@@ -221,11 +221,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                             let complex = |expression| {
                                 matches!(
                                     self.types.nodes[self.expression_info(expression).ty.index],
-                                    TypeKind::Scalar(
-                                        Scalar::ComplexFloat
-                                            | Scalar::ComplexDouble
-                                            | Scalar::ComplexLongDouble
-                                    )
+                                    TypeKind::Scalar(s) if s.complex()
                                 )
                             };
                             let domains = u8::from(complex(left_expression))

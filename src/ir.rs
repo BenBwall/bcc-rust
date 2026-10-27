@@ -54,6 +54,7 @@
 mod bits;
 mod entities;
 mod function;
+mod inline_asm;
 mod instructions;
 mod module;
 mod types;
@@ -79,6 +80,7 @@ pub(crate) use cfg::ControlFlowGraph;
 pub(crate) use dominators::DominatorTree;
 pub(crate) use entities::{
     AccessTag,
+    AsmId,
     Block,
     BlockLabel,
     ConstId,
@@ -96,6 +98,15 @@ pub(crate) use function::{
     StackSlotData,
     ValueData,
     ValueDef,
+};
+pub(crate) use inline_asm::{
+    AsmClobbers,
+    AsmConstraint,
+    AsmOperand,
+    CONDITIONS as ASM_CONDITIONS,
+    InlineAsm,
+    TemplatePiece as AsmTemplatePiece,
+    template_pieces as asm_template_pieces,
 };
 pub(crate) use instructions::{
     Align,
@@ -164,23 +175,28 @@ use crate::util::bump::{
 /// A translation unit's IR: its functions, globals and interned signatures,
 /// and the target they are for. Everything it holds lives in its `'ir` arena.
 pub(crate) struct Module<'ir> {
-    arena:          &'ir Bump,
-    triple:         &'ir str,
-    data_layout:    &'ir str,
+    arena:            &'ir Bump,
+    triple:           &'ir str,
+    data_layout:      &'ir str,
     /// Whether ABI lowering has run.
-    profile:        Profile,
-    functions:      Table<'ir, FuncId, Function<'ir>>,
-    globals:        Table<'ir, GlobalId, Global<'ir>>,
-    signatures:     Table<'ir, SigId, Signature<'ir>>,
-    signature_ids:  ArenaMap<'ir, Signature<'ir>, SigId>,
+    profile:          Profile,
+    functions:        Table<'ir, FuncId, Function<'ir>>,
+    globals:          Table<'ir, GlobalId, Global<'ir>>,
+    signatures:       Table<'ir, SigId, Signature<'ir>>,
+    signature_ids:    ArenaMap<'ir, Signature<'ir>, SigId>,
     /// Functions and globals share one namespace.
-    symbols:        ArenaMap<'ir, &'ir str, Symbol>,
+    symbols:          ArenaMap<'ir, &'ir str, Symbol>,
     /// Functions run before or after the program's entry, in this order of
     /// registration; back ends sort them by priority.
-    init_functions: ArenaVec<'ir, InitFunction>,
+    init_functions:   ArenaVec<'ir, InitFunction>,
     /// File-scope assembly blocks, in source order, each passed to the
     /// assembler verbatim before any function or global.
-    asm_blocks:     ArenaVec<'ir, &'ir str>,
+    asm_blocks:       ArenaVec<'ir, &'ir str>,
+    /// The library functions a back end may recognize by name in the
+    /// module's functions and replace or transform.
+    library_builtins: crate::configuration::LibraryBuiltins<'ir>,
+    /// The descriptors of the functions' `asm` instructions.
+    inline_asm:       Table<'ir, AsmId, InlineAsm<'ir>>,
 }
 
 /// A function of a module. It is defined if it has a body.
@@ -198,7 +214,8 @@ pub(crate) struct Function<'ir> {
     /// environment it saved (`setjmp`, `vfork`, GNU `returns_twice`). The
     /// optimizer does not inline across such frames, the LLVM back end
     /// marks the declaration and its calls `returns_twice`, and the native
-    /// back end refuses them. C99: §7.13.2.1 paragraph 4, p. 244; PDF p.
+    /// back end marks its calls and gives every value live across one a
+    /// spill slot of its own. C99: §7.13.2.1 paragraph 4, p. 244; PDF p.
     /// 256.
     pub(crate) returns_twice:  bool,
     /// Whether calls may, must or must not be expanded inline.

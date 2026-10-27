@@ -519,7 +519,8 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 self.draft.switch_to(block);
                 self.tasks.push(labeled_child(range.statement));
             },
-            | S::Asm(_) | S::MsAsm(_) =>
+            | S::Asm(_) => self.assembly(statement, source)?,
+            | S::MsAsm(_) =>
                 return Err(LoweringError::unsupported(
                     Construct::InlineAssembly,
                     source,
@@ -856,7 +857,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             .terminate_and_continue_dead(Terminator::Jump(edge));
     }
 
-    fn label_block(&mut self, label: LabelId) -> Block {
+    pub(super) fn label_block(&mut self, label: LabelId) -> Block {
         if let Some(&block) = self.labels.get(&label) {
             return block;
         }
@@ -1000,6 +1001,7 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
         unit: &'u mut super::Unit<'a, 'tu, 'ir>,
         record: &'tu FunctionRecord<'tu>,
         func: FuncId,
+        copy: Option<super::argument_pack::PackCopy<'a, 'tu>>,
         scratch: &'s Bump,
     ) -> Result<Self, LoweringError> {
         let source = record.syntax.source_vectors;
@@ -1047,6 +1049,7 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
             bounds: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, scratch),
             vla_tokens: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, scratch),
             indirect: None,
+            pack: None,
         };
         // Address-taken labels become IR labels in their semantic address
         // order, so a label's address index is its IR label number, also in
@@ -1143,6 +1146,9 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
             lowerer.operands.push(converted);
             lowerer.initialize(Object::Local(parameter), 0, declared, None)?;
         }
+        if let Some(copy) = copy {
+            lowerer.pack_items(copy.pack, ir_index, source)?;
+        }
         // Bound expressions refer to prototype bindings. Semantic analysis
         // retains their body correspondence; no translation-unit scan or
         // source-position matching belongs in a per-function constructor.
@@ -1201,8 +1207,11 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
                 let ty = representation
                     .value_type()
                     .ok_or_else(|| LoweringError::missing("a result has no value type", source))?;
-                Some(
-                    if self
+                // A `main` whose result is not compatible with `int` returns
+                // an unspecified status, so it gets no implicit zero.
+                // C99 §5.1.2.2.3p1, p. 13; PDF p. 25.
+                let main_zero = matches!(representation, Repr::Int { .. })
+                    && self
                         .record
                         .binding
                         .and_then(|binding| self.unit.sema.function_policy(binding))
@@ -1210,13 +1219,12 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
                             LoweringError::missing("function end policy is not retained", source)
                         })?
                         .end
-                        == crate::translation_phases::semantic_analysis::FunctionEnd::MainZero
-                    {
-                        self.iconst(ty, 0)
-                    } else {
-                        self.draft.poison(ty)
-                    },
-                )
+                        == crate::translation_phases::semantic_analysis::FunctionEnd::MainZero;
+                Some(if main_zero {
+                    self.iconst(ty, 0)
+                } else {
+                    self.draft.poison(ty)
+                })
             },
         };
         self.draft

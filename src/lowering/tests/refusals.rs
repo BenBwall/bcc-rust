@@ -8,11 +8,14 @@ use crate::diagnostics::ToDiagnostic;
 fn asm_collision_keeps_checking_later_function_bodies() {
     let errors = lower(
         "int a __asm__(\"same\")=1; int b __asm__(\"same\")=2;\nint f(int n){{static int same; \
-         int *p=&same;}int a[n]; return 0;}\nint g(void){__asm__(\"nop\");return 1;}",
+         int *p=&same;}int a[n]; return 0;}\nint g(void){__asm__(\"\" :: \"t\"(1.0L));return 1;}",
     )
     .unwrap_err();
     assert_eq!(errors.len(), 2, "{errors:?}");
-    for construct in ["assembler labels", "inline assembly"] {
+    for construct in [
+        "assembler labels",
+        "inline assembly operands of this register class or type",
+    ] {
         assert!(
             errors.iter().any(|error| error.ends_with(construct)),
             "{errors:?}"
@@ -53,7 +56,10 @@ fn unsupported_constructs_name_themselves() {
             "double _Complex f(void) { _Atomic(double _Complex) z; return z; }",
             "atomic complex values",
         ),
-        ("void f(void) { __asm__(\"nop\"); }", "inline assembly"),
+        (
+            "void f(void) { __asm__(\"\" :: \"t\"(1.0L)); }",
+            "inline assembly operands of this register class or type",
+        ),
     ];
     for (source, construct) in cases {
         let message = refusal(source);
@@ -96,7 +102,7 @@ fn every_failing_function_is_reported() {
     let errors = lower(
         "__float128 f(__float128 x) { return x; }
 int ok(int a) { return a; }
-int g(int n) { __asm__(\"nop\"); return n; }",
+int g(int n) { __asm__(\"\" :: \"t\"(1.0L)); return n; }",
     )
     .expect_err("two functions are unsupported");
     assert_eq!(errors.len(), 2, "{errors:?}");
@@ -105,7 +111,7 @@ int g(int n) { __asm__(\"nop\"); return n; }",
 #[test]
 fn errors_point_at_their_syntax_and_render() {
     let tu = Bump::new();
-    let source = tu.alloc_str("int f(int n) {\n  __asm__(\"nop\");\n  return 0;\n}\n");
+    let source = tu.alloc_str("int f(int n) {\n  __asm__(\"\" :: \"t\"(1.0L));\n  return 0;\n}\n");
     let mut context = Context::new(&tu);
     let unit = parse_translation_unit(
         &mut context,
@@ -124,17 +130,17 @@ fn errors_point_at_their_syntax_and_render() {
         &arena,
         &mut scratch,
     )
-    .expect_err("inline assembly is unsupported");
+    .expect_err("x87 assembly operands are unsupported");
     let error = errors.errors[0];
     assert_eq!(
         error.kind,
-        LoweringErrorKind::Unsupported(Construct::InlineAssembly)
+        LoweringErrorKind::Unsupported(Construct::InlineAssemblyOperand)
     );
     let span = error.source.expect("the error has a source");
     let diagnostic = error.to_diagnostic(&context, span);
     assert_eq!(
         diagnostic.message,
-        "not yet supported by lowering: inline assembly"
+        "not yet supported by lowering: inline assembly operands of this register class or type"
     );
 }
 
@@ -203,6 +209,31 @@ fn unsupported_type_diagnostics_retain_the_actual_construct() {
     // They must still compile beside an unrelated unsupported type.
     let message = refusal("_Thread_local int tls; __typeof__(int) ordinary; _BitInt(9) value;");
     assert!(message.ends_with("_BitInt types"), "{message}");
+}
+
+#[test]
+fn vector_values_are_refused_rather_than_missing_facts() {
+    // GNU extension: GCC manual, "Vector Extensions". Vector values have no
+    // IR representation yet (gcc.dg/pr118684.c, Wstringop-overflow-69.c);
+    // pointers to vectors and `sizeof` still lower.
+    for source in [
+        "typedef int V __attribute__((vector_size(16))); V x, y; void f(void) { x = y; }",
+        "typedef int V __attribute__((vector_size(16))); V x; void f(int *p) { x = *(V *)p; }",
+        "typedef char V __attribute__((vector_size(4))); char a[4]; void f(void) { *(V *)a = \
+         (V){0, 1, 2, 3}; }",
+        "typedef int V __attribute__((vector_size(16))); V x; int f(void) { return x[1]; }",
+    ] {
+        assert_eq!(
+            refusal(source),
+            "not yet supported by lowering: vector types",
+            "{source}"
+        );
+    }
+    let ir = lowered(
+        "typedef int V __attribute__((vector_size(16))); V x; V *f(void) { return &x; } unsigned \
+         long g(void) { return sizeof x; }",
+    );
+    assert!(ir.contains("global_addr @x"), "{ir}");
 }
 
 /// File-scope basic assembly reaches the module in source order, with
@@ -302,4 +333,24 @@ fn invalid_file_scope_asm_does_not_claim_to_be_valid_c() {
     );
     let rendered = format!("{diagnostic:?}");
     assert!(!rendered.contains("valid C"), "{rendered}");
+}
+
+#[test]
+fn objects_of_four_gib_or_more_are_refused_rather_than_missing_facts() {
+    // C99 §6.2.4p5 permits any complete automatic object; the IR's stack
+    // slots and dense static images hold less than 4 GiB.
+    for source in [
+        "int f(void) { char s[0x100000000]; s[0] = 1; return s[0]; }",
+        "int f(void) { return ((char[0x100000000]){0})[0]; }",
+    ] {
+        assert_eq!(
+            refusal(source),
+            "not yet supported by lowering: automatic objects of 4 GiB or more",
+            "{source}"
+        );
+    }
+    assert_eq!(
+        refusal("struct s { char a[__PTRDIFF_MAX__ - 3], tail[]; }; struct s object = { { 0 } };"),
+        "not yet supported by lowering: this static initializer"
+    );
 }

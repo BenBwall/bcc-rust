@@ -280,12 +280,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             TypeKind::Tag(tag) if self.types.tags[tag].kind != TagKind::Enum
         ) && !matches!(
             self.types.nodes[ty.index],
-            TypeKind::Scalar(
-                Scalar::ComplexFloat
-                    | Scalar::ComplexDouble
-                    | Scalar::ComplexLongDouble
-                    | Scalar::ComplexFloat128
-            )
+            TypeKind::Scalar(s) if s.complex()
         )
     }
 
@@ -486,12 +481,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let ty = self.types.non_atomic(self.expression_info(operand).ty);
         matches!(
             self.types.nodes[ty.index],
-            TypeKind::Scalar(
-                Scalar::ComplexFloat
-                    | Scalar::ComplexDouble
-                    | Scalar::ComplexLongDouble
-                    | Scalar::ComplexFloat128
-            )
+            TypeKind::Scalar(s) if s.complex()
         )
     }
 
@@ -516,8 +506,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | Update::Increment if boolean => false,
             | Update::Increment | Update::Decrement =>
                 !(integer
-                    || matches!(scalar, Scalar::Float | Scalar::Double | Scalar::Float128)
-                    || (scalar == Scalar::LongDouble && self.types.target.long_double_is_double())),
+                    || matches!(
+                        scalar.representation(),
+                        Scalar::Float | Scalar::Double | Scalar::Float128
+                    )
+                    || (scalar.representation() == Scalar::LongDouble
+                        && self.types.target.long_double_is_double())),
             | Update::Assignment(
                 B::AdditionAssignment
                 | B::SubtractionAssignment
@@ -643,9 +637,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 .natural_alignment(ty)
                 .is_some_and(|align| align == 0 || offset % align == 0);
             match self.types.nodes[ty.index] {
-                | TypeKind::Scalar(
-                    Scalar::LongDouble | Scalar::ComplexLongDouble | Scalar::Void,
-                ) => return false,
+                | TypeKind::Scalar(s)
+                    if matches!(
+                        s.representation(),
+                        Scalar::LongDouble | Scalar::ComplexLongDouble | Scalar::Void
+                    ) =>
+                    return false,
                 | TypeKind::Scalar(_) | TypeKind::Pointer(_) | TypeKind::Vector { .. } => {
                     if !aligned {
                         return false;

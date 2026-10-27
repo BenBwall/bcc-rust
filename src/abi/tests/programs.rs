@@ -251,6 +251,28 @@ static struct flags bump(struct flags f) { f.a++; f.b += 2; f.c -= 100; return f
 int main(void) { struct flags f = { 6, 20, 50 }; f = bump(f); return f.a + f.b + (f.c + 50); }",
         expected: 29,
     },
+    // GNU `__builtin_va_arg_pack ()` forwards promoted scalars and
+    // structures, through a nested wrapper, and its length folds away a
+    // call of an undefined `error` function at every level.
+    Program {
+        name:     "argument_pack_forwarding",
+        source:   "struct P { long a; double b; };
+static int sum(int n, ...) { __builtin_va_list ap; __builtin_va_start(ap, n); int t = 0;
+ for (int i = 0; i < n; i++) { struct P p = __builtin_va_arg(ap, struct P); t += (int)(p.a * p.b); }
+ t += __builtin_va_arg(ap, int); __builtin_va_end(ap); return t; }
+extern void too_many(void) __attribute__((error(\"too many arguments\")));
+int total(int n, ...);
+extern __inline __attribute__((always_inline, gnu_inline)) int total(int n, ...) {
+ if (__builtin_va_arg_pack_len() > 4) too_many();
+ return sum(n, __builtin_va_arg_pack()); }
+static inline __attribute__((always_inline)) int count(int first, ...) { return __builtin_va_arg_pack_len(); }
+static inline __attribute__((always_inline)) int twice(int n, ...) { return 2 * total(n, (__builtin_va_arg_pack())); }
+int main(void) { struct P x = {2, 1.5}, y = {4, 0.25};
+ if (total(0, 7) != 7 || total(2, x, y, 10) != 14) return 1;
+ if (twice(1, y, (short)5) != 12 || twice(0, 3) != 6) return 2;
+ return count(1) != 0 || count(1, 2.0f, x, 'c') != 3; }",
+        expected: 0,
+    },
 ];
 
 /// The targets every program runs for: System V, and Win64 with either C

@@ -73,6 +73,9 @@ pub(crate) struct MFunction<'a> {
     /// The IR symbols the function reaches through their GOT entry or
     /// `.refptr` stub, possibly repeated.
     pub(crate) indirect_symbols: ArenaVec<'a, Symbol>,
+    /// Each [`MInst::InlineAsm`]'s template and operand locations, by its
+    /// `index`.
+    pub(crate) asm:              ArenaVec<'a, AsmMachine<'a>>,
 }
 
 impl<'a> MFunction<'a> {
@@ -93,6 +96,7 @@ impl<'a> MFunction<'a> {
             indirect:         ArenaVec::new_in(arena),
             labels:           ArenaVec::new_in(arena),
             indirect_symbols: ArenaVec::new_in(arena),
+            asm:              ArenaVec::new_in(arena),
         }
     }
 
@@ -339,12 +343,67 @@ impl PReg {
     }
 }
 
+/// An inline assembly statement as the listing writes it: the template in
+/// LLVM's syntax and where each of its operands is.
+/// GNU extension: GCC manual, "Extended Asm".
+pub(crate) struct AsmMachine<'a> {
+    pub(crate) template: &'a str,
+    pub(crate) operands: &'a [AsmLocation],
+}
+
+/// Where an inline assembly operand is while the statement runs.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum AsmLocation {
+    /// A register holding a value of `width`.
+    Reg(PReg, Width),
+    /// Memory: a frame object or a symbol addressed directly, or the
+    /// address a physical register holds.
+    Mem(Mem),
+    Imm(i64),
+    /// A symbol's address plus an offset.
+    Symbol(SymbolRef, i64),
+    /// A flag output, which the template cannot name.
+    None,
+}
+
+impl AsmLocation {
+    /// Whether the listing writes this operand with `modifier`: `b`, `h`
+    /// (`%ah`-`%bh`), `w`, `k`, `q`, `V` (the 64-bit name without `%`), `z`
+    /// (the size suffix), `a` (as an address) and `x` for registers; `a` and
+    /// `H` (eight bytes on) and the ignored size letters for memory; `c`, `P`,
+    /// `p`, `a` (without `$`) and `n` (negated) for immediates.
+    /// GNU extension: GCC manual, "x86 Operand Modifiers".
+    pub(crate) fn writes(self, modifier: Option<u8>) -> bool {
+        let Some(modifier) = modifier else {
+            return self != Self::None;
+        };
+        match self {
+            | Self::Reg(register, _) => match modifier {
+                | b'b' | b'w' | b'k' | b'q' | b'V' | b'z' | b'a' =>
+                    register.class() == RegClass::Gpr,
+                | b'h' => register.index() < 4,
+                | b'x' => register.class() == RegClass::Xmm,
+                | _ => false,
+            },
+            | Self::Mem(_) => matches!(modifier, b'a' | b'H' | b'b' | b'w' | b'k' | b'q'),
+            | Self::Imm(_) => matches!(modifier, b'c' | b'P' | b'p' | b'a' | b'n'),
+            | Self::Symbol(..) => matches!(modifier, b'c' | b'P' | b'p' | b'a'),
+            | Self::None => false,
+        }
+    }
+}
+
 /// A set of physical registers.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub(crate) struct PRegSet(u32);
 
 impl PRegSet {
     pub(crate) const EMPTY: Self = Self(0);
+
+    /// The set whose bit `n` is the register `PReg::ALL[n]`.
+    pub(crate) const fn from_bits(bits: u32) -> Self {
+        Self(bits)
+    }
 
     pub(crate) const fn of(registers: &[PReg]) -> Self {
         let mut bits = 0;
@@ -359,6 +418,16 @@ impl PRegSet {
     #[must_use]
     pub(crate) const fn with(self, register: PReg) -> Self {
         Self(self.0 | 1 << register as u32)
+    }
+
+    #[must_use]
+    pub(crate) const fn without(self, register: PReg) -> Self {
+        Self(self.0 & !(1 << register as u32))
+    }
+
+    #[must_use]
+    pub(crate) const fn union(self, other: Self) -> Self {
+        Self(self.0 | other.0)
     }
 
     pub(crate) const fn contains(self, register: PReg) -> bool {
@@ -905,11 +974,15 @@ pub(crate) enum MInst {
         src:   Reg,
     },
     Call {
-        callee:   Callee,
+        callee:        Callee,
         /// The argument registers the call reads.
-        uses:     PRegSet,
+        uses:          PRegSet,
         /// The registers the callee may change.
-        clobbers: PRegSet,
+        clobbers:      PRegSet,
+        /// Whether the callee may return twice (`setjmp`): the allocator
+        /// keeps every value live across the call where a second return
+        /// finds it.
+        returns_twice: bool,
     },
     Jmp {
         target: MBlock,
@@ -1014,6 +1087,36 @@ pub(crate) enum MInst {
     RepMovsb,
     /// `rep stosb`: stores `%al` into `%rcx` bytes from `(%rdi)`.
     RepStosb,
+    /// `mfence`: every load and store before it is globally visible before
+    /// any after it (a sequentially consistent fence).
+    Mfence,
+    /// `xchg reg, mem`, locked without a prefix: `reg` and `mem` swap.
+    Xchg {
+        width: Width,
+        reg:   Reg,
+        mem:   Mem,
+    },
+    /// `lock xadd reg, mem`: `mem ← mem + reg` and `reg ←` the old `mem`.
+    LockXadd {
+        width: Width,
+        reg:   Reg,
+        mem:   Mem,
+    },
+    /// `lock op src, mem` of `add`, `sub`, `and`, `or` or `xor`, whose
+    /// old value nothing reads; `src` is a register or an immediate.
+    LockAlu {
+        op:    AluOp,
+        width: Width,
+        mem:   Mem,
+        src:   Operand,
+    },
+    /// `lock cmpxchg src, mem`: stores `src` if `mem` equals `%rax` (ZF
+    /// set), or else loads `mem` into `%rax` (ZF clear).
+    LockCmpxchg {
+        width: Width,
+        mem:   Mem,
+        src:   Reg,
+    },
     /// Pushes a value from memory onto the x87 stack (`fld`, `fild`).
     /// The x87 stack is not allocated: every sequence that pushes pops
     /// everything again before anything else runs, except the `%st(0)`
@@ -1049,6 +1152,14 @@ pub(crate) enum MInst {
     Ud2,
     /// A breakpoint trap (`__debugbreak`).
     Int3,
+    /// Inline assembly: [`MFunction::asm`] entry `index`, reading the
+    /// registers `uses` and writing `defs`, its outputs and clobbers. Every
+    /// register operand is physical, set and read by moves around it.
+    InlineAsm {
+        index: u32,
+        uses:  PRegSet,
+        defs:  PRegSet,
+    },
 }
 
 impl MInst {
@@ -1150,6 +1261,7 @@ impl MInst {
                 callee,
                 uses,
                 clobbers,
+                ..
             } => {
                 if let Callee::Reg(reg) = callee {
                     visit(reg, Role::Use);
@@ -1171,6 +1283,19 @@ impl MInst {
                 phys(PReg::Rcx, Role::UseDef, &mut visit);
                 phys(PReg::Rax, Role::Use, &mut visit);
             },
+            | Self::Xchg { reg, mem, .. } | Self::LockXadd { reg, mem, .. } => {
+                memory(mem, &mut visit);
+                visit(reg, Role::UseDef);
+            },
+            | Self::LockAlu { mem, src, .. } => {
+                memory(mem, &mut visit);
+                operand(src, &mut visit);
+            },
+            | Self::LockCmpxchg { mem, src, .. } => {
+                memory(mem, &mut visit);
+                visit(src, Role::Use);
+                phys(PReg::Rax, Role::UseDef, &mut visit);
+            },
             | Self::X87Load { mem, .. }
             | Self::X87Store { mem, .. }
             | Self::X87ControlWord { mem, .. } => memory(mem, &mut visit),
@@ -1178,9 +1303,18 @@ impl MInst {
                 for register in uses.iter() {
                     phys(register, Role::Use, &mut visit);
                 },
+            | Self::InlineAsm { uses, defs, .. } => {
+                for register in uses.iter() {
+                    phys(register, Role::Use, &mut visit);
+                }
+                for register in defs.iter() {
+                    phys(register, Role::Def, &mut visit);
+                }
+            },
             | Self::X87Arith { .. }
             | Self::X87Pop
             | Self::X87Compare
+            | Self::Mfence
             | Self::Jmp { .. }
             | Self::Jcc { .. }
             | Self::Ud2
@@ -1269,6 +1403,10 @@ impl MInst {
             }
             | Self::Store { dst: mem, .. }
             | Self::XStore { dst: mem, .. }
+            | Self::Xchg { mem, .. }
+            | Self::LockXadd { mem, .. }
+            | Self::LockAlu { mem, .. }
+            | Self::LockCmpxchg { mem, .. }
             | Self::Lea { addr: mem, .. }
             | Self::Move128 { mem, .. }
             | Self::X87Load { mem, .. }
@@ -1326,7 +1464,11 @@ impl MInst {
             | Self::Div { .. }
             | Self::MulWide { .. }
             | Self::Call { .. }
+            | Self::InlineAsm { .. }
             | Self::X87Compare
+            | Self::LockXadd { .. }
+            | Self::LockAlu { .. }
+            | Self::LockCmpxchg { .. }
             | Self::Unary {
                 op: UnaryOp::Neg, ..
             } => (false, true),

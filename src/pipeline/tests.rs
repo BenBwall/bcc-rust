@@ -206,7 +206,7 @@ fn adjacent_string_lookahead_keeps_current_token_before_later_diagnostics() {
         assert!(matches!(
             iterator.next().unwrap().unwrap_err(),
             TranslationError::Preprocessing(PreprocessorError {
-                error_type: PreprocessorErrorType::InvalidEscapeSequence,
+                error_type: PreprocessorErrorType::UnknownEscapeSequence('q'),
                 ..
             })
         ));

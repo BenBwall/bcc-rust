@@ -53,16 +53,20 @@ pub(crate) enum RequestedWriter {
 /// encoder refuses, as every Windows listing was assembled before direct COFF
 /// objects became the default, and Linux assembles, since direct ELF objects
 /// stay opt-in. The encoder reads only the emitter's own vocabulary, so a
-/// module with file-scope assembly, which is arbitrary assembler input, takes
-/// the assembler by default and is refused when direct objects are requested.
+/// module with file-scope or inline assembly, which is arbitrary assembler
+/// input, takes the assembler by default and is refused when direct objects
+/// are requested.
 pub(crate) fn object_writer(
     module: &Module<'_>,
     target: Target,
     requested: Option<RequestedWriter>,
 ) -> Result<ObjectWriter, NativeError<'static>> {
-    let encodable = module.module_asm().is_empty();
+    let encodable = module.module_asm().is_empty() && !module.has_inline_asm();
     match requested {
-        | Some(RequestedWriter::Direct) if !encodable => Err(NativeError::ObjectModuleAsm),
+        | Some(RequestedWriter::Direct) if !module.module_asm().is_empty() =>
+            Err(NativeError::ObjectModuleAsm),
+        | Some(RequestedWriter::Direct) if module.has_inline_asm() =>
+            Err(NativeError::ObjectInlineAsm),
         | Some(RequestedWriter::Direct) => Ok(ObjectWriter::Direct),
         | None if encodable && matches!(target, Target::WindowsGnu | Target::WindowsMsvc) =>
             Ok(ObjectWriter::DirectOrAssembler),
@@ -123,7 +127,7 @@ fn assemble_refused(
     toolchain
         .assemble(assembly.path(), object.path(), target, OutputKind::Object)
         .map_err(|assembler| FallbackError::io(refusal, assembler))?;
-    toolchain.assemble(object.path(), out_path, target, kind)
+    toolchain.assemble_linking(object.path(), out_path, target, kind, libraries(text))
 }
 
 /// Writes `text` to a temporary `.s` file beside `out_path` and assembles
@@ -134,19 +138,18 @@ pub(crate) fn assemble(
     target: Target,
     kind: OutputKind,
 ) -> io::Result<()> {
-    // The direct encoder refuses file-scope assembly, so such listings are
-    // only assembled.
+    // The direct encoder refuses file-scope and inline assembly, so such
+    // listings are only assembled.
     #[cfg(test)]
-    if matches!(target, Target::LinuxGnu | Target::LinuxMusl)
-        && !text.contains(super::emit::MODULE_ASM_START)
-    {
+    let encodable = !text.contains(super::emit::MODULE_ASM_START)
+        && !text.contains(super::emit::INLINE_ASM_START);
+    #[cfg(test)]
+    if matches!(target, Target::LinuxGnu | Target::LinuxMusl) && encodable {
         super::tests::object::equivalent(text)?;
         return build_object(text, out_path, target, kind);
     }
     #[cfg(test)]
-    if matches!(target, Target::WindowsGnu | Target::WindowsMsvc)
-        && !text.contains(super::emit::MODULE_ASM_START)
-    {
+    if matches!(target, Target::WindowsGnu | Target::WindowsMsvc) && encodable {
         super::tests::object_coff::equivalent(text, target)?;
         return build_object(text, out_path, target, kind);
     }
@@ -155,7 +158,7 @@ pub(crate) fn assemble(
     let (assembly, mut file) = TemporaryObject::create(out_path, "s", &arena)?;
     file.write_all(text.as_bytes())?;
     drop(file);
-    toolchain.assemble(assembly.path(), out_path, target, kind)
+    toolchain.assemble_linking(assembly.path(), out_path, target, kind, libraries(text))
 }
 
 /// Builds direct ELF or COFF bytes from the private emitter listing.
@@ -199,7 +202,26 @@ fn encode_object(
     let (object, mut file) = TemporaryObject::create(out_path, "o", &arena)?;
     file.write_all(&bytes)?;
     drop(file);
-    Toolchain::bundled(target)?.assemble(object.path(), out_path, target, kind)
+    Toolchain::bundled(target)?.assemble_linking(
+        object.path(),
+        out_path,
+        target,
+        kind,
+        libraries(text),
+    )
+}
+
+/// The libraries an executable of the listing `text` links besides the C
+/// library: libatomic when it calls one of its routines, which the selector
+/// does for `i128` and byte-buffer atomic operations (`isel/atomic.rs`), as
+/// the LLVM back end's driver does for the same operations. The tests'
+/// WSL runner, which links with WSL's own clang, appends the same list.
+pub(super) fn libraries(text: &str) -> &'static [&'static str] {
+    if text.contains("\tcallq\t__atomic_") {
+        &["-latomic"]
+    } else {
+        &[]
+    }
 }
 
 /// A listing the encoder refused that the assembler then failed to build. A

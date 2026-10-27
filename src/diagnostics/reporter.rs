@@ -1,5 +1,5 @@
 //! Folding, ordering, and rendering of the diagnostics one compilation
-//! reports, for the CLI's token and syntax-tree output.
+//! reports, for the CLI's output and the explorer.
 
 use std::io::{
     self,
@@ -8,14 +8,14 @@ use std::io::{
 
 use rustc_hash::FxBuildHasher;
 
+use super::{
+    ColorChoice as RenderColor,
+    Diagnostic,
+    Renderer,
+    ToDiagnostic,
+    count_of,
+};
 use crate::{
-    diagnostics::{
-        ColorChoice as RenderColor,
-        Diagnostic,
-        Renderer,
-        ToDiagnostic,
-        count_of,
-    },
     translation_phases::{
         Context,
         ErrorSeverity,
@@ -46,8 +46,10 @@ use crate::{
 /// pending list, the folding map, and the locations live in the reporter's
 /// own arena (`'r`). Parser mode keeps it for the whole compilation; token
 /// mode resets it between flushed batches.
-pub(super) struct DiagnosticReporter<'r, 'tu> {
+pub(crate) struct DiagnosticReporter<'r, 'tu> {
     arena:               &'r Bump,
+    /// Sees each diagnostic as it is rendered, with its text.
+    observer:            Option<&'r mut Observer<'r>>,
     diagnostics:         &'tu Bump,
     renderer:            Renderer,
     pending:             ArenaVec<'r, PendingDiagnostic<'r, 'tu>>,
@@ -58,12 +60,12 @@ pub(super) struct DiagnosticReporter<'r, 'tu> {
     last_other:          Option<usize>,
     /// The latest pending preprocessing error at each location.
     other_errors:        ArenaMap<'r, &'r [SourceVector], usize>,
-    pub(super) errors:   usize,
-    pub(super) warnings: usize,
+    pub(crate) errors:   usize,
+    pub(crate) warnings: usize,
 }
 
 impl<'r, 'tu> DiagnosticReporter<'r, 'tu> {
-    pub(super) fn report(&mut self, error: &TranslationError<'_>, context: &mut Context<'_>) {
+    pub(crate) fn report(&mut self, error: &TranslationError<'_>, context: &mut Context<'_>) {
         let source = error.source_vectors(context);
         // Folded parser recovery keeps spelling provenance so its secondary
         // ranges remain relative to the preprocessing error it joins.
@@ -132,7 +134,7 @@ impl<'r, 'tu> DiagnosticReporter<'r, 'tu> {
     /// Reports an error found after semantic analysis, such as a construct
     /// lowering does not handle, at `source` (or at no place, for the whole
     /// unit). Such errors never fold into another diagnostic.
-    pub(super) fn report_late(
+    pub(crate) fn report_late(
         &mut self,
         error: &dyn ToDiagnostic,
         source: Option<SourceVectors>,
@@ -151,7 +153,7 @@ impl<'r, 'tu> DiagnosticReporter<'r, 'tu> {
 
     /// Renders and counts every pending diagnostic. Later errors can no
     /// longer fold into them, so the folding targets are forgotten.
-    pub(super) fn flush(&mut self, context: &Context<'_>, out: &mut dyn Write) -> io::Result<()> {
+    pub(crate) fn flush(&mut self, context: &Context<'_>, out: &mut dyn Write) -> io::Result<()> {
         self.last_parser = None;
         self.last_other = None;
         self.other_errors.clear();
@@ -165,13 +167,26 @@ impl<'r, 'tu> DiagnosticReporter<'r, 'tu> {
                 | ErrorSeverity::Error => self.errors += 1,
                 | ErrorSeverity::Warning => self.warnings += 1,
             }
-            out.write_all(self.renderer.render_text(&diagnostic, context).as_bytes())?;
+            let text = self.renderer.render_text(&diagnostic, context);
+            if let Some(observer) = &mut self.observer {
+                observer(&diagnostic, text, context);
+            }
+            out.write_all(text.as_bytes())?;
         }
         Ok(())
     }
 
-    pub(super) fn finish(&mut self, context: &Context<'_>, out: &mut dyn Write) -> io::Result<()> {
+    pub(crate) fn finish(&mut self, context: &Context<'_>, out: &mut dyn Write) -> io::Result<()> {
         self.flush(context, out)?;
+        // GCC, MSVC and TCC print no summary.
+        if matches!(
+            context.configuration.diagnostic_format(),
+            crate::configuration::DiagnosticFormat::Gcc
+                | crate::configuration::DiagnosticFormat::Msvc { .. }
+                | crate::configuration::DiagnosticFormat::Tcc
+        ) {
+            return Ok(());
+        }
         let errors = count_of(self.errors, "error");
         let warnings = count_of(self.warnings, "warning");
         match (self.errors, self.warnings) {
@@ -214,7 +229,7 @@ impl<'r, 'tu> DiagnosticReporter<'r, 'tu> {
 
     /// Reports every pending diagnostic of a parsed translation unit, in
     /// source order, and writes them to `out`.
-    pub(super) fn report_pending(
+    pub(crate) fn report_pending(
         &mut self,
         context: &mut Context<'_>,
         out: &mut dyn Write,
@@ -246,9 +261,10 @@ impl<'r, 'tu> DiagnosticReporter<'r, 'tu> {
         }
     }
 
-    pub(super) fn new(arena: &'r Bump, diagnostics: &'tu Bump, color: RenderColor) -> Self {
+    pub(crate) fn new(arena: &'r Bump, diagnostics: &'tu Bump, color: RenderColor) -> Self {
         Self {
             arena,
+            observer: None,
             diagnostics,
             renderer: Renderer::new(color),
             pending: ArenaVec::new_in(arena),
@@ -258,6 +274,18 @@ impl<'r, 'tu> DiagnosticReporter<'r, 'tu> {
             errors: 0,
             warnings: 0,
         }
+    }
+}
+
+/// Receives each rendered diagnostic, for callers that keep diagnostics
+/// rather than print them.
+pub(crate) type Observer<'r> = dyn FnMut(&Diagnostic<'_>, &str, &Context<'_>) + 'r;
+
+impl<'r> DiagnosticReporter<'r, '_> {
+    /// Also hands each diagnostic to `observer` as it is rendered.
+    pub(crate) fn observed(mut self, observer: &'r mut Observer<'r>) -> Self {
+        self.observer = Some(observer);
+        self
     }
 }
 

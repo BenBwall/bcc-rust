@@ -625,16 +625,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 }),
                 | _ => None,
             },
-            | TypeKind::Scalar(
-                Scalar::Float
-                | Scalar::Double
-                | Scalar::LongDouble
-                | Scalar::Float128
-                | Scalar::ComplexFloat
-                | Scalar::ComplexDouble
-                | Scalar::ComplexLongDouble
-                | Scalar::ComplexFloat128,
-            ) => match value {
+            | TypeKind::Scalar(s) if s.floating() => match value {
                 | Value::Floating(floating) =>
                     self.round_floating(floating, ty).map(Value::Floating),
                 | Value::Integer(integer) => {
@@ -848,16 +839,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         };
         let value = match read {
             | Read::Zero => match self.types.nodes[ty.index] {
-                | TypeKind::Scalar(
-                    Scalar::Float
-                    | Scalar::Double
-                    | Scalar::LongDouble
-                    | Scalar::Float128
-                    | Scalar::ComplexFloat
-                    | Scalar::ComplexDouble
-                    | Scalar::ComplexLongDouble
-                    | Scalar::ComplexFloat128,
-                ) => Value::Floating(Floating {
+                | TypeKind::Scalar(s) if s.floating() => Value::Floating(Floating {
                     real: LongDouble::ZERO,
                     imag: LongDouble::ZERO,
                 }),
@@ -2018,6 +2000,13 @@ enum Step<'tu> {
 /// What the last operation of an initializer plan covering a subobject
 /// put there, in [`Analyzer::object_value`].
 #[derive(Clone, Copy)]
+#[cfg_attr(
+    target_pointer_width = "32",
+    expect(
+        variant_size_differences,
+        reason = "A string element's value is wide; with 32-bit pointers the others are small."
+    )
+)]
 enum Read<'tu> {
     Zero,
     Value(&'tu Expression<'tu>),

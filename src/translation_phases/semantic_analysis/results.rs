@@ -54,6 +54,8 @@ pub(crate) struct SemanticTranslationUnit<'tu> {
     /// attribute capability refusals.
     pub(crate) symbols:                 super::SymbolFacts<'tu>,
     pub(crate) function_extensions:     super::FunctionExtensions<'tu>,
+    /// Checked GNU `asm` statements inside functions.
+    pub(crate) assembly:                super::AssemblyFacts<'tu>,
     pub(crate) types:                   Types<'tu>,
     pub(crate) bindings:                &'tu [Binding],
     /// Locals in unmodeled constant-control regions need required/used roots.
@@ -240,10 +242,14 @@ pub(crate) struct FunctionRecord<'tu> {
     /// bindings, retained when replaying the definition's prototype scope.
     /// C99: §6.9.1p10, p. 142; PDF p. 154.
     pub(crate) parameter_aliases: &'tu [(usize, usize)],
-    /// The body contains GNU or MSVC inline assembly, which lowering cannot
-    /// translate: an `always_inline` GNU inline body then keeps calling the
-    /// external definition rather than a private copy.
+    /// The body contains GNU or MSVC inline assembly: an `always_inline`
+    /// GNU inline body then keeps calling the external definition rather
+    /// than a private copy, as MinGW-w64's `intrin-impl.h` expects.
     pub(crate) assembly:          bool,
+    /// The body calls `__builtin_va_arg_pack` or `__builtin_va_arg_pack_len`,
+    /// so lowering expands a copy of it at each direct call instead of
+    /// lowering it once. GNU extension: GCC manual, "Constructing Calls".
+    pub(crate) va_arg_pack:       bool,
 }
 
 /// A lexical scope and its enclosing scope.

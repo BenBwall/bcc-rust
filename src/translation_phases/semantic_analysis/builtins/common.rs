@@ -282,6 +282,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     }
                 }
             },
+            // Lowering substitutes the pack in a copy of this function per
+            // call, so it must know which bodies evaluate it.
+            | CommonBuiltin::ArgumentPack(_) => self.argument_pack_use(),
             | CommonBuiltin::Atomic(_)
             | CommonBuiltin::Bit(..)
             | CommonBuiltin::Bswap(_)

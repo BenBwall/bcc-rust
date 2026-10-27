@@ -131,9 +131,13 @@ impl<'a> LexedFile<'a> {
             "source file exceeds u32::MAX bytes"
         );
         let scratch = Bump::new();
-        let trigraphs = context.configuration.accepts(Feature::Trigraphs);
-        let (text, remaps) = splice(source, &scratch, trigraphs);
-        let terminal_splice = terminal_splice_length(source, trigraphs);
+        // Already preprocessed input went through phases 1 and 2 when it was
+        // written; GCC's `-fpreprocessed` neither replaces trigraphs nor
+        // splices lines again.
+        let preprocessed = context.preprocessed_input;
+        let trigraphs = !preprocessed && context.configuration.accepts(Feature::Trigraphs);
+        let (text, remaps) = splice(source, &scratch, trigraphs, !preprocessed);
+        let terminal_splice = terminal_splice_length(source, trigraphs).filter(|_| !preprocessed);
         let file = Lexer::new(context, arena, &scratch, text, remaps, source.is_empty())
             .with_terminal_splice(terminal_splice.is_some())
             .after_byte_order_mark()

@@ -5,6 +5,7 @@
 //! §6.7.2.1p12, p. 103; PDF p. 115 (member alignment).
 
 use super::{
+    Construct,
     FunctionLowerer,
     LoweringError,
     LoweringErrorKind,
@@ -119,9 +120,8 @@ impl<'s> FunctionLowerer<'_, '_, '_, '_, 's> {
         align: Align,
         source: SourceVectors,
     ) -> Result<Value, LoweringError> {
-        let size = u32::try_from(size).map_err(|_| {
-            LoweringError::missing("an automatic object is larger than 4 GiB", source)
-        })?;
+        let size = u32::try_from(size)
+            .map_err(|_| LoweringError::unsupported(Construct::LargeAutomaticObject, source))?;
         let slot = self.object_slot(size, align);
         Ok(self.inst(InstData::StackAddr { slot }, Type::Ptr))
     }
@@ -139,11 +139,13 @@ impl<'s> FunctionLowerer<'_, '_, '_, '_, 's> {
     ) -> Result<Value, LoweringError> {
         let element = super::types::target_type(&self.unit.sema.types, pointer)
             .ok_or_else(|| LoweringError::missing("an index has no pointee type", source))?;
-        // GNU `void *` arithmetic promises no alignment beyond a byte.
+        // GNU `void *` and function pointer arithmetic promises no
+        // alignment beyond a byte.
         // GNU extension: GCC "Pointer Arith".
         let default = if matches!(
             self.unit.sema.types.kind(element),
             TypeKind::Scalar(crate::translation_phases::semantic_analysis::Scalar::Void)
+                | TypeKind::Function { .. }
         ) {
             Align::BYTE
         } else {

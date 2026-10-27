@@ -46,8 +46,15 @@ mod tests {
     #[test]
     fn every_resource_header_and_value_passes_the_shared_probe() {
         let source = include_str!("../fixtures/freestanding/conformance.c");
-        clean(&bcc(&["-std=c11", "-pedantic-errors", "--input", source]));
-        clean(&bcc(&["-std=gnu17", "--input", source]));
+        // The resource headers alone, without the host's C library.
+        clean(&bcc(&[
+            "-std=c11",
+            "-pedantic-errors",
+            "-nostdlibinc",
+            "--input",
+            source,
+        ]));
+        clean(&bcc(&["-std=gnu17", "-nostdlibinc", "--input", source]));
         // Clang's resource headers also implement the freestanding execution
         // model.
         let output = Command::new(clang())

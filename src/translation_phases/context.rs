@@ -45,6 +45,7 @@ use std::path::Path;
 
 use expansion_sites::ExpansionSites;
 use rustc_hash::FxBuildHasher;
+pub(crate) use source_files::FileSystem;
 use source_text::SourceText;
 
 #[cfg(test)]
@@ -82,6 +83,17 @@ pub(crate) struct Context<'tu> {
     tu: &'tu Bump,
     pub(crate) configuration: CompilerConfiguration,
     pub(crate) preprocessing_options: &'tu [crate::configuration::PreprocessingOption<'tu>],
+    /// The library functions code generation may treat as builtins.
+    pub(crate) library_builtins: crate::configuration::LibraryBuiltins<'tu>,
+    /// The source is already preprocessed (GCC's `-fpreprocessed`): no
+    /// macro is replaced, and only line markers, `#pragma`, `#ident` and
+    /// `#sccs` take effect; `#define` and `#undef` are read but, with
+    /// replacement off, change nothing.
+    pub(crate) preprocessed_input: bool,
+    /// Where included files and `#embed` resources are found and read:
+    /// the host's file system for the command line, only in-memory files
+    /// for the explorer.
+    pub(crate) file_system: FileSystem<'tu>,
     /// Output-token ordinals preserve directive order across includes/macros.
     pub(crate) preprocessed_tokens: usize,
     pub(crate) pack_pragmas: ArenaVec<'tu, super::pragma_pack::PackPragma<'tu>>,
@@ -124,9 +136,23 @@ pub(crate) struct Context<'tu> {
     /// for a header found through a system directory, or the position of
     /// its `#pragma GCC system_header`.
     system_headers: ArenaMap<'tu, u32, u32>,
+    /// The regions GNU line markers with flag 3 make system headers, as
+    /// in preprocessed input, in the order they were opened.
+    system_regions: ArenaVec<'tu, SystemRegion>,
     /// Original text of each source file, indexed like `source_files`, kept
     /// so diagnostics can quote the lines they point at.
     source_texts: ArenaVec<'tu, Option<SourceText<'tu>>>,
+}
+
+/// Bytes `start..end` of physical file `physical` that a line marker with
+/// flag 3 made a system header; `end` is `u32::MAX` until a later marker in
+/// the file ends the region.
+/// GNU extension: GCC preprocessor manual, "Preprocessor Output".
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct SystemRegion {
+    physical: u32,
+    start:    u32,
+    end:      u32,
 }
 
 // Tests

@@ -18,9 +18,9 @@
 // Exact arithmetic
 mod arithmetic;
 
-use arithmetic::{
+use arithmetic::error;
+pub(crate) use arithmetic::{
     Natural,
-    error,
     exponent,
 };
 

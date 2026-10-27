@@ -60,6 +60,7 @@ use crate::{
             UnaryOperator,
         },
         semantic_analysis::{
+            ArrayBound,
             CallFacts,
             Callee,
             ConversionKind,
@@ -268,7 +269,12 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     return Ok(());
                 }
                 self.tasks.push(Task::Finish(expression));
-                for argument in call.arguments.iter().rev() {
+                let mut arguments = call.arguments;
+                if let Some(pack) = self.forwarded_pack(call)? {
+                    self.tasks.push(Task::ForwardPack(pack));
+                    arguments = &arguments[..arguments.len() - 1];
+                }
+                for argument in arguments.iter().rev() {
                     let expression = self
                         .unit
                         .sema
@@ -284,6 +290,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 if self
                     .resolved_direct_callee(call, function_expression.source_vectors)?
                     .is_none()
+                    && self.packed_callee(expression).is_none()
                 {
                     let Callee::Indirect(index) = call.callee else {
                         self.tasks.push(Task::Evaluate(function_expression));
@@ -510,7 +517,16 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 } else {
                     Place::Memory(address)
                 };
-                if rvalue {
+                if rvalue
+                    && let TypeKind::Array(_, ArrayBound::Incomplete) =
+                        self.unit.sema.types.kind(access_ty)
+                {
+                    // A flexible array member of a structure rvalue has no
+                    // size to copy; it stays an array at its offset in the
+                    // temporary and decays from there.
+                    // C99: §6.7.2.1p16, p. 103; PDF p. 115.
+                    self.push_item(Operand::Aggregate(address), access_ty);
+                } else if rvalue {
                     // A member of a structure rvalue is not an lvalue
                     // (§6.5.2.3p3), so it is read at once.
                     let item = self.read(place, access_ty, info.ty.unqualified(), source)?;
@@ -775,6 +791,11 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 let ty = self.value_type(item.ty, source)?;
                 Ok(self.extend(truth, false, ty))
             },
+            // A vector lvalue reaches its value use unread: vector values
+            // have no IR representation yet, though their addresses do.
+            // GNU extension: GCC manual, "Vector Extensions".
+            | _ if matches!(self.unit.sema.types.kind(item.ty), TypeKind::Vector { .. }) =>
+                Err(LoweringError::unsupported(Construct::Vector, source)),
             | _ => Err(LoweringError::missing("an operand has no value", source)),
         }
     }
@@ -1262,7 +1283,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             });
         }
         let wrap = if signed {
-            InstFlags::NSW
+            self.signed_wrap()
         } else {
             InstFlags::empty()
         };
@@ -1348,7 +1369,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 }
                 let zero = self.iconst(ty, 0);
                 let flags = if self.repr(info.ty, source)?.signed() {
-                    InstFlags::NSW
+                    self.signed_wrap()
                 } else {
                     InstFlags::empty()
                 };
@@ -1468,7 +1489,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 // Types narrower than int are promoted (§6.3.1.1p2), so their
                 // arithmetic cannot overflow; the conversion back wraps.
                 let flags = if signed && ty.bits() >= self.int_bits() && !atomic {
-                    InstFlags::NSW
+                    self.signed_wrap()
                 } else {
                     InstFlags::empty()
                 };
@@ -1523,6 +1544,12 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
     /// may modify (§6.9.1p10). A structure or union result is stored by the
     /// callee into a fresh slot passed first, which becomes the call's
     /// value.
+    ///
+    /// A last argument `__builtin_va_arg_pack ()` stands for the anonymous
+    /// arguments of the copy being lowered, which are on the stack in its
+    /// place, and a direct call of a function using the pack calls its
+    /// copy for these arguments (`argument_pack.rs`). GNU extension: GCC
+    /// manual, "Constructing Calls".
     /// C99: §6.5.2.2 paragraphs 4-7, pp. 71-72; PDF pp. 83-84.
     fn call(
         &mut self,
@@ -1530,13 +1557,26 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         info: &ExpressionInfo<'tu>,
         source: SourceVectors,
     ) -> Result<(), LoweringError> {
+        let call = self.call_facts(info.expression)?;
+        let mut arguments = call.arguments;
+        let mut pack: &[Item] = &[];
+        let mut count = count;
+        if self.forwarded_pack(call)?.is_some() {
+            pack = self.pack.unwrap_or_default();
+            arguments = &arguments[..arguments.len() - 1];
+            count = count - 1 + pack.len();
+        }
         let start = self.operands.len() - count;
         let mut items = ArenaVec::with_capacity_in(count, self.scratch);
         items.extend_from_slice(&self.operands[start..]);
         self.operands.truncate(start);
-        let call = self.call_facts(info.expression)?;
         let direct = self.resolved_direct_callee(call, source)?;
-        let callee_value = if direct.is_some() {
+        // `(*f)(...)` of a function using the pack calls its copy too.
+        let packed_callee = direct
+            .is_none()
+            .then(|| self.packed_callee(info.expression))
+            .flatten();
+        let callee_value = if direct.is_some() || packed_callee.is_some() {
             None
         } else {
             let item = self.pop();
@@ -1556,11 +1596,16 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 source,
             ));
         };
-        if items.len() != call.arguments.len()
+        if items.len() != arguments.len() + pack.len()
             || items
                 .iter()
-                .zip(call.arguments)
-                .any(|(item, argument)| item.ty != argument.ty)
+                .zip(
+                    arguments
+                        .iter()
+                        .map(|argument| argument.ty)
+                        .chain(pack.iter().map(|item| item.ty)),
+                )
+                .any(|(item, ty)| item.ty != ty)
         {
             return Err(LoweringError::missing(
                 "call argument conversions are not retained",
@@ -1651,6 +1696,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             args.push(value);
         }
         let args = self.scratch.alloc_slice_copy(&args);
+        let result_type = result;
         let result = signature.result;
         if let Some(binding) = direct {
             let ExpressionType::Call {
@@ -1692,7 +1738,21 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 _ = self.draft.push(Op::Diagnostic(diagnostic), None);
             }
         }
+        let packed = direct
+            .filter(|_| !open_external)
+            .or(packed_callee)
+            .and_then(|binding| Some((binding, self.unit.pack_function(binding)?)));
         let value = match (direct, callee_value) {
+            | _ if let Some((binding, record)) = packed => {
+                let types = self
+                    .scratch
+                    .alloc_slice_fill_iter(items.iter().map(|item| item.ty));
+                let func = self
+                    .unit
+                    .pack_copy(binding, record, types, fixed, result_type, source)
+                    .map_err(|kind| at(kind, source))?;
+                self.draft.push(Op::Call(func, args), result)
+            },
             | (Some(binding), _) => {
                 let func = self
                     .unit
@@ -1725,7 +1785,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
     /// A copy of the structure or union argument `item` in a fresh slot,
     /// which the callee receives as its parameter object.
     /// C99: §6.9.1 paragraph 10, p. 142; PDF p. 154.
-    fn copy_argument(
+    pub(super) fn copy_argument(
         &mut self,
         item: Item,
         source: SourceVectors,

@@ -434,9 +434,12 @@ impl<'b, 's> Draft<'b, 's> {
         assert!(
             matches!(
                 self.inst(inst),
-                InstData::Atomic { .. } | InstData::Call { .. } | InstData::CallIndirect { .. }
+                InstData::Atomic { .. }
+                    | InstData::Call { .. }
+                    | InstData::CallIndirect { .. }
+                    | InstData::InlineAsm { .. }
             ),
-            "owned operand lists belong only to calls and atomics"
+            "owned operand lists belong only to calls, inline assembly and atomics"
         );
         self.call_args[inst.index()] = Some(self.scratch.alloc_slice_copy(args));
     }
@@ -547,7 +550,8 @@ impl<'b, 's> Draft<'b, 's> {
                 | InstData::Load { addr, .. } => operand(addr),
                 | InstData::Atomic { args, .. }
                 | InstData::Call { args, .. }
-                | InstData::CallIndirect { args, .. } => self
+                | InstData::CallIndirect { args, .. }
+                | InstData::InlineAsm { args, .. } => self
                     .call_operands(inst, args)
                     .iter()
                     .copied()
@@ -693,6 +697,23 @@ impl<'s> Term<'s> {
             .chain(second)
             .chain(rest.iter().map(|(_, edge)| edge))
             .chain(listed)
+    }
+
+    /// The edge at `index` in [`Term::edges`] order, in constant time: a
+    /// large `switch` would otherwise make every lookup linear.
+    pub(super) fn edge(&self, index: usize) -> Option<&Edge<'s>> {
+        match self {
+            | Self::Jump(edge) => (index == 0).then_some(edge),
+            | Self::Brif {
+                then, otherwise, ..
+            } => [then, otherwise].get(index).copied(),
+            | Self::Switch { default, cases, .. } => match index.checked_sub(1) {
+                | None => Some(default),
+                | Some(case) => cases.get(case).map(|(_, edge)| edge),
+            },
+            | Self::IndirectBr { dests, .. } => dests.get(index),
+            | Self::Return(_) | Self::Unreachable => None,
+        }
     }
 
     /// Like [`Term::edges`], mutably.

@@ -112,7 +112,8 @@ pub(crate) fn allocate<'a>(
             | None => {},
         }
     }
-    let rep = coalesce::coalesce(func, &mut intervals, &depth, arena);
+    let pinned = liveness.live_across_returns_twice(func, arena);
+    let rep = coalesce::coalesce(func, &mut intervals, &depth, &pinned, arena);
     // A representative takes the first copy hint of the registers it
     // joined that names another representative.
     let mut rep_hints = ArenaVec::with_capacity_in(copy_hints.len(), arena);
@@ -199,6 +200,12 @@ impl Allocation<'_> {
         self.pieces(self.rep[vreg.index()])
             .iter()
             .map(|&(_, location)| location)
+    }
+
+    /// The register that represents `vreg` after coalescing.
+    #[cfg(test)]
+    pub(crate) fn representative(&self, vreg: VReg) -> VReg {
+        self.rep[vreg.index()]
     }
 
     /// Puts every piece of `vreg` in `location`, to show that the checker

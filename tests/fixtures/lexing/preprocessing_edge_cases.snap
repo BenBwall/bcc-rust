@@ -29,13 +29,14 @@ logical.c:10:10: integer constant `10` = 10 (int) [SourceVector { index: 30, col
 <test>:2:1: identifier `after` [SourceVector { index: 23, column: 1, line: 2, source_file_index: 0, length: 5 }]
 === "\"a\\q\" \"b\" 0xg identifier\n"
 [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 5 }]
-error: unknown escape sequence
+warning: unknown escape sequence `\q` [-Wunknown-escape-sequence]
  --> <test>:1:1
   |
 1 | "a\q" "b" 0xg identifier
   | ^^^^^ contains an escape C99 does not define
   |
   = note: C99 §6.4.4.4: the escapes are `\'`, `\"`, `\?`, `\\`, `\a`, `\b`, `\f`, `\n`, `\r`, `\t`, `\v`, octal `\ooo`, hexadecimal `\xhh`, and universal `\uXXXX` or `\UXXXXXXXX`
+  = help: it stands for `q`; write `\\` for a backslash
 
 
 [SourceVector { index: 10, column: 11, line: 1, source_file_index: 0, length: 3 }]
@@ -48,7 +49,7 @@ error: invalid hexadecimal integer constant `0xg`
   = note: C99 §6.4.4.1: hexadecimal digits are `0`-`9`, `a`-`f`, and `A`-`F`, optionally followed by an integer suffix such as `u`, `l`, or `ull`
 
 
-<test>:1:1: string literal "ab" [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 5 }, SourceVector { index: 6, column: 7, line: 1, source_file_index: 0, length: 3 }]
+<test>:1:1: string literal "aqb" [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 5 }, SourceVector { index: 6, column: 7, line: 1, source_file_index: 0, length: 3 }]
 <test>:1:11: integer constant `0xg` = 0 (int) [SourceVector { index: 10, column: 11, line: 1, source_file_index: 0, length: 3 }]
 <test>:1:15: identifier `identifier` [SourceVector { index: 14, column: 15, line: 1, source_file_index: 0, length: 10 }]
 === "#define C(a,b) a ## b\n#define M(x) C(x,0) C(x,1)\nM(int value)\n"

@@ -1,0 +1,21 @@
+[package]
+name = "wasm-explorer-smoke"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99.0"
+description = "Runs the bcc explorer compiled to WebAssembly in Node"
+license-file = "../../LICENSE"
+publish = false
+
+# A standalone workspace, like web/: it builds only for wasm32 and never
+# joins the compiler's native build or its dev-dependencies.
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+bcc-rust = { path = "../..", default-features = false, features = ["explorer"] }
+
+[profile.release]
+opt-level = "s"

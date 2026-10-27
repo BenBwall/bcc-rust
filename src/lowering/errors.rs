@@ -58,6 +58,12 @@ pub(crate) enum LoweringErrorKind {
     /// A fact lowering relies on is missing from the semantic results: a
     /// compiler bug, reported rather than turned into wrong code.
     MissingFact(&'static str),
+    /// `__builtin_va_arg_pack ()` (`false`) or `__builtin_va_arg_pack_len ()`
+    /// (`true`) where no call supplies the arguments: outside a copy of its
+    /// function expanded for a call, or the pack not as the last argument
+    /// after a callee's named parameters. GCC reports the same error.
+    /// GNU extension: GCC manual, "Constructing Calls".
+    InvalidArgumentPack(bool),
 }
 
 /// A construct outside the prototype subset of `middle-end.md`.
@@ -69,7 +75,12 @@ pub(crate) enum Construct {
     Vector,
     VariableLengthArray,
     LabelAddress,
+    /// MSVC `__asm` blocks.
     InlineAssembly,
+    /// A GNU `asm` operand in a register class or of a type lowering does
+    /// not implement: x87, MMX and register pairs, `__int128`, aggregates in
+    /// registers, or an immediate address with an offset.
+    InlineAssemblyOperand,
     /// A file-scope assembly template with NUL or bytes that are not
     /// UTF-8, which Clang accepts.
     FileScopeAssembly,
@@ -86,6 +97,9 @@ pub(crate) enum Construct {
     SelectionDeclaration,
     Extension,
     CompoundLiteralStorage,
+    /// An automatic object or compound literal of 4 GiB or more, beyond the
+    /// IR's 32-bit stack slot sizes.
+    LargeAutomaticObject,
 }
 
 /// The errors of one translation unit, in the `'ir` arena.
@@ -134,7 +148,9 @@ impl Construct {
             | Self::Vector => "vector types",
             | Self::VariableLengthArray => "variable length arrays",
             | Self::LabelAddress => "label addresses",
-            | Self::InlineAssembly => "inline assembly",
+            | Self::InlineAssembly => "MSVC inline assembly",
+            | Self::InlineAssemblyOperand =>
+                "inline assembly operands of this register class or type",
             | Self::FileScopeAssembly =>
                 "file-scope assembly templates containing NUL or bytes that are not UTF-8",
             | Self::AssemblerLabel => "assembler labels",
@@ -147,6 +163,7 @@ impl Construct {
             | Self::Initializer => "this initializer",
             | Self::SelectionDeclaration => "declarations in selection statements",
             | Self::Extension => "this extension",
+            | Self::LargeAutomaticObject => "automatic objects of 4 GiB or more",
             | Self::CompoundLiteralStorage =>
                 "compound literals with static or thread storage duration",
         }
@@ -196,6 +213,8 @@ impl LoweringErrorKind {
                  does not model",
             | Self::MissingFact(_) => "internal error: lowering is missing a semantic fact",
             | Self::InvalidFileScopeAsm(fault) => fault.message(),
+            | Self::InvalidArgumentPack(false) => "invalid use of '__builtin_va_arg_pack ()'",
+            | Self::InvalidArgumentPack(true) => "invalid use of '__builtin_va_arg_pack_len ()'",
         }
     }
 }
@@ -238,6 +257,12 @@ impl ToDiagnostic for LoweringError {
             | LoweringErrorKind::InvalidFileScopeAsm(_) => explanation
                 .label("invalid file-scope asm")
                 .note("asm outside a function takes exactly one narrow string literal"),
+            | LoweringErrorKind::InvalidArgumentPack(_) => explanation
+                .label("no call supplies the anonymous arguments here")
+                .note(
+                    "only a direct call of the variadic function using it, which is then always \
+                     inlined, can forward its anonymous arguments, as the last argument of a call",
+                ),
             | _ => explanation,
         };
         explanation.at(ErrorSeverity::Error, source)

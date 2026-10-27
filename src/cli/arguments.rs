@@ -30,6 +30,8 @@ use super::Cli;
 use crate::{
     configuration::{
         CompilerConfiguration,
+        CompilerIdentity,
+        DiagnosticFormat,
         DiagnosticGroup,
         ExtensionPolicy,
         LanguageMode,
@@ -89,6 +91,56 @@ pub(super) fn normalize_language_arguments(
             }
         } else if text.starts_with("-D") || text.starts_with("-U") {
             normalized.push(format!("--preprocessing-option={}", &text[1..]).into());
+        } else if let Some(option) = dependency_option(text, &mut arguments) {
+            normalized.push(option);
+        } else if let Some(format) = text.strip_prefix("-fdiagnostics-format=") {
+            normalized.push(format!("--diagnostic-format={format}").into());
+        } else if text == "-fsyntax-only" {
+            normalized.push("--syntax-only".into());
+        } else if text == "-dM" {
+            normalized.push("--dump-macros".into());
+        } else if text == "-x" {
+            normalized.push("--language".into());
+            opaque_value = true;
+        } else if let Some(language) = text.strip_prefix("-x") {
+            normalized.push(format!("--language={language}").into());
+        } else if text.starts_with("-Wa,") {
+            normalized.push(format!("--assembler-option={text}").into());
+        } else if text == "-Xassembler" {
+            normalized.push("--assembler-option=-Xassembler".into());
+            if let Some(operand) = arguments.next() {
+                let mut option = std::ffi::OsString::from("--assembler-option=");
+                option.push(operand);
+                normalized.push(option);
+            }
+        } else if matches!(text, "-l" | "-L" | "-Xlinker") {
+            // The operand is the next argument, which keeps its place
+            // among the inputs.
+            let operand = arguments.next();
+            if text == "-Xlinker" {
+                normalized.push("--link-option=-Xlinker".into());
+                if let Some(operand) = operand {
+                    let mut option = std::ffi::OsString::from("--link-option=");
+                    option.push(operand);
+                    normalized.push(option);
+                }
+            } else {
+                let mut option = std::ffi::OsString::from(format!("--link-option={text}"));
+                if let Some(operand) = operand {
+                    option.push(operand);
+                }
+                normalized.push(option);
+            }
+        } else if text == "-pthread" {
+            // GCC and Clang link the thread library and define `_REENTRANT`.
+            normalized.push("--link-option=-pthread".into());
+            normalized.push("--preprocessing-option=D_REENTRANT".into());
+        } else if text.starts_with("-l")
+            || text.starts_with("-L")
+            || text.starts_with("-Wl,")
+            || SINGLE_DASH_LINKER_OPTIONS.contains(&text)
+        {
+            normalized.push(format!("--link-option={text}").into());
         } else if text == "-O" {
             normalized.push("--optimization=O1".into());
         } else if let Some(value) = text.strip_prefix("-O") {
@@ -144,6 +196,13 @@ pub(super) fn normalize_language_arguments(
                     | "--interpret-step-limit"
                     | "--language-option"
                     | "--preprocessing-option"
+                    | "--language"
+                    | "--link-option"
+                    | "--assembler-option"
+                    | "--dependency-file"
+                    | "--dependency-target"
+                    | "--compiler-identity"
+                    | "--diagnostic-format"
                     | "-o"
                     | "--output"
             );
@@ -151,6 +210,81 @@ pub(super) fn normalize_language_arguments(
         }
     }
     Ok(normalized)
+}
+
+/// GCC's dependency options as the driver's: `-M`, `-MM`, `-MD`, `-MMD`,
+/// `-MP`, and `-MF`, `-MT` and `-MQ` with their operand joined or next.
+/// `-MQ` quotes its target for make as GCC does.
+#[expect(
+    clippy::disallowed_types,
+    clippy::disallowed_macros,
+    reason = "Startup argv normalization owns OS strings beside clap."
+)]
+fn dependency_option(
+    text: &str,
+    arguments: &mut impl Iterator<Item = std::ffi::OsString>,
+) -> Option<std::ffi::OsString> {
+    let fixed = match text {
+        | "-M" => Some("--dependencies=all"),
+        | "-MM" => Some("--dependencies=user"),
+        | "-MD" => Some("--write-dependencies=all"),
+        | "-MMD" => Some("--write-dependencies=user"),
+        | "-MP" => Some("--phony-dependencies"),
+        | _ => None,
+    };
+    if let Some(fixed) = fixed {
+        return Some(fixed.into());
+    }
+    let (flag, joined) = ["-MF", "-MT", "-MQ"]
+        .into_iter()
+        .find_map(|flag| Some((flag, text.strip_prefix(flag)?)))?;
+    let operand = if joined.is_empty() {
+        arguments.next()?.to_string_lossy().into_owned()
+    } else {
+        joined.into()
+    };
+    Some(
+        match flag {
+            | "-MF" => format!("--dependency-file={operand}"),
+            | "-MT" => format!("--dependency-target={operand}"),
+            | _ => format!("--dependency-target={}", quote_for_make(&operand)),
+        }
+        .into(),
+    )
+}
+
+/// `target` with the characters make treats specially escaped, as GCC's
+/// `-MQ` writes it: `$` doubled, `#` and blanks backslashed, and the
+/// backslashes before a blank doubled.
+#[expect(
+    clippy::disallowed_types,
+    reason = "Startup argv normalization owns its strings beside clap."
+)]
+fn quote_for_make(target: &str) -> String {
+    let mut quoted = String::with_capacity(target.len());
+    let mut backslashes = 0;
+    for character in target.chars() {
+        match character {
+            | '\\' => backslashes += 1,
+            | ' ' | '\t' => {
+                for _ in 0..=backslashes {
+                    quoted.push('\\');
+                }
+                backslashes = 0;
+            },
+            | '$' => {
+                quoted.push('$');
+                backslashes = 0;
+            },
+            | '#' => {
+                quoted.push('\\');
+                backslashes = 0;
+            },
+            | _ => backslashes = 0,
+        }
+        quoted.push(character);
+    }
+    quoted
 }
 
 /// Clang's numeric aliases are driver policy, before clap sees the internal
@@ -207,6 +341,8 @@ impl Cli {
             .with_optimization(self.code_generation.optimization_macros())
             .with_source_date_epoch(self.source_date_epoch.and_then(|epoch| epoch.0))
             .with_suppress_warnings(self.suppress_warnings)
+            .with_compiler_identity(self.compiler_identity.into())
+            .with_diagnostic_format(self.diagnostic_format.into())
             .with_max_nesting_depth(self.max_nesting_depth)
     }
 
@@ -266,6 +402,37 @@ impl Cli {
             .map(String::as_str)
     }
 
+    /// The library functions code generation may treat as builtins, from
+    /// `-fbuiltin`, `-fno-builtin` and `-fno-builtin-NAME` in order, as
+    /// GCC reads them. `-ffreestanding` allows none, which lowering applies.
+    pub(super) fn library_builtins<'tu>(
+        &self,
+        arena: &'tu crate::util::bump::Bump,
+    ) -> crate::configuration::LibraryBuiltins<'tu> {
+        use crate::configuration::LibraryBuiltins;
+        let mut none = false;
+        let mut excluded = crate::util::bump::ArenaVec::new_in(arena);
+        for option in &self.language_option {
+            match option.as_str() {
+                // As in GCC, `-fbuiltin` undoes `-fno-builtin` but keeps
+                // the functions `-fno-builtin-NAME` named.
+                | "-fbuiltin" => none = false,
+                | "-fno-builtin" => none = true,
+                | _ =>
+                    if let Some(name) = option.strip_prefix("-fno-builtin-") {
+                        excluded.push(&*arena.alloc_str(name));
+                    },
+            }
+        }
+        if none {
+            LibraryBuiltins::None
+        } else if excluded.is_empty() {
+            LibraryBuiltins::All
+        } else {
+            LibraryBuiltins::Except(excluded.leak())
+        }
+    }
+
     pub(super) fn configure_preprocessing(&self, context: &mut Context<'_>) {
         let tu = context.tu_arena();
         context.preprocessing_options =
@@ -278,6 +445,77 @@ impl Cli {
                     | _ => PreprocessingOption::Include(value),
                 }
             }));
+    }
+}
+
+/// Whether bcc implements the GCC-style `-W`, `-f`, `-pedantic` or
+/// `-Werror` option `text` itself, rather than only accepting it for a
+/// driver personality.
+pub(super) fn implements_language_option(text: &str) -> bool {
+    text.starts_with("-ftls-model=")
+        || text.starts_with("-fdiagnostics-format=")
+        || LanguageFlag::parse(text)
+            .is_some_and(|flag| !matches!(flag, LanguageFlag::UnknownWarning))
+}
+
+/// `--compiler-identity`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, clap::ValueEnum)]
+pub(super) enum Identity {
+    Clang,
+    Gcc,
+    Msvc,
+    ClangCl,
+    Tcc,
+}
+
+impl From<Identity> for CompilerIdentity {
+    fn from(identity: Identity) -> Self {
+        match identity {
+            | Identity::Clang => Self::Clang,
+            | Identity::Gcc => Self::Gcc,
+            | Identity::Msvc => Self::Msvc,
+            | Identity::ClangCl => Self::ClangCl,
+            | Identity::Tcc => Self::Tcc,
+        }
+    }
+}
+
+/// `--diagnostic-format`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, clap::ValueEnum)]
+pub(super) enum Format {
+    Bcc,
+    Clang,
+    Gcc,
+    /// `file(line,col):`, as clang-cl writes and `cl /diagnostics:column`.
+    Msvc,
+    /// `file(line):`, `cl /diagnostics:classic`.
+    MsvcClassic,
+    /// `file(line,col):` and the snippet, `cl /diagnostics:caret`.
+    MsvcCaret,
+    /// `file:line:`, without a snippet.
+    Tcc,
+}
+
+impl From<Format> for DiagnosticFormat {
+    fn from(format: Format) -> Self {
+        match format {
+            | Format::Bcc => Self::Bcc,
+            | Format::Clang => Self::Clang,
+            | Format::Gcc => Self::Gcc,
+            | Format::Msvc => Self::Msvc {
+                column: true,
+                caret:  false,
+            },
+            | Format::MsvcClassic => Self::Msvc {
+                column: false,
+                caret:  false,
+            },
+            | Format::MsvcCaret => Self::Msvc {
+                column: true,
+                caret:  true,
+            },
+            | Format::Tcc => Self::Tcc,
+        }
     }
 }
 
@@ -300,6 +538,25 @@ enum LanguageFlag {
     Hosted(bool),
     /// `-fgnu89-inline` or `-fno-gnu89-inline`.
     Gnu89Inline(bool),
+    /// `-fsigned-char` or `-fno-unsigned-char` (true), `-funsigned-char` or
+    /// `-fno-signed-char` (false).
+    CharSigned(bool),
+    /// `-ffloatn-types` or `-fno-floatn-types`, bcc's own switch for the
+    /// `_FloatN` keywords a GCC identity provides.
+    InterchangeFloatTypes(bool),
+    /// `-trigraphs` or `-ftrigraphs` (true), or `-fno-trigraphs`.
+    Trigraphs(bool),
+    /// `-fwrapv` (true), or `-fno-wrapv` and `-fstrict-overflow`.
+    Wrapv(bool),
+    /// `-fpack-struct=N`.
+    PackStruct(u32),
+    /// `-fpack-struct` (true) or `-fno-pack-struct`, which also clears N.
+    PackAll(bool),
+    /// `-fvisibility=default|hidden|protected|internal`.
+    Visibility(crate::configuration::DefaultVisibility),
+    /// `-fbuiltin`, `-fno-builtin` or `-fno-builtin-NAME`, which
+    /// [`Cli::library_builtins`] reads in order.
+    Builtins,
     /// A `-fpic`-family flag, which [`Cli::code_options`] reads in order.
     Relocation,
 }
@@ -321,6 +578,41 @@ impl LanguageFlag {
             | "-ffreestanding" => return Some(Self::Hosted(false)),
             | "-fgnu89-inline" => return Some(Self::Gnu89Inline(true)),
             | "-fno-gnu89-inline" => return Some(Self::Gnu89Inline(false)),
+            | "-fsigned-char" | "-fno-unsigned-char" => return Some(Self::CharSigned(true)),
+            | "-funsigned-char" | "-fno-signed-char" => return Some(Self::CharSigned(false)),
+            | "-ffloatn-types" => return Some(Self::InterchangeFloatTypes(true)),
+            | "-fno-floatn-types" => return Some(Self::InterchangeFloatTypes(false)),
+            | "-trigraphs" | "-ftrigraphs" => return Some(Self::Trigraphs(true)),
+            | "-fno-trigraphs" => return Some(Self::Trigraphs(false)),
+            | "-fwrapv" => return Some(Self::Wrapv(true)),
+            | "-fno-wrapv" | "-fstrict-overflow" => return Some(Self::Wrapv(false)),
+            | "-fbuiltin" | "-fno-builtin" => return Some(Self::Builtins),
+            | "-fpack-struct" => return Some(Self::PackAll(true)),
+            | "-fno-pack-struct" => return Some(Self::PackAll(false)),
+            | _ => {},
+        }
+        if text
+            .strip_prefix("-fno-builtin-")
+            .is_some_and(|name| !name.is_empty())
+        {
+            return Some(Self::Builtins);
+        }
+        if let Some(value) = text.strip_prefix("-fvisibility=") {
+            use crate::configuration::DefaultVisibility as V;
+            return match value {
+                | "default" => Some(Self::Visibility(V::Default)),
+                | "hidden" | "internal" => Some(Self::Visibility(V::Hidden)),
+                | "protected" => Some(Self::Visibility(V::Protected)),
+                | _ => None,
+            };
+        }
+        if let Some(value) = text.strip_prefix("-fpack-struct=") {
+            return match value {
+                | "1" | "2" | "4" | "8" | "16" => value.parse().ok().map(Self::PackStruct),
+                | _ => None,
+            };
+        }
+        match text {
             | _ => {},
         }
         if Relocation::parse(text).is_some() {
@@ -355,7 +647,8 @@ impl LanguageFlag {
 
     fn apply(self, configuration: CompilerConfiguration) -> CompilerConfiguration {
         match self {
-            | Self::UnknownWarning | Self::ExtraWarnings | Self::Relocation => configuration,
+            | Self::UnknownWarning | Self::ExtraWarnings | Self::Relocation | Self::Builtins =>
+                configuration,
             | Self::AllWarnings(enabled) => configuration.with_warning_option(
                 DiagnosticGroup::UnusedFunction,
                 WarningOption::Enable(enabled),
@@ -381,6 +674,17 @@ impl LanguageFlag {
                 configuration.with_msvc_feature(feature, enabled),
             | Self::Hosted(hosted) => configuration.with_hosted(hosted),
             | Self::Gnu89Inline(enabled) => configuration.with_gnu89_inline(enabled),
+            | Self::CharSigned(signed) => configuration.with_char_signed(signed),
+            | Self::InterchangeFloatTypes(enabled) =>
+                configuration.with_interchange_float_types(enabled),
+            | Self::Trigraphs(enabled) => configuration.with_trigraphs(enabled),
+            | Self::Wrapv(enabled) => configuration.with_wrapv(enabled),
+            | Self::PackStruct(alignment) => configuration.with_default_pack(alignment),
+            | Self::PackAll(true) => configuration.with_pack_structures(true),
+            | Self::PackAll(false) => configuration
+                .with_pack_structures(false)
+                .with_default_pack(0),
+            | Self::Visibility(visibility) => configuration.with_default_visibility(visibility),
         }
     }
 }
@@ -393,11 +697,17 @@ impl LanguageFlag {
 )]
 pub(super) struct CliInput {
     /// Input string to be parsed.
-    #[clap(short, long, conflicts_with = "input_file", allow_hyphen_values = true)]
-    pub(super) input:      Option<String>,
-    /// Input file to be parsed.
+    #[clap(
+        short,
+        long,
+        conflicts_with = "input_files",
+        allow_hyphen_values = true
+    )]
+    pub(super) input:       Option<String>,
+    /// Input files: C sources, `-` for stdin, assembly, and the objects,
+    /// archives and libraries to link.
     #[clap(conflicts_with = "input")]
-    pub(super) input_file: Option<PathBuf>,
+    pub(super) input_files: Vec<PathBuf>,
 }
 
 /// The seconds since the Unix epoch that `__DATE__` and `__TIME__` spell,
@@ -450,6 +760,19 @@ const SINGLE_DASH_SEARCH_FLAGS: [&str; 6] = [
     "nostdinc",
     "nostdlibinc",
     "nobuiltininc",
+];
+
+/// GCC's linker options without an operand, which the driver passes to the
+/// link in order with the inputs.
+const SINGLE_DASH_LINKER_OPTIONS: [&str; 8] = [
+    "-static",
+    "-nostdlib",
+    "-nostartfiles",
+    "-nodefaultlibs",
+    "-rdynamic",
+    "-pthread",
+    "-static-libgcc",
+    "-shared-libgcc",
 ];
 
 /// GCC's single-dash link options, which clap receives with two dashes:

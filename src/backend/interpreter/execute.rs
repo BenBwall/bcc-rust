@@ -21,16 +21,19 @@ use super::{
     },
     value::RuntimeValue,
 };
-use crate::ir::{
-    Body,
-    Entity,
-    FuncId,
-    Inst,
-    InstData,
-    InstFlags,
-    Opcode,
-    Type,
-    Value,
+use crate::{
+    ir::{
+        Body,
+        Entity,
+        FuncId,
+        Inst,
+        InstData,
+        InstFlags,
+        Opcode,
+        Type,
+        Value,
+    },
+    x87::X87,
 };
 
 impl Machine<'_, '_, '_> {
@@ -162,6 +165,9 @@ impl Machine<'_, '_, '_> {
                                 RuntimeValue::F32(if op == A::Fmin { a.min(b) } else { a.max(b) }),
                             | (RuntimeValue::F64(a), RuntimeValue::F64(b)) =>
                                 RuntimeValue::F64(if op == A::Fmin { a.min(b) } else { a.max(b) }),
+                            | (RuntimeValue::F80(a), RuntimeValue::F80(b)) => RuntimeValue::F80(
+                                super::arithmetic::extended_min_max(op == A::Fmin, a, b),
+                            ),
                             | _ => RuntimeValue::Poison,
                         },
                         | _ => unreachable!("handled atomic operation"),
@@ -255,7 +261,7 @@ impl Machine<'_, '_, '_> {
                     },
                     | Type::F64 => RuntimeValue::F64(f64::from_bits(truncate_u64(bits))),
                     | Type::F128 => RuntimeValue::F128(bits),
-                    | Type::F80 => return Err(Fault::Unsupported(Unsupported::WideFloat)),
+                    | Type::F80 => RuntimeValue::F80(X87::from_bits(bits)),
                     | _ => RuntimeValue::int(ty, bits),
                 }
             },
@@ -365,6 +371,9 @@ impl Machine<'_, '_, '_> {
                     host,
                     self.module.function_signature(func),
                 ),
+            // The machine code of inline assembly is outside the IR's
+            // semantics; skipping it could silently change the program.
+            | InstData::InlineAsm { .. } => return Err(Fault::Unsupported(Unsupported::InlineAsm)),
             | InstData::CallIndirect { sig, args } => {
                 let (&callee, args) = body
                     .value_list(args)

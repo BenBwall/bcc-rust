@@ -673,7 +673,7 @@ mod tests {
         ]);
         let stderr = String::from_utf8_lossy(&output.stderr);
 
-        assert!(output.status.success(), "{output:?}");
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
         let header = std::path::Path::new("test-programs").join("once.h");
         assert!(
             stderr.contains(&format!(
@@ -695,7 +695,7 @@ mod tests {
         ]);
         let stderr = String::from_utf8_lossy(&output.stderr);
 
-        assert!(output.status.success(), "{output:?}");
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
         assert!(
             stderr
                 .contains("error: expected `,`, `=`, `;`, or a function body after the declarator"),
@@ -756,7 +756,7 @@ mod tests {
         let output = run(&["--input", "#if 1.5L\n#endif\nint x;\n"]);
         let stderr = String::from_utf8_lossy(&output.stderr);
 
-        assert!(output.status.success(), "{output:?}");
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
         assert!(
             stderr.contains("error: floating constant in `#if` expression"),
             "{stderr}"
@@ -873,7 +873,13 @@ mod tests {
     fn stderr_of(arguments: &[&str]) -> String {
         let output = run(arguments);
         let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-        assert!(output.status.success(), "{arguments:?}: {output:?}");
+        // A command fails exactly when it reported an error.
+        let errors = stderr.lines().any(|line| line.starts_with("error"));
+        assert_eq!(
+            output.status.code(),
+            Some(i32::from(errors)),
+            "{arguments:?}: {output:?}"
+        );
         assert!(!stderr.contains("panicked"), "{arguments:?}: {stderr}");
         stderr
     }

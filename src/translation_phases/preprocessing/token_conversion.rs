@@ -30,6 +30,7 @@ use super::{
         ImaginaryIntegerKind,
         IntegerSuffix,
         IntegerTokenType,
+        InterchangeFloat,
         KeywordTokenType,
         LiteralEncoding,
         LiteralId,
@@ -45,6 +46,7 @@ use super::{
 use crate::{
     configuration::{
         CStandard,
+        DiagnosticGroup,
         Feature,
     },
     float_parsing::{
@@ -521,6 +523,20 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                     TokenType::Float(FloatTokenType::ImaginaryFloat128(v)),
                 | TokenType::Float(FloatTokenType::LongDouble(v)) =>
                     TokenType::Float(FloatTokenType::ImaginaryLongDouble(v)),
+                // No imaginary interchange or extended constants are
+                // modeled.
+                | TokenType::Float(
+                    FloatTokenType::Float32(_)
+                    | FloatTokenType::Float64(_)
+                    | FloatTokenType::Float32x(_)
+                    | FloatTokenType::Float64x(_),
+                ) => {
+                    self.context.preprocessor_error(PreprocessorError {
+                        error_type:     PreprocessorErrorType::InvalidDecimalFloatLiteral,
+                        source_vectors: token.source_vectors,
+                    });
+                    real_token.kind
+                },
                 | TokenType::Integer(v) => {
                     let component = match v {
                         | IntegerTokenType::Int(_) => ImaginaryIntegerKind::Int,
@@ -670,7 +686,10 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
     /// digits and must not name a surrogate or a character below U+00A0 other
     /// than `$`, `@`, and `` ` `` (§6.4.3 paragraphs 1-2, p. 53; PDF p. 65).
     /// Any other character after `\` requires a diagnostic (footnote 65,
-    /// p. 60; PDF p. 72).
+    /// p. 60; PDF p. 72): GNU `\e` and `\E` are ESC, an extension (GCC
+    /// manual, "The Character ESC in Constants"), and any other stands for
+    /// itself after an `unknown-escape-sequence` warning, as in GCC and
+    /// Clang.
     fn eval_escape_sequences(
         context: &mut Context<'_>,
         token: PreprocessorToken,
@@ -699,6 +718,7 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
             string.len()
         };
         let mut failed = false;
+        let mut escape_character = false;
         while index < end {
             let c = string[index..].chars().next().unwrap();
             index += c.len_utf8();
@@ -722,6 +742,10 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                     | 't' => Some(LiteralUnit::Character('\t')),
                     | 'v' => Some(LiteralUnit::Character('\x0b')),
                     | '\'' | '"' | '?' | '\\' => Some(LiteralUnit::Character(c)),
+                    | 'e' | 'E' => {
+                        escape_character = true;
+                        Some(LiteralUnit::Character('\x1b'))
+                    },
                     | 'x' | 'o'
                         if string.as_bytes().get(index) == Some(&b'{')
                             && context.configuration.accepts(Feature::DelimitedEscapes) =>
@@ -832,9 +856,26 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                             None
                         }
                     },
+                    // An unknown escape stands for its character, as in GCC
+                    // and Clang, which warn (C99 §6.11.4p1 reserves the
+                    // lowercase letters and leaves others to extensions).
                     | _ => {
-                        error = Some(PreprocessorErrorType::InvalidEscapeSequence);
-                        None
+                        if context
+                            .group_severity(
+                                DiagnosticGroup::UnknownEscapeSequence,
+                                token.source_vectors,
+                            )
+                            .is_some()
+                        {
+                            Context::raw_preprocessor_error(
+                                &mut context.pending_errors,
+                                PreprocessorError {
+                                    error_type:     PreprocessorErrorType::UnknownEscapeSequence(c),
+                                    source_vectors: token.source_vectors,
+                                },
+                            );
+                        }
+                        Some(LiteralUnit::Character(c))
                     },
                 }
             };
@@ -851,6 +892,13 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                     },
                 );
             }
+        }
+        if escape_character {
+            context.report_extension(
+                Feature::EscapeCharacter,
+                "\\e escape sequence",
+                token.source_vectors,
+            );
         }
         failed
     }
@@ -1039,10 +1087,7 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
         if !did_overflow
             && self
                 .context
-                .group_severity(
-                    crate::configuration::DiagnosticGroup::ConstantPromotion,
-                    token.source_vectors,
-                )
+                .group_severity(DiagnosticGroup::ConstantPromotion, token.source_vectors)
                 .is_some()
         {
             match (candidates[0], constant_type) {
@@ -1187,6 +1232,28 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
         } else {
             &normalized
         };
+        // An interchange or extended suffix reads its value as the standard
+        // suffix of the same representation would, then names its own type.
+        let interchange = self
+            .context
+            .configuration
+            .accepts(Feature::InterchangeFloatTypes)
+            .then(|| interchange_suffix(contents))
+            .flatten();
+        let mut standard = ArenaString::new_in(self.scratch);
+        let contents = if let Some((format, length)) = interchange {
+            standard.push_str(&contents[..contents.len() - 1 - length]);
+            standard.push_str(match format {
+                | InterchangeFloat::Float32 => "f",
+                | InterchangeFloat::Float64 | InterchangeFloat::Float32x => "",
+                | InterchangeFloat::Float64x => "l",
+                | InterchangeFloat::Float128 => "q",
+            });
+            standard.push('\0');
+            &standard
+        } else {
+            contents
+        };
         let suffix = contents.char_at(contents.len() - 2);
         let res = match suffix {
             | Some('q' | 'Q') =>
@@ -1204,6 +1271,29 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
             | Some('l' | 'L') => string_to_long_double(contents).map(FloatTokenType::LongDouble),
             | _ =>
                 string_to_double(contents).map(|value| FloatTokenType::Double(Packed::new(value))),
+        };
+        let res = match interchange {
+            | Some((format, _)) => {
+                let retype = |kind| match (format, kind) {
+                    | (InterchangeFloat::Float32, FloatTokenType::Float(v)) =>
+                        FloatTokenType::Float32(v),
+                    | (InterchangeFloat::Float64, FloatTokenType::Double(v)) =>
+                        FloatTokenType::Float64(v),
+                    | (InterchangeFloat::Float32x, FloatTokenType::Double(v)) =>
+                        FloatTokenType::Float32x(v),
+                    | (InterchangeFloat::Float64x, FloatTokenType::LongDouble(v)) =>
+                        FloatTokenType::Float64x(v),
+                    | (_, kind) => kind,
+                };
+                match res {
+                    | Ok(kind) => Ok(retype(kind)),
+                    | Err(ParseFloatError::Invalid(kind)) =>
+                        Err(ParseFloatError::Invalid(retype(kind))),
+                    | Err(ParseFloatError::OutOfRange(kind, error)) =>
+                        Err(ParseFloatError::OutOfRange(retype(kind), error)),
+                }
+            },
+            | None => res,
         };
         match res {
             | Ok(kind) => Token {
@@ -1513,4 +1603,32 @@ fn literal_encoding(spelling: &str) -> Option<LiteralEncoding> {
     } else {
         None
     }
+}
+
+/// The interchange or extended format a floating constant's suffix names,
+/// and the suffix's length: `f` or `F` followed by `32`, `64` or `128`, or by
+/// `32` or `64` and then a lowercase `x` (`fNx`, `FNx`; GCC rejects `f32X`).
+/// `contents` ends with a NUL.
+/// C23: §H.5.2 paragraph 2, p. 560; PDF p. 573. `f16` and `f128x` name
+/// types bcc does not provide.
+fn interchange_suffix(contents: &str) -> Option<(InterchangeFloat, usize)> {
+    let spelling = contents.strip_suffix('\0').unwrap_or(contents);
+    // A hexadecimal significand ends at its binary exponent, so `f` there
+    // starts a suffix only after the exponent's digits.
+    let hexadecimal = spelling.starts_with("0x") || spelling.starts_with("0X");
+    let (format, length) = [
+        ("32", InterchangeFloat::Float32),
+        ("64", InterchangeFloat::Float64),
+        ("128", InterchangeFloat::Float128),
+        ("32x", InterchangeFloat::Float32x),
+        ("64x", InterchangeFloat::Float64x),
+    ]
+    .into_iter()
+    .find_map(|(digits, format)| {
+        let rest = spelling.strip_suffix(digits)?;
+        let rest = rest.strip_suffix(['f', 'F'])?;
+        (!hexadecimal || rest.contains(['p', 'P'])).then_some((format, digits.len() + 1))
+    })?;
+    // The significand must remain: `1.f32` keeps `1.`.
+    (spelling.len() > length).then_some((format, length))
 }

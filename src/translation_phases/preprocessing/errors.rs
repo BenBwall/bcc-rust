@@ -379,10 +379,14 @@ pub(crate) enum PreprocessorErrorType<'tu> {
     // only a replacement list gives a meaning, §6.10.3.3, p. 154; PDF p. 166.
     HashHashUsedOutsideOfMacro,
     CannotUseHashHashAfterFunctionLikeMacroCall,
-    /// A `\` followed by a character that begins no escape sequence.
+    /// A `\` followed by a character that begins no escape sequence, which
+    /// stands for that character, as in GCC and Clang. A warning in the
+    /// `unknown-escape-sequence` group; `-pedantic-errors` makes it an error.
     ///
-    /// C99: §6.4.4.4 paragraph 1 and footnote 65, pp. 59-60; PDF pp. 71-72.
-    InvalidEscapeSequence,
+    /// C99: §6.4.4.4 paragraph 1 and footnote 65, pp. 59-60; PDF pp. 71-72
+    /// require a diagnostic; using the character is an extension (§6.11.4,
+    /// p. 163; PDF p. 175 reserves the lowercase letters).
+    UnknownEscapeSequence(char),
     /// A `#line` file name that is not a path; how names map to files is the
     /// implementation's.
     ///
@@ -442,6 +446,10 @@ pub(crate) enum PreprocessorErrorType<'tu> {
     MissingNumberInLineDirective(PreprocessorTokenType),
     MissingNewlineAfterLineDirective(PreprocessorTokenType),
     LineDirectiveIsNotASimpleDigitSequence,
+    /// A line-marker flag out of GCC's order `[1|2] [3 [4]]`, or not a
+    /// flag at all; the flags after it are ignored, as in GCC.
+    /// GNU extension: GCC preprocessor manual, "Preprocessor Output".
+    InvalidLineMarkerFlag(&'tu str),
     /// A `#line` number above 2147483647. As in Clang, a number up to
     /// 4294967295 is applied and reported only under -pedantic; a larger one
     /// is an error and is ignored.
@@ -1067,9 +1075,18 @@ impl PreprocessorErrorType<'_> {
                     .label("pasting onto an invocation is not supported"),
             | Self::InvalidLineFilename => new("line filename is not representable as a path")
                 .label("use a UTF-8 filename without NUL characters"),
-            | Self::InvalidEscapeSequence => new("unknown escape sequence")
-                .label("contains an escape C99 does not define")
-                .note(ESCAPE_LIST_NOTE),
+            | Self::UnknownEscapeSequence(character) => new(format_in!(
+                arena,
+                "unknown escape sequence `\\{}` [-Wunknown-escape-sequence]",
+                character.escape_debug()
+            ))
+            .label("contains an escape C99 does not define")
+            .note(ESCAPE_LIST_NOTE)
+            .help(format_in!(
+                arena,
+                "it stands for `{}`; write `\\\\` for a backslash",
+                character.escape_debug()
+            )),
             | Self::UnterminatedEscapeSequence => new("incomplete escape sequence")
                 .label("`\\` ends the literal")
                 .help("write `\\\\` for a backslash character"),
@@ -1214,6 +1231,13 @@ impl PreprocessorErrorType<'_> {
                 kind.found(spelling)
             ))
             .label("`#line` takes a number and an optional file name"),
+            | Self::InvalidLineMarkerFlag(flag) =>
+                new(format_in!(arena, "invalid flag `{flag}` in line marker"))
+                    .label("not a flag here")
+                    .note(
+                        "GCC line markers take the flags 1 or 2, then 3, then 4, each at most \
+                         once and in increasing order; 4 only after 3",
+                    ),
             | Self::LineDirectiveIsNotASimpleDigitSequence =>
                 new("`#line` needs a plain decimal line number")
                     .label("not a digit sequence")
@@ -1477,6 +1501,7 @@ impl GetSeverity for PreprocessorError<'_> {
     fn severity(&self) -> ErrorSeverity {
         match self.error_type {
             | PreprocessorErrorType::UnexpectedEndOfInput(_)
+            | PreprocessorErrorType::InvalidLineMarkerFlag(_)
             | PreprocessorErrorType::InvalidHexadecimalFloatLiteral
             | PreprocessorErrorType::InvalidDecimalFloatLiteral
             | PreprocessorErrorType::InvalidHexadecimalIntegerLiteral
@@ -1512,7 +1537,6 @@ impl GetSeverity for PreprocessorError<'_> {
             | PreprocessorErrorType::HashHashUsedOutsideOfMacro
             | PreprocessorErrorType::CannotUseHashHashAfterFunctionLikeMacroCall
             | PreprocessorErrorType::InvalidLineFilename
-            | PreprocessorErrorType::InvalidEscapeSequence
             | PreprocessorErrorType::UnterminatedEscapeSequence
             | PreprocessorErrorType::InvalidHexEscapeSequence
             | PreprocessorErrorType::HexEscapeSequenceTooLarge
@@ -1637,6 +1661,7 @@ impl GetSeverity for PreprocessorError<'_> {
             | PreprocessorErrorType::HashMustBeFollowedByIdentifier
             | PreprocessorErrorType::LineDirectiveIsNotASimpleDigitSequence
             | PreprocessorErrorType::UnknownPragmaDirective
+            | PreprocessorErrorType::UnknownEscapeSequence(_)
             | PreprocessorErrorType::UnknownPragmaSTDCArgument(..)
             | PreprocessorErrorType::ExtraTokensAfterPragmaOnce(..)
             | PreprocessorErrorType::ExtraTokensAfterPragmaOperator

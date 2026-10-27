@@ -35,6 +35,7 @@ use crate::{
         },
         native::{
             assemble,
+            driver::libraries,
             emit_assembly,
         },
     },
@@ -169,9 +170,12 @@ fn run_assembly(
         | Runner::Wsl => {
             std::fs::write(directory.join(format!("{name}.s")), text)
                 .map_err(|error| error.to_string())?;
+            // The libraries the driver links (`-latomic`), so that this
+            // link cannot drift from it.
             let build = run_wsl(
                 Command::new("wsl.exe")
                     .args(["-e", "clang", "-o", name, &format!("{name}.s")])
+                    .args(libraries(text))
                     .current_dir(directory),
             )
             .map_err(|error| error.to_string())?;

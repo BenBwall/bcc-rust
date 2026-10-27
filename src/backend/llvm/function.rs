@@ -541,6 +541,13 @@ impl<'id, 'm> BodyBuilder<'_, 'id, 'm, '_> {
                 }
                 call
             },
+            | InstData::InlineAsm { asm, args } => {
+                self.inline_asm(
+                    self.emitter.module.inline_asm(asm),
+                    self.body.value_list(args),
+                )?;
+                return Ok(None);
+            },
             | InstData::Jump { dest } => api.jump(self.destination(dest)?),
             | InstData::Brif {
                 cond,
@@ -743,6 +750,161 @@ impl<'id, 'm> BodyBuilder<'_, 'id, 'm, '_> {
         Ok(call)
     }
 }
+
+impl<'m> BodyBuilder<'_, '_, 'm, '_> {
+    /// Calls an LLVM inline assembly value built as Clang builds it:
+    /// register and flag outputs are the call's results, stored to their
+    /// output pointers after it; memory operands pass their address with
+    /// an `elementtype` (`=*m`, `*m`); every x86 statement clobbers the
+    /// flags (`~{dirflag},~{fpsr},~{flags}`), and `memory` adds
+    /// `~{memory}`.
+    /// GNU extension: GCC manual, "Extended Asm". LLVM Language Reference,
+    /// "Inline Asm Constraint String".
+    fn inline_asm(
+        &self,
+        asm: &crate::ir::InlineAsm<'_>,
+        args: &[Value],
+    ) -> Result<(), EmitError<'m>> {
+        use crate::ir::AsmConstraint as C;
+        let api = self.emitter.api;
+        let arena = self.emitter.arena;
+        let mut constraints = ArenaString::new_in(arena);
+        let mut results = ArenaVec::new_in(arena);
+        let mut params = ArenaVec::new_in(arena);
+        let mut values = ArenaVec::new_in(arena);
+        let mut elements = ArenaVec::new_in(arena);
+        for (operand, &arg) in asm.operands.iter().zip(args) {
+            if !constraints.is_empty() {
+                constraints.push(',');
+            }
+            if operand.output {
+                constraints.push('=');
+            }
+            if operand.early_clobber {
+                constraints.push('&');
+            }
+            match operand.constraint {
+                | C::Memory => {
+                    constraints.push_str("*m");
+                    let element = if operand.bytes == operand.ty.bytes() {
+                        api.ty(operand.ty)
+                    } else {
+                        api.array(api.ty(Type::I8), u64::from(operand.bytes))
+                    };
+                    elements.push((values.len(), element));
+                    params.push(api.ty(Type::Ptr));
+                    values.push(self.value(arg)?);
+                },
+                | constraint => {
+                    match constraint {
+                        | C::General(mask) => constraints.push_str(
+                            general_constraint(mask)
+                                .ok_or(EmitError::AsmRegisterSet(operand.constraint))?,
+                        ),
+                        | C::Sse => constraints.push('x'),
+                        | C::Immediate => constraints.push('i'),
+                        | C::Tied(output) => write!(constraints, "{output}")?,
+                        | C::Flag(condition) => write!(
+                            constraints,
+                            "{{@cc{}}}",
+                            crate::ir::ASM_CONDITIONS[usize::from(condition)]
+                        )?,
+                        | C::Memory => unreachable!("matched above"),
+                    }
+                    if operand.output {
+                        results.push((api.ty(operand.ty), arg, operand.bytes));
+                    } else {
+                        params.push(api.ty(operand.ty));
+                        values.push(self.value(arg)?);
+                    }
+                },
+            }
+        }
+        if !constraints.is_empty() {
+            constraints.push(',');
+        }
+        constraints.push_str("~{dirflag},~{fpsr},~{flags}");
+        let clobbers = asm.clobbers;
+        if clobbers.memory {
+            constraints.push_str(",~{memory}");
+        }
+        for (index, name) in LLVM_GENERAL_NAMES.iter().enumerate() {
+            if clobbers.general & (1 << index) != 0 {
+                write!(constraints, ",~{{{name}}}")?;
+            }
+        }
+        for index in 0..32 {
+            if clobbers.sse & (1 << index) != 0 {
+                write!(constraints, ",~{{xmm{index}}}")?;
+            }
+        }
+        if clobbers.x87 {
+            for index in 0..8 {
+                write!(constraints, ",~{{st({index})}}")?;
+            }
+        }
+        for index in 0..8 {
+            if clobbers.mmx & (1 << index) != 0 {
+                write!(constraints, ",~{{mm{index}}}")?;
+            }
+            if clobbers.mask & (1 << index) != 0 {
+                write!(constraints, ",~{{k{index}}}")?;
+            }
+        }
+        let result = match results.as_slice() {
+            | [] => api.void(),
+            | [(ty, ..)] => *ty,
+            | many => {
+                let types = arena.alloc_slice_fill_iter(many.iter().map(|&(ty, ..)| ty));
+                api.structure(types, false)
+            },
+        };
+        let ty = api.signature(result, &params, false);
+        let callee = api.inline_asm(ty, asm.template, &constraints, asm.side_effects);
+        let call = api.call(ty, callee, &values);
+        for &(index, element) in &elements {
+            let index = u32::try_from(index + 1).map_err(|_| std::fmt::Error)?;
+            api.attribute(call, index, "elementtype", 0, Some(element), true);
+        }
+        let single = results.len() == 1;
+        for (index, &(_, address, bytes)) in results.iter().enumerate() {
+            let value = if single {
+                call
+            } else {
+                api.extract_value(call, u32::try_from(index).map_err(|_| std::fmt::Error)?)
+            };
+            let store = api.store(value, self.value(address)?);
+            api.alignment(store, u64::from(bytes));
+        }
+        Ok(())
+    }
+}
+
+/// The LLVM constraint that allows exactly the general registers of
+/// `mask` (never `%rsp`): one register by Clang's name, `r` for all of them,
+/// `Q` for `%rax`-`%rbx` and `R` for the eight legacy registers; `None` for
+/// a set LLVM has no constraint for.
+fn general_constraint(mask: u16) -> Option<&'static str> {
+    const SINGLE: [&str; 16] = [
+        "{ax}", "{cx}", "{dx}", "{bx}", "{sp}", "{bp}", "{si}", "{di}", "{r8}", "{r9}", "{r10}",
+        "{r11}", "{r12}", "{r13}", "{r14}", "{r15}",
+    ];
+    let mask = mask & crate::ir::AsmConstraint::ANY_GENERAL;
+    match mask {
+        | crate::ir::AsmConstraint::ANY_GENERAL => Some("r"),
+        | 0b1111 => Some("Q"),
+        | 0b1110_1111 => Some("R"),
+        | _ if mask.is_power_of_two() => Some(SINGLE[mask.trailing_zeros() as usize]),
+        | _ => None,
+    }
+}
+
+/// The general registers by hardware encoding, as Clang names them in
+/// clobbers.
+const LLVM_GENERAL_NAMES: [&str; 16] = [
+    "ax", "cx", "dx", "bx", "sp", "bp", "si", "di", "r8", "r9", "r10", "r11", "r12", "r13", "r14",
+    "r15",
+];
 
 fn named(value: impl std::fmt::Display, arena: &Bump) -> ArenaString<'_> {
     let mut text = ArenaString::new_in(arena);

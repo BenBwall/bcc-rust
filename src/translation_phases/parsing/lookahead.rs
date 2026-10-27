@@ -53,6 +53,11 @@ impl Parser<'_, '_, '_> {
                 | KeywordTokenType::Constexpr
                 | KeywordTokenType::Int128
                 | KeywordTokenType::Float128
+                | KeywordTokenType::Float32
+                | KeywordTokenType::Float64
+                | KeywordTokenType::InterchangeFloat128
+                | KeywordTokenType::Float32x
+                | KeywordTokenType::Float64x
                 | KeywordTokenType::Int8
                 | KeywordTokenType::Int16
                 | KeywordTokenType::Int32
@@ -121,6 +126,11 @@ impl Parser<'_, '_, '_> {
                 | KeywordTokenType::Decimal128
                 | KeywordTokenType::Int128
                 | KeywordTokenType::Float128
+                | KeywordTokenType::Float32
+                | KeywordTokenType::Float64
+                | KeywordTokenType::InterchangeFloat128
+                | KeywordTokenType::Float32x
+                | KeywordTokenType::Float64x
                 | KeywordTokenType::Int8
                 | KeywordTokenType::Int16
                 | KeywordTokenType::Int32

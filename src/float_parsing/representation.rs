@@ -41,12 +41,11 @@ impl LongDouble {
             let exponent = (bits >> 52) & 0x7FF;
             let fraction = bits & ((1 << 52) - 1);
             let (exponent, significand) = if exponent == 0x7FF {
-                // Preserve the payload and quiet NaNs, as the native widening
-                // conversion does. Infinity has only the explicit integer bit.
-                (
-                    0x7FFF,
-                    (1 << 63) | (fraction << 11) | if fraction == 0 { 0 } else { 1 << 62 },
-                )
+                // Preserve the payload and the quiet bit, which lands on the
+                // x87 quiet bit, so a signaling NaN stays one; a NaN's
+                // fraction is nonzero, so it stays a NaN. Infinity has only
+                // the explicit integer bit.
+                (0x7FFF, (1 << 63) | (fraction << 11))
             } else if exponent == 0 && fraction == 0 {
                 (0, 0)
             } else {
@@ -141,6 +140,41 @@ impl LongDouble {
         let significand = (1 << 63) | (1 << 62) | (payload & ((1 << 62) - 1));
         value.value[..8].copy_from_slice(&significand.to_le_bytes());
         value.value[8..10].copy_from_slice(&0x7FFF_u16.to_le_bytes());
+        value
+    }
+
+    /// Constructs a signaling NaN with the target precision's low payload
+    /// bits, as GCC's `__builtin_nans` family does: the quiet bit is clear,
+    /// and a payload of zero sets the bit below it, so the value stays a
+    /// NaN. The carrier bytes are written directly, since a load through
+    /// the x87 unit would quiet the NaN; binary32 and binary64 payloads sit
+    /// in the high significand positions their format's fraction occupies,
+    /// as for [`Self::quiet_nan`].
+    /// C99: §7.12.11.2p2, p. 237; PDF p. 249 (implementation-defined payload);
+    /// signaling NaNs, §5.2.4.2.2 paragraph 3, p. 24; PDF p. 36.
+    pub(crate) fn signaling_nan(payload: u64, precision: i32) -> Self {
+        let binary64_carrier = ffi::LONG_DOUBLE_VALUE_BYTES == 8;
+        // Fraction bits of the destination format; the top one is the
+        // quiet bit.
+        let fraction_bits = match precision {
+            | 1 => 23,
+            | 2 => 52,
+            | _ if binary64_carrier => 52,
+            | _ => 63,
+        };
+        let mut payload = payload & ((1 << (fraction_bits - 1)) - 1);
+        if payload == 0 {
+            payload = 1 << (fraction_bits - 2);
+        }
+        let mut value = Self::ZERO;
+        if binary64_carrier {
+            let bits = 0x7FF0_0000_0000_0000 | payload << (52 - fraction_bits);
+            value.value[..8].copy_from_slice(&bits.to_le_bytes());
+        } else {
+            let significand = (1 << 63) | payload << (63 - fraction_bits);
+            value.value[..8].copy_from_slice(&significand.to_le_bytes());
+            value.value[8..10].copy_from_slice(&0x7FFF_u16.to_le_bytes());
+        }
         value
     }
 

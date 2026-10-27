@@ -20,6 +20,7 @@ use super::{
     Renderer,
 };
 use crate::{
+    configuration::DiagnosticFormat,
     translation_phases::{
         Context,
         ErrorSeverity,
@@ -44,12 +45,44 @@ impl Renderer {
             | ErrorSeverity::Error => "error:",
             | ErrorSeverity::Warning => "warning:",
         };
+        let format = context.configuration.diagnostic_format();
+        // GCC, Clang and MSVC lead with the primary location.
+        let location = diagnostic
+            .labels
+            .iter()
+            .filter(|label| label.primary)
+            .chain(&diagnostic.labels)
+            .find_map(|label| label.source.vectors(context).first());
+        if let Some(vector) = location
+            && format != DiagnosticFormat::Bcc
+        {
+            let file = context.get_source_file(vector.source_file_index).display();
+            let _ = match format {
+                | DiagnosticFormat::Msvc { column: true, .. } =>
+                    write!(out, "{file}({},{}): ", vector.line, vector.column),
+                | DiagnosticFormat::Msvc { column: false, .. } =>
+                    write!(out, "{file}({}): ", vector.line),
+                | DiagnosticFormat::Tcc => write!(out, "{file}:{}: ", vector.line),
+                | _ => write!(out, "{file}:{}:{}: ", vector.line, vector.column),
+            };
+        }
         let _ = writeln!(
             out,
             "{} {}",
             self.paint(severity, severity_style),
             self.paint(diagnostic.message, Style::new().bold()),
         );
+        if matches!(
+            format,
+            DiagnosticFormat::Msvc { caret: false, .. } | DiagnosticFormat::Tcc
+        ) {
+            for item in diagnostic.notes.iter().chain(&diagnostic.help) {
+                for line in item.lines() {
+                    let _ = writeln!(out, "        {line}");
+                }
+            }
+            return out.into_str();
+        }
 
         let marks = Self::marks(diagnostic, context, scratch);
         let max_line = marks.iter().map(|mark| mark.line + 1).max().unwrap_or(0);
@@ -71,7 +104,7 @@ impl Renderer {
                 files.push(mark.file);
             }
         }
-        if files.is_empty() {
+        if files.is_empty() && format == DiagnosticFormat::Bcc {
             // No quotable source: still say where, when a location exists.
             if let Some(vector) = diagnostic
                 .labels
@@ -100,15 +133,18 @@ impl Renderer {
                 .cloned();
             let arrow = if file_number == 0 { "-->" } else { ":::" };
             let (line, column) = first.map_or((1, 1), |vector| (vector.line, vector.column));
-            let _ = writeln!(
-                out,
-                "{}{} {}:{}:{}",
-                pad,
-                self.paint(arrow, Self::gutter_style()),
-                context.get_source_file(file).display(),
-                line,
-                column,
-            );
+            // The other formats named the primary file on the first line.
+            if file_number != 0 || format == DiagnosticFormat::Bcc {
+                let _ = writeln!(
+                    out,
+                    "{}{} {}:{}:{}",
+                    pad,
+                    self.paint(arrow, Self::gutter_style()),
+                    context.get_source_file(file).display(),
+                    line,
+                    column,
+                );
+            }
             let _ = writeln!(out, "{pad} {bar}");
             let starts = context.source_line_starts(file).unwrap_or(&[0]);
             self.render_file_lines(

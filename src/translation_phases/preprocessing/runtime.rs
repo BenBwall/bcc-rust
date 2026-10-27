@@ -24,6 +24,9 @@
 //! - Input frames and output reading: `runtime/frames.rs`, `runtime/reader.rs`.
 //! - Locations, builtins, and macro-use diagnostics: `runtime/location.rs`,
 //!   `runtime/builtins.rs`, `runtime/diagnostics.rs`.
+//! - Preprocessed-text output (`-E`): where the reader is in its source file,
+//!   and the `-dM` listing of the definitions in effect:
+//!   `runtime/text_output.rs`.
 //!
 //! C99: translation phases 4-7, §5.1.1.2 paragraph 1 items 4-7, p. 10; PDF p.
 //! 22.
@@ -48,6 +51,9 @@ mod reader;
 mod builtins;
 mod diagnostics;
 mod location;
+
+// Preprocessed-text output.
+mod text_output;
 
 use builtins::TranslationTimestamp;
 pub(super) use builtins::spell_string_literal;
@@ -98,6 +104,9 @@ pub(super) struct PreprocessorState<'pp> {
     pub(super) macro_definitions:   ArenaMap<'pp, StringCacheId, MacroDefinition<'pp>>,
     /// Implementation-defined pragma markers (C99 §6.10.6p1).
     pub(super) deprecated_macros:   ArenaMap<'pp, StringCacheId, MacroDeprecation<'pp>>,
+    /// `#pragma push_macro` saves: each name with its definition then, or
+    /// `None` when it was not a macro, most recent last.
+    pub(super) pushed_macros:       ArenaVec<'pp, (StringCacheId, Option<MacroDefinition<'pp>>)>,
     /// Every source file opened, including the main file and headers.
     pub(super) lexed_files:         LexedFiles<'pp>,
     /// Source-file frames, outermost first, while no expansion is active.

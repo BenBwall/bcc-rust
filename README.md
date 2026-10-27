@@ -26,8 +26,9 @@ language parser, and semantic analysis, and prints diagnostics. Pass
 `--semantic-types` for resolved declarations and types, `--syntax-tree` for a stable,
 source-oriented tree, `--syntax-locations` to add locations, `--raw-syntax` for
 the raw Rust debug form of the tree, or `--tokens` for parser-facing
-preprocessing tokens. Normal operation does not dump internal storage. These
-views exit with status 0 whatever they diagnose.
+preprocessing tokens. Normal operation does not dump internal storage. Every
+view, like every other mode, exits with status 1 when it reported an error
+(including `-pedantic-errors` and `-Werror` diagnostics) and 0 otherwise.
 
 Code generation runs only when asked for, after the same diagnostics:
 
@@ -41,7 +42,47 @@ bcc-rust x.c --target=x86_64-w64-windows-gnu -c -o x.o
 bcc-rust x.c --target=x86_64-w64-windows-gnu --backend=native -o x.exe
 bcc-rust x.c --target=x86_64-unknown-linux-gnu --backend=native --emit=asm
 bcc-rust lib.c -fPIC -shared -o libx.so   # a shared library (Linux)
+bcc-rust -c a.c b.c                    # a.o and b.o, as GCC names them
+bcc-rust -S a.c                        # a.s, LLVM's assembly
+bcc-rust a.c b.o -lm -o app            # compile, then link in order
+bcc-rust -E a.c [-P] [-o a.i]          # the preprocessed source
+bcc-rust -E -dM a.c                    # the macros defined at the end
+bcc-rust -MM a.c / -c -MMD a.c         # make dependency rules
+bcc-rust -fsyntax-only a.c             # check only; exit 1 after an error
 ```
+
+The driver takes several inputs and runs one job per input, as GCC does: C
+sources (`.c`, `.h`, or any file after `-x c`; `-` reads stdin), preprocessed
+C (`.i`, or `-x cpp-output`), assembly (`.s`, or `.S` and `.sx`, which the C
+preprocessor reads first with the `-D`, `-U`, `-include` and header search
+options; `-x assembler` and `-x assembler-with-cpp` reach the bundled clang),
+and objects, archives and libraries, which go to the linker in order with
+`-l`, `-L`, `-Wl,`, `-Xlinker`, `-static`, `-rdynamic`, `-pthread` and
+`-nostdlib`; `-pthread` also defines `_REENTRANT`, as in GCC and Clang.
+`-Wa,` and `-Xassembler` options go to the assembly inputs; C
+sources, which bcc assembles itself, warn about any but `--noexecstack`. An
+output that is one of the input files, even through a symbolic or hard link,
+is refused before any job runs. `--sysroot` also selects the libraries the
+bundled clang links against. `-c` and `-S` name each output after its source
+in the working directory unless `-o` names the only one, and `-o -` writes
+`-S` or `-E` output to stdout. `-E` writes GCC's line markers (`# 3
+"a.c"`), unless `-P`, and keeps `#pragma pack` and `#pragma weak`; bcc reads
+such markers back, so a `.i` file compiles with its original locations.
+Preprocessed input is read as GCC's `-fpreprocessed` reads it: no trigraph
+is replaced and no line spliced again, no macro is replaced, `-D`, `-U` and
+`-include` do not apply, only line markers, `#pragma`, `#ident`, `#define`
+and `#undef` starting in the first column are read (any other directive is
+an error), and `-E` skips it with a warning.
+`-E -dM` lists the macros in effect at the end, sorted by name. `-M`, `-MM`,
+`-MD`, `-MMD`, `-MF`, `-MT`, `-MQ` and `-MP` write make rules as GCC does; the
+`-MM` forms leave out system headers. The `-MD` file and target follow the
+stage and `-o` as in GCC: `-c -o x.o` writes `x.d` for `x.o`, `-S -o x.s`
+`x.d` for `x.s`, `-E -o x.i` `x.d` for the source's `.o`, and linking one
+source with `-o app` `app.d` for `app`. Linking several sources writes one
+rule per source, named after it (`a.d` for `a.o`), where GCC would overwrite
+one `app.d`. `-MF -` and `-o -` write the rules to stdout.
+`--syntax-only` (`-fsyntax-only`) analyzes like the default view. Every
+mode exits with status 1 after an error, as GCC and Clang do.
 
 Every back end receives the module after ABI lowering, which fixes how the
 `--target` passes structures by value and `va_arg`; `--emit=ir` prints the
@@ -89,7 +130,7 @@ or Win64, which `--emit=asm` prints. For `-o` it encodes COFF objects itself on
 the Windows targets, while on Linux the bundled clang assembles that assembly;
 `--native-object` asks for direct objects on any target (ELF on Linux) and
 `--no-native-object` for the assembler, and the last of the two wins. A module
-with file-scope `asm`, or a listing the encoder cannot represent (such as a
+with file-scope or inline `asm`, or a listing the encoder cannot represent (such as a
 section name outside `[A-Za-z0-9_.$-]`), is assembled by default, and
 `--native-object` refuses it. The bundled clang links executables. It
 compiles integer, pointer, `__int128`, `float` and `double` code, variadic
@@ -143,6 +184,27 @@ See [semantic-analysis.md](semantic-analysis.md) for implemented boundaries and
 validation gaps. Code generation covers the prototype subset of
 [middle-end.md](middle-end.md), with ABI lowering for x86-64 System V and Win64.
 This is not yet a production-ready or conforming C99 compiler.
+
+### Driver personalities
+
+bcc's command line can mimic another compiler's. `--gcc-mode`,
+`--clang-mode`, `--msvc-mode` (`cl.exe`), `--clang-cl-mode` and `--tcc-mode`,
+or running bcc under the name `gcc`, `cc`, `clang`, `cl`, `clang-cl` or `tcc`
+(a symbolic link; also `bcc-gcc`, `gcc-14`, or a target prefix such as
+`x86_64-w64-mingw32-gcc`), select a personality. It reads that compiler's
+options, including `cl`'s `/c /Fo /Fe /link` and `tcc -run`. Of the options
+the compiler knows and bcc does not implement, it ignores those that cannot
+change the program (warnings, diagnostics, debug information, tuning), warns
+about hardening it does not apply (`-fstack-protector`, `/GS`), and refuses
+the rest (`-fshort-enums`, `-mno-sse`, `/Gv`) with the compiler's kind of
+error. It diagnoses unknown options as the compiler does, and claims the
+compiler: `__GNUC__` 14 for GCC, `_MSC_VER` 1933 with every Microsoft
+extension for `cl`, `__TINYC__` for TCC, and the compiler's diagnostic
+format, default target, system header directories, output names and version
+banners, which still name bcc. bcc's own `--compiler-identity` and
+`--diagnostic-format` select the identity and format alone.
+[docs/design/driver-modes.md](docs/design/driver-modes.md) records each
+compiler's conventions, the mapping, and every deviation.
 
 ## Prerequisites
 
@@ -249,6 +311,39 @@ debug and test profiles as well as release builds.
 when empty; unset them for the standard build. The native build rejects
 overrides that remove linker LTO.
 
+### The explorer and WebAssembly
+
+The `explorer` feature builds the compiler without LLVM, the bundled clang,
+the command line or host threads: preprocessing, parsing, semantic analysis,
+the bcc IR and optimizer, ABI lowering, and the native x86-64 back end's
+assembly and in-process ELF encoding. Its
+[`bcc_rust::explorer`](src/explorer.rs) interface compiles one source and
+returns each stage's output as the command line prints it (`--tokens`,
+`--syntax-tree`, `--emit=ir|ir-abi|asm --backend=native`), each function's
+machine code instruction by instruction, a per-function line map, and
+structured diagnostics; the `serde` feature derives `Serialize` and
+`Deserialize` for those types. `native` (the default) implies `explorer` and
+adds `explorer::llvm_ir`, the `--emit=llvm` text. Without `native`, the C
+floating bridge is replaced by a pure-Rust model of it
+([`src/float_parsing/soft.rs`](src/float_parsing/soft.rs)), which native tests
+compare with the bridge, `__DATE__` and `__TIME__` default to the Unix epoch,
+and arena regions on WebAssembly are fixed 32 MiB allocations from linear
+memory. The site's build needs only rustup's wasm32 target:
+
+```sh
+cargo build --lib --target wasm32-unknown-unknown --no-default-features --features explorer
+(cd scripts/wasm_explorer_smoke && cargo build --release --target wasm32-unknown-unknown)
+node scripts/wasm_explorer_smoke/run.mjs \
+  scripts/wasm_explorer_smoke/target/wasm32-unknown-unknown/release/wasm_explorer_smoke.wasm
+```
+
+The smoke test runs the explorer in Node. In WebAssembly the explorer runs on
+the module's own stack, so its default nesting limit is
+`explorer::WASM_MAX_NESTING_DEPTH` (500) instead of the command line's 2^18;
+it fits the default 1 MiB stack, and input past it is a diagnostic. Overflowing
+the stack or a region instead traps, after which the instance must be
+replaced.
+
 ### Native C, static linking, and cross-language LTO
 
 [`build_support/native.rs`](build_support/native.rs) compiles the C helper,
@@ -338,12 +433,18 @@ both forms then search, in order, each `-I` directory, `CPATH`, each
 `-isystem` directory, `C_INCLUDE_PATH`, the embedded `<built-in>` resource
 directory, the C library's directories, and each `-idirafter` directory. User
 headers therefore take precedence over resource headers, and a resource header
-can `#include_next` the C library's header of the same name. `--sysroot <dir>`
-names the C library's directories `<dir>/usr/local/include` and
-`<dir>/usr/include`; without it no library directory is searched, so a C
-library elsewhere (MinGW-w64, the MSVC UCRT, a multiarch
-`/usr/include/x86_64-linux-gnu`) is added with `-idirafter` or `-isystem`.
-Target-driven discovery of these directories is future work. `-nostdinc`
+can `#include_next` the C library's header of the same name. Compiling for
+the host on an x86-64 Linux host (the default target on a glibc system), the
+C library's directories are the host's, as Clang searches them:
+`/usr/local/include`, the multiarch `/usr/include/x86_64-linux-gnu` and
+`/usr/include`, so `#include <stdio.h>` needs no option, and the link finds
+the host's C library as before. `--sysroot <dir>` replaces them with
+`<dir>/usr/local/include`, `<dir>/usr/include/<multiarch>` (for a Linux
+target, when it exists) and `<dir>/usr/include`, and is also the root the
+bundled clang links against. Any other target is a cross target and searches
+no library directory without `--sysroot`, so a C library elsewhere
+(MinGW-w64, the MSVC UCRT, musl on a glibc host) is added with `--sysroot`,
+`-idirafter` or `-isystem`. `-nostdinc`
 removes the resource and library directories, `-nostdlibinc` only the library
 directories, and `-nobuiltininc` only the resource directory; `-idirafter`
 directories stay. The GCC single-dash spellings `-iquote`, `-isystem` and
@@ -604,8 +705,9 @@ unit includes all the standard headers together. Clang runs first with the
 configuration's target and include flags and `-fsyntax-only`, in `-std=gnu17`
 and, for the standard headers, also `-std=c17`. Clang's verdict decides which
 headers are valid: bcc does not run on headers that Clang rejects, and the
-results record why Clang rejected them. bcc exits 0 even after reporting
-errors, so the survey counts its rendered diagnostics instead. A crash or
+results record why Clang rejected them. bcc exits 1 when it reported an
+error, and the survey also counts its rendered diagnostics; any other exit,
+or exit 1 without an error, is a process failure. A crash or
 timeout makes the survey exit nonzero. `--config`, `--match` (a header glob),
 `--jobs`, and `--timeout` narrow or tune a run.
 

@@ -485,8 +485,9 @@ const ARMS: [Arm; 4] = [
 
 /// The programs compiled through LLVM besides those passing structures by
 /// value: loops, recursion, memory, globals, control flow, indirect calls,
-/// and output through `printf`.
-const LLVM_PROGRAMS: [&str; 8] = [
+/// output through `printf`, and GNU forms (`push_macro`, `\e`, one-void
+/// conditionals, compound literals initializing statics).
+const LLVM_PROGRAMS: [&str; 13] = [
     "sum_to_ten",
     "recursive_fibonacci",
     "bubble_sort_local_array",
@@ -495,6 +496,11 @@ const LLVM_PROGRAMS: [&str; 8] = [
     "function_pointers",
     "printf_hello",
     "printf_long",
+    "push_and_pop_macro",
+    "gnu_escape_and_one_void_conditional",
+    "constant_compound_literal_statics",
+    "scalar_compound_literal_statics",
+    "scalar_compound_literal_bit_fields",
 ];
 
 /// The target the tests run on, if the LLVM back end supports it.

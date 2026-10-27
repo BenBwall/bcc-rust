@@ -349,6 +349,12 @@ The differential generator produces parameter and return contracts; the
 interpreter oracle discards their UB cases before comparing LLVM arms and
 rejects any optimization that introduces a UB trap into a defined execution.
 
+Inline assembly (no result; see [GNU inline assembly](#gnu-inline-assembly-2026-10-26)):
+
+```text
+asm [sideeffect] "template" (out|in "constraint" <ty> [bytes N] value, ...) [clobber(name, ...)]
+```
+
 Terminators end every block and nothing else does:
 
 ```text
@@ -412,7 +418,8 @@ none. Function parameters declared `restrict` become `noalias` parameter
 attributes. Functions that may return twice (`setjmp`, `vfork` and attributed
 functions) carry the IR flag `returns_twice`; the LLVM back end marks their
 declarations and direct calls, the inliner keeps their callers' frames, and the
-native back end refuses them (see "Returns-twice calls" below).
+native back end keeps values live across their calls out of coalescing (see
+"Returns-twice calls" below).
 
 The optimizer's current alias check uses object identity and byte ranges, not
 access tags: distinct stack slots and distinct globals are disjoint, as are
@@ -601,7 +608,32 @@ as Clang's does and drops it at O0, while the other back ends drop it.
 Lowering refuses nothing for these bodies: if the unit does not lower with
 them it is lowered again without. A GNU `weak` inline definition is a weak
 definition, emitted where it is referenced, as Clang gives it weak linkage
-before inline-only emission. Functions carry
+before inline-only emission. A function whose body uses GNU
+`__builtin_va_arg_pack ()` or `__builtin_va_arg_pack_len ()` (glibc's GCC
+fortify wrappers) is not lowered once: each direct call calls an internal
+`alwaysinline` copy, `name.va_arg_pack`, specialized for the call's promoted
+anonymous argument types, which it takes as extra parameters. In the copy the
+pack expands to those parameters at a call whose last argument it is, the
+length is an `iconst`, and `fold`, `simplify-cfg` and `dce` run on it right
+after lowering, at every optimization level, so a guarded call of an `error`
+function disappears as GCC folds it when it inlines. Copies are lowered on
+demand by a liveness walk once every definition is lowered
+(`lowering/argument_pack.rs`): it starts at externally visible, `used`,
+alias-target, inline-copy, constructor and initializer-addressed functions
+and follows calls and addresses through lowered (and, for copies, folded)
+bodies, relaxing each copy's nesting depth to the shallowest live path at a
+fixed point, so a copy that only a folded branch or an unreached internal
+helper requests stays a bodiless declaration that nothing names, the
+64-copy nesting limit counts only the shallowest live path, and internal
+bodies left unreached are dropped, as GCC drops them at -O2. The function's
+own body is lowered when it is an external definition, or internal and
+`used` or with an address live code takes; in any of these a pack it
+evaluates is an error, as in GCC. Known deviations from GCC, which finds the pack after constant folding:
+bcc sees through parentheses, `__extension__`, casts and unary `+` that keep
+the type, generic selections, and `*`, `&` or a same-type cast on the
+callee, but not arithmetic (`0 + pack`) or a comma before the pack; and the
+liveness walk runs at every optimization level, so dead code GCC keeps at
+-O0 (and then fails to link or diagnoses) is dropped. Functions carry
 their inline control in IR (`noinline` for GNU `noinline`/`noipa`,
 `alwaysinline`), which the inliner and the LLVM back end honor. Plain GNU89 `inline` and `static inline` bodies are lowered normally.
 The interpreter and LLVM therefore share the same decision. Internal functions
@@ -770,10 +802,26 @@ for buffer, 128-bit or under-aligned atomic operations. Objects using those path
 require the same runtime at final link. Windows native execution of these paths
 requires a compatible libatomic installation; interpreter coverage of the
 Windows data model does not verify that runtime. The interpreter executes each
-operation as one indivisible step in its single-threaded model. Existing
-extended-float interpreter limits still apply; LLVM supports the x87 object
-representation through padded memory.
-The native backend explicitly refuses atomic instructions before emission.
+operation as one indivisible step in its single-threaded model, including
+x87 `f80` operands; LLVM supports the x87 object representation through padded
+memory.
+The native back end selects the standard C11-to-x86-64 mapping: `mov` for
+loads and relaxed or release stores, `xchg` for sequentially consistent
+stores and exchanges, `lock xadd`, `lock cmpxchg` and `lock` arithmetic, a
+`lock cmpxchg` loop for the other read-modify-writes, and `mfence` only for
+sequentially consistent thread fences. Like LLVM without `cmpxchg16b`, it
+calls libatomic for `i128` and byte-buffer operations, and its driver then
+links `-latomic`. It refuses floating minimum and maximum, `i128` minimum and
+maximum, and accesses aligned below their size (`isel/atomic.rs`;
+`docs/design/native-backend.md`, "Atomic operations").
+Evidence (2026-10-26): GCC 15.2.0's `gcc.dg/atomic` run tests, through
+`scripts/run_gcc_torture_execute.py` for Linux, pass 34 of 48 on both
+native arms, up from 3, as many as LLVM at O0; the rest fail on every arm
+(front end, compile-only tests without `main`, atomic complex values). The
+native end-to-end program `atomics` matches the interpreter and LLVM, and
+`tests/fixtures/programs/atomic_threads.c` keeps its counters exact with 1,
+4 and 8 threads under both back ends. The counters drift once the `lock`
+prefixes are removed from the listing.
 
 ### Algorithm
 
@@ -863,8 +911,9 @@ immediate return `noundef` contract.
 The default interpreter host bridges F32/F64 arithmetic helpers through real
 scalar inputs and host output temporaries and implements `crealf`/`creal` and
 `cimagf`/`cimag` extraction, including target ABI coercions. LLVM supports x87
-complex arithmetic and transport; the native backend and interpreter retain
-their existing explicit F80 arithmetic limitation. This does not implement the
+complex arithmetic and transport; the interpreter extracts x87 parts with
+`creall`/`cimagl` but refuses the `__mulxc3`/`__divxc3` helpers, and the native
+backend retains its existing explicit F80 arithmetic limitation. This does not implement the
 complete complex math library, binary128 C lowering, or GNU complex conjugation
 and increment/decrement extensions. Atomic complex object operations retain an
 explicit unsupported diagnostic.
@@ -1124,8 +1173,8 @@ prebuilt installations can supply both directly.
 The interpreter executes a module directly: one frame per call with a value
 array, a byte-addressed memory with provenance (object, offset) for pointers, and
 exact poison tracking. It calls a small set of host functions (`putchar`,
-`printf` with integer formats, `malloc`, `free`, `exit`, `abort`) so test
-programs can report results. It is the oracle for differential tests: a program
+`printf`, `malloc`, `free`, `exit`, `abort`) so test programs can report
+results. It is the oracle for differential tests: a program
 must print the same output when interpreted before optimization, interpreted
 after optimization, and compiled through each LLVM arm.
 
@@ -1133,10 +1182,44 @@ The default host also implements the C99 real `<math.h>` function families in
 float, double and long double spellings, including pointer outputs, integer
 results and NaN constructors. Native libm evaluates float and double in their
 own precision; guest pointers stay in interpreter memory. Long double follows
-the target representation: binary64 on MSVC is supported, while GNU `f80`
-execution retains the existing unsupported-operation trap. `%f` output uses
-the default six fractional digits. Guest errno and floating-environment APIs
+the target representation: binary64 on MSVC, and x87 `f80` on the GNU targets.
+
+x87 values compute in `src/x87.rs`, a software model of the processor's x87
+unit under the default control word (64-bit precision, round to nearest even,
+exceptions masked): exact integer arithmetic rounded once, pseudo-denormals
+as valid operands, unnormals and pseudo-NaNs as invalid operands that give the
+negative "real indefinite" NaN, and the processor's NaN propagation. A test
+compares it with the host's x87 unit on random encodings of every class. The
+host computes the `long double` functions whose glibc results are exact or
+correctly rounded (rounding to integers, `sqrtl`, `fmodl`, `remainderl`,
+glibc's `remquol` algorithm, scaling, decomposition, neighbours, `nanl`)
+and refuses the transcendental ones and `fmal`. `printf` formats every
+conversion of `double` and `long double` exactly, digit for digit as glibc
+does, with halfway cases to even. Guest errno and floating-environment APIs
 remain outside the host implementation.
+
+The host's C library also covers streams and files: `stdin`, `stdout` and
+`stderr` are objects holding pointers to stream objects the program cannot
+access, and a stream used after `fclose` (or a failed `freopen`) traps, even
+when `printf` or `getchar` uses it implicitly. The command line forwards
+`stdout` and `stderr` in glibc's order for a pipe: `stderr` at once, `stdout`
+at each `fflush` and at exit. Host files are opt-in: with
+`--interpret-allow-fs`, `fopen` (including C11's exclusive `x`), `freopen` and
+`remove` act on the host's file system (unbuffered, without `errno`);
+without it they fail as glibc does for a permission error, the command line
+notes the refusal, and `tmpnam` names files without looking at the file
+system. It provides the `fprintf`, `vprintf`,
+`vfprintf`, `vsprintf` and `vsnprintf` family and glibc's `__printf_chk` forms,
+`sscanf`/`fscanf`/`scanf` with glibc's failure rules (not the wide
+conversions or `long double` input), string search and
+concatenation, `strtol` and its relatives, the "C" locale's character classes
+including the tables glibc's `<ctype.h>` reads through `__ctype_b_loc`, the
+wide-string basics at the target's `wchar_t` width, and `conj`, `cproj`,
+`cabs` and `carg`. `qsort` and `bsearch` run in the machine: each comparison
+pushes the comparison function's frame and steps until it returns, so its
+instructions count against the step limit and a trap inside it names it.
+`qsort` follows glibc's stable merge sort call for call, including its
+indirect sort through pointers for elements over 32 bytes.
 
 The interpreter runs one translation unit and links nothing else. A call
 that reaches the external definition of an inline-only function, because
@@ -1155,10 +1238,12 @@ ranges, frame layout with CFI and SEH unwind directives for System V and Win64,
 and AT&T assembly, which the bundled clang assembles, or ELF and COFF
 objects it encodes itself; the bundled clang links executables. It compiles
 integer, pointer, `i128`, `f32` and `f64` code, variadic definitions, dynamic
-stack allocation, computed `goto`, thread-local globals and the GNU symbol
-attributes, and refuses everything else (`f80`, `f128`, `i128` float
-conversions) before writing any output.
-`--backend=native` selects it for `-o`, and `--emit=asm` prints its assembly.
+stack allocation, computed `goto`, thread-local globals, calls that may
+return twice, C11 atomics and the GNU symbol attributes, and refuses
+everything else (`f80`, `f128`, `i128` float conversions) before writing any
+output.
+`--backend=native` selects it for `-o`, `-c` and `-S`, and `--emit=asm` with
+it prints its assembly.
 For `-o` it encodes COFF objects directly on the Windows targets and has the
 bundled clang assemble its listing on Linux; `--native-object` and
 `--no-native-object` choose either path on any target, and the last of the
@@ -1188,6 +1273,7 @@ bcc-rust x.c --emit=ir-abi          print the bcc IR after ABI lowering
 bcc-rust x.c --emit=llvm            print the LLVM IR
 bcc-rust x.c --interpret            run main in the interpreter; exit with its status
     [--interpret-step-limit=N]      instruction limit; default 100000000, 0 unlimited
+    [--interpret-allow-fs]          let the program open, create and remove host files
 bcc-rust x.c -o x.exe [-c]          emit an object through LLVM-C; link with clang
     [-O0|-O1|-O2|-O3|-Os|-Oz|-Og] GCC optimization level; bare -O means -O1
     [--opt=none|bcc]                the bcc optimizer; none is the default
@@ -1206,9 +1292,28 @@ bcc-rust x.c -o x.exe [-c]          emit an object through LLVM-C; link with cla
     [-shared|-pie|-no-pie]          link a shared library (needs -fpic or -fPIC),
                                     a position-independent executable (the Linux
                                     default) or a fixed-address one
-bcc-rust x.c --backend=native --emit=asm   print the native back end's assembly
+bcc-rust x.c --emit=asm            print LLVM's assembly (the native back
+                                    end's with --backend=native)
+bcc-rust -c x.c y.c                 compile each source to an object: x.o, y.o
+bcc-rust -S x.c [-o x.s|-o -]       write the assembly to x.s, or stdout
+bcc-rust x.c y.o -lm -o app         compile x.c to a temporary object and link
+                                    it with y.o and -lm, in order
 bcc-rust --print-default-passes     print the default pass list and exit
 ```
+
+The driver runs one job per input in command-line order (`src/cli/driver.rs`):
+`-S` and `-c` stop each C source at assembly or an object, named after the
+source in the working directory unless `-o` names the only output; `-o`
+alone links, after the driver has checked that the output is none of the
+inputs. One C source alone links in one step as before; with several
+inputs, or with `--sysroot`, each C source becomes a temporary object beside
+the output and
+assembly inputs are assembled by the bundled clang, which then links every
+object, archive, library and `-l`, `-L`, `-Wl,`, `-Xlinker`, `-static`,
+`-rdynamic` or `-pthread` option in order, adding `-latomic` when an object
+needs it, against the `--sysroot` when one is given. No link runs after a
+failed job. README lists the preprocessing
+stages (`-E`, `-M`).
 
 `-O0` disables optimization; the other `-O` levels enable bcc's pass
 pipeline and select the corresponding LLVM pipeline (`-Og` uses `O1`).
@@ -1710,11 +1815,13 @@ other phase matches these spellings.
   does every indirect call in a module where such an address escapes; LLVM
   then treats the caller as exposing a second return (no stack-slot
   coloring, for example), as for Clang's output.
-- **Native back end.** A call to, or the address of, a flagged function or
-  alias, and a global relocation naming one, are refused (`a call to, or the
-  address of, a function that may return twice`): its linear-scan
-  allocator and frame layout do not account for the second return, which
-  could read a register or spill slot reused after the first.
+- **Native back end.** Direct calls to a flagged function or alias, and
+  every indirect call where such an address escapes, are marked in machine
+  IR. A second return finds the callee-saved registers as they were at the
+  first, but memory as the program left it, so the allocator does not
+  coalesce a register live across such a call: its spill slot then holds
+  only its own value (`docs/design/native-backend.md`, "Calls"). Until
+  2026-10-26 the back end refused these calls and addresses.
 - **Interpreter.** `setjmp`-family calls store the frame's activation, depth,
   block, position and dynamic-allocation mark in the first 40 bytes of the
   `jmp_buf` (glibc's has 200, MinGW-w64's 256) and return 0. `longjmp`
@@ -1747,3 +1854,163 @@ build prints. Lua as one translation unit stops in the interpreter at the
 missing `realloc` host function, an unrelated host gap. Windows native
 execution (MSVCRT's `_setjmp` with a frame address and SEH unwinding) was
 not run for this change.
+
+Native back end (2026-10-26): `setjmp.c` builds with `--backend=native` at
+`--opt=none` and `--opt=bcc` and exits 0 (`code_generation_cli.rs`). The
+native end-to-end program `setjmp_and_longjmp` (`backend/native/tests/
+programs.rs`: a `longjmp` three calls down, a jump back into a loop, ten
+non-volatile locals live across the call, volatile ones changed in between,
+and an unchanged local copied into a variable the first pass changes)
+matches the interpreter with ordinary allocation and with every value in a
+spill slot; without the coalescing rule the spilled runs print the changed
+copy's value after the second return.
+
+## GNU inline assembly (2026-10-26)
+
+GNU `asm` statements inside functions compile end to end through the LLVM
+back end, as Clang compiles them; the interpreter refuses to run them.
+Contract: [GCC Extended Asm](https://gcc.gnu.org/onlinedocs/gcc/Extended-Asm.html),
+[Constraints for asm Operands](https://gcc.gnu.org/onlinedocs/gcc/Constraints.html)
+and LLVM's [inline assembler expressions](https://llvm.org/docs/LangRef.html#inline-assembler-expressions).
+C99 §J.5.10 (p. 514; PDF p. 526) lists `asm` as a common extension.
+
+**Semantic analysis** (`semantic_analysis/assembly.rs`). The operand
+expressions are typed by the ordinary expression work; then each constraint
+is parsed (`assembly/constraints.rs`: `=`, `+`, `&`, `%`, `,`
+alternatives, the generic `r` `m` `o` `V` `<` `>` `g` `X` `i` `n` `s` `p`
+`E` `F`, the x86 registers `a` `b` `c` `d` `S` `D` `q` `Q` `R` `l` `U`
+`x` `v`, the accepted but unlowered `A` `f` `t` `u` `y` `k` `Y…`, the
+ranged immediates `I` `J` `K` `L` `M` `N` `O` `e` `Z`, matching digits and
+`[name]`, and `=@cc` flag outputs). Every operand lists the same number
+of comma-separated alternatives; analysis takes the first alternative
+column in which every operand has a location, as GCC chooses one
+alternative for the whole statement, so `"=a,b"` and `"=b,a"` never share
+a register. In that column each operand gets one location:
+
+- an output is a modifiable lvalue; it takes a flag, a register when its
+  constraint allows one and its type fits (an integer or pointer of at most
+  64 bits, `float` or `double`), else its memory;
+- an input takes an immediate for a constant its constraint allows (`g`
+  only when the value fits a sign-extended 32-bit field; `i`, `g` and `X`
+  also take an address constant, but `g` prefers a register for one), else
+  a register, else the lvalue's memory;
+- a matching input names an earlier output in a register; integers and
+  pointers may differ in width (the register holds the input widened or
+  narrowed to the output's width, as in GCC), floating values may not.
+
+Memory operands must be addressable (no bit-field, `register` object or
+vector element). Clobbers (`assembly/registers.rs`) are any width of an
+x86-64 register name with or without `%`, `memory`, `cc` and its LLVM
+spellings. A clobber of the register an operand's constraint names alone is
+"impossible constraints". The template (`assembly/template.rs`) resolves
+`%N`, `%[name]`, the x86 modifiers, `%lN`/`%l[name]` goto labels, `%=`,
+`%%`, `%{` `%|` `%}`, keeps only the AT&T alternative of each `{…|…}`
+dialect group (the others are skipped unread, as GCC skips them in AT&T
+syntax, so they are not checked), and rewrites each
+`%z` to the AT&T suffix of the operand's own mode (its C type: `b` `w` `l`
+`q` for integers and pointers, `s` `l` `t` for `float`, `double` and x87
+`long double`, the byte size of an aggregate memory operand, `q` for a
+symbol address), so lowering and the back ends never see `z`, which LLVM
+lacks; `%z` on a numeric constant, a flag output or an object of another
+size is an error, as in GCC; basic assembly
+(no colon) substitutes nothing. Each fault is `SemanticErrorKind::InvalidAsm`
+with GCC's or Clang's message. Every `asm goto` label is a jump of the
+statement, checked as a `goto` is (an undefined label, or entering a
+variably modified scope, is an error), and each has its own jump fact,
+which `AsmFacts::jumps` lists in label order. Template numbering follows
+GCC: the input each `+` output reads is numbered after the written inputs
+(`%N` there names the output), and goto labels after those, so with one
+`+r` output the first label is `%l2`. `AssemblyFacts` retains, by statement, the template
+pieces, each operand's role and location, the clobbers and whether the
+statement is volatile (written so, basic, without outputs, or `goto`).
+
+**IR.** `asm` names a module-level `InlineAsm` descriptor (`ir/inline_asm.rs`):
+an LLVM-syntax template (`$N`, `${N:m}`, `${:uid}`, `$$`, `$(` `$|` `$)`),
+operands, clobbers and `sideeffect`. It has no result. Each operand is one
+value: a register or flag output is the `ptr` its result is stored to after
+the assembly runs, a memory operand the `ptr` it addresses (`bytes N` for an
+aggregate), and an input its value; an immediate is an `iconst`,
+`global_addr` or `func_addr`, and a tied input (`"0"`) names a register
+output of its type. The textual form prints the descriptor inline, as in
+`asm sideeffect "addl $1, $0" (out "r" i32 v1, in "i" i32 v2, in "0" i32 v0)
+clobber(memory, flags, rcx)`; the verifier checks these rules and the
+template's operand numbers.
+
+**Lowering** (`lowering/assembly.rs`). Operands are evaluated in order: an
+output or memory operand as a place, an input as its converted value, a `+`
+register operand as both (it becomes an output and a tied input; a `+`
+memory operand becomes a memory output and a memory input of the same
+address, Clang's `=*m,*m`, so the statement reads the object as well as
+writing it). A register output passes a
+fresh slot; its value is then assigned to the lvalue as an assignment
+would, so SSA locals, bit-fields, volatile and atomic objects are written
+correctly. A `float` in a general register, or an integer in an SSE
+register, is reinterpreted with `bitcast`. An output and its matching
+inputs share a register as wide as the widest of them, as GCC gives the
+pair the wider mode: a narrower input is extended by its signedness, a
+wider integer or pointer input keeps all its bits (so `%q2` reads all of
+a 64-bit input tied to an `int` output), each unmodified reference to a
+narrower operand gets the size modifier of its own width (`%0` stays
+`%eax`), and the output takes the low bits when assigned. The shared
+register keeps the output's class: an SSE output tied to a wider integer
+is an `f64`, whose bits the `int` output truncates (`psrlq $32` on a
+`long`, as GCC accepts). A flag output wider than 64 bits (`__int128`) is set from a
+32-bit condition and zero-extended when assigned. Lowering checks each
+descriptor against the IR's operand rules (`InlineAsm::check`, which the
+verifier shares) and refuses one that breaks them, so no statement reaches
+the verifier malformed. A local that is a memory operand lives in memory
+(`address_taken.rs`). `asm goto` adds a selector output in a stack slot
+(a memory operand, so a statement that clobbers every general register
+still has room for it) that the template's appended code sets: 0 on
+fall-through, and `N + 1` in a local stub
+`.Lbcc_asm_goto${:uid}_N` that each `%lN` names; a `switch` on it takes each
+label's jump with the cleanups that jump leaves. Outputs are therefore valid
+on every path, and no IR terminator needs to know about assembly. Operands in
+x87, MMX or register-pair registers, `__int128` or aggregates in registers,
+and symbolic immediates with an offset are refused as unsupported.
+
+**Optimizer.** Every pass treats `asm` as a call: it is never removed,
+duplicated or moved, it is a full memory barrier for GVN, its pointer
+operands escape, and DCE keeps it whether or not it is volatile. The inliner
+copies it with its operands; each copy gets its own `${:uid}`.
+
+**LLVM.** `LLVMGetInlineAsm` with Clang's constraint string: register and
+flag outputs are the call's results (`=r`, `={ax}`, `=&r`, `={@ccz}`),
+stored to their output pointers after the call; memory operands are `=*m`
+and `*m` with an `elementtype` attribute. A register set becomes the LLVM
+constraint that allows exactly it: one register by Clang's name (`{ax}`,
+`{r8}`), `r`, `Q` (`%rax`-`%rbx`) or `R` (the legacy registers); any other
+set, such as `ab` or `U`, is refused rather than widened. Every x86
+statement clobbers `~{dirflag},~{fpsr},~{flags}`, and `memory` adds
+`~{memory}`.
+
+**Interpreter.** Executing an `asm` traps with "unsupported by the
+interpreter: inline assembly, which only compiled code can run"; a program
+that never reaches its assembly still runs. Differential tests do not
+generate assembly.
+
+**Native back end** (`backend/native/isel/asm.rs`). Selection fixes each
+register operand to a physical register (the constraint's, or a free one
+of its class, most constrained operand first with backtracking; never `%rsp`, `%rbp` or the spill scratch registers
+`%r10`, `%r11`, `%xmm14` and `%xmm15`; a memory operand in a frame object or
+at a defined symbol needs none), copies the inputs in, and emits one
+`MInst::InlineAsm` that reads the input registers and writes the outputs
+and clobbers, so the allocator and frame treat it as they treat a call. The
+listing writes the substituted template between `#APP` and `#NO_APP`; the
+direct object encoder cannot read it, so such a module is assembled by the
+bundled clang and `--native-object` refuses it. Operand modifiers outside `b h w k q V z a x`
+(registers), `a H` (memory) and `c P p a n` (immediates) are refused, as is
+a clobber of `%rsp` or `%rbp`; see
+[docs/design/native-backend.md](docs/design/native-backend.md).
+
+Evidence: `semantic_analysis/tests/assembly.rs` (locations, template pieces,
+clobbers, every fault, goto jumps), `ir/tests/inline_asm.rs` (round trip,
+builder, verifier rules, template pieces), `lowering/tests/assembly.rs`, and
+`tests/integration/inline_asm.rs`, which runs `rdtsc`, `cpuid`, `+r`,
+named, immediate, memory, matching, widened matching, flag, SSE, `%h`,
+register clobber, early clobber, global memory, `memory` barrier, `%=` and
+`asm goto` operands through LLVM at O0, at O2 and after the bcc optimizer,
+and through the native back end with and without the bcc optimizer;
+`backend/native/tests/inline_asm.rs` checks register choice, template
+substitution, saved registers, flag outputs, fully spilled functions and
+the native refusals.

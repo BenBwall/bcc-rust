@@ -60,7 +60,13 @@ mod tests {
                 .env_remove("CLICOLOR_FORCE")
                 .output()
                 .unwrap();
-            assert!(output.status.success(), "inspection process");
+            // Only the semantic analysis reports the error, which fails the
+            // command; the syntax and token views do not analyze.
+            assert_eq!(
+                output.status.code(),
+                Some(i32::from(diagnosed)),
+                "inspection process"
+            );
             assert_eq!(
                 String::from_utf8_lossy(&output.stderr)
                     .contains("redeclaration has an incompatible type"),

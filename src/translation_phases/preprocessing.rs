@@ -84,6 +84,7 @@ pub(crate) use token::{
     CharacterTokenType,
     FloatTokenType,
     IntegerTokenType,
+    InterchangeFloat,
     KeywordTokenType,
     LiteralEncoding,
     LiteralId,
@@ -363,6 +364,11 @@ impl Expander<'_, '_, '_, '_> {
             if self.is_reading_operand() {
                 // A `#` or `##` operand is not macro-replaced (C99
                 // §6.10.3.1p1).
+                break 'base Some(token);
+            }
+            // Preprocessed input is not replaced again, as GCC's
+            // `-fpreprocessed` reads it: its names are the program's.
+            if self.context.preprocessed_input {
                 break 'base Some(token);
             }
 

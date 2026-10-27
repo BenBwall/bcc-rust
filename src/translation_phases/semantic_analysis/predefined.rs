@@ -496,6 +496,10 @@ fn scalar_spelling(scalar: Scalar, c23: bool) -> &'static str {
         | Scalar::ComplexDouble => "_Complex double",
         | Scalar::ComplexLongDouble => "_Complex long double",
         | Scalar::ComplexFloat128 => "_Complex __float128",
+        | Scalar::ComplexFloat32 => "_Complex _Float32",
+        | Scalar::ComplexFloat64 => "_Complex _Float64",
+        | Scalar::ComplexFloat32x => "_Complex _Float32x",
+        | Scalar::ComplexFloat64x => "_Complex _Float64x",
         | scalar => scalar.spelling(),
     }
 }

@@ -41,6 +41,7 @@ pub(crate) use driver::{
     Toolchain,
     compile_module,
     compile_module_checked,
+    needs_atomic_runtime,
 };
 #[cfg(test)]
 use target::data_layout;
@@ -83,6 +84,36 @@ pub(crate) fn emit_module_with<'m>(
     Session::with_code(&arena, target, code, |api| {
         build_module(module, target, api, &arena)?;
         out.write_str(api.print().text())?;
+        Ok(())
+    })
+}
+
+/// Writes the assembly LLVM generates for the module, through the IR pipeline
+/// and code generator `options` select, as `-S` prints it. LLVM's buffer is
+/// UTF-8 assembler text; a byte that is not is replaced.
+pub(crate) fn emit_assembly_text<'m>(
+    module: &'m Module<'_>,
+    options: LlvmOptions,
+    out: &mut dyn fmt::Write,
+) -> Result<(), EmitError<'m>> {
+    let arena = Bump::new();
+    Session::with_code(&arena, options.target, options.code, |api| {
+        build_module(module, options.target, api, &arena)?;
+        let buffer = api
+            .emit_checked(
+                options.target,
+                options.opt,
+                options.disable_llvm_passes,
+                true,
+                |_| true,
+            )?
+            .expect("unconditional emission produces a buffer");
+        for chunk in buffer.bytes().utf8_chunks() {
+            out.write_str(chunk.valid())?;
+            if !chunk.invalid().is_empty() {
+                out.write_char(char::REPLACEMENT_CHARACTER)?;
+            }
+        }
         Ok(())
     })
 }
@@ -227,6 +258,14 @@ pub(crate) enum EmitError<'m> {
     NotAbiLowered,
     #[error("the input module does not verify as bcc IR")]
     InvalidIr,
+    /// An inline assembly operand allows a set of general registers that
+    /// no LLVM constraint names exactly; a wider one would let LLVM pick a
+    /// register the statement does not allow.
+    #[error(
+        "inline assembly operand restricted to the general registers {0}, a set no LLVM \
+         constraint names; use a single register or one of r, q, Q, R"
+    )]
+    AsmRegisterSet(crate::ir::AsmConstraint),
     /// Two relocations of a global share bytes; the verifier only checks
     /// that each fits.
     #[error("@{global}: the relocations at offsets {first} and {second} overlap")]

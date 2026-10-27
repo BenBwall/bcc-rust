@@ -1,9 +1,12 @@
-//! Proxy for the engine Worker (`bin/engine_worker.rs`).
+//! Proxy for the page's two Workers: the abstract machine
+//! (`bin/engine_worker.rs`) and bcc's compiler (`bin/compiler_worker.rs`),
+//! which the page starts only once it needs a live compilation, so the
+//! machine starts without downloading the compiler.
 //!
 //! Compilation and execution never run on the UI thread. This proxy posts
-//! [`Request`]s to the Worker and matches its [`Reply`]s. A timeout terminates
-//! the Worker, including a non-yielding call, and rejects every pending
-//! request.
+//! [`Request`]s to a Worker and matches its [`Reply`]s by request id. A
+//! timeout terminates the Worker, including a non-yielding call, and rejects
+//! every pending request.
 
 use std::{
     cell::{
@@ -33,7 +36,9 @@ use web_sys::{
 };
 
 use crate::{
+    pipeline::Compilation,
     protocol::{
+        Answer,
         Command,
         Reply,
         Request,
@@ -41,27 +46,87 @@ use crate::{
     snapshot::Snapshot,
 };
 
-/// One connected engine Worker.
+/// Which Worker to start, and how to talk about it.
+pub struct Kind {
+    /// The Worker's name in the browser's developer tools.
+    name:            &'static str,
+    /// The `<meta>` that records its content-hashed loader URL.
+    meta:            &'static str,
+    /// The loader's URL when the page was not built by Trunk.
+    fallback:        &'static str,
+    connect_timeout: u32,
+    call_timeout:    u32,
+    /// Why a request failed: the Worker could not start, timed out, or
+    /// stopped.
+    unstartable:     &'static str,
+    timed_out:       &'static str,
+    stopped:         &'static str,
+    disconnected:    &'static str,
+}
+
+/// The abstract machine, which holds the stepping session.
+pub const MACHINE: Kind = Kind {
+    name:            "bcc-rust-engine",
+    meta:            crate::ENGINE_META,
+    fallback:        "./engine-worker_loader.js",
+    connect_timeout: 20_000,
+    call_timeout:    10_000,
+    unstartable:     "The Rust engine Worker could not start",
+    timed_out:       "Rust engine timed out and was terminated. Retry engine to start a fresh \
+                      instance.",
+    stopped:         "Rust engine stopped.",
+    disconnected:    "Rust engine disconnected. Retry engine to start a fresh instance.",
+};
+
+/// bcc's compiler. It keeps no state between requests, so the page simply
+/// starts a new one after a timeout or a crash.
+pub const COMPILER: Kind = Kind {
+    name:            "bcc-rust-compiler",
+    meta:            crate::COMPILER_META,
+    fallback:        "./compiler-worker_loader.js",
+    // The compiler's Wasm is several times the machine's.
+    connect_timeout: 30_000,
+    call_timeout:    COMPILE_TIMEOUT_MS,
+    unstartable:     "bcc's in-browser compiler could not start",
+    timed_out:       "bcc's in-browser compiler took longer than 10 seconds, so the page stopped \
+                      it.",
+    stopped:         "bcc's in-browser compiler stopped.",
+    disconnected:    "bcc's in-browser compiler stopped.",
+};
+
+impl Kind {
+    /// The error a request gets when the Worker ran out of time.
+    pub fn timed_out(&self) -> &'static str {
+        self.timed_out
+    }
+
+    /// The error a request gets when the Worker was stopped.
+    pub fn stopped(&self) -> &'static str {
+        self.stopped
+    }
+}
+
+/// How long one compilation may run before its Worker is terminated.
+pub const COMPILE_TIMEOUT_MS: u32 = 10_000;
+
+/// One connected Worker.
 pub struct Engine {
     inner: Rc<Inner>,
 }
 
 impl Engine {
-    /// Start a fresh Worker and wait for it to instantiate the engine.
-    pub async fn connect() -> Result<Self, String> {
+    /// Start a fresh Worker of `kind` and wait for its Wasm to start.
+    pub async fn connect(kind: &'static Kind) -> Result<Self, String> {
         let global = js_sys::global();
         if !has(&global, "Worker") || !has(&global, "WebAssembly") {
             return Err("This browser needs Web Workers and WebAssembly to execute C.".into());
         }
         let options = WorkerOptions::new();
-        options.set_name("bcc-rust-engine");
-        let worker = Worker::new_with_options(&worker_url(), &options).map_err(|error| {
-            format!(
-                "The Rust engine Worker could not start: {}",
-                describe(&error)
-            )
-        })?;
+        options.set_name(kind.name);
+        let worker = Worker::new_with_options(&worker_url(kind), &options)
+            .map_err(|error| format!("{}: {}", kind.unstartable, describe(&error)))?;
         let inner = Rc::new(Inner {
+            kind,
             worker,
             pending: RefCell::default(),
             sequence: Cell::new(0),
@@ -73,20 +138,39 @@ impl Engine {
         let engine = Self { inner };
         // The Worker announces itself once its Wasm runs; requests posted
         // before then could be lost.
-        let ready = engine.inner.expect(READY, CONNECT_TIMEOUT_MS);
-        if let Err(error) = Inner::answer(ready).await {
-            engine.dispose("Rust engine stopped.");
+        let ready = engine.inner.expect(READY, kind.connect_timeout);
+        if let Err(error) = engine.inner.answer(ready).await {
+            engine.dispose(kind.stopped);
             return Err(error);
         }
         Ok(engine)
     }
 
     pub async fn load(&self, source: &str) -> Result<Snapshot, String> {
-        self.request(Command::Load(source.to_owned())).await
+        match self.request(Command::Load(source.to_owned())).await? {
+            | Answer::Snapshot(snapshot) => Ok(*snapshot),
+            | Answer::Compiled(_) => Err(UNEXPECTED.into()),
+        }
     }
 
     pub async fn step(&self) -> Result<Snapshot, String> {
-        self.request(Command::Step).await
+        match self.request(Command::Step).await? {
+            | Answer::Snapshot(snapshot) => Ok(*snapshot),
+            | Answer::Compiled(_) => Err(UNEXPECTED.into()),
+        }
+    }
+
+    /// Run bcc's compiler over `source` in the Worker, at `-O2` when
+    /// `optimize`.
+    pub async fn compile(&self, source: &str, optimize: bool) -> Result<Compilation, String> {
+        let command = Command::Compile {
+            source: source.to_owned(),
+            optimize,
+        };
+        match self.request(command).await? {
+            | Answer::Compiled(compilation) => Ok(*compilation),
+            | Answer::Snapshot(_) => Err(UNEXPECTED.into()),
+        }
     }
 
     pub fn connected(&self) -> bool {
@@ -98,52 +182,53 @@ impl Engine {
         self.inner.dispose(reason);
     }
 
-    async fn request(&self, command: Command) -> Result<Snapshot, String> {
+    async fn request(&self, command: Command) -> Result<Answer, String> {
         let receiver = self.inner.send(command)?;
-        Inner::answer(receiver)
+        self.inner
+            .answer(receiver)
             .await?
-            .ok_or_else(|| "The Rust engine sent no snapshot.".into())
+            .ok_or_else(|| "The Rust engine sent no answer.".into())
     }
 }
 
 impl Drop for Engine {
     fn drop(&mut self) {
-        self.inner.dispose("Rust engine stopped.");
+        self.inner.dispose(self.inner.kind.stopped);
     }
 }
 
 /// The Worker URL the build recorded (see `src/bin/prerender.rs`), or the
 /// unhashed source layout when the page was not built by Trunk.
-fn worker_url() -> String {
+fn worker_url(kind: &Kind) -> String {
     web_sys::window()
         .and_then(|window| window.document())
         .and_then(|document| {
             document
-                .query_selector(&format!("meta[name=\"{}\"]", crate::ENGINE_META))
+                .query_selector(&format!("meta[name=\"{}\"]", kind.meta))
                 .ok()
                 .flatten()
         })
         .and_then(|meta| meta.get_attribute("content"))
-        .unwrap_or_else(|| "./engine-worker_loader.js".into())
+        .unwrap_or_else(|| kind.fallback.into())
 }
 
-const CONNECT_TIMEOUT_MS: u32 = 20_000;
-const CALL_TIMEOUT_MS: u32 = 10_000;
+const UNEXPECTED: &str = "The Rust engine sent an answer of the wrong kind.";
 /// The pending-request slot for the Worker's [`Reply::Ready`]; requests count
 /// from 1.
 const READY: u32 = 0;
 
-/// A request's outcome: a snapshot, or nothing for [`Reply::Ready`].
-type Answer = Result<Option<Snapshot>, String>;
+/// A request's outcome: an answer, or nothing for [`Reply::Ready`].
+type Outcome = Result<Option<Answer>, String>;
 type MessageHandler = Closure<dyn FnMut(MessageEvent)>;
 type FailureHandler = Closure<dyn FnMut(JsValue)>;
 
 struct Pending {
-    reply:  oneshot::Sender<Answer>,
+    reply:  oneshot::Sender<Outcome>,
     _timer: Timeout,
 }
 
 struct Inner {
+    kind:       &'static Kind,
     worker:     Worker,
     pending:    RefCell<HashMap<u32, Pending>>,
     sequence:   Cell<u32>,
@@ -154,13 +239,13 @@ struct Inner {
 }
 
 impl Inner {
-    fn send(self: &Rc<Self>, command: Command) -> Result<oneshot::Receiver<Answer>, String> {
+    fn send(self: &Rc<Self>, command: Command) -> Result<oneshot::Receiver<Outcome>, String> {
         if !self.connected.get() {
-            return Err("Rust engine disconnected. Retry engine to start a fresh instance.".into());
+            return Err(self.kind.disconnected.into());
         }
         let id = self.sequence.get() + 1;
         self.sequence.set(id);
-        let receiver = self.expect(id, CALL_TIMEOUT_MS);
+        let receiver = self.expect(id, self.kind.call_timeout);
         let message = serde_wasm_bindgen::to_value(&Request { id, command })
             .map_err(|error| error.to_string())
             .and_then(|message| {
@@ -178,14 +263,11 @@ impl Inner {
 
     /// Register a pending answer for `id`; the Worker is terminated if none
     /// arrives within `timeout` milliseconds.
-    fn expect(self: &Rc<Self>, id: u32, timeout: u32) -> oneshot::Receiver<Answer> {
+    fn expect(self: &Rc<Self>, id: u32, timeout: u32) -> oneshot::Receiver<Outcome> {
         let weak = Rc::downgrade(self);
         let timer = Timeout::new(timeout, move || {
             if let Some(inner) = weak.upgrade() {
-                inner.dispose(
-                    "Rust engine timed out and was terminated. Retry engine to start a fresh \
-                     instance.",
-                );
+                inner.dispose(inner.kind.timed_out);
             }
         });
         let (reply, receiver) = oneshot::channel();
@@ -199,10 +281,10 @@ impl Inner {
         receiver
     }
 
-    async fn answer(receiver: oneshot::Receiver<Answer>) -> Answer {
+    async fn answer(&self, receiver: oneshot::Receiver<Outcome>) -> Outcome {
         receiver
             .await
-            .unwrap_or_else(|_| Err("Rust engine stopped.".into()))
+            .unwrap_or_else(|_| Err(self.kind.stopped.into()))
     }
 
     fn listen(self: &Rc<Self>) {
@@ -214,14 +296,14 @@ impl Inner {
         });
         self.worker
             .set_onmessage(Some(on_message.as_ref().unchecked_ref()));
-        let on_error = self.listener(|event| {
+        let on_error = self.listener(|kind, event| {
             event.prevent_default();
             let message = event
                 .dyn_ref::<ErrorEvent>()
                 .map(ErrorEvent::message)
                 .unwrap_or_default();
             if message.is_empty() {
-                "The Rust engine Worker could not start. Serve the built site over HTTP.".into()
+                format!("{}. Serve the built site over HTTP.", kind.unstartable)
             } else {
                 message
             }
@@ -229,7 +311,7 @@ impl Inner {
         self.worker
             .set_onerror(Some(on_error.as_ref().unchecked_ref()));
         let on_message_error =
-            self.listener(|_| "Unable to decode the Rust Worker response.".into());
+            self.listener(|_, _| "Unable to decode the Rust Worker response.".into());
         self.worker
             .set_onmessageerror(Some(on_message_error.as_ref().unchecked_ref()));
         *self.on_message.borrow_mut() = Some(on_message);
@@ -237,11 +319,11 @@ impl Inner {
     }
 
     /// A Worker event that disposes the engine with the returned reason.
-    fn listener(self: &Rc<Self>, reason: fn(&web_sys::Event) -> String) -> FailureHandler {
+    fn listener(self: &Rc<Self>, reason: fn(&Kind, &web_sys::Event) -> String) -> FailureHandler {
         let weak: Weak<Self> = Rc::downgrade(self);
         Closure::new(move |event: JsValue| {
             if let Some(inner) = weak.upgrade() {
-                inner.dispose(&reason(event.unchecked_ref()));
+                inner.dispose(&reason(inner.kind, event.unchecked_ref()));
             }
         })
     }
@@ -249,7 +331,7 @@ impl Inner {
     fn receive(&self, data: JsValue) {
         let (id, answer) = match serde_wasm_bindgen::from_value(data) {
             | Ok(Reply::Ready) => (READY, Ok(None)),
-            | Ok(Reply::Done { id, result }) => (id, result.map(|snapshot| Some(*snapshot))),
+            | Ok(Reply::Done { id, result }) => (id, result.map(Some)),
             | Err(error) => {
                 self.dispose(&format!(
                     "The Rust Worker sent an unreadable reply ({error}). Reload the page."

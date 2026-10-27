@@ -8,6 +8,7 @@ use super::{
     expressions::{
         Expr,
         ExprKind,
+        combined,
     },
     lexer::{
         self,
@@ -15,6 +16,7 @@ use super::{
     },
     model::{
         Diagnostic,
+        ExpressionNode,
         Function,
         Instruction,
         MAX_CODE,
@@ -37,6 +39,7 @@ pub(super) fn compile(source: &str) -> Result<Program, Diagnostic> {
         nesting:        0,
         calls:          Vec::new(),
         function_index: 0,
+        nodes:          Vec::new(),
     };
     let mut functions: Vec<Function> = Vec::new();
     let mut total_code = 0;
@@ -84,6 +87,7 @@ pub(super) fn compile(source: &str) -> Result<Program, Diagnostic> {
             name: String::from(name.text),
             parameters,
             code: std::mem::take(&mut parser.code),
+            nodes: roots(std::mem::take(&mut parser.nodes)),
         });
         parser.symbols.clear();
     }
@@ -153,6 +157,8 @@ pub(super) struct Parser<'a> {
     pub nesting:        usize,
     pub calls:          Vec<CallSite>,
     pub function_index: usize,
+    /// The current function's expression-tree nodes.
+    pub nodes:          Vec<ExpressionNode>,
 }
 
 impl<'a> Parser<'a> {
@@ -165,7 +171,7 @@ impl<'a> Parser<'a> {
             if self.at("") {
                 return Err(self.error("expected closing brace"));
             }
-            if self.at("int") {
+            if self.at("int") || self.at("char") {
                 self.declaration()?;
             } else {
                 self.statement()?;
@@ -194,16 +200,18 @@ impl<'a> Parser<'a> {
                 self.position += 1;
                 let expression = self.expression(0)?;
                 self.require_type(expression, Type::Int)?;
-                self.emit_expression(expression, false)?;
+                let value = self.emit_expression(expression, false)?;
+                let range = combined(token.range, self.expressions[expression].range);
                 self.expect(";")?;
-                self.emit(Op::Return, token.range)?;
+                let node = self.tree("return", range, vec![value])?;
+                self.emit_node(Op::Return, range, node)?;
                 Ok(())
             },
             | "if" => {
                 self.position += 1;
-                self.condition()?;
+                let (range, node) = self.condition("if")?;
                 let branch = self.code.len();
-                self.emit(Op::Branch(0), token.range)?;
+                self.emit_node(Op::Branch(0, "if"), range, node)?;
                 self.control_body()?;
                 if self.take("else") {
                     let jump = self.code.len();
@@ -219,9 +227,9 @@ impl<'a> Parser<'a> {
             | "while" => {
                 self.position += 1;
                 let head = self.code.len();
-                self.condition()?;
+                let (range, node) = self.condition("while")?;
                 let branch = self.code.len();
-                self.emit(Op::Branch(0), token.range)?;
+                self.emit_node(Op::Branch(0, "while"), range, node)?;
                 self.control_body()?;
                 self.emit(Op::Jump(head), token.range)?;
                 self.patch(branch, self.code.len());
@@ -232,7 +240,7 @@ impl<'a> Parser<'a> {
                 self.position += 1;
                 Ok(())
             },
-            | "int" | "else" | "break" | "continue" | "goto" | "do" | "switch" =>
+            | "int" | "char" | "else" | "break" | "continue" | "goto" | "do" | "switch" =>
                 Err(self.error("unsupported statement in this subset")),
             | _ => {
                 self.expression_statement()?;
@@ -242,7 +250,12 @@ impl<'a> Parser<'a> {
     }
 
     // Selection/iteration substatements get their C99 implicit block scope.
+    // A compound body is a block of its own that ends at the same point, so
+    // its scope stands in for the implicit one.
     fn control_body(&mut self) -> Result<(), Diagnostic> {
+        if self.at("{") {
+            return self.statement();
+        }
         let range = self.current().range;
         self.scope += 1;
         self.emit(Op::Enter, range)?;
@@ -259,7 +272,7 @@ impl<'a> Parser<'a> {
         self.expect("(")?;
         self.scope += 1;
         self.emit(Op::Enter, token.range)?;
-        if self.at("int") {
+        if self.at("int") || self.at("char") {
             self.declaration()?;
         } else {
             if !self.at(";") {
@@ -268,16 +281,22 @@ impl<'a> Parser<'a> {
             self.expect(";")?;
         }
         let head = self.code.len();
-        if self.at(";") {
+        let branch = if self.at(";") {
             self.emit(Op::Push(1), token.range)?;
+            let branch = self.code.len();
+            self.emit(Op::Branch(0, "for"), token.range)?;
+            branch
         } else {
             let condition = self.expression(0)?;
             self.require_scalar(condition)?;
-            self.emit_expression(condition, false)?;
-        }
+            let value = self.emit_expression(condition, false)?;
+            let range = self.expressions[condition].range;
+            let node = self.tree("for", range, vec![value])?;
+            let branch = self.code.len();
+            self.emit_node(Op::Branch(0, "for"), range, node)?;
+            branch
+        };
         self.expect(";")?;
-        let branch = self.code.len();
-        self.emit(Op::Branch(0), token.range)?;
         let iteration_start = self.code.len();
         if !self.at(")") {
             self.expression_statement()?;
@@ -294,15 +313,26 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
-    fn condition(&mut self) -> Result<(), Diagnostic> {
+    /// A parenthesized controlling expression; returns its range and the
+    /// statement's tree root.
+    fn condition(&mut self, statement: &'static str) -> Result<(SourceRange, usize), Diagnostic> {
         self.expect("(")?;
         let expression = self.expression(0)?;
         self.require_scalar(expression)?;
-        self.emit_expression(expression, false)?;
-        self.expect(")")
+        let value = self.emit_expression(expression, false)?;
+        self.expect(")")?;
+        let range = self.expressions[expression].range;
+        Ok((range, self.tree(statement, range, vec![value])?))
     }
 
     fn declaration(&mut self) -> Result<(), Diagnostic> {
+        if self.take("char") {
+            let name = self.identifier()?;
+            if self.at("*") || self.at("[") {
+                return Err(self.error("only scalar char objects are supported"));
+            }
+            return self.scalar_declaration(name, Type::Char);
+        }
         self.expect("int")?;
         let mut ty = if self.take("*") {
             Type::Pointer
@@ -328,62 +358,106 @@ impl<'a> Parser<'a> {
             self.expect("]")?;
             ty = Type::Array(length);
         }
+        let Type::Array(length) = ty else {
+            return self.scalar_declaration(name, ty);
+        };
         self.add_symbol(name, ty, self.scope)?;
         self.emit(Op::Declare(String::from(name.text), ty), name.range)?;
         if self.take("=") {
-            if let Type::Array(length) = ty {
-                self.expect("{")?;
-                let mut index = 0;
-                while !self.at("}") {
-                    if index >= length {
-                        return Err(self.error("too many array initializer elements"));
-                    }
-                    self.array_element_address(name, index)?;
-                    let expression = self.expression(0)?;
-                    self.require_type(expression, Type::Int)?;
-                    if self.expressions[expression].call {
-                        return Err(
-                            self.error("calls in array initializers are outside this subset")
-                        );
-                    }
-                    self.emit_expression(expression, false)?;
-                    self.emit(Op::Store, name.range)?;
-                    index += 1;
-                    if !self.take(",") {
-                        break;
-                    }
+            self.expect("{")?;
+            let mut index = 0;
+            while !self.at("}") {
+                if index >= length {
+                    return Err(self.error("too many array initializer elements"));
                 }
-                self.expect("}")?;
-                if index == 0 {
-                    return Err(self.error("empty initializer lists are outside the C99 subset"));
-                }
-                while index < length {
-                    self.array_element_address(name, index)?;
-                    self.emit(Op::Push(0), name.range)?;
-                    self.emit(Op::Store, name.range)?;
-                    index += 1;
-                }
-            } else {
-                self.emit(Op::Address(String::from(name.text)), name.range)?;
+                let element = self.array_element(name, index)?;
                 let expression = self.expression(0)?;
-                self.require_type(expression, ty)?;
-                self.emit_expression(expression, false)?;
-                self.emit(Op::Store, name.range)?;
+                self.require_type(expression, Type::Int)?;
+                if self.expressions[expression].call {
+                    return Err(self.error("calls in array initializers are outside this subset"));
+                }
+                let value = self.emit_expression(expression, false)?;
+                index += 1;
+                let range = self.expressions[expression].range;
+                self.initialize(element, value, range, index == length)?;
+                if !self.take(",") {
+                    break;
+                }
+            }
+            self.expect("}")?;
+            if index == 0 {
+                return Err(self.error("empty initializer lists are outside the C99 subset"));
+            }
+            while index < length {
+                let element = self.array_element(name, index)?;
+                let zero = self.tree("0", name.range, Vec::new())?;
+                self.emit_node(Op::Zero, name.range, zero)?;
+                index += 1;
+                self.initialize(element, zero, name.range, index == length)?;
             }
         }
         self.expect(";")
     }
 
-    fn array_element_address(&mut self, name: Token<'_>, index: usize) -> Result<(), Diagnostic> {
-        self.emit(Op::Decay(String::from(name.text)), name.range)?;
+    /// `int x`, `int *p` or `char c`, with an optional initializer.
+    fn scalar_declaration(&mut self, name: Token<'a>, ty: Type) -> Result<(), Diagnostic> {
+        self.add_symbol(name, ty, self.scope)?;
+        self.emit(Op::Declare(String::from(name.text), ty), name.range)?;
+        if self.take("=") {
+            let target = self.tree(name.text, name.range, Vec::new())?;
+            self.emit_node(Op::Address(String::from(name.text)), name.range, target)?;
+            let expression = self.expression(0)?;
+            self.require_type(expression, ty)?;
+            let value = self.emit_expression(expression, false)?;
+            let range = combined(name.range, self.expressions[expression].range);
+            let node = self.tree("=", range, vec![target, value])?;
+            self.emit_node(
+                Op::Store {
+                    initializer:     true,
+                    full_expression: true,
+                },
+                range,
+                node,
+            )?;
+        }
+        self.expect(";")
+    }
+
+    /// The lvalue for element `index` of the array being initialized.
+    fn array_element(&mut self, name: Token<'_>, index: usize) -> Result<usize, Diagnostic> {
         let index =
             i32::try_from(index).map_err(|_| self.error("array index exceeds int range"))?;
-        self.emit(Op::Push(index), name.range)?;
-        self.emit(Op::Index, name.range)?;
-        Ok(())
+        let node = self.tree(&format!("{}[{index}]", name.text), name.range, Vec::new())?;
+        self.emit_node(
+            Op::Element(String::from(name.text), index),
+            name.range,
+            node,
+        )?;
+        Ok(node)
+    }
+
+    /// Store an initializer element. The initializer list is one full
+    /// expression, so only its last store ends it (C99 §6.8p4).
+    fn initialize(
+        &mut self,
+        element: usize,
+        value: usize,
+        range: SourceRange,
+        last: bool,
+    ) -> Result<(), Diagnostic> {
+        let node = self.tree("=", range, vec![element, value])?;
+        self.emit_node(
+            Op::Store {
+                initializer:     true,
+                full_expression: last,
+            },
+            range,
+            node,
+        )
     }
 
     fn expression_statement(&mut self) -> Result<(), Diagnostic> {
+        let prefix_token = self.current();
         let prefix = if self.take("++") {
             Some(1)
         } else if self.take("--") {
@@ -397,20 +471,33 @@ impl<'a> Parser<'a> {
             if prefix.is_some() {
                 return Err(self.error("nested increments are outside this subset"));
             }
-            self.emit_expression(expression, true)?;
+            let target = self.emit_expression(expression, true)?;
             let value = self.expression(0)?;
             self.require_type(value, self.expressions[expression].ty)?;
-            self.emit_expression(value, false)?;
-            self.emit(Op::Store, range)?;
-        } else if let Some(delta) = prefix.or_else(|| {
-            if self.take("++") {
-                Some(1)
-            } else if self.take("--") {
-                Some(-1)
-            } else {
-                None
-            }
-        }) {
+            let node = self.emit_expression(value, false)?;
+            let range = combined(range, self.expressions[value].range);
+            let root = self.tree("=", range, vec![target, node])?;
+            self.emit_node(
+                Op::Store {
+                    initializer:     false,
+                    full_expression: true,
+                },
+                range,
+                root,
+            )?;
+            return Ok(());
+        }
+        let postfix_token = self.current();
+        let postfix = if prefix.is_some() {
+            None
+        } else if self.take("++") {
+            Some(1)
+        } else if self.take("--") {
+            Some(-1)
+        } else {
+            None
+        };
+        if let Some(delta) = prefix.or(postfix) {
             let operand = &self.expressions[expression];
             if prefix.is_none()
                 && matches!(operand.kind, ExprKind::Unary("*", _))
@@ -423,26 +510,78 @@ impl<'a> Parser<'a> {
                      increment the pointed-to int",
                 ));
             }
-            self.emit_expression(expression, true)?;
-            self.emit(Op::Increment(delta), range)?;
+            let target = self.emit_expression(expression, true)?;
+            let (range, label) = if prefix.is_some() {
+                (combined(prefix_token.range, range), prefix_token.text)
+            } else {
+                (combined(range, postfix_token.range), postfix_token.text)
+            };
+            let root = self.tree(label, range, vec![target])?;
+            self.emit_node(
+                Op::Increment {
+                    delta,
+                    prefix: prefix.is_some(),
+                },
+                range,
+                root,
+            )?;
         } else {
-            self.emit_expression(expression, false)?;
+            let _value = self.emit_expression(expression, false)?;
             self.emit(Op::Pop, range)?;
         }
         Ok(())
     }
 
     pub fn emit(&mut self, op: Op, range: SourceRange) -> Result<(), Diagnostic> {
+        self.push_instruction(op, range, None)
+    }
+
+    /// Emit an operation that evaluates expression-tree `node`.
+    pub fn emit_node(&mut self, op: Op, range: SourceRange, node: usize) -> Result<(), Diagnostic> {
+        self.push_instruction(op, range, Some(node))
+    }
+
+    fn push_instruction(
+        &mut self,
+        op: Op,
+        range: SourceRange,
+        node: Option<usize>,
+    ) -> Result<(), Diagnostic> {
         if self.code.len() >= MAX_CODE {
             return Err(Diagnostic::limit(range, "compiled operation limit reached"));
         }
-        self.code.push(Instruction { op, range });
+        self.code.push(Instruction { op, range, node });
         Ok(())
+    }
+
+    /// Add an expression-tree node over `children`, which must be the most
+    /// recently completed subtrees in source order.
+    pub fn tree(
+        &mut self,
+        label: &str,
+        range: SourceRange,
+        children: Vec<usize>,
+    ) -> Result<usize, Diagnostic> {
+        if self.nodes.len() >= MAX_CODE {
+            return Err(Diagnostic::limit(range, "expression node limit reached"));
+        }
+        let index = self.nodes.len();
+        let first = children
+            .first()
+            .map_or(index, |&child| self.nodes[child].first);
+        self.nodes.push(ExpressionNode {
+            label: String::from(label),
+            range,
+            children,
+            first,
+            root: index,
+        });
+        Ok(index)
     }
 
     fn patch(&mut self, index: usize, target: usize) {
         match &mut self.code[index].op {
-            | Op::Branch(value) | Op::Jump(value) => *value = target,
+            | Op::Branch(value, _) | Op::Jump(value) => *value = target,
             | _ => {},
         }
     }
@@ -513,7 +652,10 @@ impl<'a> Parser<'a> {
     }
 
     pub fn require_scalar(&self, expression: usize) -> Result<(), Diagnostic> {
-        if matches!(self.expressions[expression].ty, Type::Int | Type::Pointer) {
+        if matches!(
+            self.expressions[expression].ty,
+            Type::Int | Type::Char | Type::Pointer
+        ) {
             Ok(())
         } else {
             Err(self.error("expected a scalar expression"))
@@ -601,7 +743,24 @@ pub(super) fn is_identifier(text: &str) -> bool {
 }
 
 fn compatible(expected: Type, actual: Type, null: bool) -> bool {
-    expected == actual || (expected == Type::Pointer && actual == Type::Int && null)
+    expected == actual
+        || matches!(
+            (expected, actual),
+            (Type::Char, Type::Int) | (Type::Int, Type::Char)
+        )
+        || (expected == Type::Pointer && actual == Type::Int && null)
+}
+
+/// Set each node's full-expression root. A parent follows its children, so a
+/// reverse walk meets every parent before its children.
+fn roots(mut nodes: Vec<ExpressionNode>) -> Vec<ExpressionNode> {
+    for index in (0..nodes.len()).rev() {
+        let root = nodes[index].root;
+        for child in nodes[index].children.clone() {
+            nodes[child].root = root;
+        }
+    }
+    nodes
 }
 
 fn format_message(prefix: &str, value: &str, suffix: &str) -> String {

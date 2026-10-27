@@ -47,12 +47,14 @@ mod isel;
 mod regalloc;
 
 // Output
+#[cfg(feature = "native")]
 mod driver;
 mod emit;
 mod object;
 
 use std::fmt;
 
+#[cfg(feature = "native")]
 pub(crate) use driver::{
     ObjectWriter,
     RequestedWriter,
@@ -61,6 +63,7 @@ pub(crate) use driver::{
     build_object,
     object_writer,
 };
+pub(crate) use object::FunctionCode;
 pub(crate) use support::Unsupported;
 
 use self::{
@@ -87,7 +90,7 @@ use crate::{
 /// Symbols the back end calls or reads on its own (`_tls_index` is the
 /// Windows image's TLS index); a module may not define them internally,
 /// since those references would bind to its definition.
-pub(crate) const RUNTIME_SYMBOLS: [&str; 54] = [
+pub(crate) const RUNTIME_SYMBOLS: [&str; 68] = [
     "memmove",
     "__main",
     "___chkstk_ms",
@@ -142,6 +145,21 @@ pub(crate) const RUNTIME_SYMBOLS: [&str; 54] = [
     "__fixtfdi",
     "__fixunstfdi",
     "_tls_index",
+    // libatomic, for `i128` and byte-buffer atomic operations.
+    "__atomic_load",
+    "__atomic_store",
+    "__atomic_exchange",
+    "__atomic_compare_exchange",
+    "__atomic_load_16",
+    "__atomic_store_16",
+    "__atomic_exchange_16",
+    "__atomic_compare_exchange_16",
+    "__atomic_fetch_add_16",
+    "__atomic_fetch_sub_16",
+    "__atomic_fetch_and_16",
+    "__atomic_fetch_or_16",
+    "__atomic_fetch_xor_16",
+    "__atomic_fetch_nand_16",
 ];
 
 /// Whether the module defines `symbol`: a function body, a global's
@@ -259,15 +277,24 @@ fn emit<'m>(
     let mut emitter = Emitter::new(module, target, out, &stubs);
     emitter.header()?;
     let mut scratch = Bump::new();
+    let indirect_returns_twice = module.returns_twice_escapes();
     for (id, function) in module.functions() {
         let Some(body) = &function.body else { continue };
         {
             let arena = &scratch;
-            let mut func = isel::select(module, function, body, target, code.tls_model, arena)
-                .map_err(|construct| Unsupported {
-                    function: Some(function.name),
-                    construct,
-                })?;
+            let mut func = isel::select(
+                module,
+                function,
+                body,
+                target,
+                code.tls_model,
+                indirect_returns_twice,
+                arena,
+            )
+            .map_err(|construct| Unsupported {
+                function: Some(function.name),
+                construct,
+            })?;
             let mut allocation = regalloc::allocate(&mut func, conv, arena);
             adjust(&func, &mut allocation);
             regalloc::rewrite(&mut func, &allocation, arena);
@@ -283,6 +310,17 @@ fn emit<'m>(
     }
     emitter.globals(&references)?;
     Ok(())
+}
+
+/// Each function's machine code, instruction by instruction, from the
+/// module's assembly for an ELF target, encoded as `--native-object` would.
+/// A listing the encoder does not handle, such as one with file-scope
+/// assembly, is refused with the encoder's reason.
+pub(crate) fn machine_code<'a>(
+    assembly: &'a str,
+    arena: &'a Bump,
+) -> Result<&'a [FunctionCode<'a>], &'static str> {
+    object::functions(assembly, arena).map_err(|error| error.0)
 }
 
 /// Why the back end produced no assembly.
@@ -314,6 +352,14 @@ pub(crate) enum NativeError<'m> {
          listing with clang"
     )]
     ObjectModuleAsm,
+    /// `--native-object` encodes only the emitter's own listing; inline
+    /// assembly writes its template into it. Without the flag such a module
+    /// is assembled, on every target.
+    #[error(
+        "--native-object cannot encode inline assembly; omit it to assemble the native listing \
+         with clang"
+    )]
+    ObjectInlineAsm,
 }
 
 impl<'m> From<Unsupported<'m>> for NativeError<'m> {

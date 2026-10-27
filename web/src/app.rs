@@ -1,4 +1,5 @@
-//! The debugger page: controls, bounded snapshot history, and layout.
+//! The page: lesson picker, source editor, and the two views of a program,
+//! the abstract machine stepping it and the compiler pipeline translating it.
 //!
 //! Every program state comes from the Rust engine in its Worker. Back replays
 //! retained snapshots for presentation only; the engine stays at the newest
@@ -7,40 +8,53 @@
 
 use std::rc::Rc;
 
-use gloo_timers::future::TimeoutFuture;
+use gloo_timers::{
+    callback::Timeout,
+    future::TimeoutFuture,
+};
 use leptos::{
-    html,
+    ev,
     prelude::*,
     task::spawn_local,
 };
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::JsFuture;
-use web_sys::{
-    HtmlInputElement,
-    ScrollIntoViewOptions,
-    ScrollLogicalPosition,
-};
+use web_sys::HtmlInputElement;
 
 use crate::{
     demos::{
         self,
         DEMOS,
+        Demo,
     },
-    engine::Engine,
+    editor::{
+        CodeEditor,
+        Decoration,
+        Layer,
+        Marker,
+    },
+    engine::{
+        self,
+        Engine,
+    },
+    palette,
     panels::{
-        DiagnosticBanner,
-        EffectsPanel,
-        ObjectsPanel,
-        StackPanel,
+        LiveCompile,
+        Memory,
+        Narration,
+        PipelineView,
+        TreeView,
+    },
+    pipeline::{
+        Compilation,
+        CompileDiagnostic,
+        Stage,
     },
     snapshot::{
         Diagnostic,
+        Range,
         Snapshot,
         status_label,
-    },
-    source_view::{
-        self,
-        SourceLine,
     },
 };
 
@@ -49,29 +63,72 @@ pub fn App() -> impl IntoView {
     let state = State::new();
     // Effects run only in the browser, so prerendering never starts a Worker.
     Effect::new(move || state.initialize());
+    Effect::new(move |previous: Option<()>| {
+        if previous.is_none() {
+            state.theme.set(initial_theme());
+        }
+    });
+    Effect::new(move || {
+        let theme = state.theme.get();
+        if let Some(root) = document().document_element() {
+            _ = root.set_attribute("data-theme", theme);
+        }
+    });
+    // Compile the other level as soon as the switch changes.
+    Effect::new(move || {
+        state.optimize.track();
+        state.compile_now();
+    });
+    Effect::new(move || {
+        // The page lives as long as the listener.
+        let _handle = window_event_listener(ev::keydown, move |event| state.shortcut(&event));
+    });
     view! {
-        <a class="skip-link" href="#source-panel">"Skip to debugger"</a>
+        <a class="skip-link" href="#workbench">"Skip to the workbench"</a>
         <Header state />
         <main>
-            <Intro />
+            <Hero />
+            <Lessons state />
             <EngineNotice state />
-            <section class="debugger" aria-label="C abstract machine debugger">
+            <section class="workbench" id="workbench" aria-label="Workbench">
                 <Toolbar state />
-                <div class="workspace">
-                    <SourcePanel state />
-                    <div class="machine-panels">
-                        <StackPanel snapshot=state.current />
-                        <ObjectsPanel snapshot=state.current />
+                <SiteError state />
+                <div class="workbench-grid">
+                    <SourcePane state />
+                    <div class="insight" id="insight">
+                        <Show
+                            when=move || state.mode.get() == Mode::Machine
+                            fallback=move || view! {
+                                <PipelineView
+                                    stage=state.stage
+                                    optimize=state.optimize
+                                    compilation=state.compilation
+                                    shown=state.shown
+                                    other=state.other_level
+                                    live=state.live_status.into()
+                                    theme=state.theme_name
+                                    hover_source=state.hover_source.read_only()
+                                    hover_output=state.hover_output
+                                    filename=state.filename.read_only()
+                                    source=state.editor_text.into()
+                                    on_reveal=Callback::new(move |line| state.reveal.set(Some(line)))
+                                />
+                            }
+                        >
+                            <Narration snapshot=state.current recent=state.recent on_jump=Callback::new(move |index| state.jump(index)) placeholder=state.placeholder />
+                            <TreeView snapshot=state.current />
+                            <Memory snapshot=state.current />
+                        </Show>
                     </div>
                 </div>
-                <EffectsPanel snapshot=state.current />
             </section>
-            <DiagnosticBanner diagnostic=state.diagnostic />
+            <About />
             <p class="sr-only" role="status" aria-live="polite" aria-atomic="true">{state.announcement}</p>
         </main>
         <footer class="site-footer">
-            <span>"bcc "<span class="muted">"/ experimental C abstract machine"</span></span>
-            <span>"Local execution · No external dependencies"</span>
+            <span><strong>"bcc"</strong>" · a C99 compiler written in Rust"</span>
+            <span>"Everything runs in your browser. No code leaves this page."</span>
+            <a href=REPOSITORY_URL>"Source on GitHub"</a>
         </footer>
     }
 }
@@ -79,17 +136,39 @@ pub fn App() -> impl IntoView {
 const HISTORY_LIMIT: usize = 2000;
 const RUN_LIMIT: usize = 1000;
 const MAX_SOURCE_BYTES: u32 = 32 * 1024;
-/// The site's README, which covers building it and the model's limitations.
+const REPOSITORY_URL: &str = "https://github.com/BenBwall/bcc-rust";
 const README_URL: &str = "https://github.com/BenBwall/bcc-rust/blob/main/web/README.md";
-const RUN_YIELD_MS: u32 = 25;
-const CURSOR_HINT: &str = "Highlight: next operation. Select a target line.";
+const RUN_YIELD_MS: u32 = 140;
+/// Steps a held key may queue while the engine answers.
+const MAX_QUEUED_STEPS: u32 = 4;
+const THEME_KEY: &str = "bcc-theme";
+/// How long typing must pause before the compiler runs.
+const COMPILE_DEBOUNCE_MS: u32 = 400;
+/// Compilations kept, so switching level or lesson back is instant.
+const COMPILED_LIMIT: usize = 8;
+
+/// A source and whether it is compiled at `-O2`.
+type CompileKey = (String, bool);
+
+/// Recent compilations, or why the Worker could not compile, oldest first.
+type Compiled = Vec<(CompileKey, Result<Compilation, String>)>;
+
+/// Which view of the program the workbench shows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Mode {
+    Machine,
+    Pipeline,
+}
 
 /// Page state. Every field is a `Copy` handle, so closures capture it freely.
 #[derive(Clone, Copy)]
 struct State {
     engine:          StoredValue<Option<Rc<Engine>>, LocalStorage>,
     has_engine:      RwSignal<bool>,
+    /// The program the engine runs.
     source:          RwSignal<String>,
+    /// The editor's text, which differs from `source` after an edit.
+    editor_text:     RwSignal<String>,
     filename:        RwSignal<String>,
     history:         RwSignal<Vec<Snapshot>>,
     cursor:          RwSignal<Option<usize>>,
@@ -98,22 +177,48 @@ struct State {
     target_line:     RwSignal<Option<usize>>,
     busy:            RwSignal<bool>,
     running:         RwSignal<bool>,
+    /// Steps requested (by key repeat) while one was in flight.
+    queued:          RwSignal<u32>,
     pause_requested: RwSignal<bool>,
-    editor_text:     RwSignal<String>,
-    editing:         RwSignal<bool>,
     failed:          RwSignal<bool>,
     /// A site error shown in place of the snapshot's diagnostic.
     error:           RwSignal<Option<Diagnostic>>,
-    /// Why the engine is unavailable; shows setup instructions.
+    /// Why the engine is unavailable.
     unavailable:     RwSignal<Option<String>>,
-    engine_label:    RwSignal<&'static str>,
-    cursor_label:    RwSignal<String>,
     announcement:    RwSignal<String>,
+    mode:            RwSignal<Mode>,
+    stage:           RwSignal<Stage>,
+    theme:           RwSignal<&'static str>,
+    theme_name:      Signal<&'static str>,
+    /// bcc's compiler Worker, started on the first compilation.
+    compiler:        StoredValue<Option<Rc<Engine>>, LocalStorage>,
+    starting:        RwSignal<bool>,
+    /// Whether the pipeline view shows `-O2` rather than `-O0` output.
+    optimize:        RwSignal<bool>,
+    compiled:        RwSignal<Compiled>,
+    /// The compilation the Worker is running; one runs at a time.
+    in_flight:       RwSignal<Option<CompileKey>>,
+    /// The debounce timer while typing; dropping it cancels it.
+    debounce:        StoredValue<Option<Timeout>, LocalStorage>,
+    pending:         RwSignal<bool>,
+    live_status:     Memo<LiveCompile>,
+    hover_source:    RwSignal<usize>,
+    hover_output:    RwSignal<usize>,
+    reveal:          RwSignal<Option<usize>>,
     current:         Memo<Option<Snapshot>>,
-    diagnostic:      Memo<Option<Diagnostic>>,
+    recent:          Memo<Vec<(usize, String, String)>>,
     edited:          Memo<bool>,
-    code_view:       NodeRef<html::Div>,
-    editor:          NodeRef<html::Textarea>,
+    /// The editor's text compiled at the selected level, with the
+    /// precomputed LLVM IR for a lesson.
+    compilation:     Memo<Option<Compilation>>,
+    /// What the pipeline view shows: `compilation`, or the last output while
+    /// the next one compiles.
+    shown:           Memo<Option<Compilation>>,
+    /// The same at the other level, for the optimizer comparison.
+    other_level:     Memo<Option<Compilation>>,
+    /// bcc's diagnostics as squiggles in the source editor.
+    markers:         Memo<Vec<Marker>>,
+    placeholder:     Memo<&'static str>,
 }
 
 impl State {
@@ -124,15 +229,50 @@ impl State {
         let source = RwSignal::new(tour.source.to_owned());
         let editor_text = RwSignal::new(tour.source.to_owned());
         let error = RwSignal::new(None::<Diagnostic>);
+        let optimize = RwSignal::new(false);
+        let compiled = RwSignal::new(Compiled::new());
+        let in_flight = RwSignal::new(None::<CompileKey>);
+        let starting = RwSignal::new(false);
+        let pending = RwSignal::new(false);
+        let theme = RwSignal::new("dark");
+        let live = LiveViews::new(
+            editor_text,
+            optimize,
+            compiled,
+            in_flight,
+            pending,
+            starting,
+        );
         let current = Memo::new(move |_| {
             cursor
                 .get()
                 .and_then(|index| history.with(|history| history.get(index).cloned()))
         });
+        let recent = Memo::new(move |_| {
+            let Some(cursor) = cursor.get() else {
+                return Vec::new();
+            };
+            history.with(|history| {
+                history[..cursor]
+                    .iter()
+                    .enumerate()
+                    .rev()
+                    .take(4)
+                    .map(|(index, snapshot)| {
+                        (
+                            index,
+                            snapshot.event.title.clone(),
+                            snapshot.event.category.clone(),
+                        )
+                    })
+                    .collect()
+            })
+        });
         Self {
             engine: StoredValue::new_local(None),
             has_engine: RwSignal::new(false),
             source,
+            editor_text,
             filename: RwSignal::new(tour.name.to_owned()),
             history,
             cursor,
@@ -140,26 +280,39 @@ impl State {
             target_line: RwSignal::new(None),
             busy: RwSignal::new(false),
             running: RwSignal::new(false),
+            queued: RwSignal::new(0),
             pause_requested: RwSignal::new(false),
-            editor_text,
-            editing: RwSignal::new(false),
             failed: RwSignal::new(false),
             error,
             unavailable: RwSignal::new(None),
-            engine_label: RwSignal::new("Connecting to Rust / Wasm"),
-            cursor_label: RwSignal::new(CURSOR_HINT.into()),
             announcement: RwSignal::new(String::new()),
+            mode: RwSignal::new(Mode::Machine),
+            stage: RwSignal::new(Stage::Ir),
+            theme,
+            theme_name: Signal::derive(move || theme.get()),
+            compiler: StoredValue::new_local(None),
+            starting,
+            optimize,
+            compiled,
+            in_flight,
+            debounce: StoredValue::new_local(None),
+            pending,
+            live_status: live.status,
+            hover_source: RwSignal::new(0),
+            hover_output: RwSignal::new(0),
+            reveal: RwSignal::new(None),
             current,
-            diagnostic: Memo::new(move |_| {
-                error.get().or_else(|| {
-                    current.with(|state| state.as_ref().and_then(|state| state.diagnostic.clone()))
-                })
-            }),
+            recent,
             edited: Memo::new(move |_| {
                 editor_text.with(|text| source.with(|source| text != source))
             }),
-            code_view: NodeRef::new(),
-            editor: NodeRef::new(),
+            compilation: live.compilation,
+            shown: live.shown,
+            other_level: live.other_level,
+            markers: live.markers,
+            placeholder: Memo::new(move |_| {
+                editor_text.with(|text| demos::matching(text).map_or("", |demo| demo.summary))
+            }),
         }
     }
 
@@ -167,19 +320,13 @@ impl State {
     fn initialize(self) {
         spawn_local(async move {
             self.busy.set(true);
-            self.engine_label.set("Connecting to Rust / Wasm");
             self.drop_engine();
-            match Engine::connect().await {
+            match Engine::connect(&engine::MACHINE).await {
                 | Ok(engine) => {
                     self.engine.set_value(Some(Rc::new(engine)));
                     self.has_engine.set(true);
                     self.unavailable.set(None);
-                    self.engine_label.set("Rust / Wasm · bounded C subset");
-                    let text = if self.edited.get_untracked() {
-                        self.editor_text.get_untracked()
-                    } else {
-                        self.source.get_untracked()
-                    };
+                    let text = self.source.get_untracked();
                     if let Err(error) = self.load_program(text, self.filename.get_untracked()).await
                     {
                         if self.engine_connected() {
@@ -214,37 +361,38 @@ impl State {
     }
 
     async fn load_program(self, text: String, name: String) -> Result<(), String> {
-        if text.len() > MAX_SOURCE_BYTES as usize {
-            return Err("The bounded Rust engine accepts at most 32 KiB of source.".into());
+        if !self.accepts(&text) {
+            return Ok(());
         }
         self.source.set(text.clone());
         self.editor_text.set(text.clone());
         self.filename.set(name);
         self.clear_history();
         self.failed.set(false);
-        self.show_state(false);
+        self.error.set(None);
+        self.compile_now();
         let snapshot = self.engine()?.load(&text).await?;
         self.history.set(vec![snapshot]);
         self.cursor.set(Some(0));
-        self.show_state(true);
+        self.announce_state();
         Ok(())
     }
 
-    /// Select a demo or opened file: load it, or stage it while the engine is
-    /// unavailable.
+    /// Select a demo or an opened file: load it, or stage it while the engine
+    /// is unavailable.
     async fn stage_program(self, text: String, name: String) -> Result<(), String> {
-        let result = if self.has_engine.get_untracked() {
+        if self.has_engine.get_untracked() {
             self.load_program(text, name).await
-        } else {
+        } else if self.accepts(&text) {
             self.source.set(text.clone());
             self.editor_text.set(text);
             self.filename.set(name);
             self.clear_history();
-            self.show_state(false);
+            self.compile_now();
             Ok(())
-        };
-        self.editing.set(false);
-        result
+        } else {
+            Ok(())
+        }
     }
 
     async fn step_forward(self) -> Result<(), String> {
@@ -267,6 +415,32 @@ impl State {
         Ok(())
     }
 
+    fn step(self) {
+        if self.running.get_untracked() || !self.can_step_untracked() {
+            return;
+        }
+        if self.busy.get_untracked() {
+            self.queued
+                .update(|queued| *queued = (*queued + 1).min(MAX_QUEUED_STEPS));
+            return;
+        }
+        self.action(move || async move {
+            let result = async {
+                loop {
+                    self.step_forward().await?;
+                    self.after_step();
+                    if self.queued.get_untracked() == 0 || !self.can_step_untracked() {
+                        return Ok(());
+                    }
+                    self.queued.update(|queued| *queued -= 1);
+                }
+            }
+            .await;
+            self.queued.set(0);
+            result
+        });
+    }
+
     /// Step until a terminal state, Pause, the Run budget, or `line`.
     fn run(self, line: Option<usize>) {
         if self.locked() || !self.can_step_untracked() {
@@ -278,9 +452,9 @@ impl State {
             let mut steps = 0;
             let mut reached = false;
             let mut result = Ok(());
-            // Yield between real Rust steps so Pause stays available and large
-            // loops do not lock the page. The budget also bounds accidental
-            // infinite loops.
+            // Yield between real Rust steps so the animation is visible, Pause
+            // stays available, and large loops do not lock the page. The
+            // budget also bounds accidental infinite loops.
             while !self.pause_requested.get_untracked()
                 && self.can_step_untracked()
                 && steps < RUN_LIMIT
@@ -290,7 +464,7 @@ impl State {
                     break;
                 }
                 steps += 1;
-                self.show_state(false);
+                self.reveal_current();
                 reached = line.is_some_and(|line| self.current_contains(line));
                 if reached {
                     break;
@@ -309,20 +483,10 @@ impl State {
                     | Some(line) if self.can_step_untracked() => {
                         self.report(format!("Paused before reaching line {line}."));
                     },
-                    | Some(line) => {
-                        let status = self.current.with_untracked(|state| {
-                            state
-                                .as_ref()
-                                .map(|state| state.status.replace('_', " "))
-                                .unwrap_or_default()
-                        });
-                        self.report(format!("Stopped before reaching line {line}: {status}."));
-                    },
-                    | None => self.announce_state(),
+                    | _ => self.announce_state(),
                 },
             }
             self.running.set(false);
-            self.reveal_current_line();
         });
     }
 
@@ -332,47 +496,240 @@ impl State {
         }
         if let Some(cursor) = self.cursor.get_untracked().filter(|&cursor| cursor > 0) {
             self.cursor.set(Some(cursor - 1));
-            self.show_state(true);
+            self.after_step();
         }
     }
 
-    fn select_line(self, line: usize) {
-        self.target_line.set(Some(line));
-        self.cursor_label.set(format!("Target set to line {line}."));
+    /// Show retained snapshot `index` (from the recent-steps list).
+    fn jump(self, index: usize) {
+        if self.locked() || index >= self.history.with_untracked(Vec::len) {
+            return;
+        }
+        self.cursor.set(Some(index));
+        self.after_step();
+    }
+
+    fn reset(self) {
+        self.action(move || {
+            self.load_program(self.source.get_untracked(), self.filename.get_untracked())
+        });
+    }
+
+    fn toggle_run(self) {
+        if self.running.get_untracked() {
+            self.pause_requested.set(true);
+        } else {
+            self.run(None);
+        }
+    }
+
+    fn select_demo(self, demo: &'static Demo) {
+        self.mode.set(Mode::Machine);
+        self.action(move || self.stage_program(demo.source.into(), demo.name.into()));
+    }
+
+    /// Load the editor's text into the engine (and the compiler, when live).
+    fn run_edits(self) {
+        let text = self.editor_text.get_untracked();
+        let name = if demos::matching(&text).is_some() {
+            self.filename.get_untracked()
+        } else {
+            "program.c".into()
+        };
+        self.action(move || self.load_program(text, name));
+    }
+
+    fn set_mode(self, mode: Mode) {
+        self.mode.set(mode);
+        self.compile_now();
+    }
+
+    /// Compile the editor's text once typing pauses.
+    fn compile_after_typing(self) {
+        self.pending.set(true);
+        let timer = Timeout::new(COMPILE_DEBOUNCE_MS, move || {
+            self.pending.set(false);
+            self.pump();
+        });
+        // Replacing the previous timer cancels it.
+        self.debounce.set_value(Some(timer));
+    }
+
+    /// Compile the editor's text now, as after choosing a lesson or a view.
+    fn compile_now(self) {
+        self.debounce.set_value(None);
+        self.pending.set(false);
+        self.pump();
+    }
+
+    /// Start the next compilation the page needs, unless one is running:
+    /// the editor's text at the selected level, then at the other level for
+    /// the optimizer comparison. Text is compiled when the pipeline view
+    /// shows it or when it is not a bundled lesson, so its errors show as
+    /// squiggles; a lesson in the abstract machine view never loads the
+    /// compiler. A result for text the editor no longer holds is stale and
+    /// dropped.
+    fn pump(self) {
+        if self.in_flight.with_untracked(Option::is_some) || self.pending.get_untracked() {
+            return;
+        }
+        let Some(key) = self.next_compilation() else {
+            return;
+        };
+        self.in_flight.set(Some(key.clone()));
+        spawn_local(async move {
+            let result = match self.compiler().await {
+                // The editor may have changed while the compiler loaded:
+                // drop the request and start whatever is needed now, once
+                // typing pauses.
+                | Ok(_)
+                    if self.pending.get_untracked()
+                        || self.next_compilation().as_ref() != Some(&key) =>
+                {
+                    self.in_flight.set(None);
+                    self.pump();
+                    return;
+                },
+                | Ok(compiler) => {
+                    let result = compiler.compile(&key.0, key.1).await;
+                    // A compiler that timed out or trapped is gone; the
+                    // next compilation starts a fresh one.
+                    if !compiler.connected() {
+                        self.compiler.set_value(None);
+                    }
+                    result.map_err(|error| {
+                        if error == engine::COMPILER.timed_out()
+                            || error == engine::COMPILER.stopped()
+                        {
+                            error
+                        } else {
+                            format!("bcc's in-browser compiler crashed ({error}).")
+                        }
+                    })
+                },
+                | Err(error) => Err(error),
+            };
+            self.in_flight.set(None);
+            if self.editor_text.with_untracked(|text| *text == key.0) {
+                self.compiled.update(|compiled| {
+                    compiled.retain(|(known, _)| *known != key);
+                    compiled.push((key, result));
+                    if compiled.len() > COMPILED_LIMIT {
+                        _ = compiled.remove(0);
+                    }
+                });
+            }
+            self.pump();
+        });
+    }
+
+    fn next_compilation(self) -> Option<CompileKey> {
+        let pipeline = self.mode.get_untracked() == Mode::Pipeline;
+        let level = self.optimize.get_untracked();
+        self.editor_text.with_untracked(|text| {
+            self.compiled
+                .with_untracked(|compiled| wanted(compiled, text, level, pipeline))
+        })
+    }
+
+    /// The compiler Worker, started on first use.
+    async fn compiler(self) -> Result<Rc<Engine>, String> {
+        if let Some(compiler) = self
+            .compiler
+            .with_value(Clone::clone)
+            .filter(|compiler| compiler.connected())
+        {
+            return Ok(compiler);
+        }
+        self.starting.set(true);
+        let connected = Engine::connect(&engine::COMPILER).await.map(Rc::new);
+        self.starting.set(false);
+        let compiler = connected?;
+        self.compiler.set_value(Some(Rc::clone(&compiler)));
+        Ok(compiler)
+    }
+
+    fn set_target(self, line: usize) {
+        if line == 0 {
+            return;
+        }
+        let target = (self.target_line.get_untracked() != Some(line)).then_some(line);
+        self.target_line.set(target);
+        self.announcement.set(target.map_or_else(
+            || "Run target cleared.".to_owned(),
+            |line| format!("Run target set to line {line}. Choose Run to line."),
+        ));
     }
 
     async fn open_file(self, input: HtmlInputElement) -> Result<(), String> {
         let Some(file) = input.files().and_then(|files| files.get(0)) else {
             return Ok(());
         };
+        // Clear the input so that choosing the same file again reopens it.
+        input.set_value("");
         if file.size() > f64::from(MAX_SOURCE_BYTES) {
-            return Err("The bounded Rust engine accepts source files up to 32 KiB.".into());
+            self.reject(format!(
+                "{} is {} KiB, but the bounded Rust engine accepts source files up to 32 KiB.",
+                file.name(),
+                (file.size() / 1024.0).ceil()
+            ));
+            return Ok(());
         }
-        let text = JsFuture::from(file.text())
+        let Some(text) = JsFuture::from(file.text())
             .await
             .ok()
             .and_then(|text| text.as_string())
-            .ok_or("The selected file could not be read as text.")?;
-        let result = self.stage_program(text, file.name()).await;
-        input.set_value("");
-        result
+        else {
+            self.reject(format!("{} could not be read as text.", file.name()));
+            return Ok(());
+        };
+        self.stage_program(text, file.name()).await
     }
 
-    fn set_editing(self, editing: bool) {
-        self.editing.set(editing);
-        if editing {
-            let editor = self.editor;
-            request_animation_frame(move || {
-                if let Some(editor) = editor.get_untracked() {
-                    _ = editor.focus();
-                }
+    fn shortcut(self, event: &web_sys::KeyboardEvent) {
+        if event.ctrl_key() || event.meta_key() || event.alt_key() || event.default_prevented() {
+            return;
+        }
+        let typing = event
+            .target()
+            .and_then(|target| target.dyn_into::<web_sys::Element>().ok())
+            .is_some_and(|element| {
+                element
+                    .closest("input, textarea, select, .monaco-editor, [contenteditable]")
+                    .ok()
+                    .flatten()
+                    .is_some()
             });
+        if typing || self.mode.get_untracked() != Mode::Machine {
+            return;
+        }
+        match event.key().as_str() {
+            | "ArrowRight" | "j" => self.step(),
+            | "ArrowLeft" | "k" => self.back(),
+            | "r" => self.toggle_run(),
+            | "R" => self.reset(),
+            | _ => return,
+        }
+        event.prevent_default();
+    }
+
+    fn toggle_theme(self) {
+        let next = if self.theme.get_untracked() == "dark" {
+            "light"
+        } else {
+            "dark"
+        };
+        self.theme.set(next);
+        if let Some(storage) =
+            web_sys::window().and_then(|window| window.local_storage().ok().flatten())
+        {
+            _ = storage.set_item(THEME_KEY, next);
         }
     }
 
     fn engine(self) -> Result<Rc<Engine>, String> {
         self.engine.with_value(Clone::clone).ok_or_else(|| {
-            "Rust engine disconnected. Retry engine to start a fresh instance.".into()
+            "Rust engine disconnected. Retry the engine to start a fresh instance.".into()
         })
     }
 
@@ -381,15 +738,22 @@ impl State {
         self.cursor.set(None);
         self.first_step.set(0);
         self.target_line.set(None);
-        self.cursor_label.set(CURSOR_HINT.into());
     }
 
-    fn show_state(self, reveal: bool) {
+    fn after_step(self) {
         self.error.set(None);
-        if reveal {
-            self.reveal_current_line();
-            self.announce_state();
-        }
+        self.reveal_current();
+        self.announce_state();
+    }
+
+    fn reveal_current(self) {
+        let line = self.current.with_untracked(|state| {
+            state
+                .as_ref()
+                .and_then(|state| state.event.range.or(state.location))
+                .map(|range| range.start.line)
+        });
+        self.reveal.set(line);
     }
 
     fn show_error(self, error: &str) {
@@ -399,20 +763,48 @@ impl State {
             self.show_unavailable(error);
         }
         self.error.set(Some(Diagnostic {
-            kind:     None,
-            title:    "Unable to continue".into(),
-            message:  error.into(),
-            citation: "Reset or load a program to restart from a known engine state.".into(),
-            detail:   String::new(),
+            kind:    None,
+            title:   "Unable to continue".into(),
+            message: error.into(),
+            clause:  None,
+            note:    "Reset or load a program to restart from a known engine state.".into(),
         }));
         self.announcement.set(error.into());
     }
 
+    /// Whether `text` fits the engine's source limit; a larger program is
+    /// rejected without touching the loaded one.
+    fn accepts(self, text: &str) -> bool {
+        let fits = text.len() <= MAX_SOURCE_BYTES as usize;
+        if !fits {
+            self.reject(format!(
+                "This program is {} KiB, but the bounded Rust engine accepts at most 32 KiB of \
+                 source.",
+                text.len().div_ceil(1024)
+            ));
+        }
+        fits
+    }
+
+    /// Report a request the page refused before it reached the engine, which
+    /// keeps the program it had.
+    fn reject(self, message: String) {
+        self.announcement.set(message.clone());
+        self.error.set(Some(Diagnostic {
+            kind: None,
+            title: "Program not loaded".into(),
+            message,
+            clause: None,
+            note: "The previous program is still loaded and can keep running. Choose a smaller \
+                   file, or pick a lesson."
+                .into(),
+        }));
+    }
+
     fn show_unavailable(self, error: &str) {
         self.unavailable.set(Some(error.into()));
-        self.engine_label.set("Rust / Wasm unavailable");
         self.announcement
-            .set("Rust WebAssembly engine unavailable. Build instructions are displayed.".into());
+            .set("The Rust WebAssembly engine is unavailable.".into());
     }
 
     fn drop_engine(self) {
@@ -423,7 +815,6 @@ impl State {
     }
 
     fn report(self, text: String) {
-        self.cursor_label.set(text.clone());
         self.announcement.set(text);
     }
 
@@ -433,8 +824,8 @@ impl State {
                 let mut text = format!(
                     "Step {}. {}. {}",
                     state.step,
-                    state.status.replace('_', " "),
-                    state.event
+                    state.event.title.replace('`', ""),
+                    state.event.explanation.replace('`', "")
                 );
                 if let Some(diagnostic) = &state.diagnostic {
                     text.push(' ');
@@ -446,30 +837,6 @@ impl State {
         if let Some(text) = text {
             self.announcement.set(text);
         }
-    }
-
-    fn reveal_current_line(self) {
-        let Some(line) = self
-            .current
-            .with_untracked(|state| state.as_ref()?.location.map(|range| range.start.line))
-        else {
-            return;
-        };
-        let code_view = self.code_view;
-        // Wait for the view to apply the new snapshot.
-        request_animation_frame(move || {
-            let Some(container) = code_view.get_untracked() else {
-                return;
-            };
-            if let Ok(Some(row)) =
-                container.query_selector(&format!(".code-line[data-line=\"{line}\"]"))
-            {
-                let options = ScrollIntoViewOptions::new();
-                options.set_block(ScrollLogicalPosition::Nearest);
-                options.set_inline(ScrollLogicalPosition::Nearest);
-                row.scroll_into_view_with_scroll_into_view_options(&options);
-            }
-        });
     }
 
     fn current_contains(self, line: usize) -> bool {
@@ -508,50 +875,431 @@ impl State {
     fn locked_tracked(self) -> bool {
         self.busy.get() || self.running.get()
     }
+
+    /// The source editor's decorations: execution marks, run target, object
+    /// colours, and pipeline line links.
+    fn source_layers(self) -> Vec<Layer> {
+        let snapshot = self.current.get();
+        let edited = self.edited.get();
+        let mut execution = Vec::new();
+        let mut objects = Vec::new();
+        if let Some(snapshot) = snapshot.as_ref().filter(|_| !edited) {
+            let fault = snapshot.event.category == "fault";
+            if let Some(range) = snapshot.event.range {
+                let class = if fault { "exec-fault" } else { "exec-current" };
+                let mut mark = boxed(
+                    range,
+                    &format!("{class} cat-{}", snapshot.event.category),
+                    3,
+                );
+                if fault {
+                    mark.inline_class = Some("exec-fault-text".into());
+                }
+                execution.push(mark);
+                execution.push(Decoration::line(
+                    range.start.line,
+                    if fault {
+                        "exec-line-fault"
+                    } else {
+                        "exec-line"
+                    },
+                ));
+            }
+            if let Some(next) = snapshot.location.filter(|_| snapshot.can_step())
+                && Some(next) != snapshot.event.range
+            {
+                execution.push(boxed(next, "exec-next", 2));
+            }
+            self.source.with(|source| {
+                let names: Vec<&str> = snapshot
+                    .objects
+                    .iter()
+                    .map(|object| object.name.as_str())
+                    .collect();
+                for (start, end) in palette::identifiers(source) {
+                    let name = &source[start..end];
+                    if names.contains(&name) {
+                        let (line, column) = palette::position(source, start);
+                        let (end_line, end_column) = palette::position(source, end);
+                        objects.push(Decoration {
+                            start_line: line,
+                            start_column: column,
+                            end_line,
+                            end_column,
+                            inline_class: Some(format!("obj-ident {}", palette::class(name))),
+                            ..Decoration::default()
+                        });
+                    }
+                }
+            });
+        }
+        let target = self
+            .target_line
+            .get()
+            .map(|line| Decoration {
+                glyph_class: Some("target-glyph".into()),
+                ..Decoration::line(line, "target-line")
+            })
+            .into_iter()
+            .collect();
+        let hovered = self.hover_output.get();
+        let links = if self.mode.get() == Mode::Pipeline && hovered > 0 {
+            let stage = self.stage.get();
+            self.compilation.with(|compilation| {
+                compilation
+                    .as_ref()
+                    .map(|compilation| {
+                        self.editor_text.with(|source| {
+                            crate::pipeline::links(stage, compilation, source)
+                                .sources_for(hovered)
+                                .into_iter()
+                                .map(|line| Decoration::line(line, "link-line"))
+                                .collect()
+                        })
+                    })
+                    .unwrap_or_default()
+            })
+        } else {
+            Vec::new()
+        };
+        vec![
+            ("execution", execution),
+            ("objects", objects),
+            ("target", target),
+            ("links", links),
+        ]
+    }
+}
+
+/// The page's views of live compilation, derived from the compilation cache.
+struct LiveViews {
+    status:      Memo<LiveCompile>,
+    compilation: Memo<Option<Compilation>>,
+    shown:       Memo<Option<Compilation>>,
+    other_level: Memo<Option<Compilation>>,
+    markers:     Memo<Vec<Marker>>,
+}
+
+impl LiveViews {
+    fn new(
+        editor_text: RwSignal<String>,
+        optimize: RwSignal<bool>,
+        compiled: RwSignal<Compiled>,
+        in_flight: RwSignal<Option<CompileKey>>,
+        pending: RwSignal<bool>,
+        starting: RwSignal<bool>,
+    ) -> Self {
+        let at_level = move |level: bool| {
+            editor_text.with(|text| compiled.with(|compiled| compilation_of(compiled, text, level)))
+        };
+        let compilation = Memo::new(move |_| at_level(optimize.get()));
+        let shown = Memo::new(move |previous: Option<&Option<Compilation>>| {
+            let waiting = pending.get()
+                || in_flight.with(|key| {
+                    key.as_ref()
+                        .is_some_and(|key| editor_text.with(|text| key.0 == *text))
+                });
+            compilation
+                .with(|current| shown(current.as_ref(), previous.and_then(Option::as_ref), waiting))
+        });
+        // Squiggles come only from the editor's own text: the previous
+        // output's diagnostics would mark the wrong places.
+        let markers = Memo::new(move |_| {
+            compilation.with(|compilation| {
+                compilation
+                    .iter()
+                    .flat_map(|compilation| &compilation.diagnostics)
+                    .filter_map(marker)
+                    .collect()
+            })
+        });
+        let status = Memo::new(move |_| {
+            let level = optimize.get();
+            let pending = pending.get();
+            let starting = starting.get();
+            editor_text.with(|text| {
+                in_flight.with(|in_flight| {
+                    compiled.with(|compiled| {
+                        live_status(compiled, text, level, in_flight.as_ref(), pending, starting)
+                    })
+                })
+            })
+        });
+        Self {
+            status,
+            compilation,
+            shown,
+            other_level: Memo::new(move |_| at_level(!optimize.get())),
+            markers,
+        }
+    }
+}
+
+/// The compilation of `text` at `level`, if it succeeded, with the
+/// precomputed LLVM IR for a lesson.
+fn compilation_of(compiled: &Compiled, text: &str, level: bool) -> Option<Compilation> {
+    let llvm = demos::matching(text).and_then(|demo| {
+        crate::pipeline::precomputed_llvm(demo.name.trim_end_matches(".c"), level)
+    });
+    let live = lookup(compiled, text, level).and_then(|result| result.as_ref().ok().cloned());
+    match (live, llvm) {
+        | (Some(live), llvm) => Some(Compilation {
+            llvm: llvm.map(str::to_owned),
+            ..live
+        }),
+        | (None, Some(llvm)) => Some(Compilation {
+            llvm: Some(llvm.to_owned()),
+            ..Compilation::default()
+        }),
+        | (None, None) => None,
+    }
+}
+
+/// What the pipeline view shows: the `current` compilation or, while the
+/// next one compiles (`waiting`), the `previous` output, so typing does not
+/// make the view flicker. Only `current` places markers and links and lists
+/// the diagnostics and the optimizer's changes: the previous output came
+/// from other text or another level.
+fn shown(
+    current: Option<&Compilation>,
+    previous: Option<&Compilation>,
+    waiting: bool,
+) -> Option<Compilation> {
+    let live = current.is_some_and(|current| current.tokens.is_some());
+    match previous {
+        | Some(previous) if waiting && !live => Some(Compilation {
+            // A lesson's precomputed LLVM IR is always current.
+            llvm: current.and_then(|current| current.llvm.clone()),
+            ..previous.clone()
+        }),
+        | _ => current.cloned(),
+    }
+}
+
+/// The newest result for `text` at `level`.
+fn lookup<'a>(
+    compiled: &'a Compiled,
+    text: &str,
+    level: bool,
+) -> Option<&'a Result<Compilation, String>> {
+    compiled
+        .iter()
+        .rev()
+        .find(|((source, optimized), _)| source == text && *optimized == level)
+        .map(|(_, result)| result)
+}
+
+/// Why the compiler Worker could not compile `text` at either level. Text
+/// that crashed or stalled the compiler is not tried again at the other
+/// level, so the failure stands for both.
+fn failure<'a>(compiled: &'a Compiled, text: &str) -> Option<&'a str> {
+    compiled
+        .iter()
+        .rev()
+        .find_map(|((source, _), result)| {
+            (source == text).then_some(result.as_ref().err()).flatten()
+        })
+        .map(String::as_str)
+}
+
+/// The next compilation the page needs for `text`: at the selected `level`,
+/// then at the other level when the `pipeline` view shows the optimizer
+/// comparison. Outside the pipeline view a bundled lesson needs none.
+fn wanted(compiled: &Compiled, text: &str, level: bool, pipeline: bool) -> Option<CompileKey> {
+    if (!pipeline && demos::matching(text).is_some()) || failure(compiled, text).is_some() {
+        return None;
+    }
+    [Some(level), pipeline.then_some(!level)]
+        .into_iter()
+        .flatten()
+        .find(|&level| lookup(compiled, text, level).is_none())
+        .map(|level| (text.to_owned(), level))
+}
+
+/// The compiler's progress on `text` at `level`, given what it is compiling
+/// (`in_flight`), whether typing is still being debounced (`pending`), and
+/// whether its Worker is `starting`.
+fn live_status(
+    compiled: &Compiled,
+    text: &str,
+    level: bool,
+    in_flight: Option<&CompileKey>,
+    pending: bool,
+    starting: bool,
+) -> LiveCompile {
+    let busy = if starting {
+        LiveCompile::Loading
+    } else {
+        LiveCompile::Compiling
+    };
+    if in_flight.is_some_and(|key| key.0 == text && key.1 == level) {
+        return busy;
+    }
+    match lookup(compiled, text, level) {
+        | Some(Ok(_)) => LiveCompile::Compiled,
+        | Some(Err(error)) => LiveCompile::Failed(error.clone()),
+        | None => match failure(compiled, text) {
+            | Some(error) => LiveCompile::Failed(error.to_owned()),
+            // Anything else in flight finishes (or is dropped) first.
+            | None if pending || in_flight.is_some() => busy,
+            | None => LiveCompile::Idle,
+        },
+    }
+}
+
+/// The saved theme, or the system preference.
+fn initial_theme() -> &'static str {
+    let Some(window) = web_sys::window() else {
+        return "dark";
+    };
+    let saved = window
+        .local_storage()
+        .ok()
+        .flatten()
+        .and_then(|storage| storage.get_item(THEME_KEY).ok().flatten());
+    match saved.as_deref() {
+        | Some("light") => "light",
+        | Some("dark") => "dark",
+        | _ if window
+            .match_media("(prefers-color-scheme: light)")
+            .ok()
+            .flatten()
+            .is_some_and(|query| query.matches()) =>
+            "light",
+        | _ => "dark",
+    }
+}
+
+/// A squiggle for `diagnostic`, if it is placed in the source.
+fn marker(diagnostic: &CompileDiagnostic) -> Option<Marker> {
+    let range = diagnostic.range?;
+    Some(Marker {
+        start_line:   range.line,
+        start_column: range.column,
+        end_line:     range.end_line,
+        end_column:   range.end_column,
+        severity:     diagnostic.severity.clone(),
+        message:      diagnostic.message.clone(),
+    })
+}
+
+/// One continuous box behind `range` (Monaco draws a range's `className` as
+/// a single overlay, where an inline class would box each token).
+fn boxed(range: Range, class: &str, z_index: i32) -> Decoration {
+    Decoration {
+        start_line: range.start.line,
+        start_column: range.start.column,
+        end_line: range.end.line,
+        end_column: range.end.column,
+        class_name: Some(class.to_owned()),
+        z_index,
+        ..Decoration::default()
+    }
 }
 
 #[component]
 fn Header(state: State) -> impl IntoView {
     view! {
         <header class="site-header">
-            <div class="brand">
-                <span class="brand-mark" aria-hidden="true">"b>"</span>
-                <div>
-                    <span class="wordmark">"bcc"</span>
-                    <span class="brand-divider" aria-hidden="true">"/"</span>
-                    <h1>"C abstract machine"</h1>
-                </div>
-            </div>
-            <div class="header-meta">
-                <span class="tag">"C99"</span>
-                <span class="engine-indicator">{state.engine_label}</span>
+            <a class="brand" href="#top" aria-label="bcc home">
+                <span class="brand-mark" aria-hidden="true">
+                    <svg viewBox="0 0 32 32" width="30" height="30">
+                        <rect x="1" y="1" width="30" height="30" rx="8" class="brand-tile" />
+                        <path d="M9 10l6 6-6 6" class="brand-chevron" />
+                        <path d="M17 22h7" class="brand-cursor" />
+                    </svg>
+                </span>
+                <span class="wordmark">"bcc"</span>
+                <span class="brand-divider" aria-hidden="true"></span>
+                <span class="brand-subtitle">"How C runs"</span>
+            </a>
+            <nav class="site-nav" aria-label="Sections">
+                <a href="#lessons">"Lessons"</a>
+                <a href="#workbench">"Workbench"</a>
+                <a href="#about">"How it works"</a>
+            </nav>
+            <div class="header-actions">
+                <button
+                    type="button"
+                    class="icon-button theme-toggle"
+                    aria-label="Toggle light and dark theme"
+                    title="Toggle light and dark theme"
+                    on:click=move |_| state.toggle_theme()
+                >
+                    <svg class="icon-sun" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><circle cx="12" cy="12" r="4.2" /><path d="M12 2.5v2.2M12 19.3v2.2M4.6 4.6l1.6 1.6M17.8 17.8l1.6 1.6M2.5 12h2.2M19.3 12h2.2M4.6 19.4l1.6-1.6M17.8 6.2l1.6-1.6" /></svg>
+                    <svg class="icon-moon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z" /></svg>
+                </button>
+                <a class="icon-button" href=REPOSITORY_URL aria-label="bcc on GitHub" title="bcc on GitHub">
+                    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path class="fill" d="M12 2a10 10 0 0 0-3.2 19.5c.5.1.7-.2.7-.5v-1.7c-2.8.6-3.4-1.3-3.4-1.3-.4-1.2-1.1-1.5-1.1-1.5-.9-.6.1-.6.1-.6 1 .1 1.6 1 1.6 1 .9 1.6 2.4 1.1 3 .9.1-.7.4-1.1.6-1.4-2.2-.3-4.6-1.1-4.6-5 0-1.1.4-2 1-2.7-.1-.3-.4-1.3.1-2.7 0 0 .8-.3 2.8 1a9.6 9.6 0 0 1 5 0c1.9-1.3 2.8-1 2.8-1 .5 1.4.2 2.4.1 2.7.6.7 1 1.6 1 2.7 0 3.9-2.4 4.7-4.6 5 .4.3.7.9.7 1.9V21c0 .3.2.6.7.5A10 10 0 0 0 12 2z" /></svg>
+                </a>
             </div>
         </header>
     }
 }
 
 #[component]
-fn Intro() -> impl IntoView {
+fn Hero() -> impl IntoView {
     view! {
-        <div class="intro">
-            <div>
-                <p class="eyebrow">"INSIDE THE EXECUTION"</p>
-                <h2>"Every object. Every effect."</h2>
-                <p>"Explore a bounded C subset, one Rust engine operation at a time."</p>
-            </div>
-            <a class="quiet-link" href=README_URL>"Build & limitations "<span aria-hidden="true">"↗"</span></a>
-        </div>
-        <details class="model-note">
-            <summary>"Prototype model "<span>"Independent C subset · 32-bit int · left-to-right evaluation"</span></summary>
-            <p>
-                "This Rust evaluator is independent of bcc’s full C frontend. It supports local integers, pointers, fixed \
-                 arrays, named calls, and basic control flow. It has no preprocessing, globals, library I/O, or allocation. \
-                 Nested side effects are rejected. Stores are atomic; deferred effects and full C99 sequencing checks are \
-                 not implemented. This prototype starts automatic lifetimes at declarations; C99 fixed objects instead \
-                 begin lifetime at block entry. A completed run does not establish that a program is free of undefined \
-                 behavior."
+        <section class="hero" id="top">
+            <p class="eyebrow">"An interactive introduction to compilers and the C abstract machine"</p>
+            <h1>"What really happens when C runs?"</h1>
+            <p class="lede">
+                "The C standard doesn’t describe your CPU. It describes an "<em>"abstract machine"</em>
+                ": objects with lifetimes, values that are read and stored, and rules for exactly when each \
+                 effect happens. Step through real programs one evaluation at a time, then watch bcc, a C \
+                 compiler written in Rust, translate the same code into IR, assembly and machine code."
             </p>
-        </details>
+            <ol class="hero-steps" aria-label="How to use this page">
+                <li><span class="hero-step-number">"1"</span>"Pick a lesson"</li>
+                <li><span class="hero-step-number">"2"</span>"Step through it with "<kbd>"→"</kbd></li>
+                <li><span class="hero-step-number">"3"</span>"Open the compiler pipeline"</li>
+            </ol>
+        </section>
+    }
+}
+
+#[component]
+fn Lessons(state: State) -> impl IntoView {
+    let selected = move || {
+        state
+            .editor_text
+            .with(|text| demos::matching(text).map(|demo| demo.key))
+    };
+    view! {
+        <section class="lessons" id="lessons" aria-labelledby="lessons-title">
+            <div class="section-heading">
+                <h2 id="lessons-title">"Lessons"</h2>
+                <p>"Each lesson is a small, complete C program. Edit any of them, or open your own .c file."</p>
+            </div>
+            <ol class="lesson-list">
+                {DEMOS
+                    .iter()
+                    .enumerate()
+                    .map(|(index, demo)| {
+                        let key = demo.key;
+                        view! {
+                            <li>
+                                <button
+                                    type="button"
+                                    class="lesson-card"
+                                    class:is-fault=demo.faults
+                                    aria-pressed=move || (selected() == Some(key)).to_string()
+                                    disabled=move || state.locked_tracked()
+                                    on:click=move |_| state.select_demo(demo)
+                                >
+                                    <span class="lesson-number">{format!("{:02}", index + 1)}</span>
+                                    <span class="lesson-title">{demo.title}</span>
+                                    <span class="lesson-summary">{demo.summary}</span>
+                                    <span class="lesson-topics">
+                                        {demo.topics.iter().map(|topic| view! { <span class="topic">{*topic}</span> }).collect_view()}
+                                    </span>
+                                </button>
+                            </li>
+                        }
+                    })
+                    .collect_view()}
+            </ol>
+        </section>
     }
 }
 
@@ -561,12 +1309,49 @@ fn EngineNotice(state: State) -> impl IntoView {
         <section class="notice" aria-labelledby="notice-title" hidden=move || state.unavailable.with(Option::is_none)>
             <div class="notice-icon" aria-hidden="true">"!"</div>
             <div>
-                <h2 id="notice-title">"Rust / Wasm engine unavailable"</h2>
+                <h2 id="notice-title">"The Rust engine is unavailable"</h2>
                 <p>{move || state.unavailable.get().unwrap_or_default()}</p>
                 <p>"The engine needs a browser with Web Workers and WebAssembly. Retry it, or reload the page if it keeps failing."</p>
-                <button type="button" class="small-button" disabled=move || state.busy.get() on:click=move |_| state.initialize()>
+                <button type="button" class="button" disabled=move || state.busy.get() on:click=move |_| state.initialize()>
                     "Retry engine"
                 </button>
+            </div>
+        </section>
+    }
+}
+
+/// The page-level diagnostic: an engine request that failed, or a program the
+/// page refused to load, with how to recover.
+#[component]
+fn SiteError(state: State) -> impl IntoView {
+    let field = move |read: fn(&Diagnostic) -> String| {
+        move || {
+            state
+                .error
+                .with(|error| error.as_ref().map(read).unwrap_or_default())
+        }
+    };
+    view! {
+        <section class="notice site-error" aria-labelledby="site-error-title" hidden=move || state.error.with(Option::is_none)>
+            <div class="notice-icon" aria-hidden="true">"!"</div>
+            <div>
+                <h2 id="site-error-title">{field(|error| error.title.clone())}</h2>
+                <p>{field(|error| error.message.clone())}</p>
+                <p>{field(|error| error.note.clone())}</p>
+                <div class="notice-actions">
+                    <button
+                        type="button"
+                        class="button"
+                        hidden=move || !state.failed.get()
+                        disabled=move || state.locked_tracked() || !state.has_engine.get()
+                        on:click=move |_| state.reset()
+                    >
+                        "Reset program"
+                    </button>
+                    <button type="button" class="button ghost" on:click=move |_| state.error.set(None)>
+                        "Dismiss"
+                    </button>
+                </div>
             </div>
         </section>
     }
@@ -581,200 +1366,235 @@ fn Toolbar(state: State) -> impl IntoView {
     };
     let status = move || {
         state.current.with(|snapshot| match snapshot {
-            | None => "Not loaded".to_owned(),
+            | None if state.unavailable.with(Option::is_some) => "Engine unavailable".to_owned(),
+            | None => "Loading engine…".to_owned(),
             | Some(snapshot)
                 if snapshot.diagnostic.as_ref().and_then(|d| d.kind.as_deref())
                     == Some("indeterminate") =>
-                "Indeterminate read".to_owned(),
-            | Some(snapshot) => status_label(&snapshot.status),
+                "Stopped: indeterminate read".to_owned(),
+            | Some(snapshot) => status_label(&snapshot.status).to_owned(),
         })
+    };
+    let status_kind = move || {
+        state.current.with(|snapshot| {
+            snapshot
+                .as_ref()
+                .map_or_else(|| "idle".to_owned(), |snapshot| snapshot.status.clone())
+        })
+    };
+    let tab = move |mode: Mode, label: &'static str, icon: &'static str| {
+        view! {
+            <button
+                type="button"
+                role="tab"
+                class="mode-tab"
+                aria-selected=move || (state.mode.get() == mode).to_string()
+                aria-controls="insight"
+                on:click=move |_| state.set_mode(mode)
+            >
+                <span class="mode-icon" aria-hidden="true">{icon}</span>
+                {label}
+            </button>
+        }
     };
     view! {
         <div class="toolbar">
-            <div class="transport" role="group" aria-label="Execution controls">
+            <div class="mode-tabs" role="tablist" aria-label="View">
+                {tab(Mode::Machine, "Abstract machine", "◈")}
+                {tab(Mode::Pipeline, "Compiler pipeline", "⇢")}
+            </div>
+            <div class="transport" role="group" aria-label="Execution controls" hidden=move || state.mode.get() != Mode::Machine>
                 <button
                     type="button"
-                    title="Reset to the initial state"
+                    class="button ghost"
+                    title="Reset to the initial state (Shift+R)"
                     disabled=move || state.locked_tracked() || !state.has_engine.get()
-                    on:click=move |_| state.action(move || state.load_program(state.source.get_untracked(), state.filename.get_untracked()))
+                    on:click=move |_| state.reset()
                 >
-                    <span aria-hidden="true">"↺"</span>" Reset"
+                    <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><path d="M4 10a6 6 0 1 0 1.8-4.3M4 3.5v3.2h3.2" /></svg>
+                    "Reset"
                 </button>
                 <button
                     type="button"
-                    title=move || {
-                        if state.first_step.get() > 0 {
-                            format!("Back through the most recent {HISTORY_LIMIT} snapshots")
-                        } else {
-                            "Back one engine snapshot".into()
-                        }
-                    }
+                    class="button"
+                    title="Back one step (←)"
                     disabled=move || state.locked_tracked() || state.edited.get() || state.cursor.get().is_none_or(|cursor| cursor == 0)
                     on:click=move |_| state.back()
                 >
-                    <span aria-hidden="true">"←"</span>" Back"
+                    <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><path d="M12 5l-5 5 5 5" /></svg>
+                    "Back"
                 </button>
                 <button
-                    class="primary"
                     type="button"
-                    title="Step one evaluation"
+                    class="button primary"
+                    title="Step one evaluation (→)"
                     disabled=move || state.locked_tracked() || !state.can_step()
-                    on:click=move |_| state.action(move || async move {
-                        state.step_forward().await?;
-                        state.show_state(true);
-                        Ok(())
-                    })
+                    on:click=move |_| state.step()
                 >
-                    <span aria-hidden="true">"↳"</span>" Step"
+                    "Step"
+                    <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><path d="M8 5l5 5-5 5" /></svg>
                 </button>
                 <button
                     type="button"
-                    title=move || if state.running.get() { "Pause execution" } else { "Run until completion or undefined behavior" }
+                    class="button"
+                    title=move || if state.running.get() { "Pause (R)" } else { "Run until the program ends (R)" }
                     aria-pressed=move || state.running.get().to_string()
                     disabled=move || {
                         state.busy.get() || (state.running.get() && state.pause_requested.get()) || (!state.running.get() && !state.can_step())
                     }
-                    on:click=move |_| if state.running.get_untracked() { state.pause_requested.set(true) } else { state.run(None) }
+                    on:click=move |_| state.toggle_run()
                 >
-                    <span aria-hidden="true">"▷"</span>" "<span>{run_label}</span>
+                    {move || if state.running.get() {
+                        view! { <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><path d="M7 5v10M13 5v10" /></svg> }.into_any()
+                    } else {
+                        view! { <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><path class="fill" d="M6 4.5v11l9-5.5z" /></svg> }.into_any()
+                    }}
+                    {run_label}
+                </button>
+                <button
+                    type="button"
+                    class="button ghost"
+                    hidden=move || state.target_line.get().is_none()
+                    disabled=move || state.locked_tracked() || !state.can_step()
+                    on:click=move |_| state.run(state.target_line.get_untracked())
+                >
+                    {move || format!("Run to line {}", state.target_line.get().unwrap_or_default())}
                 </button>
             </div>
-            <div class="execution-meta">
-                <span class="status-chip" data-status=move || state.current.with(|s| s.as_ref().map_or_else(|| "idle".into(), |s| s.status.clone()))>
-                    {status}
-                </span>
-                <span class="step-counter">
-                    "STEP "<strong>{move || state.current.with(|s| s.as_ref().map_or_else(|| "—".into(), |s| s.step.to_string()))}</strong>
-                </span>
+            <div class="run-status" hidden=move || state.mode.get() != Mode::Machine>
+                <span class="status-pill" data-status=status_kind>{status}</span>
+                <span class="step-counter">"Step "<strong>{move || state.current.with(|s| s.as_ref().map_or_else(|| "–".into(), |s| s.step.to_string()))}</strong></span>
             </div>
         </div>
     }
 }
 
 #[component]
-fn SourcePanel(state: State) -> impl IntoView {
-    let lines = Memo::new(move |_| state.source.with(|source| source_view::lines(source)));
-    let location = Memo::new(move |_| {
-        state
-            .current
-            .with(|snapshot| snapshot.as_ref().and_then(|snapshot| snapshot.location))
-    });
-    let selected_demo = move || {
-        state.source.with(|source| {
-            DEMOS
-                .iter()
-                .find(|demo| demo.source == source)
-                .map_or("custom", |demo| demo.key)
-        })
-    };
-    let on_select = Callback::new(move |line| state.select_line(line));
-    let target = state.target_line.read_only();
-    // `autocorrect` is a Safari attribute with no typed Leptos builder.
-    Effect::new(move || {
-        if let Some(editor) = state.editor.get() {
-            _ = editor.set_attribute("autocorrect", "off");
+fn SourcePane(state: State) -> impl IntoView {
+    let layers = Signal::derive(move || state.source_layers());
+    let on_change = Callback::new(move |text: String| {
+        if text != state.editor_text.get_untracked() {
+            state.editor_text.set(text);
+            state.compile_after_typing();
         }
     });
+    let on_hover = Callback::new(move |line| state.hover_source.set(line));
+    let on_gutter = Callback::new(move |line| state.set_target(line));
     view! {
-        <section class="source-panel" id="source-panel" tabindex="-1" aria-labelledby="source-title">
-            <div class="panel-heading source-heading">
-                <div><span class="panel-index">"01"</span><h2 id="source-title">"Source"</h2></div>
-                <span class="mono muted">{state.filename}</span>
-            </div>
-            <div class="program-tools">
-                <label class="sr-only" for="demo-select">"Choose a program"</label>
-                <select
-                    id="demo-select"
-                    prop:value=selected_demo
-                    disabled=move || state.locked_tracked()
-                    on:change=move |event| {
-                        if let Some(demo) = demos::find(&event_target_value(&event)) {
-                            state.action(move || state.stage_program(demo.source.into(), demo.name.into()));
-                        }
-                    }
-                >
-                    {DEMOS.iter().map(|demo| view! { <option value=demo.key>{demo.label}</option> }).collect_view()}
-                    <option value="custom" hidden>"Custom program"</option>
-                </select>
-                <label class="file-button" for="file-input">
-                    "Open .c"
-                    <input
-                        id="file-input"
-                        type="file"
-                        accept=".c,.h,text/plain,text/x-c"
-                        disabled=move || state.locked_tracked()
-                        on:change=move |event| {
-                            let input: HtmlInputElement = event.target().expect("change events have a target").unchecked_into();
-                            state.action(move || state.open_file(input));
-                        }
-                    />
-                </label>
-            </div>
-            <div class="source-tabs" role="group" aria-label="Source view">
-                <button type="button" aria-pressed=move || (!state.editing.get()).to_string() on:click=move |_| state.set_editing(false)>
-                    "Execution"
-                </button>
-                <button type="button" aria-pressed=move || state.editing.get().to_string() on:click=move |_| state.set_editing(true)>
-                    "Edit source"
-                </button>
-                <span class="mono muted">
-                    {move || location.get().map_or_else(|| "No current evaluation".into(), |range| format!("Ln {}, Col {}", range.start.line, range.start.column))}
-                </span>
-            </div>
-            <div
-                class="code-view"
-                role="region"
-                tabindex="0"
-                aria-label="Source code; select a line to run to it"
-                hidden=move || state.editing.get()
-                node_ref=state.code_view
-            >
-                <For each=move || lines.get() key=Clone::clone children=move |line| view! { <SourceLine line location target on_select /> } />
-            </div>
-            <div class="editor-view" hidden=move || !state.editing.get()>
-                <label class="sr-only" for="source-editor">"C source code"</label>
-                <textarea
-                    id="source-editor"
-                    spellcheck="false"
-                    autocapitalize="off"
-                    autocomplete="off"
-                    wrap="off"
-                    aria-describedby="editor-help"
-                    node_ref=state.editor
-                    prop:value=move || state.editor_text.get()
-                    disabled=move || state.locked_tracked()
-                    on:input=move |event| state.editor_text.set(event_target_value(&event))
-                ></textarea>
-                <div class="editor-footer">
-                    <span id="editor-help">
-                        {move || if state.edited.get() { "Source changed. Load program to execute your edits." } else { "Load edits to restart execution." }}
+        <section class="pane source-pane" aria-labelledby="source-title">
+            <header class="pane-header">
+                <div class="pane-title">
+                    <h2 id="source-title" class="sr-only">"Source"</h2>
+                    <span class="file-chip">
+                        <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M4 1.5h5l3.5 3.5v9.5h-8.5zM9 1.5V5h3.5" /></svg>
+                        {move || state.filename.get()}
                     </span>
+                    <span class="edited-badge" hidden=move || !state.edited.get()>"edited"</span>
+                </div>
+                <div class="pane-actions">
                     <button
                         type="button"
-                        class="primary"
+                        class="button small primary"
+                        hidden=move || !state.edited.get()
                         disabled=move || state.locked_tracked() || !state.has_engine.get()
-                        on:click=move |_| state.action(move || async move {
-                            state.load_program(state.editor_text.get_untracked(), state.filename.get_untracked()).await?;
-                            state.set_editing(false);
-                            Ok(())
-                        })
+                        on:click=move |_| state.run_edits()
                     >
-                        "Load program"
+                        "Run edited code"
                     </button>
+                    <label class="button small ghost file-button" for="file-input">
+                        "Open .c"
+                        <input
+                            id="file-input"
+                            type="file"
+                            accept=".c,.h,text/plain,text/x-c"
+                            disabled=move || state.locked_tracked()
+                            on:change=move |event| {
+                                let input: HtmlInputElement = event.target().expect("change events have a target").unchecked_into();
+                                state.action(move || state.open_file(input));
+                            }
+                        />
+                    </label>
                 </div>
+            </header>
+            <CodeEditor
+                text=state.editor_text
+                language=Signal::stored("c")
+                theme=state.theme_name
+                label="C source code. Edit it, then choose Run edited code."
+                decorations=layers
+                markers=state.markers.into()
+                on_change
+                on_hover_line=on_hover
+                on_gutter_click=on_gutter
+                reveal=state.reveal.into()
+            />
+            <footer class="source-legend">
+                <span><i class="swatch swatch-current"></i>"just evaluated"</span>
+                <span><i class="swatch swatch-next"></i>"next"</span>
+                <span><i class="swatch swatch-target"></i>"click a line number to set a run target"</span>
+                <span><i class="swatch swatch-squiggle"></i>"bcc error"</span>
+            </footer>
+            <p class="edit-hint" hidden=move || !state.edited.get()>
+                "You changed the program. The abstract machine still shows the last version you ran: choose "<strong>"Run edited code"</strong>" to restart it with your edits. bcc compiles your edits as you type, marks its errors with red squiggles, and the compiler pipeline view follows along."
+            </p>
+        </section>
+    }
+}
+
+#[component]
+fn About() -> impl IntoView {
+    view! {
+        <section class="about" id="about" aria-labelledby="about-title">
+            <div class="section-heading">
+                <h2 id="about-title">"How it works"</h2>
+                <p>"Two very different ways of giving a C program meaning, side by side."</p>
             </div>
-            <div class="source-footer">
-                <span>{state.cursor_label}</span>
-                <button
-                    type="button"
-                    class="small-button"
-                    disabled=move || state.locked_tracked() || !state.can_step() || state.target_line.get().is_none()
-                    on:click=move |_| state.run(state.target_line.get_untracked())
-                >
-                    "Run to line "{move || state.target_line.get().map_or_else(|| "—".into(), |line| line.to_string())}" "
-                    <span aria-hidden="true">"→"</span>
-                </button>
+            <div class="about-grid">
+                <article>
+                    <h3>"The abstract machine"</h3>
+                    <p>
+                        "The C standard defines a program by what an idealized machine does with it. There are no registers \
+                         here, only objects: regions of storage with a type, a lifetime and a value. Evaluating an \
+                         expression reads objects (lvalue conversion), computes new values, and stores them as side \
+                         effects that must be complete at the next sequence point."
+                    </p>
+                    <p>
+                        "The engine on this page is a small, independent interpreter written in Rust and compiled to \
+                         WebAssembly. Every explanation comes from what it actually did, and cites the paragraph of C99 \
+                         (ISO/IEC 9899, as in N1256) that requires it."
+                    </p>
+                </article>
+                <article>
+                    <h3>"The compiler"</h3>
+                    <p>
+                        "A real compiler doesn’t run your program; it translates it. bcc reads tokens, builds a syntax \
+                         tree, checks types, lowers everything to an SSA intermediate representation, optimizes it, and \
+                         finally selects x86-64 instructions and encodes them as bytes."
+                    </p>
+                    <p>
+                        "It is allowed to produce any code that behaves like the abstract machine would. That freedom is \
+                         why undefined behavior matters: the compiler may assume it never happens."
+                    </p>
+                </article>
+                <article>
+                    <h3>"Limits of this model"</h3>
+                    <p>
+                        "The engine runs a bounded subset of C: int and char locals, int pointers, fixed int arrays, \
+                         functions, if, while and for. No preprocessor, globals, structs, library calls or floating \
+                         point. Operands are evaluated left to right, and nested side effects are rejected rather than \
+                         sequenced."
+                    </p>
+                    <p>
+                        "The compiler pipeline runs bcc itself, compiled to WebAssembly, in your browser. Only LLVM IR \
+                         comes from the native bcc build: the browser build has no LLVM, so it is shown for the \
+                         bundled lessons only. "
+                        <a href=README_URL>"Read the full notes"</a>"."
+                    </p>
+                </article>
             </div>
         </section>
     }
 }
+
+#[cfg(test)]
+mod tests;

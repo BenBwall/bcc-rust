@@ -31,6 +31,20 @@ pub(crate) struct Availability {
     pub(crate) naming:  NamingPolicy,
 }
 
+impl Availability {
+    /// Whether the configuration accepts the builtin's feature, so that it
+    /// exists at all: `__builtin_inff32` only where `_Float32` is a type.
+    pub(crate) const fn accepted(
+        self,
+        configuration: crate::configuration::CompilerConfiguration,
+    ) -> bool {
+        match self.feature {
+            | Some(feature) => configuration.accepts(feature),
+            | None => true,
+        }
+    }
+}
+
 /// Every entry applies to all four current x86-64 targets. Reserved aliases
 /// keep their contracts in freestanding mode; ordinary library lookup is
 /// hosted.
@@ -286,6 +300,13 @@ pub(crate) enum BuiltinOperation {
     /// with no effect on execution. MSVC extension: Microsoft Learn,
     /// "__annotation". <https://learn.microsoft.com/en-us/cpp/intrinsics/annotation>
     Annotation,
+    /// GNU `__builtin_va_arg_pack` (`false`) and `__builtin_va_arg_pack_len`
+    /// (`true`): the anonymous arguments of the enclosing variadic function,
+    /// or their number, at a call that inlines it. Lowering substitutes them
+    /// in a specialized copy of that function for each call; anywhere else
+    /// they are invalid. GNU extension: GCC manual, "Constructing Calls".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Constructing-Calls.html>
+    ArgumentPack(bool),
     /// Checked and folded or selected by semantic analysis; lowering reads
     /// the retained constant or selected operand and otherwise refuses.
     Semantic(SemanticOperation),

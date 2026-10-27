@@ -724,6 +724,68 @@ into a 176-byte register save area, and `va_start` initializes `gp_offset`,
 all arguments are contiguous 8-byte slots, and `va_start` stores the address
 of the first variadic slot ("x64 calling convention", "Varargs").
 
+**Calls that may return twice.** A direct call to a function the module
+flags `returns_twice` (`Module::returns_twice`: `setjmp`, `_setjmp`,
+`sigsetjmp`, `vfork` and attributed functions, or an alias of one) is an
+ordinary call whose `MInst::Call` carries `returns_twice`, as is every
+indirect call in a module where such an address escapes
+(`Module::returns_twice_escapes`, computed once per module). The second
+return resumes after the call with `%rsp` and the callee-saved registers as
+they were at the first (`longjmp` restores them; on Win64 the unwinder
+does), and nothing lives in a caller-saved register across any call. Memory,
+however, is as the program left it, so a value live across the call must not
+share its spill slot: coalescing would join it with a copy defined later
+(the copy of an unchanged local into a variable the loop after `setjmp`
+changes) whose definitions then overwrite the slot the second return reads.
+The allocator therefore leaves every register live across such a call out
+of coalescing (`Liveness::live_across_returns_twice`), and since every
+representative has its own spill slot, its slot holds only its own value.
+Values defined again after the call, block parameters of a loop around
+`setjmp` that C variables changed between `setjmp` and `longjmp` become,
+are indeterminate after the second return (C99 §7.13.2.1p3), as with
+LLVM's `returns_twice`.
+
+### Atomic operations
+
+`isel/atomic.rs` selects the IR's `atomic` instructions with the standard
+mapping of the C11 memory orders onto x86-64 ("C/C++11 mappings to
+processors", x86 column; GCC and LLVM emit the same). x86 already gives
+every load acquire and every store release semantics. Only a later load may
+pass an earlier store to another location, so sequential consistency puts
+the full barrier on the store:
+
+| IR operation | x86-64 |
+| --- | --- |
+| `load`, any order | `mov` (`movzx` below 32 bits) |
+| `store`, relaxed or release | `mov` |
+| `store`, `seq_cst` | `xchg` |
+| `exchange` | `xchg` |
+| `compare_exchange` (strong; weak may be strong) | `lock cmpxchg` through `%rax` |
+| `add`, `sub` | `lock xadd` (`neg` first for `sub`) |
+| `add`, `sub`, `and`, `or`, `xor`, old value unused | `lock add`, `sub`, `and`, `or`, `xor` |
+| `and`, `or`, `xor`, `nand`, `min`, `max`, `umin`, `umax`, `fadd`, `fsub` | a `lock cmpxchg` loop |
+| `thread_fence seq_cst` | `mfence` |
+| other fences, `signal_fence` | nothing |
+
+The loop loads the old value, computes the new one (`cmp` and `cmov` at 32
+bits or more for minimum and maximum, `addsd`/`subsd` through `movq` for
+floats), and retries `lock cmpxchg` until it succeeds. It is the one
+selection that splits an IR block: the loop and the rest of the block are
+new machine blocks at the end of the layout. Weaker fences emit nothing,
+because the selector never moves a memory access past another instruction.
+
+`i128` operations call libatomic's `__atomic_load_16`, `__atomic_store_16`,
+`__atomic_exchange_16`, `__atomic_compare_exchange_16` (expected value
+through a 16-byte temporary) and `__atomic_fetch_{add,sub,and,or,xor,nand}_16`.
+The byte-buffer operations call the generic `__atomic_load`, `__atomic_store`,
+`__atomic_exchange` and `__atomic_compare_exchange`. Both pass C's
+`memory_order` constants, as GCC does and as LLVM does for a CPU without
+`cmpxchg16b`, which baseline x86-64 lacks. The driver links `-latomic` when
+the listing calls one of them. The support check refuses `fmin`/`fmax`
+(IEEE `minNum` NaN handling has no single instruction), `i128` minimum and
+maximum (libatomic has no routine), and accesses aligned below their size,
+which a locked instruction would split across cache lines.
+
 ### Poison and undefined behaviour at the machine level
 
 The machine is a refinement of the IR's semantics. The rules:
@@ -928,6 +990,33 @@ with the following decisions recorded for review:
   inline assembly` and `# End of file scope inline assembly` after the
   listing's first `.text`, in source order and before every function and
   object, as Clang places module assembly; `.att_syntax` follows them.
+- Inline assembly (`isel/asm.rs`) never reaches the allocator as an operand
+  form. Selection fixes every register operand to a physical register
+  first: the one its constraint names, or a free one of its class in the
+  allocation order, assigned most constrained operand first with
+  backtracking, so an unrestricted output never takes the one register a
+  `Q` input could use. Every operand gets its own register, except that
+  an output that is not early-clobber may share an input's fixed register
+  (`"=a"(eax) : "a"(leaf)`) and a tied input shares its output's. `%rsp`,
+  `%rbp` and the spill scratch registers (`%r10`, `%r11`, `%xmm14`, `%xmm15`)
+  are never assigned,
+  and a clobber of `%rsp` or `%rbp` is refused. Inputs and memory addresses
+  are materialized in virtual registers and then copied into their
+  registers; a memory operand in a frame object or at a defined symbol is
+  addressed directly (`16(%rsp)`, `sym(%rip)`) and needs no register, and
+  operands at one address (a `+m` output and its read) share one. `MInst::InlineAsm` then reads the input registers and writes
+  the output and clobbered ones, so the allocator keeps values that are
+  live across it elsewhere, as at a call, and the frame saves any
+  callee-saved register it writes. Right after it come `setcc` for flag
+  outputs, copies of the register outputs into virtual registers, and
+  stores to the output pointers. The listing writes the template between
+  `#APP` and `#NO_APP`: registers at their operand's width or the `b` `h`
+  `w` `k` `q` `V` `z` `a` `x` modifiers, memory as its operand (`H` adds 8),
+  immediates as `$n` (`c` `P` `p` `a` without `$`, `n` negated), symbols as
+  `$sym+off`, `${:uid}` as a listing-wide counter, and the AT&T alternative
+  of `{att|intel}`. Other modifiers, and templates that name a flag output,
+  are refused. Like GCC and Clang, a System V leaf function may keep its
+  frame in the red zone, which assembly that pushes would overwrite.
 
 - An `i1` arriving from another compiler (a parameter or a call result) is
   masked to its low bit, since the back end keeps `i1` canonical.
@@ -1309,8 +1398,8 @@ Windows targets by default, and ELF64 objects for Linux targets under
 `--no-native-object` selects the text path, which bundled clang assembles,
 on every target; it remains the Linux default, and the last of the two flags
 wins. `--emit=asm` prints the same listing either way. The encoder reads only
-the emitter's vocabulary, so a module with file-scope assembly takes the text
-path by default and is refused under `--native-object`.
+the emitter's vocabulary, so a module with file-scope or inline assembly
+takes the text path by default and is refused under `--native-object`.
 `driver::object_writer` makes this choice from the target, the flags and the
 module, in one place, including whether an encoder refusal is final, and
 `driver::build` runs it. When the default direct writer's encoder refuses a

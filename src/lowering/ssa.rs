@@ -115,6 +115,9 @@ pub(super) enum Op<'s> {
     Call(FuncId, &'s [Value]),
     Diagnostic(&'s super::CallDiagnostic),
     CallIndirect(SigId, Value, &'s [Value]),
+    /// Inline assembly with one value per descriptor operand; the
+    /// descriptor joins the module when the draft is emitted.
+    InlineAsm(&'s crate::ir::InlineAsm<'s>, &'s [Value]),
 }
 
 /// How a block ends.
@@ -436,6 +439,22 @@ impl<'s> Draft<'s> {
         value
     }
 
+    /// Whether `value` is a `global_addr` or `func_addr` of the current
+    /// block: a symbol's address, which an immediate operand may hold.
+    pub(super) fn is_symbol_address(&self, value: Value) -> bool {
+        self.blocks[self.current.index()]
+            .insts
+            .iter()
+            .rev()
+            .find(|&&(_, result)| result == Some(value))
+            .is_some_and(|&(op, _)| {
+                matches!(
+                    op,
+                    Op::Inst(InstData::GlobalAddr { .. } | InstData::FuncAddr { .. })
+                )
+            })
+    }
+
     pub(super) fn create_slot(&mut self, size: u32, align: crate::ir::Align) -> StackSlot {
         let slot = StackSlot::new(self.slots.len());
         self.slots.push(StackSlotData { size, align });
@@ -466,6 +485,32 @@ impl<'s> Terminator<'s> {
             | Self::Return(_) | Self::Unreachable => (&[], &[]),
         };
         first.iter().chain(rest.iter().map(|(_, edge)| edge))
+    }
+
+    /// The number of edges [`Self::edges`] yields, in constant time.
+    pub(super) fn edge_count(&self) -> usize {
+        match self {
+            | Self::Jump(_) => 1,
+            | Self::Brif(..) => 2,
+            | Self::IndirectBr(_, edges) => edges.len(),
+            | Self::Switch { cases, .. } => 1 + cases.len(),
+            | Self::Return(_) | Self::Unreachable => 0,
+        }
+    }
+
+    /// The edge at `index` in [`Self::edges`] order, in constant time: a
+    /// large `switch` would otherwise make every lookup linear.
+    pub(super) fn edge(&self, index: usize) -> Option<&Edge<'s>> {
+        match self {
+            | Self::Jump(edge) => (index == 0).then_some(edge),
+            | Self::Brif(_, edges) => edges.get(index),
+            | Self::IndirectBr(_, edges) => edges.get(index),
+            | Self::Switch { default, cases, .. } => match index.checked_sub(1) {
+                | None => Some(default),
+                | Some(case) => cases.get(case).map(|(_, edge)| edge),
+            },
+            | Self::Return(_) | Self::Unreachable => None,
+        }
     }
 
     fn edge_mut(&mut self, index: u32) -> &mut Edge<'s> {

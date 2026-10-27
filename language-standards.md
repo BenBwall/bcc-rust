@@ -77,7 +77,21 @@ the other absent. Before C99 (including C95), GNU89 inline is the default;
 from C99 on, C99 inline is the default. `-fgnu89-inline` and
 `-fno-gnu89-inline` override this choice independently of `-std`, with the
 last inline flag winning. bcc permits explicitly selecting C99 inline even
-in a pre-C99 mode; GCC diagnoses that combination. Only `__STRICT_ANSI__` distinguishes
+in a pre-C99 mode; GCC diagnoses that combination. `-funsigned-char` (or
+`-fno-signed-char`) makes plain `char` unsigned on every target, and
+`-fsigned-char` (or `-fno-unsigned-char`) signed, the last flag winning, as in
+GCC and Clang (C99 §6.2.5p15 leaves the choice to the implementation; every
+bcc target defaults to signed). Plain `char` stays a distinct type; semantic
+analysis, constant folding and lowering take its signedness from
+`CompilerConfiguration::layout`, character constants such as `'\xff'` take its
+value range, and `__CHAR_UNSIGNED__` is defined, with `_CHAR_UNSIGNED` on the
+MSVC target as Clang defines it there. `#if` reads a one-byte narrow
+character constant the same way (§6.10.1p4 lets it), so `#if '\xff' < 0` is
+true exactly where plain `char` is signed, as in GCC and Clang; wide constants
+keep their `wchar_t` value. `-ffloatn-types` adds GCC 7's `_FloatN` keywords,
+constants, macros and builtins (see
+[Interchange floating types](#interchange-floating-types-2026-10-26)); it is
+off by default, as for Clang. Only `__STRICT_ANSI__` distinguishes
 strict modes from GNU modes in these macros. On the MSVC target,
 explicitly enabling `-fms-extensions` defines
 `_MSC_VER` `1933`, `_MSC_FULL_VER` `193300000`, `_MSC_BUILD` `1` and
@@ -104,6 +118,48 @@ ordinary macros that `#undef` may remove. OS identity
 macros such as `__linux__` and `_WIN32` follow the selected target, below. The identity and target definitions are read from the synthetic
 `<built-in>/predefined.h` before user input.
 
+`--compiler-identity` claims another compiler than Clang, as the driver
+personalities ([docs/design/driver-modes.md](docs/design/driver-modes.md)) do.
+`gcc` defines `__GNUC__` `14`, `__GNUC_MINOR__` `2`, `__GNUC_PATCHLEVEL__`
+`0`, `__VERSION__` `"14.2.0"` and GCC's execution character set names, and no
+Clang macro (`__clang__` and its versions, `__llvm__`, the literal
+encodings). Because GCC 7 and later name the TS 18661-3 types as keywords,
+glibc's headers then stop declaring them, so this identity also defines
+`_Float32`, `_Float64`, `_Float32x`, `_Float64x` and `_Float128` as macros for
+the standard types of the same representation (`float`, `double`, `double`,
+`long double`, `__float128`); they are not distinct types. glibc's GCC fortify
+wrappers for the `printf` family, `open` and `syslog` forward their arguments
+with `__builtin_va_arg_pack`, which lowering expands at each call, so under
+this identity they reach the checked functions. `msvc` (`cl.exe`) removes the
+GNU and Clang macros and the inline-semantics macro, and defines `_MT` and
+`_MSVC_TRADITIONAL` `0` (bcc's preprocessor is conforming, like `cl
+/Zc:preprocessor`); `_MSC_VER` still needs `-fms-extensions` on the MSVC
+target, which the `cl` personality selects. `clang-cl` removes the GNU macros
+and keeps Clang's. `tcc` removes the GNU and Clang macros and defines
+`__TINYC__` `927` (TCC 0.9.27). Every identity keeps `__bcc__`, the ISO
+macros and the target's definitions, as clang-cl keeps `__x86_64__`.
+
+Several options change rules the mode otherwise fixes. `-ftrigraphs` and
+`-fno-trigraphs` (also GCC's `-trigraphs`) turn phase 1 trigraph replacement
+on or off whatever the mode; the `cl` personality turns it off, as `cl`
+replaces trigraphs only under `/Zc:trigraphs`. `-fwrapv` makes signed integer
+`+`, `-`, `*`, `<<`, negation and `++`/`--` wrap in two's complement, so
+lowering marks none of them `nsw`; pointer arithmetic is unaffected, as in
+GCC. `-fpack-struct=N` (1, 2, 4, 8 or 16) sets the packing in effect before
+any `#pragma pack`, which `#pragma pack()` restores, as GCC documents and
+`cl /ZpN` does. `-fpack-struct` without a value instead packs every
+structure and union as the `packed` attribute does (an `aligned` member keeps
+its alignment) and ignores `#pragma pack` with GCC's warning, as GCC 15.2
+does. `-fno-pack-struct` undoes both. `-fno-builtin` keeps LLVM from
+treating any library function as a builtin (no `sqrt` instruction, no
+`memset` formed from a loop, no `printf` turned into `puts`);
+`-fno-builtin-NAME` does so for NAME, `-fbuiltin` undoes `-fno-builtin` but
+keeps the named exclusions, as in GCC, and
+`-ffreestanding` implies `-fno-builtin`, as in Clang. `-fvisibility=hidden`
+(or `protected`, `internal` as hidden, `default`) gives that visibility to
+the definitions with linkage that name none; declarations keep the default,
+as in GCC.
+
 Claiming Clang changes the paths the C libraries take. In glibc,
 `sys/cdefs.h` drops its pre-C11 `_Noreturn` and `_Static_assert` fallbacks
 (bcc accepts both keywords in every mode, as Clang does), marks socket
@@ -124,6 +180,13 @@ runtime member and nested-array offsets in subobject modes 1 and 3. Unsupported
 predicate shapes diagnose rather than being discarded. These contracts cover
 the exercised glibc level-2/3 fortify wrappers and Clang C arithmetic,
 real/complex, pointer-qualification and variadic-fallback overload selection.
+Code that presents as GCC (GCC's version macros without Clang's) gets glibc's
+GCC wrappers instead, which forward their anonymous arguments with
+`__builtin_va_arg_pack ()` and count them with `__builtin_va_arg_pack_len ()`.
+Lowering gives each direct call of a function using them a copy specialized for
+the call's promoted anonymous argument types, folds the copy's branches on the
+length at every optimization level, and refuses any use no call resolves
+(`lowering/argument_pack.rs`).
 Overload symbols use Clang's Itanium ABI on ELF and MinGW and its Microsoft ABI
 on MSVC, including written nested-function qualifiers and shared argument/name
 backreferences. Anonymous and repeated local tags receive ABI ordinals as
@@ -250,7 +313,7 @@ In a hosted translation a header that Clang chains to the C library tests
 before supplying what remains; `-ffreestanding` skips the C library entirely.
 The headers are searched after the `-I`,
 `-isystem` and environment directories and before the C library's directories
-(`--sysroot`) and `-idirafter`; quoted lookup additionally gives local and
+(the host's when compiling for the host, or `--sysroot`) and `-idirafter`; quoted lookup additionally gives local and
 `-iquote` headers priority. `-nostdinc` and `-nobuiltininc` remove the resource
 directory. `__has_include` uses the same search.
 This follows Clang resource-header availability; use of newer language syntax
@@ -260,7 +323,7 @@ still follows the configured extension policy.
 | --- | --- |
 | `float.h` | C99 floating limits; C11 adds true minima, subnormal and decimal-digit macros. `FLT_ROUNDS` is the default round-to-nearest value `1`; `FLT_EVAL_METHOD` is `0`. Runtime changes to the rounding environment require backend support. Hosted with `__MINGW32__` or `_MSC_VER` defined, it first reads the C library's `<float.h>` and then replaces its characteristics, as Clang does; it defines GCC's guard `_FLOAT_H___` first, so MinGW-w64's header does not look for GCC's. |
 | `iso646.h` | The eleven C alternative operator macros. |
-| `limits.h` | Target-derived signed/unsigned limits; long-long limits from C99 onward. Hosted, it first reads the C library's `<limits.h>` for its POSIX and other additions, defining `_GCC_LIMITS_H_` in GNU modes so glibc does not look for GCC's header, then replaces the integer limits with the target's, as Clang does. `MB_LEN_MAX` is defined only if the C library did not (glibc 16, musl 4, MSVC 5); the fallback is `4`, since bcc's literals are UTF-8 and 4 bytes cover every stateless encoding. Clang's fallback is `1`. |
+| `limits.h` | Target-derived signed/unsigned limits; long-long limits from C99 onward. `CHAR_MIN` and `CHAR_MAX` are `0` and `UCHAR_MAX` when `__CHAR_UNSIGNED__` is defined (`-funsigned-char`), as in Clang's header. Hosted, it first reads the C library's `<limits.h>` for its POSIX and other additions, defining `_GCC_LIMITS_H_` in GNU modes so glibc does not look for GCC's header, then replaces the integer limits with the target's, as Clang does. `MB_LEN_MAX` is defined only if the C library did not (glibc 16, musl 4, MSVC 5); the fallback is `4`, since bcc's literals are UTF-8 and 4 bytes cover every stateless encoding. Clang's fallback is `1`. |
 | `stdarg.h` | `va_list` and the four `va_*` macros in every mode, plus GNU `__gnuc_va_list` and `__va_copy`. Like Clang's, it may be included repeatedly; `__need___va_list`, `__need_va_list`, `__need_va_arg`, `__need___va_copy` and `__need_va_copy` request one part, and each part keeps its conventional guard (`__GNUC_VA_LIST`, `_VA_LIST`). The intrinsic type is an array of one opaque 24-byte, 8-aligned SysV record on Linux, and `char *` on Windows. |
 | `stdbool.h` | `__bool_true_false_are_defined`; `bool`, `true`, `false` macros before C23. C23 uses language keywords. |
 | `stddef.h` | `size_t`, `ptrdiff_t`, `wchar_t`, `NULL`, `offsetof`; C11 adds `max_align_t`, and `__STDC_WANT_LIB_EXT1__` adds `rsize_t`. Like Clang's, it may be included repeatedly: `__need_size_t`, `__need_ptrdiff_t`, `__need_wchar_t`, `__need_NULL`, `__need_wint_t`, `__need_rsize_t`, `__need_max_align_t` and `__need_offsetof` request one part, as glibc's headers do. Each type keeps its conventional guard (`_SIZE_T`, `_PTRDIFF_T`, `_WCHAR_T`, `_WINT_T`, `_RSIZE_T`), so a definition the C library made first is kept; a requested `NULL` is always restored to `((void *)0)`. As in Clang, `_MSC_EXTENSIONS` also defines vcruntime.h's `_WCHAR_T_DEFINED` guard with `wchar_t`, and `max_align_t` is `double` on the MSVC target (`_M_X64` without `__MINGW32__`), otherwise the GCC-style record, independently of MSVC extension flags. |
@@ -458,6 +521,7 @@ mode gate and policy diagnostics (`Imaginary` reports an unsupported type); a
 | MacroExpandedDefined | - | - | - | - | - | - | - | extension (object-like warning baseline) | preprocessor |
 | QuotedHeaderBackslash | - | - | - | - | - | - | - | extension | preprocessor |
 | UnnamedDefinitionParameters | - | - | - | - | - | Y | Y | extension (warning fallback) | parser/semantic analysis |
+| InterchangeFloatTypes | - | - | - | - | - | Y | Y | `-ffloatn-types` only | lexer/parser/semantic analysis |
 | EmptyMacroArguments | - | - | Y | Y | Y | Y | Y | extension | lexer/preprocessor |
 | Inline | - | - | Y | Y | Y | Y | Y | GNU earlier | parser |
 | Restrict | - | - | Y | Y | Y | Y | Y | native | parser |
@@ -500,7 +564,7 @@ mode gate and policy diagnostics (`Imaginary` reports an unsupported type); a
 | GenericTypeOperand | - | - | - | - | - | - | Y | extension | parser |
 | CaseRanges | - | - | - | - | - | - | Y | GNU earlier | parser |
 | GnuAttribute | - | - | - | - | - | - | - | extension (GNU native) | parser; sema attribute pass; packed/aligned/scalar mode, transparent_union, cleanup, constructor/destructor, alias, weak, section, used, visibility lowering; vector_size sema |
-| GnuAsm | - | - | - | - | - | - | - | extension (GNU native) | parser |
+| GnuAsm | - | - | - | - | - | - | - | extension (GNU native) | parser; sema statement checks; LLVM and native lowering |
 | GnuTypeof | - | - | - | - | - | - | - | extension (GNU native) | parser/sema |
 | ExtensionMarker | - | - | - | - | - | - | - | extension (GNU native) | parser |
 | StatementExpressions | - | - | - | - | - | - | - | extension (GNU native) | parser |
@@ -512,6 +576,8 @@ mode gate and policy diagnostics (`Imaginary` reports an unsupported type); a
 | LabelsAsValues | - | - | - | - | - | - | - | extension (GNU native) | parser, sema, lowering |
 | LocalLabels | - | - | - | - | - | - | - | extension (GNU native) | parser, sema, lowering |
 | OmittedConditionalOperand | - | - | - | - | - | - | - | extension (GNU native) | parser |
+| OneVoidConditional | - | - | - | - | - | - | - | extension (GNU native) | semantic analysis |
+| ConstantCompoundLiteral | - | - | - | - | - | - | - | extension (GNU native) | sema, lowering |
 | ZeroLengthArrays | - | - | - | - | - | - | - | extension (GNU native) | parser |
 | Float128 | - | - | - | - | - | - | - | extension (GNU native) | parser/sema |
 | Int128 | - | - | - | - | - | - | - | extension (GNU native) | parser/sema |
@@ -526,6 +592,7 @@ mode gate and policy diagnostics (`Imaginary` reports an unsupported type); a
 | ExtraSemicolons | - | - | - | - | - | - | - | extension (GNU native) | parser |
 | NestedFunctions | - | - | - | - | - | - | - | extension (GNU native) | parser |
 | ImaginaryConstants | - | - | - | - | - | - | - | extension (GNU native) | lexer/preprocessor |
+| EscapeCharacter | - | - | - | - | - | - | - | extension (GNU native) | lexer/preprocessor |
 | DollarIdentifiers | - | - | - | - | - | - | - | extension (GNU native) | lexer/preprocessor |
 | NamedVariadicMacros | - | - | - | - | - | - | - | extension (GNU native) | lexer/preprocessor |
 | GnuVaArgs | - | - | - | - | - | - | - | extension (GNU native) | lexer/preprocessor |
@@ -539,6 +606,7 @@ mode gate and policy diagnostics (`Imaginary` reports an unsupported type); a
 | FlexibleArrayInitializers | - | - | - | - | - | - | - | extension (GNU native) | semantic analysis, lowering |
 | ConstantFolding | - | - | - | - | - | - | - | extension (GNU native) | semantic analysis |
 | VoidPointerArithmetic | - | - | - | - | - | - | - | extension (GNU native) | semantic analysis, lowering |
+| SameTypeCasts | - | - | - | - | - | - | - | extension (GNU native) | semantic analysis |
 | MsDeclspec | - | - | - | - | - | - | - | MS flag | parser |
 | MsIntTypes | - | - | - | - | - | - | - | MS flag | parser |
 | MsCallingConventions | - | - | - | - | - | - | - | MS flag | parser |
@@ -600,8 +668,30 @@ The following vocabulary entries retain the established diagnostic contracts:
   spellings under Warn/Deny, including GNU modes; C99 and later are silent.
   Parser `__extension__` suppression applies. C99 §6.7.5p1 (printed p. 114;
   PDF p. 126) specifies all three forms.
+- `SameTypeCasts` has GNU origin. A cast of a structure or union to its own
+  type, qualifiers aside (`(struct S)s`, through typedefs too), gives the
+  operand's value as an rvalue, as GCC accepts it ("ISO C forbids casting
+  nonscalar to the same type" under -Wpedantic; C99 §6.5.4p2 requires a scalar
+  or void type). Warn/Deny report it, except a cast spelled `(union ...)`,
+  which keeps the parser's `UnionCasts` report. A cast to another aggregate
+  type stays invalid, the result is not an lvalue, and it is no constant
+  initializer of a static object, as in GCC.
+- `ConstantCompoundLiteral` has GNU origin. A compound literal of a static
+  object's own type as its whole initializer, possibly parenthesized, is
+  accepted as if its braced list were written in its place, when every value
+  the literal stores is a constant its destination accepts: a structure or
+  union (GCC and Clang), or a scalar of a compatible type, qualifiers aside
+  (`static int x = (int){3};`, GCC only; `static double d = (int){3};` and
+  `(int){3} + 1` stay non-constant, as in GCC). Lowering copies the bytes of
+  the literal's own initializer. Warn/Deny report "'compound literal as a
+  constant initializer' is a GNU extension" where GCC says "initializer
+  element is not constant [-Wpedantic]". Source: [GCC compound
+  literals](https://gcc.gnu.org/onlinedocs/gcc/Compound-Literals.html).
 - `AlignofExpression` has GNU origin and accepts an expression operand in
-  every mode. ISO `_Alignof` and C23 `alignof` spellings report GNU origin under
+  every mode, parenthesized or, as GCC accepts it, not (`_Alignof x`,
+  `_Alignof (a)[1]`): every spelling takes `__alignof__`'s operand, a
+  parenthesized type name or a unary expression, like `sizeof`. ISO
+  `_Alignof` and C23 `alignof` spellings report GNU origin under
   Warn/Deny, including GNU dialects; Allow is silent. Reserved GNU aliases
   retain their exemption, and parser suppression still applies. The source is
   [GCC's alignment extension](https://gcc.gnu.org/onlinedocs/gcc/Alignment.html).
@@ -654,7 +744,7 @@ functions.
 | --- | --- | --- |
 | C89/C90/C95 | Native implicit int; C99-origin mixed blocks, for declarations, designated initializers, compound literals, flexible array members, long long, trailing enum comma, `__func__`, and unambiguous qualified/static/`[*]` array syntax follow Allow/Warn/Deny | Variable bounds need constant evaluation to distinguish VLAs from constant arrays; flexible-member position and object layout |
 | C99 | Full C99 grammar; implicit int is retained with a removed-feature policy diagnostic | Type/name/control-flow constraints listed in the C99 checklist |
-| C11/C17 | `_Alignas` expression/type operands, `_Alignof` types (parenthesized expressions as a GNU extension), `_Atomic` type/qualifier, `_Generic` associations, `_Noreturn`, `_Static_assert`, `_Thread_local`, anonymous untagged aggregates; `_Alignas` in a plain type name is a constraint error | Alignment validity, storage-class combinations and aggregate layout; atomic eligibility and generic selection are analyzed |
+| C11/C17 | `_Alignas` expression/type operands, `_Alignof` types (expression operands as a GNU extension), `_Atomic` type/qualifier, `_Generic` associations, `_Noreturn`, `_Static_assert`, `_Thread_local`, anonymous untagged aggregates; `_Alignas` in a plain type name is a constraint error | Alignment validity, storage-class combinations and aggregate layout; atomic eligibility and generic selection are analyzed |
 | C23 | All `[[...]]` attribute positions with standard/vendor names and balanced arguments; `bool`/`true`/`false`, `nullptr`, `constexpr`, `typeof`/`typeof_unqual`, message-optional `static_assert`, `alignas`/`alignof`/`thread_local` aliases; labels before declarations and at block end; `{}`; `_BitInt` with signedness; fixed enum underlying specifier-qualifier lists; `auto` type inference, alone or beside another storage class except `typedef`; unnamed definition parameters; ellipsis-only prototypes; empty parameter lists as prototypes; rejected identifier-list declarators; decimal type keywords; compound-literal storage classes | Attribute applicability/meaning, inferred types, width values, enum type legality, decimal literal support and literal object lifetime |
 | C2y subset | `_Countof` unary expression or parenthesized type; type-controlling `_Generic`; `if`/`switch` declaration headers with an optional following expression; case ranges; `break`/`continue` label | Array/type/count evaluation, selection conversion, range overlap, and named control-target resolution |
 
@@ -733,7 +823,10 @@ the vendor grammar. `parse_gnu` owns assembly, builtins and `__label__`
 declarations. Assembly nodes keep typed qualifiers, the template literal,
 constraint and clobber literals, parsed operand expressions, symbolic names and
 goto labels; file assembly and declarator assembly labels have explicit AST
-variants. Builtins keep their type/expression operands and `__builtin_offsetof`
+variants. Semantic analysis checks statement-level assembly (constraints,
+operand lvalues and constants, clobbers, template references and goto
+labels) and retains it for lowering; see
+[middle-end.md](middle-end.md#gnu-inline-assembly-2026-10-26). Builtins keep their type/expression operands and `__builtin_offsetof`
 member paths. Statement expressions, local labels, label addresses, computed
 goto, omitted conditional operands, GNU initializers and nested definitions
 also have inspectable syntax nodes.
@@ -829,7 +922,14 @@ Phase 5 preserves Unicode encoding in literal tokens and distinguishes numeric
 escapes from source characters. UTF-8/UTF-16/UTF-32 character constants must fit
 one code unit; numeric escapes have the selected code-unit range. C2y delimited
 escapes are `\x{...}` and `\o{...}`, with empty, unterminated, invalid-radix,
-and out-of-range forms diagnosed. Phase 6 concatenates ordinary strings with
+and out-of-range forms diagnosed. An unknown escape such as `\j` or `\%`
+stands for its character after the warning "unknown escape sequence `\j`
+[-Wunknown-escape-sequence]", in every mode, strict ISO included, as GCC and
+Clang do: C99 requires only a diagnostic (§6.4.4.4 footnote 65) and §6.11.4
+leaves non-lowercase escapes to extensions. `-pedantic-errors` makes it an
+error, as Clang's extension warning is; `-Wno-unknown-escape-sequence`
+silences it and `-Werror=unknown-escape-sequence` promotes it, and a system
+header withholds it. Phase 6 concatenates ordinary strings with
 encoded strings while keeping the encoding, and diagnoses incompatible
 nonordinary prefixes. Phase 7 adds encoding-bearing literal, bit-precise
 integer, and imaginary constant token variants. Semantic analysis types the
@@ -961,14 +1061,36 @@ absolute path, and the primary source file are not. `#pragma GCC
 system_header` (also through `_Pragma`) makes the rest of the current header
 a system header; in the primary source file it is ignored with a warning, as
 in GCC and Clang. A `#line` directive gives the following lines a new file
-identity that is not a system header. `#pragma GCC warning` and `#pragma GCC
+identity that is not a system header. A GNU line marker (`# 12 "file.c" 1 3`),
+the form `-E` writes, is read as `#line 12 "file.c"`. Flag 3 makes the
+following lines a system header until the next line marker in the same
+physical file, which ends the region unless it has flag 3 too, as GCC and
+Clang read preprocessed output; the other flags are ignored, and a `#line`
+directive does not end the region. The flags must come in GCC's order, one of
+`1` or `2`, then `3`, then `4` (only after `3`): the first token out of that
+order is an error ("invalid flag"), and it and the flags after it are ignored,
+so `1 2 3` or `1 wat 3` makes no system header. A header included from a
+system header, a marked region or the part after `#pragma GCC system_header`
+included, is a system header too however it is found (beside the includer,
+through `-I`, or by an absolute path), as GCC takes the including position's
+status. A header that is a system header by its
+directory or pragma stays one. So `-E` output compiled again withholds its
+system headers' warnings, also from ordinary source. Already
+preprocessed input (`.i`, `-x cpp-output`) is read as GCC's
+`-fpreprocessed` reads it: phases 1 and 2 replace no trigraph and delete no
+line splice (CR and CRLF still end lines), no macro, builtin or not, is
+replaced, and only line markers, `#pragma`, `#ident`, `#sccs`, `#define` and
+`#undef` whose `#` starts the line are directives; any other directive is an
+error. `#pragma GCC warning` and `#pragma GCC
 error` report their macro-replaced string operand (optionally parenthesized,
 adjacent literals concatenated) as a warning or an error, as GCC and Clang do;
 any other operand is an error. glibc's `__glibc_macro_warning`, which bcc
 reaches as Clang does, uses the warning form for deprecated macros.
 
 Inside a system header, warnings, extension diagnostics and warning-group
-diagnostics are withheld, the latter two at every severity: under
+diagnostics are withheld, the latter two at every severity, except the
+message of a `#warning` directive, which GCC and Clang also emit there
+(`#pragma GCC warning` stays withheld, as in GCC): under
 `-pedantic-errors` an extension in a system header is not reported, and
 neither is an `-Wincompatible-pointer-types`, `-Wint-conversion` or
 `-Wincompatible-function-pointer-types` error, matching Clang, where such
@@ -1260,8 +1382,11 @@ none are invented. The macro oracle has 82 documented exclusions.
 
 The pinned Clang rejects native `_Float128`, `_Float32`, `_Float64`,
 `_Float32x`, `_Float64x`, and `f128`/`F128` suffixes in C11, C17, GNU17,
-C23 and GNU23. bcc follows that contract: glibc supplies its `_FloatN`
-typedefs. Because bcc claims Clang, glibc's own `bits/floatn.h` enables
+C23 and GNU23. bcc follows that contract by default: glibc supplies its
+`_FloatN` typedefs, so the names must stay identifiers. `-ffloatn-types`
+(`CompilerConfiguration::with_interchange_float_types`, see
+[Interchange floating types](#interchange-floating-types-2026-10-26)) gives
+GCC 7's contract instead, for a GCC identity. Because bcc claims Clang, glibc's own `bits/floatn.h` enables
 `__HAVE_FLOAT128` through `__glibc_clang_prereq (3, 9)` and declares the
 complex type as `_Complex float __attribute__ ((__mode__ (__TC__)))`. The GNU
 `mode` attribute selects real (`SF`, `DF`, `XF`, `TF`, `KF`) and complex
@@ -1303,6 +1428,59 @@ integer constant expression requiring binary128 evaluation is unavailable.
 The x87 helper is never used to approximate binary128. See
 [semantic-analysis.md](semantic-analysis.md#binary128-and-type-generic-math-2026-10-09)
 for verification and limits.
+
+## Interchange floating types (2026-10-26)
+
+`-ffloatn-types` (and `-fno-floatn-types`; the last wins) makes `_Float32`,
+`_Float64`, `_Float128`, `_Float32x` and `_Float64x` keywords, as GCC 7 and
+later have them in every C mode, with the C23 Annex H constant suffixes
+`f32`, `f64`, `f128`, `f32x` and `f64x`, with `f` or `F` but only a lowercase
+`x`, as GCC requires (§H.5.1-H.5.2). It is
+off by default because glibc's `bits/floatn.h` declares these names as
+typedefs for the Clang identity bcc claims; a GCC identity, which makes
+glibc expect the keywords, should turn it on. The `Feature` row is
+`InterchangeFloatTypes`: origin C23, so `-pedantic` before C23 warns
+"'_Float32' is a C23 extension" where GCC says "ISO C does not support the
+'_Float32' type before C23".
+
+Each type is distinct (§H.2.2p3, §H.2.4p2) and has the representation of a
+type bcc already lowers: binary32 (`float`), binary64 (`double`, for
+`_Float64` and `_Float32x`), the target's `long double` for `_Float64x`, and
+binary128 for `_Float128`, which is the same type as `__float128`, as in GCC.
+`_Generic`, `__builtin_types_compatible_p` and the usual arithmetic
+conversions see the distinct types: within one precision an interchange type
+is chosen over `long double`, then `double`, then the extended type
+(§H.4.3p1), so `_Float32 + float` is `_Float32` and `_Float32x + double` is
+`double`. The classes follow the target's formats: on the MSVC target, where
+`long double` is binary64, `_Float64 + long double` is `_Float64` and
+`_Float32x + long double` is `long double`, as GCC gives with
+`-mlong-double-64`. Default argument promotions apply only to `float`, as in GCC.
+`_Complex` combines with each in either order. On the MSVC target, whose
+`long double` is binary64 and which has no binary128 type, `_Float64x` and
+`_Float128` are refused as unsupported.
+
+With the switch, the `__FLT32_*__`, `__FLT64_*__`, `__FLT32X_*__`,
+`__FLT64X_*__` and `__FLT128_*__` characteristics macros are predefined
+with GCC 15's x86-64 values (`target/interchange_floats.rs`), omitting the
+types the target lacks, and the constant builtins glibc's GCC paths call
+exist: `__builtin_huge_valfN`, `__builtin_inffN`, `__builtin_nanfN` and
+`__builtin_nansfN` for `f32`, `f64`, `f32x` and `f64x` (the `f128` ones
+already exist). The `nans` family, `__builtin_nans` included, gives a
+signaling NaN of the result's format with the tag's payload, bit for bit as
+GCC does; a conversion that cannot keep a NaN's payload makes it quiet. Without the switch these builtins are unknown to calls and
+`__has_builtin`.
+
+Verified against real glibc 2.43 headers (`<math.h>`, `<complex.h>`,
+`<stdlib.h>`, `<float.h>`, with and without `_GNU_SOURCE`) under an emulated
+GCC 14 identity (`-U__clang__ -U__GNUC__ -D__GNUC__=14 ...`) in C11, GNU17
+and C23, and programs using `HUGE_VAL_F32`, `sqrtf32`, `strtof64` and the
+builtins print what GCC 15's builds print (`signbit` returns another
+nonzero value). Limits: the resource
+`<tgmath.h>` and `<float.h>` are Clang's and know none of these types
+(no `FLT32_MAX`), so a GCC identity still needs GCC's own `<float.h>`
+macros; GNU vector element types, imaginary `_FloatN` constants such as
+`1.0f32i`, `__builtin_*f128` math beyond the existing primitives, and
+binary128 arithmetic in lowering remain unsupported.
 
 ## GNU vectors and x86 SIMD resources (2026-10-09)
 
@@ -1684,9 +1862,10 @@ The `float *` to `char *` argument execution regression explicitly uses
 contradict the observed Clang behavior. Function/void pointer conversions
 and pointer/zero ordering use the existing GNU extension policy adapter.
 
-Existing inspection views keep their historical success status while printing
-diagnostics. Code-generation modes (`--emit=ir`, `--interpret`, `-c`, `-o`)
-return failure for error diagnostics; flag regressions verify that lowering gate.
+Every mode, the inspection views included, returns failure after an error
+diagnostic, as a compiler must; code-generation modes (`--emit=ir`,
+`--interpret`, `-c`, `-o`) also stop before lowering, and flag regressions
+verify that gate.
 
 These defaults satisfy the diagnostic requirement of C99 §5.1.1.3p1
 (printed p. 11; PDF p. 23). The constraints remain §6.5.16.1p1

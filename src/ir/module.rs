@@ -8,8 +8,10 @@ use bitflags::bitflags;
 
 use super::{
     Function,
+    InlineAsm,
     Module,
     entities::{
+        AsmId,
         BlockLabel,
         FuncId,
         GlobalId,
@@ -24,10 +26,13 @@ use super::{
     types::Type,
     verifier::Profile,
 };
-use crate::util::bump::{
-    ArenaMap,
-    ArenaVec,
-    Bump,
+use crate::{
+    configuration::LibraryBuiltins,
+    util::bump::{
+        ArenaMap,
+        ArenaVec,
+        Bump,
+    },
 };
 
 impl<'ir> Module<'ir> {
@@ -50,6 +55,7 @@ impl<'ir> Module<'ir> {
                 ..
             }
             | InstData::Store { .. }
+            | InstData::InlineAsm { .. }
             | InstData::MemoryRange { .. }
             | InstData::Jump { .. }
             | InstData::Brif { .. }
@@ -257,9 +263,50 @@ impl<'ir> Module<'ir> {
         self.asm_blocks.push(text);
     }
 
+    /// Adds an inline assembly descriptor, copying it into the module's
+    /// arena.
+    pub(crate) fn add_inline_asm(&mut self, asm: &InlineAsm<'_>) -> AsmId {
+        let asm = asm.copy_into(self.arena);
+        self.inline_asm.push(asm)
+    }
+
+    /// The descriptor an `asm` instruction names.
+    pub(crate) fn inline_asm(&self, asm: AsmId) -> &InlineAsm<'ir> {
+        &self.inline_asm[asm]
+    }
+
+    /// The descriptor `asm`, if the module has it.
+    pub(crate) fn get_inline_asm(&self, asm: AsmId) -> Option<&InlineAsm<'ir>> {
+        self.inline_asm.get(asm)
+    }
+
+    /// Whether any function has inline assembly: the module has an `asm`
+    /// descriptor.
+    pub(crate) fn has_inline_asm(&self) -> bool {
+        !self.inline_asm.is_empty()
+    }
+
     /// The file-scope assembly blocks in source order.
     pub(crate) fn module_asm(&self) -> &[&'ir str] {
         &self.asm_blocks
+    }
+
+    /// Restricts the library functions a back end may treat as builtins,
+    /// copying the names into the module's arena.
+    pub(crate) fn set_library_builtins(&mut self, builtins: LibraryBuiltins<'_>) {
+        let arena = self.arena;
+        self.library_builtins = match builtins {
+            | LibraryBuiltins::All => LibraryBuiltins::All,
+            | LibraryBuiltins::None => LibraryBuiltins::None,
+            | LibraryBuiltins::Except(names) => LibraryBuiltins::Except(
+                arena.alloc_slice_fill_iter(names.iter().map(|name| &*arena.alloc_str(name))),
+            ),
+        };
+    }
+
+    /// The library functions a back end may treat as builtins.
+    pub(crate) const fn library_builtins(&self) -> LibraryBuiltins<'ir> {
+        self.library_builtins
     }
 
     /// Gives a global its initializer, copying the bytes and relocations
@@ -309,6 +356,8 @@ impl<'ir> Module<'ir> {
             symbols: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, arena),
             init_functions: ArenaVec::new_in(arena),
             asm_blocks: ArenaVec::new_in(arena),
+            library_builtins: LibraryBuiltins::All,
+            inline_asm: Table::new_in(arena),
         }
     }
 
@@ -464,6 +513,7 @@ impl fmt::Debug for Module<'_> {
             .field("globals", &self.globals)
             .field("signatures", &self.signatures)
             .field("asm_blocks", &self.asm_blocks)
+            .field("inline_asm", &self.inline_asm)
             .finish_non_exhaustive()
     }
 }

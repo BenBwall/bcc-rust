@@ -7,9 +7,11 @@
 //! would: for System V, each integer or pointer from the register save area
 //! until `gp_offset` passes the six general registers, each `double` from
 //! its vector half until `fp_offset` passes the eight vector registers, then
-//! one eightbyte at a time from the overflow area; for Win64, one 8-byte
-//! slot per argument. Reading advances a local copy, so the caller's list is
-//! left as the C library may leave it: indeterminate.
+//! one eightbyte at a time from the overflow area, and each x87 `long
+//! double` from a 16-byte aligned pair of eightbytes in the overflow area;
+//! for Win64, one 8-byte slot per argument, which holds the address of a
+//! `long double` passed by reference. Reading advances a local copy, so the
+//! caller's list is left as the C library may leave it: indeterminate.
 //!
 //! C99: §7.15p3, p. 249; PDF p. 261; §7.19.6.8-§7.19.6.13, pp. 292-294;
 //! PDF pp. 304-306 (the `v` functions take a `va_list`). System V psABI
@@ -55,6 +57,8 @@ pub(super) enum ArgumentClass {
     /// An integer conversion of this many bits, after default promotions.
     Integer(u32),
     Double,
+    /// An x87 `long double`, through the `L` modifier.
+    LongDouble,
     Pointer,
 }
 
@@ -117,6 +121,7 @@ impl<'v> FormatArguments<'v> {
             | ArgumentClass::Integer(bits) if bits <= 32 => Type::I32,
             | ArgumentClass::Integer(_) => Type::I64,
             | ArgumentClass::Double => Type::F64,
+            | ArgumentClass::LongDouble => Type::F80,
             | ArgumentClass::Pointer => Type::Ptr,
         };
         let advance = |pointer: RuntimeValue, bytes: u64| {
@@ -128,6 +133,16 @@ impl<'v> FormatArguments<'v> {
                     .next()
                     .copied()
                     .ok_or(UbKind::MissingFormatArgument.into()),
+            | Self::SystemV {
+                gp,
+                fp,
+                overflow,
+                save,
+            } if matches!(class, ArgumentClass::LongDouble) => {
+                let address = align_to(memory, *overflow, 16);
+                *overflow = advance(address, 16);
+                address
+            },
             | Self::SystemV {
                 gp,
                 fp,
@@ -152,9 +167,23 @@ impl<'v> FormatArguments<'v> {
             | Self::Win64 { next } => {
                 let address = *next;
                 *next = advance(address, 8);
-                address
+                if matches!(class, ArgumentClass::LongDouble) {
+                    memory.load(Type::Ptr, address, Align::BYTE)?
+                } else {
+                    address
+                }
             },
         };
         memory.load(ty, address, Align::BYTE)
     }
+}
+
+/// `pointer` rounded up to a multiple of `align` bytes, as `va_arg` aligns
+/// the overflow area for a type aligned to 16 (psABI §3.5.7, step 7).
+fn align_to(memory: &Memory<'_>, pointer: RuntimeValue, align: u64) -> RuntimeValue {
+    let address = pointer.as_pointer().map_or(0, |pointer| pointer.address);
+    // A power of two: the distance up to its next multiple, which a guest
+    // address near the top of the space cannot overflow.
+    let padding = address.wrapping_neg() & (align - 1);
+    memory.ptr_add(pointer, RuntimeValue::Int(u128::from(padding)), false)
 }

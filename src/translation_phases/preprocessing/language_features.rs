@@ -27,6 +27,7 @@ use super::{
 use crate::{
     configuration::{
         CompilerConfiguration,
+        CompilerIdentity,
         Feature,
         FeatureOrigin,
     },
@@ -186,8 +187,10 @@ impl<'pp: 'x, 'x> Expander<'_, '_, 'pp, 'x> {
                     if let Some(path) = self.find_resource(name, system, embed, start) {
                         if embed
                             && (params.limit == Some(0)
-                                || std::fs::metadata(self.context.get_source_file(path))
-                                    .is_ok_and(|m| m.len() == 0))
+                                || self
+                                    .context
+                                    .resource_length(self.context.get_source_file(path))
+                                    == Some(0))
                         {
                             2
                         } else {
@@ -299,10 +302,9 @@ impl<'pp: 'x, 'x> Expander<'_, '_, 'pp, 'x> {
             );
             return;
         };
-        let read = std::fs::File::open(self.context.get_source_file(path)).and_then(|file| {
-            let length = file.metadata()?.len();
-            Ok((file, length))
-        });
+        let read = self
+            .context
+            .open_resource(self.context.get_source_file(path));
         let (mut file, length) = match read {
             | Ok(opened) => opened,
             | Err(error) => {
@@ -683,8 +685,9 @@ impl<'tu, 'pp: 'x, 'x> Expander<'_, 'tu, 'pp, 'x> {
     ) -> Option<u32> {
         let path = Path::new(name);
         if path.is_absolute() {
-            return path
-                .is_file()
+            return self
+                .context
+                .file_exists(path)
                 .then(|| self.context.intern_source_file(path));
         }
         let places = self.header_search_places(self.physical_source_file_index(), system, start);
@@ -990,7 +993,16 @@ pub(super) fn with_identity_macros<'a>(
         env!("CARGO_PKG_VERSION_PATCH"),
         env!("CARGO_PKG_VERSION"),
     );
-    out.push_str("#define __GNUC__ 4\n#define __GNUC_MINOR__ 2\n#define __GNUC_PATCHLEVEL__ 1\n");
+    let identity = configuration.compiler_identity();
+    if identity == CompilerIdentity::Gcc {
+        out.push_str(
+            "#define __GNUC__ 14\n#define __GNUC_MINOR__ 2\n#define __GNUC_PATCHLEVEL__ 0\n",
+        );
+    } else {
+        out.push_str(
+            "#define __GNUC__ 4\n#define __GNUC_MINOR__ 2\n#define __GNUC_PATCHLEVEL__ 1\n",
+        );
+    }
     // GNU optimization macros (reserved implementation names, C99 §7.1.3p1).
     let (optimized, size) = configuration.optimization();
     if optimized {
@@ -1021,6 +1033,23 @@ pub(super) fn with_identity_macros<'a>(
     if configuration.accepts(Feature::C23Keywords) {
         out.push_str(configuration.target().atomic_c23_macros());
     }
+    // GCC and Clang mark an unsigned plain `char`, which `<limits.h>` reads
+    // for `CHAR_MIN` and `CHAR_MAX` (C99 §5.2.4.2.1p2, p. 23; PDF p. 35).
+    // On the MSVC target Clang also defines `_CHAR_UNSIGNED`, the macro
+    // `cl /J` defines.
+    if !configuration.layout().char_signed {
+        out.push_str("#define __CHAR_UNSIGNED__ 1\n");
+        if configuration.target() == crate::target::Target::WindowsMsvc {
+            out.push_str("#define _CHAR_UNSIGNED 1\n");
+        }
+    }
+    // GCC 7 and later describe the interchange and extended floating types
+    // they provide; glibc's GCC paths read these macros.
+    if configuration.interchange_float_types() {
+        configuration
+            .target()
+            .write_interchange_float_macros(&mut out);
+    }
     // The relocation model `-fpic` and its family select, as Clang spells
     // it (GCC manual, "Code Gen Options").
     let relocation = configuration
@@ -1032,6 +1061,7 @@ pub(super) fn with_identity_macros<'a>(
             _ = write!(out, "#define __PIE__ {level}\n#define __pie__ {level}\n");
         }
     }
+    out.push_str(identity_claim(identity));
     // MinGW-w64 targets spell `__declspec(a)` as a GNU attribute, unless
     // Microsoft extensions make `__declspec` a keyword: Clang then defines
     // it as itself, so Microsoft modifier lists are retained.
@@ -1041,6 +1071,59 @@ pub(super) fn with_identity_macros<'a>(
         out.push_str("#undef __declspec\n#define __declspec __declspec\n");
     }
     out.into_str()
+}
+
+/// The macros that change when bcc claims another compiler than Clang
+/// (`--compiler-identity`), read after the target's definitions and the GNU
+/// claim, which they adjust. GCC 14.2 defines no Clang macros; its
+/// `__VERSION__` and execution character set names are GCC's, and it names
+/// the TS 18661-3 types `_Float32`, `_Float64`, `_Float32x`, `_Float64x` and
+/// `_Float128` as keywords, which glibc's headers then use: bcc spells them
+/// as the standard types of the same representation. MSVC 19.33 (`cl.exe`)
+/// defines neither GNU nor Clang macros, `_MSVC_TRADITIONAL` as 0 for bcc's
+/// conforming preprocessor (MSVC's `/Zc:preprocessor`) and `_MT` for the
+/// default static runtime; clang-cl keeps the Clang macros. TCC 0.9.27
+/// defines `__TINYC__` and no GNU or Clang macros. The target's definitions,
+/// such as `__x86_64__`, stay, as clang-cl keeps them.
+/// C99: §6.10.8 paragraph 4, p. 161; PDF p. 173; extension to §4
+/// paragraph 6, p. 7; PDF p. 19.
+fn identity_claim(identity: CompilerIdentity) -> &'static str {
+    match identity {
+        | CompilerIdentity::Clang => "",
+        | CompilerIdentity::Gcc => concat!(
+            "#undef __clang__\n#undef __clang_major__\n#undef __clang_minor__\n#undef \
+             __clang_patchlevel__\n#undef __clang_version__\n#undef \
+             __clang_literal_encoding__\n#undef __clang_wide_literal_encoding__\n#undef \
+             __llvm__\n#undef __VERSION__\n",
+            "#define __VERSION__ \"14.2.0\"\n",
+            "#define __GNUC_EXECUTION_CHARSET_NAME \"UTF-8\"\n",
+            "#define __GNUC_WIDE_EXECUTION_CHARSET_NAME \"UTF-32LE\"\n",
+            "#define _Float32 float\n#define _Float64 double\n#define _Float32x double\n",
+            "#define _Float64x long double\n#define _Float128 __float128\n",
+        ),
+        | CompilerIdentity::Msvc => concat!(
+            "#undef __clang__\n#undef __clang_major__\n#undef __clang_minor__\n#undef \
+             __clang_patchlevel__\n#undef __clang_version__\n#undef \
+             __clang_literal_encoding__\n#undef __clang_wide_literal_encoding__\n#undef \
+             __llvm__\n#undef __VERSION__\n",
+            "#undef __GNUC__\n#undef __GNUC_MINOR__\n#undef __GNUC_PATCHLEVEL__\n",
+            "#undef __GNUC_STDC_INLINE__\n#undef __GNUC_GNU_INLINE__\n",
+            "#define _MSVC_TRADITIONAL 0\n#define _MT 1\n",
+        ),
+        | CompilerIdentity::ClangCl => concat!(
+            "#undef __GNUC__\n#undef __GNUC_MINOR__\n#undef __GNUC_PATCHLEVEL__\n",
+            "#undef __GNUC_STDC_INLINE__\n#undef __GNUC_GNU_INLINE__\n#define _MT 1\n",
+        ),
+        | CompilerIdentity::Tcc => concat!(
+            "#undef __clang__\n#undef __clang_major__\n#undef __clang_minor__\n#undef \
+             __clang_patchlevel__\n#undef __clang_version__\n#undef \
+             __clang_literal_encoding__\n#undef __clang_wide_literal_encoding__\n#undef \
+             __llvm__\n#undef __VERSION__\n",
+            "#undef __GNUC__\n#undef __GNUC_MINOR__\n#undef __GNUC_PATCHLEVEL__\n",
+            "#undef __GNUC_STDC_INLINE__\n#undef __GNUC_GNU_INLINE__\n",
+            "#define __TINYC__ 927\n",
+        ),
+    }
 }
 
 /// Clang's `__has_feature` (`extension` false) and `__has_extension` answers
@@ -1096,7 +1179,9 @@ fn has_builtin(context: &mut Context<'_>, spelling: &str) -> bool {
         NamingPolicy,
         SyntaxForm,
     };
-    let Some(descriptor) = crate::builtins::lookup(spelling) else {
+    let Some(descriptor) = crate::builtins::lookup(spelling)
+        .filter(|descriptor| descriptor.availability.accepted(context.configuration))
+    else {
         return false;
     };
     if descriptor.syntax != SyntaxForm::OrdinaryCall {

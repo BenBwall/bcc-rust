@@ -359,7 +359,7 @@ fn scalar<'tu>(
             image.bits(start, width, value as u128)?;
             return Some(());
         }
-        let (float, complex) = match s {
+        let (float, complex) = match s.representation() {
             | Scalar::Float => (Type::F32, false),
             | Scalar::Double => (Type::F64, false),
             | Scalar::LongDouble => (if size == 8 { Type::F64 } else { Type::F80 }, false),
