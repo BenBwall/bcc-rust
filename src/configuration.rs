@@ -86,6 +86,7 @@ pub(crate) struct CompilerConfiguration {
     /// Whether plain `char` is signed, overriding the target's choice, as
     /// `-fsigned-char` and `-funsigned-char` do.
     char_signed: Option<bool>,
+    interchange_float_types: bool,
     suppress_warnings: bool,
     warnings_as_errors: bool,
     /// Most recursive grammar productions active at once; see

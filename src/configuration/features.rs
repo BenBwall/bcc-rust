@@ -175,6 +175,16 @@ pub(crate) enum Feature {
     /// which requires a scalar or void type; GCC c/c-typeck.cc,
     /// `build_c_cast`, "ISO C forbids casting nonscalar to the same type".
     SameTypeCasts,
+    /// The `_Float32`, `_Float64`, `_Float128`, `_Float32x` and `_Float64x`
+    /// keywords and their `f32`, `f64`, `f128`, `f32x` and `f64x` constant
+    /// suffixes. Accepted only where
+    /// [`CompilerConfiguration::interchange_float_types`](super::CompilerConfiguration::interchange_float_types)
+    /// selects them; GCC 7 and later accept them in every mode, as an
+    /// extension before C23.
+    /// C23: Annex H, §H.5.1 paragraph 1 and §H.5.2 paragraph 2, p. 560;
+    /// PDF p. 573. GCC manual, "Additional Floating Types",
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Floating-Types.html>.
+    InterchangeFloatTypes,
 }
 
 impl Feature {
@@ -232,6 +242,7 @@ impl Feature {
             | Self::Constexpr
             | Self::Nullptr
             | Self::UnnamedDefinitionParameters
+            | Self::InterchangeFloatTypes
             | Self::WideEnumerators => FeatureOrigin::Standard(CStandard::C23),
 
             | Self::OctalPrefix
@@ -439,6 +450,7 @@ impl Feature {
         Self::VoidPointerArithmetic,
         Self::ForwardEnumReference,
         Self::SameTypeCasts,
+        Self::InterchangeFloatTypes,
     ];
 }
 

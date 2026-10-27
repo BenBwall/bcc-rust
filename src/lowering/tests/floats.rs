@@ -27,6 +27,17 @@ fn binary64_and_x87_carriers_produce_the_same_target_bits() {
     for value in interesting_doubles() {
         let binary64 = LongDouble::decode_x87(&value.to_bits().to_le_bytes())
             .expect("binary64 carrier decodes");
+        // The x87 load in `from_double` quiets a signaling NaN, which the
+        // bitwise binary64 decoding keeps, as GCC's constants do.
+        if value.is_nan() && value.to_bits() & (1 << 51) == 0 {
+            assert_eq!(
+                constant_parts(binary64, Type::F64),
+                Some(u128::from(value.to_bits())),
+                "{:#x}",
+                value.to_bits()
+            );
+            continue;
+        }
         let x87_bits = constant_bits(&LongDouble::from_double(value), Type::F80).unwrap();
         let x87 = LongDouble::decode_x87(&x87_bits.to_le_bytes()[..10]).unwrap();
         for ty in [Type::F32, Type::F64, Type::F80] {

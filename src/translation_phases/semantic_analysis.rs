@@ -164,6 +164,7 @@ use super::{
         AttributeSpecifier,
         AttributeSyntax,
         ExtendedType,
+        InterchangeFloat,
         ParsedTranslationUnit,
         SpecifierExtension,
         SpecifierExtensionKind,
@@ -1651,6 +1652,10 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                             super::preprocessing::FloatTokenType::Float(_)
                                 | super::preprocessing::FloatTokenType::Double(_)
                                 | super::preprocessing::FloatTokenType::LongDouble(_)
+                                | super::preprocessing::FloatTokenType::Float32(_)
+                                | super::preprocessing::FloatTokenType::Float64(_)
+                                | super::preprocessing::FloatTokenType::Float32x(_)
+                                | super::preprocessing::FloatTokenType::Float64x(_)
                         )
                     {
                         self.exceptional_constant(source);

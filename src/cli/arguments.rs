@@ -303,6 +303,9 @@ enum LanguageFlag {
     /// `-fsigned-char` or `-fno-unsigned-char` (true), `-funsigned-char` or
     /// `-fno-signed-char` (false).
     CharSigned(bool),
+    /// `-ffloatn-types` or `-fno-floatn-types`, bcc's own switch for the
+    /// `_FloatN` keywords a GCC identity provides.
+    InterchangeFloatTypes(bool),
     /// A `-fpic`-family flag, which [`Cli::code_options`] reads in order.
     Relocation,
 }
@@ -326,6 +329,8 @@ impl LanguageFlag {
             | "-fno-gnu89-inline" => return Some(Self::Gnu89Inline(false)),
             | "-fsigned-char" | "-fno-unsigned-char" => return Some(Self::CharSigned(true)),
             | "-funsigned-char" | "-fno-signed-char" => return Some(Self::CharSigned(false)),
+            | "-ffloatn-types" => return Some(Self::InterchangeFloatTypes(true)),
+            | "-fno-floatn-types" => return Some(Self::InterchangeFloatTypes(false)),
             | _ => {},
         }
         if Relocation::parse(text).is_some() {
@@ -387,6 +392,8 @@ impl LanguageFlag {
             | Self::Hosted(hosted) => configuration.with_hosted(hosted),
             | Self::Gnu89Inline(enabled) => configuration.with_gnu89_inline(enabled),
             | Self::CharSigned(signed) => configuration.with_char_signed(signed),
+            | Self::InterchangeFloatTypes(enabled) =>
+                configuration.with_interchange_float_types(enabled),
         }
     }
 }

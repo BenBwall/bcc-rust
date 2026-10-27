@@ -62,10 +62,17 @@ pub(crate) fn constant_parts(
     };
     if exponent == 0x7FFF {
         // Infinity has only the integer bit; anything else is a NaN, which
-        // keeps the top of its payload and is quiet.
+        // keeps the top of its fraction, the quiet bit included, so a
+        // signaling NaN stays one. A NaN whose payload a narrower format
+        // cannot hold becomes quiet (C99 §F.3, conversions).
         let nan = significand << 1 != 0;
         let payload = if nan {
-            ((significand << 1) >> (64 - mantissa_bits)) | 1 << (mantissa_bits - 1)
+            let fraction = (significand << 1) >> (64 - mantissa_bits);
+            if fraction == 0 {
+                1 << (mantissa_bits - 1)
+            } else {
+                fraction
+            }
         } else {
             0
         };

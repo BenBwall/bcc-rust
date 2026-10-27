@@ -1031,6 +1031,13 @@ pub(super) fn with_identity_macros<'a>(
             out.push_str("#define _CHAR_UNSIGNED 1\n");
         }
     }
+    // GCC 7 and later describe the interchange and extended floating types
+    // they provide; glibc's GCC paths read these macros.
+    if configuration.interchange_float_types() {
+        configuration
+            .target()
+            .write_interchange_float_macros(&mut out);
+    }
     // The relocation model `-fpic` and its family select, as Clang spells
     // it (GCC manual, "Code Gen Options").
     let relocation = configuration
@@ -1106,7 +1113,9 @@ fn has_builtin(context: &mut Context<'_>, spelling: &str) -> bool {
         NamingPolicy,
         SyntaxForm,
     };
-    let Some(descriptor) = crate::builtins::lookup(spelling) else {
+    let Some(descriptor) = crate::builtins::lookup(spelling)
+        .filter(|descriptor| descriptor.availability.accepted(context.configuration))
+    else {
         return false;
     };
     if descriptor.syntax != SyntaxForm::OrdinaryCall {

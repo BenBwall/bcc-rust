@@ -12,7 +12,9 @@
 //! Files by role:
 //! - Target names and queries: `selection.rs`.
 //! - Scalar types and layout tables: `model.rs`.
-//! - Frozen macro lookup: `predefined.rs`; its `.h` tables stay beside it.
+//! - Frozen macro lookup: `predefined.rs`; its `.h` tables stay beside it. The
+//!   `_FloatN` characteristics macros a GCC identity predefines:
+//!   `interchange_floats.rs`.
 //! - Relocation and thread-local storage models: `code_options.rs`.
 //! - Shared ELF named-section classification: `sections.rs`.
 //!
@@ -28,6 +30,7 @@ mod model;
 mod selection;
 
 // Predefined macros
+mod interchange_floats;
 mod predefined;
 
 // Code generation options

@@ -520,9 +520,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         use super::super::preprocessing::FloatTokenType as F;
         let (bits, signed) = self.integer_type(ty)?;
         let (negative, mantissa, shift) = match value {
-            | F::Float(value) => float_parts(f64::from(value)),
-            | F::Double(value) => float_parts(value.get()),
-            | F::LongDouble(value) => {
+            | F::Float(value) | F::Float32(value) => float_parts(f64::from(value)),
+            | F::Double(value) | F::Float64(value) | F::Float32x(value) => float_parts(value.get()),
+            | F::LongDouble(value) | F::Float64x(value) => {
                 let text = crate::diagnostics::format_in!(self.scratch, "{value}");
                 let negative = text.starts_with('-');
                 let text = text.trim_start_matches('-').strip_prefix("0x")?;
@@ -924,6 +924,7 @@ fn unanalyzed_extended(specifiers: super::TypeSpecifiers<'_>) -> bool {
                     | super::ExtendedType::Int128 { .. }
                     | super::ExtendedType::Atomic(_)
                     | super::ExtendedType::Float128 { .. }
+                    | super::ExtendedType::InterchangeFloat { .. }
                     | super::ExtendedType::Typeof { .. }
             )
     )

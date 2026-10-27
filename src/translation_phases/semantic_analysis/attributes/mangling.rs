@@ -112,13 +112,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     let ty = TypeId { alignment: 0, ..ty };
                     let substitute = !ty.qualifiers.is_empty()
                         || match self.types.nodes[ty.index] {
-                            | TypeKind::Scalar(scalar) => matches!(
-                                scalar,
-                                Scalar::ComplexFloat
-                                    | Scalar::ComplexDouble
-                                    | Scalar::ComplexLongDouble
-                                    | Scalar::ComplexFloat128
-                            ),
+                            | TypeKind::Scalar(scalar) => scalar.complex(),
                             | TypeKind::Nullptr => false,
                             | _ => true,
                         };
@@ -514,6 +508,16 @@ fn scalar_code(scalar: Scalar) -> &'static str {
         | Scalar::ComplexDouble => "Cd",
         | Scalar::ComplexLongDouble => "Ce",
         | Scalar::ComplexFloat128 => "Cg",
+        // Itanium C++ ABI, "Builtin types": `DF <number> _` and
+        // `DF <number> x`.
+        | Scalar::Float32 => "DF32_",
+        | Scalar::Float64 => "DF64_",
+        | Scalar::Float32x => "DF32x",
+        | Scalar::Float64x => "DF64x",
+        | Scalar::ComplexFloat32 => "CDF32_",
+        | Scalar::ComplexFloat64 => "CDF64_",
+        | Scalar::ComplexFloat32x => "CDF32x",
+        | Scalar::ComplexFloat64x => "CDF64x",
     }
 }
 fn binary_code(operator: BinaryOperator) -> Option<&'static str> {

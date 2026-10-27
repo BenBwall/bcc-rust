@@ -139,7 +139,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let pointer = matches!(self.types.nodes[value.index], TypeKind::Pointer(_));
         let floating = matches!(
             self.types.nodes[value.index],
-            TypeKind::Scalar(Scalar::Float | Scalar::Double)
+            TypeKind::Scalar(s) if matches!(s.representation(), Scalar::Float | Scalar::Double)
         );
         let modifying = operation != O::Load;
         let valid = if builtin.family == Family::C11 {

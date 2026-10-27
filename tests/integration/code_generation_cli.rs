@@ -177,6 +177,27 @@ int main(void) {
         }
     }
 
+    /// `-ffloatn-types` makes `_Float32`, `_Float64` and `_Float32x`
+    /// distinct types that compute in binary32 and binary64, with their
+    /// constant suffixes and GCC's infinity builtins (C23 Annex H).
+    #[test]
+    fn floatn_types_lower_with_their_standard_representations() {
+        let source = "int main(void) {\n  _Float32 a = 1.5f32; _Float64 b = 2.25f64; _Float32x c \
+                      = 0.5f32x;\n  float f = a * 2;\n  _Float64 sum = a + b + c;\n  if (sum != \
+                      4.25 || f != 3.0f || _Generic(a + f, _Float32: 0, default: 1)) return 1;\n  \
+                      if (!(__builtin_inff32() > 1e38f32)) return 2;\n  _Complex _Float32 z = a; \
+                      return (int)(__real__ z * 4) + (int)sizeof c;\n}\n";
+        let result = bcc(source, &["-ffloatn-types", "--interpret"]);
+        assert_eq!(result.status.code(), Some(14), "{}", text(&result.stderr));
+        let rejected = bcc(source, &["--interpret"]);
+        assert_eq!(
+            rejected.status.code(),
+            Some(1),
+            "{}",
+            text(&rejected.stderr)
+        );
+    }
+
     #[test]
     fn interpreter_step_limit_applies_to_both_main_signatures() {
         for source in [

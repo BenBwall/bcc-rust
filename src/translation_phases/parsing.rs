@@ -117,6 +117,7 @@ pub(crate) use modern::{
     AttributeSyntax,
     ExtendedType,
     GenericSelection,
+    InterchangeFloat,
     SpecifierExtension,
     SpecifierExtensionKind,
     StaticAssertion,

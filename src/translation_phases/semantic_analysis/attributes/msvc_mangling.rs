@@ -193,6 +193,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                                                     | Scalar::ComplexDouble
                                                     | Scalar::ComplexLongDouble
                                                     | Scalar::ComplexFloat128
+                                                    | Scalar::ComplexFloat32
+                                                    | Scalar::ComplexFloat64
+                                                    | Scalar::ComplexFloat32x
+                                                    | Scalar::ComplexFloat64x
                                             )
                                     ) =>
                             {
@@ -204,13 +208,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     }
                     match kind {
                         | TypeKind::Scalar(scalar) => {
-                            let complex = match scalar {
-                                | Scalar::ComplexFloat => Some(Scalar::Float),
-                                | Scalar::ComplexDouble => Some(Scalar::Double),
-                                | Scalar::ComplexLongDouble => Some(Scalar::LongDouble),
-                                | Scalar::ComplexFloat128 => Some(Scalar::Float128),
-                                | _ => None,
-                            };
+                            let complex = scalar.complex().then(|| scalar.real_type());
                             if let Some(real) = complex {
                                 let inner = self.types.scalar(real);
                                 work.push(Part::Vendor(
@@ -593,6 +591,16 @@ fn scalar_code(scalar: Scalar) -> &'static str {
         | Scalar::Double => "N",
         | Scalar::LongDouble => "O",
         | Scalar::Float128 => "_T",
+        // Clang's artificial-tag form for builtin types without an MSVC
+        // code, as it mangles `_Float16`.
+        | Scalar::Float32 => "U_Float32@__clang@@",
+        | Scalar::Float64 => "U_Float64@__clang@@",
+        | Scalar::Float32x => "U_Float32x@__clang@@",
+        | Scalar::Float64x => "U_Float64x@__clang@@",
+        | Scalar::ComplexFloat32
+        | Scalar::ComplexFloat64
+        | Scalar::ComplexFloat32x
+        | Scalar::ComplexFloat64x
         | Scalar::ComplexFloat
         | Scalar::ComplexDouble
         | Scalar::ComplexLongDouble

@@ -389,6 +389,11 @@ pub(crate) enum SemanticErrorKind {
     /// GNU extension: GCC manual, "Floating Types".
     /// <https://gcc.gnu.org/onlinedocs/gcc/Floating-Types.html>
     UnsupportedFloat128,
+    /// `_Float128` needs binary128 and `_Float64x` a format wider than
+    /// binary64, which the target lacks.
+    /// C23: implementation-defined extended types, §H.2.4 paragraph 2,
+    /// p. 554; PDF p. 567.
+    UnsupportedInterchangeFloat,
     /// GCC Other Builtins: `choose_expr` requires an integer constant.
     /// GNU extension: GCC manual, "Other Builtins".
     /// <https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html>
@@ -600,7 +605,8 @@ impl SemanticErrorKind {
             | Self::PragmaPackPopNameAlignment
             | Self::PragmaPackUnterminated
             | Self::PragmaPackShow(_) => "packing directive",
-            | Self::UnsupportedFloat128 => "unsupported floating type",
+            | Self::UnsupportedFloat128 | Self::UnsupportedInterchangeFloat =>
+                "unsupported floating type",
             | Self::InvalidVectorAttribute => "invalid vector size or element type",
             | Self::InvalidAlignmentAttribute => "alignment must be a power-of-two constant",
             | Self::InvalidStandardAlignment => "invalid alignment specifier",
@@ -951,6 +957,11 @@ impl SemanticErrorKind {
                 "__builtin_choose_expr requires an integer constant expression",
                 "GCC Other Builtins: __builtin_choose_expr selects its second or third operand \
                  using an integer constant expression, preserving the selected type",
+            ),
+            | Self::UnsupportedInterchangeFloat => (
+                "this floating type is not supported on this target",
+                "C23 Annex H: _Float128 needs binary128 and _Float64x a format wider than \
+                 binary64; this target's long double is binary64 and it has no binary128 type",
             ),
             | Self::UnsupportedFloat128 => (
                 "__float128 is not supported on this target",
