@@ -67,7 +67,9 @@ without a personality as well:
   without `-E`, `-c` or `-S` take `-o` with several inputs, each unit's
   rules replacing the last, as in GCC;
 - standard input (`-`) as a source, whose `-c` and `-S` outputs are `-.o`
-  and `-.s`, as GCC and Clang name them;
+  and `-.s`, as GCC and Clang name them; an output named like an option
+  (`-o -app`), and the temporary objects named after it, reach the bundled
+  clang as `./-app` and so as files;
 - `-fsyntax-only` (`--syntax-only`), and a failing exit status from every
   mode, the inspection views included, after an error;
 - an input that cannot be read failing its own job alone, reported in the

@@ -37,6 +37,7 @@ use super::{
     host_target,
     version,
 };
+use crate::backend::llvm::operand;
 
 /// Clang options that clang-cl takes only after `/clang:`; given bare, it
 /// ignores them with a warning, as for an unknown `/` option.
@@ -989,15 +990,15 @@ fn ignored(invocation: &Invocation, option: &str, why: &str) {
 /// sources, as `cl` does.
 fn named(option: Option<&Path>, source: &OsStr, extension: &str) -> PathBuf {
     let stem = Path::new(Path::new(source).file_name().unwrap_or(source)).with_extension(extension);
-    match option {
+    let name = match option {
         | Some(option) if is_directory(option) => option.join(stem),
         | Some(option) if option.extension().is_none() => option.with_extension(extension),
         | Some(option) => option.into(),
-        // Standard input's `-.obj`, which bcc's command line must not read
-        // as an option.
-        | None if stem.as_os_str().to_string_lossy().starts_with('-') => Path::new(".").join(stem),
         | None => stem,
-    }
+    };
+    // Standard input's `-.obj`, or `/Fo-x.obj`, which bcc's command line
+    // must not read as an option.
+    operand(&name).into_owned()
 }
 
 /// Whether an output option names a directory: it ends in a separator.

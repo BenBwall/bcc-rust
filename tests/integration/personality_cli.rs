@@ -1779,6 +1779,56 @@ mod tests {
             assert!(directory.path("-named.o").is_file(), "{mode}");
             std::fs::remove_file(directory.path("-named.o")).unwrap();
         }
+        // An object named like an option is written and assembled too.
+        directory.write("f.s", ".globl f\nf:\n ret\n");
+        directory.write("f.c", "int g;\n");
+        succeeds(&directory.bcc("--gcc-mode", &["-c", "f.s", "-o", "-f.o"]));
+        assert!(directory.path("-f.o").is_file());
+        succeeds(&directory.bcc("--msvc-mode", &["/nologo", "/c", "/Fo-g.obj", "f.c"]));
+        assert!(directory.path("-g.obj").is_file());
+    }
+
+    /// A link whose output is named like an option: the temporary objects
+    /// named after it reach the linker as files, not options.
+    #[test]
+    fn links_name_outputs_like_options() {
+        if !cfg!(all(target_os = "linux", target_env = "gnu"))
+            || !Path::new("/usr/include/stdio.h").is_file()
+        {
+            eprintln!("skipping: the test links with the Linux GNU host's C library");
+            return;
+        }
+        let directory = Directory::new();
+        directory.write(
+            "main.c",
+            "int helper(void);\nint main(void) { return helper(); }\n",
+        );
+        directory.write("helper.c", "int helper(void) { return 3; }\n");
+        directory.write("solo.c", "int main(void) { return 3; }\n");
+        directory.write("f.s", ".globl f\nf:\n ret\n");
+        for mode in ["--gcc-mode", "--clang-mode", "--tcc-mode"] {
+            // One source links from one temporary object; several, from
+            // one each.
+            for inputs in [
+                &["solo.c"][..],
+                &["main.c", "helper.c"],
+                &["main.c", "helper.c", "f.s"],
+            ] {
+                let output = directory.bcc(mode, &[inputs, &["-o", "-app"]].concat());
+                succeeds(&output);
+                let run = Command::new(directory.path("-app")).output().unwrap();
+                assert_eq!(run.status.code(), Some(3), "{mode} {inputs:?}");
+                std::fs::remove_file(directory.path("-app")).unwrap();
+            }
+        }
+        let names: Vec<String> = std::fs::read_dir(&directory.0)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert!(
+            names.iter().all(|name| !name.contains(".bcc-")),
+            "temporary objects remain: {names:?}"
+        );
     }
 
     #[test]
