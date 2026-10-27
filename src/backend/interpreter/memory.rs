@@ -62,15 +62,17 @@ use crate::{
 
 /// The interpreter's memory: every object a program can address.
 pub(crate) struct Memory<'a> {
-    arena:           &'a Bump,
-    objects:         ArenaVec<'a, Object<'a>>,
+    arena:            &'a Bump,
+    objects:          ArenaVec<'a, Object<'a>>,
     /// The base address and index of every live object, sorted by address.
-    live:            ArenaVec<'a, (u64, u32)>,
+    live:             ArenaVec<'a, (u64, u32)>,
     /// For each power-of-two capacity, the first freed object; the rest
     /// are chained through [`Object::next_free`].
-    free:            ArenaMap<'a, usize, u32>,
-    next_address:    u64,
-    max_object_size: u64,
+    free:             ArenaMap<'a, usize, u32>,
+    next_address:     u64,
+    max_object_size:  u64,
+    /// The `FILE` objects of `stdin`, `stdout` and `stderr`, once made.
+    standard_streams: [Option<Pointer>; 3],
 }
 
 /// One object of memory.
@@ -113,6 +115,11 @@ pub(crate) enum ObjectKind {
     /// A `va_list` cursor, which `va_start` and `va_copy` create. Its state
     /// is the object's [`VaCursor`].
     VaCursor,
+    /// A C library stream, the `FILE` a `FILE *` points to, numbered for the
+    /// host; it holds no data the program may access. Streams 0, 1 and 2 are
+    /// `stdin`, `stdout` and `stderr`.
+    /// C99: §7.19.3 paragraphs 1 and 7, pp. 264-265; PDF pp. 276-277.
+    Stream(u32),
 }
 
 /// The state of a `va_list`: the variadic arguments of one activation of a
@@ -433,8 +440,10 @@ impl<'a> Memory<'a> {
             .ok_or(UbKind::DanglingPointer)?;
         match object.kind {
             | ObjectKind::UnresolvedGlobal(global) => return Err(Fault::UnknownGlobal(global)),
-            | ObjectKind::Function(_) | ObjectKind::Labels(_) | ObjectKind::VaCursor =>
-                return Err(UbKind::NotData.into()),
+            | ObjectKind::Function(_)
+            | ObjectKind::Labels(_)
+            | ObjectKind::VaCursor
+            | ObjectKind::Stream(_) => return Err(UbKind::NotData.into()),
             | ObjectKind::ConstantGlobal if write => return Err(UbKind::WriteToConstant.into()),
             | _ => {},
         }
@@ -635,6 +644,34 @@ impl Memory<'_> {
         }
     }
 
+    /// The number of the live stream `pointer` points to the start of.
+    pub(crate) fn stream_at(&self, pointer: RuntimeValue) -> Option<u32> {
+        let pointer = pointer.as_pointer()?;
+        match self.live_object(pointer.provenance?)? {
+            | &Object {
+                base,
+                kind: ObjectKind::Stream(stream),
+                ..
+            } if base == pointer.address => Some(stream),
+            | _ => None,
+        }
+    }
+
+    /// The `FILE` object of standard stream `stream` (0 to 2), made the
+    /// first time anything asks for it.
+    pub(crate) fn standard_stream(&mut self, stream: u32) -> Result<Pointer, Fault> {
+        let slot = usize::try_from(stream).map_err(|_| UbKind::InvalidStream)?;
+        if let Some(Some(pointer)) = self.standard_streams.get(slot) {
+            return Ok(*pointer);
+        }
+        let pointer = self.allocate(ObjectKind::Stream(stream), 0, Align::BYTE)?;
+        *self
+            .standard_streams
+            .get_mut(slot)
+            .ok_or(UbKind::InvalidStream)? = Some(pointer);
+        Ok(pointer)
+    }
+
     /// `free`: releases a heap allocation. Freeing null does nothing;
     /// freeing anything but the start of a live heap object is undefined.
     ///
@@ -760,6 +797,7 @@ impl<'a> Memory<'a> {
             free: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, arena),
             next_address: FIRST_ADDRESS,
             max_object_size,
+            standard_streams: [None; 3],
         }
     }
 }

@@ -37,8 +37,9 @@ crash_dialogs.suppress()
 
 TARGET = "x86_64-w64-windows-gnu"
 ARMS = {
-    "interpret": ["--interpret"],
-    "interpret-bcc": ["--interpret", "--opt=bcc"],
+    # Tests such as fprintf-2.c write and read back temporary files.
+    "interpret": ["--interpret", "--interpret-allow-fs"],
+    "interpret-bcc": ["--interpret", "--interpret-allow-fs", "--opt=bcc"],
     "A0": ["--llvm-opt=O0"],
     "A1": ["--opt=bcc", "--llvm-opt=O2", "--llvm-codegen-only"],
     "B0": ["--backend=native"],

@@ -20,6 +20,7 @@ long double logbl(long double), modfl(long double, long double *);
 int ilogbl(long double);
 long double fmaxl(long double, long double), fminl(long double, long double);
 long double fdiml(long double, long double);
+long double nanl(const char *);
 
 static void bits(long double value)
 {
@@ -101,6 +102,14 @@ int main(void)
     bits(fdiml(x, one));
     bits(fdiml(one, x));
     printf("\n  conv %a %a\n", (double)x, (double)(float)x);
+  }
+  /* NaN payloads: overflow saturates, and only whole numbers count. */
+  static const char *const payloads[] = {"18446744073709551616", "0x10000000000000000", "-5",
+                                         " 7", "+9", "08", "0x", "0x+5", "12a", ""};
+  for (int i = 0; i < 10; i++) {
+    printf("nanl(\"%s\")", payloads[i]);
+    bits(nanl(payloads[i]));
+    printf("\n");
   }
   return 0;
 }

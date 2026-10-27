@@ -55,6 +55,7 @@ mod conversion;
 #[cfg(test)]
 mod tests;
 
+pub(crate) use conversion::nearest_binary;
 pub(crate) use functions::Integral;
 
 /// An x87 double-extended value as its 80-bit object representation.

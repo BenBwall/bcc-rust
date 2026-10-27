@@ -182,6 +182,8 @@ impl<'v> FormatArguments<'v> {
 /// the overflow area for a type aligned to 16 (psABI §3.5.7, step 7).
 fn align_to(memory: &Memory<'_>, pointer: RuntimeValue, align: u64) -> RuntimeValue {
     let address = pointer.as_pointer().map_or(0, |pointer| pointer.address);
-    let padding = address.next_multiple_of(align) - address;
+    // A power of two: the distance up to its next multiple, which a guest
+    // address near the top of the space cannot overflow.
+    let padding = address.wrapping_neg() & (align - 1);
     memory.ptr_add(pointer, RuntimeValue::Int(u128::from(padding)), false)
 }

@@ -1173,6 +1173,29 @@ conversion of `double` and `long double` exactly, digit for digit as glibc
 does, with halfway cases to even. Guest errno and floating-environment APIs
 remain outside the host implementation.
 
+The host's C library also covers streams and files: `stdin`, `stdout` and
+`stderr` are objects holding pointers to stream objects the program cannot
+access, and a stream used after `fclose` (or a failed `freopen`) traps, even
+when `printf` or `getchar` uses it implicitly. The command line forwards
+`stdout` and `stderr` in glibc's order for a pipe: `stderr` at once, `stdout`
+at each `fflush` and at exit. Host files are opt-in: with
+`--interpret-allow-fs`, `fopen` (including C11's exclusive `x`), `freopen` and
+`remove` act on the host's file system (unbuffered, without `errno`);
+without it they fail as glibc does for a permission error, the command line
+notes the refusal, and `tmpnam` names files without looking at the file
+system. It provides the `fprintf`, `vprintf`,
+`vfprintf`, `vsprintf` and `vsnprintf` family and glibc's `__printf_chk` forms,
+`sscanf`/`fscanf`/`scanf` with glibc's failure rules (not the wide
+conversions or `long double` input), string search and
+concatenation, `strtol` and its relatives, the "C" locale's character classes
+including the tables glibc's `<ctype.h>` reads through `__ctype_b_loc`, the
+wide-string basics at the target's `wchar_t` width, and `conj`, `cproj`,
+`cabs` and `carg`. `qsort` and `bsearch` run in the machine: each comparison
+pushes the comparison function's frame and steps until it returns, so its
+instructions count against the step limit and a trap inside it names it.
+`qsort` follows glibc's stable merge sort call for call, including its
+indirect sort through pointers for elements over 32 bytes.
+
 The interpreter runs one translation unit and links nothing else. A call
 that reaches the external definition of an inline-only function, because
 the always-inliner walk did not expand it (#109) or the function is plain
@@ -1225,6 +1248,7 @@ bcc-rust x.c --emit=ir-abi          print the bcc IR after ABI lowering
 bcc-rust x.c --emit=llvm            print the LLVM IR
 bcc-rust x.c --interpret            run main in the interpreter; exit with its status
     [--interpret-step-limit=N]      instruction limit; default 100000000, 0 unlimited
+    [--interpret-allow-fs]          let the program open, create and remove host files
 bcc-rust x.c -o x.exe [-c]          emit an object through LLVM-C; link with clang
     [-O0|-O1|-O2|-O3|-Os|-Oz|-Og] GCC optimization level; bare -O means -O1
     [--opt=none|bcc]                the bcc optimizer; none is the default
