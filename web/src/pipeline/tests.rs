@@ -31,7 +31,7 @@ fn links_token_and_syntax_lines_to_source_lines() {
         ),
         ..Compilation::default()
     };
-    let exact = links(Stage::Tokens, &tokens, "");
+    let exact = links(Stage::Tokens, &tokens, "", false);
     assert!(exact.is_exact());
     assert_eq!(exact.outputs_for(12), [1]);
     assert_eq!(exact.sources_for(2), [3]);
@@ -43,7 +43,7 @@ fn links_token_and_syntax_lines_to_source_lines() {
         ),
         ..Compilation::default()
     };
-    let exact = links(Stage::SyntaxTree, &tree, "");
+    let exact = links(Stage::SyntaxTree, &tree, "", false);
     assert_eq!(exact.outputs_for(7), [1, 3]);
     assert_eq!(exact.sources_for(2), Vec::<usize>::new());
 }
@@ -75,7 +75,7 @@ fn links_the_other_stages_per_function() {
         ],
         ..Compilation::default()
     };
-    let ir = links(Stage::Ir, &compilation, source);
+    let ir = links(Stage::Ir, &compilation, source, false);
     assert!(!ir.is_exact() && !ir.is_empty());
     assert_eq!(ir.outputs_for(2), [2, 3, 4]);
     assert_eq!(ir.sources_for(6), [5, 6, 7]);
@@ -84,7 +84,7 @@ fn links_the_other_stages_per_function() {
         Vec::<usize>::new(),
         "a blank line links nowhere"
     );
-    let llvm = links(Stage::Llvm, &compilation, source);
+    let llvm = links(Stage::Llvm, &compilation, source, false);
     assert_eq!(llvm.outputs_for(1), [2, 3, 4]);
     assert_eq!(llvm.sources_for(7), [5, 6, 7]);
     // Before the live compilation arrives, LLVM IR finds the definitions in
@@ -94,10 +94,10 @@ fn links_the_other_stages_per_function() {
         ..Compilation::default()
     };
     assert_eq!(
-        links(Stage::Llvm, &precomputed, source).outputs_for(6),
+        links(Stage::Llvm, &precomputed, source, false).outputs_for(6),
         [6, 7, 8]
     );
-    assert!(links(Stage::Asm, &compilation, source).is_empty());
+    assert!(links(Stage::Asm, &compilation, source, false).is_empty());
 }
 
 #[test]

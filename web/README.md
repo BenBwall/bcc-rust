@@ -11,15 +11,19 @@ them. Visitors pick a lesson (a small C program) and see it two ways:
   current full expression is drawn as a tree whose values fill in as it is
   evaluated, and memory is drawn as call frames holding objects, with
   pointers as arrows.
-- **Compiler pipeline.** What bcc itself produces for the same program:
-  tokens, syntax tree, bcc IR before and after ABI lowering, LLVM IR, native
-  x86-64 assembly, and machine code with its encoded bytes, each with a short
-  explanation. The real compiler runs in the browser and recompiles as you
+- **Compiler pipeline.** What bcc itself produces for the same program, from
+  the first translation phases to machine code: the logical lines after
+  line splicing (phases 1-2), the preprocessing tokens (phase 3), the
+  preprocessed text with every macro expansion, conditional group and
+  `#include` it took (phase 4), tokens (phases 5-7), syntax tree, bcc IR
+  before and after ABI lowering, LLVM IR, native x86-64 assembly, and machine
+  code with its encoded bytes, each with a short explanation and, for the
+  front end, the C99 rules it applies. The real compiler runs in the browser and recompiles as you
   type, at `-O0` or `-O2`, with a note on what the optimizer changed. Its
   errors appear as squiggles in the source and in a diagnostics list, and the
   view says which stage stopped and why. Hovering a source line highlights
-  what it became (line by line for tokens and the syntax tree, per function
-  for the IR and machine stages, whose output keeps no source locations), and
+  what it became (line by line for the front-end stages, per function for
+  the IR and machine stages, whose output keeps no source locations), and
   the reverse.
 
 Every variable keeps one colour across the source, the expression tree and the
@@ -162,6 +166,42 @@ built, so a compiler change that alters it fails CI until it is regenerated.
 The crate's `tests/integration/explorer.rs` checks that the explorer's other
 stages equal the CLI's for every lesson.
 
+The front end is shown phase by phase, each from the compiler's own output
+for that phase (`bcc_rust::explorer::compile` returns all of them; the page
+reimplements none):
+
+- **Logical lines (phases 1-2)** come from the lexer's own `splice`: each
+  line after trigraph replacement, new-line mapping and line splicing, with
+  the physical lines it came from in the gutter (`8–12`), `↩` where a splice
+  joined two, and in the source the backslash it deleted. A card lists every
+  splice, trigraph, CRLF and UTF-8 character. Trigraphs are replaced in the
+  ISO modes (the site compiles as `c17`), not the GNU ones.
+- **Preprocessing tokens (phase 3)** are the entries the lexer saved for the
+  main file, read as phase 4 reads them: one per line with its kind, its
+  spelling, and whether it starts a line, follows white space, was a comment
+  (now one space), spans a splice or is read by `#include` as a header name.
+  bcc's lexer forms no header-name tokens; the `#include` handler reads the
+  operand's tokens back as one name, and the listing says which. Hovering an
+  entry boxes its exact range in the source.
+- **Preprocessor (phase 4)** shows what `bcc-rust -E` prints, from one
+  preprocessing run with the preprocessor's opt-in trace on (the same run
+  gives the Tokens stage's listing). Each header the source includes is
+  folded into one line saying what it held, with a switch to show it; the
+  gutter numbers each line with the source line it came from. A card lists
+  the headers, the macros defined, every expansion with its result and its
+  steps (each replacement with its arguments, each `#` and `##` and its
+  result, nested replacements indented), and each conditional directive with
+  the lines it skipped. In the source, invocations are underlined with their
+  expansion on hover, skipped lines are hatched, and conditionals carry a
+  kept or skipped mark. The browser build has no host headers: `#include`
+  finds only bcc's embedded freestanding headers (`<limits.h>`,
+  `<stdint.h>`, `<stddef.h>`, `<stdbool.h>`, …), so `<stdio.h>` is reported
+  as not found.
+
+The lesson "Before the compiler: the preprocessor" (`demos/macros.c`)
+exercises these stages and opens at the preprocessor. The abstract machine
+has no preprocessor, so it rejects that lesson as outside its subset.
+
 How live compilation runs:
 
 - **Off the UI thread, in its own Worker.** The compiler Worker's Wasm is many
@@ -229,12 +269,15 @@ operations and an 8 MiB trace-retention budget.
 themes, layout, components, and the classes the editor decorations use). In
 `src/`, `lib.rs` maps the modules. `app.rs` owns the page state, controls,
 keyboard shortcuts and layout. `panels/` renders the narration, expression
-tree, memory diagram and pipeline view. `editor.rs` mounts Monaco, and
+tree, memory diagram and pipeline view, with the front-end stages' cards and
+source marks in `panels/front_end.rs`. `editor.rs` mounts Monaco, and
 `highlight.rs` colours the prerendered fallback. `palette.rs` assigns each
 variable its colour. `snapshot.rs` defines what the page presents, `demos.rs`
-the lessons, and `pipeline.rs` the compiler stages, their explanations, the
-source-to-output links, why a compilation stopped, the optimizer comparison
-and the bundled LLVM IR. `engine.rs` proxies both Workers over the messages in
+the lessons, and `pipeline.rs` the compiler stages, their explanations and
+citations, the source-to-output links, why a compilation stopped, the
+optimizer comparison and the bundled LLVM IR; `pipeline/front_end.rs` holds
+the front-end phases' data, the folded preprocessed text and its line
+links. `engine.rs` proxies both Workers over the messages in
 `protocol.rs`. In the abstract machine's Worker, `machine.rs` drives an engine
 `Session` and turns each state into a snapshot (UTF-8 byte ranges become
 UTF-16 editor columns); in the compiler's, `explorer.rs` runs bcc and turns
@@ -249,8 +292,8 @@ a titled, cited event at each step; event ranges, expression trees and
 waiting frames; diagnostics and recovery; UTF-16 columns; colouring; every
 lesson compiling live at both levels; placed compiler diagnostics and the
 stop explanation; the machine-code listing; the LLVM IR's sync with the
-lessons; the source-to-output links and the optimizer comparison; and
-prerendering. The engine's own
+lessons; the source-to-output links, the folded headers and gutter labels of
+the front-end stages, and the optimizer comparison; and prerendering. The engine's own
 tests run from the repository root with `cargo test --lib --no-default-features
 --features abstract-machine abstract_machine`. Generated artifacts belong in
 ignored `web/target/`, `web/dist/` and `web/editor/{node_modules,dist,fonts}/`.

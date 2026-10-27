@@ -3,7 +3,10 @@
 //! page's source and present its output as a [`Compilation`].
 //!
 //! The text stages carry over unchanged, with the syntax tree's locations on
-//! so it links to the source line by line. Each function's machine code
+//! so it links to the source line by line. The front end's phases become
+//! views of their own: the logical lines of phases 1-2, one line each; phase
+//! 3's preprocessing tokens as an aligned listing; and the preprocessed
+//! text with what phase 4 did in the source. Each function's machine code
 //! becomes one listing in the format `web/pipeline/generate.sh` used to write
 //! from `objdump`. Diagnostics move from the compiler's character columns to
 //! the editor's UTF-16 columns, and the compiler's per-function line map
@@ -17,14 +20,25 @@ use bcc_rust::explorer::{
     ExplorerDiagnostic,
     ExplorerFunctionBytes,
     ExplorerLineRange,
+    ExplorerLogicalLine,
     ExplorerOptions,
+    ExplorerPpToken,
+    ExplorerPreprocessing,
 };
 
 use crate::{
     pipeline::{
         Compilation,
         CompileDiagnostic,
+        Conditional,
+        Definition,
+        Expansion,
+        ExpansionStep,
         FunctionLines,
+        Include,
+        LogicalLine,
+        Preprocessing,
+        SourceChange,
         SourceSpan,
     },
     protocol::{
@@ -64,7 +78,42 @@ pub fn compile(source: &str, optimize: bool) -> Compilation {
     let (machine_code, listed) = output.machine_code.as_deref().map(listing).unzip();
     let listed = listed.unwrap_or_default();
     let lines = |range: Option<ExplorerLineRange>| range.map(span);
+    let logical = output.logical_lines.as_deref().unwrap_or_default();
+    let (pp_tokens, pp_ranges, pp_counts) = match output.pp_tokens.as_deref() {
+        | Some(tokens) => {
+            let (listing, ranges, counts) = pp_listing(tokens, source);
+            (Some(listing), ranges, counts)
+        },
+        | None => (None, Vec::new(), Vec::new()),
+    };
     Compilation {
+        logical: output.logical_lines.as_ref().map(|lines| {
+            lines
+                .iter()
+                .flat_map(|line| [line.text.as_str(), "\n"])
+                .collect()
+        }),
+        logical_lines: logical
+            .iter()
+            .map(|line| logical_line(line, source))
+            .collect(),
+        pp_tokens,
+        pp_comments: output
+            .pp_tokens
+            .iter()
+            .flatten()
+            .zip(&pp_ranges)
+            .filter(|(token, _)| token.comment)
+            .map(|(_, range)| *range)
+            .collect(),
+        pp_ranges,
+        pp_counts,
+        preprocessed: output.preprocessed,
+        preprocessing: output
+            .preprocessing
+            .as_ref()
+            .map(|trace| preprocessing(trace, source))
+            .unwrap_or_default(),
         code_bytes: output
             .machine_code
             .iter()
@@ -103,6 +152,217 @@ pub fn compile(source: &str, optimize: bool) -> Compilation {
 
 fn span(range: ExplorerLineRange) -> (usize, usize) {
     (range.start as usize, range.end as usize)
+}
+
+/// A logical line's physical lines and changes, in UTF-16 columns.
+fn logical_line(line: &ExplorerLogicalLine, source: &str) -> LogicalLine {
+    LogicalLine {
+        source:  span(line.source),
+        changes: line
+            .changes
+            .iter()
+            .map(|change| {
+                let at = |column: u32| utf16_column(source, change.line as usize, column as usize);
+                let length = change.spelling.chars().count().max(1) as u32;
+                // A splice ends its line; mark its backslash alone.
+                let length = if change.kind == "splice" { 1 } else { length };
+                SourceChange {
+                    kind:        change.kind.clone(),
+                    column:      utf16_column(&line.text, 1, change.column as usize),
+                    source:      SourceSpan {
+                        line:       change.line as usize,
+                        column:     at(change.source_column),
+                        end_line:   change.line as usize,
+                        end_column: at(change.source_column + length),
+                    },
+                    spelling:    change.spelling.clone(),
+                    replacement: change.replacement.clone(),
+                }
+            })
+            .collect(),
+    }
+}
+
+/// The kinds of phase-3 entries, in the order the listing's counts give
+/// them.
+const PP_KINDS: [&str; 8] = [
+    "identifier",
+    "pp-number",
+    "character-constant",
+    "string-literal",
+    "punctuator",
+    "other",
+    "whitespace",
+    "newline",
+];
+
+/// Phase 3's entries as a listing, one per line: where each starts, its
+/// kind, its spelling, and what is notable about it. Also each entry's
+/// range in the source and how many entries of each kind there are, with
+/// the comments among the white space counted apart.
+fn pp_listing(
+    tokens: &[ExplorerPpToken],
+    source: &str,
+) -> (String, Vec<SourceSpan>, Vec<(String, usize)>) {
+    let mut text = String::new();
+    let mut ranges = Vec::with_capacity(tokens.len());
+    for token in tokens {
+        let place = format!("{}:{}", token.line, token.column);
+        let spelling = match token.kind.as_str() {
+            | "whitespace" => "' '".to_owned(),
+            | "newline" => "'\\n'".to_owned(),
+            | _ => token.spelling.clone(),
+        };
+        let mut notes = Vec::new();
+        if token.line_start {
+            notes.push(if token.spelling == "#" {
+                "line start: a directive".to_owned()
+            } else {
+                "line start".to_owned()
+            });
+        }
+        if token.leading_space {
+            notes.push("after space".to_owned());
+        }
+        if token.comment {
+            notes.push("a comment, now one space".to_owned());
+        }
+        if token.header_name {
+            notes.push("read by #include as a header name".to_owned());
+        }
+        if token.end_line > token.line && token.kind != "newline" {
+            notes.push(format!(
+                "spliced from lines {}–{}",
+                token.line, token.end_line
+            ));
+        }
+        if let Some(name) = &token.canonical {
+            notes.push(format!("a universal character name for {name}"));
+        }
+        if token.kind == "other" {
+            notes.push("no other category fits".to_owned());
+        }
+        let line = format!(
+            "{place:<8}{:<20}{spelling:<14}{}",
+            token.kind,
+            notes.join(" · ")
+        );
+        text.push_str(line.trim_end());
+        text.push('\n');
+        let (line, column) = (token.line as usize, token.column as usize);
+        let (end_line, end_column) = if token.kind == "newline" {
+            (line, column + 1)
+        } else {
+            (token.end_line as usize, token.end_column as usize)
+        };
+        ranges.push(SourceSpan {
+            line,
+            column: utf16_column(source, line, column),
+            end_line,
+            end_column: utf16_column(source, end_line, end_column),
+        });
+    }
+    let mut counts: Vec<(String, usize)> = PP_KINDS
+        .iter()
+        .map(|kind| {
+            let count = tokens.iter().filter(|token| token.kind == *kind).count();
+            ((*kind).to_owned(), count)
+        })
+        .filter(|(_, count)| *count > 0)
+        .collect();
+    let comments = tokens.iter().filter(|token| token.comment).count();
+    if comments > 0 {
+        counts.push(("comment".to_owned(), comments));
+    }
+    (text, ranges, counts)
+}
+
+/// What phase 4 did in the source, placed in the editor's coordinates.
+/// Headers' own expansions and conditionals are left out: the view is about
+/// the program, and a header's are many.
+fn preprocessing(trace: &ExplorerPreprocessing, source: &str) -> Preprocessing {
+    let input = |file: &str| file == crate::INPUT_NAME;
+    Preprocessing {
+        expansions:   trace
+            .expansions
+            .iter()
+            .filter(|expansion| input(&expansion.file))
+            .map(|expansion| Expansion {
+                range:      SourceSpan {
+                    line:       expansion.line as usize,
+                    column:     utf16_column(
+                        source,
+                        expansion.line as usize,
+                        expansion.column as usize,
+                    ),
+                    end_line:   expansion.end_line as usize,
+                    end_column: utf16_column(
+                        source,
+                        expansion.end_line as usize,
+                        expansion.end_column as usize,
+                    ),
+                },
+                invocation: expansion.invocation.clone(),
+                result:     expansion.result.clone(),
+                steps:      expansion
+                    .steps
+                    .iter()
+                    .map(|step| ExpansionStep {
+                        kind:       step.kind.clone(),
+                        macro_name: step.macro_name.clone(),
+                        depth:      step.depth as usize,
+                        arguments:  step
+                            .arguments
+                            .iter()
+                            .map(|argument| (argument.parameter.clone(), argument.argument.clone()))
+                            .collect(),
+                        operands:   step.operands.clone(),
+                        result:     step.result.clone(),
+                    })
+                    .collect(),
+            })
+            .collect(),
+        conditionals: trace
+            .conditionals
+            .iter()
+            .filter(|conditional| input(&conditional.file))
+            .map(|conditional| Conditional {
+                line:      conditional.line as usize,
+                directive: conditional.directive.clone(),
+                taken:     conditional.taken,
+            })
+            .collect(),
+        skipped:      trace
+            .skipped
+            .iter()
+            .filter(|skipped| input(&skipped.file))
+            .map(|skipped| span(skipped.lines))
+            .collect(),
+        includes:     trace
+            .includes
+            .iter()
+            .filter(|include| input(&include.file))
+            .map(|include| Include {
+                line:   include.line as usize,
+                header: include.header.clone(),
+                angled: include.angled,
+                found:  include.found.is_some(),
+                system: include.system,
+                lines:  include.lines as usize,
+            })
+            .collect(),
+        definitions:  trace
+            .definitions
+            .iter()
+            .filter(|definition| input(&definition.file))
+            .map(|definition| Definition {
+                line:      definition.line as usize,
+                name:      definition.name.clone(),
+                kind:      definition.kind.clone(),
+                directive: definition.directive.clone(),
+            })
+            .collect(),
+    }
 }
 
 /// Each function's name and first and last line in a listing.

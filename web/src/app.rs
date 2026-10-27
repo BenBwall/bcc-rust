@@ -44,6 +44,7 @@ use crate::{
         Narration,
         PipelineView,
         TreeView,
+        source_marks,
     },
     pipeline::{
         Compilation,
@@ -109,6 +110,7 @@ pub fn App() -> impl IntoView {
                                     theme=state.theme_name
                                     hover_source=state.hover_source.read_only()
                                     hover_output=state.hover_output
+                                    headers=state.headers
                                     filename=state.filename.read_only()
                                     source=state.editor_text.into()
                                     on_reveal=Callback::new(move |line| state.reveal.set(Some(line)))
@@ -188,6 +190,8 @@ struct State {
     announcement:    RwSignal<String>,
     mode:            RwSignal<Mode>,
     stage:           RwSignal<Stage>,
+    /// Whether the preprocessed text shows the headers' text.
+    headers:         RwSignal<bool>,
     theme:           RwSignal<&'static str>,
     theme_name:      Signal<&'static str>,
     /// bcc's compiler Worker, started on the first compilation.
@@ -288,6 +292,7 @@ impl State {
             announcement: RwSignal::new(String::new()),
             mode: RwSignal::new(Mode::Machine),
             stage: RwSignal::new(Stage::Ir),
+            headers: RwSignal::new(false),
             theme,
             theme_name: Signal::derive(move || theme.get()),
             compiler: StoredValue::new_local(None),
@@ -523,8 +528,16 @@ impl State {
         }
     }
 
+    /// Load a lesson, in the view it is about: a lesson about the compiler
+    /// opens the pipeline at its stage.
     fn select_demo(self, demo: &'static Demo) {
-        self.mode.set(Mode::Machine);
+        match demo.stage {
+            | Some(stage) => {
+                self.stage.set(stage);
+                self.mode.set(Mode::Pipeline);
+            },
+            | None => self.mode.set(Mode::Machine),
+        }
         self.action(move || self.stage_program(demo.source.into(), demo.name.into()));
     }
 
@@ -877,13 +890,21 @@ impl State {
     }
 
     /// The source editor's decorations: execution marks, run target, object
-    /// colours, and pipeline line links.
+    /// colours, and in the pipeline view the stage's own marks and the line
+    /// links (with the exact range of a hovered preprocessing token).
     fn source_layers(self) -> Vec<Layer> {
         let snapshot = self.current.get();
         let edited = self.edited.get();
         let mut execution = Vec::new();
         let mut objects = Vec::new();
-        if let Some(snapshot) = snapshot.as_ref().filter(|_| !edited) {
+        // A program the abstract machine refused never ran; the pipeline
+        // view marks what the compiler did with it instead.
+        let refused = |snapshot: &Snapshot| snapshot.step == 0 && snapshot.status == "error";
+        let pipeline = self.mode.get() == Mode::Pipeline;
+        if let Some(snapshot) = snapshot
+            .as_ref()
+            .filter(|snapshot| !edited && !(pipeline && refused(snapshot)))
+        {
             let fault = snapshot.event.category == "fault";
             if let Some(range) = snapshot.event.range {
                 let class = if fault { "exec-fault" } else { "exec-current" };
@@ -943,20 +964,45 @@ impl State {
             .into_iter()
             .collect();
         let hovered = self.hover_output.get();
-        let links = if self.mode.get() == Mode::Pipeline && hovered > 0 {
+        let links = if pipeline && hovered > 0 {
             let stage = self.stage.get();
+            let headers = self.headers.get();
             self.compilation.with(|compilation| {
                 compilation
                     .as_ref()
                     .map(|compilation| {
                         self.editor_text.with(|source| {
-                            crate::pipeline::links(stage, compilation, source)
+                            let links = crate::pipeline::links(stage, compilation, source, headers);
+                            let mut marks: Vec<Decoration> = links
                                 .sources_for(hovered)
                                 .into_iter()
                                 .map(|line| Decoration::line(line, "link-line"))
-                                .collect()
+                                .collect();
+                            if let Some(range) = links.range_for(hovered) {
+                                marks.push(Decoration {
+                                    start_line: range.line,
+                                    start_column: range.column,
+                                    end_line: range.end_line,
+                                    end_column: range.end_column.max(range.column + 1),
+                                    class_name: Some("link-range".to_owned()),
+                                    z_index: 4,
+                                    ..Decoration::default()
+                                });
+                            }
+                            marks
                         })
                     })
+                    .unwrap_or_default()
+            })
+        } else {
+            Vec::new()
+        };
+        let stage_marks = if pipeline {
+            let stage = self.stage.get();
+            self.compilation.with(|compilation| {
+                compilation
+                    .as_ref()
+                    .map(|compilation| source_marks(stage, compilation))
                     .unwrap_or_default()
             })
         } else {
@@ -966,6 +1012,7 @@ impl State {
             ("execution", execution),
             ("objects", objects),
             ("target", target),
+            ("stage", stage_marks),
             ("links", links),
         ]
     }
@@ -1567,9 +1614,10 @@ fn About() -> impl IntoView {
                 <article>
                     <h3>"The compiler"</h3>
                     <p>
-                        "A real compiler doesn’t run your program; it translates it. bcc reads tokens, builds a syntax \
-                         tree, checks types, lowers everything to an SSA intermediate representation, optimizes it, and \
-                         finally selects x86-64 instructions and encodes them as bytes."
+                        "A real compiler doesn’t run your program; it translates it. bcc splices lines, cuts them into \
+                         tokens, runs the preprocessor, builds a syntax tree, checks types, lowers everything to an SSA \
+                         intermediate representation, optimizes it, and finally selects x86-64 instructions and encodes \
+                         them as bytes."
                     </p>
                     <p>
                         "It is allowed to produce any code that behaves like the abstract machine would. That freedom is \
@@ -1580,8 +1628,8 @@ fn About() -> impl IntoView {
                     <h3>"Limits of this model"</h3>
                     <p>
                         "The engine runs a bounded subset of C: int and char locals, int pointers, fixed int arrays, \
-                         functions, if, while and for. No preprocessor, globals, structs, library calls or floating \
-                         point. Operands are evaluated left to right, and nested side effects are rejected rather than \
+                         functions, if, while and for. No preprocessor (the preprocessor lesson opens in the compiler \
+                         pipeline instead), globals, structs, library calls or floating point. Operands are evaluated left to right, and nested side effects are rejected rather than \
                          sequenced."
                     </p>
                     <p>

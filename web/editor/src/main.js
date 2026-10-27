@@ -113,6 +113,26 @@ class Editor {
     this.editor.updateOptions({ lineNumbers: language === 'objdump' ? 'off' : 'on' });
   }
 
+  /**
+   * Label each line in the gutter with `labels[line - 1]` instead of its
+   * number, as the logical-lines view does with the physical lines a line
+   * came from; an empty list numbers the lines again.
+   */
+  setLineNumbers(labels) {
+    if (!labels || labels.length === 0) {
+      this.editor.updateOptions({
+        lineNumbers: this.editor.getModel()?.getLanguageId() === 'objdump' ? 'off' : 'on',
+        lineNumbersMinChars: 3,
+      });
+      return;
+    }
+    const width = Math.max(3, ...labels.map((label) => label.length));
+    this.editor.updateOptions({
+      lineNumbers: (line) => labels[line - 1] ?? '',
+      lineNumbersMinChars: width,
+    });
+  }
+
   setReadOnly(readOnly) {
     this.editor.updateOptions({ readOnly, domReadOnly: readOnly });
   }
@@ -168,7 +188,8 @@ class Editor {
    * Replace the decoration layer `layer` with `items`: each has 1-based
    * `startLine`, `startColumn`, `endLine`, `endColumn` (columns may be 0 for
    * whole-line marks), and any of `inlineClass`, `lineClass`, `marginClass`,
-   * `glyphClass` and `hover` (Markdown).
+   * `glyphClass`, `hover` (Markdown), and `before` with `beforeClass`: text
+   * drawn before the range that is not part of the code.
    */
   setDecorations(layer, items) {
     const decorations = items.map((item) => ({
@@ -186,6 +207,11 @@ class Editor {
         linesDecorationsClassName: item.marginClass || undefined,
         glyphMarginClassName: item.glyphClass || undefined,
         hoverMessage: item.hover ? { value: item.hover } : undefined,
+        before: item.before
+          ? { content: item.before, inlineClassName: item.beforeClass || undefined }
+          : undefined,
+        // A marker sits on an empty range, which Monaco otherwise skips.
+        showIfCollapsed: !!item.before,
         stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges,
         zIndex: item.zIndex || 0,
       },

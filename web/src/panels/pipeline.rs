@@ -1,12 +1,18 @@
-//! The compiler pipeline: a strip of stages from tokens to machine code, an
-//! explanation of the selected stage, and bcc's real output for it in a
-//! read-only editor, compiled live in the browser at `-O0` or `-O2`.
+//! The compiler pipeline: a strip of stages from the logical lines of
+//! translation phases 1-2 to machine code, an explanation of the selected
+//! stage with the C99 rules it applies, and bcc's real output for it in a
+//! read-only editor, compiled live in the browser at `-O0` or `-O2`. The
+//! front-end stages add what they did to this program (`front_end.rs`).
 //! Hovering a source line highlights the output lines that came from it (and
 //! the reverse). When an error stops bcc, the view says which stage stopped
 //! and why, and the diagnostics list every message.
 
 use leptos::prelude::*;
 
+use super::front_end::{
+    FrontEndCard,
+    StageClauses,
+};
 use crate::{
     demos,
     editor::{
@@ -19,10 +25,16 @@ use crate::{
         CompileDiagnostic,
         Links,
         Stage,
+        displayed,
+        gutter,
+        is_folded,
         links,
         optimizer_changes,
     },
 };
+
+/// Where the repository's source files are shown.
+const SOURCE_URL: &str = "https://github.com/BenBwall/bcc-rust/blob/main/";
 
 #[component]
 #[expect(clippy::too_many_arguments, reason = "The page state the view reads.")]
@@ -43,6 +55,9 @@ pub fn PipelineView(
     theme: Signal<&'static str>,
     hover_source: ReadSignal<usize>,
     hover_output: RwSignal<usize>,
+    /// Whether the preprocessed text shows the headers' text, not a folded
+    /// line for each.
+    headers: RwSignal<bool>,
     filename: ReadSignal<String>,
     /// The source the compilation came from.
     source: Signal<String>,
@@ -51,23 +66,33 @@ pub fn PipelineView(
 ) -> impl IntoView {
     let output = Memo::new(move |_| {
         let stage = stage.get();
+        let headers = headers.get();
         shown.with(|compilation| {
-            compilation
-                .as_ref()
-                .and_then(|compilation| compilation.output(stage))
-                .map(str::to_owned)
+            let compilation = compilation.as_ref()?;
+            source
+                .with(|source| displayed(stage, compilation, source, headers))
+                .map(|(text, _)| text)
         })
     });
     let text = Signal::derive(move || output.get().unwrap_or_default());
     let lesson = Memo::new(move |_| source.with(|source| demos::matching(source).is_some()));
     let language = Signal::derive(move || stage.get().language());
+    let line_numbers = Signal::derive(move || {
+        let stage = stage.get();
+        let headers = headers.get();
+        shown.with(|compilation| {
+            compilation.as_ref().map_or_else(Vec::new, |compilation| {
+                source.with(|source| gutter(stage, compilation, source, headers))
+            })
+        })
+    });
     let links_of = move |compilation: Memo<Option<Compilation>>| {
         Memo::new(move |_| {
             compilation.with(|compilation| {
                 compilation
                     .as_ref()
                     .map(|compilation| {
-                        source.with(|source| links(stage.get(), compilation, source))
+                        source.with(|source| links(stage.get(), compilation, source, headers.get()))
                     })
                     .unwrap_or_default()
             })
@@ -84,13 +109,16 @@ pub fn PipelineView(
         } else {
             Vec::new()
         };
-        vec![(
-            "links",
-            linked
-                .into_iter()
-                .map(|line| Decoration::line(line, "link-line"))
-                .collect(),
-        )]
+        vec![
+            (
+                "links",
+                linked
+                    .into_iter()
+                    .map(|line| Decoration::line(line, "link-line"))
+                    .collect(),
+            ),
+            ("stage", output_marks(stage.get(), shown, text)),
+        ]
     });
     let reveal = Signal::derive(move || {
         let hovered = hover_source.get();
@@ -103,10 +131,15 @@ pub fn PipelineView(
         <section class="pipeline" aria-labelledby="pipeline-title">
             <h2 id="pipeline-title" class="sr-only">"Compiler pipeline"</h2>
             <StageStrip stage compilation=shown />
-            <article class="card stage-card" id="stage-output">
+            <article class="card stage-card" id="stage-output" data-phase=move || stage.get().phase()>
                 <header class="stage-header">
                     <div>
-                        <p class="stage-kicker">{move || stage.get().phase()}</p>
+                        <p class="stage-kicker">
+                            {move || stage.get().phase()}
+                            {move || stage.get().translation_phases().map(|phases| view! {
+                                <span class="stage-kicker-phases">{format!("Translation {phases}")}</span>
+                            })}
+                        </p>
                         <h3>{move || stage.get().label()}</h3>
                     </div>
                     <div class="stage-controls">
@@ -114,20 +147,45 @@ pub fn PipelineView(
                         <OptimizationToggle optimize />
                     </div>
                 </header>
-                <code class="stage-command">
-                    {move || format!("$ {}", stage.get().command(&filename.get(), optimize.get()))}
-                </code>
+                {move || {
+                    let stage = stage.get();
+                    match (stage.command(&filename.get(), optimize.get()), stage.internal()) {
+                        | (Some(command), _) => view! { <code class="stage-command">{format!("$ {command}")}</code> }.into_any(),
+                        | (None, Some(path)) => view! {
+                            <p class="stage-command is-internal">
+                                "No command prints this stage: it happens inside bcc, in "
+                                <a href=format!("{SOURCE_URL}{path}")><code>{path}</code></a>
+                            </p>
+                        }.into_any(),
+                        | (None, None) => ().into_any(),
+                    }
+                }}
                 <p class="stage-explanation">{move || stage.get().explanation()}</p>
+                <StageClauses stage />
                 <StopBanner compilation=shown />
+                <FrontEndCard stage compilation on_reveal />
                 <OptimizerNote stage optimize compilation other />
-                <p class="stage-note is-link" hidden=move || shown_links.with(Links::is_empty)>
-                    {move || if shown_links.with(Links::is_exact) {
-                        "Hover a source line to find what it became here, or hover here to find its source."
-                    } else {
-                        "Hover a source line to find its function here, or hover here to find the source. bcc's IR \
-                         keeps no source locations yet, so these stages link per function, not per line."
-                    }}
-                </p>
+                <div class="stage-toolbar">
+                    <p class="stage-note is-link" hidden=move || shown_links.with(Links::is_empty)>
+                        {move || if shown_links.with(Links::is_exact) {
+                            "Hover a source line to find what it became here, or hover here to find its source."
+                        } else {
+                            "Hover a source line to find its function here, or hover here to find the source. bcc's IR \
+                             keeps no source locations yet, so these stages link per function, not per line."
+                        }}
+                    </p>
+                    <button
+                        type="button"
+                        class="toggle-chip"
+                        hidden=move || stage.get() != Stage::Preprocessor || output.with(Option::is_none)
+                        aria-pressed=move || headers.get().to_string()
+                        title="Show the text each #include brought in, or fold it into one line"
+                        on:click=move |_| headers.update(|headers| *headers = !*headers)
+                    >
+                        <span class="toggle-chip-dot" aria-hidden="true"></span>
+                        "Show headers"
+                    </button>
+                </div>
                 <div class="stage-output" hidden=move || output.with(Option::is_none)>
                     <CodeEditor
                         text
@@ -138,6 +196,7 @@ pub fn PipelineView(
                         decorations=layers
                         on_hover_line=on_hover
                         reveal
+                        line_numbers
                     />
                 </div>
                 <div class="stage-missing" hidden=move || output.with(Option::is_some)>
@@ -168,8 +227,10 @@ fn StopBanner(compilation: Memo<Option<Compilation>>) -> impl IntoView {
     }
 }
 
-/// The stages as tabs, grouped under front, middle and back end. A stage an
-/// error kept from running is marked.
+/// The stages as tabs, in two rows of five: the front end, then the middle
+/// and back ends, each row under the headings of its parts. Each front-end
+/// stage names the C99 translation phases it shows. A stage an error kept
+/// from running is marked.
 #[component]
 fn StageStrip(stage: RwSignal<Stage>, compilation: Memo<Option<Compilation>>) -> impl IntoView {
     let stopped = move |entry: Stage| {
@@ -179,34 +240,102 @@ fn StageStrip(stage: RwSignal<Stage>, compilation: Memo<Option<Compilation>>) ->
                 .is_some_and(|compilation| compilation.stopped_before(entry))
         })
     };
-    view! {
-            <div class="stage-phases" aria-hidden="true">
-                <span data-phase="Front end">"Front end"</span>
-                <span data-phase="Middle end">"Middle end"</span>
-                <span data-phase="Back end">"Back end"</span>
+    let item = move |(index, entry): (usize, Stage)| {
+        view! {
+            <div class="stage-item" role="presentation">
+                <button
+                    type="button"
+                    role="tab"
+                    class="stage-button"
+                    class:is-stopped=move || stopped(entry)
+                    data-phase=entry.phase()
+                    aria-selected=move || (stage.get() == entry).to_string()
+                    aria-controls="stage-output"
+                    on:click=move |_| stage.set(entry)
+                >
+                    <span class="stage-index">{move || if stopped(entry) { "✕".to_owned() } else { (index + 1).to_string() }}</span>
+                    <span class="stage-text">
+                        <span class="stage-name">{entry.label()}</span>
+                        {entry.translation_phases().map(|phases| view! { <span class="stage-phase">{phases}</span> })}
+                    </span>
+                    <span class="sr-only">
+                        {move || format!(" ({}{})", entry.phase(), if stopped(entry) { ", did not run" } else { "" })}
+                    </span>
+                </button>
             </div>
-            <ol class="stage-strip" role="tablist" aria-label="Compiler stages">
-                {Stage::ALL.iter().enumerate().map(|(index, &entry)| view! {
-                    <li class="stage-item">
-                        <button
-                            type="button"
-                            role="tab"
-                            class="stage-button"
-                            class:is-stopped=move || stopped(entry)
-                            data-phase=entry.phase()
-                            aria-selected=move || (stage.get() == entry).to_string()
-                            aria-controls="stage-output"
-                            on:click=move |_| stage.set(entry)
-                        >
-                            <span class="stage-index">{move || if stopped(entry) { "✕".to_owned() } else { (index + 1).to_string() }}</span>
-                            <span class="stage-name">{entry.label()}</span>
-                            <span class="sr-only">
-                                {move || format!(" ({}{})", entry.phase(), if stopped(entry) { ", did not run" } else { "" })}
-                            </span>
-                        </button>
-                    </li>
-                }).collect_view()}
-            </ol>
+        }
+    };
+    let row = move |range: std::ops::Range<usize>| {
+        Stage::ALL[range.clone()]
+            .iter()
+            .copied()
+            .enumerate()
+            .map(move |(offset, entry)| (range.start + offset, entry))
+            .map(item)
+            .collect_view()
+    };
+    view! {
+        <div class="stage-strip" role="tablist" aria-label="Compiler stages">
+            <div class="stage-row" role="presentation">
+                <span class="stage-group-label" data-phase="Front end" aria-hidden="true">"Front end"</span>
+                {row(0..5)}
+            </div>
+            <div class="stage-row" role="presentation">
+                <span class="stage-group-label" data-phase="Middle end" aria-hidden="true">"Middle end"</span>
+                <span class="stage-group-label" data-phase="Back end" aria-hidden="true">"Back end"</span>
+                {row(5..10)}
+            </div>
+        </div>
+    }
+}
+
+/// The marks the output of `stage` carries: where phase 2 spliced each
+/// logical line, and the folded headers of the preprocessed text.
+fn output_marks(
+    stage: Stage,
+    compilation: Memo<Option<Compilation>>,
+    text: Signal<String>,
+) -> Vec<Decoration> {
+    match stage {
+        | Stage::Lines => compilation.with(|compilation| {
+            compilation
+                .iter()
+                .flat_map(|compilation| compilation.logical_lines.iter().enumerate())
+                .flat_map(|(index, line)| {
+                    line.changes.iter().filter_map(move |change| {
+                        let (before, class) = match change.kind.as_str() {
+                            | "splice" => ("↩", "splice-marker"),
+                            | "trigraph" => ("", "trigraph-marker"),
+                            | _ => return None,
+                        };
+                        let end = if before.is_empty() {
+                            change.column + 1
+                        } else {
+                            change.column
+                        };
+                        Some(Decoration {
+                            start_line: index + 1,
+                            start_column: change.column,
+                            end_line: index + 1,
+                            end_column: end,
+                            inline_class: before.is_empty().then(|| class.to_owned()),
+                            before: (!before.is_empty()).then(|| before.to_owned()),
+                            before_class: (!before.is_empty()).then(|| class.to_owned()),
+                            hover: Some(change.describe()),
+                            ..Decoration::default()
+                        })
+                    })
+                })
+                .collect()
+        }),
+        | Stage::Preprocessor => text.with(|text| {
+            text.lines()
+                .enumerate()
+                .filter(|(_, line)| is_folded(line))
+                .map(|(index, _)| Decoration::line(index + 1, "folded-line"))
+                .collect()
+        }),
+        | _ => Vec::new(),
     }
 }
 
@@ -530,6 +659,7 @@ mod tests {
                     theme=Signal::stored("dark")
                     hover_source=RwSignal::new(0).read_only()
                     hover_output=RwSignal::new(0)
+                    headers=RwSignal::new(false)
                     filename=RwSignal::new("program.c".to_owned()).read_only()
                     source=Signal::stored("int main(void) { return 0; }\n".to_owned())
                     on_reveal=Callback::new(|_: usize| {})
