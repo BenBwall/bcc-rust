@@ -19,7 +19,9 @@
 //! - Stage drivers: `stages.rs` scopes the preprocessing and parser arenas to
 //!   their stages and collects the preprocessed tokens.
 //! - Middle-end handoff: `middle_end.rs`.
-//! - Token descriptions for `--tokens` and the explorer: `views.rs`.
+//! - Token descriptions for `--tokens` and the explorer: `views.rs`; the
+//!   preprocessed text that `-E` prints and the explorer shows:
+//!   `preprocessed_text.rs`.
 //! - End-to-end fixtures: `tests.rs` and `tests/`.
 //!
 //! C99: translation phases 1-7, §5.1.1.2 paragraph 1, pp. 9-10;
@@ -32,6 +34,7 @@ mod stages;
 mod middle_end;
 
 // Views
+mod preprocessed_text;
 mod views;
 
 use std::path::Path;
@@ -47,6 +50,11 @@ pub(crate) use middle_end::{
     InlineCopies,
     MiddleEndError,
     with_optional_retention,
+};
+pub(crate) use preprocessed_text::{
+    Pragmas,
+    TextOptions,
+    TextWriter,
 };
 pub(crate) use stages::{
     parse_with_arena,

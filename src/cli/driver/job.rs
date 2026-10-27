@@ -27,10 +27,7 @@ use super::{
             print_preprocessor_output,
         },
         output_file,
-        preprocessed::{
-            TextOptions,
-            print_preprocessed,
-        },
+        preprocessed::print_preprocessed,
     },
     Source,
     dependencies::{
@@ -40,6 +37,7 @@ use super::{
 };
 use crate::{
     headers::HeaderSearch,
+    pipeline::TextOptions,
     translation_phases::Context,
     util::bump::{
         ArenaString,
