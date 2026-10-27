@@ -15,8 +15,8 @@
 //! reads wide characters through the narrow `scanf` engine
 //! (`scanf::Input::Wide`), both over UTF-8.
 //!
-//! C99: §7.19.2 paragraphs 4-5, p. 264; PDF p. 276 (orientation); §7.24.2,
-//! pp. 349-367; PDF pp. 361-379 (formatted wide I/O); §7.24.3, pp.
+//! C99: §7.19.2 paragraphs 4-5, pp. 264-265; PDF pp. 276-277 (orientation);
+//! §7.24.2, pp. 349-367; PDF pp. 361-379 (formatted wide I/O); §7.24.3, pp.
 //! 367-372; PDF pp. 379-384 (wide character I/O).
 
 use super::{
@@ -200,8 +200,10 @@ impl DefaultHost<'_> {
                 };
                 self.orient_wide(stream)?;
                 let mut values = match va_list_operand(call.name) {
-                    | Some(list) => FormatArguments::from_va_list(args[list], call.va_list, memory)?,
-                    | None => FormatArguments::Values(args.get(format + 1..).unwrap_or_default().iter()),
+                    | Some(list) =>
+                        FormatArguments::from_va_list(args[list], call.va_list, memory)?,
+                    | None =>
+                        FormatArguments::Values(args.get(format + 1..).unwrap_or_default().iter()),
                 };
                 let before = self.output.len();
                 if let Err(fault) = self.wide_printf(arg(format), &mut values, memory) {
@@ -219,12 +221,14 @@ impl DefaultHost<'_> {
             | "swprintf" | "vswprintf" => {
                 let limit = integer(arg(1))?;
                 let mut values = match va_list_operand(call.name) {
-                    | Some(list) => FormatArguments::from_va_list(args[list], call.va_list, memory)?,
+                    | Some(list) =>
+                        FormatArguments::from_va_list(args[list], call.va_list, memory)?,
                     | None => FormatArguments::Values(args.get(3..).unwrap_or_default().iter()),
                 };
                 let before = self.output.len();
                 let formatted = self.wide_printf(arg(2), &mut values, memory);
-                let result = formatted.and_then(|()| self.store_wide_output(before, arg(0), limit, memory));
+                let result =
+                    formatted.and_then(|()| self.store_wide_output(before, arg(0), limit, memory));
                 self.output.truncate(before);
                 match result? {
                     | Some(count) => RuntimeValue::Int(count as u128),
@@ -252,8 +256,15 @@ impl DefaultHost<'_> {
         name: &str,
         memory: &mut Memory<'_>,
     ) -> Result<HostReturn, Fault> {
-        let arg = |index: usize| call.args.get(index).copied().unwrap_or(RuntimeValue::Poison);
-        let base = name.trim_start_matches("__isoc99_").trim_start_matches("__isoc23_");
+        let arg = |index: usize| {
+            call.args
+                .get(index)
+                .copied()
+                .unwrap_or(RuntimeValue::Poison)
+        };
+        let base = name
+            .trim_start_matches("__isoc99_")
+            .trim_start_matches("__isoc23_");
         let (input, fixed) = match base {
             | "wscanf" => (scanf::Input::wide_stream(self.standard(0)?), 1),
             | "fwscanf" => {
@@ -285,7 +296,7 @@ impl DefaultHost<'_> {
     /// Orients `stream` for wide characters, as glibc's `_IO_fwide (fp, 1)`
     /// does before a wide function reads or writes; one already
     /// byte-oriented is undefined.
-    /// C99: §7.19.2 paragraph 5, p. 264; PDF p. 276.
+    /// C99: §7.19.2 paragraph 5, p. 265; PDF p. 277.
     pub(in crate::backend::interpreter::host) fn orient_wide(
         &mut self,
         stream: usize,
@@ -306,7 +317,12 @@ impl DefaultHost<'_> {
 
     /// Writes `characters` to `stream` as the locale converts them for a
     /// stream, in the way `kind` writes; whether it worked.
-    fn put_wide(&mut self, stream: usize, characters: &[u32], kind: Written) -> Result<bool, Fault> {
+    fn put_wide(
+        &mut self,
+        stream: usize,
+        characters: &[u32],
+        kind: Written,
+    ) -> Result<bool, Fault> {
         self.orient_wide(stream)?;
         let before = self.output.len();
         let utf8 = self.locale.utf8();
@@ -338,7 +354,10 @@ impl DefaultHost<'_> {
     /// Reads one wide character from `stream`, converting its multibyte
     /// form: `None` at the end of the file, on an error, or, setting the
     /// error indicator and `EILSEQ`, for bytes the locale cannot convert.
-    pub(in crate::backend::interpreter::host) fn read_wide(&mut self, stream: usize) -> Option<u32> {
+    pub(in crate::backend::interpreter::host) fn read_wide(
+        &mut self,
+        stream: usize,
+    ) -> Option<u32> {
         let utf8 = self.locale.utf8();
         let first = self.read(stream)?;
         let length = locale::sequence_length(utf8, first);
@@ -408,7 +427,8 @@ impl DefaultHost<'_> {
         let mut index = 0;
         let mut position = 0;
         while index < stored {
-            let (character, length) = locale::decode(true, &text[position..]).unwrap_or((u32::from(b'?'), 1));
+            let (character, length) =
+                locale::decode(true, &text[position..]).unwrap_or((u32::from(b'?'), 1));
             store_wide(memory, destination, index as i128, wide, character)?;
             position += length;
             index += 1;

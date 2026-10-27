@@ -190,7 +190,7 @@ pub(crate) enum UbKind {
     InvalidJmpBuf,
     /// A byte input/output function on a wide-oriented stream, or a wide
     /// character one on a byte-oriented stream.
-    /// C99: §7.19.2 paragraph 5, p. 264; PDF p. 276.
+    /// C99: §7.19.2 paragraph 5, p. 265; PDF p. 277.
     StreamOrientation,
 }
 

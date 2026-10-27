@@ -145,48 +145,48 @@ pub(crate) enum HostReturn {
 /// C99: §7.12.4-§7.12.13, pp. 218-239; PDF pp. 230-251 (real math).
 /// C99: §7.4.1.8, p. 183; PDF p. 195 (`isprint` in the initial C locale).
 pub(crate) struct DefaultHost<'a> {
-    allocator:     &'a Bump,
-    output:        ArenaVec<'a, u8>,
+    allocator:       &'a Bump,
+    output:          ArenaVec<'a, u8>,
     /// What the program wrote to `stderr`, and where it falls among the
     /// flushes of `stdout`.
-    console:       stdio::Console<'a>,
+    console:         stdio::Console<'a>,
     /// Whether the program may open, create and remove host files.
-    file_access:   bool,
+    file_access:     bool,
     /// How many file-system accesses were refused, and the first path.
-    denied_files:  u32,
-    denied_path:   ArenaVec<'a, u8>,
+    denied_files:    u32,
+    denied_path:     ArenaVec<'a, u8>,
     /// The open streams.
-    streams:       stdio::Streams<'a>,
+    streams:         stdio::Streams<'a>,
     /// A file name being passed to the host's file system.
-    path:          ArenaVec<'a, u8>,
+    path:            ArenaVec<'a, u8>,
     /// `tmpnam`'s static buffer, once made.
-    tmpnam_buffer: Option<Pointer>,
+    tmpnam_buffer:   Option<Pointer>,
     /// The program's `errno` object, once made.
-    errno: Option<Pointer>,
+    errno:           Option<Pointer>,
     /// `strerror`'s message strings, by code, once made, and its buffer
     /// for an unknown code.
-    messages: [Option<Pointer>; errno::MESSAGE_COUNT],
+    messages:        [Option<Pointer>; errno::MESSAGE_COUNT],
     unknown_message: Option<Pointer>,
     /// The program's locale.
-    locale:        locale::Locale,
+    locale:          locale::Locale,
     /// Whether the format being run is a wide one, and whether a conversion
     /// met a character the locale cannot convert, which fails the call.
-    wide_format:   bool,
-    format_error:  bool,
+    wide_format:     bool,
+    format_error:    bool,
     /// glibc's character tables, by `strings::ctype_table` slot, once made.
-    ctype:         [Option<Pointer>; 3],
+    ctype:           [Option<Pointer>; 3],
     /// Where `strtok` continues.
-    strtok:        RuntimeValue,
-    scratch:       ArenaVec<'a, u8>,
-    text:          ArenaVec<'a, u8>,
+    strtok:          RuntimeValue,
+    scratch:         ArenaVec<'a, u8>,
+    text:            ArenaVec<'a, u8>,
     /// Digit space for floating conversions.
-    floating:      floating::Scratch<'a>,
+    floating:        floating::Scratch<'a>,
     /// The width of `long` in bits, which `printf`'s `l` modifier reads.
-    long_width:    u32,
+    long_width:      u32,
     /// The target's existing long double representation (f64 or unsupported
     /// f80).
-    long_double:   Type,
-    target:        Target,
+    long_double:     Type,
+    target:          Target,
 }
 
 impl Host for DefaultHost<'_> {
@@ -221,9 +221,7 @@ impl Host for DefaultHost<'_> {
         // A formatting function fails with EILSEQ on a character the locale
         // cannot convert, after writing what came before it.
         if std::mem::take(&mut self.format_error) && result.is_ok() {
-            if let Err(fault) = self.set_errno(memory, errno::EILSEQ) {
-                return Err(fault);
-            }
+            self.set_errno(memory, errno::EILSEQ)?;
             result = result.map(|value| match value {
                 | HostReturn::Value(Some(RuntimeValue::Int(_))) => HostReturn::Value(
                     call.result
@@ -831,37 +829,37 @@ impl<'a> DefaultHost<'a> {
     /// A host whose output and scratch space live in `arena`.
     pub(crate) fn new_in(arena: &'a Bump) -> Self {
         Self {
-            allocator:     arena,
-            output:        ArenaVec::new_in(arena),
-            console:       stdio::Console {
+            allocator:       arena,
+            output:          ArenaVec::new_in(arena),
+            console:         stdio::Console {
                 errors: ArenaVec::new_in(arena),
                 marks:  ArenaVec::new_in(arena),
                 output: stdio::Channel::new(stdio::Mode::Full),
                 error:  stdio::Channel::new(stdio::Mode::Unbuffered),
             },
-            file_access:   false,
-            denied_files:  0,
-            denied_path:   ArenaVec::new_in(arena),
-            streams:       stdio::Streams::new_in(arena),
-            path:          ArenaVec::new_in(arena),
-            tmpnam_buffer: None,
-            errno: None,
-            messages: [None; errno::MESSAGE_COUNT],
+            file_access:     false,
+            denied_files:    0,
+            denied_path:     ArenaVec::new_in(arena),
+            streams:         stdio::Streams::new_in(arena),
+            path:            ArenaVec::new_in(arena),
+            tmpnam_buffer:   None,
+            errno:           None,
+            messages:        [None; errno::MESSAGE_COUNT],
             unknown_message: None,
-            locale: locale::Locale::new(),
-            wide_format: false,
-            format_error: false,
-            ctype:         [None; 3],
-            strtok:        RuntimeValue::NULL,
-            scratch:       ArenaVec::new_in(arena),
-            text:          ArenaVec::new_in(arena),
-            floating:      floating::Scratch {
+            locale:          locale::Locale::new(),
+            wide_format:     false,
+            format_error:    false,
+            ctype:           [None; 3],
+            strtok:          RuntimeValue::NULL,
+            scratch:         ArenaVec::new_in(arena),
+            text:            ArenaVec::new_in(arena),
+            floating:        floating::Scratch {
                 integer:     ArenaVec::new_in(arena),
                 significant: ArenaVec::new_in(arena),
             },
-            long_width:    64,
-            long_double:   Type::F80,
-            target:        Target::LinuxGnu,
+            long_width:      64,
+            long_double:     Type::F80,
+            target:          Target::LinuxGnu,
         }
     }
 

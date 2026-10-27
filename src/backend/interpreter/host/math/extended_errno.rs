@@ -7,8 +7,10 @@
 //! `math/s_fdim_template.c`); and a few set it themselves: `sinl`, `cosl`
 //! and `tanl` for an infinity (`sysdeps/ieee754/ldbl-96`), `erfcl` when it
 //! underflows to zero, and `nextafterl` and `nexttoward` when they leave the
-//! normal range. The rest (`atanl`, `expm1l`, rounding,
-//! `frexpl`, `fmal`, ...) never set it; `scalbnl` is libm's `ldexpl`. glibc 2.39 and 2.43 agree.
+//! normal range; `expm1l` reports an overflow through `expl`. The rest
+//! (`atanl`, `tanhl`, `asinhl`, `cbrtl`, `erfl`, rounding,
+//! `frexpl`, `fmal`, ...) never set it; `scalbnl` is libm's `ldexpl`. glibc
+//! 2.39 and 2.43 agree.
 //!
 //! An encoding the processor rejects (an unnormal, pseudo-infinity or
 //! pseudo-NaN) compares unordered, as a NaN does, so a wrapper's `isless`
@@ -57,28 +59,29 @@ pub(super) fn errno(operation: Operation, args: &[RuntimeValue], result: Runtime
             | _ => 0,
         },
         | Operation::Atan2 => range(is_zero(z) && !is_zero(x) && finite(y)),
-        | Operation::Cosh | Operation::Sinh => range(!finite(z) && finite(x)),
+        | Operation::Cosh | Operation::Sinh | Operation::Lgamma => range(!finite(z) && finite(x)),
         | Operation::Exp | Operation::Exp2 => range(out_of_range(x)),
-        | Operation::Fmod =>
-            domain((infinite(x) || is_zero(y)) && !is_nan(x) && !is_nan(y)),
-        | Operation::Remainder =>
-            domain((is_zero(y) && !is_nan(x)) || (infinite(x) && !is_nan(y))),
+        // `expm1l` hands an argument of 128 or more to `expl`, whose
+        // wrapper reports the overflow.
+        | Operation::Expm1 =>
+            range(finite(x) && !less(x, X87::from_integer(false, 128)) && !finite(z)),
+        | Operation::Fmod => domain((infinite(x) || is_zero(y)) && !is_nan(x) && !is_nan(y)),
+        | Operation::Remainder => domain((is_zero(y) && !is_nan(x)) || (infinite(x) && !is_nan(y))),
         | Operation::Hypot => range(!finite(z) && finite(x) && finite(y)),
-        | Operation::Log | Operation::Log10 | Operation::Log2 => pole_or_domain(x, X87::zero(false)),
+        | Operation::Log | Operation::Log10 | Operation::Log2 =>
+            pole_or_domain(x, X87::zero(false)),
         | Operation::Log1p => pole_or_domain(x, one.negate()),
         | Operation::Sqrt => domain(less(x, X87::zero(false))),
         | Operation::Pow => {
-            if !finite(z) {
-                if !finite(x) || !finite(y) {
-                    0
-                } else if is_nan(z) {
-                    EDOM
-                } else {
-                    // A pole (zero to a negative power) or an overflow.
-                    ERANGE
-                }
-            } else {
+            if finite(z) {
                 range(is_zero(z) && finite(x) && !is_zero(x) && finite(y))
+            } else if !finite(x) || !finite(y) {
+                0
+            } else if is_nan(z) {
+                EDOM
+            } else {
+                // A pole (zero to a negative power) or an overflow.
+                ERANGE
             }
         },
         | Operation::Tgamma => {
@@ -95,19 +98,20 @@ pub(super) fn errno(operation: Operation, args: &[RuntimeValue], result: Runtime
                 ERANGE
             }
         },
-        | Operation::Lgamma => range(!finite(z) && finite(x)),
         | Operation::Sin | Operation::Cos | Operation::Tan => domain(x.class() == Class::Infinite),
         | Operation::Erfc => range(finite(x) && greater(x, X87::zero(false)) && is_zero(z)),
         | Operation::Ilogb => range_of_ilogb(result),
         // libm's `scalbnl` is its `ldexpl` wrapper.
-        | Operation::Ldexp | Operation::Scalbn | Operation::Scalbln => range(finite(x) && !is_zero(x) && out_of_range(x)),
+        | Operation::Ldexp | Operation::Scalbn | Operation::Scalbln =>
+            range(finite(x) && !is_zero(x) && out_of_range(x)),
         | Operation::Fdim => range(infinite(z) && !infinite(x) && !infinite(y)),
         // From zero, both step to the least subnormal without setting it.
-        | Operation::Nextafter | Operation::Nexttoward =>
-            range(!is_nan(x) && !is_nan(y) && !is_zero(x) && x.compare(y) != Some(Ordering::Equal) && {
+        | Operation::Nextafter | Operation::Nexttoward => range(
+            !is_nan(x) && !is_nan(y) && !is_zero(x) && x.compare(y) != Some(Ordering::Equal) && {
                 let (biased, _) = z.magnitude_parts();
                 biased == 0 || biased == 0x7FFF
-            }),
+            },
+        ),
         | _ => 0,
     }
 }
@@ -130,7 +134,11 @@ pub(super) fn next_toward(x: RuntimeValue, y: RuntimeValue, result: RuntimeValue
             X87::from_f64(x).compare(y).is_some_and(Ordering::is_ne),
         | _ => false,
     };
-    if leaves_normal_range && moved { ERANGE } else { 0 }
+    if leaves_normal_range && moved {
+        ERANGE
+    } else {
+        0
+    }
 }
 
 /// `ilogb`'s `EDOM` for zero, a NaN or an infinity, whose results are
@@ -142,7 +150,11 @@ fn range_of_ilogb(result: RuntimeValue) -> i32 {
     };
     #[expect(clippy::cast_possible_truncation, reason = "`ilogb` returns an int.")]
     let value = bits as u32 as i32;
-    if value == i32::MIN || value == i32::MAX { EDOM } else { 0 }
+    if value == i32::MIN || value == i32::MAX {
+        EDOM
+    } else {
+        0
+    }
 }
 
 /// A logarithm's error at or below `pole`: `ERANGE` at it, `EDOM` below.

@@ -121,7 +121,10 @@ impl Machine<'_, '_, '_> {
                     if types != [Type::Ptr, Type::Ptr] {
                         return Err(UbKind::SignatureMismatch.into());
                     }
-                    Handler::WithStatus(self.handler(argument(0), &[Type::I32, Type::Ptr])?, argument(1))
+                    Handler::WithStatus(
+                        self.handler(argument(0), &[Type::I32, Type::Ptr])?,
+                        argument(1),
+                    )
                 } else {
                     if types != [Type::Ptr] {
                         return Err(UbKind::SignatureMismatch.into());

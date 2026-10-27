@@ -90,7 +90,21 @@ fn evaluate(
         | Type::F64 => {
             let (value, code) =
                 native::with_errno(|| double(operation, call.args, memory, long, text));
-            Ok((value?, code))
+            let value = value?;
+            // glibc's dynamic libm still reaches these through their SVID
+            // wrappers (`math/w_*_compat.c`), whose `__kernel_standard`
+            // returns a positive `NAN` for a domain error; the host's own
+            // libm may return the bare function's negative one.
+            if code == super::errno::EDOM
+                && matches!(
+                    operation,
+                    Operation::Acos | Operation::Asin | Operation::Log10 | Operation::Tgamma
+                )
+                && matches!(value, RuntimeValue::F64(result) if result.is_nan())
+            {
+                return Ok((RuntimeValue::F64(f64::NAN), code));
+            }
+            Ok((value, code))
         },
         | Type::F80 => {
             let value = extended::extended(operation, call.args, memory, long, text)?;
@@ -793,7 +807,9 @@ pub(super) mod native {
         let location = errno_location();
         // SAFETY: The C library's `errno` is this thread's, valid for as
         // long as the thread runs.
-        unsafe { location.write(0) };
+        unsafe {
+            location.write(0);
+        }
         let result = operation();
         // SAFETY: As above.
         (result, unsafe { location.read() })

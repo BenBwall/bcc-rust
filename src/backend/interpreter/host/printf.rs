@@ -273,7 +273,11 @@ impl DefaultHost<'_> {
             | b'c' if wide => {
                 spec.zero = false;
                 let character = u32::try_from(integer(arg)? & 0xFFFF_FFFF).expect("masked");
-                if !super::locale::encode(self.wide_format || self.locale.utf8(), character, &mut self.text) {
+                if !super::locale::encode(
+                    self.wide_format || self.locale.utf8(),
+                    character,
+                    &mut self.text,
+                ) {
                     return Ok(false);
                 }
             },
@@ -281,7 +285,8 @@ impl DefaultHost<'_> {
                 spec.zero = false;
                 let byte = truncate_u8(integer(arg)?);
                 // A wide format converts the byte as `btowc` does.
-                if self.wide_format && super::locale::decode(self.locale.utf8(), &[byte]).is_none() {
+                if self.wide_format && super::locale::decode(self.locale.utf8(), &[byte]).is_none()
+                {
                     return Ok(false);
                 }
                 self.text.push(byte);
@@ -381,9 +386,10 @@ impl DefaultHost<'_> {
         let align = Align::from_bytes(size).expect("a power of two");
         let utf8 = self.wide_format || self.locale.utf8();
         let limit = precision.unwrap_or(usize::MAX);
-        let mut characters = 0;
-        for index in 0.. {
-            if (self.wide_format && characters == limit) || (!self.wide_format && self.text.len() == limit) {
+        for (characters, index) in (0..).enumerate() {
+            if (self.wide_format && characters == limit)
+                || (!self.wide_format && self.text.len() == limit)
+            {
                 break;
             }
             let at = memory.ptr_add(string, RuntimeValue::Int(u128::from(index * size)), true);
@@ -392,14 +398,17 @@ impl DefaultHost<'_> {
                 break;
             }
             let before = self.text.len();
-            if !super::locale::encode(utf8, u32::try_from(character).unwrap_or(u32::MAX), &mut self.text) {
+            if !super::locale::encode(
+                utf8,
+                u32::try_from(character).unwrap_or(u32::MAX),
+                &mut self.text,
+            ) {
                 return Ok(false);
             }
             if !self.wide_format && self.text.len() > limit {
                 self.text.truncate(before);
                 break;
             }
-            characters += 1;
         }
         Ok(true)
     }
@@ -407,7 +416,7 @@ impl DefaultHost<'_> {
     /// `%s` in a wide format: the multibyte string at `string`, converted
     /// as `mbrtowc` converts it, into `self.text` as UTF-8, with a precision
     /// counting wide characters. Whether every character converted.
-    /// C99: §7.24.2.1 paragraph 8, p. 354; PDF p. 366.
+    /// C99: §7.24.2.1 paragraph 8, pp. 352-353; PDF pp. 364-365.
     fn multibyte_string(
         &mut self,
         string: RuntimeValue,
@@ -422,7 +431,11 @@ impl DefaultHost<'_> {
         while characters < limit {
             let byte = |offset: u64| -> Result<u8, Fault> {
                 let at = memory.ptr_add(string, RuntimeValue::Int(u128::from(offset)), true);
-                Ok(truncate_u8(integer(memory.load(Type::I8, at, Align::BYTE)?)?))
+                Ok(truncate_u8(integer(memory.load(
+                    Type::I8,
+                    at,
+                    Align::BYTE,
+                )?)?))
             };
             let first = byte(offset)?;
             if first == 0 {

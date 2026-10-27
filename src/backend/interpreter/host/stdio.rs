@@ -42,8 +42,6 @@ mod console;
 mod stream;
 mod wide;
 
-pub(super) use wide::FUNCTIONS as WIDE_FUNCTIONS;
-
 use std::{
     fs::OpenOptions,
     io::{
@@ -57,14 +55,17 @@ pub(super) use console::{
     Console,
     Mode,
 };
-pub(super) use stream::TERMINAL_BUFFER;
-pub(super) use stream::BUFSIZ;
+pub(super) use stream::{
+    BUFSIZ,
+    TERMINAL_BUFFER,
+};
 use stream::{
     Release,
     Stream,
     Target,
     Whence,
 };
+pub(super) use wide::FUNCTIONS as WIDE_FUNCTIONS;
 
 use super::{
     DefaultHost,
@@ -237,7 +238,7 @@ impl DefaultHost<'_> {
 
     /// The stream a byte function reads or writes, named or implicit, which
     /// a wide orientation forbids.
-    /// C99: §7.19.2 paragraph 5, p. 264; PDF p. 276.
+    /// C99: §7.19.2 paragraph 5, p. 265; PDF p. 277.
     pub(super) fn byte_stream(
         &self,
         call: HostCall<'_>,
@@ -558,10 +559,12 @@ impl DefaultHost<'_> {
             },
             | "setvbuf" | "setbuf" | "setbuffer" | "setlinebuf" => {
                 let stream = self.stream(arg(0), memory)?;
-                let Some((mode, size)) = self.buffering_request(call, memory)? else {
+                let Some((mode, size)) = self.buffering_request(call)? else {
                     // glibc refuses an unknown mode without touching the
                     // stream or `errno`.
-                    return Ok(HostReturn::Value(call.result.map(|ty| RuntimeValue::int(ty, EOF))));
+                    return Ok(HostReturn::Value(
+                        call.result.map(|ty| RuntimeValue::int(ty, EOF)),
+                    ));
                 };
                 let set = self.set_buffering(stream, mode, size);
                 if call.result.is_none() {
@@ -619,10 +622,13 @@ impl DefaultHost<'_> {
     fn buffering_request(
         &self,
         call: HostCall<'_>,
-        memory: &Memory<'_>,
     ) -> Result<Option<(Mode, Option<usize>)>, Fault> {
-        let _ = memory;
-        let arg = |index: usize| call.args.get(index).copied().unwrap_or(RuntimeValue::Poison);
+        let arg = |index: usize| {
+            call.args
+                .get(index)
+                .copied()
+                .unwrap_or(RuntimeValue::Poison)
+        };
         let size = |value: RuntimeValue| -> Result<usize, Fault> {
             usize::try_from(integer(value)?).map_err(|_| UbKind::OutOfBounds.into())
         };
@@ -745,8 +751,7 @@ impl DefaultHost<'_> {
                 entry.oriented = true;
                 let start = self.console.errors.len();
                 self.console.errors.extend_from_slice(bytes);
-                self.console
-                    .put_errors(start, kind, &self.output[..before]);
+                self.console.put_errors(start, kind, &self.output[..before]);
                 true
             },
             | _ => match kind {
@@ -1151,7 +1156,10 @@ mod tests {
         let mut output = ArenaVec::new_in(&arena);
         let mut full = Channel::new(Mode::Full);
         full.block = 4096;
-        assert_eq!(write(&mut output, &mut full, &[b'a'; 4096], Written::Byte), 0);
+        assert_eq!(
+            write(&mut output, &mut full, &[b'a'; 4096], Written::Byte),
+            0
+        );
         assert_eq!(write(&mut output, &mut full, b"b", Written::Byte), 4096);
         // 4095 bytes fill the buffer; the rest writes it out, sends a whole
         // buffer's worth through and keeps 100.
@@ -1173,6 +1181,9 @@ mod tests {
         output.clear();
         let mut small = Channel::new(Mode::Full);
         small.set_buffering(Mode::Full, Some(64), 0);
-        assert_eq!(write(&mut output, &mut small, b"one\n", Written::Formatted), 4);
+        assert_eq!(
+            write(&mut output, &mut small, b"one\n", Written::Formatted),
+            4
+        );
     }
 }

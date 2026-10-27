@@ -228,6 +228,9 @@ fn every_added_host_function_has_a_signature() {
             "__isoc23_scanf",
         ])
     {
-        assert!(signature(name).is_some(), "{name}");
+        assert!(
+            signature(name).is_some() || crate::builtins::external_signature(name).is_some(),
+            "{name}"
+        );
     }
 }

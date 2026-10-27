@@ -19,7 +19,7 @@
 //! `stdout` had been written out before it, so the command line can replay
 //! both in the order a pipe would have received them.
 //!
-//! C99: §7.19.3 paragraph 3, p. 264; PDF p. 276 (buffering);
+//! C99: §7.19.3 paragraph 3, p. 266; PDF p. 278 (buffering);
 //! §7.19.5.6 paragraphs 2-3, p. 274; PDF p. 286 (`setvbuf`).
 
 use super::{
@@ -60,8 +60,7 @@ impl Console<'_> {
         let written = self.error.flushed;
         self.error.put(&self.errors, before, kind);
         if self.error.flushed > written {
-            self.marks
-                .push((self.released(output), self.error.flushed));
+            self.marks.push((self.released(output), self.error.flushed));
         }
     }
 
@@ -80,16 +79,16 @@ impl Console<'_> {
 pub(in crate::backend::interpreter::host) struct Channel {
     /// How many of the stream's bytes have been written out.
     pub(in crate::backend::interpreter::host) flushed: usize,
-    pub(in crate::backend::interpreter::host) mode:    Mode,
+    pub(in crate::backend::interpreter::host) mode: Mode,
     /// The buffer's size once allocated, else 0; 1 for a stream that was
     /// unbuffered then (glibc's `_shortbuf`).
-    size:                                              usize,
+    size: usize,
     /// The size glibc allocates: the descriptor's `st_blksize` when below
     /// `BUFSIZ`.
-    pub(in crate::backend::interpreter::host) block:   usize,
+    pub(in crate::backend::interpreter::host) block: usize,
     /// Whether the stream is writing (`_IO_CURRENTLY_PUTTING`), so a block
     /// first fills the buffer's free space.
-    putting:                                           bool,
+    putting: bool,
 }
 
 /// A stream's buffering mode (`_IOFBF`, `_IOLBF` or `_IONBF`).
@@ -150,11 +149,11 @@ impl Channel {
     /// out before the next byte goes in, a line-buffered one after each
     /// newline, and an unbuffered one after each byte.
     fn put_bytes(&mut self, bytes: &[u8], start: usize, end: usize) {
-        for at in start..end {
+        for (at, &byte) in bytes.iter().enumerate().take(end).skip(start) {
             if at - self.flushed >= self.size {
                 self.flushed = at;
             }
-            if self.mode == Mode::Unbuffered || (self.mode == Mode::Line && bytes[at] == b'\n') {
+            if self.mode == Mode::Unbuffered || (self.mode == Mode::Line && byte == b'\n') {
                 self.flushed = at + 1;
             }
         }

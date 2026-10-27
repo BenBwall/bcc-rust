@@ -15,8 +15,8 @@
 //! returns an error number, to `__xpg_strerror_r` when `_GNU_SOURCE` is
 //! not defined and `_POSIX_C_SOURCE` is at least 200112L.
 //!
-//! C99: §7.5 paragraphs 2-3, p. 186; PDF p. 198 (`errno`); §7.21.6.2, p. 334; PDF p. 346
-//! (`strerror`); §7.19.10.4, p. 305; PDF p. 317 (`perror`).
+//! C99: §7.5 paragraphs 2-3, p. 186; PDF p. 198 (`errno`); §7.21.6.2, p. 334;
+//! PDF p. 346 (`strerror`); §7.19.10.4, p. 305; PDF p. 317 (`perror`).
 
 use std::io;
 
@@ -119,7 +119,11 @@ impl DefaultHost<'_> {
                 let result = match message(errnum) {
                     | Some(text) => {
                         self.text.extend_from_slice(text.as_bytes());
-                        if size <= text.len() as u128 { ERANGE } else { 0 }
+                        if size <= text.len() as u128 {
+                            ERANGE
+                        } else {
+                            0
+                        }
                     },
                     | None => {
                         unknown(errnum, &mut self.text);
@@ -273,7 +277,11 @@ fn unknown(errnum: i32, text: &mut super::ArenaVec<'_, u8>) {
 }
 
 /// A fresh object of `kind` holding `bytes` and a terminating null.
-fn constant_string(memory: &mut Memory<'_>, kind: ObjectKind, bytes: &[u8]) -> Result<Pointer, Fault> {
+fn constant_string(
+    memory: &mut Memory<'_>,
+    kind: ObjectKind,
+    bytes: &[u8],
+) -> Result<Pointer, Fault> {
     let object = memory.allocate(kind, bytes.len() as u64 + 1, Align::BYTE)?;
     memory.initialize(object, bytes);
     Ok(object)

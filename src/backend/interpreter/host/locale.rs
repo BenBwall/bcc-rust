@@ -72,7 +72,9 @@ const CATEGORY_NAMES: [&str; CATEGORIES] = [
 pub(super) enum Name {
     C,
     /// "C.UTF-8", or "C.utf8" as the program spelled it.
-    Utf8 { lowercase: bool },
+    Utf8 {
+        lowercase: bool,
+    },
 }
 
 impl Name {
@@ -131,13 +133,24 @@ impl DefaultHost<'_> {
         call: HostCall<'_>,
         memory: &mut Memory<'_>,
     ) -> Result<HostReturn, Fault> {
-        let arg = |index: usize| call.args.get(index).copied().unwrap_or(RuntimeValue::Poison);
+        let arg = |index: usize| {
+            call.args
+                .get(index)
+                .copied()
+                .unwrap_or(RuntimeValue::Poison)
+        };
         if call.name == "__ctype_get_mb_cur_max" {
             let maximum = if self.locale.utf8() { 6 } else { 1 };
-            return Ok(HostReturn::Value(Some(RuntimeValue::int(Type::I64, maximum))));
+            return Ok(HostReturn::Value(Some(RuntimeValue::int(
+                Type::I64,
+                maximum,
+            ))));
         }
         let category = sext(Type::I32, integer(arg(0))?);
-        let Some(index) = usize::try_from(category).ok().filter(|&index| index < CATEGORIES) else {
+        let Some(index) = usize::try_from(category)
+            .ok()
+            .filter(|&index| index < CATEGORIES)
+        else {
             return Ok(HostReturn::Value(Some(RuntimeValue::NULL)));
         };
         if arg(1) != RuntimeValue::NULL {

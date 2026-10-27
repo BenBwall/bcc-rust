@@ -95,7 +95,11 @@ pub(crate) fn string_to_binary64_long_double(s: &str) -> Result<LongDouble, Pars
 /// C99: §7.20.1.3 paragraphs 2-10, pp. 308-310; PDF pp. 320-322.
 #[cfg(feature = "native")]
 pub(crate) fn host_strtod(text: &[u8]) -> (f64, usize) {
-    assert_eq!(text.last(), Some(&0), "host_strtod: text must end with a null byte");
+    assert_eq!(
+        text.last(),
+        Some(&0),
+        "host_strtod: text must end with a null byte"
+    );
     let mut endptr = std::ptr::null_mut();
     // SAFETY: The text is NUL-terminated and the end pointer is writable.
     let value = unsafe { ffi::string_to_double(text.as_ptr().cast::<c_char>(), &raw mut endptr) };
@@ -105,7 +109,11 @@ pub(crate) fn host_strtod(text: &[u8]) -> (f64, usize) {
 /// As [`host_strtod`] for `strtof`.
 #[cfg(feature = "native")]
 pub(crate) fn host_strtof(text: &[u8]) -> (f32, usize) {
-    assert_eq!(text.last(), Some(&0), "host_strtof: text must end with a null byte");
+    assert_eq!(
+        text.last(),
+        Some(&0),
+        "host_strtof: text must end with a null byte"
+    );
     let mut endptr = std::ptr::null_mut();
     // SAFETY: The text is NUL-terminated and the end pointer is writable.
     let value = unsafe { ffi::string_to_float(text.as_ptr().cast::<c_char>(), &raw mut endptr) };
@@ -115,7 +123,11 @@ pub(crate) fn host_strtof(text: &[u8]) -> (f32, usize) {
 /// As [`host_strtod`] for `strtold`, in the host's `long double` carrier.
 #[cfg(feature = "native")]
 pub(crate) fn host_strtold(text: &[u8]) -> (LongDouble, usize) {
-    assert_eq!(text.last(), Some(&0), "host_strtold: text must end with a null byte");
+    assert_eq!(
+        text.last(),
+        Some(&0),
+        "host_strtold: text must end with a null byte"
+    );
     let mut endptr = std::ptr::null_mut();
     // SAFETY: The text is NUL-terminated and the end pointer is writable.
     let value =

@@ -252,7 +252,7 @@ impl DefaultHost<'_> {
                     // `wchar_t`, converted from its multibyte form.
                     let wide = (length == Length::Long).then(|| self.wide_type());
                     let utf8 = matches!(input, Input::Wide { .. }) || self.locale.utf8();
-                    let element = wide.map_or(Type::I8, |wide| wide);
+                    let element = wide.unwrap_or(Type::I8);
                     let mut count = 0;
                     let mut ended = false;
                     let mut unconverted = false;
@@ -464,8 +464,8 @@ impl DefaultHost<'_> {
                                 RuntimeValue::Int(u128::from(*index) * size),
                                 true,
                             );
-                            let align = Align::from_bytes(u64::from(wide.bytes()))
-                                .expect("a power of two");
+                            let align =
+                                Align::from_bytes(u64::from(wide.bytes())).expect("a power of two");
                             let character = integer(memory.load(wide, at, align)?)?;
                             if character == 0 {
                                 return Ok(None);
