@@ -33,6 +33,7 @@ use super::{
         errno::{
             EBADF,
             EINVAL,
+            ESPIPE,
             from_io,
         },
         posix::Sink,
@@ -516,18 +517,18 @@ impl Stream<'_> {
         let held = self.pending.len() + (self.wide_log.len() - self.wide_written);
         let pushed = to_offset(self.wide_backup_bytes());
         if held > 0 {
-            // The bytes glibc holds count after the descriptor's offset; an
+            // The bytes glibc holds count after the file offset; an
             // appending stream's go at the file's end.
             let at = if self.appending {
-                let at = self.descriptor_seek(SeekFrom::End(0)).ok()?;
-                self.offset = i64::try_from(at).ok();
+                let at = i64::try_from(self.descriptor_seek(SeekFrom::End(0)).ok()?).ok()?;
+                self.offset = Some(at);
                 at
             } else {
-                self.descriptor_seek(SeekFrom::Current(0)).ok()?
+                self.file_offset()?
             };
-            return i64::try_from(at).ok().map(|at| at + to_offset(held));
+            return Some(at + to_offset(held));
         }
-        let at = i64::try_from(self.descriptor_seek(SeekFrom::Current(0)).ok()?).ok()? - pushed;
+        let at = self.file_offset()? - pushed;
         if self.size == 0 {
             return Some(at);
         }
@@ -548,6 +549,42 @@ impl Stream<'_> {
         // `_IO_ftell` then subtracts the buffer's unread bytes behind the
         // pushback area, without checking the sign again.
         Some(position - to_offset(behind))
+    }
+
+    /// The file offset at the buffer's end: the cached one while glibc knows
+    /// it (`_offset`), even after a `lseek` of the descriptor behind the
+    /// stream's back, else the descriptor's (`do_ftell`).
+    fn file_offset(&mut self) -> Option<i64> {
+        match self.offset {
+            | Some(offset) => Some(offset),
+            | None => i64::try_from(self.descriptor_seek(SeekFrom::Current(0)).ok()?).ok(),
+        }
+    }
+
+    /// Writes out what the stream holds before `fclose` or `freopen` closes
+    /// it (`_IO_new_file_close_it`); whether that worked. Since glibc 2.42
+    /// a stream that is not writing but has read ahead, or holds pushed-back
+    /// bytes, then seeks its descriptor to the stream's position, so that
+    /// descriptors sharing the open file description continue from there
+    /// (commit be6818be31e7, bug 12724); a descriptor that cannot seek is
+    /// left as it is. glibc 2.39 left the offset where the reads left it.
+    pub(super) fn close_out(&mut self) -> bool {
+        let putting = self.writable && self.putting;
+        if !self.write_out() {
+            return false;
+        }
+        let read_ahead = self.in_backup || self.position < self.bytes.len();
+        if putting || !read_ahead || matches!(self.target, Target::Detached) {
+            return true;
+        }
+        let Some(at) = self.tell() else {
+            return self.errno == Some(ESPIPE);
+        };
+        let Ok(at) = u64::try_from(at) else {
+            self.errno = Some(EINVAL);
+            return false;
+        };
+        self.descriptor_seek(SeekFrom::Start(at)).is_ok() || self.errno == Some(ESPIPE)
     }
 
     /// Writes out what glibc holds and gives back what the buffer read

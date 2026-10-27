@@ -1,3 +1,4 @@
 flush all a 0 X
 flush pushback a 0 0 97 88 99 -1
 orientation 0 0 a 0 0 a 0 0 a 0 0 a 0 0 a
+fclose seeks a 0 1

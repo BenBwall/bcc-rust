@@ -6,7 +6,11 @@
    made a seek count and drop the pushback area of an oriented stream whose
    buffer was never allocated (commit 3e1d8d1d1dca, bug 27821: before it,
    _IO_have_backup tested _IO_save_base, which ungetc on such a stream
-   leaves null). The expected output is in stdio_modern_glibc.expected.
+   leaves null). glibc 2.42 also made fclose of a stream that has read
+   ahead seek its descriptor back to the stream's position, which other
+   descriptors on the same open file description then see (commit
+   be6818be31e7, bug 12724). The expected output is in
+   stdio_modern_glibc.expected.
    Declarations are written out so that no system header is needed. */
 typedef struct _IO_FILE FILE;
 typedef unsigned long size_t;
@@ -26,6 +30,11 @@ int fseek(FILE *, long, int);
 long ftell(FILE *);
 int remove(const char *);
 char *tmpnam(char *);
+int open(const char *, int, ...);
+int dup(int);
+int close(int);
+long lseek(int, long, int);
+FILE *fdopen(int, const char *);
 
 /* After ungetc and a SEEK_CUR of 1, where the stream is and what it reads:
    since glibc 2.41 a stream that some operation oriented counts the
@@ -91,6 +100,15 @@ int main(void)
     fclose(file);
   }
   printf("\n");
+  /* glibc 2.39 leaves the shared offset at 6, where the read left it. */
+  int fd = open(name, 0);
+  int copy = dup(fd);
+  reader = fdopen(fd, "r");
+  first = fgetc(reader);
+  int closed = fclose(reader);
+  long offset = lseek(copy, 0, 1);
+  printf("fclose seeks %c %d %ld\n", first, closed, offset);
+  close(copy);
   /* So does printf to a redirected stdout that has no buffer yet. */
   freopen(name, "r+", stdout);
   ungetc('X', stdout);

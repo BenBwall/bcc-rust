@@ -1203,9 +1203,51 @@ int main(void) {{ FILE *first = fopen(\"{path_text}\", \"r+\");
     /// write what glibc writes and leave the same file.
     #[test]
     fn descriptors_and_streams_match_glibc() {
-        for mode in 0..=8 {
+        for mode in 0..=9 {
             merged_mode_matches_glibc("posix_descriptors.c", mode);
         }
+    }
+
+    /// With every descriptor taken, `open`, `creat` and `fopen` fail with
+    /// `EMFILE` before touching the file system, as Linux does, so neither
+    /// `O_TRUNC` nor `"w"` empties the file; and glibc's `__xstat` family
+    /// accepts both x86-64 `_STAT_VER` values, 0 and 1. The host's own
+    /// descriptor limit varies, so the expected output is written out.
+    #[test]
+    fn full_descriptor_table_and_stat_versions_fail_as_glibc_does() {
+        if host() != Some("x86_64-unknown-linux-gnu") {
+            return;
+        }
+        let path = temporary("full-table.txt");
+        std::fs::write(&path, "KEEP").unwrap();
+        let path_text = path.to_str().unwrap();
+        let source = format!(
+            "typedef struct _IO_FILE FILE; int printf(const char *, ...);
+int open(const char *, int, ...); int creat(const char *, unsigned); int *__errno_location(void);
+FILE *fopen(const char *, const char *); struct stat {{ long words[18]; }};
+int __fxstat(int, int, struct stat *); int __xstat(int, const char *, struct stat *);
+int __lxstat(int, const char *, struct stat *);
+int main(void) {{ const char *name = \"{path_text}\"; int last = -1, fd, e[4], r[4]; struct stat \
+             st;
+  while ((fd = open(\"/dev/null\", 0)) >= 0) last = fd;
+  r[0] = open(name, 01 | 01000); e[0] = *__errno_location();
+  r[1] = creat(name, 0600); e[1] = *__errno_location();
+  r[2] = fopen(name, \"w\") != 0; e[2] = *__errno_location();
+  printf(\"%d %d %d %d %d %d %d\\n\", last, r[0], e[0], r[1], e[1], r[2], e[2]);
+  *__errno_location() = 0; r[0] = __fxstat(0, 1, &st); e[0] = *__errno_location();
+  r[1] = __xstat(1, name, &st); r[2] = __lxstat(0, name, &st);
+  r[3] = __xstat(3, name, &st); e[3] = *__errno_location();
+  printf(\"%d %d %d %d %d %d\\n\", r[0], e[0], r[1], r[2], r[3], e[3]); return 0; }}
+"
+        );
+        let output = bcc(&source, &["--interpret", "--interpret-allow-fs"]);
+        assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
+        assert_eq!(
+            text(&output.stdout),
+            "1023 -1 24 -1 24 0 24\n0 0 0 0 -1 22\n"
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "KEEP");
+        std::fs::remove_file(&path).unwrap();
     }
 
     /// `tests/fixtures/programs/posix_console.c`: on pipes, as the tests run

@@ -117,6 +117,35 @@ impl Status {
         }
     }
 
+    /// The status the host's `fstatat` reported.
+    #[cfg(target_os = "linux")]
+    #[cfg_attr(
+        target_arch = "x86_64",
+        expect(
+            clippy::useless_conversion,
+            reason = "`st_nlink` and `st_blksize` are narrower on other Linux architectures."
+        )
+    )]
+    pub(in crate::backend::interpreter::host) fn of_host(raw: &libc::stat) -> Self {
+        Self {
+            device:     raw.st_dev,
+            inode:      raw.st_ino,
+            links:      u64::from(raw.st_nlink),
+            mode:       raw.st_mode,
+            user:       raw.st_uid,
+            group:      raw.st_gid,
+            rdev:       raw.st_rdev,
+            size:       raw.st_size,
+            block_size: i64::from(raw.st_blksize),
+            blocks:     raw.st_blocks,
+            times:      [
+                (raw.st_atime, raw.st_atime_nsec),
+                (raw.st_mtime, raw.st_mtime_nsec),
+                (raw.st_ctime, raw.st_ctime_nsec),
+            ],
+        }
+    }
+
     /// The status of the console's output or error: a pipe of the buffer
     /// size glibc would allocate for it, or a terminal, owned by the user
     /// the interpreter runs as.

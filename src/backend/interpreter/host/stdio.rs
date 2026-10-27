@@ -721,7 +721,7 @@ impl DefaultHost<'_> {
         match entry.target {
             | Target::Output => self.console.output.flush(self.output.len()),
             | Target::Errors => self.console.flush_errors(&self.output),
-            | _ => return entry.write_out(),
+            | _ => return entry.close_out(),
         }
         self.route_flushed(stream)
     }
@@ -939,7 +939,19 @@ impl DefaultHost<'_> {
         let writable = access != Some(b'r') || plus;
         let appending = access == Some(b'a');
         let allowed = self.file_access;
-        let opened = if known {
+        // A full stream or descriptor table fails before the file system is
+        // touched, so `w` truncates nothing: `freopen` reuses its stream and
+        // the descriptor it just closed.
+        let room = match reopen {
+            | Some(_) => number.is_some() || self.descriptors.lowest_free(0).is_some(),
+            | None =>
+                (3..MAX_STREAMS)
+                    .any(|index| matches!(self.streams.entries[index].target, Target::Closed))
+                    && self.descriptors.lowest_free(0).is_some(),
+        };
+        let opened = if known && !room {
+            Err(errno::EMFILE)
+        } else if known {
             match self.path(path, memory)? {
                 | _ if !allowed => Err(errno::EACCES),
                 | Some(path) => options.open(path).map_err(|error| errno::from_io(&error)),
@@ -963,7 +975,7 @@ impl DefaultHost<'_> {
         {
             _ = opened.seek(SeekFrom::End(0)).ok();
         }
-        if known && !allowed {
+        if known && room && !allowed {
             self.deny_file_access();
         }
         let descriptor = match &file {

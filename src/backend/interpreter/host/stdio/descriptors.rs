@@ -97,30 +97,35 @@ impl DefaultHost<'_> {
             self.set_errno(memory, errno::EINVAL)?;
             return Ok(RuntimeValue::NULL);
         }
-        let target = match self.target_for(number) {
-            | Ok(target) => target,
-            | Err(code) => {
-                self.set_errno(memory, code)?;
-                return Ok(RuntimeValue::NULL);
-            },
-        };
-        let mut target = target;
-        if appending && let Some(file) = self.descriptors.file(number) {
-            super::super::posix::set_append(file);
-        }
-        // Without `+`, an appending stream starts at the end.
-        if appending
-            && !readable
-            && let Target::File(file) = &mut target
-        {
-            _ = std::io::Seek::seek(file, std::io::SeekFrom::End(0)).ok();
-        }
+        // Every failure comes before the descriptor's flags or offset
+        // change.
         let Some(index) = (3..MAX_STREAMS)
             .find(|&index| matches!(self.streams.entries[index].target, Target::Closed))
         else {
             self.set_errno(memory, errno::EMFILE)?;
             return Ok(RuntimeValue::NULL);
         };
+        let mut target = match self.target_for(number) {
+            | Ok(target) => target,
+            | Err(code) => {
+                self.set_errno(memory, code)?;
+                return Ok(RuntimeValue::NULL);
+            },
+        };
+        // glibc adds `O_APPEND` when the descriptor lacks it, and only then
+        // starts a stream without `+` at the end, which moves the offset
+        // the descriptor's duplicates share.
+        let added_append = appending
+            && self
+                .descriptors
+                .file(number)
+                .is_some_and(super::super::posix::set_append);
+        if added_append
+            && !readable
+            && let Target::File(file) = &mut target
+        {
+            _ = std::io::Seek::seek(file, std::io::SeekFrom::End(0)).ok();
+        }
         let stream = u32::try_from(index).expect("a small table");
         let object = memory.allocate(ObjectKind::Stream(stream), 0, Align::BYTE)?;
         let opened = self.streams.open_next();

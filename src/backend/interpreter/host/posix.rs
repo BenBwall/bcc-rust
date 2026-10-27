@@ -108,6 +108,10 @@ pub(super) const FUNCTIONS: &[&str] = &[
     "__xstat64",
     "__lxstat",
     "__lxstat64",
+    "fstatat",
+    "fstatat64",
+    "__fxstatat",
+    "__fxstatat64",
     "unlink",
     "isatty",
 ];
@@ -127,8 +131,18 @@ mod flags {
 /// `AT_FDCWD`.
 const CURRENT_DIRECTORY: i128 = -100;
 
-/// glibc's `_STAT_VER` on x86-64, which `__xstat` and its relatives check.
-const STAT_VERSION: i128 = 1;
+/// Whether `version` is one of the `_STAT_VER` values glibc's x86-64
+/// `__xstat` and its relatives accept: `_STAT_VER_KERNEL` (0) and
+/// `_STAT_VER_LINUX` (1), which have the same layout.
+fn stat_version(version: i128) -> bool {
+    matches!(version, 0 | 1)
+}
+
+/// The `fstatat` flags Linux accepts: `AT_SYMLINK_NOFOLLOW`,
+/// `AT_NO_AUTOMOUNT` and `AT_EMPTY_PATH`.
+const NO_FOLLOW: i128 = 0x100;
+const NO_AUTOMOUNT: i128 = 0x800;
+const EMPTY_PATH: i128 = 0x1000;
 
 /// How much one host `read` asks for at a time.
 const READ_CHUNK: usize = 1 << 16;
@@ -215,7 +229,7 @@ impl DefaultHost<'_> {
             | "pipe" => self.pipe(arg(0), memory)?,
             | "fstat" | "fstat64" => self.status_of_descriptor(int(0)?, arg(1), memory)?,
             | "__fxstat" | "__fxstat64" =>
-                if int(0)? == STAT_VERSION {
+                if stat_version(int(0)?) {
                     self.status_of_descriptor(int(1)?, arg(2), memory)?
                 } else {
                     Err(errno::EINVAL)
@@ -225,9 +239,17 @@ impl DefaultHost<'_> {
                 self.status_of_path(arg(0), arg(1), follow, memory)?
             },
             | "__xstat" | "__xstat64" | "__lxstat" | "__lxstat64" =>
-                if int(0)? == STAT_VERSION {
+                if stat_version(int(0)?) {
                     let follow = !call.name.starts_with("__l");
                     self.status_of_path(arg(1), arg(2), follow, memory)?
+                } else {
+                    Err(errno::EINVAL)
+                },
+            | "fstatat" | "fstatat64" =>
+                self.status_at(int(0)?, arg(1), arg(2), int(3)?, memory)?,
+            | "__fxstatat" | "__fxstatat64" =>
+                if stat_version(int(0)?) {
+                    self.status_at(int(1)?, arg(2), arg(3), int(4)?, memory)?
                 } else {
                     Err(errno::EINVAL)
                 },
@@ -266,6 +288,11 @@ impl DefaultHost<'_> {
     ) -> Result<Outcome, Fault> {
         self.path.clear();
         memory.read_c_string(path, &mut self.path)?;
+        // As Linux does, a full table fails before the file system is
+        // touched, so `O_CREAT` and `O_TRUNC` change nothing.
+        if self.descriptors.lowest_free(0).is_none() {
+            return Ok(Err(errno::EMFILE));
+        }
         if !self.file_access {
             self.deny_file_access();
             return Ok(Err(errno::EACCES));
@@ -518,8 +545,71 @@ impl DefaultHost<'_> {
         follow: bool,
         memory: &mut Memory<'_>,
     ) -> Result<Outcome, Fault> {
+        self.path.clear();
+        memory.read_c_string(path, &mut self.path)?;
+        self.status_of_named(buffer, follow, memory)
+    }
+
+    /// `fstatat`: the status of `path` relative to the directory
+    /// `directory` refers to (or the working directory for `AT_FDCWD`), or
+    /// of `directory` itself for an empty path with `AT_EMPTY_PATH`.
+    fn status_at(
+        &mut self,
+        directory: i128,
+        path: RuntimeValue,
+        buffer: RuntimeValue,
+        flags: i128,
+        memory: &mut Memory<'_>,
+    ) -> Result<Outcome, Fault> {
+        if flags & !(NO_FOLLOW | NO_AUTOMOUNT | EMPTY_PATH) != 0 {
+            return Ok(Err(errno::EINVAL));
+        }
+        let follow = flags & NO_FOLLOW == 0;
+        self.path.clear();
+        memory.read_c_string(path, &mut self.path)?;
+        if self.path.is_empty() {
+            if flags & EMPTY_PATH == 0 {
+                return Ok(Err(errno::ENOENT));
+            }
+            if directory != CURRENT_DIRECTORY {
+                return self.status_of_descriptor(directory, buffer, memory);
+            }
+            self.path.push(b'.');
+        }
+        if self.path.first() == Some(&b'/') || directory == CURRENT_DIRECTORY {
+            return self.status_of_named(buffer, follow, memory);
+        }
+        if !self.file_access {
+            self.deny_file_access();
+            return Ok(Err(errno::EACCES));
+        }
+        let status = match self.descriptors.get(directory).map(|entry| &entry.open) {
+            | None => Err(errno::EBADF),
+            | Some(Open::Console(_)) => Err(errno::ENOTDIR),
+            | Some(Open::File(file)) => host_status_at(file, &mut self.path, follow),
+        };
+        Ok(match status {
+            | Ok(status) => {
+                status.store(memory, buffer)?;
+                Ok(0)
+            },
+            | Err(code) => Err(code),
+        })
+    }
+
+    /// The status of the file `self.path` names, following a final
+    /// symbolic link when `follow`.
+    fn status_of_named(
+        &mut self,
+        buffer: RuntimeValue,
+        follow: bool,
+        memory: &mut Memory<'_>,
+    ) -> Result<Outcome, Fault> {
         let allowed = self.file_access;
-        let metadata = match self.path(path, memory)? {
+        let path = std::str::from_utf8(&self.path)
+            .ok()
+            .map(std::path::Path::new);
+        let metadata = match path {
             | _ if !allowed => Err(errno::EACCES),
             | None => Err(errno::ENOENT),
             | Some(path) => if follow {
@@ -605,6 +695,50 @@ fn mode(call: HostCall<'_>, index: usize, flags: i128) -> Result<Option<i128>, F
     Ok(Some(sext(Type::I32, integer(mode)?)))
 }
 
+/// The status of `path` (null-terminated here) relative to the directory
+/// `directory`, as the host's `fstatat` reports it.
+#[cfg(target_os = "linux")]
+fn host_status_at(
+    directory: &File,
+    path: &mut crate::util::bump::ArenaVec<'_, u8>,
+    follow: bool,
+) -> Result<Status, i32> {
+    use std::os::fd::AsRawFd as _;
+    if path.contains(&0) {
+        return Err(errno::EINVAL);
+    }
+    path.push(0);
+    let flags = if follow { 0 } else { libc::AT_SYMLINK_NOFOLLOW };
+    let mut raw = std::mem::MaybeUninit::<libc::stat>::uninit();
+    // SAFETY: `path` is null-terminated and outlives the call, and `raw`
+    // is writable storage for one `struct stat`.
+    let result = unsafe {
+        libc::fstatat(
+            directory.as_raw_fd(),
+            path.as_ptr().cast(),
+            raw.as_mut_ptr(),
+            flags,
+        )
+    };
+    _ = path.pop();
+    if result != 0 {
+        return Err(errno::from_io(&io::Error::last_os_error()));
+    }
+    // SAFETY: a successful `fstatat` filled the structure.
+    Ok(Status::of_host(&unsafe { raw.assume_init() }))
+}
+
+/// Without Linux's `fstatat`, a path relative to a directory descriptor is
+/// refused.
+#[cfg(not(target_os = "linux"))]
+fn host_status_at(
+    _directory: &File,
+    _path: &mut crate::util::bump::ArenaVec<'_, u8>,
+    _follow: bool,
+) -> Result<Status, i32> {
+    Err(errno::EINVAL)
+}
+
 /// Writes all of `bytes` to `file`, or the `errno` of the write that
 /// failed.
 pub(super) fn write_all(file: &mut File, mut bytes: &[u8]) -> Result<(), i32> {
@@ -621,8 +755,8 @@ pub(super) fn write_all(file: &mut File, mut bytes: &[u8]) -> Result<(), i32> {
 }
 
 /// Sets `O_APPEND` on the host file, as `fdopen` with an appending mode
-/// does.
-pub(super) fn set_append(file: &File) {
+/// does when the descriptor lacks it; whether it had to.
+pub(super) fn set_append(file: &mut File) -> bool {
     #[cfg(unix)]
     {
         use std::os::fd::AsRawFd as _;
@@ -630,14 +764,17 @@ pub(super) fn set_append(file: &File) {
         // SAFETY: `descriptor` is open for as long as `file` lives;
         // `F_GETFL` only reads its status flags.
         let status = unsafe { libc::fcntl(descriptor, libc::F_GETFL) };
-        if status >= 0 {
-            // SAFETY: as above; `F_SETFL` only sets them.
-            _ = unsafe { libc::fcntl(descriptor, libc::F_SETFL, status | libc::O_APPEND) };
+        if status < 0 || status & libc::O_APPEND != 0 {
+            return false;
         }
+        // SAFETY: as above; `F_SETFL` only sets them.
+        _ = unsafe { libc::fcntl(descriptor, libc::F_SETFL, status | libc::O_APPEND) };
+        true
     }
     #[cfg(not(unix))]
     {
         _ = file;
+        false
     }
 }
 

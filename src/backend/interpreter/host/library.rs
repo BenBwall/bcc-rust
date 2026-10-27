@@ -197,6 +197,8 @@ pub(super) fn signature(name: &str) -> Option<Signature> {
         | "stat" | "stat64" | "lstat" | "lstat64" => fixed(Int, &[Ptr, Ptr]),
         | "__fxstat" | "__fxstat64" => fixed(Int, &[Int, Int, Ptr]),
         | "__xstat" | "__xstat64" | "__lxstat" | "__lxstat64" => fixed(Int, &[Int, Ptr, Ptr]),
+        | "fstatat" | "fstatat64" => fixed(Int, &[Int, Ptr, Ptr, Int]),
+        | "__fxstatat" | "__fxstatat64" => fixed(Int, &[Int, Int, Ptr, Ptr, Int]),
         | _ => return None,
     })
 }

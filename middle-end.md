@@ -1409,9 +1409,12 @@ The POSIX descriptors (`host/posix.rs`) are a table of numbers from 0 to
 1023, of which only 0, 1 and 2 (the console) are open at the start, handed
 out lowest first: `open` and `openat` with Linux's flags and the mode
 after the umask, `creat`, `close`, `read`, `write`, `lseek`, `dup`,
-`dup2`, `dup3`, `pipe`, `fstat`, `stat`, `lstat` (and glibc's older
-`__xstat` forms) filling glibc's 144-byte x86-64 `struct stat`, `unlink`
-and `isatty`, each with the `errno` glibc's wrapper reports. A descriptor
+`dup2`, `dup3`, `pipe`, `fstat`, `stat`, `lstat`, `fstatat` (and glibc's
+older `__xstat` forms, which accept both x86-64 `_STAT_VER` values)
+filling glibc's 144-byte x86-64 `struct stat`, `unlink` and `isatty`,
+each with the `errno` glibc's wrapper reports. A full table fails with
+`EMFILE` before the file system is touched, so a refused `O_TRUNC` or
+`fopen` in `w` empties nothing. A descriptor
 on a file holds a host duplicate, so offsets and `O_APPEND` are shared as
 an open file description shares them. A pipe is a host pipe kept
 non-blocking: the program is its only process, so a read of an empty
@@ -1424,8 +1427,12 @@ the buffer size glibc would choose (a terminal under
 interoperate as glibc's do (`host/stdio/descriptors.rs`): each stream
 keeps its descriptor number (`fileno`), `fopen` takes the lowest free one
 and `freopen` keeps the old one, `fclose` closes it whatever it now refers
-to (failing with `EBADF` once it is closed), `fdopen` makes a stream on a
-descriptor with glibc's access checks, and a stream follows its number
+to (failing with `EBADF` once it is closed) and, as glibc 2.42 does
+(commit be6818be31e7), first seeks a stream that has read ahead back to
+its position, `fdopen` makes a stream on a descriptor with glibc's access
+checks (in an appending mode setting `O_APPEND`, and starting at the end
+only when it had to set it), `ftell` counts from the offset the stream
+cached rather than the descriptor's, and a stream follows its number
 through `close`, `dup2` and reuse. `stdout` and `stderr` stay in the
 console model; after each call the host passes what they wrote out to what
 descriptors 1 and 2 refer to then (a file after `dup2`, nothing after
