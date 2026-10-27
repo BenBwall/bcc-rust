@@ -106,9 +106,14 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
         value: Value,
         source: SourceVectors,
     ) -> Result<Value, LoweringError> {
+        // A `_Float16` classifies in `float`, which holds it exactly, against
+        // binary16's smallest normal.
+        let half = self.draft.value_type(value) == Type::F16;
+        let value = if half { self.widen_half(value) } else { value };
         let ty = self.draft.value_type(value);
         // Exact x87 parts: biased exponent and explicit integer bit.
         let minimum_exponent = match ty {
+            | Type::F32 if half => 16383 - 14,
             | Type::F32 => 16383 - 126,
             | Type::F64 => 16383 - 1022,
             | _ => 1,
