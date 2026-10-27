@@ -577,8 +577,10 @@ fn interpret(
     if allow_fs {
         host.allow_file_access();
     }
-    // glibc line-buffers a terminal's stdout and fully buffers a pipe's.
+    // glibc line-buffers a terminal's stdout and fully buffers a pipe's,
+    // in a buffer of the descriptor's block size.
     host.set_terminal_output(terminal);
+    host.set_console_blocks(block_size(&io::stdout()), block_size(&io::stderr()));
     host.set_terminal_input(terminal_input);
     let mut limits = interpreter::Limits::default();
     if let Some(steps) = steps {
@@ -637,6 +639,22 @@ fn interpret(
             TRAP_STATUS
         },
     }
+}
+
+/// The `st_blksize` of a standard stream's descriptor, which glibc sizes
+/// its buffer by.
+#[cfg(unix)]
+fn block_size(stream: &impl std::os::fd::AsFd) -> Option<usize> {
+    use std::os::unix::fs::MetadataExt as _;
+    let descriptor = stream.as_fd().try_clone_to_owned().ok()?;
+    let metadata = std::fs::File::from(descriptor).metadata().ok()?;
+    usize::try_from(metadata.blksize()).ok()
+}
+
+/// No descriptor block size outside Unix.
+#[cfg(not(unix))]
+fn block_size<T>(_stream: &T) -> Option<usize> {
+    None
 }
 
 /// Prints `text` to stdout and returns success.

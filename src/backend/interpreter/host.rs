@@ -200,6 +200,9 @@ impl Host for DefaultHost<'_> {
         let before = self.output.len();
         let mut result = self.dispatch(call, memory);
         let redirected = self.redirect_output(before, call.name);
+        // What remains past `before` went to the captured standard output.
+        let kind = stdio::written_by(call.name);
+        self.console.output.put(&self.output, before, kind);
         // A stream operation that failed passes its `errno` on.
         if let Some(code) = self.streams.take_errno()
             && result.is_ok()
@@ -228,6 +231,8 @@ impl Host for DefaultHost<'_> {
         // line; files keep only what was written out.
         let released = self.console.released(&self.output);
         self.output.truncate(released);
+        let written = self.console.error.flushed;
+        self.console.errors.truncate(written);
     }
 }
 
@@ -641,7 +646,26 @@ impl DefaultHost<'_> {
     /// Treats standard output as a terminal, which glibc line-buffers rather
     /// than fully buffering as for a pipe or file.
     pub(crate) fn set_terminal_output(&mut self, terminal: bool) {
-        self.console.line_buffered = terminal;
+        if terminal {
+            self.console.output.mode = stdio::Mode::Line;
+            self.console.output.block = stdio::TERMINAL_BUFFER;
+        } else {
+            self.console.output.mode = stdio::Mode::Full;
+        }
+    }
+
+    /// The buffer sizes glibc would give standard output and error, from
+    /// their descriptors' `st_blksize` (4096 for a Linux pipe); `BUFSIZ`
+    /// otherwise.
+    pub(crate) fn set_console_blocks(&mut self, output: Option<usize>, errors: Option<usize>) {
+        let size = |block: Option<usize>| match block {
+            | Some(block) if block > 0 && block < stdio::BUFSIZ => block,
+            | _ => stdio::BUFSIZ,
+        };
+        if self.console.output.mode != stdio::Mode::Line {
+            self.console.output.block = size(output);
+        }
+        self.console.error.block = size(errors);
     }
 
     /// Treats standard input as a terminal, which glibc line-buffers:
@@ -676,6 +700,9 @@ impl DefaultHost<'_> {
         }
         if output < self.output.len() {
             write(Channel::Output, &self.output[output..])?;
+        }
+        if errors < self.console.errors.len() {
+            write(Channel::Errors, &self.console.errors[errors..])?;
         }
         Ok(())
     }
@@ -774,12 +801,10 @@ impl<'a> DefaultHost<'a> {
             allocator:     arena,
             output:        ArenaVec::new_in(arena),
             console:       stdio::Console {
-                errors:        ArenaVec::new_in(arena),
-                marks:         ArenaVec::new_in(arena),
-                flushed:       0,
-                line_buffered: false,
-                scanned:       0,
-                line_end:      0,
+                errors: ArenaVec::new_in(arena),
+                marks:  ArenaVec::new_in(arena),
+                output: stdio::Channel::new(stdio::Mode::Full),
+                error:  stdio::Channel::new(stdio::Mode::Unbuffered),
             },
             file_access:   false,
             denied_files:  0,

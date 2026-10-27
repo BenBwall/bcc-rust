@@ -46,11 +46,11 @@ use crate::{
 
 /// glibc's `BUFSIZ`, its buffer size when the file's `st_blksize` is not
 /// smaller.
-const BUFSIZ: usize = 8192;
+pub(in crate::backend::interpreter::host) const BUFSIZ: usize = 8192;
 
 /// The buffer size of a stream modelled as a terminal: the `st_blksize` of
 /// a Linux pseudo-terminal.
-const TERMINAL_BUFFER: usize = 1024;
+pub(in crate::backend::interpreter::host) const TERMINAL_BUFFER: usize = 1024;
 
 /// How many buffers' worth one direct read takes at most. glibc reads the
 /// whole request at once; reading it in pieces makes no difference, since
@@ -79,9 +79,11 @@ pub(super) struct Stream<'a> {
     pub(super) object:    Option<Pointer>,
     /// The buffer's size once it is allocated (`_IO_buf_end -
     /// _IO_buf_base`), else 0, and whether glibc line-buffers the stream,
-    /// as it does a terminal.
+    /// as it does a terminal, or leaves it unbuffered (`_IO_UNBUFFERED`,
+    /// with a one-byte buffer), as `setvbuf` may.
     size:                 usize,
     line_buffered:        bool,
+    unbuffered:           bool,
     /// The buffer up to `_IO_read_end`, with `_IO_read_base` and
     /// `_IO_read_ptr` as indices. While the pushback area holds bytes, the
     /// read position stays where `ungetc` left the buffer, and the base
@@ -150,7 +152,8 @@ impl Release<'_, '_, '_> {
             return;
         };
         match stdout.target {
-            | Target::Output if self.console.line_buffered => self.console.flushed = self.written,
+            | Target::Output if self.console.output.mode == super::Mode::Line =>
+                self.console.output.flushed = self.written,
             | Target::File(_) if stdout.line_buffered && stdout.writable => {
                 let _ = stdout.write_out();
             },
@@ -204,7 +207,7 @@ impl Stream<'_> {
             return Some(byte);
         }
         self.allocate();
-        if self.line_buffered {
+        if self.line_buffered || self.unbuffered {
             stdout.release();
         }
         (self.base, self.position) = (0, 0);
@@ -572,13 +575,16 @@ impl Stream<'_> {
             return false;
         }
         self.pending.push(byte);
-        !(self.line_buffered && byte == b'\n') || self.write_out()
+        !(self.unbuffered || (self.line_buffered && byte == b'\n')) || self.write_out()
     }
 
     /// Writes what the `printf` family formatted, as glibc's
-    /// `__printf_buffer_to_file` does: byte by byte into the buffer, like
-    /// `fputc`. A stream that may not write fails even with nothing to
-    /// write. Whether all of it was written.
+    /// `__printf_buffer_to_file` does: into the put area directly while a
+    /// fully buffered stream that is writing has room, a byte as `fputc`
+    /// writes it when the area fills, and otherwise through a 128-byte
+    /// staging area that each fill or the end writes as `fputs` would. A
+    /// stream that may not write fails even with nothing to write. Whether
+    /// all of it was written.
     pub(super) fn put_formatted(&mut self, bytes: &[u8]) -> bool {
         self.oriented = true;
         if !self.writable {
@@ -586,14 +592,41 @@ impl Stream<'_> {
             self.errno = Some(EBADF);
             return false;
         }
-        bytes.iter().all(|&byte| self.put_char(byte))
+        let mut at = 0;
+        while at < bytes.len() {
+            let room = if self.putting && !self.line_buffered && !self.unbuffered {
+                self.room()
+            } else {
+                0
+            };
+            if room > 0 {
+                let filled = (bytes.len() - at).min(room);
+                self.pending.extend_from_slice(&bytes[at..at + filled]);
+                at += filled;
+                if at < bytes.len() {
+                    if !self.put_char(bytes[at]) {
+                        return false;
+                    }
+                    at += 1;
+                }
+            } else {
+                let chunk = (bytes.len() - at).min(super::console::PRINTF_STAGE);
+                if self.put_block(&bytes[at..at + chunk]) != chunk {
+                    return false;
+                }
+                at += chunk;
+            }
+        }
+        true
     }
 
     /// Writes `bytes` as `fputs` and `fwrite` do (`_IO_new_file_xsputn`),
-    /// returning how many it took: what fits fills the buffer if the stream
-    /// was already writing; otherwise the buffer is written out, whole
-    /// buffers' worth go to the file directly, and the rest fills the
-    /// buffer. Nothing to write is no write at all.
+    /// returning how many it took: what fits fills the buffer if a fully
+    /// buffered stream was already writing, or on a line-buffered one, a
+    /// block that fits up to its last newline; otherwise, or for that
+    /// newline, the buffer is written out, whole buffers' worth go to the
+    /// file directly, and the rest goes in as `fputc` writes it. Nothing to
+    /// write is no write at all.
     pub(super) fn put_block(&mut self, bytes: &[u8]) -> usize {
         self.oriented = true;
         if bytes.is_empty() {
@@ -603,18 +636,26 @@ impl Stream<'_> {
         if !self.start_write() {
             return 0;
         }
-        if self.line_buffered {
-            return bytes
-                .iter()
-                .take_while(|&&byte| self.put_char(byte))
-                .count();
+        // glibc keeps the put area of a line-buffered or unbuffered stream
+        // empty, so that each byte reaches `__overflow`.
+        let mut count = if writing && !self.line_buffered && !self.unbuffered {
+            self.room()
+        } else {
+            0
+        };
+        let mut must_flush = false;
+        if self.line_buffered && writing {
+            count = self.room();
+            if count >= bytes.len()
+                && let Some(newline) = bytes.iter().rposition(|&byte| byte == b'\n')
+            {
+                count = newline + 1;
+                must_flush = true;
+            }
         }
-        let mut taken = 0;
-        if writing {
-            taken = bytes.len().min(self.room());
-            self.pending.extend_from_slice(&bytes[..taken]);
-        }
-        if taken < bytes.len() {
+        let mut taken = count.min(bytes.len());
+        self.pending.extend_from_slice(&bytes[..taken]);
+        if taken < bytes.len() || must_flush {
             if !self.write_out() {
                 return taken;
             }
@@ -719,11 +760,51 @@ impl Stream<'_> {
             return;
         }
         self.open_input();
-        (self.size, self.line_buffered) = if self.terminal {
+        // glibc only ever turns line buffering on here, for a terminal.
+        let (size, line_buffered) = if self.terminal {
             (TERMINAL_BUFFER, true)
         } else {
             buffering(&self.target)
         };
+        self.size = size;
+        self.line_buffered |= line_buffered;
+    }
+
+    /// `setvbuf` (`_IO_setvbuf`): sets the stream's mode, and with a buffer
+    /// (`size` is `Some`) or for unbuffered mode replaces its buffer
+    /// (`_IO_SETBUF`): what it holds is written out and what it read ahead
+    /// given back first, and a zero size leaves it unbuffered. Fully
+    /// buffered mode without a buffer allocates the stream's own buffer now
+    /// and then turns off the line buffering a terminal would have given
+    /// it. Whether it worked, which only the write-out can stop.
+    /// C99: §7.19.5.6 paragraphs 2-3, p. 274; PDF p. 286.
+    pub(super) fn set_buffering(&mut self, mode: super::Mode, size: Option<usize>) -> bool {
+        use super::Mode;
+        self.line_buffered = mode == Mode::Line;
+        self.unbuffered = mode == Mode::Unbuffered;
+        let size = if self.unbuffered { Some(0) } else { size };
+        let Some(size) = size else {
+            if mode == Mode::Full && self.size == 0 {
+                self.allocate();
+                self.line_buffered = false;
+            }
+            return true;
+        };
+        if !self.sync() {
+            return false;
+        }
+        // `_IO_default_setbuf` empties the get and put areas.
+        self.drop_backup();
+        (self.base, self.position) = (0, 0);
+        self.bytes.clear();
+        (self.putting, self.write_base) = (false, 0);
+        if size == 0 {
+            self.unbuffered = true;
+            self.size = 1;
+        } else {
+            self.size = size;
+        }
+        true
     }
 
     /// Opens the process's standard input as a file on Unix, so that it
@@ -778,7 +859,7 @@ impl Stream<'_> {
         (self.eof, self.error) = (false, false);
         (self.readable, self.writable, self.appending) = (readable, writable, appending);
         self.terminal = false;
-        (self.size, self.line_buffered) = (0, false);
+        (self.size, self.line_buffered, self.unbuffered) = (0, false, false);
         self.bytes.clear();
         (self.base, self.position) = (0, 0);
         self.drop_backup();
@@ -803,6 +884,7 @@ impl<'a> Stream<'a> {
             object:        None,
             size:          0,
             line_buffered: false,
+            unbuffered:    false,
             bytes:         ArenaVec::new_in(arena),
             base:          0,
             position:      0,
@@ -915,6 +997,10 @@ mod tests {
     use std::fs::File;
 
     use super::{
+        super::{
+            Channel,
+            Mode,
+        },
         Console,
         Release,
         Stream,
@@ -937,12 +1023,10 @@ mod tests {
         std::fs::write(&input, "x\n").unwrap();
         let arena = Bump::new();
         let mut console = Console {
-            errors:        ArenaVec::new_in(&arena),
-            marks:         ArenaVec::new_in(&arena),
-            flushed:       0,
-            line_buffered: false,
-            scanned:       0,
-            line_end:      0,
+            errors: ArenaVec::new_in(&arena),
+            marks:  ArenaVec::new_in(&arena),
+            output: Channel::new(Mode::Full),
+            error:  Channel::new(Mode::Unbuffered),
         };
         let mut stdout = Stream::new_in(&arena);
         stdout.reopen(

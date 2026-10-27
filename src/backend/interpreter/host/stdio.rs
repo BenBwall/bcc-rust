@@ -10,10 +10,11 @@
 //! `printf` or `getchar` use implicitly.
 //!
 //! The captured output keeps glibc's order for a pipe: standard error is
-//! unbuffered, while standard output reaches the command line only at
-//! `fflush(stdout)`, `fflush(NULL)` or the end of the run (a full buffer's
-//! flush is not modelled). [`Console`] records where each error write falls
-//! among those flushes.
+//! unbuffered, while standard output reaches the command line when its
+//! buffer fills, at `fflush(stdout)`, `fflush(NULL)` or the end of the run,
+//! and after each newline on a terminal; `setvbuf` changes either stream's
+//! buffering ([`console`]). [`Console`] records where each error write falls
+//! among those write-outs.
 //!
 //! Streams read as glibc's do ([`stream`]): through a buffer of the size
 //! glibc picks, refilled by one `read` at a time, with glibc's pushback and
@@ -37,6 +38,7 @@
 //! pp. 268-304; PDF pp. 280-316 (operations, access, I/O, positioning and
 //! errors).
 
+mod console;
 mod stream;
 
 use std::{
@@ -47,6 +49,13 @@ use std::{
     },
 };
 
+pub(super) use console::{
+    Channel,
+    Console,
+    Mode,
+};
+pub(super) use stream::TERMINAL_BUFFER;
+pub(super) use stream::BUFSIZ;
 use stream::{
     Release,
     Stream,
@@ -115,6 +124,10 @@ pub(super) const FUNCTIONS: &[&str] = &[
     "__fprintf_chk",
     "__vfprintf_chk",
     "__acrt_iob_func",
+    "setvbuf",
+    "setbuf",
+    "setbuffer",
+    "setlinebuf",
 ];
 
 /// `EOF`.
@@ -131,49 +144,6 @@ const TMPNAM_NAMES: u32 = 1_000_000;
 /// The open streams the host can track at once, the standard three
 /// included.
 const MAX_STREAMS: usize = 64;
-
-/// What the program wrote to the standard streams, in the order the
-/// command line shows it.
-pub(super) struct Console<'a> {
-    /// Everything written to `stderr`.
-    pub(super) errors:        super::ArenaVec<'a, u8>,
-    /// For each write to `stderr`: how much of the host's output buffer had
-    /// been flushed before it, and the end of its bytes in `errors`.
-    pub(super) marks:         super::ArenaVec<'a, (usize, usize)>,
-    /// How much of the output buffer `fflush` has released.
-    pub(super) flushed:       usize,
-    /// Whether standard output is a terminal, which glibc line-buffers: each
-    /// newline releases what precedes it, and refilling a line-buffered input
-    /// stream releases all.
-    pub(super) line_buffered: bool,
-    /// How much of the output buffer [`Console::released`] has searched for
-    /// newlines, and the end of the last one it found, so that a run looks
-    /// at each byte once however often it writes to `stderr`.
-    pub(super) scanned:       usize,
-    pub(super) line_end:      usize,
-}
-
-impl Console<'_> {
-    /// How much of `output` has reached the terminal or pipe by now.
-    pub(super) fn released(&mut self, output: &[u8]) -> usize {
-        if self.line_buffered {
-            // Formatted text moved out of the buffer leaves it shorter; it is
-            // never shorter than what was written before, but search it again
-            // rather than trust a stale position.
-            if output.len() < self.scanned {
-                (self.scanned, self.line_end) = (0, 0);
-            }
-            if let Some(at) = output[self.scanned..]
-                .iter()
-                .rposition(|&byte| byte == b'\n')
-            {
-                self.line_end = self.scanned + at + 1;
-            }
-            self.scanned = output.len();
-        }
-        self.flushed.max(self.line_end).min(output.len())
-    }
-}
 
 /// The host's stream table.
 pub(super) struct Streams<'a> {
@@ -293,11 +263,16 @@ impl DefaultHost<'_> {
                 } else {
                     let stream = self.stream(arg(0), memory)?;
                     let entry = &mut self.streams.entries[stream];
-                    if matches!(entry.target, Target::Output) {
-                        self.console.flushed = self.output.len();
-                        true
-                    } else {
-                        entry.sync()
+                    match entry.target {
+                        | Target::Output => {
+                            self.console.output.flushed = self.output.len();
+                            true
+                        },
+                        | Target::Errors => {
+                            self.console.flush_errors(&self.output);
+                            true
+                        },
+                        | _ => entry.sync(),
                     }
                 };
                 RuntimeValue::Int(if flushed { 0 } else { EOF })
@@ -550,6 +525,19 @@ impl DefaultHost<'_> {
                 result?;
                 RuntimeValue::Int(count as u128)
             },
+            | "setvbuf" | "setbuf" | "setbuffer" | "setlinebuf" => {
+                let stream = self.stream(arg(0), memory)?;
+                let Some((mode, size)) = self.buffering_request(call, memory)? else {
+                    // glibc refuses an unknown mode without touching the
+                    // stream or `errno`.
+                    return Ok(HostReturn::Value(call.result.map(|ty| RuntimeValue::int(ty, EOF))));
+                };
+                let set = self.set_buffering(stream, mode, size);
+                if call.result.is_none() {
+                    return Ok(HostReturn::Value(None));
+                }
+                RuntimeValue::Int(if set { 0 } else { EOF })
+            },
             | "__acrt_iob_func" => {
                 let stream = u32::try_from(integer(arg(0))?).map_err(|_| UbKind::InvalidStream)?;
                 RuntimeValue::Ptr(memory.standard_stream(stream)?)
@@ -588,6 +576,80 @@ impl DefaultHost<'_> {
         Ok(RuntimeValue::Int(if written { count as u128 } else { EOF }))
     }
 
+    /// The mode and buffer size a `setvbuf`, `setbuf`, `setbuffer` or
+    /// `setlinebuf` call asks for, `None` for an unknown `setvbuf` mode: the
+    /// size is `Some` when the call replaces the buffer (`_IO_SETBUF`),
+    /// which `setvbuf` does only when it is given one or for `_IONBF`, and
+    /// `setbuf` and `setbuffer` always do, unbuffered without a buffer. The
+    /// mode constants are glibc's (`_IOFBF` 0, `_IOLBF` 1, `_IONBF` 2), or
+    /// the Windows C runtimes' (0, 0x40, 4) on Windows targets.
+    /// C99: §7.19.5.5 paragraph 2, p. 273; PDF p. 285; §7.19.5.6
+    /// paragraphs 2-3, p. 274; PDF p. 286.
+    fn buffering_request(
+        &self,
+        call: HostCall<'_>,
+        memory: &Memory<'_>,
+    ) -> Result<Option<(Mode, Option<usize>)>, Fault> {
+        let _ = memory;
+        let arg = |index: usize| call.args.get(index).copied().unwrap_or(RuntimeValue::Poison);
+        let size = |value: RuntimeValue| -> Result<usize, Fault> {
+            usize::try_from(integer(value)?).map_err(|_| UbKind::OutOfBounds.into())
+        };
+        let windows = matches!(
+            self.target,
+            crate::target::Target::WindowsGnu | crate::target::Target::WindowsMsvc
+        );
+        Ok(Some(match call.name {
+            | "setvbuf" => {
+                let mode = match (sext(Type::I32, integer(arg(2))?), windows) {
+                    | (0, _) => Mode::Full,
+                    | (1, false) | (0x40, true) => Mode::Line,
+                    | (2, false) | (4, true) => Mode::Unbuffered,
+                    | _ => return Ok(None),
+                };
+                let replaced = arg(1) != RuntimeValue::NULL || mode == Mode::Unbuffered;
+                (mode, if replaced { Some(size(arg(3))?) } else { None })
+            },
+            | "setbuf" | "setbuffer" => {
+                let size = match arg(1) {
+                    | RuntimeValue::NULL => 0,
+                    | _ if call.name == "setbuf" => BUFSIZ,
+                    | _ => size(arg(2))?,
+                };
+                let mode = if size == 0 {
+                    Mode::Unbuffered
+                } else {
+                    Mode::Full
+                };
+                (mode, Some(size))
+            },
+            | _ => (Mode::Line, None),
+        }))
+    }
+
+    /// Sets the buffering of `stream`, whichever it writes to; whether it
+    /// worked.
+    fn set_buffering(&mut self, stream: usize, mode: Mode, size: Option<usize>) -> bool {
+        let entry = &mut self.streams.entries[stream];
+        match entry.target {
+            | Target::Output => {
+                self.console
+                    .output
+                    .set_buffering(mode, size, self.output.len());
+                true
+            },
+            | Target::Errors => {
+                if size.is_some() {
+                    self.console.flush_errors(&self.output);
+                }
+                let length = self.console.errors.len();
+                self.console.error.set_buffering(mode, size, length);
+                true
+            },
+            | _ => entry.set_buffering(mode, size),
+        }
+    }
+
     /// The table index of standard stream `index`, which a function such as
     /// `printf` or `getchar` uses implicitly; undefined once it is closed.
     pub(super) fn standard(&self, index: usize) -> Result<usize, Fault> {
@@ -602,11 +664,12 @@ impl DefaultHost<'_> {
     /// C99: §7.19.5.1 paragraph 2, p. 270; PDF p. 282.
     fn flush_before_closing(&mut self, stream: usize) -> bool {
         let entry = &mut self.streams.entries[stream];
-        if matches!(entry.target, Target::Output) {
-            self.console.flushed = self.output.len();
-            return true;
+        match entry.target {
+            | Target::Output => self.console.output.flushed = self.output.len(),
+            | Target::Errors => self.console.flush_errors(&self.output),
+            | _ => return entry.write_out(),
         }
-        entry.write_out()
+        true
     }
 
     /// Counts a refused file-system access and keeps the first path, for the
@@ -645,15 +708,16 @@ impl DefaultHost<'_> {
         let written = match entry.target {
             | Target::Output => return true,
             | Target::Errors => {
+                let start = self.console.errors.len();
                 self.console.errors.extend_from_slice(bytes);
-                let end = self.console.errors.len();
-                let released = self.console.released(&self.output[..before]);
-                self.console.marks.push((released, end));
+                self.console
+                    .put_errors(start, kind, &self.output[..before]);
                 true
             },
             | _ => match kind {
                 | Written::Formatted => entry.put_formatted(bytes),
                 | Written::Byte => bytes.iter().all(|&byte| entry.put_char(byte)),
+                | Written::Block => entry.put_block(bytes) == bytes.len(),
                 // `puts` writes the string as a block and then its newline.
                 | Written::Line => {
                     let (line, newline) = bytes.split_at(bytes.len().saturating_sub(1));
@@ -703,7 +767,8 @@ impl DefaultHost<'_> {
         for index in order {
             let entry = &mut self.streams.entries[index];
             match entry.target {
-                | Target::Output => self.console.flushed = self.output.len(),
+                | Target::Output => self.console.output.flushed = self.output.len(),
+                | Target::Errors => self.console.flush_errors(&self.output),
                 | Target::Closed => {},
                 | _ => {
                     flushed &= entry.write_out();
@@ -947,9 +1012,10 @@ fn write_to(
     match entry.target {
         | Target::Output => output.extend_from_slice(bytes),
         | Target::Errors => {
+            let start = console.errors.len();
             console.errors.extend_from_slice(bytes);
-            let released = console.released(output);
-            console.marks.push((released, console.errors.len()));
+            let kind = if block { Written::Block } else { Written::Byte };
+            console.put_errors(start, kind, output);
         },
         | _ if block => return entry.put_block(bytes),
         | _ => return usize::from(entry.put_char(bytes[0])),
@@ -958,11 +1024,23 @@ fn write_to(
     bytes.len()
 }
 
+/// How the C library function `name` writes what it gives a stream.
+pub(super) fn written_by(name: &str) -> Written {
+    match name {
+        | "fputs" | "fwrite" => Written::Block,
+        | "puts" => Written::Line,
+        | _ if name.contains("printf") => Written::Formatted,
+        | _ => Written::Byte,
+    }
+}
+
 /// How a function writes the bytes it hands a stream.
-#[derive(Clone, Copy)]
-enum Written {
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum Written {
     /// Byte by byte, as `fputc` and `putchar`.
     Byte,
+    /// As a block, as `fputs` and `fwrite`.
+    Block,
     /// As the `printf` family: byte by byte, failing even with nothing to
     /// write on a stream that may not write.
     Formatted,
@@ -973,9 +1051,11 @@ enum Written {
 #[cfg(test)]
 mod tests {
     use super::{
-        Console,
+        Channel,
         DefaultHost,
+        Mode,
         TMPNAM_NAMES,
+        Written,
     };
     use crate::{
         backend::interpreter::{
@@ -1015,35 +1095,33 @@ mod tests {
         assert_eq!(name(&mut host, &mut memory), None);
     }
 
-    /// A line-buffered stdout searches each byte of the output buffer for a
-    /// newline once, however often the program writes to stderr: these
-    /// 200 000 writes look at 3.2 MB in all, where searching the whole
-    /// buffer at each would look at hundreds of gigabytes and run for
-    /// minutes.
+    /// A fully buffered stdout of 4096 bytes is written out when a byte
+    /// finds it full and when a block does not fit, with whole buffers'
+    /// worth of a block going straight through; a line-buffered one also
+    /// after each newline; an unbuffered one at once.
     #[test]
-    fn line_buffered_release_searches_each_byte_once() {
+    fn standard_output_is_written_out_where_glibc_writes_it() {
         let arena = Bump::new();
-        let mut console = Console {
-            errors:        ArenaVec::new_in(&arena),
-            marks:         ArenaVec::new_in(&arena),
-            flushed:       0,
-            line_buffered: true,
-            scanned:       0,
-            line_end:      0,
-        };
         let mut output = ArenaVec::new_in(&arena);
-        let (mut line_end, mut previous) = (0, 0);
-        for write in 0..200_000 {
-            output.extend_from_slice(b"no newline here.");
-            if write % 50_000 == 0 {
-                output.extend_from_slice(b"\n tail");
-                previous = line_end;
-                line_end = output.len() - 5;
-            }
-            assert_eq!(console.released(&output), line_end, "write {write}");
-            assert_eq!(console.scanned, output.len());
-        }
-        // A buffer cut short before its last newline is searched again.
-        assert_eq!(console.released(&output[..line_end - 1]), previous);
+        let mut channel = Channel::new(Mode::Full);
+        channel.block = 4096;
+        let mut write = |channel: &mut Channel, bytes: &[u8], kind: Written| {
+            let before = output.len();
+            output.extend_from_slice(bytes);
+            channel.put(&output, before, kind);
+            channel.flushed
+        };
+        assert_eq!(write(&mut channel, &[b'a'; 4096], Written::Byte), 0);
+        assert_eq!(write(&mut channel, b"b", Written::Byte), 4096);
+        // 4095 bytes fill the buffer; the rest writes it out, sends a whole
+        // buffer's worth through and keeps 100.
+        assert_eq!(write(&mut channel, &[b'c'; 4095 + 4096 + 100], Written::Block), 4097 + 4095 + 4096);
+        let mut line = Channel::new(Mode::Line);
+        line.block = 1024;
+        output.clear();
+        assert_eq!(write(&mut line, b"one\ntwo", Written::Byte), 4);
+        assert_eq!(write(&mut line, b"three\n", Written::Line), 13);
+        let mut none = Channel::new(Mode::Unbuffered);
+        assert_eq!(write(&mut none, b"x", Written::Byte), output.len());
     }
 }
