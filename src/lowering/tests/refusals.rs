@@ -49,10 +49,6 @@ fn a_unit_with_errors_is_refused_whole() {
 fn unsupported_constructs_name_themselves() {
     let cases = [
         (
-            "__float128 f(__float128 x) { return x; }",
-            "binary128 floating-point types",
-        ),
-        (
             "double _Complex f(void) { _Atomic(double _Complex) z; return z; }",
             "atomic complex values",
         ),
@@ -100,7 +96,7 @@ fn unmodeled_extension_types_are_refused_as_unsupported() {
 #[test]
 fn every_failing_function_is_reported() {
     let errors = lower(
-        "__float128 f(__float128 x) { return x; }
+        "double _Complex f(void) { _Atomic(double _Complex) z; return z; }
 int ok(int a) { return a; }
 int g(int n) { __asm__(\"\" :: \"t\"(1.0L)); return n; }",
     )

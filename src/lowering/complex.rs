@@ -379,6 +379,8 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
             | (true, Type::F64) => "__divdc3",
             | (false, Type::F80) => "__mulxc3",
             | (true, Type::F80) => "__divxc3",
+            | (false, Type::F128) => "__multc3",
+            | (true, Type::F128) => "__divtc3",
             | _ => return Err(LoweringError::missing("complex runtime precision", source)),
         };
         let layout = types::complex_layout(&self.unit.sema.types, ty, self.scratch)

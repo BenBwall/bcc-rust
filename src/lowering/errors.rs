@@ -69,7 +69,6 @@ pub(crate) enum LoweringErrorKind {
 /// A construct outside the prototype subset of `middle-end.md`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Construct {
-    Float128,
     ComplexAtomic,
     Atomic,
     Vector,
@@ -142,7 +141,6 @@ impl Construct {
     /// The construct as the diagnostic names it.
     pub(crate) const fn description(self) -> &'static str {
         match self {
-            | Self::Float128 => "binary128 floating-point types",
             | Self::ComplexAtomic => "atomic complex values",
             | Self::Atomic => "atomic types",
             | Self::Vector => "vector types",
