@@ -963,7 +963,9 @@ comparisons are ordered `fcmp`s except `!=`, which is `une`, and conversions are
 `sitofp`/`uitofp`/`fptosi`/`fptoui`/`fpext`/`fptrunc` (a value converts to
 `_Bool` by comparing with zero). Floating constants and static initializers use
 sema's folded values, rounded to the destination format. Real and complex
-binary128 C lowering still report the existing unsupported diagnostic.
+binary128 (`__float128`, `_Float128`) lower to `f128` with the same
+instructions; a folded binary128 constant becomes `fconst.f128`, and complex
+products and quotients call `__multc3` and `__divtc3`.
 
 Complex scalars use two immutable SSA component values retained in a sparse
 arena table; taking an lvalue's value immediately loads both components.
@@ -993,9 +995,10 @@ The default interpreter host bridges F32/F64 arithmetic helpers through real
 scalar inputs and host output temporaries and implements `crealf`/`creal` and
 `cimagf`/`cimag` extraction, including target ABI coercions. LLVM supports x87
 complex arithmetic and transport; the interpreter extracts x87 parts with
-`creall`/`cimagl` but refuses the `__mulxc3`/`__divxc3` helpers, and the native
+`creall`/`cimagl` but refuses the `__mulxc3`/`__divxc3` and binary128
+`__multc3`/`__divtc3` helpers, and the native
 backend retains its existing explicit F80 arithmetic limitation. This does not implement the
-complete complex math library, binary128 C lowering, or GNU complex conjugation
+complete complex math library or GNU complex conjugation
 and increment/decrement extensions. Atomic complex object operations retain an
 explicit unsupported diagnostic.
 
@@ -1265,6 +1268,15 @@ results and NaN constructors. Native libm evaluates float and double in their
 own precision; guest pointers stay in interpreter memory. Long double follows
 the target representation: binary64 on MSVC, and x87 `f80` on the GNU targets.
 
+`f128` values compute in `src/binary128.rs`, IEEE binary128 arithmetic in
+software that rounds once to nearest even and propagates NaNs as libgcc's
+soft-float routines do on x86-64, so interpreted programs print what
+programs linked with libgcc print. The host provides glibc's `strtof128`
+and `strfromf128` (with `printf`'s exact digits, since glibc's `printf`
+has no binary128 conversion) and the exact `_Float128` math functions
+(`sqrtf128`, `fabsf128`, `floorf128`, `fmodf128`, `frexpf128`, …); the
+others, like the complex helpers, are refused.
+
 x87 values compute in `src/x87.rs`, a software model of the processor's x87
 unit under the default control word (64-bit precision, round to nearest even,
 exceptions masked): exact integer arithmetic rounded once, pseudo-denormals
@@ -1318,11 +1330,11 @@ virtual registers, linear-scan register allocation with fixed-register
 ranges, frame layout with CFI and SEH unwind directives for System V and Win64,
 and AT&T assembly, which the bundled clang assembles, or ELF and COFF
 objects it encodes itself; the bundled clang links executables. It compiles
-integer, pointer, `i128`, `f32` and `f64` code, variadic definitions, dynamic
-stack allocation, computed `goto`, thread-local globals, calls that may
-return twice, C11 atomics and the GNU symbol attributes, and refuses
-everything else (`f80`, `f128`, `i128` float conversions) before writing any
-output.
+integer, pointer, `i128`, `f32` and `f64` code, `f80` on the x87 unit,
+`f128` through libgcc's soft-float routines (`isel/quad.rs`), variadic
+definitions, dynamic stack allocation, computed `goto`, thread-local globals,
+calls that may return twice, C11 atomics and the GNU symbol attributes, and
+refuses everything else before writing any output.
 `--backend=native` selects it for `-o`, `-c` and `-S`, and `--emit=asm` with
 it prints its assembly.
 For `-o` it encodes COFF objects directly on the Windows targets and has the
