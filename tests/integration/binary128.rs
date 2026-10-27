@@ -190,6 +190,8 @@ union G fg(union G x);
 struct F ff(struct F x);
 union A full(long a, long b, long c, long d, long e, long f, union A x, union A y);
 union A vsum(int count, ...);
+union A gp_tail(long a, long b, long c, long d, long e, long f, ...);
+union A sse_tail(double a, double b, double c, double d, double e, double f, double g, ...);
 ";
 
     /// Callees that change and return each union or structure shape.
@@ -207,6 +209,14 @@ union A vsum(int count, ...) {
     va_list list; union A total = {0}; va_start(list, count);
     for (int i = 0; i < count; i++) total.q += va_arg(list, union A).q;
     va_end(list); return total; }
+union A gp_tail(long a, long b, long c, long d, long e, long f, ...) {
+    va_list list; va_start(list, f); union A x = va_arg(list, union A);
+    x.q += va_arg(list, union A).q + va_arg(list, long) + a + b + c + d + e + f;
+    va_end(list); return x; }
+union A sse_tail(double a, double b, double c, double d, double e, double f, double g, ...) {
+    va_list list; va_start(list, g); union A x = va_arg(list, union A);
+    x.q += va_arg(list, union A).q + va_arg(list, long) + a + b + c + d + e + f + g;
+    va_end(list); return x; }
 ";
 
     /// A caller that checks each result; it exits with the failing check.
@@ -223,6 +233,8 @@ union A vsum(int count, ...) {
     if (full(1, 2, 3, 4, 5, 6, a, a).q != 24.0Q) return 8;
 #ifndef NO_VARARGS
     if (vsum(3, a, a, a).q != 4.5Q) return 9;
+    if (gp_tail(1, 2, 3, 4, 5, 6, a, a, 7L).q != 31.0Q) return 10;
+    if (sse_tail(1, 2, 3, 4, 5, 6, 7, a, a, 8L).q != 39.0Q) return 11;
 #endif
     return 0;
 }
@@ -233,10 +245,12 @@ union A vsum(int count, ...) {
     /// with the default (Clang) identity a callee or caller built by bcc
     /// links with one built by the bundled Clang, and with the GCC identity
     /// with one built by GCC, on both back ends and in both directions,
-    /// including an argument after the general registers run out. Clang's
-    /// own `va_arg` of such a union reads the wrong registers, so Clang's
-    /// callee is not given variadic ones. The interpreter runs the whole
-    /// program.
+    /// including arguments and variadic arguments after the general or the
+    /// vector registers run out, where Clang passes a split union's low
+    /// part on the stack and its high part in a register. Clang's own
+    /// `va_arg` of such a union reads the wrong registers, so Clang's callee
+    /// is not given variadic ones. bcc's halves also link with each other,
+    /// and the interpreter runs the whole program.
     #[test]
     fn binary128_unions_link_with_the_claimed_compiler() {
         if !cfg!(all(
@@ -306,6 +320,12 @@ union A vsum(int count, ...) {
                 &checks,
                 &["-DNO_VARARGS"],
                 &object("bcc-caller.o"),
+            );
+            bcc(identity, &checks, &[], &object("bcc-full-caller.o"));
+            assert_eq!(
+                run(&object("bcc-callee.o"), &object("bcc-full-caller.o")),
+                Some(0),
+                "{backend}"
             );
             assert_eq!(
                 run(&object("clang-callee.o"), &object("bcc-caller.o")),

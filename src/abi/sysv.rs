@@ -151,8 +151,11 @@ pub(super) fn result<'s>(
 /// takes as the low eightbyte's type; `GetX86_64ByValArgumentPair` then
 /// widens that 16-byte part to `i64`, so the low eightbyte travels in a
 /// general register (`X86_64ABIInfo`, `clang/lib/CodeGen/Targets/X86.cpp`).
-/// Clang's own `va_arg` still reads both eightbytes from the vector save
-/// area; bcc's reads them from where callers put them.
+/// Clang's caller still decides between registers and memory by the
+/// classes, so once the general registers run out the low part goes to the
+/// stack and the high part to a vector register. Clang's own `va_arg`
+/// reads both eightbytes from the vector save area; bcc's reads each part
+/// from where Clang's caller puts it.
 /// An aggregate that is only an `fp128` (SSE and SSEUP) travels in one
 /// vector register in both.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -163,6 +166,16 @@ pub(crate) enum Dialect {
 }
 
 impl Dialect {
+    /// The classes of an aggregate the dialect passes as a split `fp128`
+    /// (see [`Dialect`]), whose parts each travel as a scalar of their own.
+    pub(super) fn split_quad(self, layout: AggregateLayout<'_>) -> Option<[Class; 2]> {
+        match classify(layout) {
+            | Classification::Classes(classes) if self.splits_quad(layout, classes) =>
+                Some(classes),
+            | _ => None,
+        }
+    }
+
     /// Whether the dialect passes the low eightbyte of a split `fp128` as an
     /// `i64` (see [`Dialect`]). Its class stays SSE, so it counts against
     /// the vector registers as in Clang, while the back ends give the `i64`
