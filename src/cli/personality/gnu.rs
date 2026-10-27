@@ -221,18 +221,10 @@ const PLAIN_OPTIONS: [&str; 27] = [
 ];
 
 /// GCC options that need no translation and cannot change the program bcc
-/// builds: driver conveniences and reports, and what bcc always does.
+/// builds: driver conveniences and reports.
 /// `-g*` (debug information, which bcc does not emit) and the `-f` and `-m`
 /// options in `unimplemented.rs` are ignored too.
-const IGNORED_OPTIONS: [&str; 7] = [
-    "-pipe",
-    "-save-temps",
-    "-Q",
-    "-H",
-    "-time",
-    "-fsigned-char",
-    "-fno-unsigned-char",
-];
+const IGNORED_OPTIONS: [&str; 5] = ["-pipe", "-save-temps", "-Q", "-H", "-time"];
 
 impl State<'_> {
     /// Translates one argument, reading its operand from `rest`. Returns
@@ -324,8 +316,6 @@ impl State<'_> {
             | "-pg" | "-p" => self.invocation.warning(format_args!(
                 "'{text}' is not supported: bcc does not instrument programs for profiling"
             )),
-            | "-funsigned-char" | "-fno-signed-char" =>
-                self.unsupported(text, "plain char is always signed in bcc"),
             | "-m32" | "-mx32" | "-m16" => self.unsupported(text, "bcc compiles for x86-64 only"),
             | "-traditional" | "-traditional-cpp" =>
                 self.unsupported(text, "bcc has no traditional preprocessor"),

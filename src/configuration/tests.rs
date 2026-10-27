@@ -96,6 +96,47 @@ fn msvc_groups_are_independent_and_recomputed() {
     assert_eq!(without_seh.standard(), CStandard::C99);
     assert!(!all.with_msvc_extensions(false).accepts(Feature::MsDeclspec));
 }
+/// The `_FloatN` keywords come with a GCC identity, as GCC 7 and later
+/// provide them, and `-f[no-]floatn-types` overrides the identity whichever
+/// comes first.
+#[test]
+fn interchange_float_types_follow_the_identity_unless_chosen() {
+    let base = CompilerConfiguration::new(CStandard::C17, ExtensionPolicy::Allow);
+    for (identity, expected) in [
+        (CompilerIdentity::Clang, false),
+        (CompilerIdentity::Gcc, true),
+        (CompilerIdentity::Msvc, false),
+        (CompilerIdentity::ClangCl, false),
+        (CompilerIdentity::Tcc, false),
+    ] {
+        let configuration = base.with_compiler_identity(identity);
+        assert_eq!(
+            configuration.interchange_float_types(),
+            expected,
+            "{identity:?}"
+        );
+        assert_eq!(
+            configuration.accepts(Feature::InterchangeFloatTypes),
+            expected,
+            "{identity:?}"
+        );
+        for chosen in [false, true] {
+            for configuration in [
+                base.with_interchange_float_types(chosen)
+                    .with_compiler_identity(identity),
+                base.with_compiler_identity(identity)
+                    .with_interchange_float_types(chosen),
+            ] {
+                assert_eq!(
+                    configuration.accepts(Feature::InterchangeFloatTypes),
+                    chosen,
+                    "{identity:?}"
+                );
+            }
+        }
+    }
+}
+
 #[test]
 fn dialect_aliases_are_complete() {
     for (alias, standard, gnu) in [

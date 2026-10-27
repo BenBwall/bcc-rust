@@ -161,6 +161,231 @@ mod tests {
         assert_eq!(cl_expand("--msvc-mode", &["/DX#5", "/DY=6"], "X Y"), "5 6");
     }
 
+    /// `-funsigned-char` and its relatives in GCC, Clang and TCC, and `/J`
+    /// in `cl` and clang-cl, make plain `char` unsigned, with the macros
+    /// each compiler defines for `<limits.h>`; the last option wins.
+    #[test]
+    fn plain_char_signedness_follows_each_compilers_options() {
+        let directory = Directory::new();
+        directory.write(
+            "probe.c",
+            "#include <limits.h>\nCHAR_MIN (char)-1 < 0 __CHAR_UNSIGNED__ _CHAR_UNSIGNED\n",
+        );
+        let expand = |mode: &str, options: &[&str]| {
+            let mut args = options.to_vec();
+            if mode.ends_with("cl-mode") || mode == "--msvc-mode" {
+                args.extend(["/nologo", "/EP", "probe.c"]);
+            } else {
+                args.extend(["-E", "-P", "probe.c"]);
+            }
+            let output = directory.bcc(mode, &args);
+            succeeds(&output);
+            stdout(&output)
+                .lines()
+                .find(|line| line.contains("(char)"))
+                .unwrap_or_default()
+                .to_owned()
+        };
+        let signed = "(- 127 - 1) (char)-1 < 0 __CHAR_UNSIGNED__ _CHAR_UNSIGNED";
+        let unsigned = "0 (char)-1 < 0 1 _CHAR_UNSIGNED";
+        for mode in ["--gcc-mode", "--clang-mode", "--tcc-mode"] {
+            assert_eq!(expand(mode, &[]), signed, "{mode}");
+            for options in [
+                &["-funsigned-char"][..],
+                &["-fno-signed-char"],
+                &["-fsigned-char", "-funsigned-char"],
+            ] {
+                assert_eq!(expand(mode, options), unsigned, "{mode} {options:?}");
+            }
+            for options in [
+                &["-fno-unsigned-char"][..],
+                &["-funsigned-char", "-fsigned-char"],
+                &["-fno-signed-char", "-fno-unsigned-char"],
+            ] {
+                assert_eq!(expand(mode, options), signed, "{mode} {options:?}");
+            }
+        }
+        // `cl /J` defines `_CHAR_UNSIGNED`, as clang-cl's does; bcc keeps
+        // Clang's `__CHAR_UNSIGNED__` beside it, as clang-cl does.
+        for mode in ["--msvc-mode", "--clang-cl-mode"] {
+            assert_eq!(
+                expand(mode, &[]),
+                "(- 127 - 1) (char)-1 < 0 __CHAR_UNSIGNED__ _CHAR_UNSIGNED",
+                "{mode}"
+            );
+            assert_eq!(expand(mode, &["/J"]), "0 (char)-1 < 0 1 1", "{mode}");
+        }
+        assert_eq!(
+            expand("--clang-cl-mode", &["-funsigned-char"]),
+            "0 (char)-1 < 0 1 1"
+        );
+        // The program compiles with the signedness the macros claim.
+        directory.write(
+            "char.c",
+            "#include <limits.h>\n_Static_assert(((char)-1 < 0) == (CHAR_MIN < 0), \
+             \"\");\n_Static_assert(CHAR_MIN == 0, \"\");\n",
+        );
+        for (mode, options) in [
+            ("--gcc-mode", &["-c", "-funsigned-char", "char.c"][..]),
+            ("--clang-mode", &["-c", "-fno-signed-char", "char.c"]),
+            ("--tcc-mode", &["-c", "-funsigned-char", "char.c"]),
+            ("--msvc-mode", &["/nologo", "/c", "/J", "char.c"]),
+            ("--clang-cl-mode", &["/c", "/J", "char.c"]),
+        ] {
+            succeeds(&directory.bcc(mode, options));
+        }
+    }
+
+    /// GCC 7 and later provide `_Float32`, `_Float64`, `_Float32x`,
+    /// `_Float64x` and `_Float128` as distinct types with `f32`-style
+    /// suffixes and `__FLT32_*__`-family macros, in every mode; Clang, `cl`
+    /// and TCC provide none of them in C, so the names stay identifiers
+    /// for glibc's typedefs there.
+    #[test]
+    fn gcc_mode_provides_the_floatn_types_as_gcc_does() {
+        let gcc = macros("--gcc-mode");
+        for (name, value) in [
+            ("__FLT32_MANT_DIG__", "24"),
+            ("__FLT64_MAX_EXP__", "1024"),
+            ("__FLT32X_DIG__", "15"),
+            ("__FLT64X_MANT_DIG__", "64"),
+            (
+                "__FLT128_MAX__",
+                "1.18973149535723176508575932662800702e+4932F128",
+            ),
+            ("__FLT_EVAL_METHOD_TS_18661_3__", "0"),
+            ("__GCC_IEC_559", "2"),
+            ("__LDBL_IS_IEC_60559__", "1"),
+        ] {
+            assert_eq!(defines(&gcc, name).as_deref(), Some(value), "{name}");
+        }
+        // GCC 14 defines no `__STDC_IEC_60559_TYPES__` for x86-64, and the
+        // types are keywords, not macros.
+        assert_eq!(defines(&gcc, "__STDC_IEC_60559_TYPES__"), None);
+        assert_eq!(defines(&gcc, "_Float32"), None);
+        for mode in ["--clang-mode", "--tcc-mode"] {
+            let listing = macros(mode);
+            assert_eq!(defines(&listing, "__FLT32_MANT_DIG__"), None, "{mode}");
+            assert_eq!(defines(&listing, "__GCC_IEC_559"), None, "{mode}");
+            assert_eq!(defines(&listing, "_Float32"), None, "{mode}");
+        }
+        assert_eq!(
+            cl_expand("--msvc-mode", &[], "__FLT32_MANT_DIG__ _Float32"),
+            "__FLT32_MANT_DIG__ _Float32"
+        );
+        let directory = Directory::new();
+        directory.write(
+            "types.c",
+            "_Static_assert(_Generic(1.0f64, double: 0, _Float64: 1), \
+             \"\");\n_Static_assert(_Generic((_Float32)1, float: 0, _Float32: 1), \
+             \"\");\n_Static_assert(_Generic(1.0f64x, long double: 0, _Float64x: 1), \
+             \"\");\n_Static_assert(sizeof(_Float128) == 16 && sizeof(_Float32x) == 8, \
+             \"\");\n_Complex _Float32 z;\n",
+        );
+        for std in ["-std=gnu17", "-std=c11", "-std=c23"] {
+            succeeds(&directory.bcc("--gcc-mode", &["-fsyntax-only", std, "types.c"]));
+        }
+        // Without the types the GCC identity spells them as the standard
+        // types, which glibc's GCC paths then use, and rejects the suffixes.
+        directory.write(
+            "names.c",
+            "_Float64 x = 1.0; long double *y = (_Float64x *)0;\n",
+        );
+        succeeds(&directory.bcc(
+            "--gcc-mode",
+            &["-fsyntax-only", "-fno-floatn-types", "names.c"],
+        ));
+        assert_eq!(
+            directory
+                .bcc(
+                    "--gcc-mode",
+                    &["-fsyntax-only", "-fno-floatn-types", "types.c"]
+                )
+                .status
+                .code(),
+            Some(1)
+        );
+        // Clang 23 knows none of these names in C.
+        let clang = directory.bcc("--clang-mode", &["-fsyntax-only", "types.c"]);
+        assert_eq!(clang.status.code(), Some(1), "{}", stderr(&clang));
+        succeeds(&directory.bcc(
+            "--clang-mode",
+            &["-fsyntax-only", "-ffloatn-types", "types.c"],
+        ));
+    }
+
+    /// The floating-point macros of the GCC identity are the host GCC's,
+    /// apart from the types bcc lacks (`_Float16`, `__bf16`), the standard
+    /// types' constants, which bcc spells as Clang does, and what glibc's
+    /// `stdc-predef.h` adds.
+    #[test]
+    fn gcc_mode_floating_macros_match_the_host_gcc() {
+        let Some(host) = host_gcc_macros() else {
+            eprintln!("skipping: no x86-64 Linux GCC 13 or later on the host");
+            return;
+        };
+        let compared = |listing: &str| -> Vec<String> {
+            let mut lines: Vec<String> = listing
+                .lines()
+                .filter(|line| {
+                    let Some(name) = line.strip_prefix("#define ") else {
+                        return false;
+                    };
+                    [
+                        "__FLT32",
+                        "__FLT64",
+                        "__FLT128",
+                        "__FLT_EVAL_METHOD_TS",
+                        "__GCC_IEC_559",
+                    ]
+                    .iter()
+                    .any(|prefix| name.starts_with(prefix))
+                        || name.contains("_IS_IEC_60559__")
+                            && !name.starts_with("__FLT16")
+                            && !name.starts_with("__BFLT16")
+                })
+                .map(str::to_owned)
+                .collect();
+            lines.sort();
+            lines
+        };
+        let bcc = compared(&macros("--gcc-mode"));
+        assert!(bcc.len() > 70, "{bcc:#?}");
+        assert_eq!(bcc, compared(&host));
+    }
+
+    /// `gcc -std=gnu17 -dM -E` of an empty file, from a host GCC that
+    /// targets x86-64 Linux and defines the floating-point macros as GCC 13
+    /// and later do.
+    fn host_gcc_macros() -> Option<String> {
+        let gcc = |args: &[&str]| {
+            Command::new("gcc")
+                .args(args)
+                .output()
+                .ok()
+                .filter(|output| output.status.success())
+                .map(|output| stdout(&output))
+        };
+        let machine = gcc(&["-dumpmachine"])?;
+        let major: u32 = gcc(&["-dumpversion"])?
+            .trim()
+            .split('.')
+            .next()?
+            .parse()
+            .ok()?;
+        if !machine.starts_with("x86_64-") || !machine.contains("linux") || major < 13 {
+            return None;
+        }
+        let directory = Directory::new();
+        directory.write("empty.c", "");
+        gcc(&[
+            "-std=gnu17",
+            "-dM",
+            "-E",
+            directory.path("empty.c").to_str()?,
+        ])
+    }
+
     #[test]
     fn version_queries_answer_like_their_compilers_and_name_bcc() {
         let directory = Directory::new();
@@ -231,11 +456,6 @@ mod tests {
                 "clang: error: unknown argument: '-fbogus'",
             ),
             ("--tcc-mode", "-q", "tcc: error: invalid option -- '-q'"),
-            (
-                "--gcc-mode",
-                "-funsigned-char",
-                "plain char is always signed in bcc",
-            ),
         ] {
             let output = directory.bcc(mode, &["-c", option, "x.c"]);
             assert_eq!(output.status.code(), Some(1), "{mode} {option}");

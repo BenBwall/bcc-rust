@@ -18,7 +18,10 @@ impl Target {
     /// Appends the characteristics macros of every interchange and extended
     /// floating type the target provides: `_Float32`, `_Float64` and
     /// `_Float32x` always, `_Float64x` where `long double` is wider than
-    /// binary64, and `_Float128` where binary128 is a type.
+    /// binary64, and `_Float128` where binary128 is a type. Then
+    /// `__FLT_EVAL_METHOD_TS_18661_3__`, the evaluation method counting
+    /// these types, which glibc's `<math.h>` prefers to `__FLT_EVAL_METHOD__`:
+    /// 0, since every bcc target evaluates each type in its own format.
     pub(crate) fn write_interchange_float_macros(self, out: &mut impl Write) {
         for characteristics in CHARACTERISTICS {
             let provided = match characteristics.name {
@@ -30,6 +33,7 @@ impl Target {
                 characteristics.write(out);
             }
         }
+        _ = out.write_str("#define __FLT_EVAL_METHOD_TS_18661_3__ 0\n");
     }
 }
 

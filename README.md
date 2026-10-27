@@ -198,8 +198,10 @@ change the program (warnings, diagnostics, debug information, tuning), warns
 about hardening it does not apply (`-fstack-protector`, `/GS`), and refuses
 the rest (`-fshort-enums`, `-mno-sse`, `/Gv`) with the compiler's kind of
 error. It diagnoses unknown options as the compiler does, and claims the
-compiler: `__GNUC__` 14 for GCC, `_MSC_VER` 1933 with every Microsoft
-extension for `cl`, `__TINYC__` for TCC, and the compiler's diagnostic
+compiler: `__GNUC__` 14 and the `_Float32`-family keyword types for GCC,
+`_MSC_VER` 1933 with every Microsoft extension for `cl`, `__TINYC__` for
+TCC, the compiler's spelling of an unsigned plain `char` (`-funsigned-char`,
+`cl /J`), and the compiler's diagnostic
 format, default target, system header directories, output names and version
 banners, which still name bcc. bcc's own `--compiler-identity` and
 `--diagnostic-format` select the identity and format alone.

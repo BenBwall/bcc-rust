@@ -612,9 +612,6 @@ impl LanguageFlag {
                 | _ => None,
             };
         }
-        match text {
-            | _ => {},
-        }
         if Relocation::parse(text).is_some() {
             return Some(Self::Relocation);
         }

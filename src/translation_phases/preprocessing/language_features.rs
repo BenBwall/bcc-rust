@@ -1044,11 +1044,19 @@ pub(super) fn with_identity_macros<'a>(
         }
     }
     // GCC 7 and later describe the interchange and extended floating types
-    // they provide; glibc's GCC paths read these macros.
+    // they provide; glibc's GCC paths read these macros. A GCC identity
+    // without the types (`-fno-floatn-types`) still makes glibc use their
+    // names, so bcc spells them as the standard types of the same
+    // representation, which are not distinct types.
     if configuration.interchange_float_types() {
         configuration
             .target()
             .write_interchange_float_macros(&mut out);
+    } else if identity == CompilerIdentity::Gcc {
+        out.push_str(
+            "#define _Float32 float\n#define _Float64 double\n#define _Float32x double\n#define \
+             _Float64x long double\n#define _Float128 __float128\n",
+        );
     }
     // The relocation model `-fpic` and its family select, as Clang spells
     // it (GCC manual, "Code Gen Options").
@@ -1075,11 +1083,13 @@ pub(super) fn with_identity_macros<'a>(
 
 /// The macros that change when bcc claims another compiler than Clang
 /// (`--compiler-identity`), read after the target's definitions and the GNU
-/// claim, which they adjust. GCC 14.2 defines no Clang macros; its
-/// `__VERSION__` and execution character set names are GCC's, and it names
-/// the TS 18661-3 types `_Float32`, `_Float64`, `_Float32x`, `_Float64x` and
-/// `_Float128` as keywords, which glibc's headers then use: bcc spells them
-/// as the standard types of the same representation. MSVC 19.33 (`cl.exe`)
+/// claim, which they adjust. GCC 14.2 defines no Clang macros, and its
+/// `__VERSION__` and execution character set names are GCC's; it claims
+/// IEC 60559 arithmetic (`__GCC_IEC_559` 2, as without `-ffast-math`) and
+/// formats for the standard floating types (`__FLT_IS_IEC_60559__`, which
+/// GCC 13 and later define as 1 for x86-64's three formats); its `_FloatN`
+/// keywords come with the identity (`interchange_float_types`), not from
+/// here. MSVC 19.33 (`cl.exe`)
 /// defines neither GNU nor Clang macros, `_MSVC_TRADITIONAL` as 0 for bcc's
 /// conforming preprocessor (MSVC's `/Zc:preprocessor`) and `_MT` for the
 /// default static runtime; clang-cl keeps the Clang macros. TCC 0.9.27
@@ -1098,8 +1108,9 @@ fn identity_claim(identity: CompilerIdentity) -> &'static str {
             "#define __VERSION__ \"14.2.0\"\n",
             "#define __GNUC_EXECUTION_CHARSET_NAME \"UTF-8\"\n",
             "#define __GNUC_WIDE_EXECUTION_CHARSET_NAME \"UTF-32LE\"\n",
-            "#define _Float32 float\n#define _Float64 double\n#define _Float32x double\n",
-            "#define _Float64x long double\n#define _Float128 __float128\n",
+            "#define __GCC_IEC_559 2\n#define __GCC_IEC_559_COMPLEX 2\n",
+            "#define __FLT_IS_IEC_60559__ 1\n#define __DBL_IS_IEC_60559__ 1\n#define \
+             __LDBL_IS_IEC_60559__ 1\n",
         ),
         | CompilerIdentity::Msvc => concat!(
             "#undef __clang__\n#undef __clang_major__\n#undef __clang_minor__\n#undef \

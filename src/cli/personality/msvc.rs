@@ -583,7 +583,8 @@ impl State {
                 .push(format!("-fpack-struct={}", &option[2..]).into()),
             | "Zc:trigraphs" => self.bcc.push("-ftrigraphs".into()),
             | "Zc:trigraphs-" => self.bcc.push("-fno-trigraphs".into()),
-            | "J" => self.unsupported(invocation, option, "plain char is always signed in bcc"),
+            // An unsigned plain `char`, which also defines `_CHAR_UNSIGNED`.
+            | "J" => self.bcc.push("-funsigned-char".into()),
             | "Zs" => self.syntax_only = true,
             | "diagnostics:classic" => self.diagnostics = "msvc-classic",
             | "diagnostics:column" => self.diagnostics = "msvc",

@@ -534,7 +534,6 @@ const IGNORED: &[&str] = &[
     "-fno-common",
     "-fno-short-enums",
     "-fno-short-wchar",
-    "-fno-unsigned-char",
     "-fsigned-bitfields",
     "-fno-unsigned-bitfields",
     "-freg-struct-return",

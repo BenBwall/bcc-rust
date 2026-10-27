@@ -113,12 +113,6 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
                 invocation.warning(format_args!("'-dD' is treated as '-dM'"));
                 out.push("-dM".into());
             },
-            | "-funsigned-char" => {
-                invocation.error(format_args!(
-                    "'-funsigned-char' is not supported: plain char is always signed in bcc"
-                ));
-                return Err(MainError::Reported(1));
-            },
             | _ => {
                 if let Some(level) = text.strip_prefix("-bt") {
                     let _ = level;

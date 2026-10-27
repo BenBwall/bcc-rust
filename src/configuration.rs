@@ -90,7 +90,8 @@ pub(crate) struct CompilerConfiguration {
     /// Whether plain `char` is signed, overriding the target's choice, as
     /// `-fsigned-char` and `-funsigned-char` do.
     char_signed: Option<bool>,
-    interchange_float_types: bool,
+    /// `-ffloatn-types` or `-fno-floatn-types`, over the identity's default.
+    interchange_float_types: Option<bool>,
     /// `-ftrigraphs` or `-fno-trigraphs`, over the mode's default.
     trigraphs: Option<bool>,
     /// Signed integer overflow wraps (`-fwrapv`).
