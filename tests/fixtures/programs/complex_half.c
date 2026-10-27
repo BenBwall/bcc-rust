@@ -47,6 +47,10 @@ static void contexts(void) {
         _Complex float w = !one ? a : a * a;
         printf("conditional excess %a %a %a\n", (double)__real__ z, (double)__imag__ z,
                (double)__real__ w);
+        /* And of a real half arm converted to the complex type. */
+        volatile __bf16 bf = 1.0078125f;
+        _Complex float r = one ? h * h : a, s = one ? bf * bf : a;
+        printf("conditional real %a %a\n", (double)__real__ r, (double)__real__ s);
     }
     printf("comma %08x\n", cb((0, X) * a));
     printf("real operands %08x %08x %08x\n", cb(a * h * h), cb(h * h * a), cb(a + h * h));

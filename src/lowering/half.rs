@@ -279,6 +279,11 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
             },
             | Repr::Float { ty } =>
                 Operand::Value(self.float_from(value, Repr::Float { ty: Type::F32 }, ty, source)?),
+            // To `_Complex _Float16` the excess stays one, in `f32` parts.
+            | Repr::Complex { .. } if self.complex_half(to) => {
+                let imag = self.fconst(Type::F32, 0);
+                self.complex_pair([value, imag])
+            },
             // The real part converts from the excess; the imaginary part is
             // zero (C99 §6.3.1.7 paragraph 1, p. 44; PDF p. 56).
             | Repr::Complex { component } => {
