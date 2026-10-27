@@ -516,3 +516,47 @@ fn unparenthesized_alignof_operands_take_gnu_alignment() {
         },
     );
 }
+
+/// GCC accepts a cast of a structure or union to its own type, qualifiers
+/// aside, as its value, an rvalue ("ISO C forbids casting nonscalar to the
+/// same type" under -Wpedantic); any other aggregate cast stays invalid.
+/// GNU extension to C99 §6.5.4 paragraph 2, p. 81; PDF p. 93.
+#[test]
+fn aggregates_cast_to_their_own_type_are_rvalues() {
+    let accepted = "struct S { int a; } s; union U { int i; } u; typedef struct S T;\nconst \
+                    struct S cs;\nint f(void) { struct S t = (struct S)cs; T v = (T)s; union U w \
+                    = (union U)u; return t.a + v.a + w.i + ((const struct S)s).a + \
+                    (int)sizeof((struct S)s); }";
+    for (policy, extensions) in [
+        (ExtensionPolicy::Allow, 0),
+        (ExtensionPolicy::Warn, 5),
+        (ExtensionPolicy::Deny, 5),
+    ] {
+        with_configuration(
+            accepted,
+            CompilerConfiguration::new(CStandard::C11, policy),
+            |context, _| {
+                let errors = context.take_pending_errors();
+                assert_eq!(errors.len(), extensions, "{policy:?}: {errors:?}");
+                // The `(union U)` spelling keeps the parser's cast-to-union
+                // report; the others are same-type casts.
+                assert!(
+                    errors
+                        .iter()
+                        .all(|error| matches!(error, TranslationError::Extension(_))),
+                    "{errors:?}"
+                );
+            },
+        );
+    }
+    for source in [
+        "struct S { int a; } s; struct R { int a; } r; void f(void) { r = (struct R)s; }",
+        "struct S { int a; } s, t; void f(void) { (struct S)s = t; }",
+        "struct S { int a; } s; void f(void) { struct S *p = &(struct S)s; (void)p; }",
+        "struct S { int a; } s; struct S t = (struct S)s;",
+    ] {
+        with_source(source, |context, _| {
+            assert!(context.pending_error_count() > 0, "{source}");
+        });
+    }
+}

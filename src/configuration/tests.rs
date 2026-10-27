@@ -148,7 +148,7 @@ fn feature_lists_name_every_variant_in_order() {
     }
     assert_eq!(
         Feature::ALL.last().map(|feature| *feature as usize),
-        Some(Feature::ForwardEnumReference as usize)
+        Some(Feature::SameTypeCasts as usize)
     );
     for (index, feature) in MsvcFeature::ALL.iter().enumerate() {
         assert_eq!(*feature as usize, index, "{feature:?}");
