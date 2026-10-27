@@ -200,6 +200,19 @@ impl<'a> Streams<'a> {
         }
     }
 
+    /// Stream `stream`, to read, and the `stdout` stream unless that is the
+    /// same one.
+    fn reading(&mut self, stream: usize) -> (&mut Stream<'a>, Option<&mut Stream<'a>>) {
+        if stream == 1 {
+            return (&mut self.entries[1], None);
+        }
+        let [entry, stdout] = self
+            .entries
+            .get_disjoint_mut([stream, 1])
+            .expect("distinct streams in the table");
+        (entry, Some(stdout))
+    }
+
     /// The order of a stream opened now.
     fn open_next(&mut self) -> u64 {
         self.opened += 1;
@@ -666,13 +679,13 @@ impl DefaultHost<'_> {
     /// Reads one byte from `stream`, setting its end-of-file or error
     /// indicator when there is none.
     pub(super) fn read(&mut self, stream: usize) -> Option<u8> {
-        let linked = matches!(self.streams.entries[1].target, Target::Output);
-        let mut stdout = Release {
+        let (entry, stdout) = self.streams.reading(stream);
+        let mut release = Release {
             console: &mut self.console,
             written: self.output.len(),
-            linked,
+            stdout,
         };
-        self.streams.entries[stream].read(&mut stdout)
+        entry.read(&mut release)
     }
 
     /// Reads up to `wanted` bytes from `stream` for `fread`, passing them to
@@ -683,13 +696,13 @@ impl DefaultHost<'_> {
         wanted: usize,
         store: impl FnMut(&[u8]) -> Result<(), E>,
     ) -> Result<usize, E> {
-        let linked = matches!(self.streams.entries[1].target, Target::Output);
-        let mut stdout = Release {
+        let (entry, stdout) = self.streams.reading(stream);
+        let mut release = Release {
             console: &mut self.console,
             written: self.output.len(),
-            linked,
+            stdout,
         };
-        self.streams.entries[stream].read_block(wanted, &mut stdout, store)
+        entry.read_block(wanted, &mut release, store)
     }
 
     /// Pushes `byte` back onto `stream`, as `ungetc` does.
@@ -712,6 +725,14 @@ impl DefaultHost<'_> {
         reopen: Option<(usize, RuntimeValue)>,
         memory: &mut Memory<'_>,
     ) -> Result<RuntimeValue, Fault> {
+        if let Some((stream, _)) = reopen {
+            // C99 §7.19.5.4p4: the original stream is closed first, written
+            // out with any failure ignored, so that reopening its own file
+            // for writing truncates what it held too (glibc's `freopen`
+            // syncs and closes before it opens).
+            let _ = self.flush_before_closing(stream);
+            self.streams.entries[stream].reopen(Target::Closed, false, false, false);
+        }
         self.text.clear();
         memory.read_c_string(mode, &mut self.text)?;
         // glibc reads the access letter and then up to six modifiers, of
@@ -723,22 +744,26 @@ impl DefaultHost<'_> {
         let exclusive = modifiers.contains(&b'x');
         let mut options = OpenOptions::new();
         let access = self.text.first().copied();
-        let _ = match access {
-            | Some(b'r') => options.read(true).write(plus),
-            | Some(b'w') if exclusive => options.write(true).create_new(true).read(plus),
-            | Some(b'w') => options.write(true).create(true).truncate(true).read(plus),
-            | Some(b'a') if exclusive => options.append(true).create_new(true).read(plus),
-            | Some(b'a') => options.append(true).create(true).read(plus),
-            | _ => return Ok(RuntimeValue::NULL),
-        };
+        let known = match access {
+            | Some(b'r') => Some(options.read(true).write(plus)),
+            | Some(b'w') if exclusive => Some(options.write(true).create_new(true).read(plus)),
+            | Some(b'w') => Some(options.write(true).create(true).truncate(true).read(plus)),
+            | Some(b'a') if exclusive => Some(options.append(true).create_new(true).read(plus)),
+            | Some(b'a') => Some(options.append(true).create(true).read(plus)),
+            | _ => None,
+        }
+        .is_some();
         let readable = access == Some(b'r') || plus;
         let writable = access != Some(b'r') || plus;
         let appending = access == Some(b'a');
         let allowed = self.file_access;
-        let mut file = self
-            .path(path, memory)?
-            .filter(|_| allowed)
-            .and_then(|path| options.open(path).ok());
+        let mut file = if known {
+            self.path(path, memory)?
+                .filter(|_| allowed)
+                .and_then(|path| options.open(path).ok())
+        } else {
+            None
+        };
         // glibc starts a stream that only appends at the end of the file
         // (`_IO_file_open`); one that also reads starts at its beginning.
         if appending
@@ -747,17 +772,14 @@ impl DefaultHost<'_> {
         {
             _ = opened.seek(SeekFrom::End(0)).ok();
         }
-        if !allowed {
+        if known && !allowed {
             self.deny_file_access();
         }
         if let Some((stream, pointer)) = reopen {
-            // C99 §7.19.5.4p3: the original stream is flushed and closed
-            // even when the new file cannot be opened, so its `FILE *` dies
-            // with it.
-            let _ = self.flush_before_closing(stream);
+            // C99 §7.19.5.4p3: the original stream stays closed when the new
+            // file cannot be opened, so its `FILE *` dies with it.
             let entry = &mut self.streams.entries[stream];
             let Some(file) = file else {
-                entry.reopen(Target::Closed, false, false, false);
                 if let Some(object) = entry.object.take() {
                     memory.free(object.provenance.expect("streams have provenance"));
                 }

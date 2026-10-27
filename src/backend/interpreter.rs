@@ -206,7 +206,10 @@ fn exit(
     host: &mut dyn Host,
 ) -> Result<Outcome, Trap> {
     let outcome = machine.finish(destructors, outcome, host)?;
-    host.at_exit();
+    // A destructor that aborts ends the program abnormally after all.
+    if outcome.termination != Termination::Aborted {
+        host.at_exit();
+    }
     Ok(outcome)
 }
 

@@ -120,21 +120,30 @@ pub(super) enum Target {
     File(File),
 }
 
-/// Releases a terminal's line-buffered `stdout`, as glibc's underflow of a
-/// line-buffered input stream does before it reads.
-pub(super) struct Release<'c, 'a> {
+/// Writes out a line-buffered `stdout`, as glibc's underflow of a
+/// line-buffered input stream does before it reads: the captured output if
+/// it is a terminal's, or the stream `freopen` put on a terminal.
+pub(super) struct Release<'c, 'a, 's> {
     pub(super) console: &'c mut Console<'a>,
     /// How many bytes the program has written to the output buffer.
     pub(super) written: usize,
-    /// Whether `stdout` is still the captured output (glibc's
-    /// `_IO_LINKED`), rather than closed or reopened on a file.
-    pub(super) linked:  bool,
+    /// The `stdout` stream, unless it is the stream being read.
+    pub(super) stdout:  Option<&'c mut Stream<'s>>,
 }
 
-impl Release<'_, '_> {
+impl Release<'_, '_, '_> {
+    /// `_IO_OVERFLOW (stdout, EOF)` when `stdout` is open, may write, and
+    /// is line-buffered.
     fn release(&mut self) {
-        if self.linked && self.console.line_buffered {
-            self.console.flushed = self.written;
+        let Some(stdout) = self.stdout.as_deref_mut() else {
+            return;
+        };
+        match stdout.target {
+            | Target::Output if self.console.line_buffered => self.console.flushed = self.written,
+            | Target::File(_) if stdout.line_buffered && stdout.writable => {
+                let _ = stdout.write_out();
+            },
+            | _ => {},
         }
     }
 }
@@ -142,7 +151,7 @@ impl Release<'_, '_> {
 impl Stream<'_> {
     /// The next byte, or `None` at end of file or on an error, which set
     /// the indicator (`__uflow` and `_IO_default_uflow`).
-    pub(super) fn read(&mut self, stdout: &mut Release<'_, '_>) -> Option<u8> {
+    pub(super) fn read(&mut self, stdout: &mut Release<'_, '_, '_>) -> Option<u8> {
         if !self.end_write() {
             return None;
         }
@@ -171,7 +180,7 @@ impl Stream<'_> {
     /// releases a line-buffered `stdout` (only `stdout`: glibc no longer
     /// flushes every line-buffered stream).
     /// C99: §7.19.7.1 paragraph 3, p. 296; PDF p. 308.
-    fn underflow(&mut self, stdout: &mut Release<'_, '_>) -> Option<u8> {
+    fn underflow(&mut self, stdout: &mut Release<'_, '_, '_>) -> Option<u8> {
         if self.eof {
             return None;
         }
@@ -216,7 +225,7 @@ impl Stream<'_> {
     pub(super) fn read_block<E>(
         &mut self,
         wanted: usize,
-        stdout: &mut Release<'_, '_>,
+        stdout: &mut Release<'_, '_, '_>,
         mut store: impl FnMut(&[u8]) -> Result<(), E>,
     ) -> Result<usize, E> {
         if !self.end_write() {
@@ -860,4 +869,77 @@ fn to_offset(count: usize) -> i64 {
 /// A non-negative offset within a buffer as a byte count.
 fn to_count(offset: i64) -> usize {
     usize::try_from(offset).expect("an offset within a buffer")
+}
+
+#[cfg(test)]
+#[expect(
+    clippy::disallowed_methods,
+    clippy::disallowed_macros,
+    reason = "The test names temporary files with std paths; the arena rule covers the \
+              interpreter, not its tests."
+)]
+mod tests {
+    use std::fs::File;
+
+    use super::{
+        Console,
+        Release,
+        Stream,
+        Target,
+    };
+    use crate::util::bump::{
+        ArenaVec,
+        Bump,
+    };
+
+    /// Refilling a terminal's input writes out a line-buffered `stdout`
+    /// even when `freopen` put it on a file (a terminal device), and
+    /// refilling a regular file's input does not.
+    #[cfg(not(miri))]
+    #[test]
+    fn terminal_refill_writes_out_a_reopened_line_buffered_stdout() {
+        let directory = std::env::temp_dir();
+        let input = directory.join(format!("bcc-stdio-refill-in-{}", std::process::id()));
+        let output = directory.join(format!("bcc-stdio-refill-out-{}", std::process::id()));
+        std::fs::write(&input, "x\n").unwrap();
+        let arena = Bump::new();
+        let mut console = Console {
+            errors:        ArenaVec::new_in(&arena),
+            marks:         ArenaVec::new_in(&arena),
+            flushed:       0,
+            line_buffered: false,
+            scanned:       0,
+            line_end:      0,
+        };
+        let mut stdout = Stream::new_in(&arena);
+        stdout.reopen(
+            Target::File(File::create(&output).unwrap()),
+            false,
+            true,
+            false,
+        );
+        stdout.terminal = true;
+        assert!(stdout.put_char(b'A'));
+        let mut held = [0, 0];
+        for (terminal, held) in [false, true].into_iter().zip(&mut held) {
+            let mut stdin = Stream::new_in(&arena);
+            stdin.reopen(
+                Target::File(File::open(&input).unwrap()),
+                true,
+                false,
+                false,
+            );
+            stdin.terminal = terminal;
+            let mut release = Release {
+                console: &mut console,
+                written: 0,
+                stdout:  Some(&mut stdout),
+            };
+            assert_eq!(stdin.read(&mut release), Some(b'x'));
+            *held = arena.read_to_str_lossy(&output).unwrap().len();
+        }
+        std::fs::remove_file(&input).unwrap();
+        std::fs::remove_file(&output).unwrap();
+        assert_eq!(held, [0, 1]);
+    }
 }

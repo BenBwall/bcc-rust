@@ -1014,8 +1014,8 @@ int main(void) { volatile long double x = 1.5L; printf(\"%Lf %d \", x, 7);
 
     /// At a normal end, after `main` returns or the program calls `exit`,
     /// glibc writes out what every stream holds, the most recently opened
-    /// first; `abort` writes out nothing. The expected file contents are
-    /// what glibc programs leave.
+    /// first; `abort`, even from a destructor, writes out nothing. The
+    /// expected file contents are what glibc programs leave.
     #[test]
     fn interpreter_writes_out_streams_at_exit_in_glibc_order() {
         let path = temporary("exit-order.txt");
@@ -1024,6 +1024,10 @@ int main(void) { volatile long double x = 1.5L; printf(\"%Lf %d \", x, 7);
             ("return 0;", "Abcdef"),
             ("exit(0);", "Abcdef"),
             ("abort();", "abcdef"),
+            (
+                "return 0; } __attribute__((destructor)) static void end(void) { abort();",
+                "abcdef",
+            ),
         ] {
             std::fs::write(&path, "abcdef").unwrap();
             let source = format!(

@@ -162,6 +162,19 @@ int main(void)
     fclose(file);
   }
   printf("\n");
+  /* freopen closes the stream, writing out what it holds, before it opens
+     the file: reopening its own file for writing truncates those bytes,
+     and a mode it refuses still closes the stream. */
+  writer = fopen(name, "w");
+  fputs("old", writer);
+  writer = freopen(name, "w", writer);
+  fputs("N", writer);
+  fclose(writer);
+  printf("reopen %lu %c", on_disk(), first_byte());
+  writer = fopen(name, "w");
+  fputs("old", writer);
+  int refused = freopen(name, "q", writer) == 0;
+  printf(" %d %lu\n", refused, on_disk());
   /* printf orients a redirected stdout even when it formats nothing, and
      fails on one that may not write. */
   freopen(name, "r+", stdout);
