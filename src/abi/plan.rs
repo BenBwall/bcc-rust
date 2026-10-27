@@ -64,6 +64,16 @@ pub(crate) fn plan_signature<'ir: 's, 's>(
         ResultPlan::Scalar | ResultPlan::VectorI128
     ));
     for (index, &ty) in signature.params.iter().enumerate().skip(first) {
+        // Arguments after the ellipsis follow the psABI in every dialect,
+        // which `va_arg` reads (`sysv::Dialect`).
+        let variadic = signature
+            .variadic_fixed
+            .is_some_and(|fixed| index >= fixed as usize);
+        let dialect = if variadic {
+            sysv::Dialect::Gcc
+        } else {
+            dialect
+        };
         let plan = match signature.param_abi(index) {
             | Some(ParamAbi::Aggregate(layout)) => match convention {
                 | Convention::SystemV => sysv::argument(layout, &mut registers, dialect)?,

@@ -1204,16 +1204,16 @@ that low part to `i64`, which travels in a general register while still
 counting a vector one. ABI lowering follows the compiler identity
 (`sysv::Dialect`): Clang's by default, GCC's under `--compiler-identity=gcc`,
 and a test links each with code built by that compiler in both directions.
-Clang's caller decides between registers and memory by the classes, then
-passes the two parts as independent scalars, so with the general registers
-used up the `i64` goes to the next stack slot and the high part to a vector
-register. bcc's callers do the same, and its `va_arg` checks the classes'
-registers, then reads each part as a scalar `va_arg` of its own type (an
-aggregate that did not fit is read whole from the overflow area). Clang's
-own `va_arg` of such an aggregate reads both eightbytes from the vector save
-area, which matches no caller. bcc's decision reads the registers actually
-used; they differ from the ones Clang counted only after an earlier split
-aggregate in the same call, counted for a vector register it did not use.
+That applies to named parameters and results. Arguments after the
+ellipsis, and `va_arg`, follow the psABI (GCC's choice) in every identity,
+consistently with each other: Clang's caller counts two vector registers
+for the split aggregate but uses one, which moves the registers of later
+aggregates, and Clang's own `va_arg` reads both eightbytes from the vector
+save area, which matches no caller. So passing such an aggregate through
+`...` between Clang-compiled and bcc-compiled code is not supported (Clang
+itself mis-handles it); between GCC and bcc it works under either identity.
+`tests/fixtures/programs/binary128_varargs.c` checks every later argument
+after such unions on each back end and against GCC.
 
 The LLVM back end emits register extension and `noundef` independently and
 exactly as the signature records them, on declarations, definitions and both

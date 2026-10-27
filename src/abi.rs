@@ -179,7 +179,7 @@ fn lower_abi_with_function_scratch<'ir>(
         rewrite::rewrite_body(
             module,
             func,
-            (target, dialect),
+            target,
             &plans,
             &lowered_signatures,
             &old_signatures,

@@ -245,12 +245,12 @@ union A sse_tail(double a, double b, double c, double d, double e, double f, dou
     /// with the default (Clang) identity a callee or caller built by bcc
     /// links with one built by the bundled Clang, and with the GCC identity
     /// with one built by GCC, on both back ends and in both directions,
-    /// including arguments and variadic arguments after the general or the
-    /// vector registers run out, where Clang passes a split union's low
-    /// part on the stack and its high part in a register. Clang's own
-    /// `va_arg` of such a union reads the wrong registers, so Clang's callee
-    /// is not given variadic ones. bcc's halves also link with each other,
-    /// and the interpreter runs the whole program.
+    /// including an argument after the general registers run out, where
+    /// Clang passes a split union's low part on the stack and its high part
+    /// in a register. Through `...` such a union travels as the psABI says
+    /// in every identity, which Clang does not do (and its own `va_arg`
+    /// matches no caller), so the Clang pairs pass none; the variadic calls
+    /// run between bcc's halves, with GCC's, and in the interpreter.
     #[test]
     fn binary128_unions_link_with_the_claimed_compiler() {
         if !cfg!(all(
@@ -298,7 +298,7 @@ union A sse_tail(double a, double b, double c, double d, double e, double f, dou
         let bcc_binary = env!("CARGO_BIN_EXE_bcc-rust");
         let clang = "target/llvm/bin/clang";
         compile(clang, &[&definitions], &object("clang-callee.o"));
-        compile(clang, &[&checks], &object("clang-caller.o"));
+        compile(clang, &[&checks, "-DNO_VARARGS"], &object("clang-caller.o"));
         let gcc = Command::new("gcc")
             .arg("--version")
             .output()
@@ -363,6 +363,99 @@ union A sse_tail(double a, double b, double c, double d, double e, double f, dou
             );
         }
         std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    /// Variadic arguments before and after unions that mix a `__float128`
+    /// with doubles (`tests/fixtures/programs/binary128_varargs.c`): longs,
+    /// doubles, `long double` and structures of each register class come
+    /// back where the caller put them after the general or vector registers
+    /// run out, on every back end, between separately built halves, and
+    /// with GCC's halves under either identity.
+    #[test]
+    fn variadic_binary128_unions_keep_later_arguments_in_place() {
+        if !cfg!(all(
+            target_arch = "x86_64",
+            target_os = "linux",
+            target_env = "gnu"
+        )) {
+            return;
+        }
+        let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/programs/binary128_varargs.c");
+        let source = source.to_str().unwrap();
+        let expected = "0 failures\n";
+        for identity in ["--compiler-identity=clang", "--compiler-identity=gcc"] {
+            for flags in [&["--interpret"][..], &["--interpret", "--opt=bcc"]] {
+                let output = bcc(&[&[identity, source][..], flags].concat());
+                assert_eq!(text(&output.stdout), expected, "{identity} {flags:?}");
+            }
+            for flags in [&["-O0"][..], &["-O2"], &["--backend=native"]] {
+                let executable = temporary("varargs.exe");
+                let built = bcc(&[
+                    &[identity, source, "-o", executable.to_str().unwrap()][..],
+                    flags,
+                ]
+                .concat());
+                assert!(built.status.success(), "{flags:?}: {}", text(&built.stderr));
+                let run = run_native(&mut Command::new(&executable)).unwrap();
+                assert_eq!(text(&run.stdout), expected, "{identity} {flags:?}");
+                std::fs::remove_file(executable).unwrap();
+            }
+        }
+        let gcc = Command::new("gcc")
+            .arg("--version")
+            .output()
+            .is_ok_and(|output| output.status.success());
+        let half = |compiler: &[&str], half: &str| {
+            let object = temporary(&format!("{half}.o"));
+            let built = Command::new(compiler[0])
+                .args(&compiler[1..])
+                .args([source, half, "-c", "-o", object.to_str().unwrap()])
+                .output()
+                .unwrap();
+            assert!(
+                built.status.success(),
+                "{compiler:?}: {}",
+                text(&built.stderr)
+            );
+            object
+        };
+        let bcc_binary = env!("CARGO_BIN_EXE_bcc-rust");
+        for backend in ["--backend=llvm", "--backend=native"] {
+            for identity in ["--compiler-identity=clang", "--compiler-identity=gcc"] {
+                let ours = [bcc_binary, backend, identity];
+                let mut pairs = vec![(half(&ours, "-DCALLEE_ONLY"), half(&ours, "-DCALLER_ONLY"))];
+                if gcc {
+                    pairs.push((
+                        half(&["gcc"], "-DCALLEE_ONLY"),
+                        half(&ours, "-DCALLER_ONLY"),
+                    ));
+                    pairs.push((
+                        half(&ours, "-DCALLEE_ONLY"),
+                        half(&["gcc"], "-DCALLER_ONLY"),
+                    ));
+                }
+                for (callee, caller) in pairs {
+                    let executable = temporary("varargs-pair.exe");
+                    let linked = Command::new("target/llvm/bin/clang")
+                        .args([&callee, &caller])
+                        .arg("-o")
+                        .arg(&executable)
+                        .output()
+                        .unwrap();
+                    assert!(linked.status.success(), "{}", text(&linked.stderr));
+                    let run = run_native(&mut Command::new(&executable)).unwrap();
+                    assert_eq!(
+                        text(&run.stdout),
+                        expected,
+                        "{backend} {identity} {callee:?} {caller:?}"
+                    );
+                    for path in [callee, caller, executable] {
+                        std::fs::remove_file(path).unwrap();
+                    }
+                }
+            }
+        }
     }
 
     fn bcc(args: &[&str]) -> Output {

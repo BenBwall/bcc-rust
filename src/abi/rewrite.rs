@@ -71,14 +71,13 @@ pub(super) fn check_va_arg(target: Target, ty: Type) -> Result<(), AbiErrorKind>
     }
 }
 
-/// Rebuilds the body of `func`, if it has one, for the target and System V
-/// dialect its plans were made for. `plans` holds the plan of every pre-ABI
-/// signature, and `old_signatures` each function's pre-ABI signature, which
-/// its callers were planned for.
+/// Rebuilds the body of `func`, if it has one. `plans` holds the plan of
+/// every pre-ABI signature, and `old_signatures` each function's pre-ABI
+/// signature, which its callers were planned for.
 pub(super) fn rewrite_body(
     module: &mut Module<'_>,
     func: FuncId,
-    (target, dialect): (Target, sysv::Dialect),
+    target: Target,
     plans: &[SignaturePlan<'_>],
     lowered_signatures: &[SigId],
     old_signatures: &[SigId],
@@ -96,7 +95,6 @@ pub(super) fn rewrite_body(
         lowered_signatures,
         old_signatures,
         convention: Convention::of(target),
-        dialect,
         scratch,
         wide_result: None,
     };
@@ -121,8 +119,6 @@ struct Rewriter<'a, 'm, 'ir, 's> {
     lowered_signatures: &'a [SigId],
     old_signatures:     &'a [SigId],
     convention:         Convention,
-    /// Whose classification an aggregate `va_arg` follows.
-    dialect:            sysv::Dialect,
     scratch:            &'a Bump,
     /// A scalar i128 result's post-ABI register return area.
     wide_result:        Option<Value>,
@@ -827,10 +823,11 @@ impl<'a> Rewriter<'a, '_, '_, '_> {
             overflow_size:  layout.size.next_multiple_of(8),
             overflow_align: layout.align.bytes().max(8),
         };
+        // Variadic arguments follow the psABI in every dialect.
         let arg = sysv::argument(
             layout,
             &mut sysv::ArgumentRegisters::default(),
-            self.dialect,
+            sysv::Dialect::Gcc,
         )
         .expect("aggregate descriptor preflight");
         let ArgPlan::Registers { parts, .. } = arg else {
@@ -840,9 +837,6 @@ impl<'a> Rewriter<'a, '_, '_, '_> {
             }
             return object;
         };
-        if let Some(classes) = self.dialect.split_quad(layout) {
-            return self.split_quad_va_arg(layout, classes, parts, list, object, stack_class);
-        }
         let gp = parts.types().iter().filter(|t| !t.is_float()).count() as u64;
         let sse = parts.types().iter().filter(|t| t.is_float()).count() as u64;
         let gp_field = self.offset(list, va_list::GP_OFFSET);
@@ -911,74 +905,6 @@ impl<'a> Rewriter<'a, '_, '_, '_> {
         }
         if sse > 0 {
             self.builder.store(fp_cursor, fp_field, mem32);
-        }
-        self.builder.jump(join, &[]);
-        self.builder.switch_to_block(stack);
-        let address = self.overflow_arg(list, stack_class);
-        self.copy(object, address, layout.size, layout.align);
-        self.builder.jump(join, &[]);
-        self.builder.switch_to_block(join);
-        object
-    }
-}
-
-impl Rewriter<'_, '_, '_, '_> {
-    /// `va_arg` of an aggregate Clang passes as a split `fp128`
-    /// (`sysv::Dialect`). Clang's caller decides between registers and
-    /// memory by the eightbytes' classes, as for any aggregate, but then
-    /// passes the parts as independent scalars: the `i64` low part takes a
-    /// general register or, once those run out, the next overflow slot,
-    /// whatever the high part does. So the classes' registers decide, and
-    /// then each part is read as a scalar `va_arg` of its own type; an
-    /// aggregate that did not fit is read whole from the overflow area.
-    /// The decision reads the registers actually used, which equal the
-    /// ones Clang counted unless an earlier split aggregate in the same call
-    /// was counted for a vector register it did not use.
-    fn split_quad_va_arg(
-        &mut self,
-        layout: AggregateLayout<'_>,
-        classes: [sysv::Class; 2],
-        parts: Parts,
-        list: Value,
-        object: Value,
-        stack_class: sysv::VaArgClass,
-    ) -> Value {
-        let needed = |wanted| classes.iter().filter(|&&class| class == wanted).count() as u64;
-        let (gp, sse) = (needed(sysv::Class::Integer), needed(sysv::Class::Sse));
-        let mem32 = MemFlags::aligned(natural_align(Type::I32));
-        let gp_field = self.offset(list, va_list::GP_OFFSET);
-        let fp_field = self.offset(list, va_list::FP_OFFSET);
-        let gp_offset = self.builder.load(Type::I32, gp_field, mem32);
-        let fp_offset = self.builder.load(Type::I32, fp_field, mem32);
-        let gp_limit = self
-            .builder
-            .iconst(Type::I32, i128::from(va_list::GP_AREA_SIZE - 8 * gp));
-        let fp_limit = self
-            .builder
-            .iconst(Type::I32, i128::from(va_list::SAVE_AREA_SIZE - 16 * sse));
-        let gp_fits = self.builder.icmp(IntCC::Ule, gp_offset, gp_limit);
-        let fp_fits = self.builder.icmp(IntCC::Ule, fp_offset, fp_limit);
-        let fits = self
-            .builder
-            .binary(Opcode::And, InstFlags::empty(), gp_fits, fp_fits);
-        let registers = self.builder.create_block();
-        let stack = self.builder.create_block();
-        let join = self.builder.create_block();
-        self.builder.brif(fits, (registers, &[]), (stack, &[]));
-        self.builder.switch_to_block(registers);
-        for (index, &ty) in parts.types().iter().enumerate() {
-            let address = self.sysv_va_arg(ty, list);
-            let value = self.builder.load(
-                ty,
-                address,
-                MemFlags::aligned(at_most(natural_align(ty), 8)),
-            );
-            let destination = self.offset(object, 8 * index as u64);
-            self.builder.store(
-                value,
-                destination,
-                MemFlags::aligned(at_most(layout.align, 8)),
-            );
         }
         self.builder.jump(join, &[]);
         self.builder.switch_to_block(stack);
