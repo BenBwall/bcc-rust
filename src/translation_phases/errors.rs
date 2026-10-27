@@ -90,6 +90,8 @@ impl TranslationError<'_> {
                 | semantic_analysis::SemanticErrorKind::InitializerOverride
                 | semantic_analysis::SemanticErrorKind::PartialInitializerOverride =>
                     Some(G::InitializerOverrides),
+                | semantic_analysis::SemanticErrorKind::ConstantConversion(_) =>
+                    Some(G::ConstantConversion),
                 | _ => None,
             },
             | _ => None,

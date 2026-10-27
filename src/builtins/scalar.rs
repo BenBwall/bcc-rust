@@ -1056,7 +1056,7 @@ pub(super) const BUILTINS: &[BuiltinDescriptor] = &[
             A::value(C::Parameter(T::Pointer(S::Void, false))),
             A::constrained(
                 C::Parameter(T::Scalar(S::Int)),
-                K::OriginalIntegerValue(1),
+                K::ConvertedIntegerValue(1),
                 D::LongjmpValue,
             ),
         ],

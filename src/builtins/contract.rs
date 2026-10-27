@@ -225,9 +225,10 @@ pub(crate) enum ConstantConstraint {
     /// An x86 immediate: after prototype conversion, an integer constant in
     /// `[low, high]` that, with a nonzero mask, names a set bit of the mask.
     Immediate(i32, i32, u16),
-    /// An integer constant expression equal to the value before
-    /// conversion, as Clang checks `__builtin_longjmp`'s.
-    OriginalIntegerValue(u64),
+    /// After conversion, an integer constant equal to the value, as GCC and
+    /// Clang check `__builtin_longjmp`'s; a constant the conversion changes
+    /// gets `-Wconstant-conversion`.
+    ConvertedIntegerValue(u64),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

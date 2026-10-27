@@ -54,4 +54,12 @@ error: function call has the wrong number of arguments
    |
    = note: C99 §6.5.2.2p2: a prototype fixes the required arguments; only an ellipsis permits additional arguments
 
-7 errors generated.
+warning: implicit conversion from `long long` to `int` changes value from 4294967297 to 1 [-Wconstant-conversion]
+  --> sema-builtin-setjmp.c:13:31
+   |
+13 |     __builtin_longjmp(buffer, 4294967297LL);
+   |                               ^^^^^^^^^^^^ the converted value differs
+   |
+   = note: C99 §6.3.1.3p3: the conversion to a signed type that cannot represent the value is implementation-defined; bcc, GCC and Clang reduce it modulo 2^N
+
+7 errors and 1 warning generated.

@@ -362,11 +362,18 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 .filter(|_| info.ice)
                 .and_then(Integer::to_u64)
                 .is_some_and(|v| v <= max),
-            | ConstantConstraint::OriginalIntegerValue(value) => info
-                .integer
-                .filter(|_| info.ice)
-                .and_then(Integer::to_u64)
-                .is_some_and(|v| v == value),
+            | ConstantConstraint::ConvertedIntegerValue(value) => {
+                let converted = self.common_integer_constant(argument, ty);
+                if let Some((original, converted)) =
+                    info.integer.filter(|_| info.ice).zip(converted)
+                    && original.value != converted.value
+                {
+                    self.constant_conversion_warning(argument, info.ty, ty, original, converted);
+                }
+                converted
+                    .and_then(Integer::to_u64)
+                    .is_some_and(|v| v == value)
+            },
             | ConstantConstraint::ConvertedPowerOfTwo => self
                 .common_integer_constant(argument, ty)
                 .and_then(Integer::to_u64)
@@ -395,6 +402,41 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 None,
             );
         }
+    }
+
+    /// Clang's `-Wconstant-conversion`: an integer constant argument whose
+    /// conversion to the parameter type `to` changes its value, which wraps
+    /// modulo 2^N on every target, an implementation-defined choice.
+    /// C99: §6.3.1.3p3, p. 43; PDF p. 55.
+    fn constant_conversion_warning(
+        &mut self,
+        argument: &'tu Expression<'tu>,
+        from: TypeId,
+        to: TypeId,
+        original: Integer,
+        converted: Integer,
+    ) {
+        let (TypeKind::Scalar(from), TypeKind::Scalar(to)) =
+            (self.types.nodes[from.index], self.types.nodes[to.index])
+        else {
+            return;
+        };
+        let text = crate::diagnostics::format_in!(
+            self.scratch,
+            "implicit conversion from `{}` to `{}` changes value from {} to {}",
+            from.spelling(),
+            to.spelling(),
+            original.value,
+            converted.value
+        );
+        let text = self.context.string_cache.intern(text);
+        self.group_diagnostic(
+            crate::configuration::DiagnosticGroup::ConstantConversion,
+            SemanticErrorKind::ConstantConversion(text),
+            argument.source_vectors,
+            None,
+            None,
+        );
     }
 
     /// Reports incompatible types before checking dependent value constraints.

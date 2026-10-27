@@ -10,5 +10,6 @@ void f(int value) {
     __builtin_longjmp(buffer);
     __builtin_longjmp(words, 1);
     __builtin_setjmp(&words);
+    __builtin_longjmp(buffer, 4294967297LL);
 }
 int following;

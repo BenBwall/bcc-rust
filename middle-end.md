@@ -2113,9 +2113,13 @@ stack pointer.
 - **Semantic analysis.** Both are GNU builtins (`builtins/scalar.rs`).
   GCC's prototypes type the buffer `void *`, so any object pointer converts
   (Clang's `void **` rejects `int[5]` and GCC's `pr60003.c`). The value must
-  be an integer constant equal to 1 before conversion
-  (`ConstantConstraint::OriginalIntegerValue`, diagnosed as
-  `InvalidLongjmpValue`), as Clang requires; GCC also accepts `1.0`.
+  be an integer constant that is 1 after conversion to `int`
+  (`ConstantConstraint::ConvertedIntegerValue`, diagnosed as
+  `InvalidLongjmpValue`), as GCC and Clang require; one the conversion
+  changes, such as `4294967297LL`, gets Clang's default-on
+  `-Wconstant-conversion` warning (a new group, also controlled by
+  `-W[no-]conversion`), as GCC warns with `-Woverflow`. Clang rejects the
+  floating `1.0` that GCC converts, and so does bcc.
   `__builtin_longjmp` does not return, like Clang's builtin. Neither GCC 15
   nor Clang diagnoses a `__builtin_longjmp` in the function that called
   `__builtin_setjmp`, which the GCC manual forbids; it works on every bcc

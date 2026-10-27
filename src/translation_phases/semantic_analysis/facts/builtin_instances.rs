@@ -182,11 +182,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             None
         };
         let integer = info.integer.map(|value| {
-            if matches!(
-                rule.constraint,
-                ConstantConstraint::OriginalIntegerRange(_)
-                    | ConstantConstraint::OriginalIntegerValue(_)
-            ) {
+            if matches!(rule.constraint, ConstantConstraint::OriginalIntegerRange(_)) {
                 return value;
             }
             self.integer_type(ty)
