@@ -28,8 +28,10 @@
 //! `tmpnam` then names files without looking at the file system. Writes to
 //! files are buffered as glibc buffers them, so a later `fopen` of the same
 //! name reads them back only once they are written out, at the latest when
-//! the program ends normally. `errno` is not modelled: a failing call only
-//! returns its failure value.
+//! the program ends normally. A failing call sets `errno` as glibc's does:
+//! `EACCES` for a refused access, `EINVAL` for an unknown mode, whence or a
+//! negative position, `EBADF` for a direction the stream's mode does not
+//! allow, and otherwise the code the host's system reports.
 //!
 //! C99: §7.19.3, pp. 264-266; PDF pp. 276-278 (files); §7.19.4-§7.19.10,
 //! pp. 268-304; PDF pp. 280-316 (operations, access, I/O, positioning and
@@ -57,6 +59,7 @@ use super::{
     FormatArguments,
     HostCall,
     HostReturn,
+    errno,
     integer,
     va_list_operand,
 };
@@ -152,7 +155,7 @@ pub(super) struct Console<'a> {
 
 impl Console<'_> {
     /// How much of `output` has reached the terminal or pipe by now.
-    fn released(&mut self, output: &[u8]) -> usize {
+    pub(super) fn released(&mut self, output: &[u8]) -> usize {
         if self.line_buffered {
             // Formatted text moved out of the buffer leaves it shorter; it is
             // never shorter than what was written before, but search it again
@@ -222,6 +225,15 @@ impl<'a> Streams<'a> {
     /// Treats the process's standard input as a terminal.
     pub(super) fn set_terminal_input(&mut self, terminal: bool) {
         self.entries[0].terminal = terminal;
+    }
+
+    /// The `errno` of the last stream operation that failed since the last
+    /// call, which the host then passes to the program.
+    pub(super) fn take_errno(&mut self) -> Option<i32> {
+        self.entries
+            .iter_mut()
+            .filter_map(|entry| entry.errno.take())
+            .last()
     }
 }
 
@@ -461,8 +473,10 @@ impl DefaultHost<'_> {
                         | 0 => Whence::Start,
                         | 1 => Whence::Current,
                         | 2 => Whence::End,
-                        | _ =>
-                            return Ok(HostReturn::Value(Some(RuntimeValue::int(Type::I32, EOF)))),
+                        | _ => {
+                            self.set_errno(memory, errno::EINVAL)?;
+                            return Ok(HostReturn::Value(Some(RuntimeValue::int(Type::I32, EOF))));
+                        },
                     };
                     (offset, whence)
                 };
@@ -485,14 +499,30 @@ impl DefaultHost<'_> {
             | "remove" => {
                 let allowed = self.file_access;
                 let path = self.path(arg(0), memory)?;
-                let removed = allowed
-                    && path.is_some_and(|path| {
-                        std::fs::remove_file(path).is_ok() || std::fs::remove_dir(path).is_ok()
-                    });
+                // glibc unlinks, and removes a directory when unlinking
+                // reports one (`EISDIR`, or `EPERM` elsewhere); a failure
+                // sets the errno of the last attempt.
+                let failure = match path {
+                    | _ if !allowed => Some(errno::EACCES),
+                    | None => Some(errno::ENOENT),
+                    | Some(path) => std::fs::remove_file(path).err().and_then(|error| {
+                        let code = errno::from_io(&error);
+                        if code == errno::EISDIR || code == errno::EPERM {
+                            std::fs::remove_dir(path)
+                                .err()
+                                .map(|error| errno::from_io(&error))
+                        } else {
+                            Some(code)
+                        }
+                    }),
+                };
                 if !allowed {
                     self.deny_file_access();
                 }
-                RuntimeValue::Int(if removed { 0 } else { EOF })
+                if let Some(code) = failure {
+                    self.set_errno(memory, code)?;
+                }
+                RuntimeValue::Int(if failure.is_none() { 0 } else { EOF })
             },
             | "tmpnam" => self.tmpnam(arg(0), memory)?,
             | "fprintf" | "vfprintf" | "__fprintf_chk" | "__vfprintf_chk" => {
@@ -636,6 +666,16 @@ impl DefaultHost<'_> {
         written
     }
 
+    /// Moves what was formatted after `before` to `stream` as the `printf`
+    /// family writes, leaving the stream's orientation as it was, as
+    /// `perror` does; says whether it was written.
+    pub(super) fn write_unoriented(&mut self, stream: usize, before: usize) -> bool {
+        let oriented = self.streams.entries[stream].oriented;
+        let written = self.move_output(stream, before, Written::Formatted);
+        self.streams.entries[stream].oriented = oriented;
+        written
+    }
+
     /// Moves what a function that writes standard output implicitly wrote
     /// after `before` to wherever `freopen` redirected `stdout`, if it did;
     /// says whether it was written. A `printf` that formats nothing still
@@ -757,12 +797,21 @@ impl DefaultHost<'_> {
         let writable = access != Some(b'r') || plus;
         let appending = access == Some(b'a');
         let allowed = self.file_access;
-        let mut file = if known {
-            self.path(path, memory)?
-                .filter(|_| allowed)
-                .and_then(|path| options.open(path).ok())
+        let opened = if known {
+            match self.path(path, memory)? {
+                | _ if !allowed => Err(errno::EACCES),
+                | Some(path) => options.open(path).map_err(|error| errno::from_io(&error)),
+                | None => Err(errno::ENOENT),
+            }
         } else {
-            None
+            Err(errno::EINVAL)
+        };
+        let mut file = match opened {
+            | Ok(file) => Some(file),
+            | Err(code) => {
+                self.set_errno(memory, code)?;
+                None
+            },
         };
         // glibc starts a stream that only appends at the end of the file
         // (`_IO_file_open`); one that also reads starts at its beginning.
@@ -795,6 +844,7 @@ impl DefaultHost<'_> {
         let Some(index) = (3..MAX_STREAMS)
             .find(|&index| matches!(self.streams.entries[index].target, Target::Closed))
         else {
+            self.set_errno(memory, errno::EMFILE)?;
             return Ok(RuntimeValue::NULL);
         };
         let number = u32::try_from(index).expect("a small table");

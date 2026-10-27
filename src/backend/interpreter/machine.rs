@@ -206,6 +206,17 @@ impl<'m, 'ir> Machine<'m, 'ir, '_> {
         if returns_twice {
             return Err(Fault::Unsupported(Unsupported::ReturnsTwice));
         }
+        if super::exit::FUNCTIONS.contains(&callee.name) && host.provides(callee.name) {
+            return match self.exit_function(callee.name)? {
+                | Ok(value) => {
+                    if let (Some(result), Some(value)) = (result, value) {
+                        self.set(result, value);
+                    }
+                    Ok(None)
+                },
+                | Err(termination) => Ok(Some(termination)),
+            };
+        }
         if super::callbacks::FUNCTIONS.contains(&callee.name) && host.provides(callee.name) {
             return match self.library_callback(callee.name, host)? {
                 | Ok(value) => {
@@ -781,6 +792,7 @@ impl<'m, 'ir, 'a> Machine<'m, 'ir, 'a> {
             activations: 0,
             timestamp: 0,
             callback: None,
+            exit: super::exit::Exit::new_in(arena),
         })
     }
 }

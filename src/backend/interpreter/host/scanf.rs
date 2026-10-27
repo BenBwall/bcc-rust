@@ -50,6 +50,15 @@ pub(super) enum Input {
     Stream(usize),
 }
 
+/// Which `scanf` a call runs: the C99 forms (`__isoc99_scanf` and the
+/// plain names) or glibc's C23 forms (`__isoc23_scanf`, which `<stdio.h>`
+/// selects under `_GNU_SOURCE` or C23), which add `%b` and the `0b` prefix.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum Dialect {
+    C99,
+    C23,
+}
+
 /// Why a directive failed.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Failure {
@@ -83,6 +92,7 @@ impl DefaultHost<'_> {
         format: RuntimeValue,
         args: &mut FormatArguments<'_>,
         memory: &mut Memory<'_>,
+        dialect: Dialect,
     ) -> Result<i32, Fault> {
         let mut directives = super::ArenaVec::new_in(self.allocator);
         memory.read_c_string(format, &mut directives)?;
@@ -155,15 +165,25 @@ impl DefaultHost<'_> {
                 text: super::ArenaVec::new_in(self.allocator),
             };
             let result = match conversion {
-                | b'd' | b'i' | b'u' | b'o' | b'x' | b'X' => {
+                | b'd' | b'i' | b'u' | b'o' | b'x' | b'X' | b'b' => {
                     let base = match conversion {
                         | b'd' | b'u' => 10,
                         | b'i' => 0,
                         | b'o' => 8,
+                        | b'b' if dialect == Dialect::C23 => 2,
+                        | b'b' => return Err(Fault::Unsupported(Unsupported::FormatConversion)),
                         | _ => 16,
                     };
-                    self.scan_integer(&mut input, &mut field, base, memory)?
-                        .map(|value| {
+                    let signed = matches!(conversion, b'd' | b'i');
+                    let scanned =
+                        self.scan_integer(&mut input, &mut field, base, signed, dialect, memory)?;
+                    scanned
+                        .map(|(value, clamped)| {
+                            // glibc converts with `strtol` or `strtoul`, which
+                            // clamp a value out of range and set ERANGE.
+                            if clamped {
+                                self.set_errno(memory, super::errno::ERANGE)?;
+                            }
                             if !suppress {
                                 store_integer(memory, destination, value, size)?;
                             }
@@ -288,7 +308,7 @@ impl DefaultHost<'_> {
     fn store_size(&self, conversion: u8, length: Length) -> Result<u32, Fault> {
         let unsupported = Err(Fault::Unsupported(Unsupported::FormatConversion));
         Ok(match conversion {
-            | b'd' | b'i' | b'u' | b'o' | b'x' | b'X' | b'n' => match length {
+            | b'd' | b'i' | b'u' | b'o' | b'x' | b'X' | b'b' | b'n' => match length {
                 | Length::Char => 1,
                 | Length::Short => 2,
                 | Length::None => 4,
@@ -437,30 +457,43 @@ impl DefaultHost<'_> {
         Ok(true)
     }
 
-    /// An integer as `strtol` reads it with `base`, within the field width;
-    /// `None` (a matching failure) when no digit follows the sign and
-    /// prefix, including a `0x` with no hexadecimal digit after it.
+    /// An integer as `strtol` (`signed`) or `strtoul` reads it with `base`,
+    /// within the field width: its 64-bit value, clamped as those functions
+    /// clamp it, and whether it was; `None` (a matching failure) when no
+    /// digit follows the sign and prefix, including a `0x` with no
+    /// hexadecimal digit after it. The C23 forms also read a `0b` prefix in
+    /// bases 0 and 2.
     fn scan_integer(
         &mut self,
         input: &mut Input,
         field: &mut Field<'_>,
         base: u32,
+        signed: bool,
+        dialect: Dialect,
         memory: &Memory<'_>,
-    ) -> Result<Option<u128>, Fault> {
+    ) -> Result<Option<(u128, bool)>, Fault> {
         let negative =
             self.take(input, field, memory, |byte| byte == b'+' || byte == b'-')? == Some(b'-');
         let mut base = base;
         let mut digits = 0_u64;
-        if matches!(base, 0 | 16)
+        let binary = dialect == Dialect::C23 && matches!(base, 0 | 2);
+        if (matches!(base, 0 | 16) || binary)
             && self
                 .take(input, field, memory, |byte| byte == b'0')?
                 .is_some()
         {
-            if self
-                .take(input, field, memory, |byte| byte == b'x' || byte == b'X')?
-                .is_some()
+            if base != 2
+                && self
+                    .take(input, field, memory, |byte| byte == b'x' || byte == b'X')?
+                    .is_some()
             {
                 base = 16;
+            } else if binary
+                && self
+                    .take(input, field, memory, |byte| byte == b'b' || byte == b'B')?
+                    .is_some()
+            {
+                base = 2;
             } else {
                 digits = 1;
                 if base == 0 {
@@ -471,23 +504,20 @@ impl DefaultHost<'_> {
         if base == 0 {
             base = 10;
         }
-        let mut value = 0_u128;
+        let mut parsed = super::strings::ParsedInteger {
+            negative,
+            magnitude: 0,
+            overflow: false,
+            consumed: 0,
+        };
         while let Some(byte) = self.take(input, field, memory, |byte: u8| {
             char::from(byte).is_digit(base)
         })? {
             let digit = char::from(byte).to_digit(base).expect("an accepted digit");
-            value = value
-                .wrapping_mul(u128::from(base))
-                .wrapping_add(u128::from(digit));
+            parsed.push_digit(base, digit);
             digits = digits.saturating_add(1);
         }
-        Ok((digits > 0).then(|| {
-            if negative {
-                value.wrapping_neg()
-            } else {
-                value
-            }
-        }))
+        Ok((digits > 0).then(|| parsed.signed(signed, 64)))
     }
 
     /// A floating number as `strtod` reads it, within the field width:

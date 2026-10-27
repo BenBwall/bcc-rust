@@ -27,6 +27,10 @@ pub(super) enum P {
     Ptr,
     /// `wchar_t`: 32 bits on GNU/Linux, 16 on Windows.
     WChar,
+    Float,
+    Double,
+    /// `long double`: the target's representation.
+    LongDouble,
 }
 
 /// A function's result, fixed parameters and whether it is variadic.
@@ -60,8 +64,11 @@ const fn variadic(result: P, parameters: &'static [P]) -> Signature {
 )]
 pub(super) fn signature(name: &str) -> Option<Signature> {
     use P::{
+        Double,
+        Float,
         Int,
         Long,
+        LongDouble,
         Ptr,
         Void,
         WChar,
@@ -81,9 +88,9 @@ pub(super) fn signature(name: &str) -> Option<Signature> {
         | "fseek" => fixed(Int, &[Ptr, Long, Int]),
         | "ftell" => fixed(Long, &[Ptr]),
         | "tmpnam" => fixed(Ptr, &[Ptr]),
-        | "fprintf" | "sscanf" | "fscanf" | "__isoc99_sscanf" | "__isoc99_fscanf" =>
-            variadic(Int, &[Ptr, Ptr]),
-        | "scanf" | "__isoc99_scanf" => variadic(Int, &[Ptr]),
+        | "fprintf" | "sscanf" | "fscanf" | "__isoc99_sscanf" | "__isoc99_fscanf"
+        | "__isoc23_sscanf" | "__isoc23_fscanf" => variadic(Int, &[Ptr, Ptr]),
+        | "scanf" | "__isoc99_scanf" | "__isoc23_scanf" => variadic(Int, &[Ptr]),
         | "vfprintf" | "vsprintf" => fixed(Int, &[Ptr, Ptr, Ptr]),
         | "vprintf" => fixed(Int, &[Ptr, Ptr]),
         | "vsnprintf" => fixed(Int, &[Ptr, Wide64, Ptr, Ptr]),
@@ -101,8 +108,10 @@ pub(super) fn signature(name: &str) -> Option<Signature> {
         | "atoi" => fixed(Int, &[Ptr]),
         | "atol" => fixed(Long, &[Ptr]),
         | "atoll" => fixed(Wide64, &[Ptr]),
-        | "strtol" | "strtoul" => fixed(Long, &[Ptr, Ptr, Int]),
-        | "strtoll" | "strtoull" => fixed(Wide64, &[Ptr, Ptr, Int]),
+        | "strtol" | "strtoul" | "__isoc23_strtol" | "__isoc23_strtoul" =>
+            fixed(Long, &[Ptr, Ptr, Int]),
+        | "strtoll" | "strtoull" | "__isoc23_strtoll" | "__isoc23_strtoull" =>
+            fixed(Wide64, &[Ptr, Ptr, Int]),
         | "isalnum" | "isalpha" | "isblank" | "iscntrl" | "isdigit" | "isgraph" | "islower"
         | "ispunct" | "isspace" | "isupper" | "isxdigit" | "tolower" | "toupper" =>
             fixed(Int, &[Int]),
@@ -114,6 +123,23 @@ pub(super) fn signature(name: &str) -> Option<Signature> {
         | "wcsncmp" | "wmemcmp" => fixed(Int, &[Ptr, Ptr, Wide64]),
         | "wcschr" | "wcsrchr" => fixed(Ptr, &[Ptr, WChar]),
         | "wmemset" | "wmemchr" => fixed(Ptr, &[Ptr, WChar, Wide64]),
+        | "strtod" => fixed(Double, &[Ptr, Ptr]),
+        | "strtof" => fixed(Float, &[Ptr, Ptr]),
+        | "strtold" => fixed(LongDouble, &[Ptr, Ptr]),
+        | "atof" => fixed(Double, &[Ptr]),
+        | "realloc" => fixed(Ptr, &[Ptr, Wide64]),
+        | "__errno_location" => fixed(Ptr, &[]),
+        | "strerror" => fixed(Ptr, &[Int]),
+        | "strerror_r" => fixed(Ptr, &[Int, Ptr, Wide64]),
+        | "__xpg_strerror_r" => fixed(Int, &[Int, Ptr, Wide64]),
+        | "perror" => fixed(Void, &[Ptr]),
+        | "atexit" | "at_quick_exit" => fixed(Int, &[Ptr]),
+        | "on_exit" => fixed(Int, &[Ptr, Ptr]),
+        | "quick_exit" | "_Exit" | "_exit" => fixed(Void, &[Int]),
+        | "setvbuf" => fixed(Int, &[Ptr, Ptr, Int, Wide64]),
+        | "setbuf" => fixed(Void, &[Ptr, Ptr]),
+        | "setbuffer" => fixed(Void, &[Ptr, Ptr, Wide64]),
+        | "setlinebuf" => fixed(Void, &[Ptr]),
         | "qsort" => fixed(Void, &[Ptr, Wide64, Wide64, Ptr]),
         | "bsearch" => fixed(Ptr, &[Ptr, Ptr, Wide64, Wide64, Ptr]),
         | _ => return None,
@@ -126,6 +152,7 @@ pub(super) fn check(
     call: HostCall<'_>,
     signature: Signature,
     long_width: u32,
+    long_double: Type,
     windows: bool,
 ) -> Result<(), Fault> {
     #[expect(
@@ -141,6 +168,9 @@ pub(super) fn check(
             | P::Ptr => Type::Ptr,
             | P::WChar if windows => Type::I16,
             | P::WChar => Type::I32,
+            | P::Float => Type::F32,
+            | P::Double => Type::F64,
+            | P::LongDouble => long_double,
         })
     };
     let fixed = signature.parameters.len();
@@ -172,6 +202,9 @@ fn every_added_host_function_has_a_signature() {
             "__isoc99_sscanf",
             "__isoc99_fscanf",
             "__isoc99_scanf",
+            "__isoc23_sscanf",
+            "__isoc23_fscanf",
+            "__isoc23_scanf",
         ])
     {
         assert!(signature(name).is_some(), "{name}");

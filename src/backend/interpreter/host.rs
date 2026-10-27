@@ -3,7 +3,8 @@
 //! The interpreter hands such a call to a [`Host`] by name. [`DefaultHost`]
 //! implements the part of the C library that test programs use to report
 //! results, manage memory and handle strings and files, and captures their
-//! output in arena buffers. `stdio.rs` holds the streams and files,
+//! output in arena buffers. `errno.rs` holds `errno` and its messages,
+//! `stdio.rs` the streams and files,
 //! `printf.rs` and `scanf.rs` formatted input and output, `strings.rs` the
 //! string, wide-string, character and conversion functions, `math.rs` and
 //! `complex.rs` the numeric library, and `checked.rs` the
@@ -22,6 +23,7 @@ mod scanf;
 // Library families
 mod checked;
 mod complex;
+mod errno;
 mod library;
 mod math;
 mod stdio;
@@ -90,6 +92,11 @@ pub(crate) trait Host {
     /// streams hold.
     /// C99: §7.20.4.3 paragraph 4, p. 315; PDF p. 327.
     fn at_exit(&mut self) {}
+
+    /// Ends the program at once, after `_Exit`, `_exit` or `quick_exit`:
+    /// what the host's streams hold is lost, as the C library loses it.
+    /// C99: §7.20.4.4 paragraph 2, p. 316; PDF p. 328.
+    fn at_immediate_exit(&mut self) {}
 }
 
 /// A call the host is asked to run.
@@ -152,6 +159,12 @@ pub(crate) struct DefaultHost<'a> {
     path:          ArenaVec<'a, u8>,
     /// `tmpnam`'s static buffer, once made.
     tmpnam_buffer: Option<Pointer>,
+    /// The program's `errno` object, once made.
+    errno: Option<Pointer>,
+    /// `strerror`'s message strings, by code, once made, and its buffer
+    /// for an unknown code.
+    messages: [Option<Pointer>; errno::MESSAGE_COUNT],
+    unknown_message: Option<Pointer>,
     /// glibc's character tables, by `strings::ctype_table` slot, once made.
     ctype:         [Option<Pointer>; 3],
     /// Where `strtok` continues.
@@ -185,8 +198,16 @@ impl Host for DefaultHost<'_> {
         // Standard output written by any function follows a `freopen`; a
         // function that writes it implicitly fails when that write does.
         let before = self.output.len();
-        let result = self.dispatch(call, memory);
-        if self.redirect_output(before, call.name) || implicit_stream(call.name) != Some(1) {
+        let mut result = self.dispatch(call, memory);
+        let redirected = self.redirect_output(before, call.name);
+        // A stream operation that failed passes its `errno` on.
+        if let Some(code) = self.streams.take_errno()
+            && result.is_ok()
+            && let Err(fault) = self.set_errno(memory, code)
+        {
+            result = Err(fault);
+        }
+        if redirected || implicit_stream(call.name) != Some(1) {
             return result;
         }
         result.map(|value| match value {
@@ -200,6 +221,13 @@ impl Host for DefaultHost<'_> {
 
     fn at_exit(&mut self) {
         let _ = self.flush_all();
+    }
+
+    fn at_immediate_exit(&mut self) {
+        // Only what standard output already released reaches the command
+        // line; files keep only what was written out.
+        let released = self.console.released(&self.output);
+        self.output.truncate(released);
     }
 }
 
@@ -216,7 +244,7 @@ impl DefaultHost<'_> {
             check_signature(call, self.long_width, self.long_double)?;
         } else if let Some(signature) = library::signature(call.name) {
             let windows = matches!(self.target, Target::WindowsGnu | Target::WindowsMsvc);
-            library::check(call, signature, self.long_width, windows)?;
+            library::check(call, signature, self.long_width, self.long_double, windows)?;
         }
         // Using a closed standard stream is undefined even without naming it.
         if let Some(stream) = implicit_stream(call.name) {
@@ -225,16 +253,23 @@ impl DefaultHost<'_> {
         if let Some(result) = complex::call(call, memory, self.target, self.long_double) {
             return result;
         }
-        if let Some(value) = math::call(
+        if let Some(result) = math::call(
             call,
             memory,
             self.long_double,
             self.long_width,
             &mut self.text,
         ) {
-            return value.map(|value| HostReturn::Value(Some(value)));
+            let (value, code) = result?;
+            if code != 0 {
+                self.set_errno(memory, code)?;
+            }
+            return Ok(HostReturn::Value(Some(value)));
         }
         if let Some(result) = self.checked(call, memory) {
+            return result;
+        }
+        if let Some(result) = self.errno_functions(call, memory) {
             return result;
         }
         if let Some(result) = self.stdio(call, memory) {
@@ -283,7 +318,7 @@ impl DefaultHost<'_> {
                 RuntimeValue::Int(count as u128)
             },
             | "sscanf" | "__isoc99_sscanf" | "fscanf" | "__isoc99_fscanf" | "scanf"
-            | "__isoc99_scanf" => {
+            | "__isoc99_scanf" | "__isoc23_sscanf" | "__isoc23_fscanf" | "__isoc23_scanf" => {
                 let fixed = if call.name.ends_with("_scanf") || call.name == "scanf" {
                     1
                 } else {
@@ -301,15 +336,54 @@ impl DefaultHost<'_> {
                 };
                 let mut values =
                     FormatArguments::Values(args.get(fixed..).unwrap_or_default().iter());
-                let count = self.scanf(input, arg(fixed - 1), &mut values, memory)?;
+                let dialect = if call.name.starts_with("__isoc23_") {
+                    scanf::Dialect::C23
+                } else {
+                    scanf::Dialect::C99
+                };
+                let count = self.scanf(input, arg(fixed - 1), &mut values, memory, dialect)?;
                 RuntimeValue::int(Type::I32, u128::from(count.cast_unsigned()))
             },
-            | "malloc" => allocate(memory, integer(arg(0))?, false)?,
-            | "calloc" => {
-                let size = integer(arg(0))?.checked_mul(integer(arg(1))?);
-                match size {
-                    | Some(size) => allocate(memory, size, true)?,
+            | "malloc" | "calloc" => {
+                let size = if call.name == "malloc" {
+                    Some(integer(arg(0))?)
+                } else {
+                    integer(arg(0))?.checked_mul(integer(arg(1))?)
+                };
+                let pointer = match size {
+                    | Some(size) => allocate(memory, size, call.name == "calloc")?,
                     | None => RuntimeValue::NULL,
+                };
+                // C99 leaves errno to the implementation; glibc's
+                // allocators set ENOMEM when they fail.
+                if pointer == RuntimeValue::NULL {
+                    self.set_errno(memory, errno::ENOMEM)?;
+                }
+                pointer
+            },
+            | "realloc" => {
+                // glibc: a null pointer allocates, a zero size frees and
+                // returns null, and a failed allocation leaves the old one
+                // alone and sets ENOMEM.
+                let (old, size) = (arg(0), integer(arg(1))?);
+                if old != RuntimeValue::NULL && size == 0 {
+                    memory.free_heap(old)?;
+                    RuntimeValue::NULL
+                } else {
+                    let kept = if old == RuntimeValue::NULL {
+                        0
+                    } else {
+                        memory.heap_size(old)?
+                    };
+                    let pointer = allocate(memory, size, false)?;
+                    if pointer == RuntimeValue::NULL {
+                        self.set_errno(memory, errno::ENOMEM)?;
+                    } else if old != RuntimeValue::NULL {
+                        let count = u128::from(kept).min(size);
+                        memory.copy(pointer, old, RuntimeValue::Int(count), Align::BYTE, false)?;
+                        memory.free_heap(old)?;
+                    }
+                    pointer
                 }
             },
             | "free" => {
@@ -619,7 +693,8 @@ pub(crate) enum Channel {
 fn implicit_stream(name: &str) -> Option<usize> {
     match name {
         | "printf" | "puts" | "putchar" | "vprintf" | "__printf_chk" | "__vprintf_chk" => Some(1),
-        | "getchar" | "scanf" | "__isoc99_scanf" => Some(0),
+        | "getchar" | "scanf" | "__isoc99_scanf" | "__isoc23_scanf" => Some(0),
+        | "perror" => Some(2),
         | _ => None,
     }
 }
@@ -712,6 +787,9 @@ impl<'a> DefaultHost<'a> {
             streams:       stdio::Streams::new_in(arena),
             path:          ArenaVec::new_in(arena),
             tmpnam_buffer: None,
+            errno: None,
+            messages: [None; errno::MESSAGE_COUNT],
+            unknown_message: None,
             ctype:         [None; 3],
             strtok:        RuntimeValue::NULL,
             scratch:       ArenaVec::new_in(arena),

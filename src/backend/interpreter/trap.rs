@@ -255,6 +255,9 @@ pub(crate) enum Unsupported {
     InlineAsm,
     /// A `longjmp` out of a function `qsort` or `bsearch` called.
     CallbackEscape,
+    /// An exit handler the program does not define, such as a library
+    /// function.
+    HostExitHandler,
 }
 
 impl fmt::Display for Unsupported {
@@ -270,6 +273,7 @@ impl fmt::Display for Unsupported {
             | Self::InlineAsm =>
                 "inline assembly, which only compiled code can run; compile it with -o instead",
             | Self::CallbackEscape => "a longjmp out of a qsort or bsearch comparison",
+            | Self::HostExitHandler => "an exit handler the program does not define",
         })
     }
 }

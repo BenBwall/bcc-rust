@@ -28,7 +28,14 @@ use std::{
     },
 };
 
-use super::Console;
+use super::{
+    super::errno::{
+        EBADF,
+        EINVAL,
+        from_io,
+    },
+    Console,
+};
 use crate::{
     backend::interpreter::value::Pointer,
     util::bump::{
@@ -105,6 +112,10 @@ pub(super) struct Stream<'a> {
     /// flush at exit: glibc's `_IO_list_all` puts each stream it opens
     /// first.
     pub(super) opened:    u64,
+    /// The `errno` the last failing operation set, until the host passes it
+    /// to the program: `EBADF` for a direction the mode does not allow, and
+    /// the system's code when a read, write or seek fails.
+    pub(super) errno:     Option<i32>,
 }
 
 /// Where a stream's bytes go or come from.
@@ -186,6 +197,7 @@ impl Stream<'_> {
         }
         if !self.readable {
             self.error = true;
+            self.errno = Some(EBADF);
             return None;
         }
         if let Some(&byte) = self.bytes.get(self.position) {
@@ -202,10 +214,12 @@ impl Stream<'_> {
         self.bytes.truncate(*count.as_ref().unwrap_or(&0));
         match count {
             | Ok(0) | Err(_) => {
-                if count.is_ok() {
-                    self.eof = true;
-                } else {
-                    self.error = true;
+                match &count {
+                    | Ok(_) => self.eof = true,
+                    | Err(error) => {
+                        self.error = true;
+                        self.errno = Some(from_io(error));
+                    },
                 }
                 self.offset = None;
                 None
@@ -275,8 +289,9 @@ impl Stream<'_> {
                     self.eof = true;
                     0
                 },
-                | Err(_) => {
+                | Err(error) => {
                     self.error = true;
+                    self.errno = Some(from_io(&error));
                     0
                 },
                 | Ok(read) => read,
@@ -359,6 +374,7 @@ impl Stream<'_> {
                 };
                 offset = offset.wrapping_add(known);
                 if offset < 0 {
+                    self.errno = Some(EINVAL);
                     return false;
                 }
             },
@@ -379,6 +395,7 @@ impl Stream<'_> {
             }
         }
         let Ok(start) = u64::try_from(offset) else {
+            self.errno = Some(EINVAL);
             return false;
         };
         if !self.readable {
@@ -469,11 +486,9 @@ impl Stream<'_> {
         };
         // A character device that reports offset 0 after a read has no
         // position.
-        if at == 0 && ahead > 0 {
-            return None;
-        }
         let position = at - to_offset(ahead);
-        if position < 0 {
+        if (at == 0 && ahead > 0) || position < 0 {
+            self.errno = Some(EINVAL);
             return None;
         }
         // `_IO_ftell` then subtracts the buffer's unread bytes behind the
@@ -524,7 +539,7 @@ impl Stream<'_> {
         if self.pending.is_empty() {
             return true;
         }
-        let (written, complete) = write_file(&mut self.target, &self.pending);
+        let (written, complete) = write_file(&mut self.target, &self.pending, &mut self.errno);
         self.pending.clear();
         self.write_base = 0;
         self.wrote(written, complete)
@@ -568,6 +583,7 @@ impl Stream<'_> {
         self.oriented = true;
         if !self.writable {
             self.error = true;
+            self.errno = Some(EBADF);
             return false;
         }
         bytes.iter().all(|&byte| self.put_char(byte))
@@ -609,8 +625,11 @@ impl Stream<'_> {
                 rest
             };
             if blocks > 0 {
-                let (written, complete) =
-                    write_file(&mut self.target, &bytes[taken..taken + blocks]);
+                let (written, complete) = write_file(
+                    &mut self.target,
+                    &bytes[taken..taken + blocks],
+                    &mut self.errno,
+                );
                 self.write_base = 0;
                 taken += written;
                 if !self.wrote(written, complete) {
@@ -636,6 +655,7 @@ impl Stream<'_> {
     fn start_write(&mut self) -> bool {
         if !self.writable {
             self.error = true;
+            self.errno = Some(EBADF);
             return false;
         }
         if self.putting {
@@ -718,14 +738,18 @@ impl Stream<'_> {
         }
     }
 
-    /// Seeks the stream's descriptor; one that cannot seek fails as a pipe
-    /// does.
+    /// Seeks the stream's descriptor, keeping the `errno` of a failure; one
+    /// that cannot seek fails as a pipe does.
     fn descriptor_seek(&mut self, position: SeekFrom) -> io::Result<u64> {
         self.open_input();
-        match &mut self.target {
+        let result = match &mut self.target {
             | Target::File(file) => file.seek(position),
             | _ => Err(io::ErrorKind::NotSeekable.into()),
+        };
+        if let Err(error) = &result {
+            self.errno = Some(from_io(error));
         }
+        result
     }
 
     /// The size of a regular file, which `SEEK_END` counts from; other
@@ -790,6 +814,7 @@ impl<'a> Stream<'a> {
             write_base:    0,
             pending:       ArenaVec::new_in(arena),
             opened:        0,
+            errno:         None,
         }
     }
 }
@@ -849,15 +874,20 @@ pub(super) enum Whence {
 }
 
 /// Writes `bytes` to `target`'s file: how many reached it, and whether all
-/// did.
-fn write_file(target: &mut Target, bytes: &[u8]) -> (usize, bool) {
+/// did, keeping the `errno` of a write that failed.
+fn write_file(target: &mut Target, bytes: &[u8], errno: &mut Option<i32>) -> (usize, bool) {
     let Target::File(file) = target else {
+        *errno = Some(EBADF);
         return (0, false);
     };
     let mut written = 0;
     while written < bytes.len() {
         match file.write(&bytes[written..]) {
-            | Ok(0) | Err(_) => return (written, false),
+            | Ok(0) => return (written, false),
+            | Err(error) => {
+                *errno = Some(from_io(&error));
+                return (written, false);
+            },
             | Ok(count) => written += count,
         }
     }

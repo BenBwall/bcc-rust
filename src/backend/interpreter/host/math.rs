@@ -17,17 +17,24 @@ use super::{
 };
 use crate::ir::Align;
 
-// The x87 long double functions
+// The x87 long double functions and the errno they set
 mod extended;
+mod extended_errno;
 
-/// Calls a known math function after validating its complete C signature.
+/// Calls a known math function after validating its complete C signature:
+/// its value and the `errno` it sets, or zero. glibc's `math_errhandling`
+/// is `MATH_ERRNO | MATH_ERREXCEPT`: a domain error sets `EDOM`, and a pole
+/// error or a range error `ERANGE`. Native libm reports its own `errno` for
+/// `float` and `double` (glibc's, on GNU/Linux); the x87 functions follow
+/// glibc's wrappers' rules (`math/extended_errno.rs`).
+/// C99: §7.12.1 paragraphs 2-4, pp. 214-215; PDF pp. 226-227.
 pub(super) fn call(
     call: HostCall<'_>,
     memory: &mut Memory<'_>,
     long_double: Type,
     long_width: u32,
     text: &mut crate::util::bump::ArenaVec<'_, u8>,
-) -> Option<Result<RuntimeValue, Fault>> {
+) -> Option<Result<(RuntimeValue, i32), Fault>> {
     let (operation, precision) = lookup(call.name, long_double)?;
     Some(evaluate(
         call,
@@ -48,7 +55,7 @@ fn evaluate(
     long_double: Type,
     long_width: u32,
     text: &mut crate::util::bump::ArenaVec<'_, u8>,
-) -> Result<RuntimeValue, Fault> {
+) -> Result<(RuntimeValue, i32), Fault> {
     super::check_signature(call, long_width, long_double)?;
     let long = if long_width == 32 {
         Type::I32
@@ -62,7 +69,11 @@ fn evaluate(
         return Err(UbKind::PoisonInHostCall.into());
     }
     if operation == Operation::Nexttoward && long_double == Type::F80 && precision != Type::F80 {
-        return extended::next_toward_extended(call.args[0], call.args[1]);
+        let value = extended::next_toward_extended(call.args[0], call.args[1])?;
+        return Ok((
+            value,
+            extended_errno::next_toward(call.args[0], call.args[1], value),
+        ));
     }
     if operation == Operation::Nan {
         text.clear();
@@ -70,9 +81,20 @@ fn evaluate(
         text.push(0);
     }
     match precision {
-        | Type::F32 => single(operation, call.args, memory, long, text),
-        | Type::F64 => double(operation, call.args, memory, long, text),
-        | Type::F80 => extended::extended(operation, call.args, memory, long, text),
+        | Type::F32 => {
+            let (value, code) =
+                native::with_errno(|| single(operation, call.args, memory, long, text));
+            Ok((value?, code))
+        },
+        | Type::F64 => {
+            let (value, code) =
+                native::with_errno(|| double(operation, call.args, memory, long, text));
+            Ok((value?, code))
+        },
+        | Type::F80 => {
+            let value = extended::extended(operation, call.args, memory, long, text)?;
+            Ok((value, extended_errno::errno(operation, call.args, value)))
+        },
         | _ => Err(Fault::Unsupported(Unsupported::WideFloat)),
     }
 }
@@ -758,6 +780,44 @@ pub(super) mod native {
         fn native_nan(tag: *const c_char) -> f64;
         #[link_name = "nanf"]
         fn native_nanf(tag: *const c_char) -> f32;
+    }
+
+    /// Runs `operation`, which calls the host's C library, and returns its
+    /// result with the `errno` it left (zero if it set none). On GNU/Linux
+    /// the host's library is glibc, whose math functions and conversions
+    /// set `errno` as the program's would.
+    pub(in crate::backend::interpreter::host) fn with_errno<T>(
+        operation: impl FnOnce() -> T,
+    ) -> (T, c_int) {
+        let location = errno_location();
+        // SAFETY: The C library's `errno` is this thread's, valid for as
+        // long as the thread runs.
+        unsafe { location.write(0) };
+        let result = operation();
+        // SAFETY: As above.
+        (result, unsafe { location.read() })
+    }
+
+    /// The address of this thread's C `errno`.
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    fn errno_location() -> *mut c_int {
+        // SAFETY: `__errno_location` has no preconditions.
+        unsafe { libc::__errno_location() }
+    }
+
+    #[cfg(target_vendor = "apple")]
+    fn errno_location() -> *mut c_int {
+        // SAFETY: `__error` has no preconditions.
+        unsafe { libc::__error() }
+    }
+
+    #[cfg(windows)]
+    fn errno_location() -> *mut c_int {
+        unsafe extern "C" {
+            fn _errno() -> *mut c_int;
+        }
+        // SAFETY: The C runtime's `_errno` has no preconditions.
+        unsafe { _errno() }
     }
 
     pub(super) fn nan(tag: &[u8]) -> f64 {

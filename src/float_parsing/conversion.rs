@@ -88,3 +88,47 @@ pub(crate) fn string_to_binary64_long_double(s: &str) -> Result<LongDouble, Pars
             | _ => unreachable!("double conversion returns a double error"),
         })
 }
+
+/// Converts the longest prefix of the NUL-terminated `text` the host C
+/// library's `strtod` reads: the value and how many bytes it read (zero when
+/// it read no number).
+/// C99: §7.20.1.3 paragraphs 2-10, pp. 308-310; PDF pp. 320-322.
+#[cfg(feature = "native")]
+pub(crate) fn host_strtod(text: &[u8]) -> (f64, usize) {
+    assert_eq!(text.last(), Some(&0), "host_strtod: text must end with a null byte");
+    let mut endptr = std::ptr::null_mut();
+    // SAFETY: The text is NUL-terminated and the end pointer is writable.
+    let value = unsafe { ffi::string_to_double(text.as_ptr().cast::<c_char>(), &raw mut endptr) };
+    (value, read_length(text, endptr))
+}
+
+/// As [`host_strtod`] for `strtof`.
+#[cfg(feature = "native")]
+pub(crate) fn host_strtof(text: &[u8]) -> (f32, usize) {
+    assert_eq!(text.last(), Some(&0), "host_strtof: text must end with a null byte");
+    let mut endptr = std::ptr::null_mut();
+    // SAFETY: The text is NUL-terminated and the end pointer is writable.
+    let value = unsafe { ffi::string_to_float(text.as_ptr().cast::<c_char>(), &raw mut endptr) };
+    (value, read_length(text, endptr))
+}
+
+/// As [`host_strtod`] for `strtold`, in the host's `long double` carrier.
+#[cfg(feature = "native")]
+pub(crate) fn host_strtold(text: &[u8]) -> (LongDouble, usize) {
+    assert_eq!(text.last(), Some(&0), "host_strtold: text must end with a null byte");
+    let mut endptr = std::ptr::null_mut();
+    // SAFETY: The text is NUL-terminated and the end pointer is writable.
+    let value =
+        unsafe { ffi::string_to_long_double(text.as_ptr().cast::<c_char>(), &raw mut endptr) };
+    let value = LongDouble {
+        // SAFETY: The C function initializes every byte of the union.
+        value: unsafe { value.bytes },
+    };
+    (value, read_length(text, endptr))
+}
+
+/// How far into `text` the C conversion's end pointer points.
+#[cfg(feature = "native")]
+fn read_length(text: &[u8], endptr: *mut c_char) -> usize {
+    endptr.addr().saturating_sub(text.as_ptr().addr())
+}
