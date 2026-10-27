@@ -20,6 +20,7 @@ use super::{
     },
     Input,
     Job,
+    combine,
     compile,
     dependencies::{
         self,
@@ -85,7 +86,7 @@ pub(super) fn link(args: &Cli, inputs: &[Input<'_>]) -> Result<i32, MainError> {
         };
         match *input {
             | Input::Assembly(assembly) =>
-                status = status.max(assemble(args, assembly, object.path())),
+                status = combine(status, assemble(args, assembly, object.path())),
             | _ => {
                 let source = input.c_source().expect("a C input");
                 let mut job = generation.clone();
@@ -108,7 +109,7 @@ pub(super) fn link(args: &Cli, inputs: &[Input<'_>]) -> Result<i32, MainError> {
                 };
                 let dependencies = dependencies::request(args, source, false, names)?;
                 let generated = compile(args, source, Job::Generate(&job), dependencies)?;
-                status = status.max(generated.status);
+                status = combine(status, generated.status);
                 atomic_runtime |= generated.atomic_runtime;
             },
         }

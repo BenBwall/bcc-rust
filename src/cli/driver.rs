@@ -119,7 +119,7 @@ pub(super) fn run(args: &Cli, matches: &ArgMatches) -> Result<i32, MainError> {
                 let Some(source) = input.c_source() else {
                     continue;
                 };
-                status = status.max(compile(args, source, Job::Inspect, None)?.status);
+                status = combine(status, compile(args, source, Job::Inspect, None)?.status);
             }
         },
         | Stage::Preprocess =>
@@ -134,7 +134,8 @@ pub(super) fn run(args: &Cli, matches: &ArgMatches) -> Result<i32, MainError> {
                     | Some(source) if args.driver.dependencies.is_some() => {
                         let dependencies =
                             dependencies::request(args, source, true, DependencyNames::default())?;
-                        status = status.max(compile(args, source, Job::Scan, dependencies)?.status);
+                        let scanned = compile(args, source, Job::Scan, dependencies)?;
+                        status = combine(status, scanned.status);
                     },
                     | Some(source) => {
                         let names = DependencyNames {
@@ -142,9 +143,9 @@ pub(super) fn run(args: &Cli, matches: &ArgMatches) -> Result<i32, MainError> {
                             target: None,
                         };
                         let dependencies = dependencies::request(args, source, false, names)?;
-                        status = status.max(
-                            compile(args, source, Job::Preprocess(output), dependencies)?.status,
-                        );
+                        let preprocessed =
+                            compile(args, source, Job::Preprocess(output), dependencies)?;
+                        status = combine(status, preprocessed.status);
                     },
                     | None => {},
                 }
@@ -157,7 +158,7 @@ pub(super) fn run(args: &Cli, matches: &ArgMatches) -> Result<i32, MainError> {
                     | Input::Assembly(assembly) =>
                         if stage == Stage::Compile {
                             let object = output_or_stem(output, assembly.path, extension)?;
-                            status = status.max(assemble(args, assembly, &object));
+                            status = combine(status, assemble(args, assembly, &object));
                         },
                     | Input::C(source) => {
                         let path = output_or_stem(output, source.path(), extension)?;
@@ -179,14 +180,26 @@ pub(super) fn run(args: &Cli, matches: &ArgMatches) -> Result<i32, MainError> {
                             job.emit_path = Some(path);
                             job.output_path = None;
                         }
-                        status = status
-                            .max(compile(args, source, Job::Generate(&job), dependencies)?.status);
+                        let generated = compile(args, source, Job::Generate(&job), dependencies)?;
+                        status = combine(status, generated.status);
                     },
                 }
             },
         | Stage::Link => status = link(args, &inputs)?,
     }
     Ok(status)
+}
+
+/// Folds one job's exit status into the run's: the first job that fails
+/// decides it, and later jobs still run, as GCC's driver reports a failure
+/// whichever input failed. Statuses are not ordered by severity: an
+/// interpreted program's is the `int` it passed to `exit`, which may be
+/// negative or a multiple of 256, and `main` hands it to the OS unchanged,
+/// so a POSIX shell sees its low byte as for a native build.
+///
+/// C99: §5.1.2.2.3 paragraph 1, p. 13; PDF p. 25.
+const fn combine(status: i32, job: i32) -> i32 {
+    if status == 0 { job } else { status }
 }
 
 /// The last stage a run reaches.
