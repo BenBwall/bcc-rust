@@ -685,7 +685,7 @@ impl Verifier<'_, '_, '_, '_> {
                 } else if opcode.is_float_binary() {
                     checker.require(ty.is_float(), ty);
                     [ty, ty]
-                } else if opcode == Opcode::PtrAdd {
+                } else if matches!(opcode, Opcode::PtrAdd | Opcode::Subobject) {
                     checker.require(ty == Type::Ptr, ty);
                     [Type::Ptr, Type::I64]
                 } else {
@@ -693,6 +693,10 @@ impl Verifier<'_, '_, '_, '_> {
                     [Type::Ptr, Type::Ptr]
                 };
                 checker.operands(&args, &operands);
+            },
+            | InstData::ObjectSize { ty, ptr, .. } => {
+                checker.require(matches!(ty, Type::I32 | Type::I64), ty);
+                checker.operand(0, ptr, Type::Ptr);
             },
             | InstData::DynAlloca { ty, size, .. } => {
                 checker.require(ty == Type::I64, ty);

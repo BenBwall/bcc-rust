@@ -24,6 +24,7 @@ use crate::{
         OptimizerOptions,
         optimize,
         resolve_inline_copies,
+        resolve_object_sizes,
     },
     translation_phases::{
         Context,
@@ -178,6 +179,8 @@ fn lower_diagnosed<'tu, 'ir>(
         scratch.reset();
         resolve_inline_copies(&mut module, &scratch);
     }
+    scratch.reset();
+    resolve_object_sizes(&mut module, &scratch);
     scratch.reset();
     let retained_diagnostics =
         crate::lowering::retained_call_diagnostics(&module, call_diagnostics, arena, &scratch);

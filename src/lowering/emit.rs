@@ -405,6 +405,11 @@ fn map_operands(
             size: map(size)?,
             align,
         },
+        | InstData::ObjectSize { ty, query, ptr } => InstData::ObjectSize {
+            ty,
+            query,
+            ptr: map(ptr)?,
+        },
         | InstData::Unary { opcode, ty, arg } => InstData::Unary {
             opcode,
             ty,

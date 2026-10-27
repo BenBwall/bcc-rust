@@ -1906,6 +1906,14 @@ covered on all four targets, including unsigned 128-bit high-half values.
 The execution table covers all four converted modes in both spellings before
 and after optimization/ABI lowering and in the native arms. The reference
 program passes bundled Clang at O0/O2, with its expected conversion warnings.
+A query whose operand names no object semantic analysis can see (a pointer
+parameter, say) is no longer folded to the unknown answer in a function:
+`ObjectSize::Deferred` makes it a non-constant expression, as in Clang, and
+lowering emits an IR `object_size` that the middle end answers after
+inlining (`middle-end.md`, "Object sizes"). Direct calls also retain, per
+pointer argument, the closest-subobject size it names
+(`FunctionExtensions::subobject_arguments`), which lowering passes to
+`always_inline` callees.
 See [GCC Object Size Checking](https://gcc.gnu.org/onlinedocs/gcc/Object-Size-Checking.html)
 and C99 6.5.2.2p7 (printed p. 72, PDF p. 84), 6.3.1.3p1-3
 (printed p. 43, PDF p. 55).

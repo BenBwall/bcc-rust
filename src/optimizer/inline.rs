@@ -254,7 +254,8 @@ fn remap_inst(mut data: InstData, map: &impl Fn(Value) -> Value, slots: &[StackS
             *args = args.map(map),
         | InstData::Unary { arg, .. }
         | InstData::VaArgAggregate { list: arg, .. }
-        | InstData::DynAlloca { size: arg, .. } => *arg = map(*arg),
+        | InstData::DynAlloca { size: arg, .. }
+        | InstData::ObjectSize { ptr: arg, .. } => *arg = map(*arg),
         | InstData::Load { addr, .. } => *addr = map(*addr),
         | InstData::StackAddr { slot } => *slot = slots[slot.index()],
         // Constants and calls get owned pool data in expand; symbol ids are

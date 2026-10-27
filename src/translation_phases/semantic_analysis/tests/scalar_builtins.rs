@@ -229,44 +229,63 @@ fn object_size_modes_check_and_fold_the_converted_int() {
                 ("4", None),
                 ("n", None),
             ] {
-                let source = format!(
-                    "__SIZE_TYPE__ f(void *p,int n){{return __builtin_{builtin}(p,{mode});}}"
-                );
-                with_configuration(
-                    &source,
-                    crate::configuration::CompilerConfiguration::default().with_target(target),
-                    |context, unit| {
-                        let errors = context.take_pending_errors();
-                        assert_eq!(
-                            unit.errors,
-                            usize::from(expected.is_none()),
-                            "{target:?} {source}: {errors:?}"
-                        );
-                        if let Some(expected) = expected {
-                            let call = unit
-                                .expressions
-                                .iter()
-                                .find(|i| matches!(i.expression.kind, ExpressionType::Call { .. }))
-                                .unwrap();
+                // An operand with side effects is not evaluated, so its
+                // answer is folded now; a parameter's waits for inlining.
+                for operand in ["(char *)p + n++", "p"] {
+                    let source = format!(
+                        "__SIZE_TYPE__ f(void *p,int n){{return \
+                         __builtin_{builtin}({operand},{mode});}}"
+                    );
+                    with_configuration(
+                        &source,
+                        crate::configuration::CompilerConfiguration::default().with_target(target),
+                        |context, unit| {
+                            let errors = context.take_pending_errors();
                             assert_eq!(
-                                call.integer.and_then(Integer::to_u64),
-                                Some(if expected == 0 { 0 } else { u64::MAX }),
-                                "{target:?} {source}"
-                            );
-                        } else {
-                            assert!(
-                                matches!(
-                                    errors.as_slice(),
-                                    [TranslationError::Semantic(SemanticError {
-                                        kind: SemanticErrorKind::InvalidObjectSizeMode,
-                                        ..
-                                    })]
-                                ),
+                                unit.errors,
+                                usize::from(expected.is_none()),
                                 "{target:?} {source}: {errors:?}"
                             );
-                        }
-                    },
-                );
+                            if let Some(expected) = expected {
+                                let call = unit
+                                    .expressions
+                                    .iter()
+                                    .find(|i| {
+                                        matches!(i.expression.kind, ExpressionType::Call { .. })
+                                    })
+                                    .unwrap();
+                                if operand == "p" {
+                                    assert!(
+                                        matches!(
+                                            unit.function_extensions.object_size(call.expression),
+                                            Some(ObjectSize::Deferred { mode, .. })
+                                                if (mode >= 2) == (expected == 0)
+                                        ),
+                                        "{target:?} {source}"
+                                    );
+                                    assert!(call.integer.is_none(), "{target:?} {source}");
+                                } else {
+                                    assert_eq!(
+                                        call.integer.and_then(Integer::to_u64),
+                                        Some(if expected == 0 { 0 } else { u64::MAX }),
+                                        "{target:?} {source}"
+                                    );
+                                }
+                            } else {
+                                assert!(
+                                    matches!(
+                                        errors.as_slice(),
+                                        [TranslationError::Semantic(SemanticError {
+                                            kind: SemanticErrorKind::InvalidObjectSizeMode,
+                                            ..
+                                        })]
+                                    ),
+                                    "{target:?} {source}: {errors:?}"
+                                );
+                            }
+                        },
+                    );
+                }
             }
         }
     }

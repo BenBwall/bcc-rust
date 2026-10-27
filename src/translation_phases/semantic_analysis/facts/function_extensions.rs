@@ -59,6 +59,14 @@ pub(crate) struct FunctionExtensions<'tu> {
         ArenaMap<'tu, usize, StringCacheId>,
     pub(in crate::translation_phases::semantic_analysis) object_sizes:
         ArenaMap<'tu, usize, ObjectSize<'tu>>,
+    /// The bytes from each pointer argument of a direct call to the end of
+    /// the closest surrounding subobject it designates, where that is a
+    /// constant (`__builtin_object_size (argument, 1)` and `(argument, 3)`
+    /// agree), by argument expression. Lowering passes them to
+    /// `always_inline` callees, whose `object_size` queries of modes 1 and 3
+    /// need the subobject the IR's addresses do not record.
+    pub(in crate::translation_phases::semantic_analysis) subobject_arguments:
+        ArenaMap<'tu, usize, u64>,
     /// Hidden size of a cleanup call's synthetic address argument, keyed by
     /// the automatic object's binding rather than expression syntax.
     pub(in crate::translation_phases::semantic_analysis) cleanup_sizes:
@@ -68,18 +76,19 @@ pub(crate) struct FunctionExtensions<'tu> {
 impl<'tu> FunctionExtensions<'tu> {
     pub(in crate::translation_phases::semantic_analysis) fn new(arena: &'tu Bump) -> Self {
         Self {
-            functions:          ArenaMap::with_hasher_in(FxBuildHasher, arena),
-            calls:              ArenaMap::with_hasher_in(FxBuildHasher, arena),
-            values:             ArenaMap::with_hasher_in(FxBuildHasher, arena),
-            anonymous_names:    ArenaMap::with_hasher_in(FxBuildHasher, arena),
-            local_names:        ArenaMap::with_hasher_in(FxBuildHasher, arena),
-            abi_names:          ArenaMap::with_hasher_in(FxBuildHasher, arena),
-            written_types:      ArenaMap::with_hasher_in(FxBuildHasher, arena),
-            written_fields:     ArenaMap::with_hasher_in(FxBuildHasher, arena),
-            written_type_names: ArenaMap::with_hasher_in(FxBuildHasher, arena),
-            typedef_names:      ArenaMap::with_hasher_in(FxBuildHasher, arena),
-            object_sizes:       ArenaMap::with_hasher_in(FxBuildHasher, arena),
-            cleanup_sizes:      ArenaMap::with_hasher_in(FxBuildHasher, arena),
+            functions:           ArenaMap::with_hasher_in(FxBuildHasher, arena),
+            calls:               ArenaMap::with_hasher_in(FxBuildHasher, arena),
+            values:              ArenaMap::with_hasher_in(FxBuildHasher, arena),
+            anonymous_names:     ArenaMap::with_hasher_in(FxBuildHasher, arena),
+            local_names:         ArenaMap::with_hasher_in(FxBuildHasher, arena),
+            abi_names:           ArenaMap::with_hasher_in(FxBuildHasher, arena),
+            written_types:       ArenaMap::with_hasher_in(FxBuildHasher, arena),
+            written_fields:      ArenaMap::with_hasher_in(FxBuildHasher, arena),
+            written_type_names:  ArenaMap::with_hasher_in(FxBuildHasher, arena),
+            typedef_names:       ArenaMap::with_hasher_in(FxBuildHasher, arena),
+            object_sizes:        ArenaMap::with_hasher_in(FxBuildHasher, arena),
+            subobject_arguments: ArenaMap::with_hasher_in(FxBuildHasher, arena),
+            cleanup_sizes:       ArenaMap::with_hasher_in(FxBuildHasher, arena),
         }
     }
 
@@ -97,6 +106,11 @@ impl<'tu> FunctionExtensions<'tu> {
 
     pub(crate) fn object_size(&self, expression: &Expression<'tu>) -> Option<ObjectSize<'tu>> {
         self.object_sizes.get(&identity(expression)).copied()
+    }
+
+    /// See [`Self::subobject_arguments`].
+    pub(crate) fn subobject_argument(&self, argument: &Expression<'tu>) -> Option<u64> {
+        self.subobject_arguments.get(&identity(argument)).copied()
     }
 
     pub(crate) fn cleanup_size(&self, variable: usize) -> Option<ObjectSize<'tu>> {
@@ -200,6 +214,15 @@ pub(crate) enum ObjectSize<'tu> {
     Incoming {
         binding: usize,
         offset:  u64,
+    },
+    /// A query of a pointer whose object only inlining can reveal, such as
+    /// an `always_inline` wrapper's parameter: lowering emits an IR
+    /// `object_size` of the evaluated pointer, which the middle end answers
+    /// after inlining (`optimizer::resolve_object_sizes`). GNU extension:
+    /// GCC manual, "Object Size Checking".
+    Deferred {
+        mode:    u8,
+        dynamic: bool,
     },
 }
 

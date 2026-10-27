@@ -67,6 +67,7 @@ impl<'ir> Module<'ir> {
             | InstData::Binary { ty, .. }
             | InstData::Unary { ty, .. }
             | InstData::Select { ty, .. }
+            | InstData::ObjectSize { ty, .. }
             | InstData::Const { ty, .. }
             | InstData::WideConst { ty, .. }
             | InstData::Nullary { ty, .. }

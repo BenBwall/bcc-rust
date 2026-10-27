@@ -60,10 +60,12 @@ use crate::{
             UnaryOperator,
         },
         semantic_analysis::{
+            ArgumentFacts,
             CallFacts,
             Callee,
             ConversionKind,
             ExpressionInfo,
+            Inlining,
             TypeId,
             TypeKind,
         },
@@ -1597,6 +1599,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 source,
             ));
         }
+        self.mark_subobject_arguments(direct.or(packed_callee), arguments, &mut items, source)?;
         let open_external = direct.is_some_and(|binding| self.unit.unprototyped_external(binding));
         let extension_call = self.unit.sema.function_extensions.call(info.expression);
         let hidden_count = extension_call.map_or(0, |call| call.sizes.len());
@@ -1764,6 +1767,54 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             | (None, None) => Operand::Void,
         };
         self.push_item(operand, info.ty);
+        Ok(())
+    }
+
+    /// Passes each pointer argument of a call to an `always_inline` function
+    /// (or an argument pack copy, which is one) through a `subobject` that
+    /// records the closest surrounding subobject it designates, as semantic
+    /// analysis found it (`FunctionExtensions::subobject_argument`): once
+    /// the call is expanded, the callee's `object_size` queries of modes 1
+    /// and 3 find it, as GCC finds the member an inlined argument names.
+    /// GNU extension: GCC manual, "Object Size Checking".
+    fn mark_subobject_arguments(
+        &mut self,
+        callee: Option<usize>,
+        arguments: &[ArgumentFacts],
+        items: &mut [Item],
+        source: SourceVectors,
+    ) -> Result<(), LoweringError> {
+        let sema = self.unit.sema;
+        let inlined = callee.is_some_and(|binding| {
+            self.unit.pack_function(binding).is_some()
+                || sema
+                    .entity_attributes(binding)
+                    .is_some_and(|attributes| attributes.inlining == Inlining::Always)
+        });
+        if !inlined {
+            return Ok(());
+        }
+        for (item, argument) in items.iter_mut().zip(arguments) {
+            let Some(size) = sema
+                .expressions
+                .get(argument.expression.0)
+                .and_then(|info| sema.function_extensions.subobject_argument(info.expression))
+            else {
+                continue;
+            };
+            let pointer = self.value(*item, source)?;
+            let size = self.iconst(Type::I64, i128::from(size));
+            let marked = self.inst(
+                InstData::Binary {
+                    opcode: Opcode::Subobject,
+                    ty:     Type::Ptr,
+                    flags:  InstFlags::empty(),
+                    args:   [pointer, size],
+                },
+                Type::Ptr,
+            );
+            item.operand = Operand::Value(marked);
+        }
         Ok(())
     }
 

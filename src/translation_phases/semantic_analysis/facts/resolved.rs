@@ -15,6 +15,7 @@ use super::{
         BindingKind,
         ConversionKind,
         ExpressionInfo,
+        ObjectSize,
         SemanticTranslationUnit,
         TypeId,
         TypeKind,
@@ -312,6 +313,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             },
             | _ => Callee::Indirect(ExprId(self.expression_indices[&identity(expression)])),
         };
+        if matches!(callee, Callee::Direct { .. }) {
+            for &argument in arguments {
+                self.retain_subobject_argument(argument);
+            }
+        }
         let ty = selected.map_or_else(
             || self.expression_info(expression).ty,
             |selected| self.bindings[selected.binding].ty,
@@ -365,6 +371,35 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 arguments,
             },
         );
+    }
+
+    /// Retains the closest-subobject size of a direct call's pointer
+    /// argument (`FunctionExtensions::subobject_arguments`), when the
+    /// argument designates one with a constant number of bytes left: the
+    /// answer `__builtin_object_size (argument, 1)` would give in the
+    /// caller, which an inlined callee's query of its parameter then reaches.
+    /// GNU extension: GCC manual, "Object Size Checking".
+    fn retain_subobject_argument(&mut self, argument: &'tu Expression<'tu>) {
+        let ty = self
+            .resolved
+            .conversions
+            .get(&identity(argument))
+            .map_or(self.expression_info(argument).ty, |c| c.ty);
+        if !matches!(
+            self.types.nodes[self.types.non_atomic(ty).index],
+            TypeKind::Pointer(_)
+        ) {
+            return;
+        }
+        if let ObjectSize::Constant(most) = self.infer_object_size(argument, 1, false)
+            && let ObjectSize::Constant(least) = self.infer_object_size(argument, 3, false)
+            && most == least
+        {
+            _ = self
+                .function_extensions
+                .subobject_arguments
+                .insert(identity(argument), most);
+        }
     }
 
     /// Forward only the immediate label's completed value tail; compound

@@ -74,6 +74,14 @@ pub(crate) enum InstData {
         ty:   Type,
         args: [Value; 2],
     },
+    /// `object_size`: GCC's object-size query of a `ptr`, answered after
+    /// inlining ([`ObjectSizeQuery`]). The type is the result's, an integer.
+    /// GNU extension: GCC manual, "Object Size Checking".
+    ObjectSize {
+        ty:    Type,
+        query: ObjectSizeQuery,
+        ptr:   Value,
+    },
     /// `select cond, a, b`.
     Select {
         ty:   Type,
@@ -196,6 +204,7 @@ impl InstData {
             | Self::DynAlloca { .. } => Opcode::DynAlloca,
             | Self::VaArgAggregate { .. } => Opcode::VaArgAggregate,
             | Self::IntCompare { .. } => Opcode::Icmp,
+            | Self::ObjectSize { .. } => Opcode::ObjectSize,
             | Self::FloatCompare { .. } => Opcode::Fcmp,
             | Self::Select { .. } => Opcode::Select,
             | Self::StackAddr { .. } => Opcode::StackAddr,
@@ -237,6 +246,7 @@ impl InstData {
             | Self::DynAlloca { ty, .. }
             | Self::IntCompare { ty, .. }
             | Self::FloatCompare { ty, .. }
+            | Self::ObjectSize { ty, .. }
             | Self::Select { ty, .. }
             | Self::Const { ty, .. }
             | Self::WideConst { ty, .. }
@@ -363,6 +373,16 @@ named! {
         FuncAddr = "func_addr",
         BlockAddr = "block_addr",
         PtrAdd = "ptr_add",
+        /// `subobject ptr, size`: `ptr` itself, which designates a
+        /// subobject with `size` (`i64`) bytes from `ptr` to its end, as
+        /// the C expression it was computed from names one. Lowering
+        /// passes it to the `always_inline` calls whose `object_size`
+        /// queries of modes 1 and 3 ask for the closest surrounding
+        /// subobject, which the IR's addresses do not record.
+        /// GNU extension: GCC manual, "Object Size Checking".
+        Subobject = "subobject",
+        /// See [`InstData::ObjectSize`].
+        ObjectSize = "object_size",
         Atomic = "atomic",
         Load = "load",
         Store = "store",
@@ -472,6 +492,7 @@ impl Opcode {
                 | Self::FuncAddr
                 | Self::BlockAddr
                 | Self::PtrAdd
+                | Self::Subobject
                 | Self::Copy
                 | Self::Fill
                 | Self::Call
@@ -612,6 +633,53 @@ impl fmt::Display for InstFlags {
             }
         }
         Ok(())
+    }
+}
+
+/// What an `object_size` asks, as GCC's `__builtin_object_size (ptr, mode)`
+/// and `__builtin_dynamic_object_size`: bit 1 of the mode asks for the
+/// fewest bytes left (else the most), bit 0 for the closest surrounding
+/// subobject (else the whole object); a dynamic query may be answered by a
+/// runtime value. Printed `object_size.i64 [dynamic] ptr, mode`.
+/// GNU extension: GCC manual, "Object Size Checking".
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub(crate) struct ObjectSizeQuery {
+    mode:    u8,
+    dynamic: bool,
+}
+
+impl ObjectSizeQuery {
+    /// The query of `mode` (0 through 3), or `None` for another mode.
+    pub(crate) const fn new(mode: u8, dynamic: bool) -> Option<Self> {
+        if mode <= 3 {
+            Some(Self { mode, dynamic })
+        } else {
+            None
+        }
+    }
+
+    pub(crate) const fn mode(self) -> u8 {
+        self.mode
+    }
+
+    pub(crate) const fn dynamic(self) -> bool {
+        self.dynamic
+    }
+
+    /// Modes 2 and 3: the answer must not exceed the bytes left.
+    pub(crate) const fn minimum(self) -> bool {
+        self.mode & 2 != 0
+    }
+
+    /// Modes 1 and 3: the object is the closest surrounding subobject.
+    pub(crate) const fn subobject(self) -> bool {
+        self.mode & 1 != 0
+    }
+
+    /// The answer when nothing is known, as a `ty` bit pattern: all ones
+    /// (`(size_t) -1`) for the most bytes, zero for the fewest.
+    pub(crate) const fn unknown(self, ty: Type) -> u128 {
+        if self.minimum() { 0 } else { ty.mask() }
     }
 }
 

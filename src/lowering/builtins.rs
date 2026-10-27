@@ -687,6 +687,21 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 offset,
             ),
             | ObjectSize::Unknown => return Ok(self.iconst(Type::I64, i128::from(u64::MAX))),
+            | ObjectSize::Deferred { mode, dynamic } => {
+                let query = crate::ir::ObjectSizeQuery::new(mode, dynamic)
+                    .ok_or_else(|| LoweringError::missing("an object-size mode above 3", source))?;
+                let ptr = pointer.ok_or_else(|| {
+                    LoweringError::missing("an object-size pointer was not evaluated", source)
+                })?;
+                return Ok(self.inst(
+                    InstData::ObjectSize {
+                        ty: Type::I64,
+                        query,
+                        ptr,
+                    },
+                    Type::I64,
+                ));
+            },
         };
         if offset == 0 {
             return Ok(size);
