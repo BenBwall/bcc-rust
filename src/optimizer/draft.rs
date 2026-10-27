@@ -546,7 +546,8 @@ impl<'b, 's> Draft<'b, 's> {
                     args.into_iter().for_each(operand),
                 | InstData::Unary { arg, .. }
                 | InstData::VaArgAggregate { list: arg, .. }
-                | InstData::DynAlloca { size: arg, .. } => operand(arg),
+                | InstData::DynAlloca { size: arg, .. }
+                | InstData::ObjectSize { ptr: arg, .. } => operand(arg),
                 | InstData::Load { addr, .. } => operand(addr),
                 | InstData::Atomic { args, .. }
                 | InstData::Call { args, .. }

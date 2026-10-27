@@ -18,6 +18,7 @@ mod labels;
 mod licm;
 mod loops;
 mod memory;
+mod object_size;
 mod options;
 mod pipeline;
 mod promote;

@@ -49,6 +49,7 @@ use super::{
         InstData,
         InstFlags,
         IntCC,
+        ObjectSizeQuery,
         Opcode,
     },
     module::{
@@ -773,7 +774,7 @@ impl<'t, 's> BodyParser<'_, '_, 't, '_, '_, 's> {
             | _ if opcode.is_int_binary()
                 || opcode.is_overflow()
                 || opcode.is_float_binary()
-                || opcode == Opcode::PtrAdd =>
+                || matches!(opcode, Opcode::PtrAdd | Opcode::Subobject) =>
             {
                 let flags = self.cursor.flags();
                 InstData::Binary {
@@ -808,6 +809,17 @@ impl<'t, 's> BodyParser<'_, '_, 't, '_, '_, 's> {
                     Align::from_bytes(16).unwrap()
                 };
                 InstData::DynAlloca { ty, size, align }
+            },
+            | Opcode::ObjectSize => {
+                let dynamic = self.cursor.eat(TokenKind::Ident("dynamic"));
+                let ptr = self.value()?;
+                self.cursor.expect(TokenKind::Comma, "`,`")?;
+                let (token, mode) = self.cursor.unsigned()?;
+                let query = u8::try_from(mode)
+                    .ok()
+                    .and_then(|mode| ObjectSizeQuery::new(mode, dynamic))
+                    .ok_or_else(|| token.expected("an object-size mode from 0 to 3"))?;
+                InstData::ObjectSize { ty, query, ptr }
             },
             | Opcode::VaArgAggregate => {
                 let list = self.value()?;

@@ -169,16 +169,14 @@ fn m4_checked_instances_retain_normalized_values_types_storage_and_effects() {
                 assert_eq!(arg.operands[1].evaluation, E::Type);
                 assert!(arg.operands[1].expression.is_none());
                 assert_eq!(arg.operands[1].ty, arg.result_type);
+                // A parameter's object is known only after inlining: the
+                // pointer is evaluated for the IR query, and the mode not.
                 let object = get(I::ObjectSize);
                 assert_eq!(object.operands[1].integer.unwrap().to_u64(), Some(2));
                 assert_eq!(object.operands[1].integer.unwrap().bits, 32);
-                assert!(
-                    object
-                        .operands
-                        .iter()
-                        .all(|operand| operand.evaluation == E::Unevaluated)
-                );
-                assert_eq!(object.integer.unwrap().to_u64(), Some(0));
+                assert_eq!(object.operands[0].evaluation, E::Value);
+                assert_eq!(object.operands[1].evaluation, E::Unevaluated);
+                assert!(object.integer.is_none());
                 assert_eq!(
                     get(I::AssumeAligned).operands[1].integer.unwrap().to_u64(),
                     Some(16)

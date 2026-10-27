@@ -168,6 +168,10 @@ impl<'ir> Module<'ir> {
             match *data {
                 | InstData::Binary { args: [a, b], .. } => write!(f, " {a}, {b}"),
                 | InstData::Unary { arg, .. } => write!(f, " {arg}"),
+                | InstData::ObjectSize { query, ptr, .. } => {
+                    let dynamic = if query.dynamic() { " dynamic" } else { "" };
+                    write!(f, "{dynamic} {ptr}, {}", query.mode())
+                },
                 | InstData::DynAlloca { size, align, .. } =>
                     write!(f, " {size}, align {}", align.bytes()),
                 | InstData::VaArgAggregate { sig, list } =>

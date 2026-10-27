@@ -363,6 +363,451 @@ int main(void) {
         std::fs::remove_file(executable).unwrap();
     }
 
+    /// glibc's fortify wrappers ask `__builtin_object_size` of their
+    /// parameter, which only expanding the `always_inline` call answers:
+    /// bcc answers it after inlining, so overflowing `memcpy`, `strcpy`,
+    /// `read` and `snprintf` calls abort with glibc's "buffer overflow
+    /// detected" under both GCC and Clang identity and with `--gcc-mode`,
+    /// on both back ends and at both optimization levels, while calls that
+    /// fit run.
+    #[test]
+    fn glibc_fortify_wrappers_check_object_sizes_after_inlining() {
+        if host() != Some("x86_64-unknown-linux-gnu")
+            || !Path::new("/usr/include/x86_64-linux-gnu/bits/string_fortified.h").is_file()
+        {
+            eprintln!("skipping glibc object-size test: no Linux GNU host headers");
+            return;
+        }
+        let headers = [
+            "--target=x86_64-unknown-linux-gnu",
+            "-D_FORTIFY_SOURCE=2",
+            "-O2",
+            "--idirafter",
+            "/usr/include/x86_64-linux-gnu",
+            "--idirafter",
+            "/usr/include",
+        ];
+        let gcc = [
+            "-U__clang__",
+            "-U__clang_major__",
+            "-U__clang_minor__",
+            "-U__clang_patchlevel__",
+            "-U__GNUC__",
+            "-D__GNUC__=14",
+            "-U__GNUC_MINOR__",
+            "-D__GNUC_MINOR__=2",
+        ];
+        let source = r#"
+#include <stdio.h>
+#include <string.h>
+#include <unistd.h>
+#if __USE_FORTIFY_LEVEL != 2
+#error glibc did not choose its fortify wrappers
+#endif
+struct record { long id; char name[4]; char rest[12]; };
+int main(int argc, char **argv) {
+    char buf[4];
+    struct record r = {0};
+    const char *s = argc > 2 ? argv[2] : "abcdefgh";
+    switch (argv[1][0]) {
+    case 'm': memcpy(buf, s, strlen(s)); break;
+    case 's': strcpy(buf, s); break;
+    case 'r': return read(0, buf, 16) < 0;
+    case 'n': return snprintf(buf, 16, "%s", "x") < 0;
+    case 'p': strcpy(r.name, s); break;
+    default:
+        memcpy(buf, "abc", 4);
+        strcpy(r.name, "xyz");
+        if (snprintf(buf, sizeof buf, "%s", "de") != 2 || read(0, buf, sizeof buf) != 0)
+            return 1;
+        return printf("%s %s\n", buf, r.name) < 0;
+    }
+    return puts(buf) < 0;
+}
+"#;
+        let executable = temporary("fortify-sizes.exe");
+        let check = |label: &str| {
+            let fits = run_native(Command::new(&executable).arg("k")).unwrap();
+            assert_eq!(
+                (fits.status.code(), text(&fits.stdout).as_str()),
+                (Some(0), "de xyz\n"),
+                "{label}: {}",
+                text(&fits.stderr)
+            );
+            for case in ["m", "s", "r", "n", "p"] {
+                let output = run_native(Command::new(&executable).arg(case)).unwrap();
+                assert!(
+                    !output.status.success()
+                        && text(&output.stderr).contains("buffer overflow detected"),
+                    "{label} {case}: {:?} {}",
+                    output.status,
+                    text(&output.stderr)
+                );
+            }
+        };
+        let options = [
+            ["--opt=none", "--backend=llvm"],
+            ["--opt=bcc", "--backend=llvm"],
+            ["--opt=none", "--backend=native"],
+            ["--opt=bcc", "--backend=native"],
+        ];
+        for identity in [&[][..], &gcc[..]] {
+            for options in options {
+                let built = bcc(
+                    source,
+                    &[
+                        &headers[..],
+                        identity,
+                        &options[..],
+                        &["-o", executable.to_str().unwrap()],
+                    ]
+                    .concat(),
+                );
+                assert!(
+                    built.status.success(),
+                    "{identity:?} {options:?}: {}",
+                    text(&built.stderr)
+                );
+                check(&format!("{identity:?} {options:?}"));
+            }
+        }
+        // The GCC personality, whose glibc wrappers forward argument packs.
+        let file = temporary("fortify-sizes.c");
+        std::fs::write(&file, source).unwrap();
+        for [optimizer, backend] in options {
+            let built = Command::new(env!("CARGO_BIN_EXE_bcc-rust"))
+                .args([
+                    "--gcc-mode",
+                    "-D_FORTIFY_SOURCE=2",
+                    "-O2",
+                    "-Xbcc",
+                    optimizer,
+                ])
+                .args(["-Xbcc", backend, "-o"])
+                .arg(&executable)
+                .arg(&file)
+                .env("NO_COLOR", "1")
+                .output()
+                .unwrap();
+            assert!(
+                built.status.success(),
+                "--gcc-mode {optimizer} {backend}: {}",
+                text(&built.stderr)
+            );
+            check(&format!("--gcc-mode {optimizer} {backend}"));
+        }
+        std::fs::remove_file(file).unwrap();
+        std::fs::remove_file(executable).unwrap();
+    }
+
+    /// Object-size queries in argument pack copies are answered after the
+    /// copies are expanded (#150, review round 5), as GCC answers them: a
+    /// query whose offset depends on another query, a wrapper with a dead
+    /// recursive call, and nested pack wrappers. `B(p)` is mode 1.
+    #[test]
+    fn argument_pack_copies_answer_object_sizes_after_inlining() {
+        if host() != Some("x86_64-unknown-linux-gnu") {
+            return;
+        }
+        let prologue = "#define B(x) __builtin_object_size((x), 1)\nextern int \
+                        __snprintf_chk(char *, unsigned long, int, unsigned long, const char *, \
+                        ...);\n";
+        let nested = "\
+static inline __attribute__((always_inline)) unsigned long f(char *p, ...) {
+    return B(p + ((B(p) + 1) & 1)) + __builtin_va_arg_pack_len();
+}
+int main(void) { char a[4]; return f(a); }
+";
+        let nested_check = "\
+static inline __attribute__((always_inline)) int f(char *p, ...) {
+    return __snprintf_chk(p + ((B(p) + 1) & 1), 4, 1, B(p + ((B(p) + 1) & 1)), \"%s\",
+                          __builtin_va_arg_pack());
+}
+int main(void) { char a[4]; return f(a, \"abc\") < 0; }
+";
+        let recursive = "\
+static inline __attribute__((always_inline)) unsigned long f(char *p, ...) {
+    if (0) return f(p);
+    return __builtin_object_size(p, 1) + __builtin_va_arg_pack_len();
+}
+int main(void) { char a[4]; return USE; }
+";
+        let wrappers = "\
+static inline __attribute__((always_inline)) int g(char *p, ...) {
+    return __snprintf_chk(p, 16, 1, __builtin_object_size(p, 1), \"%s\", __builtin_va_arg_pack());
+}
+static inline __attribute__((always_inline)) int f(char *p, ...) {
+    return g(p, __builtin_va_arg_pack());
+}
+int main(int argc, char **argv) { char a[4]; return (argc > 1 ? g(a, \"x\") : f(a, \"x\")) < 0; }
+";
+        let executable = temporary("pack-sizes.exe");
+        let programs = [
+            (nested.to_owned(), Some(3)),
+            (nested_check.to_owned(), None),
+            (recursive.replace("USE", "f(a)"), Some(4)),
+            (recursive.replace("USE", "4"), Some(4)),
+            (wrappers.to_owned(), None),
+        ];
+        for (program, expected) in &programs {
+            let source = format!("{prologue}{program}");
+            for options in [
+                &["--opt=none"][..],
+                &["--opt=bcc"][..],
+                &["--opt=none", "--backend=native"][..],
+                &["--opt=bcc", "--backend=native"][..],
+            ] {
+                let built = bcc(
+                    &source,
+                    &[options, &["-o", executable.to_str().unwrap()]].concat(),
+                );
+                assert!(
+                    built.status.success(),
+                    "{options:?}: {}\n{source}",
+                    text(&built.stderr)
+                );
+                for args in [&[][..], &["g"][..]] {
+                    let output = run_native(Command::new(&executable).args(args)).unwrap();
+                    match expected {
+                        | Some(code) => assert_eq!(
+                            output.status.code(),
+                            Some(*code),
+                            "{options:?}: {}\n{source}",
+                            text(&output.stderr)
+                        ),
+                        | None => assert!(
+                            !output.status.success()
+                                && text(&output.stderr).contains("buffer overflow detected"),
+                            "{options:?} {args:?}: {:?}\n{source}",
+                            output.status
+                        ),
+                    }
+                }
+            }
+            if let Some(code) = expected {
+                for optimizer in ["--opt=none", "--opt=bcc"] {
+                    let output = bcc(&source, &[optimizer, "--interpret"]);
+                    assert_eq!(
+                        output.status.code(),
+                        Some(*code),
+                        "{optimizer}: {}\n{source}",
+                        text(&output.stderr)
+                    );
+                }
+            }
+        }
+        std::fs::remove_file(executable).unwrap();
+    }
+
+    /// A pointer an inlined function forms by a member access names a
+    /// narrower subobject than its caller's argument (#151 review rounds 1
+    /// and 2, also when written through the parameter's address):
+    /// modes 1 and 3 of it, queried there or in a further wrapper, get the
+    /// unknown answers (GCC finds 3), never the 15 bytes left in the
+    /// structure the caller named. A parameter offset by pointer arithmetic
+    /// alone keeps its caller's subobject and matches GCC. Without the C
+    /// library (`-ffreestanding`), `malloc` names no known object, as in GCC
+    /// and Clang, since the program may define it as anything.
+    #[test]
+    fn object_size_hints_never_cross_member_accesses() {
+        if host() != Some("x86_64-unknown-linux-gnu") {
+            return;
+        }
+        let prologue = "struct S { char a[4]; char b[12]; };\n#define INLINE static inline \
+                        __attribute__((always_inline))\n";
+        let member = "\
+INLINE unsigned long f(struct S *p) { char *q = &p->a[1]; return QUERY(q, MODE); }
+int main(void) { struct S s; return f(&s) & 255; }
+";
+        let forwarded = "\
+INLINE unsigned long g(char *q) { return __builtin_object_size(q, 1) + (__builtin_object_size(q, \
+                         3) << 4); }
+INLINE unsigned long f(struct S *p) { char *q = &p->a[1]; return g(q); }
+int main(void) { struct S s; return f(&s) & 0xff; }
+";
+        let written = "\
+INLINE unsigned long f(char *p) { p = &((struct S *)p)->b[1]; return __builtin_object_size(p, 1); }
+int main(void) { char buf[16]; return f(buf) & 255; }
+";
+        // Written through its address (#151 review round 2).
+        let through_address = "\
+INLINE unsigned long f(char *p) { char **q = &p; *q = &((struct S *)p)->a[1]; return \
+                               __builtin_object_size(p, 3); }
+int main(void) { struct S s; return f((char *)&s) & 255; }
+";
+        // A dynamic query of one of two objects (round 2): GCC selects 4 at
+        // run time; bcc answers unknown, never the larger 16. The static
+        // query takes the larger, as GCC's does.
+        let dynamic_pick = "\
+volatile int pick = 0;
+INLINE unsigned long f(char *p) { return __builtin_dynamic_object_size(p, 0); }
+int main(void) { char small[4], large[16]; return f(pick ? large : small) & 0xff; }
+";
+        let arithmetic = "\
+INLINE unsigned long g(char *q) { return __builtin_object_size(q + 1, 1); }
+INLINE unsigned long f(char *p) { return g(p + 2); }
+int main(void) { struct S s; return f(s.b) * 10 + g(&s.a[1]); }
+";
+        let programs = [
+            (
+                member
+                    .replace("QUERY", "__builtin_object_size")
+                    .replace("MODE", "3"),
+                0,
+            ),
+            (
+                member
+                    .replace("QUERY", "__builtin_object_size")
+                    .replace("MODE", "1"),
+                255,
+            ),
+            (
+                member
+                    .replace("QUERY", "__builtin_dynamic_object_size")
+                    .replace("MODE", "1"),
+                255,
+            ),
+            (forwarded.to_owned(), 255),
+            (written.to_owned(), 255),
+            (through_address.to_owned(), 0),
+            (through_address.replace(", 3)", ", 1)"), 255),
+            (
+                through_address.replace(
+                    "__builtin_object_size(p, 3)",
+                    "__builtin_dynamic_object_size(p, 3)",
+                ),
+                0,
+            ),
+            (
+                through_address.replace(
+                    "__builtin_object_size(p, 3)",
+                    "__builtin_dynamic_object_size(p, 1)",
+                ),
+                255,
+            ),
+            (through_address.replace("char **q = &p; *q =", "*(&p) ="), 0),
+            (dynamic_pick.to_owned(), 255),
+            (
+                dynamic_pick.replace("__builtin_dynamic_object_size", "__builtin_object_size"),
+                16,
+            ),
+            (arithmetic.to_owned(), 92),
+        ];
+        let executable = temporary("subobject-hints.exe");
+        for (program, expected) in &programs {
+            let source = format!("{prologue}{program}");
+            for options in [
+                &["--opt=none"][..],
+                &["--opt=bcc"][..],
+                &["--opt=none", "--backend=native"][..],
+                &["--opt=bcc", "--backend=native"][..],
+            ] {
+                let built = bcc(
+                    &source,
+                    &[options, &["-o", executable.to_str().unwrap()]].concat(),
+                );
+                assert!(
+                    built.status.success(),
+                    "{options:?}: {}",
+                    text(&built.stderr)
+                );
+                let output = run_native(&mut Command::new(&executable)).unwrap();
+                assert_eq!(
+                    output.status.code(),
+                    Some(*expected),
+                    "{options:?}\n{source}"
+                );
+            }
+            for optimizer in ["--opt=none", "--opt=bcc"] {
+                let output = bcc(&source, &[optimizer, "--interpret"]);
+                assert_eq!(
+                    output.status.code(),
+                    Some(*expected),
+                    "{optimizer}\n{source}"
+                );
+            }
+        }
+        let source = "\
+extern void *malloc(unsigned long);
+int main(void) { char *p = malloc(16); return __builtin_object_size(p, 0) & 0xff; }
+";
+        for backend in ["--backend=llvm", "--backend=native"] {
+            for (hosted, expected) in [("-fhosted", 16), ("-ffreestanding", 255)] {
+                let built = bcc(
+                    source,
+                    &[backend, hosted, "-o", executable.to_str().unwrap()],
+                );
+                assert!(
+                    built.status.success(),
+                    "{backend} {hosted}: {}",
+                    text(&built.stderr)
+                );
+                let output = run_native(&mut Command::new(&executable)).unwrap();
+                assert_eq!(output.status.code(), Some(expected), "{backend} {hosted}");
+            }
+        }
+        std::fs::remove_file(executable).unwrap();
+    }
+
+    /// GCC never evaluates an object-size operand, so a query whose operand
+    /// would read through a pointer, read an atomic or volatile object, or
+    /// call a function, or evaluate a variably modified type's bound, is
+    /// answered as unknown without evaluating it (#151 review rounds 3 and
+    /// 4): a null pointer is never read, by either builtin, on any back end,
+    /// at either level.
+    #[test]
+    fn object_size_operands_are_never_evaluated() {
+        if host() != Some("x86_64-unknown-linux-gnu") {
+            return;
+        }
+        let operands = [
+            ("_Atomic(char *) *p = 0;", "*p"),
+            ("char * volatile *p = 0;", "*p"),
+            ("char **p = 0;", "*p"),
+            ("struct { char *s; } *p = 0;", "p->s"),
+            ("char **p = 0;", "p[1]"),
+            ("extern char *get(void);", "get()"),
+            // A variably modified cast evaluates its bound (round 4).
+            ("int *n = 0;", "(char (*)[*n])0"),
+            ("_Atomic(int) *n = 0;", "(char (*)[*n])0"),
+            ("int *n = 0;", "(__typeof__(char [*n]) *)0"),
+        ];
+        let executable = temporary("unevaluated-size.exe");
+        for (declaration, operand) in operands {
+            for builtin in ["__builtin_object_size", "__builtin_dynamic_object_size"] {
+                for mode in [0, 1] {
+                    let source = format!(
+                        "char *get(void) {{ return *(char *volatile *)0; }}\nint main(void) {{ \
+                         {declaration} return {builtin}({operand}, {mode}) & 255; }}\n"
+                    );
+                    for options in [
+                        &["--opt=none"][..],
+                        &["--opt=bcc"][..],
+                        &["--opt=none", "--backend=native"][..],
+                        &["--opt=bcc", "--backend=native"][..],
+                    ] {
+                        let built = bcc(
+                            &source,
+                            &[options, &["-o", executable.to_str().unwrap()]].concat(),
+                        );
+                        assert!(
+                            built.status.success(),
+                            "{options:?}: {}",
+                            text(&built.stderr)
+                        );
+                        let output = run_native(&mut Command::new(&executable)).unwrap();
+                        assert_eq!(output.status.code(), Some(255), "{options:?}\n{source}");
+                    }
+                    for optimizer in ["--opt=none", "--opt=bcc"] {
+                        let output = bcc(&source, &[optimizer, "--interpret"]);
+                        assert_eq!(output.status.code(), Some(255), "{optimizer}\n{source}");
+                    }
+                }
+            }
+        }
+        std::fs::remove_file(executable).unwrap();
+    }
+
     #[test]
     fn interpreter_step_limit_applies_to_both_main_signatures() {
         for source in [

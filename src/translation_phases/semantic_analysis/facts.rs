@@ -72,6 +72,7 @@ pub(crate) use entities::{
 pub(crate) use function_extensions::*;
 pub(crate) use initializer_plans::*;
 pub(crate) use resolved::{
+    ArgumentFacts,
     CallFacts,
     Callee,
     ResolvedFacts,

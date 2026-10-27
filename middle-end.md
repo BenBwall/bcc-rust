@@ -202,7 +202,83 @@ fill  dst, byte, size, align               (memset)
 dyn_alloca.i64 size             → ptr     (until restore or return, align 16)
 stack_save                     → ptr     (opaque current stack position)
 stack_restore position                   (releases later dynamic objects)
+object_size.i64 [dynamic] ptr, mode → i64 (GCC object size, mode 0-3)
+subobject   ptr, size_i64        → ptr     (ptr, naming a subobject)
 ```
+
+**Object sizes.** `object_size` is GCC's `__builtin_object_size (ptr,
+mode)` (`__builtin_dynamic_object_size` with `dynamic`), asked of an IR
+pointer: the bytes from `ptr` to the end of its object, the most (modes 0,
+1) or the fewest (2, 3), of the whole object (0, 2) or of the closest
+surrounding subobject (1, 3). Like LLVM's `llvm.objectsize`, it is answered
+after inlining: semantic analysis answers a query whose C operand names its
+object, and lowering emits `object_size` for the others in a function,
+which evaluates the operand. GCC never evaluates it, so only an operand
+whose evaluation reads named variables and computes addresses is deferred;
+one that has side effects, reads through a pointer (which may fault), reads
+an atomic or volatile object, calls a function other than a nested query,
+or has a variably modified type anywhere (a cast to `char (*)[*n]` reads
+`*n`) gets the unknown answer at once.
+The rest of a deferred operand is dead once the query is answered and
+`dce` removes it. A deferred query is not an integer constant expression,
+as in Clang.
+`subobject` is its pointer operand; lowering passes each pointer argument of
+a call to an `always_inline` function (an argument pack copy is one) through
+it when the argument names a subobject with a constant number of bytes left
+(`__builtin_object_size (arg, 1)` and `(arg, 3)` agree in the caller). The
+IR's addresses do not record subobjects, so this is how a callee's mode 1
+or 3 query of its parameter finds `s.name` once the call is expanded. The
+hint closest to the query decides, and it holds only across pointer
+arithmetic: an argument that is the calling wrapper's own parameter, offset
+by pointer arithmetic and casts alone, never assigned, incremented or
+decremented, and whose address `&` never takes, gets no hint (its
+caller's still names the subobject), and every other argument gets a
+`subobject ptr, -1`, "not known", so that no hint from further out answers
+across a member access (`char *q = &p->a[1]`) that narrowed the subobject.
+Likewise a mode 1 or 3 query is emitted only in such a wrapper and of such a
+parameter expression; any other gets the unknown answer at once. GCC tracks
+the member there and answers more often; bcc never answers more.
+
+`optimizer::resolve_object_sizes` (`optimizer/object_size.rs`) answers every
+query before ABI lowering, for every back end and at every optimization
+level, after the always-inline expansion (`resolve_inline_copies`, or for
+the LLVM back end `expand_object_size_wrappers`, which expands the calls of
+`always_inline` functions that ask, directly or through another such
+function, and keeps the copies LLVM needs). It walks the pointer back
+through `ptr_add`, `subobject`, `select` and block parameters (at most 64
+values) to stack slots, defined non-weak globals, `dyn_alloca` and, in a
+hosted unit (not `-ffreestanding`, where a program may define them as
+anything, as GCC and Clang assume), calls of the library's `malloc`,
+`calloc`, `realloc` and `aligned_alloc`, and takes
+the most or fewest bytes left over the objects reached; modes 1 and 3 also
+need a `subobject` on the path and answer the fewer of its bytes and the
+object's. Offsets must be constant: queries whose offset another query
+decides wait while `fold` makes it constant (`p + ((B(p) + 1) & 1)`).
+A dynamic query on one path computes a runtime answer from a runtime size or
+offset; a dynamic query whose alternatives differ is unknown, since it
+answers for the object reached at run time (GCC selects among them at run
+time; bcc does not yet); any other query left gets the answer for an unknown object,
+`(size_t) -1` for modes 0 and 1 and 0 for modes 2 and 3. Positions past the
+end leave 0 bytes, before the start 0 (mode 1 before its subobject: unknown),
+so no answer exceeds the bytes the pointer has left, and a checked call
+never accepts a write the object cannot hold. The `subobject`s are then
+removed and `fold`, `simplify-cfg` and `dce` clean up the tests of the
+answers. Back ends that meet an unanswered query in hand-written IR give
+the unknown answer (and `subobject` is its pointer): LLVM's `llvm.objectsize`
+would answer it after LLVM's inlining, but could disagree with the
+interpreter and cannot tell a member from its enclosing object for modes 1
+and 3. Not answered (the unknown answer, as before): pointers loaded from
+memory or passed to functions that are not expanded, offsets that stay
+runtime values in non-dynamic queries, and modes 1 and 3 of a pointer that
+is not a wrapper parameter's arithmetic (`char *p = s.name; strcpy (p,
+...)`, or a member address formed in a wrapper). Heap buffers are the
+common case of the last: a `malloc`ed pointer held in a variable names no
+subobject at the call, so glibc's mode 1 checks (`strcpy`, `snprintf` at
+`_FORTIFY_SOURCE=2`) get no bound for it, though mode 0 ones (`memcpy`,
+`read` in GCC mode) do; Clang-mode wrappers that take `pass_object_size`
+(`read`) are answered by semantic analysis at the call, which sees no
+allocation.
+GNU extension: [GCC Object Size Checking](https://gcc.gnu.org/onlinedocs/gcc/Object-Size-Checking.html).
 
 Atomic memory operations carry their operation, success and failure orders,
 alignment and volatile flag in one 16-byte instruction record. Operands live in
@@ -628,7 +704,12 @@ helper requests stays a bodiless declaration that nothing names, the
 bodies left unreached are dropped, as GCC drops them at -O2. The function's
 own body is lowered when it is an external definition, or internal and
 `used` or with an address live code takes; in any of these a pack it
-evaluates is an error, as in GCC. Known deviations from GCC, which finds the pack after constant folding:
+evaluates is an error, as in GCC. A copy's object-size queries of its
+parameters are IR `object_size` operations, answered once the copy is
+expanded into its caller ([Object sizes](#instructions)), so glibc's
+`snprintf` wrapper checks the caller's buffer as GCC's does after inlining;
+the same holds for every other `always_inline` wrapper (`memcpy`, `strcpy`,
+`read`) in GCC and Clang mode. Known deviations from GCC, which finds the pack after constant folding:
 bcc sees through parentheses, `__extension__`, casts and unary `+` that keep
 the type, generic selections, and `*`, `&` or a same-type cast on the
 callee, but not arithmetic (`0 + pack`) or a comma before the pack; and the
@@ -1457,9 +1538,11 @@ expressions when their evaluated operands are integer constant expressions.
 `expect` and alignment assumptions return their first argument; probability
 and alignment arguments are checked without introducing optimizer promises.
 Prefetch evaluates its arguments and emits no memory access. `constant_p`
-returns one only for a retained integer constant expression. Both object-size
-queries conservatively return `(size_t)-1` in modes 0/1 or zero in modes 2/3;
-no bound is inferred and no argument is evaluated. `trap` is a side-effecting
+returns one only for a retained integer constant expression. An object-size
+query semantic analysis cannot answer becomes `object_size`, answered after
+inlining (see [Object sizes](#instructions)); outside a function, or with an
+operand that has side effects, it returns `(size_t)-1` in modes 0/1 or zero in
+modes 2/3 without evaluating the operand. `trap` is a side-effecting
 nullary instruction mapping to LLVM `trap`, followed by `unreachable`;
 `unreachable` itself ends control flow and is undefined when executed.
 

@@ -15,6 +15,7 @@ use super::{
             FAILURE_STATUS,
             Generated,
             generate_code,
+            report_stderr,
         },
         output::{
             print_parser_output,
@@ -61,17 +62,27 @@ pub(super) fn compile(
     dependencies: Option<DependencyRequest>,
 ) -> Result<Generated, MainError> {
     let tu = Bump::new();
-    let (input_string, source_filename): (&str, &Path) = match source {
-        | Source::Text(text) => (tu.alloc_str(text), Path::new("<input>")),
-        | Source::File(path) | Source::Preprocessed(path) if path == Path::new("-") => {
-            let text = tu
-                .read_from_lossy(io::stdin().lock())
-                .map_err(|source| open_error(path, source))?;
-            (text, Path::new("<stdin>"))
-        },
-        | Source::File(path) | Source::Preprocessed(path) => match tu.read_to_str_lossy(path) {
-            | Ok(text) => (text, path),
-            | Err(source) => return Err(open_error(path, source)),
+    let read: Result<(&str, &Path), _> = match source {
+        | Source::Text(text) => Ok((tu.alloc_str(text), Path::new("<input>"))),
+        | Source::File(path) | Source::Preprocessed(path) if path == Path::new("-") => tu
+            .read_from_lossy(io::stdin().lock())
+            .map(|text| (text, Path::new("<stdin>")))
+            .map_err(|source| (path, source)),
+        | Source::File(path) | Source::Preprocessed(path) => tu
+            .read_to_str_lossy(path)
+            .map(|text| (text, path))
+            .map_err(|source| (path, source)),
+    };
+    let (input_string, source_filename) = match read {
+        | Ok(read) => read,
+        // An unreadable input fails its own job alone: GCC reports it and
+        // still runs the others, then skips the link.
+        | Err((path, source)) => {
+            report_stderr(format_args!("{}", open_error(path, source)));
+            return Ok(Generated {
+                status:         FAILURE_STATUS,
+                atomic_runtime: false,
+            });
         },
     };
     let output = match &job {

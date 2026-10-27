@@ -312,7 +312,7 @@ expression 89 type=void category=rvalue
 expression 90 type="unsigned long long (const void *, int)" category=function-designator binding=__builtin_dynamic_object_size
 expression 91 type=int category=rvalue value=0 ice constant=arithmetic
 expression 92 type=int category=rvalue value=0 ice constant=arithmetic
-expression 93 type="unsigned long long" category=rvalue value=18446744073709551615 ice constant=arithmetic
+expression 93 type="unsigned long long" category=rvalue
 expression 94 type=void category=rvalue
 expression 95 type="long (long, long)" category=function-designator binding=__builtin_expect
 expression 96 type=int category=rvalue value=1 ice constant=arithmetic
@@ -365,7 +365,7 @@ expression 142 type=void category=rvalue
 expression 143 type="unsigned long long (const void *, int)" category=function-designator binding=__builtin_object_size
 expression 144 type=int category=rvalue value=0 ice constant=arithmetic
 expression 145 type=int category=rvalue value=0 ice constant=arithmetic
-expression 146 type="unsigned long long" category=rvalue value=18446744073709551615 ice constant=arithmetic
+expression 146 type="unsigned long long" category=rvalue
 expression 147 type=void category=rvalue
 expression 148 type="unsigned long long" category=rvalue value=0 ice constant=arithmetic
 expression 149 type=void category=rvalue

@@ -177,5 +177,9 @@ windows-sys = { optional = true, version = "0.61.2", features = ["Win32_Foundati
 windows-sys = { version = "0.61.2", features = ["Win32_Security", "Win32_System_JobObjects", "Win32_System_Diagnostics_Debug"] }
 
 [[example]]
+name = "coz_preprocessing"
+required-features = ["benchmarking-internals"]
+
+[[example]]
 name = "lowering_study"
 required-features = ["benchmarking-internals", "recursive-lowering-study"]

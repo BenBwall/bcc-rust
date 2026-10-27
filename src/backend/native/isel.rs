@@ -422,6 +422,26 @@ impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
                     ValueKind::Const(u64::from(compare(cond, operand, lhs, rhs))),
                 | _ => return None,
             },
+            // A size hint for `object_size` is its pointer.
+            | InstData::Binary {
+                opcode: Opcode::Subobject,
+                args: [base, _],
+                ..
+            } => match self.kind(base) {
+                | ValueKind::Unknown => return None,
+                | kind => kind,
+            },
+            // The middle end answers every query before a back end runs
+            // (`optimizer::resolve_object_sizes`); one left in text gets the
+            // answer for an unknown object, as the other back ends give it.
+            | InstData::ObjectSize { query, .. } => {
+                #[expect(
+                    clippy::cast_possible_truncation,
+                    reason = "The answer is a mask of at most 64 bits."
+                )]
+                let bits = query.unknown(ty) as u64;
+                ValueKind::Const(bits)
+            },
             | InstData::Unary { opcode, arg, .. } => {
                 let from = self.ty(arg);
                 match (opcode, self.kind(arg)) {
@@ -613,6 +633,10 @@ impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
                     | Opcode::Lshr => self.shift(ShiftOp::Shr, ty, dst, args),
                     | Opcode::Ashr => self.shift(ShiftOp::Sar, ty, dst, args),
                     | Opcode::PtrAdd => self.pointer_add(inst, dst, args),
+                    | Opcode::Subobject => {
+                        let src = self.reg(args[0]);
+                        self.copy(dst, src);
+                    },
                     | Opcode::UaddOverflow => self.add_overflow(ty, dst, args),
                     | Opcode::UmulOverflow => self.mul_overflow(ty, dst, args),
                     | _ => return Err(Construct::Opcode(opcode)),
