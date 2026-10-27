@@ -67,6 +67,20 @@ use crate::{
 /// IEEE round-to-nearest-even conversion. Nonzero rounded-to-zero and infinity
 /// use the existing range diagnostics (C99 §6.4.4p2, p. 54; PDF p. 66).
 pub(crate) fn parse(text: &str, arena: &Bump) -> Result<Binary128, ParseFloatError> {
+    parse_reporting_underflow(text, arena).map(|(value, _)| value)
+}
+
+/// As [`parse`], also saying whether a finite nonzero result underflowed
+/// as glibc's `strtod` family reports it (`round_and_return` in
+/// `stdlib/strtod_l.c`): the exact value is tiny and the result inexact.
+/// x86 detects tininess after rounding, so a value below the smallest
+/// normal that rounds to it at the full 113-bit precision is not tiny.
+/// C99: §7.20.1.3 paragraph 10, p. 310; PDF p. 322 (`ERANGE` on underflow is
+/// implementation-defined).
+pub(crate) fn parse_reporting_underflow(
+    text: &str,
+    arena: &Bump,
+) -> Result<(Binary128, bool), ParseFloatError> {
     let text = text.trim_end_matches('\0');
     let text = text.strip_suffix(['q', 'Q']).ok_or_else(|| error(None))?;
     let hex = text.starts_with("0x") || text.starts_with("0X");
@@ -117,7 +131,7 @@ pub(crate) fn parse(text: &str, arena: &Bump) -> Result<Binary128, ParseFloatErr
         return Err(error(None));
     }
     if !nonzero {
-        return Ok(Binary128(Packed::new(0)));
+        return Ok((Binary128(Packed::new(0)), false));
     }
     let significant = count - leading - trailing;
     let factor = if hex { 4 } else { 1 };
@@ -190,6 +204,18 @@ pub(crate) fn parse(text: &str, arena: &Bump) -> Result<Binary128, ParseFloatErr
         }
         divisor.halve();
     }
+    // The remainder decides exactness. Just below the smallest normal, a
+    // floor of 112 ones with at least three quarters left over rounds to it
+    // at 113 bits, so it is not tiny.
+    let inexact = numerator.bits() != 0;
+    let rounds_to_normal = binary_exponent == -16383 && quotient == (1_u128 << 112) - 1 && {
+        let mut remainder = numerator.copy(arena);
+        remainder.shift(2);
+        let mut three_quarters = denominator.copy(arena);
+        three_quarters.mul_add(3, 0);
+        !remainder.compare(&three_quarters).is_lt()
+    };
+    let underflow = inexact && binary_exponent < -16382 && !rounds_to_normal;
     numerator.shift(1);
     let rounding = numerator.compare(&denominator);
     if rounding.is_gt() || (rounding.is_eq() && quotient & 1 != 0) {
@@ -210,9 +236,12 @@ pub(crate) fn parse(text: &str, arena: &Bump) -> Result<Binary128, ParseFloatErr
     } else {
         (binary_exponent.max(-16382) + 16383) as u128
     };
-    Ok(Binary128(Packed::new(
-        (encoded_exponent << 112) | (quotient & ((1_u128 << 112) - 1)),
-    )))
+    Ok((
+        Binary128(Packed::new(
+            (encoded_exponent << 112) | (quotient & ((1_u128 << 112) - 1)),
+        )),
+        underflow,
+    ))
 }
 
 /// IEEE binary128 bits at token alignment. Arithmetic is deliberately not

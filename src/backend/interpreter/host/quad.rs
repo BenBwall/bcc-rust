@@ -15,8 +15,9 @@
 //! infinity or by zero (neither a NaN) are domain errors (`EDOM`);
 //! `ldexpf128` and `scalbnf128` of a finite nonzero number that overflows
 //! or underflows to zero, `fdimf128` that overflows, and `strtof128` of a
-//! value that overflows, underflows to zero or is subnormal and inexact are
-//! range errors (`ERANGE`). The others set none.
+//! value that overflows or underflows (is tiny and inexact) are
+//! range errors (`ERANGE`), the underflow as glibc's `round_and_return`
+//! decides it. The others set none.
 //! C99: §7.20.1.3, pp. 307-310; PDF pp. 319-322 (the `strtod` family, which
 //! TS 18661-3 extends to `strtof128`); §7.12.6-§7.12.12, pp. 223-238;
 //! PDF pp. 235-250. `strfromf128` is TS 18661-3's (C23 §7.24.1.3).
@@ -293,9 +294,10 @@ fn errno(name: &str, x: Option<Binary128>, y: Option<Binary128>, result: Binary1
 
 /// The value of the longest prefix of `text` that `strtod` reads as a
 /// floating number, how many bytes it takes (zero when there is none), and
-/// whether glibc reports it as a range error: an overflow, an underflow to
-/// zero, or a subnormal result that is not exact. `spelling` is scratch
-/// space for the significand and exponent.
+/// whether glibc reports it as a range error: an overflow, or an underflow
+/// (a tiny value, by x86's tininess after rounding, that the result does not
+/// hold exactly). `spelling` is scratch space for the significand and
+/// exponent.
 fn scan(
     text: &[u8],
     spelling: &mut crate::util::bump::ArenaVec<'_, u8>,
@@ -377,57 +379,12 @@ fn scan(
     }
     spelling.push(b'q');
     let spelling = std::str::from_utf8(spelling).unwrap_or("");
-    let (value, out_of_range) = match crate::binary128::parse(spelling, arena) {
-        | Ok(value) => (value, false),
+    let (value, out_of_range) = match crate::binary128::parse_reporting_underflow(spelling, arena) {
+        | Ok((value, underflow)) => (value, underflow),
         | Err(ParseFloatError::OutOfRange(FloatTokenType::Float128(value), _)) => (value, true),
         | Err(_) => (Binary128::zero(false), false),
     };
-    let subnormal = matches!(value.class(), Class::Finite { exponent, significand }
-        if exponent == SUBNORMAL_EXPONENT && significand >> 112 == 0);
-    let inexact = subnormal && !exact_hexadecimal(spelling.as_bytes());
-    (value.with_sign(negative), end, out_of_range || inexact)
-}
-
-/// The exponent of a binary128 subnormal's lowest significand bit,
-/// `1 - 16383 - 112`.
-const SUBNORMAL_EXPONENT: i32 = -16494;
-
-/// Whether the spelling `0x<digits>[.<digits>]p<exponent>q` names a value
-/// whose lowest set bit is at least the subnormal unit, so that a subnormal
-/// result holds it exactly; a decimal spelling of a subnormal never does
-/// (its exact value has thousands of digits).
-fn exact_hexadecimal(spelling: &[u8]) -> bool {
-    let Some(digits) = spelling.strip_prefix(b"0x") else {
-        return false;
-    };
-    let marker = digits
-        .iter()
-        .position(|&byte| byte == b'p')
-        .unwrap_or(digits.len());
-    let (significand, exponent) = digits.split_at(marker);
-    let exponent = exponent
-        .get(1..)
-        .map(|text| text.strip_suffix(b"q").unwrap_or(text))
-        .and_then(|text| std::str::from_utf8(text).ok())
-        .and_then(|text| text.parse::<i64>().ok())
-        .unwrap_or(0);
-    let fraction = significand
-        .iter()
-        .position(|&byte| byte == b'.')
-        .map_or(0, |point| significand.len() - point - 1);
-    let mut trailing = 0_i64;
-    for &byte in significand.iter().rev().filter(|&&byte| byte != b'.') {
-        let digit = char::from(byte).to_digit(16).unwrap_or(0);
-        if digit != 0 {
-            trailing += i64::from(digit.trailing_zeros());
-            break;
-        }
-        trailing += 4;
-    }
-    let lowest = exponent
-        .saturating_sub(4 * i64::try_from(fraction).unwrap_or(i64::MAX))
-        .saturating_add(trailing);
-    lowest >= i64::from(SUBNORMAL_EXPONENT)
+    (value.with_sign(negative), end, out_of_range)
 }
 
 /// The length of the significand at the start of `text`: digits of the

@@ -313,6 +313,29 @@ const LIBGCC_VECTORS: [[u128; 8]; 24] = [
     ],
 ];
 
+/// glibc's `strtod` family reports an underflow for a tiny inexact value,
+/// with x86's tininess after rounding: just below the smallest normal, a
+/// value that rounds to it at 113 bits is not tiny.
+#[test]
+fn underflow_follows_glibc_round_and_return() {
+    let arena = Bump::new();
+    for (text, underflow) in [
+        ("0x1p-16494q", false),
+        ("0x1.8p-16494q", true),
+        ("0x1.8P-16494q", true),
+        ("0x1p-16382q", false),
+        ("0x1.ffffffffffffffffffffffffffffcp-16383q", false),
+        ("0x1.ffffffffffffffffffffffffffff8p-16383q", false),
+        ("0x1.ffffffffffffffffffffffffffff4p-16383q", true),
+        ("0x0.ffffffffffffffffffffffffffff8p-16382q", true),
+        ("1e-4940q", true),
+        ("1.5q", false),
+    ] {
+        let (_, reported) = parse_reporting_underflow(text, &arena).unwrap();
+        assert_eq!(reported, underflow, "{text}");
+    }
+}
+
 #[test]
 fn arithmetic_matches_libgcc_bit_for_bit() {
     for [a, b, sum, difference, product, quotient, remainder, root] in LIBGCC_VECTORS {

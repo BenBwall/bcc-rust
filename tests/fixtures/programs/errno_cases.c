@@ -68,6 +68,8 @@ quad sqrtf128(quad), fmodf128(quad, quad), ldexpf128(quad, int), scalbnf128(quad
     fdimf128(quad, quad), rintf128(quad), fmaxf128(quad, quad), frexpf128(quad, int *);
 static volatile quad quad_zero = 0, quad_one = 1;
 
+#include "strtof128_edges.h"
+
 /* As SHOW, for a binary128 call, whose value printf cannot print. */
 #define SHOW_QUAD(call)                                                        \
   do {                                                                         \
@@ -311,5 +313,17 @@ int main(void) {
   SHOW_QUAD(strtof128("3.3621031431120935062626778173217526e-4932", &end));
   SHOW_QUAD(strtof128("0e-99999", &end));
   SHOW_QUAD(strtof128("1.5", &end));
+  SHOW_QUAD(strtof128("0x1.8P-16494", &end));
+  SHOW_QUAD(strtof128("0x1.ffffffffffffffffffffffffffffcp-16383", &end));
+  SHOW_QUAD(strtof128("0x1.ffffffffffffffffffffffffffff8p-16383", &end));
+  SHOW_QUAD(strtof128("0x1.ffffffffffffffffffffffffffff4p-16383", &end));
+  /* glibc's underflow rule at its edges; errno stays as it was when the
+     value is exact or rounds to the smallest normal. */
+  for (unsigned i = 0; i < sizeof strtof128_edges / sizeof strtof128_edges[0]; i++) {
+    errno = 123;
+    volatile quad value = strtof128(strtof128_edges[i].text, &end);
+    printf("%s errno %d zero %d rest %d\n", strtof128_edges[i].name, errno, value == 0,
+           (int)(end - strtof128_edges[i].text));
+  }
   return 0;
 }
