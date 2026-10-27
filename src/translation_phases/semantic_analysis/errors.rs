@@ -201,6 +201,10 @@ pub(crate) enum SemanticErrorKind {
     /// level constraint.
     /// <https://gcc.gnu.org/onlinedocs/gcc/Return-Address.html>
     InvalidFrameLevel,
+    /// GNU extension: GCC "Nonlocal Gotos": the second argument of
+    /// `__builtin_longjmp` must be the constant 1.
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Nonlocal-Gotos.html>
+    InvalidLongjmpValue,
     /// GNU extension: GCC "Other Builtins" probability constraint.
     /// <https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html>
     InvalidBuiltinProbability,
@@ -679,6 +683,7 @@ impl SemanticErrorKind {
                 "expected an integer constant from 0 to 3",
             | Self::InvalidBuiltinProbability => "expected a constant probability from 0 to 1",
             | Self::InvalidFrameLevel => "expected an integer constant frame level",
+            | Self::InvalidLongjmpValue => "expected the constant 1",
             | Self::InvalidBuiltinAlignment => "expected a constant power-of-two alignment",
             | Self::InvalidPrefetchReadWrite => "expected an integer constant of 0 or 1",
             | Self::InvalidUnaryOperand | Self::InvalidAdditiveOperands =>
@@ -921,6 +926,11 @@ impl SemanticErrorKind {
             | Self::InvalidFrameLevel => (
                 "the frame level must be an integer constant",
                 "GNU extension: GCC requires the level of __builtin_frame_address and __builtin_return_address to be a constant unsigned integer",
+            ),
+            | Self::InvalidLongjmpValue => (
+                "the value argument must be the integer constant 1",
+                "GNU extension: GCC Nonlocal Gotos requires the second argument of \
+                 __builtin_longjmp to be the integer constant 1",
             ),
             | Self::InvalidBuiltinProbability => (
                 "the probability argument must be a constant from 0 to 1",

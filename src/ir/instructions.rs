@@ -349,6 +349,19 @@ named! {
         /// `__builtin_return_address (0)`.
         ReturnAddress = "return_address",
         StackRestore = "stack_restore",
+        /// `sjlj_setjmp buf`, an `i32`: GCC's `__builtin_setjmp` after the
+        /// frame address and stack position are in words 0 and 2 of the
+        /// five-word buffer `buf`. Saves the address to resume at in word 1
+        /// and returns 0, or 1 when `sjlj_longjmp` resumes it; every other
+        /// register may have changed then (LLVM's `llvm.eh.sjlj.setjmp`).
+        /// GNU extension: GCC manual, "Nonlocal Gotos".
+        /// <https://gcc.gnu.org/onlinedocs/gcc/Nonlocal-Gotos.html>
+        SjljSetjmp = "sjlj_setjmp",
+        /// `sjlj_longjmp buf`: resumes the `sjlj_setjmp` that filled `buf`
+        /// in a still active function, with the frame address and stack
+        /// position it saved; never returns, so `unreachable` follows
+        /// (`__builtin_longjmp`, LLVM's `llvm.eh.sjlj.longjmp`).
+        SjljLongjmp = "sjlj_longjmp",
         Trap = "trap",
         /// The x86 time-stamp counter, an `i64` (Clang's `__rdtsc`). Every
         /// read is a distinct observation, never merged or reordered.
@@ -515,6 +528,8 @@ impl Opcode {
                 | Self::FrameAddress
                 | Self::ReturnAddress
                 | Self::StackRestore
+                | Self::SjljSetjmp
+                | Self::SjljLongjmp
                 | Self::VaArgAggregate
                 | Self::Jump
                 | Self::Brif

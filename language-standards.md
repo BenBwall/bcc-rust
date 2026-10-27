@@ -1578,6 +1578,11 @@ coverage is not implied.
 `__builtin_frame_address` and `__builtin_return_address` take a constant level
 and lower level 0 (MinGW-w64's Clang `setjmp` passes the frame address);
 `__builtin_extract_return_addr` is the identity.
+GCC's `__builtin_setjmp (void *)` and `__builtin_longjmp (void *, 1)`
+([Nonlocal Gotos](https://gcc.gnu.org/onlinedocs/gcc/Nonlocal-Gotos.html))
+take GCC's `void *` buffer and require the integer constant 1, as Clang
+does; they run on every back end with LLVM's buffer layout (see
+[middle-end.md](middle-end.md#gccs-builtin-setjmp-and-longjmp-2026-10-27)).
 
 GCC contracts: [common attributes](https://gcc.gnu.org/onlinedocs/gcc/Common-Attributes.html),
 [union casts](https://gcc.gnu.org/onlinedocs/gcc/Cast-to-Union.html),

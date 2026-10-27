@@ -47,6 +47,19 @@ block0(v0: ptr, v1: ptr):
 }
 
 #[test]
+fn builtin_non_local_jumps_are_kept_without_used_results() {
+    let input = "\
+function @f(ptr) internal {
+block0(v0: ptr):
+    v1 = sjlj_setjmp v0
+    sjlj_longjmp v0
+    unreachable
+}
+";
+    assert_pass_leaves(Pass::Dce, input);
+}
+
+#[test]
 fn an_unused_plain_load_is_removed_but_a_volatile_one_is_not() {
     let input = "\
 function @f(ptr) internal {

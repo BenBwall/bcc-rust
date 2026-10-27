@@ -1025,6 +1025,43 @@ pub(super) const BUILTINS: &[BuiltinDescriptor] = &[
         &[],
         0,
     ),
+    // GCC's `int __builtin_setjmp(void *)` and
+    // `void __builtin_longjmp(void *, int)`, whose value must be 1. GCC
+    // types the buffer `void *` (Clang `void **`), so any object pointer
+    // converts to it.
+    descriptor(
+        Id::Setjmp,
+        "__builtin_setjmp",
+        B::Setjmp,
+        Signature {
+            result:     T::Scalar(S::Int),
+            parameters: &[T::Pointer(S::Void, false)],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[A::value(C::Parameter(T::Pointer(S::Void, false)))],
+        1,
+    ),
+    descriptor(
+        Id::Longjmp,
+        "__builtin_longjmp",
+        B::Longjmp,
+        Signature {
+            result:     T::Scalar(S::Void),
+            parameters: &[T::Pointer(S::Void, false), T::Scalar(S::Int)],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[
+            A::value(C::Parameter(T::Pointer(S::Void, false))),
+            A::constrained(
+                C::Parameter(T::Scalar(S::Int)),
+                K::OriginalIntegerValue(1),
+                D::LongjmpValue,
+            ),
+        ],
+        2,
+    ),
     descriptor(
         Id::UaddOverflow,
         "__builtin_uadd_overflow",
@@ -1607,7 +1644,7 @@ const fn descriptor(
             Some(crate::configuration::Feature::GnuBuiltins),
             SyntaxForm::OrdinaryCall,
         ),
-        | B::Trap | B::Unreachable => (
+        | B::Trap | B::Unreachable | B::Setjmp | B::Longjmp => (
             TypeRule::Fixed,
             BuiltinEffectClass::Control,
             Some(crate::configuration::Feature::GnuBuiltins),

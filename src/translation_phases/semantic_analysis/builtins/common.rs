@@ -315,6 +315,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | CommonBuiltin::ExtractReturnAddress
             | CommonBuiltin::Unreachable
             | CommonBuiltin::Trap
+            | CommonBuiltin::Setjmp
+            | CommonBuiltin::Longjmp
             | CommonBuiltin::Varargs(_)
             | CommonBuiltin::Library
             | CommonBuiltin::Offsetof
@@ -360,6 +362,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 .filter(|_| info.ice)
                 .and_then(Integer::to_u64)
                 .is_some_and(|v| v <= max),
+            | ConstantConstraint::OriginalIntegerValue(value) => info
+                .integer
+                .filter(|_| info.ice)
+                .and_then(Integer::to_u64)
+                .is_some_and(|v| v == value),
             | ConstantConstraint::ConvertedPowerOfTwo => self
                 .common_integer_constant(argument, ty)
                 .and_then(Integer::to_u64)

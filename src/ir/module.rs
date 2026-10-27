@@ -47,7 +47,7 @@ impl<'ir> Module<'ir> {
                 ..
             }
             | InstData::Unary {
-                opcode: Opcode::VaStart | Opcode::VaEnd | Opcode::StackRestore,
+                opcode: Opcode::VaStart | Opcode::VaEnd | Opcode::StackRestore | Opcode::SjljLongjmp,
                 ..
             }
             | InstData::Nullary {

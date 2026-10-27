@@ -335,3 +335,72 @@ fn unsupported_asm_labels_are_refused() {
         );
     }
 }
+
+/// GCC's `__builtin_setjmp` stores the frame address and the stack position
+/// in words 0 and 2 before `sjlj_setjmp`, as Clang does, and
+/// `__builtin_longjmp` ends its block; the interpreter runs the pair. GNU
+/// extension: GCC manual, "Nonlocal Gotos".
+#[test]
+fn builtin_setjmp_saves_the_frame_and_stack_before_the_jump_point() {
+    let source = "static void *b[5];\nstatic void jump(void) { __builtin_longjmp(b, 1); }\nint \
+                  main(void) { volatile int n = 0;\n if (__builtin_setjmp(b) == 0) { n = 4; \
+                  jump(); }\n return n + __builtin_setjmp(b); }";
+    let text = lowered(source);
+    pretty_assertions::assert_eq!(
+        functions(&text),
+        "\
+global @b internal size 40, align 16 = zero
+
+function @jump() internal {
+block0:
+    v0 = global_addr @b
+    v1 = iconst.i32 1
+    sjlj_longjmp v0
+    unreachable
+}
+
+function @main() -> i32 external {
+    slot0 = stack_slot 4, align 4
+block0:
+    v0 = iconst.i32 0
+    v1 = stack_addr slot0
+    store.i32 volatile v0, v1, align 4
+    v2 = global_addr @b
+    v3 = frame_address
+    store.ptr v3, v2, align 16
+    v4 = stack_save
+    v5 = iconst.i64 16
+    v6 = ptr_add inbounds v2, v5
+    store.ptr v4, v6, align 16
+    v7 = sjlj_setjmp v2
+    v8 = iconst.i32 0
+    v9 = icmp.i32 eq v7, v8
+    brif v9, block1, block2
+block1:
+    v10 = stack_addr slot0
+    v11 = iconst.i32 4
+    store.i32 volatile v11, v10, align 4
+    call @jump()
+    jump block2
+block2:
+    v12 = stack_addr slot0
+    v13 = load.i32 volatile v12, align 4
+    v14 = global_addr @b
+    v15 = frame_address
+    store.ptr v15, v14, align 16
+    v16 = stack_save
+    v17 = iconst.i64 16
+    v18 = ptr_add inbounds v14, v17
+    store.ptr v16, v18, align 16
+    v19 = sjlj_setjmp v14
+    v20 = iadd.i32 nsw v13, v19
+    return v20
+}
+"
+    );
+    assert_eq!(
+        run_text(&text, "main").result.unwrap().termination,
+        Termination::Returned(Some(RuntimeValue::Int(4))),
+        "{text}"
+    );
+}

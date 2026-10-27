@@ -225,6 +225,9 @@ pub(crate) enum ConstantConstraint {
     /// An x86 immediate: after prototype conversion, an integer constant in
     /// `[low, high]` that, with a nonzero mask, names a set bit of the mask.
     Immediate(i32, i32, u16),
+    /// An integer constant expression equal to the value before
+    /// conversion, as Clang checks `__builtin_longjmp`'s.
+    OriginalIntegerValue(u64),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -241,6 +244,8 @@ pub(crate) enum ConstraintDiagnostic {
     VaArgType,
     /// An x86 immediate operand outside its constraint.
     Immediate,
+    /// A `__builtin_longjmp` value that is not the constant 1.
+    LongjmpValue,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -300,6 +305,16 @@ pub(crate) enum BuiltinOperation {
     /// with no effect on execution. MSVC extension: Microsoft Learn,
     /// "__annotation". <https://learn.microsoft.com/en-us/cpp/intrinsics/annotation>
     Annotation,
+    /// GNU `__builtin_setjmp`: saves the frame address, a resume address and
+    /// the stack pointer in a five-word buffer, then returns 0, or 1 when a
+    /// `__builtin_longjmp` resumes it. Unlike `setjmp` it saves no other
+    /// register and no signal mask. GNU extension: GCC manual, "Nonlocal
+    /// Gotos". <https://gcc.gnu.org/onlinedocs/gcc/Nonlocal-Gotos.html>
+    Setjmp,
+    /// GNU `__builtin_longjmp`: resumes the `__builtin_setjmp` that filled
+    /// the buffer, whose second argument is the constant 1. Does not
+    /// return. GNU extension: GCC manual, "Nonlocal Gotos".
+    Longjmp,
     /// GNU `__builtin_va_arg_pack` (`false`) and `__builtin_va_arg_pack_len`
     /// (`true`): the anonymous arguments of the enclosing variadic function,
     /// or their number, at a call that inlines it. Lowering substitutes them

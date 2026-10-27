@@ -295,13 +295,14 @@ impl<'a> Liveness<'a> {
         FixedRanges { ranges }
     }
 
-    /// The virtual registers live across a call that may return twice, as
-    /// a set. A second return resumes after the call with the callee-saved
-    /// registers as they were at the first (`longjmp` restores them), but
-    /// with memory as the program left it, so such a value must keep a spill
-    /// slot of its own: coalescing would let another register's later
-    /// definitions overwrite it. C99: §7.13.2.1 paragraph 3, p. 244; PDF
-    /// p. 256.
+    /// The virtual registers live across a call that may return twice or a
+    /// [`MInst::SjljSetjmp`], as a set. A second return resumes after the
+    /// call with the callee-saved registers as they were at the first
+    /// (`longjmp` restores them; after `__builtin_longjmp` nothing lives in
+    /// a register), but with memory as the program left it, so such a value
+    /// must keep a spill slot of its own: coalescing would let another
+    /// register's later definitions overwrite it. C99: §7.13.2.1 paragraph
+    /// 3, p. 244; PDF p. 256.
     pub(super) fn live_across_returns_twice(
         &self,
         func: &MFunction<'_>,
@@ -317,7 +318,7 @@ impl<'a> Liveness<'a> {
                     MInst::Call {
                         returns_twice: true,
                         ..
-                    }
+                    } | MInst::SjljSetjmp { .. }
                 )
             };
             if !data.insts.iter().any(calls) {
