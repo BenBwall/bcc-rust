@@ -768,11 +768,19 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         Ok(
             if let TypeKind::Array(element, ArrayBound::Incomplete) = self.types.nodes[ty.index] {
                 if count == 0 {
-                    return Err(if self.semantic_errors > before {
-                        (self.types.unknown(), None)
-                    } else {
-                        (ty, None)
-                    });
+                    if self.semantic_errors > before {
+                        return Err((self.types.unknown(), None));
+                    }
+                    // An empty list gives an array of unknown size no
+                    // elements: GCC and Clang complete it as a zero-length
+                    // array, which C forbids (C99 §6.7.5.2p1, p. 116; PDF
+                    // p. 128; N3220 §6.7.11p4).
+                    // GNU extension: GCC manual, "Arrays of Length Zero".
+                    self.context.report_extension(
+                        crate::configuration::Feature::ZeroLengthArrays,
+                        "zero-length array",
+                        initializer.source_vectors,
+                    );
                 }
                 // C99 §6.7.8p22, p. 127; PDF p. 139: completion produces an
                 // object type subject to the same size limit as a declared

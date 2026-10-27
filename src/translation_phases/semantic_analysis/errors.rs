@@ -235,6 +235,11 @@ pub(crate) enum SemanticErrorKind {
     InvalidCast,
     /// C99: §6.5.3.4p1, p. 80; PDF p. 92.
     InvalidSizeof,
+    /// An lvalue of incomplete structure, union or enumeration type used
+    /// for its value. C99 leaves the behavior undefined; GCC and Clang
+    /// reject it, and there is no value to load.
+    /// C99: §6.3.2.1p2, p. 46; PDF p. 58.
+    IncompleteValue,
     /// C99: §6.5.2.3p1-2, p. 72; PDF p. 84.
     InvalidMemberAccess,
     /// C99: §6.5.2.2p1, p. 71; PDF p. 83.
@@ -675,6 +680,7 @@ impl SemanticErrorKind {
             | Self::InvalidAssignment => "value cannot be assigned to this type",
             | Self::InvalidCast => "invalid conversion",
             | Self::InvalidSizeof => "operand has no size",
+            | Self::IncompleteValue => "value of incomplete type",
             | Self::InvalidMemberAccess => "no such member",
             | Self::InvalidCall => "not a callable function",
             | Self::InvalidArgumentCount => "wrong number of arguments",
@@ -1277,6 +1283,10 @@ impl SemanticErrorKind {
                 "size query requires a complete object type and no bit-field",
                 "C99 §6.5.3.4p1: sizeof cannot be applied to function, incomplete or bit-field \
                  types",
+            ),
+            | Self::IncompleteValue => (
+                "value of an object requires a complete type",
+                "C99 §6.3.2.1p2: an lvalue of incomplete non-array type has no value to convert to",
             ),
             | Self::InvalidMemberAccess => (
                 "member access requires a declared record member",

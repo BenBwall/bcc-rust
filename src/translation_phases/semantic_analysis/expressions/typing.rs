@@ -1699,6 +1699,20 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             info
         };
         let (ty, kind) = self.value_conversion(info);
+        // C99 §6.3.2.1p2, p. 46; PDF p. 58: an incomplete structure, union
+        // or enumeration lvalue has no value to load.
+        if matches!(kind, Some(ConversionKind::Lvalue))
+            && let TypeKind::Tag(id) = self.types.nodes[ty.index]
+            && !self.types.tags[id].complete.get()
+        {
+            self.error(
+                SemanticErrorKind::IncompleteValue,
+                info.expression.source_vectors,
+                None,
+                None,
+            );
+            return self.types.unknown();
+        }
         if let Some(kind) = kind {
             self.convert(info.expression, ty, kind);
         }

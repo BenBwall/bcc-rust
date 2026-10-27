@@ -11,6 +11,7 @@
 //! p. 92; PDF p. 104.
 
 use super::{
+    Construct,
     FunctionLowerer,
     LoweringError,
     module_items::at,
@@ -140,7 +141,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 let layout =
                     types::layout(&self.unit.sema.types, ty).map_err(|kind| at(kind, source))?;
                 let size = u32::try_from(layout.size).map_err(|_| {
-                    LoweringError::missing("an automatic object is larger than 4 GiB", source)
+                    LoweringError::unsupported(Construct::LargeAutomaticObject, source)
                 })?;
                 Local::Slot(
                     self.object_slot(
@@ -210,6 +211,10 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 Operand::Aggregate(address)
             },
             | (Place::Variable(var), _) => Operand::Value(self.draft.use_var(var)),
+            // `*pv` with `pv` a `void *` designates no object, so its value
+            // is a void expression and nothing is accessed (DR 106).
+            // C99 §6.3.2.2p1, p. 47; PDF p. 59.
+            | (Place::Memory(_), Repr::Void) => Operand::Void,
             | (Place::Memory(address), representation) => {
                 let value_type = representation
                     .value_type()

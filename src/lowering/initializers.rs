@@ -698,9 +698,8 @@ impl<'tu, 's> FunctionLowerer<'_, '_, 'tu, '_, 's> {
         source: SourceVectors,
     ) -> Result<(), LoweringError> {
         let layout = types::layout(&self.unit.sema.types, ty).map_err(|kind| at(kind, source))?;
-        let size = u32::try_from(layout.size).map_err(|_| {
-            LoweringError::missing("a compound literal is larger than 4 GiB", source)
-        })?;
+        let size = u32::try_from(layout.size)
+            .map_err(|_| LoweringError::unsupported(Construct::LargeAutomaticObject, source))?;
         let slot = self.object_slot(
             size,
             super::alignment::storage_alignment(&self.unit.sema.types, ty)
