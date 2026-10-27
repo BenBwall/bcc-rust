@@ -152,6 +152,73 @@ mod tests {
         assert!(!project.path("app3").exists());
     }
 
+    /// One failing input fails the run whichever position it holds, and the
+    /// driver still runs the other jobs, as GCC does.
+    #[test]
+    fn a_failing_input_fails_a_multi_file_run() {
+        let project = Project::new();
+        std::fs::write(project.path("bad.c"), "int x = ;\n").unwrap();
+        std::fs::write(project.path("stop.c"), "#error stop\n").unwrap();
+        for bad in ["bad.c", "stop.c"] {
+            for sources in [[bad, "a.c"], ["a.c", bad]] {
+                for stage in [
+                    &["-c"][..],
+                    &["-S"],
+                    &["-fsyntax-only"],
+                    &[],
+                    &["-o", "app"],
+                ] {
+                    let failed = project.bcc(&[stage, &sources[..]].concat());
+                    assert_eq!(failed.status.code(), Some(1), "{stage:?} {sources:?}");
+                }
+                drop(std::fs::remove_file(project.path("a.o")));
+                assert_eq!(
+                    project.bcc(&["-c", sources[0], sources[1]]).status.code(),
+                    Some(1)
+                );
+                assert!(project.path("a.o").is_file(), "{sources:?}");
+                assert!(!project.path(&bad.replace(".c", ".o")).exists());
+            }
+            let failed = project.bcc(&["-E", "a.c", "stop.c"]);
+            assert_eq!(failed.status.code(), Some(1));
+            assert!(stdout(&failed).contains("helper"), "{}", stdout(&failed));
+        }
+        assert!(!project.path("app").exists());
+    }
+
+    /// An interpreted program's status reaches the shell as a native build's
+    /// would: the OS keeps its low byte on POSIX and all 32 bits on Windows.
+    #[test]
+    fn interpreted_status_reaches_the_shell_as_a_native_build_would() {
+        let project = Project::new();
+        for (name, body, status) in [
+            ("negative.c", "return -1;", -1),
+            ("wraps.c", "return 256;", 256),
+            ("truncated.c", "return 300;", 300),
+            ("exits.c", "exit(-2);", -2),
+        ] {
+            std::fs::write(
+                project.path(name),
+                format!("void exit(int);\nint main(void) {{ {body} }}\n"),
+            )
+            .unwrap();
+            let expected = if cfg!(windows) { status } else { status & 255 };
+            let run = project.bcc(&["--interpret", name]);
+            assert_eq!(
+                run.status.code(),
+                Some(expected),
+                "{name}: {}",
+                stderr(&run)
+            );
+            if linkable_host() {
+                let program = name.trim_end_matches(".c");
+                succeeds(&project.bcc(&[name, "-o", program]));
+                let native = Command::new(project.path(program)).output().unwrap();
+                assert_eq!(native.status.code(), Some(expected), "{name}");
+            }
+        }
+    }
+
     #[test]
     fn preprocessing_writes_source_text_with_line_markers() {
         let project = Project::new();
