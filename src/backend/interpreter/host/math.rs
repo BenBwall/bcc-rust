@@ -1,7 +1,9 @@
 //! C99 real math functions for the default interpreter host.
 //! Native libm computes f32/f64 results in their own precision. Target long
-//! double uses that target's IR representation; f80 remains unsupported by
-//! the interpreter. Guest pointers are never passed to native library code.
+//! double uses that target's IR representation: binary64 goes to native libm,
+//! and x87 `f80` to the software x87 model in `math/extended.rs`, which
+//! supports the functions with exact results. Guest pointers are never passed
+//! to native library code.
 //! C99: §7.12.4-§7.12.13, pp. 218-239; PDF pp. 230-251.
 
 use super::{
@@ -14,6 +16,9 @@ use super::{
     Unsupported,
 };
 use crate::ir::Align;
+
+// The x87 long double functions
+mod extended;
 
 /// Calls a known math function after validating its complete C signature.
 pub(super) fn call(
@@ -53,11 +58,11 @@ fn evaluate(
     if call.args.len() != call.arg_types.len() {
         return Err(UbKind::SignatureMismatch.into());
     }
-    if precision == Type::F80 || (operation == Operation::Nexttoward && long_double == Type::F80) {
-        return Err(Fault::Unsupported(Unsupported::WideFloat));
-    }
     if call.args.iter().any(|value| value.is_poison()) {
         return Err(UbKind::PoisonInHostCall.into());
+    }
+    if operation == Operation::Nexttoward && long_double == Type::F80 && precision != Type::F80 {
+        return extended::next_toward_extended(call.args[0], call.args[1]);
     }
     if operation == Operation::Nan {
         text.clear();
@@ -67,6 +72,7 @@ fn evaluate(
     match precision {
         | Type::F32 => single(operation, call.args, memory, long, text),
         | Type::F64 => double(operation, call.args, memory, long, text),
+        | Type::F80 => extended::extended(operation, call.args, memory, long, text),
         | _ => Err(Fault::Unsupported(Unsupported::WideFloat)),
     }
 }

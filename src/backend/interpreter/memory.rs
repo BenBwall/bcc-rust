@@ -57,6 +57,7 @@ use crate::{
         ArenaVec,
         Bump,
     },
+    x87::X87,
 };
 
 /// The interpreter's memory: every object a program can address.
@@ -175,7 +176,7 @@ impl<'a> Memory<'a> {
         address: RuntimeValue,
         align: Align,
     ) -> Result<RuntimeValue, Fault> {
-        let size = stored_size(ty)?;
+        let size = ty.bytes();
         let (index, offset) = self.resolve(address, u64::from(size), align, false)?;
         let cells = &self.objects[index].cells[offset..offset + size as usize];
         if cells.iter().any(|cell| cell.tag == Cell::POISON_TAG) {
@@ -189,6 +190,7 @@ impl<'a> Memory<'a> {
             | Type::I1 if bits > 1 => RuntimeValue::Poison,
             | Type::F32 => RuntimeValue::F32(f32::from_bits(truncate_u32(bits))),
             | Type::F64 => RuntimeValue::F64(f64::from_bits(truncate_u64(bits))),
+            | Type::F80 => RuntimeValue::F80(X87::from_bits(bits)),
             | Type::F128 => RuntimeValue::F128(bits),
             | Type::Ptr => {
                 let provenance = cells[0].provenance;
@@ -219,7 +221,7 @@ impl<'a> Memory<'a> {
         address: RuntimeValue,
         align: Align,
     ) -> Result<(), Fault> {
-        let size = stored_size(ty)?;
+        let size = ty.bytes();
         let (index, offset) = self.resolve(address, u64::from(size), align, true)?;
         let cells = &mut self.objects[index].cells[offset..offset + size as usize];
         let (bits, provenance) = match value {
@@ -230,6 +232,7 @@ impl<'a> Memory<'a> {
             | RuntimeValue::Int(bits) | RuntimeValue::F128(bits) => (bits, None),
             | RuntimeValue::F32(value) => (u128::from(value.to_bits()), None),
             | RuntimeValue::F64(value) => (u128::from(value.to_bits()), None),
+            | RuntimeValue::F80(value) => (value.to_bits(), None),
             | RuntimeValue::Ptr(pointer) => (u128::from(pointer.address), Some(pointer)),
         };
         for (position, cell) in cells.iter_mut().enumerate() {
@@ -721,14 +724,6 @@ impl Memory<'_> {
             out.push(cell.byte);
         }
         Err(UbKind::OutOfBounds.into())
-    }
-}
-
-/// The bytes a load or store of `ty` accesses.
-fn stored_size(ty: Type) -> Result<u32, Fault> {
-    match ty {
-        | Type::F80 => Err(Fault::Unsupported(Unsupported::WideFloat)),
-        | _ => Ok(ty.bytes()),
     }
 }
 

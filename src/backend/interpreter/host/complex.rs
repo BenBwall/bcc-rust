@@ -62,7 +62,9 @@ fn evaluate(
         | "__muldc3" | "__divdc3" | "creal" | "cimag" => Type::F64,
         | _ => long_double,
     };
-    if precision == Type::F80 {
+    // The x87 helpers' recovery of infinite results from NaN parts is not
+    // modelled; component extraction reads the parts directly.
+    if precision == Type::F80 && helper {
         return Err(Fault::Unsupported(Unsupported::WideFloat));
     }
     if call.args.iter().any(|value| value.is_poison()) {

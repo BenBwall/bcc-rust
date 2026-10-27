@@ -62,6 +62,15 @@ fn generation_is_deterministic() {
         let probes = probe.lines().count() - text.lines().count();
         assert_eq!(probes, 3 * text.matches("freeze").count(), "seed {seed}");
     }
+    // The sweeps check x87 arithmetic only if programs contain it.
+    let extended = (0..50)
+        .filter(|&seed| generate(seed, false).contains(".f80 "))
+        .count();
+    assert!(extended >= 10, "only {extended} of 50 programs use f80");
+    let wide = (0..50)
+        .filter(|&seed| generate(seed, false).contains(".i128 "))
+        .count();
+    assert!(wide >= 5, "only {wide} of 50 programs convert i128");
 }
 
 #[test]
@@ -163,7 +172,7 @@ fn native_backend_matches_the_interpreter_on_many_generated_programs() {
 
 /// Checks the first `cases` kept cases from `first` with the native back
 /// end, which must accept every one of them: the generator writes only
-/// integer, pointer, `f32` and `f64` code.
+/// integer, pointer, `f32`, `f64` and x87 `f80` code.
 fn check_native_backend_sweep(first: u64, cases: u64) {
     if cases == 0 {
         return;

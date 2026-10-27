@@ -4,8 +4,9 @@
 //! Poison in an operand makes the result poison, except that a division by
 //! poison or zero is undefined behaviour. A violated `nsw`, `nuw` or
 //! `exact`, a shift by the width or more, and a float-to-integer conversion
-//! out of range all produce poison. `f80` and `f128` operations are not
-//! supported yet.
+//! out of range all produce poison. `f80` values compute as the x87 unit
+//! does, through the software model in `crate::x87`; `f128` operations are
+//! not supported yet.
 
 use super::{
     memory::truncate_u64,
@@ -16,12 +17,15 @@ use super::{
     },
     value::RuntimeValue,
 };
-use crate::ir::{
-    FloatCC,
-    InstFlags,
-    IntCC,
-    Opcode,
-    Type,
+use crate::{
+    ir::{
+        FloatCC,
+        InstFlags,
+        IntCC,
+        Opcode,
+        Type,
+    },
+    x87::X87,
 };
 
 /// `iadd` through `ashr` on operands of type `ty`.
@@ -106,6 +110,8 @@ pub(crate) fn int_binary(
 }
 
 /// `fadd` through `frem` on operands of type `ty`. `frem` is C's `fmod`.
+/// C99: §6.5.5 paragraphs 4-5, p. 82; PDF p. 94; §6.5.6 paragraphs 5-6,
+/// p. 82; PDF p. 94; §7.12.10.1, p. 235; PDF p. 247.
 pub(crate) fn float_binary(
     opcode: Opcode,
     ty: Type,
@@ -126,10 +132,18 @@ pub(crate) fn float_binary(
         | Opcode::Fdiv => a / b,
         | _ => a % b,
     };
+    let apply80 = |a: X87, b: X87| match opcode {
+        | Opcode::Fadd => a.add(b),
+        | Opcode::Fsub => a.sub(b),
+        | Opcode::Fmul => a.mul(b),
+        | Opcode::Fdiv => a.div(b),
+        | _ => a.rem(b),
+    };
     supported_float(ty)?;
     Ok(match (a, b) {
         | (RuntimeValue::F32(a), RuntimeValue::F32(b)) => RuntimeValue::F32(apply32(a, b)),
         | (RuntimeValue::F64(a), RuntimeValue::F64(b)) => RuntimeValue::F64(apply64(a, b)),
+        | (RuntimeValue::F80(a), RuntimeValue::F80(b)) => RuntimeValue::F80(apply80(a, b)),
         | _ => RuntimeValue::Poison,
     })
 }
@@ -140,6 +154,7 @@ pub(crate) fn float_negate(ty: Type, a: RuntimeValue) -> Result<RuntimeValue, Fa
     Ok(match a {
         | RuntimeValue::F32(a) => RuntimeValue::F32(-a),
         | RuntimeValue::F64(a) => RuntimeValue::F64(-a),
+        | RuntimeValue::F80(a) => RuntimeValue::F80(a.negate()),
         | _ => RuntimeValue::Poison,
     })
 }
@@ -169,11 +184,10 @@ pub(crate) fn int_compare(cond: IntCC, ty: Type, a: RuntimeValue, b: RuntimeValu
 }
 
 /// `fcmp`: an ordered condition is false if either operand is NaN, an
-/// unordered one true.
-#[expect(
-    clippy::float_cmp,
-    reason = "fcmp compares exactly, as IEEE 754 comparisons do."
-)]
+/// unordered one true. An invalid x87 encoding compares unordered, as
+/// `fucomi` reports it.
+/// C99: §6.5.8 paragraphs 3-6, p. 85; PDF p. 97; §6.5.9 paragraph 3,
+/// p. 86; PDF p. 98.
 pub(crate) fn float_compare(
     cond: FloatCC,
     ty: Type,
@@ -181,28 +195,33 @@ pub(crate) fn float_compare(
     b: RuntimeValue,
 ) -> Result<RuntimeValue, Fault> {
     supported_float(ty)?;
-    let (a, b) = match (a, b) {
-        | (RuntimeValue::F32(a), RuntimeValue::F32(b)) => (f64::from(a), f64::from(b)),
-        | (RuntimeValue::F64(a), RuntimeValue::F64(b)) => (a, b),
+    let order = match (a, b) {
+        | (RuntimeValue::F32(a), RuntimeValue::F32(b)) => a.partial_cmp(&b),
+        | (RuntimeValue::F64(a), RuntimeValue::F64(b)) => a.partial_cmp(&b),
+        | (RuntimeValue::F80(a), RuntimeValue::F80(b)) => a.compare(b),
         | _ => return Ok(RuntimeValue::Poison),
     };
-    let unordered = a.is_nan() || b.is_nan();
-    let ordered = !unordered;
+    let Some(order) = order else {
+        return Ok(boolean(matches!(
+            cond,
+            FloatCC::Ueq
+                | FloatCC::Une
+                | FloatCC::Ult
+                | FloatCC::Ule
+                | FloatCC::Ugt
+                | FloatCC::Uge
+                | FloatCC::Uno
+        )));
+    };
     Ok(boolean(match cond {
-        | FloatCC::Oeq => ordered && a == b,
-        | FloatCC::One => ordered && a != b,
-        | FloatCC::Olt => ordered && a < b,
-        | FloatCC::Ole => ordered && a <= b,
-        | FloatCC::Ogt => ordered && a > b,
-        | FloatCC::Oge => ordered && a >= b,
-        | FloatCC::Ord => ordered,
-        | FloatCC::Ueq => unordered || a == b,
-        | FloatCC::Une => unordered || a != b,
-        | FloatCC::Ult => unordered || a < b,
-        | FloatCC::Ule => unordered || a <= b,
-        | FloatCC::Ugt => unordered || a > b,
-        | FloatCC::Uge => unordered || a >= b,
-        | FloatCC::Uno => unordered,
+        | FloatCC::Oeq | FloatCC::Ueq => order.is_eq(),
+        | FloatCC::One | FloatCC::Une => order.is_ne(),
+        | FloatCC::Olt | FloatCC::Ult => order.is_lt(),
+        | FloatCC::Ole | FloatCC::Ule => order.is_le(),
+        | FloatCC::Ogt | FloatCC::Ugt => order.is_gt(),
+        | FloatCC::Oge | FloatCC::Uge => order.is_ge(),
+        | FloatCC::Ord => true,
+        | FloatCC::Uno => false,
     }))
 }
 
@@ -231,7 +250,13 @@ pub(crate) fn convert(
     Ok(match (opcode, a) {
         | (Opcode::Zext | Opcode::Trunc, RuntimeValue::Int(a)) => RuntimeValue::int(to, a),
         | (Opcode::Sext, RuntimeValue::Int(a)) => RuntimeValue::int(to, sext(from, a) as u128),
-        | (Opcode::Fpext, RuntimeValue::F32(a)) => RuntimeValue::F64(f64::from(a)),
+        | (Opcode::Fpext, RuntimeValue::F32(a)) if to == Type::F64 =>
+            RuntimeValue::F64(f64::from(a)),
+        | (Opcode::Fpext, RuntimeValue::F32(a)) => RuntimeValue::F80(X87::from_f32(a)),
+        | (Opcode::Fpext, RuntimeValue::F64(a)) => RuntimeValue::F80(X87::from_f64(a)),
+        | (Opcode::Fptrunc, RuntimeValue::F80(a)) if to == Type::F32 =>
+            RuntimeValue::F32(a.to_f32()),
+        | (Opcode::Fptrunc, RuntimeValue::F80(a)) => RuntimeValue::F64(a.to_f64()),
         | (Opcode::Fptrunc, RuntimeValue::F64(a)) => {
             #[expect(
                 clippy::cast_possible_truncation,
@@ -244,6 +269,15 @@ pub(crate) fn convert(
             float_to_int(opcode == Opcode::Fptosi, to, f64::from(a)),
         | (Opcode::Fptosi | Opcode::Fptoui, RuntimeValue::F64(a)) =>
             float_to_int(opcode == Opcode::Fptosi, to, a),
+        | (Opcode::Fptosi | Opcode::Fptoui, RuntimeValue::F80(a)) => a
+            .to_integer(opcode == Opcode::Fptosi, to.bits())
+            .map_or(RuntimeValue::Poison, |bits| RuntimeValue::int(to, bits)),
+        | (Opcode::Sitofp, RuntimeValue::Int(a)) if to == Type::F80 => {
+            let value = sext(from, a);
+            RuntimeValue::F80(X87::from_integer(value < 0, value.unsigned_abs()))
+        },
+        | (Opcode::Uitofp, RuntimeValue::Int(a)) if to == Type::F80 =>
+            RuntimeValue::F80(X87::from_integer(false, a)),
         | (Opcode::Sitofp, RuntimeValue::Int(a)) =>
             int_to_float(to, sext(from, a) as f64, sext(from, a) as f32),
         | (Opcode::Uitofp, RuntimeValue::Int(a)) => int_to_float(to, a as f64, a as f32),
@@ -261,6 +295,7 @@ fn bitcast(to: Type, value: RuntimeValue) -> RuntimeValue {
         | RuntimeValue::Int(bits) | RuntimeValue::F128(bits) => bits,
         | RuntimeValue::F32(value) => u128::from(value.to_bits()),
         | RuntimeValue::F64(value) => u128::from(value.to_bits()),
+        | RuntimeValue::F80(value) => value.to_bits(),
     };
     match to {
         | Type::F32 => {
@@ -272,6 +307,7 @@ fn bitcast(to: Type, value: RuntimeValue) -> RuntimeValue {
             RuntimeValue::F32(f32::from_bits(bits))
         },
         | Type::F64 => RuntimeValue::F64(f64::from_bits(truncate_u64(bits))),
+        | Type::F80 => RuntimeValue::F80(X87::from_bits(bits)),
         | Type::F128 => RuntimeValue::F128(bits),
         | _ => RuntimeValue::int(to, bits),
     }
@@ -314,7 +350,7 @@ const fn int_to_float(to: Type, wide: f64, narrow: f32) -> RuntimeValue {
 /// Fails for the float types the interpreter does not implement.
 fn supported_float(ty: Type) -> Result<(), Fault> {
     match ty {
-        | Type::F80 | Type::F128 => Err(Fault::Unsupported(Unsupported::WideFloat)),
+        | Type::F128 => Err(Fault::Unsupported(Unsupported::WideFloat)),
         | _ => Ok(()),
     }
 }
@@ -328,4 +364,14 @@ const fn boolean(value: bool) -> RuntimeValue {
 pub(crate) const fn sext(ty: Type, bits: u128) -> i128 {
     let shift = 128 - ty.bits();
     ((bits << shift) as i128) >> shift
+}
+
+/// The `minnum` or `maxnum` of two x87 values, which atomic `fmin` and
+/// `fmax` compute: a NaN operand gives the other operand.
+pub(crate) fn extended_min_max(minimum: bool, a: X87, b: X87) -> X87 {
+    let take_b = match a.compare(b) {
+        | None => a.compare(a).is_none(),
+        | Some(order) => order.is_gt() == minimum,
+    };
+    if take_b { b } else { a }
 }

@@ -19,7 +19,7 @@
 //! - Invocation and language choices: `main.rs`, `cli.rs`, `configuration.rs`,
 //!   `headers.rs`, `target.rs`.
 //! - Values, storage, and reporting: `binary128.rs`, `diagnostics.rs`,
-//!   `float_parsing.rs`, `util.rs`.
+//!   `float_parsing.rs`, `util.rs`, `x87.rs`.
 //! - Measurements and test support: `benchmarking.rs`, `test_support.rs`.
 //!
 //! C99: translation phases 1-7, §5.1.1.2 paragraph 1, pp. 9-10;
@@ -110,6 +110,8 @@ pub(crate) mod diagnostics;
 pub(crate) mod float_parsing;
 #[cfg(feature = "native")]
 pub(crate) mod util;
+#[cfg(feature = "native")]
+mod x87;
 
 // Measurements and test support
 #[cfg(feature = "benchmarking-internals")]

@@ -10,8 +10,9 @@
 //! the value in its caller that receives its result. Returning pops the
 //! frame, frees its slots and stores the result into the caller.
 //!
-//! Values are integers of each width (as masked `u128` bits), `f32` and
-//! `f64`, pointers with provenance, and poison, following the IR's LLVM-like
+//! Values are integers of each width (as masked `u128` bits), `f32`, `f64`
+//! and x87 `f80` (computed bit for bit by `crate::x87`), pointers with
+//! provenance, and poison, following the IR's LLVM-like
 //! rules exactly: violated `nsw`, `nuw`, `exact` or `inbounds` facts give
 //! poison, poison propagates, and branching on poison, dividing by it or
 //! using it as an address traps as undefined behaviour. Memory is a set of
@@ -44,8 +45,8 @@
 //! - `text.rs` runs textual IR for tests; `tests.rs` and `tests/` exercise the
 //!   interpreter.
 //!
-//! Limits: `f80` values and `f128` arithmetic trap as unsupported; `f128`
-//! representations support constants, loads, stores, freeze and bitcasts.
+//! Limits: `f128` arithmetic traps as unsupported; `f128` representations
+//! support constants, loads, stores, freeze and bitcasts.
 //! `inttoptr` maps an address to the live object containing it, a deterministic
 //! stand-in for a full provenance model. Declared globals without an
 //! initializer have unresolved addresses; accessing their data traps.

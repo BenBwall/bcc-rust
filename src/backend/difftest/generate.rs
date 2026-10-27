@@ -339,15 +339,13 @@ impl FunctionGen<'_> {
     }
 
     /// A floating operation: arithmetic, a comparison, or a conversion to or
-    /// from an integer or the other floating type. Floating values reach
+    /// from an integer or another floating type. Floating values reach
     /// the checksum only through comparisons and conversions to integers,
-    /// so NaN payloads, which LLVM does not fix, are never observed.
+    /// so NaN payloads, which LLVM does not fix, are never observed. A third
+    /// of the operations are x87 `f80`, so the interpreter's software x87
+    /// unit is checked against the processor's.
     fn float(&mut self) {
-        let ty = if self.rng.chance(50) {
-            Ty::F32
-        } else {
-            Ty::F64
-        };
+        let ty = self.rng.pick(&[Ty::F32, Ty::F64, Ty::F80]);
         let range = Range::FULL_PTR;
         match self.rng.below(6) {
             | 0 => {
@@ -376,34 +374,82 @@ impl FunctionGen<'_> {
             },
             | 3 => {
                 let a = self.float_operand(ty);
-                let to = self.int_type();
                 let op = if self.rng.chance(50) {
                     "fptosi"
                 } else {
                     "fptoui"
                 };
+                if self.rng.chance(25) {
+                    // An i128 result is folded to i64 through its halves.
+                    let wide = self.fresh();
+                    self.line(format_args!("v{wide} = {op}.i128 v{}", a.id));
+                    let _ = self.fold_wide(wide);
+                    return;
+                }
+                let to = self.int_type();
                 let _ = self.def(to, Range::full(to), format_args!("{op}.{to} v{}", a.id));
             },
             | 4 => {
-                let (from, op) = if ty == Ty::F32 {
-                    (Ty::F64, "fptrunc")
+                let from = match ty {
+                    | Ty::F32 => self.rng.pick(&[Ty::F64, Ty::F80]),
+                    | Ty::F64 => self.rng.pick(&[Ty::F32, Ty::F80]),
+                    | _ => self.rng.pick(&[Ty::F32, Ty::F64]),
+                };
+                let op = if from.bits() > ty.bits() {
+                    "fptrunc"
                 } else {
-                    (Ty::F32, "fpext")
+                    "fpext"
                 };
                 let a = self.float_operand(from);
                 let _ = self.def(ty, range, format_args!("{op}.{ty} v{}", a.id));
             },
             | _ => {
-                let from = self.rng.pick(&[Ty::I1, Ty::I8, Ty::I32, Ty::I64]);
-                let a = self.operand(from);
                 let op = if self.rng.chance(50) {
                     "sitofp"
                 } else {
                     "uitofp"
                 };
+                if self.rng.chance(25) {
+                    let wide = self.wide_operand();
+                    let _ = self.def(ty, range, format_args!("{op}.{ty} v{wide}"));
+                    return;
+                }
+                let from = self.rng.pick(&[Ty::I1, Ty::I8, Ty::I32, Ty::I64]);
+                let a = self.operand(from);
                 let _ = self.def(ty, range, format_args!("{op}.{ty} v{}", a.id));
             },
         }
+    }
+
+    /// An `i128` value outside the scope, whose type the range tracking does
+    /// not model: a boundary or rounding-tie constant, or an `i64` operand
+    /// widened with or without its sign.
+    fn wide_operand(&mut self) -> u32 {
+        let id = self.fresh();
+        if self.rng.chance(50) {
+            let bits = self.rng.pick(&WIDE_CONSTANTS);
+            self.line(format_args!("v{id} = iconst.i128 {}", bits.cast_signed()));
+        } else {
+            let a = self.operand(Ty::I64);
+            let op = if self.rng.chance(50) { "sext" } else { "zext" };
+            self.line(format_args!("v{id} = {op}.i128 v{}", a.id));
+        }
+        id
+    }
+
+    /// The `i64` exclusive or of the halves of the `i128` value `wide`.
+    fn fold_wide(&mut self, wide: u32) -> Val {
+        let shift = self.fresh();
+        self.line(format_args!("v{shift} = iconst.i128 64"));
+        let high = self.fresh();
+        self.line(format_args!("v{high} = lshr.i128 v{wide}, v{shift}"));
+        let mixed = self.fresh();
+        self.line(format_args!("v{mixed} = xor.i128 v{wide}, v{high}"));
+        self.def(
+            Ty::I64,
+            Range::full(Ty::I64),
+            format_args!("trunc.i64 v{mixed}"),
+        )
     }
 
     /// A floating operand: a value in scope, or a constant.
@@ -419,10 +465,12 @@ impl FunctionGen<'_> {
             reason = "Rounding to the nearest `f32` is the intent."
         )]
         let single = value as f32;
-        let bits = if ty == Ty::F32 {
-            format!("0x{:08X}", single.to_bits())
-        } else {
-            format!("0x{:016X}", value.to_bits())
+        let bits = match ty {
+            | Ty::F32 => format!("0x{:08X}", single.to_bits()),
+            | Ty::F64 => format!("0x{:016X}", value.to_bits()),
+            // Half the x87 constants carry digits beyond binary64.
+            | _ if self.rng.chance(50) => format!("0x{:020X}", self.rng.pick(&EXTENDED_CONSTANTS)),
+            | _ => format!("0x{:020X}", crate::x87::X87::from_f64(value).to_bits()),
         };
         self.def(ty, Range::FULL_PTR, format_args!("fconst.{ty} {bits}"))
     }
@@ -1913,6 +1961,38 @@ const FLOAT_CONSTANTS: [f64; 14] = [
     f64::NAN,
 ];
 
+/// x87 constants that no binary64 value equals: a third, the largest and
+/// smallest finite values, a denormal, `2^64 - 1` at the edge of `fptoui`,
+/// and values one unit away from integers and from each other.
+const EXTENDED_CONSTANTS: [u128; 8] = [
+    0x3FFD_AAAA_AAAA_AAAA_AAAB,
+    0xBFFD_AAAA_AAAA_AAAA_AAAB,
+    0x7FFE_FFFF_FFFF_FFFF_FFFF,
+    0x0001_8000_0000_0000_0000,
+    0x0000_0000_0000_0000_0001,
+    0x403E_FFFF_FFFF_FFFF_FFFF,
+    0x3FFF_8000_0000_0000_0001,
+    0xC03D_FFFF_FFFF_FFFF_FFFF,
+];
+
+/// `i128` operands for conversions: the signed and unsigned extremes, and
+/// values halfway between neighbouring x87, binary64 and binary32 values,
+/// whose rounding must go to even.
+const WIDE_CONSTANTS: [u128; 12] = [
+    1 << 127,
+    (1 << 127) - 1,
+    u128::MAX,
+    (1 << 64) + 1,
+    (1 << 65) + 2,
+    (1 << 65) + 6,
+    (1 << 127) + (1 << 63),
+    (1 << 127) + (3 << 63),
+    (1 << 53) + 1,
+    (1 << 24) + 1,
+    u128::MAX - (1 << 63),
+    0xFFFF_FFFF_FFFF_FFFF_8000_0000_0000_0000,
+];
+
 const CONDITIONS: [&str; 10] = [
     "eq", "ne", "slt", "sle", "sgt", "sge", "ult", "ule", "ugt", "uge",
 ];
@@ -2068,6 +2148,7 @@ enum Ty {
     I64,
     F32,
     F64,
+    F80,
     Ptr,
 }
 
@@ -2080,6 +2161,7 @@ impl Ty {
             | Self::I64 => "i64",
             | Self::F32 => "f32",
             | Self::F64 => "f64",
+            | Self::F80 => "f80",
             | Self::Ptr => "ptr",
         }
     }
@@ -2090,6 +2172,7 @@ impl Ty {
             | Self::I8 => 8,
             | Self::I32 | Self::F32 => 32,
             | Self::I64 | Self::F64 | Self::Ptr => 64,
+            | Self::F80 => 80,
         }
     }
 

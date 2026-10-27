@@ -109,6 +109,7 @@ impl<'m, 'ir> Machine<'m, 'ir, '_> {
                 | (_, RuntimeValue::Poison)
                 | (Type::F32, RuntimeValue::F32(_))
                 | (Type::F64, RuntimeValue::F64(_))
+                | (Type::F80, RuntimeValue::F80(_))
                 | (Type::F128, RuntimeValue::F128(_))
                 | (Type::Ptr, RuntimeValue::Ptr(_)) => arg,
                 | _ => return Err(Trap::BadEntry(EntryError::Arguments)),
