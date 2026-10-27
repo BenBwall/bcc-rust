@@ -1,12 +1,16 @@
-/* _Float16 across the System V x86-64 ABI: scalars in vector registers and
-   on the stack, structures of halves alone and mixed with other classes, a
-   union, and variadic arguments, which are not promoted. Built whole, or as
-   the callee half (-DCALLEE_ONLY) and the caller half (-DCALLER_ONLY) by
-   different compilers; the caller prints what came back. */
+/* _Float16, or __bf16 with -DHALF=__bf16, across the System V x86-64 ABI:
+   scalars in vector registers and on the stack, structures of halves alone
+   and mixed with other classes, a union, and variadic arguments, which are
+   not promoted. Built whole, or as the callee half (-DCALLEE_ONLY) and the
+   caller half (-DCALLER_ONLY) by different compilers; the caller prints
+   what came back. Every f16 constant is exact in both types. */
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
-typedef _Float16 H;
+#ifndef HALF
+#define HALF _Float16
+#endif
+typedef HALF H;
 struct S1 { H a; };
 struct S2 { H a, b; };
 struct S3 { H a, b, c; };
