@@ -698,6 +698,20 @@ impl<'m, 'ir, 'a> Machine<'m, 'ir, 'a> {
                 globals.push(pointer);
                 continue;
             }
+            // The C library's other objects, such as `signgam`, start at
+            // zero, as glibc's do.
+            if global.init.is_none()
+                && global.size >= 4
+                && let Some(object) = host.library_object(global.name)
+            {
+                let pointer = memory
+                    .allocate(ObjectKind::Global, global.size, global.align)
+                    .map_err(|_| Trap::BadEntry(EntryError::GlobalTooLarge))?;
+                memory.initialize(pointer, &[]);
+                memory.set_library_object(object, pointer);
+                globals.push(pointer);
+                continue;
+            }
             let kind = if global.init.is_none() {
                 ObjectKind::UnresolvedGlobal(id)
             } else if global.constant {

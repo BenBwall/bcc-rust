@@ -171,6 +171,12 @@ pub(super) fn signature(name: &str) -> Option<Signature> {
         | "frexpf128" => fixed(Quad, &[Quad, Ptr]),
         | "nanf128" => fixed(Quad, &[Ptr]),
         | "bsearch" => fixed(Ptr, &[Ptr, Ptr, Wide64, Wide64, Ptr]),
+        | "lgamma_r" => fixed(Double, &[Double, Ptr]),
+        | "lgammaf_r" => fixed(Float, &[Float, Ptr]),
+        | "lgammal_r" => fixed(LongDouble, &[LongDouble, Ptr]),
+        | "gamma" => fixed(Double, &[Double]),
+        | "gammaf" => fixed(Float, &[Float]),
+        | "gammal" => fixed(LongDouble, &[LongDouble]),
         | _ => return None,
     })
 }

@@ -1323,20 +1323,26 @@ bit for bit: the exact ones (rounding to integers, `sqrtl`, `fmodl`,
 `remainderl`, glibc's `remquol` algorithm, scaling, decomposition,
 neighbours, `nanl`) and the ports of glibc's C code (`sinl`, `cosl` and
 `tanl` with their argument reduction, `asinl`, the hyperbolic functions,
-`erfl`, `erfcl`, `cbrtl`, `hypotl`, and `fmal` correctly rounded) on the
-x87 model. The exponentials, logarithms, `powl` and the arctangents follow
+`erfl`, `erfcl`, `lgammal` with `__lgamma_negl`'s expansions about the
+zeros between -33 and -2, `tgammal`, `cbrtl`, `hypotl`, and `fmal`
+correctly rounded) on the x87 model. The exponentials, logarithms, `powl` and the arctangents follow
 glibc's assembly language, whose `f2xm1`, `fyl2x`, `fyl2xp1` and `fpatan`
 results come from the processor's microcode: those four instructions run
 on the host's own x87 unit, so the results match glibc on the same
 processor (they may differ between processor makers, as glibc's do), and a
 host without an x87 unit refuses those functions. The return values of
 glibc's SVID wrappers apply (`NAN` for `asinl`, `acosl` and the logarithms
-of out-of-domain arguments). `lgammal` and `tgammal` are refused.
+of out-of-domain arguments, and `tgammal`'s values for poles, negative
+integers and overflows). The `lgamma` family stores the sign of Γ in the
+program's `signgam` when it declares one (a host-defined object, as the
+standard streams are), or through `lgamma_r`'s pointer, with glibc's
+`gamma` names as aliases; `float` and `double` take the sign glibc's own
+`lgamma` left in the host's `signgam`.
 `src/backend/interpreter/host/math/extended/tests.rs` compares every
 function with the test binary's glibc on random encodings (skipping, on a
 glibc before 2.43, the `powl` cases its commit 1b657c53c21a changed), and
-`tests/fixtures/programs/long_double_math.c` with a program built against
-glibc; `long_double_modern_glibc.c` pins the `powl` cases (non-canonical
+`tests/fixtures/programs/long_double_math.c` and `gamma_functions.c` with
+programs built against glibc; `long_double_modern_glibc.c` pins the `powl` cases (non-canonical
 bases to small integer powers) on which glibc 2.39 and 2.43 differ. `printf` formats every
 conversion of `double` and `long double` exactly, digit for digit as glibc
 does, with halfway cases to even. The floating-environment APIs remain

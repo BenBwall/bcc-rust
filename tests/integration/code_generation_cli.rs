@@ -1160,6 +1160,16 @@ int main(void) {{ FILE *first = fopen(\"{path_text}\", \"r+\");
         interpreter_matches_glibc("wide_stdio.c", &["--interpret-allow-fs"]);
     }
 
+    /// `tests/fixtures/programs/gamma_functions.c` calls the `lgamma`
+    /// family in each precision, with the sign each leaves in `signgam` or
+    /// stores through its pointer, glibc's `gamma` names, and `tgamma`, with
+    /// `errno`: the interpreter must print what glibc prints, the x87
+    /// `lgammal` and `tgammal` bit for bit.
+    #[test]
+    fn gamma_functions_and_signgam_match_glibc() {
+        interpreter_matches_glibc("gamma_functions.c", &[]);
+    }
+
     /// `tests/fixtures/programs/exit_handlers.c` ends in each way glibc
     /// offers: the `atexit` and `on_exit` handlers in reverse order around
     /// the destructors, then the streams written out, for a return from
@@ -1627,8 +1637,8 @@ int main(void) { wchar_t a[2] = {1, 2}, b[2]; wmemcpy(b, a, 1ULL << 62); return 
     }
 
     /// The interpreter computes the x87 `long double` functions, including
-    /// the transcendental ones on an x86-64 host, and refuses those it does
-    /// not implement, such as `tgammal`.
+    /// the transcendental ones (and `tgammal`, built on them) on an x86-64
+    /// host, and refuses those it does not implement, such as `cabsl`.
     #[test]
     fn host_math_runs_x87_functions_and_refuses_the_rest() {
         for target in [
@@ -1646,13 +1656,18 @@ int main(void) { wchar_t a[2] = {1, 2}, b[2]; wmemcpy(b, a, 1ULL << 62); return 
                     "long double expl(long double); int main(void) { return expl(1.0L) <= 2.718L; \
                      }",
                 );
+                sources.push(
+                    "long double tgammal(long double); int main(void) { return tgammal(3.0L) != \
+                     2.0L; }",
+                );
             }
             for source in sources {
                 let output = bcc(source, &["--interpret", target]);
                 assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
             }
             let output = bcc(
-                "long double tgammal(long double); int main(void) { return tgammal(3.0L) > 0; }",
+                "long double cabsl(long double _Complex); int main(void) { long double _Complex z \
+                 = 3.0L; return cabsl(z) > 0; }",
                 &["--interpret", target],
             );
             assert_eq!(output.status.code(), Some(70), "{}", text(&output.stderr));

@@ -90,6 +90,13 @@ pub(crate) trait Host {
         None
     }
 
+    /// The C library object other than a stream that a declared but
+    /// undefined object names, if the host's C library defines it. A host
+    /// that does not say defines none.
+    fn library_object(&self, _name: &str) -> Option<LibraryObject> {
+        None
+    }
+
     /// Ends the program normally, after `main` returns or the program calls
     /// `exit` and the destructors have run, but not after `abort` or a
     /// trap: as the C library does then, the host writes out what its
@@ -101,6 +108,15 @@ pub(crate) trait Host {
     /// what the host's streams hold is lost, as the C library loses it.
     /// C99: §7.20.4.4 paragraph 2, p. 316; PDF p. 328.
     fn at_immediate_exit(&mut self) {}
+}
+
+/// An object of the host's C library other than a stream, which the
+/// program's declaration of it becomes.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum LibraryObject {
+    /// glibc's `signgam`: the sign of Γ the last `lgamma`, `lgammaf`,
+    /// `lgammal` or `gamma` call found (XSI; glibc's own symbol since 2.0).
+    Signgam = 0,
 }
 
 /// A call the host is asked to run.
@@ -204,6 +220,10 @@ impl Host for DefaultHost<'_> {
         stdio::standard_stream(name)
     }
 
+    fn library_object(&self, name: &str) -> Option<LibraryObject> {
+        (name == "signgam").then_some(LibraryObject::Signgam)
+    }
+
     fn call(&mut self, call: HostCall<'_>, memory: &mut Memory<'_>) -> Result<HostReturn, Fault> {
         // Standard output written by any function follows a `freopen`; a
         // function that writes it implicitly fails when that write does.
@@ -303,11 +323,22 @@ impl DefaultHost<'_> {
             self.long_width,
             &mut self.text,
         ) {
-            let (value, code) = result?;
-            if code != 0 {
-                self.set_errno(memory, code)?;
+            let outcome = result?;
+            if outcome.errno != 0 {
+                self.set_errno(memory, outcome.errno)?;
             }
-            return Ok(HostReturn::Value(Some(value)));
+            // glibc's `lgamma` family leaves the sign of Γ in `signgam`.
+            if let Some(sign) = outcome.signgam
+                && let Some(signgam) = memory.library_object(LibraryObject::Signgam)
+            {
+                memory.store(
+                    Type::I32,
+                    RuntimeValue::int(Type::I32, u128::from(sign.cast_unsigned())),
+                    RuntimeValue::Ptr(signgam),
+                    Align::BYTE,
+                )?;
+            }
+            return Ok(HostReturn::Value(Some(outcome.value)));
         }
         if let Some(result) = self.checked(call, memory) {
             return result;

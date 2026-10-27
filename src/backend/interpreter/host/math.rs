@@ -35,17 +35,110 @@ pub(super) fn call(
     long_double: Type,
     long_width: u32,
     text: &mut crate::util::bump::ArenaVec<'_, u8>,
-) -> Option<Result<(RuntimeValue, i32), Fault>> {
+) -> Option<Result<Outcome, Fault>> {
+    if let Some((precision, reentrant)) = glibc_lgamma(call.name, long_double) {
+        return Some(log_gamma(call, memory, precision, reentrant));
+    }
     let (operation, precision) = lookup(call.name, long_double)?;
-    Some(evaluate(
-        call,
-        memory,
-        operation,
-        precision,
-        long_double,
-        long_width,
-        text,
-    ))
+    if operation == Operation::Lgamma {
+        return Some(
+            super::check_signature(call, long_width, long_double)
+                .and_then(|()| log_gamma(call, memory, precision, false)),
+        );
+    }
+    Some(
+        evaluate(
+            call,
+            memory,
+            operation,
+            precision,
+            long_double,
+            long_width,
+            text,
+        )
+        .map(|(value, errno)| Outcome {
+            value,
+            errno,
+            signgam: None,
+        }),
+    )
+}
+
+/// What a math function returned: its value, the `errno` it set (or
+/// zero), and for `lgamma`, `lgammaf`, `lgammal` and `gamma` the sign of Γ
+/// glibc leaves in `signgam`.
+pub(super) struct Outcome {
+    pub(super) value:   RuntimeValue,
+    pub(super) errno:   i32,
+    pub(super) signgam: Option<i32>,
+}
+
+/// The precision of glibc's `lgamma` functions outside the builtin catalog,
+/// whose signatures the dispatch checks as `library.rs` gives them, and
+/// whether they are the reentrant forms, which store the sign through their
+/// second argument (`lgamma_r`, `lgammaf_r`, `lgammal_r`); `gamma`,
+/// `gammaf` and `gammal` are glibc's other names for `lgamma`, `lgammaf`
+/// and `lgammal`.
+fn glibc_lgamma(name: &str, long_double: Type) -> Option<(Type, bool)> {
+    Some(match name {
+        | "lgamma_r" => (Type::F64, true),
+        | "lgammaf_r" => (Type::F32, true),
+        | "lgammal_r" => (long_double, true),
+        | "gamma" => (Type::F64, false),
+        | "gammaf" => (Type::F32, false),
+        | "gammal" => (long_double, false),
+        | _ => return None,
+    })
+}
+
+/// The `lgamma` family: `log |Γ(x)|`, with the sign of Γ(x) stored
+/// through the second argument when `reentrant` and otherwise returned for
+/// `signgam`. glibc's wrappers return the function's value; they only set
+/// `errno` (`ERANGE` for a pole or an overflow).
+/// C99: §7.12.8.3, p. 230; PDF p. 242; `lgamma_r` and `signgam` are XSI
+/// and glibc extensions.
+fn log_gamma(
+    call: HostCall<'_>,
+    memory: &mut Memory<'_>,
+    precision: Type,
+    reentrant: bool,
+) -> Result<Outcome, Fault> {
+    if call.args.len() != call.arg_types.len() {
+        return Err(UbKind::SignatureMismatch.into());
+    }
+    if call.args.iter().any(|value| value.is_poison()) {
+        return Err(UbKind::PoisonInHostCall.into());
+    }
+    let (value, sign, errno) = match (precision, call.args.first()) {
+        | (Type::F32, Some(&RuntimeValue::F32(x))) => {
+            let ((value, sign), errno) = native::with_errno(|| native::lgammaf_sign(x));
+            (RuntimeValue::F32(value), sign, errno)
+        },
+        | (Type::F64, Some(&RuntimeValue::F64(x))) => {
+            let ((value, sign), errno) = native::with_errno(|| native::lgamma_sign(x));
+            (RuntimeValue::F64(value), sign, errno)
+        },
+        | (Type::F80, Some(&RuntimeValue::F80(x))) => {
+            let (value, sign) = extended::lgamma(x)?;
+            let value = RuntimeValue::F80(value);
+            let errno = extended_errno::errno(Operation::Lgamma, call.args, value);
+            (value, sign, errno)
+        },
+        | _ => return Err(UbKind::SignatureMismatch.into()),
+    };
+    if reentrant {
+        memory.store(
+            Type::I32,
+            RuntimeValue::int(Type::I32, u128::from(sign.cast_unsigned())),
+            call.args[1],
+            Align::BYTE,
+        )?;
+    }
+    Ok(Outcome {
+        value,
+        errno,
+        signgam: (!reentrant).then_some(sign),
+    })
 }
 
 fn evaluate(
@@ -841,6 +934,42 @@ pub(super) mod native {
         debug_assert_eq!(tag.last(), Some(&0), "host tags have a terminating null");
         // SAFETY: The host copied the complete tag and appended its null.
         unsafe { native_nan(tag.as_ptr().cast()) }
+    }
+
+    /// `lgamma` and the sign it leaves in the host's `signgam`.
+    pub(in crate::backend::interpreter::host) fn lgamma_sign(x: f64) -> (f64, c_int) {
+        let value = lgamma(x);
+        (value, last_gamma_sign(x))
+    }
+
+    /// `lgammaf` and the sign it leaves in the host's `signgam`.
+    pub(in crate::backend::interpreter::host) fn lgammaf_sign(x: f32) -> (f32, c_int) {
+        let value = lgammaf(x);
+        (value, last_gamma_sign(f64::from(x)))
+    }
+
+    /// The sign glibc's last `lgamma` call stored in `signgam`.
+    #[cfg(unix)]
+    fn last_gamma_sign(_x: f64) -> c_int {
+        unsafe extern "C" {
+            static mut signgam: c_int;
+        }
+        // SAFETY: `signgam` is the C library's `int`, written only by its
+        // `lgamma` functions on this thread.
+        unsafe { (&raw const signgam).read_volatile() }
+    }
+
+    /// The sign of Γ(`x`) as glibc gives it, on a host whose C library has
+    /// no `signgam`: negative for -0 and below zero between an odd and an
+    /// even integer.
+    #[cfg(not(unix))]
+    fn last_gamma_sign(x: f64) -> c_int {
+        let negative = if x == 0.0 {
+            x.is_sign_negative()
+        } else {
+            x < 0.0 && x != x.floor() && x.floor().rem_euclid(2.0) == 1.0
+        };
+        if negative { -1 } else { 1 }
     }
 
     pub(super) fn nanf(tag: &[u8]) -> f32 {
