@@ -12,6 +12,7 @@ use std::{
         OsString,
     },
     fmt::Write as _,
+    path::Path,
 };
 
 use super::{
@@ -33,7 +34,10 @@ use super::{
     version,
 };
 use crate::{
-    cli::arguments::implements_language_option,
+    cli::{
+        arguments::implements_language_option,
+        driver::compiles,
+    },
     target::Target,
 };
 
@@ -52,9 +56,11 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         errors: 0,
         target: invocation.target,
         sysroot: None,
-        stage: None,
-        output: false,
-        inputs: 0,
+        stages: Vec::new(),
+        syntax_only: false,
+        outputs: Vec::new(),
+        inputs: Vec::new(),
+        language: false,
         verbose: false,
         dry_run: false,
         machine: Vec::new(),
@@ -67,6 +73,8 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
     }
     let target = state.target.unwrap_or_else(|| host_target(personality));
     state.machine_options(target);
+    state.check_inputs();
+    let syntax_only = state.syntax_only();
     if state.errors != 0 {
         return Err(MainError::Reported(1));
     }
@@ -99,7 +107,7 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         option.push(sysroot);
         bcc.push(option);
     }
-    let links = state.stage.is_none();
+    let links = state.stages.is_empty() && !syntax_only;
     if !links {
         // GCC ignores what links when it stops before linking.
         state
@@ -107,7 +115,17 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
             .retain(|option| !matches!(option.to_str(), Some("-shared" | "-pie" | "-no-pie")));
     }
     bcc.append(&mut state.out);
-    if links && !state.output && state.inputs != 0 {
+    let named_output = !state.outputs.is_empty();
+    if syntax_only {
+        bcc.push("--syntax-only".into());
+    } else {
+        bcc.extend(state.stages.iter().map(OsString::from));
+        for output in state.outputs.drain(..) {
+            bcc.push("-o".into());
+            bcc.push(output);
+        }
+    }
+    if links && !named_output && !state.inputs.is_empty() {
         bcc.push("-o".into());
         bcc.push(
             if matches!(target, Target::WindowsGnu | Target::WindowsMsvc) {
@@ -129,19 +147,16 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
             text.push('\n');
         }
         plan.steps.push(Step::Print { text, stderr: true });
-        if state.dry_run || state.inputs == 0 {
+        if state.dry_run || state.inputs.is_empty() {
             return Ok(plan);
         }
     }
-    if state.inputs == 0 {
-        invocation.error(format_args!(
-            "{}no input files",
-            if personality == Personality::Gcc {
-                "fatal error: "
-            } else {
-                ""
-            }
-        ));
+    if state.inputs.is_empty() {
+        if personality == Personality::Gcc {
+            invocation.fatal(format_args!("no input files"));
+        } else {
+            invocation.error(format_args!("no input files"));
+        }
         return Err(MainError::Reported(1));
     }
     plan.steps.push(Step::Bcc(bcc));
@@ -149,24 +164,36 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
 }
 
 /// The translation so far.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "The switches of a command line are independent."
+)]
 struct State<'a> {
-    invocation: &'a Invocation,
-    compiler:   Compiler,
+    invocation:  &'a Invocation,
+    compiler:    Compiler,
     /// bcc's options and inputs, in order.
-    out:        Vec<OsString>,
-    errors:     usize,
-    target:     Option<Target>,
-    sysroot:    Option<OsString>,
-    /// The option that stops before linking: `-c`, `-S`, `-E`, `-M`, `-MM`
-    /// or `-fsyntax-only`.
-    stage:      Option<&'static str>,
-    output:     bool,
-    inputs:     usize,
-    verbose:    bool,
-    dry_run:    bool,
+    out:         Vec<OsString>,
+    errors:      usize,
+    target:      Option<Target>,
+    sysroot:     Option<OsString>,
+    /// The options that stop before linking, in order: `-c`, `-S`, `-E`,
+    /// `-M` and `-MM`.
+    stages:      Vec<&'static str>,
+    /// `-fsyntax-only`, which the preprocessing stages override and which
+    /// overrides the others.
+    syntax_only: bool,
+    /// The `-o` operands.
+    outputs:     Vec<OsString>,
+    /// The input files, each with whether bcc compiles it rather than
+    /// passing it to the linker.
+    inputs:      Vec<(OsString, bool)>,
+    /// Whether a `-x` language other than `none` is in effect.
+    language:    bool,
+    verbose:     bool,
+    dry_run:     bool,
     /// The known `-m` options bcc does not implement, judged once the
     /// target is known, since `--target` may come after them.
-    machine:    Vec<String>,
+    machine:     Vec<String>,
 }
 
 /// Options bcc reads in GCC's spelling, which take their operand as the next
@@ -288,20 +315,14 @@ impl State<'_> {
                 return Some(Plan::print(help(personality, &self.invocation.name))),
             | "-v" => self.verbose = true,
             | "-###" => self.dry_run = true,
-            | "-c" | "-S" | "-E" | "-M" | "-MM" => {
-                self.stage = Some(match text {
-                    | "-c" => "-c",
-                    | "-S" => "-S",
-                    | "-E" => "-E",
-                    | "-M" => "-M",
-                    | _ => "-MM",
-                });
-                self.out.push(text.into());
-            },
-            | "-fsyntax-only" => {
-                self.stage = Some("-fsyntax-only");
-                self.out.push("--syntax-only".into());
-            },
+            | "-c" | "-S" | "-E" | "-M" | "-MM" => self.stages.push(match text {
+                | "-c" => "-c",
+                | "-S" => "-S",
+                | "-E" => "-E",
+                | "-M" => "-M",
+                | _ => "-MM",
+            }),
+            | "-fsyntax-only" => self.syntax_only = true,
             | "-ansi" => self.out.push("-std=c89".into()),
             | "-nostdinc" => self.out.push("--nostdinc".into()),
             | "-s" => self.out.push("-Wl,-s".into()),
@@ -331,8 +352,96 @@ impl State<'_> {
 
     /// An input file, or `-` for stdin.
     fn input(&mut self, argument: &OsStr) {
-        self.inputs += 1;
+        let compiled = self.language || compiles(Path::new(argument));
+        self.inputs.push((argument.into(), compiled));
         self.out.push(argument.into());
+    }
+
+    /// Diagnoses the inputs as the driver does before it runs anything:
+    /// Clang's refuses a missing file and runs no job, and both refuse `-o`
+    /// for several outputs. GCC leaves a missing file to its compiler,
+    /// which reports it and goes on with the others, as bcc's driver does.
+    fn check_inputs(&mut self) {
+        let clang = self.compiler == Compiler::Clang;
+        if clang {
+            let mut missing = 0;
+            for (input, _) in &self.inputs {
+                if input != "-" && std::fs::metadata(input).is_err() {
+                    missing += 1;
+                    self.errors += 1;
+                    self.invocation.error(format_args!(
+                        "no such file or directory: '{}'",
+                        input.to_string_lossy()
+                    ));
+                }
+            }
+            if missing != 0 && missing == self.inputs.len() {
+                self.error(format_args!("no input files"));
+            }
+        }
+        let compiled = self.inputs.iter().filter(|(_, compiled)| *compiled).count();
+        if self.outputs.is_empty() || compiled < 2 {
+            return;
+        }
+        // GCC refuses `-o` with `-c`, `-S` or `-E` given, even when
+        // `-fsyntax-only` leaves nothing to write, but lets each unit's `-M`
+        // rules replace the one before; Clang refuses any stage that writes
+        // a file per input.
+        if clang {
+            let preprocesses = self.preprocesses();
+            if preprocesses || (!self.syntax_only && !self.stages.is_empty()) {
+                self.error(format_args!(
+                    "cannot specify -o when generating multiple output files"
+                ));
+            }
+        } else if self
+            .stages
+            .iter()
+            .any(|stage| matches!(*stage, "-c" | "-S" | "-E"))
+        {
+            self.errors += 1;
+            self.invocation.fatal(format_args!(
+                "cannot specify '-o' with '-c', '-S' or '-E' with multiple files"
+            ));
+        }
+    }
+
+    /// Whether `-E`, `-M` or `-MM` stops the command line after
+    /// preprocessing.
+    fn preprocesses(&self) -> bool {
+        self.stages
+            .iter()
+            .any(|stage| matches!(*stage, "-E" | "-M" | "-MM"))
+    }
+
+    /// Whether `-fsyntax-only` decides what runs. Both compilers let `-E`,
+    /// `-M` and `-MM` override it, and let it override `-c`, `-S` and `-o`,
+    /// writing nothing; Clang warns about the option it leaves unused.
+    fn syntax_only(&mut self) -> bool {
+        if !self.syntax_only {
+            return false;
+        }
+        let clang = self.compiler == Compiler::Clang;
+        if self.preprocesses() {
+            if clang {
+                self.invocation.warning(format_args!(
+                    "argument unused during compilation: '-fsyntax-only' \
+                     [-Wunused-command-line-argument]"
+                ));
+            }
+            return false;
+        }
+        if clang {
+            for stage in &self.stages {
+                self.invocation.warning(format_args!(
+                    "argument unused during compilation: '{stage}' \
+                     [-Wunused-command-line-argument]"
+                ));
+            }
+        }
+        self.stages.clear();
+        self.outputs.clear();
+        true
     }
 
     /// The option and its operand, joined or the next argument, of an
@@ -410,6 +519,7 @@ impl State<'_> {
                 self.out.push("-Xassembler".into());
                 self.out.push(operand.into());
             },
+            | "-o" => self.outputs.push(operand.into()),
             // Tuning parameters of GCC's optimizers.
             | "--param" => {},
             | "-B" => self.invocation.warning(format_args!(
@@ -431,8 +541,8 @@ impl State<'_> {
                 .into(),
             ),
             | _ => {
-                if option == "-o" {
-                    self.output = true;
+                if option == "-x" {
+                    self.language = operand != "none";
                 }
                 self.out.push(option.into());
                 self.out.push(operand.into());

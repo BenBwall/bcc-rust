@@ -65,7 +65,9 @@ use super::MainError;
 use crate::target::Target;
 
 /// Runs the command line as `personality` reads it and returns the exit
-/// status: the status of the first step that fails, or of the last.
+/// status: the status of the first step that fails, or of the last. A
+/// failing step stops the plan, unless the plan keeps going, when only the
+/// link is skipped; `cl` then exits with 2, as it does after any error.
 pub(super) fn run(
     personality: Personality,
     arguments: Vec<OsString>,
@@ -79,8 +81,11 @@ pub(super) fn run(
     };
     let mut status = 0;
     for step in plan.steps {
-        status = match step {
-            | Step::Bcc(arguments) => run_bcc(arguments)?,
+        if status != 0 && (!plan.keep_going || matches!(step, Step::Link(_))) {
+            break;
+        }
+        let step_status = match step {
+            | Step::Bcc(arguments) | Step::Link(arguments) => run_bcc(arguments)?,
             | Step::Print { text, stderr } => {
                 print(&text, stderr);
                 0
@@ -95,11 +100,14 @@ pub(super) fn run(
                     },
                 },
         };
-        if status != 0 {
-            break;
+        if status == 0 {
+            status = step_status;
         }
     }
     drop(plan.temporary);
+    if status != 0 && personality == Personality::Msvc {
+        status = msvc::ERROR_STATUS;
+    }
     Ok(status)
 }
 
@@ -259,6 +267,19 @@ impl Invocation {
         );
     }
 
+    /// Prints `NAME: fatal error: MESSAGE` and `compilation terminated.` to
+    /// stderr, as GCC's driver words the errors that stop it.
+    fn fatal(&self, message: std::fmt::Arguments<'_>) {
+        print(
+            &format_args!(
+                "{}: fatal error: {message}\ncompilation terminated.\n",
+                self.name
+            )
+            .to_string(),
+            true,
+        );
+    }
+
     /// Prints `NAME: warning: MESSAGE` to stderr.
     fn warning(&self, message: std::fmt::Arguments<'_>) {
         print(
@@ -271,20 +292,23 @@ impl Invocation {
 /// What a personality runs.
 #[derive(Default)]
 pub(super) struct Plan {
-    steps:     Vec<Step>,
+    steps:      Vec<Step>,
+    /// Whether the steps after a failing one still run, except a
+    /// [`Step::Link`]: `cl` compiles every source and then skips the link.
+    keep_going: bool,
     /// A directory the steps write temporary files to, removed afterwards.
-    temporary: Option<TemporaryDirectory>,
+    temporary:  Option<TemporaryDirectory>,
 }
 
 impl Plan {
     /// A plan that prints `text` to stdout.
     fn print(text: String) -> Self {
         Self {
-            steps:     vec![Step::Print {
+            steps: vec![Step::Print {
                 text,
                 stderr: false,
             }],
-            temporary: None,
+            ..Self::default()
         }
     }
 }
@@ -293,6 +317,9 @@ impl Plan {
 enum Step {
     /// Run bcc's driver on these arguments, `argv[0]` first.
     Bcc(Vec<OsString>),
+    /// Run bcc's driver to link what the steps before compiled, which runs
+    /// only when every one of them succeeded.
+    Link(Vec<OsString>),
     /// Print text.
     Print { text: String, stderr: bool },
     /// Run a program bcc built and exit with its status.

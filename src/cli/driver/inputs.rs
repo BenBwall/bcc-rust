@@ -164,16 +164,7 @@ pub(super) fn ordered_inputs<'a>(
                     path,
                     language: Some(preprocessed),
                 }),
-                | None => match path.extension().and_then(OsStr::to_str) {
-                    | _ if path == Path::new("-") => Input::C(Source::File(path)),
-                    | Some("c" | "h") => Input::C(Source::File(path)),
-                    | Some("i") => Input::C(Source::Preprocessed(path)),
-                    | Some("s" | "S" | "sx") => Input::Assembly(Assembly {
-                        path,
-                        language: None,
-                    }),
-                    | _ => Input::Link(path.as_os_str()),
-                },
+                | None => by_extension(path),
             }),
         }
     }
@@ -184,6 +175,33 @@ pub(super) fn ordered_inputs<'a>(
         return Err(MainError::Driver("no input files"));
     }
     Ok(inputs)
+}
+
+/// The input `path` is without `-x`: `-` (stdin), `.c` and `.h` are C, `.i`
+/// preprocessed C, `.s`, `.S` and `.sx` assembly, and anything else goes to
+/// the linker.
+fn by_extension(path: &Path) -> Input<'_> {
+    match path.extension().and_then(OsStr::to_str) {
+        | _ if path == Path::new("-") => Input::C(Source::File(path)),
+        | Some("c" | "h") => Input::C(Source::File(path)),
+        | Some("i") => Input::C(Source::Preprocessed(path)),
+        | Some("s" | "S" | "sx") => Input::Assembly(Assembly {
+            path,
+            language: None,
+        }),
+        | _ => Input::Link(path.as_os_str()),
+    }
+}
+
+/// Whether the driver compiles `path` without `-x`, as C or assembly,
+/// rather than passing it to the linker.
+pub(in crate::cli) fn compiles(path: &Path) -> bool {
+    !matches!(by_extension(path), Input::Link(_))
+}
+
+/// Whether the driver compiles `path` without `-x` as C.
+pub(in crate::cli) fn is_c(path: &Path) -> bool {
+    matches!(by_extension(path), Input::C(_))
 }
 
 /// The `-o` path, or the input's file name with `extension` in the working

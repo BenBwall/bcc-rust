@@ -2,6 +2,7 @@
 //! it for the inspection views, or generating code for it.
 
 use std::{
+    fmt::Write as _,
     io,
     path::Path,
 };
@@ -10,6 +11,10 @@ use super::{
     super::{
         Cli,
         MainError,
+        arguments::{
+            Format,
+            Identity,
+        },
         code_generation::{
             CodeGeneration,
             FAILURE_STATUS,
@@ -36,7 +41,10 @@ use super::{
 use crate::{
     headers::HeaderSearch,
     translation_phases::Context,
-    util::bump::Bump,
+    util::bump::{
+        ArenaString,
+        Bump,
+    },
 };
 
 /// What one C job does with its translation unit.
@@ -78,7 +86,7 @@ pub(super) fn compile(
         // An unreadable input fails its own job alone: GCC reports it and
         // still runs the others, then skips the link.
         | Err((path, source)) => {
-            report_stderr(format_args!("{}", open_error(path, source)));
+            report_unreadable(args, path, &source, &tu);
             return Ok(Generated {
                 status:         FAILURE_STATUS,
                 atomic_runtime: false,
@@ -240,9 +248,42 @@ fn run_job<'tu>(
     Ok(generated)
 }
 
-fn open_error(path: &Path, source: io::Error) -> MainError {
-    MainError::OpenInputFileError {
-        path: path.into(),
-        source,
+/// Reports an input that cannot be read in the words of the compiler whose
+/// diagnostic format is selected: GCC's `cc1`, Clang's front end (also for
+/// clang-cl), `cl`'s `c1` with Microsoft's error C1083, or TCC; bcc's own
+/// format adds the OS's error code. Clang's and clang-cl's drivers report a
+/// missing file before any job runs, and so do their personalities, so this
+/// reaches them for a file that exists but cannot be read.
+fn report_unreadable(args: &Cli, path: &Path, error: &io::Error, arena: &Bump) {
+    let reason = os_reason(error, arena);
+    let path = path.display();
+    match args.diagnostic_format {
+        | Format::Bcc => report_stderr(format_args!("error: cannot read `{path}`: {error}")),
+        | Format::Gcc => report_stderr(format_args!(
+            "cc1: fatal error: {path}: {reason}\ncompilation terminated."
+        )),
+        | Format::Msvc | Format::MsvcClassic | Format::MsvcCaret
+            if args.compiler_identity != Identity::ClangCl =>
+            report_stderr(format_args!(
+                "c1: fatal error C1083: Cannot open source file: '{path}': {reason}"
+            )),
+        | Format::Clang | Format::Msvc | Format::MsvcClassic | Format::MsvcCaret => report_stderr(
+            format_args!("error: error reading '{path}': {reason}\n1 error generated."),
+        ),
+        | Format::Tcc => report_stderr(format_args!("tcc: error: file '{path}' not found")),
+    }
+}
+
+/// The C library's `strerror` text for `error`, which the compilers print,
+/// without the ` (os error N)` Rust appends to it.
+pub(super) fn os_reason<'a>(error: &io::Error, arena: &'a Bump) -> &'a str {
+    let mut text = ArenaString::new_in(arena);
+    _ = write!(text, "{error}");
+    let text = text.into_str();
+    match error.raw_os_error() {
+        | Some(_) => text
+            .rsplit_once(" (os error ")
+            .map_or(text, |(reason, _)| reason),
+        | None => text,
     }
 }

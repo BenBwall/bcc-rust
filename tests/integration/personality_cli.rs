@@ -739,7 +739,9 @@ mod tests {
             ),
         ] {
             let output = directory.bcc(mode, args);
-            assert_eq!(output.status.code(), Some(1), "{mode}");
+            // `cl` exits with 2 after an error.
+            let status = if mode == "--msvc-mode" { 2 } else { 1 };
+            assert_eq!(output.status.code(), Some(status), "{mode}");
             let text = stderr(&output);
             assert!(text.contains(location), "{mode}: {text}");
             assert!(!text.contains("-->"), "{mode}: {text}");
@@ -1105,7 +1107,7 @@ mod tests {
         assert!(!directory.path("good.obj").exists());
         assert!(!directory.path("good.exe").exists());
         let bad = directory.bcc("--msvc-mode", &["/nologo", "/Zs", "bad.c"]);
-        assert_eq!(bad.status.code(), Some(1));
+        assert_eq!(bad.status.code(), Some(2));
         assert!(
             stderr(&bad).contains("bad.c(1,9): error:"),
             "{}",
@@ -1132,7 +1134,7 @@ mod tests {
             stderr(&cl)
         );
         let clang_cl = directory.bcc("--clang-cl-mode", &["/c", "a.c", "b.c", "/Foout.obj"]);
-        assert_eq!(clang_cl.status.code(), Some(2));
+        assert_eq!(clang_cl.status.code(), Some(1));
         assert!(
             stderr(&clang_cl).contains(
                 "clang-cl: error: cannot specify '/Foout.obj' when compiling multiple source files"
@@ -1173,7 +1175,7 @@ mod tests {
         );
         succeeds(&directory.bcc("--msvc-mode", &["/nologo", "/Zs", "anon.c"]));
         let strict = directory.bcc("--msvc-mode", &["/nologo", "/Zs", "/Za", "anon.c"]);
-        assert_eq!(strict.status.code(), Some(1), "{}", stderr(&strict));
+        assert_eq!(strict.status.code(), Some(2), "{}", stderr(&strict));
         // `cl` replaces trigraphs only under `/Zc:trigraphs`.
         assert_eq!(cl_expand("--msvc-mode", &[], "\"??=\""), "\"??=\"");
         assert_eq!(
@@ -1331,6 +1333,206 @@ mod tests {
         }
     }
 
+    /// Each personality reports a missing input in its compiler's words,
+    /// with its exit status, and compiles the other inputs as that compiler
+    /// does: GCC's `cc1` and `cl`'s `c1` report it and go on with the others;
+    /// Clang's and clang-cl's drivers refuse it before compiling any; TCC
+    /// stops at it.
+    #[test]
+    fn missing_inputs_are_reported_as_each_compiler_does() {
+        let directory = Directory::new();
+        directory.write("good.c", "int good;\n");
+        directory.write("main.c", "int main(void) { return 0; }\n");
+        let missing = "No such file or directory";
+        let run = |mode: &str, args: &[&str], objects: &[&str]| {
+            for object in ["good.o", "good.obj", "main.o", "main.obj"] {
+                drop(std::fs::remove_file(directory.path(object)));
+            }
+            let output = directory.bcc(mode, args);
+            for object in ["good.o", "good.obj", "main.o", "main.obj"] {
+                assert_eq!(
+                    directory.path(object).exists(),
+                    objects.contains(&object),
+                    "{mode} {args:?}: {object}"
+                );
+            }
+            output
+        };
+        let gcc = run("--gcc-mode", &["-c", "missing.c", "good.c"], &["good.o"]);
+        assert_eq!(gcc.status.code(), Some(1));
+        assert_eq!(
+            stderr(&gcc),
+            format!("cc1: fatal error: missing.c: {missing}\ncompilation terminated.\n")
+        );
+        let gcc = run("--gcc-mode", &["-fsyntax-only", "missing.c", "good.c"], &[]);
+        assert_eq!(gcc.status.code(), Some(1));
+        let clang = run("--clang-mode", &["-c", "missing.c", "good.c"], &[]);
+        assert_eq!(clang.status.code(), Some(1));
+        assert_eq!(
+            stderr(&clang),
+            "clang: error: no such file or directory: 'missing.c'\n"
+        );
+        let clang = run("--clang-mode", &["-c", "missing.o"], &[]);
+        assert_eq!(clang.status.code(), Some(1));
+        assert_eq!(
+            stderr(&clang),
+            "clang: error: no such file or directory: 'missing.o'\nclang: error: no input files\n"
+        );
+        let clang_cl = run(
+            "--clang-cl-mode",
+            &["/nologo", "/c", "good.c", "missing.c"],
+            &[],
+        );
+        assert_eq!(clang_cl.status.code(), Some(1));
+        assert_eq!(
+            stderr(&clang_cl),
+            "clang-cl: error: no such file or directory: 'missing.c'\n"
+        );
+        let clang_cl = run("--clang-cl-mode", &["/nologo", "/c", "missing.c"], &[]);
+        assert!(
+            stderr(&clang_cl).ends_with("clang-cl: error: no input files\n"),
+            "{}",
+            stderr(&clang_cl)
+        );
+        // cl compiles every source, reports each missing one with error
+        // C1083, skips the link and exits with 2.
+        for args in [
+            &["/nologo", "/c", "missing.c", "good.c"][..],
+            &["/nologo", "missing.c", "main.c"],
+        ] {
+            let object = if args.contains(&"good.c") {
+                "good.obj"
+            } else {
+                "main.obj"
+            };
+            let cl = run("--msvc-mode", args, &[object]);
+            assert_eq!(cl.status.code(), Some(2), "{args:?}");
+            assert_eq!(
+                stderr(&cl),
+                format!("c1: fatal error C1083: Cannot open source file: 'missing.c': {missing}\n")
+            );
+            assert_eq!(
+                stdout(&cl),
+                format!("missing.c\n{}\n", object.replace(".obj", ".c"))
+            );
+            assert!(!directory.path("missing.exe").exists());
+        }
+        let tcc = run(
+            "--tcc-mode",
+            &["-c", "good.c", "missing.c", "main.c"],
+            &["good.o"],
+        );
+        assert_eq!(tcc.status.code(), Some(1));
+        assert_eq!(stderr(&tcc), "tcc: error: file 'missing.c' not found\n");
+        let tcc = run("--tcc-mode", &["-c", "missing.o", "good.c"], &[]);
+        assert_eq!(tcc.status.code(), Some(1));
+        assert_eq!(stderr(&tcc), "tcc: error: file 'missing.o' not found\n");
+    }
+
+    /// `cl` and clang-cl after a source that fails: `cl` compiles the rest,
+    /// clang-cl stops. `cl` warns about a file it does not know, which it
+    /// passes to the linker (warnings D9024 and D9027 under `/c`), and
+    /// clang-cl that `/c` leaves it unused.
+    #[test]
+    fn cl_and_clang_cl_go_on_after_a_failing_source_as_each_does() {
+        let directory = Directory::new();
+        directory.write("bad.c", "int x = ;\n");
+        directory.write("good.c", "int good;\n");
+        directory.write("data", "not a source\n");
+        let cl = directory.bcc("--msvc-mode", &["/nologo", "/c", "bad.c", "good.c"]);
+        assert_eq!(cl.status.code(), Some(2));
+        assert!(directory.path("good.obj").is_file());
+        std::fs::remove_file(directory.path("good.obj")).unwrap();
+        let cl = directory.bcc("--msvc-mode", &["/nologo", "/Zs", "bad.c", "good.c"]);
+        assert_eq!(cl.status.code(), Some(2));
+        assert_eq!(stdout(&cl), "bad.c\ngood.c\n");
+        let clang_cl = directory.bcc("--clang-cl-mode", &["/nologo", "/c", "bad.c", "good.c"]);
+        assert_eq!(clang_cl.status.code(), Some(1));
+        assert!(!directory.path("good.obj").exists());
+        let cl = directory.bcc("--msvc-mode", &["/nologo", "/c", "data", "good.c"]);
+        succeeds(&cl);
+        assert_eq!(
+            stderr(&cl),
+            "cl : Command line warning D9024 : unrecognized source file type 'data', object file \
+             assumed\ncl : Command line warning D9027 : source file 'data' ignored\n"
+        );
+        let clang_cl = directory.bcc("--clang-cl-mode", &["/nologo", "/c", "data", "good.c"]);
+        succeeds(&clang_cl);
+        assert_eq!(
+            stderr(&clang_cl),
+            "clang-cl: warning: data: 'linker' input unused [-Wunused-command-line-argument]\n"
+        );
+    }
+
+    /// `-fsyntax-only` writes nothing, also with `-c`, `-S` or `-o`, but `-E`
+    /// and `-M` override it. GCC refuses `-o` with `-c`, `-S` or `-E` for
+    /// several inputs, but not with `-M`; Clang refuses it for any stage that
+    /// writes a file per input, and warns about the options it leaves unused.
+    #[test]
+    fn gcc_and_clang_choose_the_stage_and_output_as_each_does() {
+        let directory = Directory::new();
+        directory.write("a.c", "int a;\n");
+        directory.write("b.c", "int b;\n");
+        let run = |mode: &str, args: &[&str]| {
+            let output = directory.bcc(mode, args);
+            assert!(!directory.path("out").exists(), "{mode} {args:?}");
+            output
+        };
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            succeeds(&run(mode, &["-fsyntax-only", "a.c", "b.c", "-o", "out"]));
+            succeeds(&run(mode, &["-fsyntax-only", "-c", "a.c", "-o", "out"]));
+            assert!(!directory.path("a.o").exists());
+            let missing = run(mode, &["-fsyntax-only", "missing.c", "a.c", "-o", "out"]);
+            assert_eq!(missing.status.code(), Some(1), "{mode}");
+            succeeds(&directory.bcc(mode, &["-fsyntax-only", "-E", "a.c", "-o", "pre.i"]));
+            assert!(
+                std::fs::read_to_string(directory.path("pre.i"))
+                    .unwrap()
+                    .contains("int a;")
+            );
+            let several = run(mode, &["-E", "a.c", "b.c", "-o", "out"]);
+            assert_eq!(several.status.code(), Some(1), "{mode}");
+        }
+        let gcc = run(
+            "--gcc-mode",
+            &["-fsyntax-only", "-c", "a.c", "b.c", "-o", "out"],
+        );
+        assert_eq!(gcc.status.code(), Some(1));
+        assert_eq!(
+            stderr(&gcc),
+            "gcc: fatal error: cannot specify '-o' with '-c', '-S' or '-E' with multiple \
+             files\ncompilation terminated.\n"
+        );
+        let clang = run(
+            "--clang-mode",
+            &["-fsyntax-only", "-c", "a.c", "b.c", "-o", "out"],
+        );
+        succeeds(&clang);
+        assert_eq!(
+            stderr(&clang),
+            "clang: warning: argument unused during compilation: '-c' \
+             [-Wunused-command-line-argument]\n"
+        );
+        let clang = run("--clang-mode", &["-E", "a.c", "b.c", "-o", "out"]);
+        assert_eq!(
+            stderr(&clang),
+            "clang: error: cannot specify -o when generating multiple output files\n"
+        );
+        succeeds(&directory.bcc("--gcc-mode", &["-M", "a.c", "b.c", "-o", "deps"]));
+        assert!(
+            std::fs::read_to_string(directory.path("deps"))
+                .unwrap()
+                .starts_with("b.o: b.c")
+        );
+        let clang = run("--clang-mode", &["-M", "a.c", "b.c", "-o", "out"]);
+        assert_eq!(clang.status.code(), Some(1));
+        let gcc = directory.bcc("--gcc-mode", &[]);
+        assert_eq!(
+            stderr(&gcc),
+            "gcc: fatal error: no input files\ncompilation terminated.\n"
+        );
+    }
+
     #[test]
     fn cl_outputs_never_replace_an_input() {
         let directory = Directory::new();
@@ -1339,7 +1541,9 @@ mod tests {
         directory.write("o.obj", "not an object\n");
         let refused = |mode: &str, args: &[&str], message: &str| {
             let output = directory.bcc(mode, args);
-            assert_eq!(output.status.code(), Some(2), "{args:?}");
+            // clang-cl exits with 1, as Clang does; `cl` with 2.
+            let status = if mode == "--clang-cl-mode" { 1 } else { 2 };
+            assert_eq!(output.status.code(), Some(status), "{args:?}");
             assert!(
                 stderr(&output).contains(message),
                 "{args:?}: {}",

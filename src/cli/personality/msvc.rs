@@ -110,10 +110,11 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
             }
         }
     }
+    state.check_inputs(invocation);
     let c_count = state.sources.iter().filter(|source| source.is_c()).count();
     state.check_output_names(invocation, c_count);
     if state.errors != 0 {
-        return Err(MainError::Reported(2));
+        return Err(MainError::Reported(error_status(invocation.personality)));
     }
     let target = invocation
         .target
@@ -167,7 +168,12 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
     }
     common.append(&mut state.bcc);
     common.append(&mut clang_options);
-    let mut plan = Plan::default();
+    // `cl` compiles every source even after one fails, then skips the link;
+    // clang-cl stops at the first failure.
+    let mut plan = Plan {
+        keep_going: !clang_cl,
+        ..Plan::default()
+    };
     if !state.nologo && !clang_cl {
         plan.steps.push(Step::Print {
             text:   version::banner(invocation.personality, &invocation.name, target),
@@ -196,7 +202,7 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
             "'{}': bcc compiles C only; C++ sources are not supported",
             Path::new(&source.path).display()
         ));
-        return Err(MainError::Reported(2));
+        return Err(MainError::Reported(error_status(invocation.personality)));
     }
     // Preprocessing: `/E` and `/EP` write every source to stdout, `/P` each
     // to its `.i` file.
@@ -311,8 +317,21 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
     link.append(&mut state.link);
     link.push("-o".into());
     link.push(executable.into());
-    plan.steps.push(Step::Bcc(link));
+    plan.steps.push(Step::Link(link));
     Ok(plan)
+}
+
+/// The status `cl` exits with after any error, its own or a compiler's;
+/// clang-cl exits with 1, as Clang does.
+pub(super) const ERROR_STATUS: i32 = 2;
+
+/// The status the personality exits with after an error it reports itself.
+fn error_status(personality: Personality) -> i32 {
+    if personality == Personality::ClangCl {
+        1
+    } else {
+        ERROR_STATUS
+    }
 }
 
 /// Refuses an output of any step that is one of the command line's input
@@ -357,7 +376,7 @@ fn check_outputs(
                         true,
                     );
                 }
-                return Err(MainError::Reported(2));
+                return Err(MainError::Reported(error_status(invocation.personality)));
             }
         }
     }
@@ -787,6 +806,71 @@ impl State {
                 },
         }
         true
+    }
+
+    /// Diagnoses the inputs as the compiler does before it compiles any.
+    /// clang-cl's driver refuses a missing source and compiles none, while
+    /// `cl` reports it when it reaches it (fatal error C1083, in bcc's job),
+    /// and compiles the others. `cl` warns that a file whose extension it
+    /// does not know is assumed to be an object (warning D9024), and both
+    /// say that `/c` leaves the linker's inputs unused (`cl`'s warning
+    /// D9027).
+    fn check_inputs(&mut self, invocation: &Invocation) {
+        let clang_cl = invocation.personality == Personality::ClangCl;
+        let links = !self.compile_only && self.preprocess.is_none() && !self.syntax_only;
+        let given = self.sources.len();
+        self.sources.retain(|source| {
+            let path = Path::new(&source.path).display();
+            let compiled = source.is_c() || source.cpp;
+            if clang_cl && compiled && std::fs::metadata(&source.path).is_err() {
+                invocation.error(format_args!("no such file or directory: '{path}'"));
+                return false;
+            }
+            if compiled {
+                return true;
+            }
+            let extension = Path::new(&source.path)
+                .extension()
+                .and_then(OsStr::to_str)
+                .map(str::to_ascii_lowercase);
+            // The extensions Microsoft documents for D9024, and `.res`,
+            // which `cl` passes to the linker too.
+            if !clang_cl
+                && !matches!(
+                    extension.as_deref(),
+                    Some("obj" | "lib" | "def" | "exp" | "res")
+                )
+            {
+                super::print(
+                    &format!(
+                        "{} : Command line warning D9024 : unrecognized source file type \
+                         '{path}', object file assumed\n",
+                        invocation.name
+                    ),
+                    true,
+                );
+            }
+            if clang_cl && !links {
+                invocation.warning(format_args!(
+                    "{path}: 'linker' input unused [-Wunused-command-line-argument]"
+                ));
+            } else if !clang_cl && self.compile_only {
+                super::print(
+                    &format!(
+                        "{} : Command line warning D9027 : source file '{path}' ignored\n",
+                        invocation.name
+                    ),
+                    true,
+                );
+            }
+            true
+        });
+        if self.sources.len() != given {
+            self.errors += 1;
+            if self.sources.is_empty() {
+                invocation.error(format_args!("no input files"));
+            }
+        }
     }
 
     /// Refuses `/Fo`, `/Fa` or `/Fi` naming a file for several sources, as
