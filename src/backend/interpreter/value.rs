@@ -14,8 +14,8 @@ use crate::{
 /// The contents of one SSA value.
 ///
 /// An `Int` of type `iN` always has its bits above `N` clear. `f80` values
-/// compute as the x87 unit does; `f128` representations can be transported,
-/// but their arithmetic remains unsupported.
+/// compute as the x87 unit does, and `f128` values as libgcc's soft-float
+/// routines do.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub(crate) enum RuntimeValue {
     Int(u128),

@@ -72,7 +72,7 @@ impl Machine<'_, '_, '_> {
                         return Ok(None);
                     },
                     | _ if opcode.is_int_binary() => int_binary(opcode, ty, flags, a, b)?,
-                    | _ => float_binary(opcode, ty, a, b)?,
+                    | _ => float_binary(opcode, ty, a, b),
                 }
             },
             | InstData::Atomic {
@@ -162,7 +162,7 @@ impl Machine<'_, '_, '_> {
                             ty,
                             old,
                             operand,
-                        )?,
+                        ),
                         | A::Fmin | A::Fmax => match (old, operand) {
                             | (RuntimeValue::F32(a), RuntimeValue::F32(b)) =>
                                 RuntimeValue::F32(if op == A::Fmin { a.min(b) } else { a.max(b) }),
@@ -221,7 +221,7 @@ impl Machine<'_, '_, '_> {
                         self.release_dynamic(position);
                         return Ok(None);
                     },
-                    | Opcode::Fneg => float_negate(ty, value)?,
+                    | Opcode::Fneg => float_negate(ty, value),
                     | Opcode::Freeze if value.is_poison() => RuntimeValue::zero(ty),
                     | Opcode::Freeze => value,
                     | Opcode::VaStart => {
@@ -238,7 +238,7 @@ impl Machine<'_, '_, '_> {
                             RuntimeValue::Ptr(self.memory.pointer_from_address(truncate_u64(bits))),
                         | _ => RuntimeValue::Poison,
                     },
-                    | _ => convert(opcode, body.value_type(arg), ty, value)?,
+                    | _ => convert(opcode, body.value_type(arg), ty, value),
                 }
             },
             | InstData::IntCompare {
@@ -250,7 +250,7 @@ impl Machine<'_, '_, '_> {
                 cond,
                 ty,
                 args: [a, b],
-            } => float_compare(cond, ty, self.value(a), self.value(b))?,
+            } => float_compare(cond, ty, self.value(a), self.value(b)),
             | InstData::Select {
                 args: [cond, a, b], ..
             } => match self.value(cond) {

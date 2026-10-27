@@ -33,6 +33,8 @@ pub(super) fn provides(name: &str) -> bool {
             | "__divdc3"
             | "__mulxc3"
             | "__divxc3"
+            | "__multc3"
+            | "__divtc3"
             | "crealf"
             | "creal"
             | "creall"
@@ -217,11 +219,12 @@ fn evaluate(
     let precision = match call.name {
         | "__mulsc3" | "__divsc3" | "crealf" | "cimagf" => Type::F32,
         | "__muldc3" | "__divdc3" | "creal" | "cimag" => Type::F64,
+        | "__multc3" | "__divtc3" => Type::F128,
         | _ => long_double,
     };
-    // The x87 helpers' recovery of infinite results from NaN parts is not
-    // modelled; component extraction reads the parts directly.
-    if precision == Type::F80 && helper {
+    // The x87 and binary128 helpers' recovery of infinite results from NaN
+    // parts is not modelled; component extraction reads the parts directly.
+    if matches!(precision, Type::F80 | Type::F128) && helper {
         return Err(Fault::Unsupported(Unsupported::WideFloat));
     }
     if call.args.iter().any(|value| value.is_poison()) {
