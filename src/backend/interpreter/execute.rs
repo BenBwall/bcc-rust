@@ -17,6 +17,7 @@ use super::{
     trap::{
         Fault,
         UbKind,
+        Unsupported,
     },
     value::RuntimeValue,
 };
