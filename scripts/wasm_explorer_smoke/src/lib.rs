@@ -43,7 +43,25 @@ pub unsafe extern "C" fn smoke_compile(
     for diagnostic in &output.diagnostics {
         _ = write!(report, "== diagnostic {}\n{}", diagnostic.severity, diagnostic.rendered);
     }
+    if let Some(lines) = &output.logical_lines {
+        _ = writeln!(report, "== logical-lines {}", lines.len());
+        for line in lines.iter().filter(|line| !line.changes.is_empty()) {
+            for change in &line.changes {
+                _ = writeln!(report, "{}-{}: {}", line.source.start, line.source.end, change.kind);
+            }
+        }
+    }
+    if let Some(tokens) = &output.pp_tokens {
+        _ = writeln!(report, "== pp-tokens {}", tokens.len());
+    }
+    if let Some(trace) = &output.preprocessing {
+        _ = writeln!(report, "== expansions");
+        for expansion in trace.expansions.iter().filter(|expansion| expansion.file == "<input>") {
+            _ = writeln!(report, "{} -> {}", expansion.invocation, expansion.result);
+        }
+    }
     for (name, text) in [
+        ("preprocessed", &output.preprocessed),
         ("tokens", &output.tokens),
         ("syntax-tree", &output.syntax_tree),
         ("ir", &output.ir),

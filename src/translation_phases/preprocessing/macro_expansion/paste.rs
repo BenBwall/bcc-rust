@@ -154,7 +154,11 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                 token.kind = PreprocessorTokenType::Identifier;
             }
         }
-        let mut token = self.merge_tokens_impl(lhs, rhs)?;
+        let merged = self.merge_tokens_impl(lhs, rhs);
+        if self.tracing() {
+            self.trace_pasted(lhs, rhs, merged);
+        }
+        let mut token = merged?;
         if !self.context.configuration.is_native(Feature::Digraphs)
             && let spelling @ ("<:" | ":>" | "<%" | "%>" | "%:" | "%:%:") =
                 self.context.string_cache.at(token.contents)

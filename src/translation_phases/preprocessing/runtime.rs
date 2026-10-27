@@ -27,6 +27,8 @@
 //! - Preprocessed-text output (`-E`): where the reader is in its source file,
 //!   and the `-dM` listing of the definitions in effect:
 //!   `runtime/text_output.rs`.
+//! - The opt-in record of what phase 4 did, for the explorer:
+//!   `runtime/trace.rs`.
 //!
 //! C99: translation phases 4-7, §5.1.1.2 paragraph 1 items 4-7, p. 10; PDF p.
 //! 22.
@@ -52,8 +54,9 @@ mod builtins;
 mod diagnostics;
 mod location;
 
-// Preprocessed-text output.
+// Preprocessed-text output and the phase-4 trace.
 mod text_output;
+mod trace;
 
 use builtins::TranslationTimestamp;
 pub(super) use builtins::spell_string_literal;
@@ -70,6 +73,7 @@ pub(super) use frames::{
 };
 pub(super) use lifecycle::Resting;
 pub(crate) use text_output::ReadAt;
+pub(crate) use trace::TraceEvent;
 
 use super::{
     conditional::ConditionalGroup,
@@ -122,4 +126,6 @@ pub(super) struct PreprocessorState<'pp> {
     translation_timestamp:          Option<TranslationTimestamp<'pp>>,
     /// Storage that string-literal conversion reuses.
     pub(super) literal_scratch:     LiteralScratch<'pp>,
+    /// What phase 4 did, when a caller asked for a record of it.
+    pub(super) trace:               Option<ArenaVec<'pp, TraceEvent<'pp>>>,
 }

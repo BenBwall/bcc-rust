@@ -57,6 +57,9 @@ impl Expander<'_, '_, '_, '_> {
                 return None;
             };
 
+            if self.tracing() && token.kind != PreprocessorTokenType::Newline {
+                self.trace_produced(token);
+            }
             if let Some(result) = self.map_preprocessor_token(token) {
                 if matches!(self.output_purpose, OutputPurpose::Parsing)
                     && let Some(site) = self.expansion_end()

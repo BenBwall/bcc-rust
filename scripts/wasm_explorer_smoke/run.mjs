@@ -1,5 +1,7 @@
 // Runs the explorer compiled to WebAssembly (src/lib.rs) in Node and checks
-// that it compiles C to tokens, a syntax tree, IR, assembly and machine code,
+// that it shows the front end phase by phase (logical lines, preprocessing
+// tokens, the preprocessed text and its macro expansions) and compiles C to
+// tokens, a syntax tree, IR, assembly and machine code,
 // and that the deepest nesting the default limit admits fits the stack while
 // deeper nesting ends with a diagnostic.
 //
@@ -43,6 +45,19 @@ for (const optimize of [false, true]) {
   assert.match(report, /retq$/m);
   if (optimize) console.log(report.slice(report.indexOf("== ir\n")));
 }
+
+const macros = compile(`#define SQUARE(x) ((x) * (x))
+#define GLUE(a, b) a ## b
+int GLUE(count, er) = SQUARE(1 + \\
+2); /* a comment */
+`);
+assert.doesNotMatch(macros, /== diagnostic error/, macros);
+assert.match(macros, /^== logical-lines 3$/m, macros);
+assert.match(macros, /^3-4: splice$/m, macros);
+assert.match(macros, /^== pp-tokens \d+$/m, macros);
+assert.match(macros, /^GLUE\(count, er\) -> counter$/m, macros);
+assert.match(macros, /^SQUARE\(1 \+ 2\) -> \(\(1 \+ 2\) \* \(1 \+ 2\)\)$/m, macros);
+assert.match(macros, /^== preprocessed\n# 1 "<input>"\n[^]*^int counter = \(\(1 \+/m, macros);
 
 const errors = compile("int main(void) { return 1 +; }\n");
 assert.match(errors, /== diagnostic error\nerror: expected an expression/);

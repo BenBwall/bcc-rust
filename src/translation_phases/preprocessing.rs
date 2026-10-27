@@ -71,7 +71,6 @@ pub(crate) use errors::{
 use expression::PreprocessorExpressionParser;
 pub(crate) use macro_expansion::HashHash;
 use macro_expansion::MacroDefinition;
-pub(crate) use runtime::ReadAt;
 use runtime::{
     OutputPurpose,
     PreprocessorState,
@@ -80,6 +79,10 @@ use runtime::{
     Resting,
     TokenizerFrame,
     TokenizerFrameType,
+};
+pub(crate) use runtime::{
+    ReadAt,
+    TraceEvent,
 };
 pub(crate) use token::{
     CharacterTokenType,
@@ -409,6 +412,9 @@ impl Expander<'_, '_, '_, '_> {
                             },
                             tokenizer,
                         };
+                        if self.tracing() {
+                            self.trace_invocation(&frame);
+                        }
                         self.push_tokenizer_frame(frame);
                         continue;
                     },
@@ -433,7 +439,7 @@ impl Expander<'_, '_, '_, '_> {
                         } else {
                             (tokenizer, arguments)
                         };
-                        self.push_tokenizer_frame(TokenizerFrame {
+                        let frame = TokenizerFrame {
                             frame_type: TokenizerFrameType::FunctionLikeMacroInvocation {
                                 invocation_end,
                                 invocation: self.invocation_location(token),
@@ -444,7 +450,11 @@ impl Expander<'_, '_, '_, '_> {
                                 released: false,
                             },
                             tokenizer,
-                        });
+                        };
+                        if self.tracing() {
+                            self.trace_invocation(&frame);
+                        }
+                        self.push_tokenizer_frame(frame);
                         continue;
                     },
                     | MacroDefinition::BuiltIn => {

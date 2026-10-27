@@ -4,8 +4,11 @@
 //! toolchain, threads or file system, so it builds for
 //! `wasm32-unknown-unknown` with the `explorer` feature alone.
 //!
-//! [`compile`] preprocesses the source once for the token listing, then
-//! compiles it as `--emit` does: parsing (the syntax tree), semantic
+//! [`compile`] first shows the front of the compiler phase by phase: the
+//! logical lines that translation phases 1 and 2 leave, the preprocessing
+//! tokens of phase 3, and one preprocessing run (phases 4-6) with a trace of
+//! what phase 4 did, which gives the `-E` text and the token listing. Then it
+//! compiles the source as `--emit` does: parsing (the syntax tree), semantic
 //! analysis, lowering to the bcc IR before and after ABI lowering, and the
 //! native x86-64 back end's assembly, which the in-process object encoder
 //! turns into machine code. A stage that fails yields `None` and
@@ -21,7 +24,8 @@
 //!
 //! Files by role:
 //! - The interface types: `model.rs`.
-//! - The stages: `compilation.rs`; the function-level line map: `line_map.rs`.
+//! - The stages: `compilation.rs`; the front end, phase by phase:
+//!   `front_end.rs`; the function-level line map: `line_map.rs`.
 //! - LLVM IR for prebuilt demonstrations, on a native host: `llvm.rs`.
 //! - Agreement with the command line: `tests/integration/explorer.rs`.
 //!
@@ -34,6 +38,7 @@ mod model;
 
 // Stages
 mod compilation;
+mod front_end;
 mod line_map;
 
 // Native-only output
@@ -46,14 +51,25 @@ pub use llvm::{
     llvm_ir,
 };
 pub use model::{
+    ExplorerArgument,
+    ExplorerConditional,
+    ExplorerDefinition,
     ExplorerDiagnostic,
+    ExplorerExpansion,
+    ExplorerExpansionStep,
     ExplorerFile,
     ExplorerFunctionBytes,
+    ExplorerInclude,
     ExplorerInstruction,
     ExplorerLineMapping,
     ExplorerLineRange,
+    ExplorerLogicalLine,
     ExplorerOptions,
     ExplorerOutput,
+    ExplorerPpToken,
+    ExplorerPreprocessing,
+    ExplorerSkippedLines,
+    ExplorerSourceChange,
 };
 
 /// Compiles `source` through every stage the explorer shows. Malformed input

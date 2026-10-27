@@ -55,6 +55,7 @@ pub(crate) use preprocessed_text::{
     Pragmas,
     TextOptions,
     TextWriter,
+    would_paste,
 };
 pub(crate) use stages::{
     parse_with_arena,

@@ -125,6 +125,11 @@ mod tests {
                         "{name}"
                     );
                     assert_eq!(
+                        output.preprocessed.as_deref(),
+                        Some(&*with(&["-E"]).0),
+                        "{name}"
+                    );
+                    assert_eq!(
                         output.syntax_tree.as_deref(),
                         Some(&*with(&["--syntax-tree"]).1),
                         "{name}"
@@ -275,6 +280,243 @@ mod tests {
 
     fn temporary(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!("bcc-explorer-{}-{name}", std::process::id()))
+    }
+
+    /// One program that exercises each front-end phase.
+    const FRONT_END: &str =
+        "#include <limits.h>\n#define SQUARE(x) ((x) * (x))\n#define STR(x) #x\n#define CAT(a, b) \
+         a ## b\n#define DEBUG 0\nint long_name_\\\nsplit = 3; /* a comment */\n#if DEBUG\nint \
+         debug_only;\n#else\nint CAT(re, lease) = SQUARE(2 + 1);\n#endif\nconst char *s = STR(a  \
+         +  b) \"!\"; // trailing\nint max = INT_MAX;\n??=define T 1\n";
+
+    #[test]
+    fn logical_lines_mark_splices_and_trigraphs() {
+        let output = compile(FRONT_END, &options(false));
+        let lines = output.logical_lines.expect("phases 1-2 always run");
+        // Fifteen physical lines, two of them spliced into one.
+        assert_eq!(lines.len(), 14, "{lines:#?}");
+        let joined = &lines[5];
+        assert_eq!(joined.text, "int long_name_split = 3; /* a comment */");
+        assert_eq!((joined.source.start, joined.source.end), (6, 7));
+        assert_eq!(joined.changes.len(), 1, "{joined:#?}");
+        let splice = &joined.changes[0];
+        assert_eq!(
+            (
+                splice.kind.as_str(),
+                splice.column,
+                splice.line,
+                splice.source_column
+            ),
+            ("splice", 15, 6, 15)
+        );
+        assert_eq!(
+            (splice.spelling.as_str(), splice.replacement.as_str()),
+            ("\\\n", "")
+        );
+        // Later lines keep their physical numbers.
+        assert_eq!(
+            (lines[6].source.start, lines[6].text.as_str()),
+            (8, "#if DEBUG")
+        );
+        let trigraph = &lines[13];
+        assert_eq!(trigraph.text, "#define T 1");
+        assert_eq!(
+            (
+                trigraph.changes[0].kind.as_str(),
+                trigraph.changes[0].spelling.as_str(),
+                trigraph.changes[0].replacement.as_str()
+            ),
+            ("trigraph", "??=", "#")
+        );
+        // Without trigraphs (a GNU mode), `??=` stays.
+        let gnu = compile(
+            FRONT_END,
+            &ExplorerOptions {
+                std: "gnu17".to_owned(),
+                ..options(false)
+            },
+        );
+        let unchanged = &gnu.logical_lines.unwrap()[13];
+        assert_eq!(unchanged.text, "??=define T 1", "{unchanged:#?}");
+        let crlf = compile("int a; /* é */\r\nint b;\r\n", &options(false));
+        let lines = crlf.logical_lines.unwrap();
+        let kinds: Vec<&str> = lines[0]
+            .changes
+            .iter()
+            .map(|change| change.kind.as_str())
+            .collect();
+        assert_eq!(kinds, ["extended", "crlf"]);
+        assert_eq!(
+            (lines[0].changes[0].column, lines[0].changes[1].column),
+            (11, 15)
+        );
+        assert_eq!(lines[1].source.start, 2);
+    }
+
+    #[test]
+    fn pp_tokens_are_the_lexers_decomposition() {
+        let output = compile(FRONT_END, &options(false));
+        let tokens = output.pp_tokens.expect("phase 3 always runs");
+        let find = |spelling: &str| {
+            tokens
+                .iter()
+                .find(|token| token.spelling == spelling)
+                .unwrap_or_else(|| panic!("{spelling}: {tokens:#?}"))
+        };
+        let spliced = find("long_name_split");
+        assert_eq!(spliced.kind, "identifier");
+        assert_eq!(
+            (spliced.line, spliced.end_line, spliced.end_column),
+            (6, 7, 6)
+        );
+        assert!(spliced.leading_space && !spliced.line_start);
+        let comment = tokens
+            .iter()
+            .find(|token| token.comment)
+            .expect("a comment");
+        assert_eq!(
+            (comment.kind.as_str(), comment.spelling.as_str()),
+            ("whitespace", " ")
+        );
+        // The run of white space starts before the comment.
+        assert_eq!((comment.line, comment.column), (7, 11));
+        let hash = find("#");
+        assert!(hash.line_start && hash.kind == "punctuator");
+        assert_eq!(find("3").kind, "pp-number");
+        assert_eq!(find("\"!\"").kind, "string-literal");
+        let header: Vec<&str> = tokens
+            .iter()
+            .filter(|token| token.header_name)
+            .map(|token| token.spelling.as_str())
+            .collect();
+        assert_eq!(header, ["<", "limits", ".", "h", ">"]);
+        assert!(tokens.iter().any(|token| token.kind == "newline"));
+        let universal = compile("int caf\\u00e9 = 1;\n", &options(false))
+            .pp_tokens
+            .unwrap();
+        let name = universal
+            .iter()
+            .find(|token| token.spelling.starts_with("caf"))
+            .unwrap();
+        assert_eq!(name.canonical.as_deref(), Some("café"));
+    }
+
+    #[test]
+    fn the_preprocessing_trace_follows_each_expansion() {
+        let output = compile(FRONT_END, &options(false));
+        let trace = output.preprocessing.expect("phase 4 always runs");
+        let input: Vec<_> = trace
+            .expansions
+            .iter()
+            .filter(|expansion| expansion.file == "<input>")
+            .collect();
+        let shown: Vec<(&str, &str)> = input
+            .iter()
+            .map(|expansion| (expansion.invocation.as_str(), expansion.result.as_str()))
+            .collect();
+        assert_eq!(
+            shown,
+            [
+                ("DEBUG", ""),
+                ("CAT(re, lease)", "release"),
+                ("SQUARE(2 + 1)", "((2 + 1) * (2 + 1))"),
+                ("STR(a + b)", "\"a + b\""),
+                ("INT_MAX", "2147483647"),
+            ],
+            "{input:#?}"
+        );
+        let square = &input[2].steps[0];
+        assert_eq!(
+            (square.kind.as_str(), square.macro_name.as_str()),
+            ("replace", "SQUARE")
+        );
+        assert_eq!(
+            (
+                square.arguments[0].parameter.as_str(),
+                square.arguments[0].argument.as_str()
+            ),
+            ("x", "2 + 1")
+        );
+        assert!(input[1].steps.iter().any(|step| step.kind == "paste"
+            && step.operands == ["re", "lease"]
+            && step.result == "release"));
+        assert!(input[3].steps.iter().any(|step| step.kind == "stringify"
+            && step.macro_name == "STR"
+            && step.result == "\"a + b\""));
+        assert!(
+            input[4].steps.iter().any(|step| step.depth == 1),
+            "{:#?}",
+            input[4]
+        );
+        let conditions: Vec<(u32, &str, bool)> = trace
+            .conditionals
+            .iter()
+            .filter(|conditional| conditional.file == "<input>")
+            .map(|conditional| {
+                (
+                    conditional.line,
+                    conditional.directive.as_str(),
+                    conditional.taken,
+                )
+            })
+            .collect();
+        assert_eq!(conditions, [(8, "#if DEBUG", false), (10, "#else", true)]);
+        let skipped: Vec<(u32, u32)> = trace
+            .skipped
+            .iter()
+            .filter(|skipped| skipped.file == "<input>")
+            .map(|skipped| (skipped.lines.start, skipped.lines.end))
+            .collect();
+        assert_eq!(skipped, [(9, 9)]);
+        let include = &trace.includes[0];
+        assert_eq!(
+            (include.header.as_str(), include.angled, include.line),
+            ("limits.h", true, 1)
+        );
+        assert!(
+            include.found.is_some() && include.system && include.lines > 10,
+            "{include:#?}"
+        );
+        let defined: Vec<(&str, &str)> = trace
+            .definitions
+            .iter()
+            .filter(|definition| definition.file == "<input>")
+            .map(|definition| (definition.name.as_str(), definition.kind.as_str()))
+            .collect();
+        assert_eq!(
+            defined,
+            [
+                ("SQUARE", "function"),
+                ("STR", "function"),
+                ("CAT", "function"),
+                ("DEBUG", "object"),
+                ("T", "object")
+            ]
+        );
+        let text = output.preprocessed.unwrap();
+        assert!(
+            text.contains("int release = ((2 + 1) * (2 + 1));"),
+            "{text}"
+        );
+        assert!(text.contains("# 1 \"<input>\""), "{text}");
+    }
+
+    #[test]
+    fn each_skipped_group_is_traced_with_its_own_lines() {
+        let source = "#if 0\na\n#elif 0\nb\n#elif 1\nc\n#else\nd\n#endif\n";
+        let trace = compile(source, &options(false)).preprocessing.unwrap();
+        let conditions: Vec<(u32, bool)> = trace
+            .conditionals
+            .iter()
+            .map(|conditional| (conditional.line, conditional.taken))
+            .collect();
+        assert_eq!(conditions, [(1, false), (3, false), (5, true), (7, false)]);
+        let skipped: Vec<(u32, u32)> = trace
+            .skipped
+            .iter()
+            .map(|skipped| (skipped.lines.start, skipped.lines.end))
+            .collect();
+        assert_eq!(skipped, [(2, 2), (4, 4), (8, 8)]);
     }
 
     #[test]

@@ -153,6 +153,7 @@ impl<'tu, 'pp> Preprocessor<'tu, 'pp> {
                     open_conditionals: ArenaVec::new_in(pp),
                     translation_timestamp: None,
                     literal_scratch: LiteralScratch::new(pp),
+                    trace: None,
                 },
                 tokenizer,
                 last_was_newline: true,
