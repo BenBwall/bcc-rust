@@ -1,6 +1,6 @@
 //! The explorer's outputs are the command line's: each view equals what
-//! `bcc-rust --input SOURCE` prints for the matching flag, and the machine
-//! code equals the text of the object `--native-object` writes.
+//! `bcc-rust -nostdlibinc --input SOURCE` prints for the matching flag, and the
+//! machine code equals the text of the object `--native-object` writes.
 
 #[cfg(test)]
 #[expect(
@@ -78,10 +78,13 @@ mod tests {
         ),
     ];
 
+    /// Runs the command line on `source`. `-nostdlibinc` leaves out the
+    /// host's C library headers, which the command line searches when
+    /// compiling for the host and the explorer never reads.
     fn bcc(arguments: &[&str], source: &str) -> (String, String) {
         let output = Command::new(env!("CARGO_BIN_EXE_bcc-rust"))
             .args(arguments)
-            .args(["--source-date-epoch=0", "--input", source])
+            .args(["-nostdlibinc", "--source-date-epoch=0", "--input", source])
             .output()
             .unwrap();
         (
