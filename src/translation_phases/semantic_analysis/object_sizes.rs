@@ -14,8 +14,10 @@ use super::{
     Integer,
     ObjectSize,
     TypeKind,
+    TypeQualifiers,
     UnaryOperator,
 };
+use crate::util::bump::ArenaVec;
 
 impl<'tu> Analyzer<'_, 'tu, '_> {
     pub(super) fn infer_object_size(
@@ -379,6 +381,162 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 | _ => return None,
             };
         }
+    }
+
+    /// Whether an object-size query of `operand` may be deferred to the
+    /// middle end, which evaluates the operand for the IR's `object_size`:
+    /// evaluating it must do nothing GCC's unevaluated operand would not,
+    /// and must leave nothing dead code elimination keeps once the query is
+    /// answered. It may read named variables and compute addresses, but not
+    /// read through a pointer (which may fault), read an atomic or volatile
+    /// object, call a function (other than a nested object-size query), or
+    /// evaluate a variably modified `sizeof`. An explicit stack walks the
+    /// operand, each node in the context it is evaluated in.
+    /// C99: §6.5.3.2p4, p. 79; PDF p. 91 (`*` of an invalid pointer is
+    /// undefined); §6.3.2.1p2, p. 46; PDF p. 58 (lvalue conversion reads).
+    /// GNU extension: GCC manual, "Object Size Checking" (the operand is not
+    /// evaluated).
+    pub(super) fn deferrable_operand(&self, operand: &'tu Expression<'tu>) -> bool {
+        /// How a node is evaluated: for its value, for its address only, or
+        /// as a named object whose value is read.
+        #[derive(Clone, Copy, PartialEq, Eq)]
+        enum Use {
+            Value,
+            Address,
+            Object,
+        }
+        let mut stack = ArenaVec::new_in(self.scratch);
+        stack.push((operand, Use::Value));
+        while let Some((node, mut usage)) = stack.pop() {
+            let node = self.selected_designator(node);
+            let info = self.expression_info(node);
+            if info.ice && usage == Use::Value {
+                continue;
+            }
+            let array = matches!(
+                self.types.nodes[info.ty.index],
+                TypeKind::Array(..) | TypeKind::Function { .. }
+            );
+            if array && usage == Use::Value {
+                // Decay computes the lvalue's address and reads nothing.
+                usage = Use::Address;
+            }
+            if usage != Use::Address
+                && (matches!(self.types.nodes[info.ty.index], TypeKind::Atomic(_))
+                    || info
+                        .ty
+                        .qualifiers
+                        .intersects(TypeQualifiers::VOLATILE | TypeQualifiers::ATOMIC))
+            {
+                return false;
+            }
+            match (node.kind, usage) {
+                | (ExpressionType::Identifier(_), _)
+                | (
+                    ExpressionType::Constant(_)
+                    | ExpressionType::StringLiteral(_)
+                    | ExpressionType::Boolean(_)
+                    | ExpressionType::Nullptr,
+                    Use::Value | Use::Address,
+                ) => {},
+                | (ExpressionType::Parenthesized { expression }, _) =>
+                    stack.push((expression, usage)),
+                | (
+                    ExpressionType::Unary {
+                        operator,
+                        operand_expression,
+                    },
+                    Use::Value,
+                ) => match operator {
+                    | UnaryOperator::AddressOf => stack.push((operand_expression, Use::Address)),
+                    | UnaryOperator::Plus
+                    | UnaryOperator::Minus
+                    | UnaryOperator::BitwiseNot
+                    | UnaryOperator::LogicalNot
+                    | UnaryOperator::Extension => stack.push((operand_expression, Use::Value)),
+                    | _ => return false,
+                },
+                // A cast converts its operand's value; `*p` and `p->m` as
+                // addresses are the value of `p`.
+                | (
+                    ExpressionType::Cast {
+                        operand_expression, ..
+                    },
+                    Use::Value,
+                )
+                | (
+                    ExpressionType::Unary {
+                        operator: UnaryOperator::Indirection,
+                        operand_expression,
+                    }
+                    | ExpressionType::IndirectMember {
+                        base_expression: operand_expression,
+                        ..
+                    },
+                    Use::Address,
+                ) => stack.push((operand_expression, Use::Value)),
+                | (
+                    ExpressionType::DirectMember {
+                        base_expression, ..
+                    },
+                    Use::Address | Use::Object,
+                ) => stack.push((base_expression, usage)),
+                | (
+                    ExpressionType::DirectMember {
+                        base_expression, ..
+                    },
+                    Use::Value,
+                ) => stack.push((base_expression, Use::Object)),
+                | (
+                    ExpressionType::Binary {
+                        operator: BinaryOperator::Subscript,
+                        left_expression,
+                        right_expression,
+                    },
+                    Use::Address,
+                ) => {
+                    stack.push((left_expression, Use::Value));
+                    stack.push((right_expression, Use::Value));
+                },
+                | (
+                    ExpressionType::Binary {
+                        operator,
+                        left_expression,
+                        right_expression,
+                    },
+                    Use::Value,
+                ) if !matches!(
+                    operator,
+                    BinaryOperator::Subscript
+                        | BinaryOperator::Assignment
+                        | BinaryOperator::MultiplicationAssignment
+                        | BinaryOperator::DivisionAssignment
+                        | BinaryOperator::ModuloAssignment
+                        | BinaryOperator::AdditionAssignment
+                        | BinaryOperator::SubtractionAssignment
+                        | BinaryOperator::LeftShiftAssignment
+                        | BinaryOperator::RightShiftAssignment
+                        | BinaryOperator::BitwiseAndAssignment
+                        | BinaryOperator::BitwiseXorAssignment
+                        | BinaryOperator::BitwiseOrAssignment
+                ) =>
+                {
+                    stack.push((left_expression, Use::Value));
+                    stack.push((right_expression, Use::Value));
+                },
+                | (ExpressionType::Conditional(conditional), Use::Value) => {
+                    stack.push((conditional.condition_expression, Use::Value));
+                    stack.push((conditional.then_expression, Use::Value));
+                    stack.push((conditional.else_expression, Use::Value));
+                },
+                // A nested query evaluates its own operand only if that is
+                // deferrable too.
+                | (ExpressionType::Call { .. }, Use::Value)
+                    if self.function_extensions.object_size(node).is_some() => {},
+                | _ => return false,
+            }
+        }
+        true
     }
 
     /// Records that an assignment, increment or decrement writes the

@@ -210,12 +210,17 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 // In a function the object may be known after inlining, as
                 // for a wrapper's parameter: the query is then no constant
                 // expression, as in Clang, and the middle end answers it. An
-                // operand with side effects is not evaluated, so its answer
-                // is the unknown one now (GCC manual, "Object Size
-                // Checking").
+                // operand whose evaluation could do anything GCC's
+                // unevaluated one does not (side effects, reads through a
+                // pointer, atomic or volatile reads, calls) is not
+                // evaluated, so its answer is the unknown one now (GCC
+                // manual, "Object Size Checking").
                 let size = match size {
                     | super::super::ObjectSize::Unknown
-                        if pure && self.functions.current.is_some() && mode <= 3 =>
+                        if pure
+                            && self.functions.current.is_some()
+                            && mode <= 3
+                            && self.deferrable_operand(args[0]) =>
                         super::super::ObjectSize::Deferred {
                             mode,
                             dynamic,

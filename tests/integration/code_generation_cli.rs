@@ -624,6 +624,60 @@ int main(void) { char *p = malloc(16); return __builtin_object_size(p, 0) & 0xff
         std::fs::remove_file(executable).unwrap();
     }
 
+    /// GCC never evaluates an object-size operand, so a query whose operand
+    /// would read through a pointer, read an atomic or volatile object, or
+    /// call a function is answered as unknown without evaluating it (#151
+    /// review round 3): a null pointer is never read, by either builtin, on
+    /// any back end, at either level.
+    #[test]
+    fn object_size_operands_are_never_evaluated() {
+        if host() != Some("x86_64-unknown-linux-gnu") {
+            return;
+        }
+        let operands = [
+            ("_Atomic(char *) *p = 0;", "*p"),
+            ("char * volatile *p = 0;", "*p"),
+            ("char **p = 0;", "*p"),
+            ("struct { char *s; } *p = 0;", "p->s"),
+            ("char **p = 0;", "p[1]"),
+            ("extern char *get(void);", "get()"),
+        ];
+        let executable = temporary("unevaluated-size.exe");
+        for (declaration, operand) in operands {
+            for builtin in ["__builtin_object_size", "__builtin_dynamic_object_size"] {
+                for mode in [0, 1] {
+                    let source = format!(
+                        "char *get(void) {{ return *(char *volatile *)0; }}\nint main(void) {{ \
+                         {declaration} return {builtin}({operand}, {mode}) & 255; }}\n"
+                    );
+                    for options in [
+                        &["--opt=none"][..],
+                        &["--opt=bcc"][..],
+                        &["--opt=none", "--backend=native"][..],
+                        &["--opt=bcc", "--backend=native"][..],
+                    ] {
+                        let built = bcc(
+                            &source,
+                            &[options, &["-o", executable.to_str().unwrap()]].concat(),
+                        );
+                        assert!(
+                            built.status.success(),
+                            "{options:?}: {}",
+                            text(&built.stderr)
+                        );
+                        let output = run_native(&mut Command::new(&executable)).unwrap();
+                        assert_eq!(output.status.code(), Some(255), "{options:?}\n{source}");
+                    }
+                    for optimizer in ["--opt=none", "--opt=bcc"] {
+                        let output = bcc(&source, &[optimizer, "--interpret"]);
+                        assert_eq!(output.status.code(), Some(255), "{optimizer}\n{source}");
+                    }
+                }
+            }
+        }
+        std::fs::remove_file(executable).unwrap();
+    }
+
     #[test]
     fn interpreter_step_limit_applies_to_both_main_signatures() {
         for source in [

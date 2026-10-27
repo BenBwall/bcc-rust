@@ -212,9 +212,15 @@ pointer: the bytes from `ptr` to the end of its object, the most (modes 0,
 1) or the fewest (2, 3), of the whole object (0, 2) or of the closest
 surrounding subobject (1, 3). Like LLVM's `llvm.objectsize`, it is answered
 after inlining: semantic analysis answers a query whose C operand names its
-object, and lowering emits `object_size` for the others in a function (an
-operand with side effects is never evaluated, and gets the unknown answer
-at once). Neither is then an integer constant expression, as in Clang.
+object, and lowering emits `object_size` for the others in a function,
+which evaluates the operand. GCC never evaluates it, so only an operand
+whose evaluation reads named variables and computes addresses is deferred;
+one that has side effects, reads through a pointer (which may fault), reads
+an atomic or volatile object, calls a function other than a nested query,
+or evaluates a variably modified `sizeof` gets the unknown answer at once.
+The rest of a deferred operand is dead once the query is answered and
+`dce` removes it. A deferred query is not an integer constant expression,
+as in Clang.
 `subobject` is its pointer operand; lowering passes each pointer argument of
 a call to an `always_inline` function (an argument pack copy is one) through
 it when the argument names a subobject with a constant number of bytes left

@@ -291,6 +291,57 @@ fn object_size_modes_check_and_fold_the_converted_int() {
     }
 }
 
+/// A query is deferred to the middle end only when evaluating its operand
+/// can do nothing GCC's unevaluated operand would not: a parameter, pointer
+/// arithmetic and nested queries are deferred; reads through a pointer,
+/// atomic or volatile reads and calls are answered as unknown at once.
+#[test]
+fn object_size_queries_defer_only_operands_safe_to_evaluate() {
+    for (operand, deferred) in [
+        ("p", true),
+        ("p + n", true),
+        ("(char *)p + (__builtin_object_size(p, 0) & 1)", true),
+        ("&s.buf[n]", true),
+        ("s.ptr", true),
+        ("*pp", false),
+        ("pp[1]", false),
+        ("ps->ptr", false),
+        ("*ap", false),
+        ("vp", false),
+        ("get()", false),
+        ("(n++, p)", false),
+    ] {
+        let source = format!(
+            "struct S {{ char buf[8]; char *ptr; }};\nchar *get(void);\nunsigned long f(void *p, \
+             int n, char **pp, struct S *ps, _Atomic(char *) *ap,\nchar *volatile vp) {{ struct S \
+             s = {{0}}; return __builtin_object_size({operand}, 0); }}"
+        );
+        with_configuration(
+            &source,
+            crate::configuration::CompilerConfiguration::default(),
+            |context, unit| {
+                let errors = context.take_pending_errors();
+                assert_eq!(unit.errors, 0, "{source}: {errors:?}");
+                let call = unit
+                    .expressions
+                    .iter()
+                    .rev()
+                    .find(|i| {
+                        matches!(i.expression.kind, ExpressionType::Call { .. })
+                            && unit.function_extensions.object_size(i.expression).is_some()
+                    })
+                    .unwrap();
+                let size = unit.function_extensions.object_size(call.expression);
+                assert_eq!(
+                    matches!(size, Some(ObjectSize::Deferred { .. })),
+                    deferred,
+                    "{operand}: {size:?}"
+                );
+            },
+        );
+    }
+}
+
 #[test]
 fn alignment_checks_the_converted_size_t() {
     for target in [
