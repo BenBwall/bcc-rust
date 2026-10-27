@@ -1223,6 +1223,21 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             }
             self.operands.push(item);
         }
+        // And a `_Complex _Float16` excess in a pair of them.
+        if !truth
+            && self.half_in_float()
+            && let &[param, _] = self.draft.block_params(merge)
+            && self.draft.value_type(param) == Type::F32
+        {
+            let item = self.pop_excess();
+            if self.complex_half(item.ty) {
+                let item = self.single_operand(item, true, source)?;
+                let parts = self.complex_parts(item, source)?;
+                self.draft.jump(merge, &parts);
+                return Ok(());
+            }
+            self.operands.push(item);
+        }
         let item = if truth { self.pop_truth() } else { self.pop() };
         if let Operand::Complex(id) = item.operand
             && !truth
@@ -2276,6 +2291,10 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             | Repr::Void => &[],
             | Repr::Aggregate | Repr::Pointer => &[Type::Ptr],
             | Repr::Bool => &[Type::I8],
+            // GCC's `?:` keeps a `_Complex _Float16` excess in `f32` parts.
+            | Repr::Complex {
+                component: Type::F16,
+            } if self.half_in_float() => &[Type::F32, Type::F32],
             | Repr::Complex {
                 component: Type::F16,
             } => &[Type::F16, Type::F16],

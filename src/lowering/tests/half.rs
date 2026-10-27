@@ -116,6 +116,16 @@ fn mixed_halves_meet_in_float_for_gcc() {
     assert_eq!(clang.matches("fptrunc.f16").count(), 2, "{clang}");
 }
 
+/// GCC's `?:` passes a `_Complex _Float16` arm's excess in `f32` parts.
+#[test]
+fn gcc_conditionals_keep_complex_half_excess() {
+    let source = "_Complex float f(int c, _Complex _Float16 a) { return c ? a * a : a; }";
+    let gcc = lowered_as(source, CompilerIdentity::Gcc);
+    let clang = lowered_as(source, CompilerIdentity::Clang);
+    assert!(!gcc.contains("fptrunc"), "{gcc}");
+    assert_eq!(clang.matches("fptrunc.f16").count(), 2, "{clang}");
+}
+
 /// `_Complex _Float16` multiplies in `float _Complex` through `__mulsc3`
 /// and rounds both parts once, at the return.
 #[test]

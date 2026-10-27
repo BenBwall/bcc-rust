@@ -41,6 +41,13 @@ static void contexts(void) {
     printf("compare %d %d %d\n", X == mk(2.001953125f, 0), X != X, a * a == a * a);
     printf("truth %d %d\n", (a * a - a * a) ? 1 : 0, !(X - mk(2.001953125f, 0)));
     printf("conditional %08x\n", cb((one ? X : a) * a));
+    {
+        /* GCC's ?: keeps the excess of a complex half arm. */
+        _Complex float z = one ? a * a : a;
+        _Complex float w = !one ? a : a * a;
+        printf("conditional excess %a %a %a\n", (double)__real__ z, (double)__imag__ z,
+               (double)__real__ w);
+    }
     printf("comma %08x\n", cb((0, X) * a));
     printf("real operands %08x %08x %08x\n", cb(a * h * h), cb(h * h * a), cb(a + h * h));
     printf("integer %08x %08x\n", cb(a + 2049), cb(2049 * a));

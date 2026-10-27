@@ -997,7 +997,8 @@ conversions go through `f32`. `_Complex _Float16` is a pair of `f16` parts
 computed in `float _Complex`: an excess is a complex pair of `f32` parts
 typed as the complex half, which `settle` rounds; products and quotients
 call `__mulsc3` and `__divsc3`, as both compilers do, and the excess ends
-where a real `_Float16`'s does. Clang's `__fp16` is `f16` storage; semantic
+where a real `_Float16`'s does (GCC's `?:` merges it in two `f32`
+parameters). Clang's `__fp16` is `f16` storage; semantic
 analysis promotes its values to `float`.
 
 Complex scalars use two immutable SSA component values retained in a sparse
