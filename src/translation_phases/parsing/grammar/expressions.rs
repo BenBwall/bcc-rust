@@ -412,6 +412,9 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                 {
                     self.extension(Feature::Float16, "_Float16 floating constant suffix", token);
                 }
+                if matches!(value, FloatTokenType::BFloat16(_)) {
+                    self.extension(Feature::BFloat16, "__bf16 floating constant suffix", token);
+                }
                 ExpressionType::Constant(Constant::Float(value))
             },
             | TokenType::Character(value) => ExpressionType::Constant(Constant::Char(value)),

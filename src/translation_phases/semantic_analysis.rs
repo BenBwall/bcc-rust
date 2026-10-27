@@ -1106,6 +1106,15 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                         None,
                     );
                 }
+                // Clang refuses a storage-only `__fp16` parameter.
+                if self.storage_half(ty) {
+                    self.error(
+                        SemanticErrorKind::Fp16Parameter,
+                        p.source_vectors,
+                        name.map(|n| n.name),
+                        None,
+                    );
+                }
                 // C99 §6.7.4p2: parameters declare objects, including
                 // declarators adjusted from function types.
                 if p.declaration_specifiers.function_specifiers.is_inline {
@@ -1662,6 +1671,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                                 | super::preprocessing::FloatTokenType::Float32x(_)
                                 | super::preprocessing::FloatTokenType::Float64x(_)
                                 | super::preprocessing::FloatTokenType::Float16(_)
+                                | super::preprocessing::FloatTokenType::BFloat16(_)
                         )
                     {
                         self.exceptional_constant(source);

@@ -210,6 +210,19 @@ pub(crate) enum Feature {
     /// PDF p. 573. GCC manual, "Half-Precision Floating Point",
     /// <https://gcc.gnu.org/onlinedocs/gcc/Half-Precision.html>.
     Float16,
+    /// The `__bf16` keyword (bfloat16), an arithmetic type in GCC 13 and
+    /// later and in Clang on x86-64 with SSE2, and GCC's `bf16` constant
+    /// suffix. Accepted for the GCC and Clang identities in every mode.
+    /// GNU and Clang extension to C99 §6.2.5 paragraph 10, p. 34; PDF
+    /// p. 46. GCC manual, "Half-Precision Floating Point".
+    BFloat16,
+    /// Clang's `__fp16`: a binary16 storage type whose values promote to
+    /// `float` and which no parameter or return type may have. Accepted for
+    /// the Clang identities; GCC provides it only on ARM.
+    /// Clang extension to C99 §6.2.5 paragraph 10, p. 34; PDF p. 46. Clang
+    /// Language Extensions, "Half-Precision Floating Point",
+    /// <https://clang.llvm.org/docs/LanguageExtensions.html#half-precision-floating-point>.
+    Fp16,
 }
 
 impl Feature {
@@ -338,7 +351,9 @@ impl Feature {
             | Self::QuotedHeaderBackslash
             | Self::VoidPointerArithmetic
             | Self::SameTypeCasts
-            | Self::ForwardEnumReference => FeatureOrigin::Gnu,
+            | Self::ForwardEnumReference
+            | Self::BFloat16
+            | Self::Fp16 => FeatureOrigin::Gnu,
 
             | Self::MsDeclspec => FeatureOrigin::Msvc(MsvcFeature::Declspec),
             | Self::MsIntTypes => FeatureOrigin::Msvc(MsvcFeature::IntTypes),
@@ -484,6 +499,8 @@ impl Feature {
         Self::SameTypeCasts,
         Self::InterchangeFloatTypes,
         Self::Float16,
+        Self::BFloat16,
+        Self::Fp16,
     ];
 }
 
