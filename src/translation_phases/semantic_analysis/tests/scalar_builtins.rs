@@ -229,46 +229,119 @@ fn object_size_modes_check_and_fold_the_converted_int() {
                 ("4", None),
                 ("n", None),
             ] {
-                let source = format!(
-                    "__SIZE_TYPE__ f(void *p,int n){{return __builtin_{builtin}(p,{mode});}}"
-                );
-                with_configuration(
-                    &source,
-                    crate::configuration::CompilerConfiguration::default().with_target(target),
-                    |context, unit| {
-                        let errors = context.take_pending_errors();
-                        assert_eq!(
-                            unit.errors,
-                            usize::from(expected.is_none()),
-                            "{target:?} {source}: {errors:?}"
-                        );
-                        if let Some(expected) = expected {
-                            let call = unit
-                                .expressions
-                                .iter()
-                                .find(|i| matches!(i.expression.kind, ExpressionType::Call { .. }))
-                                .unwrap();
+                // An operand with side effects is not evaluated, so its
+                // answer is folded now; a parameter's waits for inlining.
+                for operand in ["(char *)p + n++", "p"] {
+                    let source = format!(
+                        "__SIZE_TYPE__ f(void *p,int n){{return \
+                         __builtin_{builtin}({operand},{mode});}}"
+                    );
+                    with_configuration(
+                        &source,
+                        crate::configuration::CompilerConfiguration::default().with_target(target),
+                        |context, unit| {
+                            let errors = context.take_pending_errors();
                             assert_eq!(
-                                call.integer.and_then(Integer::to_u64),
-                                Some(if expected == 0 { 0 } else { u64::MAX }),
-                                "{target:?} {source}"
-                            );
-                        } else {
-                            assert!(
-                                matches!(
-                                    errors.as_slice(),
-                                    [TranslationError::Semantic(SemanticError {
-                                        kind: SemanticErrorKind::InvalidObjectSizeMode,
-                                        ..
-                                    })]
-                                ),
+                                unit.errors,
+                                usize::from(expected.is_none()),
                                 "{target:?} {source}: {errors:?}"
                             );
-                        }
-                    },
-                );
+                            if let Some(expected) = expected {
+                                let call = unit
+                                    .expressions
+                                    .iter()
+                                    .find(|i| {
+                                        matches!(i.expression.kind, ExpressionType::Call { .. })
+                                    })
+                                    .unwrap();
+                                if operand == "p" {
+                                    assert!(
+                                        matches!(
+                                            unit.function_extensions.object_size(call.expression),
+                                            Some(ObjectSize::Deferred { mode, .. })
+                                                if (mode >= 2) == (expected == 0)
+                                        ),
+                                        "{target:?} {source}"
+                                    );
+                                    assert!(call.integer.is_none(), "{target:?} {source}");
+                                } else {
+                                    assert_eq!(
+                                        call.integer.and_then(Integer::to_u64),
+                                        Some(if expected == 0 { 0 } else { u64::MAX }),
+                                        "{target:?} {source}"
+                                    );
+                                }
+                            } else {
+                                assert!(
+                                    matches!(
+                                        errors.as_slice(),
+                                        [TranslationError::Semantic(SemanticError {
+                                            kind: SemanticErrorKind::InvalidObjectSizeMode,
+                                            ..
+                                        })]
+                                    ),
+                                    "{target:?} {source}: {errors:?}"
+                                );
+                            }
+                        },
+                    );
+                }
             }
         }
+    }
+}
+
+/// A query is deferred to the middle end only when evaluating its operand
+/// can do nothing GCC's unevaluated operand would not: a parameter, pointer
+/// arithmetic and nested queries are deferred; reads through a pointer,
+/// atomic or volatile reads, calls and variably modified types (whose
+/// bounds a cast evaluates) are answered as unknown at once.
+#[test]
+fn object_size_queries_defer_only_operands_safe_to_evaluate() {
+    for (operand, deferred) in [
+        ("p", true),
+        ("p + n", true),
+        ("(char *)p + (__builtin_object_size(p, 0) & 1)", true),
+        ("&s.buf[n]", true),
+        ("s.ptr", true),
+        ("*pp", false),
+        ("pp[1]", false),
+        ("ps->ptr", false),
+        ("*ap", false),
+        ("vp", false),
+        ("get()", false),
+        ("(n++, p)", false),
+        ("(char (*)[n])p", false),
+        ("(char (*)[*pp[0]])p", false),
+    ] {
+        let source = format!(
+            "struct S {{ char buf[8]; char *ptr; }};\nchar *get(void);\nunsigned long f(void *p, \
+             int n, char **pp, struct S *ps, _Atomic(char *) *ap,\nchar *volatile vp) {{ struct S \
+             s = {{0}}; return __builtin_object_size({operand}, 0); }}"
+        );
+        with_configuration(
+            &source,
+            crate::configuration::CompilerConfiguration::default(),
+            |context, unit| {
+                let errors = context.take_pending_errors();
+                assert_eq!(unit.errors, 0, "{source}: {errors:?}");
+                let call = unit
+                    .expressions
+                    .iter()
+                    .rev()
+                    .find(|i| {
+                        matches!(i.expression.kind, ExpressionType::Call { .. })
+                            && unit.function_extensions.object_size(i.expression).is_some()
+                    })
+                    .unwrap();
+                let size = unit.function_extensions.object_size(call.expression);
+                assert_eq!(
+                    matches!(size, Some(ObjectSize::Deferred { .. })),
+                    deferred,
+                    "{operand}: {size:?}"
+                );
+            },
+        );
     }
 }
 

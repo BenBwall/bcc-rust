@@ -64,6 +64,9 @@ impl Machine<'_, '_, '_> {
                     | Opcode::PtrAdd =>
                         self.memory
                             .ptr_add(a, b, flags.contains(InstFlags::INBOUNDS)),
+                    // A size hint for `object_size`, which this interpreter
+                    // answers without it.
+                    | Opcode::Subobject => a,
                     | Opcode::VaCopy => {
                         self.va_copy(a, b)?;
                         return Ok(None);
@@ -178,6 +181,10 @@ impl Machine<'_, '_, '_> {
                 }
                 old
             },
+            // The middle end answers every query before a back end runs
+            // (`optimizer::resolve_object_sizes`); one left in text gets the
+            // answer for an unknown object, as the other back ends give it.
+            | InstData::ObjectSize { ty, query, .. } => RuntimeValue::int(ty, query.unknown(ty)),
             | InstData::DynAlloca { size, align, .. } => {
                 let RuntimeValue::Int(size) = self.value(size) else {
                     return Err(Fault::Ub(UbKind::PoisonAddress));

@@ -70,34 +70,7 @@ pub(crate) fn resolve_inline_copies(module: &mut Module<'_>, scratch: &Bump) {
             && function.body.is_some();
     }
     if expand {
-        let mut function_scratch = Bump::new();
-        // The module order LLVM sees: a copy in its external function's place.
-        let order =
-            scratch.alloc_slice_fill_iter(module.functions().filter_map(|(func, _)| match copies
-                [func.index()]
-            {
-                | Some(copy) => Some(copy),
-                | None if module.inline_copy_target(func).is_some() => None,
-                | None => Some(func),
-            }));
-        for &callee in &*order {
-            let function = module.function(callee);
-            if function.inlining != InlineControl::Always {
-                continue;
-            }
-            let external = module.inline_copy_target(callee);
-            let names_callee = |func: FuncId| func == callee || Some(func) == external;
-            let Some(body) = &function.body else { continue };
-            if !viable(module, callee, body, names_callee) {
-                continue;
-            }
-            for &user in &*ids {
-                if !names_callee(user) {
-                    expand_calls(module, user, callee, names_callee, &function_scratch);
-                    function_scratch.reset();
-                }
-            }
-        }
+        expand_always_inline(module, &copies, |_| true, scratch);
     }
     let targets = scratch.alloc_slice_fill_iter(
         module
@@ -112,6 +85,102 @@ pub(crate) fn resolve_inline_copies(module: &mut Module<'_>, scratch: &Bump) {
     for &func in &*ids {
         if targets[func.index()].is_some() {
             module.function_mut(func).body = None;
+        }
+    }
+}
+
+/// Expands the calls of the `always_inline` functions whose `object_size`
+/// queries need the caller's pointer, directly or through an
+/// `always_inline` function they call, with the always-inliner's walk
+/// ([`resolve_inline_copies`]). The LLVM back end would leave these calls
+/// to LLVM's always-inliner, which expands them all the same, but after
+/// bcc answered the queries: expanding them first lets
+/// [`super::resolve_object_sizes`] see the caller's object, and every back
+/// end then gets the same answers. The copies stay for LLVM. For the other
+/// back ends, which had the calls expanded already, this expands only the
+/// internal `always_inline` functions of a module without inline copies.
+/// GNU extension: GCC manual, "Object Size Checking".
+pub(super) fn expand_object_size_wrappers(module: &mut Module<'_>, scratch: &Bump) {
+    let count = module.functions().count();
+    let mut copies = ArenaVec::new_in(scratch);
+    copies.resize(count, None);
+    let mut asks = ArenaVec::new_in(scratch);
+    asks.resize(count, false);
+    for (func, function) in module.functions() {
+        if let Some(external) = module.inline_copy_target(func) {
+            copies[external.index()] = Some(func);
+        }
+        asks[func.index()] = function.inlining == InlineControl::Always
+            && function
+                .body
+                .as_ref()
+                .is_some_and(super::object_size::has_queries);
+    }
+    // A wrapper that calls an asking wrapper asks too, once expanded.
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for (func, function) in module.functions() {
+            if asks[func.index()] || function.inlining != InlineControl::Always {
+                continue;
+            }
+            let Some(body) = &function.body else { continue };
+            let calls_asking =
+                body.blocks().any(|block| {
+                    body.block_insts(block).iter().any(|&inst| match *body.inst(inst) {
+                    | InstData::Call { func: callee, .. } =>
+                        asks[callee.index()]
+                            || copies[callee.index()].is_some_and(|copy| asks[copy.index()]),
+                    | _ => false,
+                })
+                });
+            if calls_asking {
+                asks[func.index()] = true;
+                changed = true;
+            }
+        }
+    }
+    if asks.contains(&true) {
+        expand_always_inline(module, &copies, |callee| asks[callee.index()], scratch);
+    }
+}
+
+/// The always-inliner's walk over the functions `wanted` accepts: in the
+/// module order LLVM sees, with each copy in its external function's place
+/// (`copies`, by external function), expands every call of an inline
+/// viable `always_inline` body.
+fn expand_always_inline(
+    module: &mut Module<'_>,
+    copies: &[Option<FuncId>],
+    wanted: impl Fn(FuncId) -> bool,
+    scratch: &Bump,
+) {
+    let ids = scratch.alloc_slice_fill_iter(module.functions().map(|(func, _)| func));
+    let mut function_scratch = Bump::new();
+    let order =
+        scratch.alloc_slice_fill_iter(module.functions().filter_map(|(func, _)| {
+            match copies[func.index()] {
+                | Some(copy) => Some(copy),
+                | None if module.inline_copy_target(func).is_some() => None,
+                | None => Some(func),
+            }
+        }));
+    for &callee in &*order {
+        let function = module.function(callee);
+        if function.inlining != InlineControl::Always || !wanted(callee) {
+            continue;
+        }
+        let external = module.inline_copy_target(callee);
+        let names_callee = |func: FuncId| func == callee || Some(func) == external;
+        let Some(body) = &function.body else { continue };
+        if !viable(module, callee, body, names_callee) {
+            continue;
+        }
+        for &user in &*ids {
+            if !names_callee(user) {
+                expand_calls(module, user, callee, names_callee, &function_scratch);
+                function_scratch.reset();
+            }
         }
     }
 }

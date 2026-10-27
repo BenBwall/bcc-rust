@@ -97,10 +97,18 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             };
             let mut operand = self.checked_operand(expression, rule);
             if index == 0
-                && matches!(descriptor.operation, BuiltinOperation::ObjectSize(true))
                 && matches!(
-                    self.function_extensions.object_size(info.expression),
-                    Some(super::super::ObjectSize::Remainder { .. })
+                    (
+                        descriptor.operation,
+                        self.function_extensions.object_size(info.expression)
+                    ),
+                    (
+                        BuiltinOperation::ObjectSize(true),
+                        Some(super::super::ObjectSize::Remainder { .. })
+                    ) | (
+                        BuiltinOperation::ObjectSize(_),
+                        Some(super::super::ObjectSize::Deferred { .. })
+                    )
                 )
             {
                 operand.evaluation = ArgumentEvaluation::Value;
