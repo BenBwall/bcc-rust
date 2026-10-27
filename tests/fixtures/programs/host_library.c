@@ -117,6 +117,12 @@ static int by_value(const void *a, const void *b)
 
 struct pair { int key; const char *name; };
 
+/* The sign of a comparison result: -1, 0 or 1. */
+static int sign(int value)
+{
+  return (value > 0) - (value < 0);
+}
+
 /* Orders only by key, so equal keys show that the sort is stable. */
 static int by_key(const void *a, const void *b)
 {
@@ -197,11 +203,14 @@ int main(void)
   wchar_t wide[32];
   wcscpy(wide, L"wide");
   wcscat(wide, L" chars");
-  printf("%lu %d %d %ld %ld", wcslen(wide), wcscmp(wide, L"wide"), wcsncmp(wide, L"wider", 4),
+  /* Only the sign of a comparison is specified (C99 7.24.4); glibc's
+     implementations differ in magnitude between CPUs. */
+  printf("%lu %d %d %ld %ld", wcslen(wide), sign(wcscmp(wide, L"wide")),
+         sign(wcsncmp(wide, L"wider", 4)),
          (long)(wcschr(wide, L'c') - wide), (long)(wcsrchr(wide, L'e') - wide));
   wmemset(wide, L'z', 3);
   wchar_t negative[] = {-5, 0};
-  printf(" %d %d\n", wmemcmp(wide, L"zzze", 4), wcscmp(negative, L"a"));
+  printf(" %d %d\n", sign(wmemcmp(wide, L"zzze", 4)), sign(wcscmp(negative, L"a")));
 
   int number = 0, count = 0;
   unsigned hex = 0;
