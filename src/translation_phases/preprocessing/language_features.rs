@@ -983,7 +983,21 @@ pub(super) fn with_identity_macros<'a>(
     configuration: CompilerConfiguration,
 ) -> &'a str {
     let mut out = ArenaString::new_in(arena);
-    out.push_str(definitions);
+    let identity = configuration.compiler_identity();
+    // The frozen Clang tables describe `_Float16` as Clang does; GCC spells
+    // its constants to 36 digits, and MSVC and TCC have no such type.
+    if configuration.half_precision_types() && identity != CompilerIdentity::Gcc {
+        out.push_str(definitions);
+    } else {
+        for line in definitions.split_inclusive('\n') {
+            if !line.starts_with("#define __FLT16_") {
+                out.push_str(line);
+            }
+        }
+        if identity == CompilerIdentity::Gcc {
+            crate::target::Target::write_half_float_macros(&mut out);
+        }
+    }
     _ = write!(
         out,
         "#define __bcc__ 1\n#define __bcc_major__ {}\n#define __bcc_minor__ {}\n#define \
@@ -993,7 +1007,6 @@ pub(super) fn with_identity_macros<'a>(
         env!("CARGO_PKG_VERSION_PATCH"),
         env!("CARGO_PKG_VERSION"),
     );
-    let identity = configuration.compiler_identity();
     if identity == CompilerIdentity::Gcc {
         out.push_str(
             "#define __GNUC__ 14\n#define __GNUC_MINOR__ 2\n#define __GNUC_PATCHLEVEL__ 0\n",

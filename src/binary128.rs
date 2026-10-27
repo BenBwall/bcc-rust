@@ -81,6 +81,24 @@ pub(crate) fn parse_reporting_underflow(
     text: &str,
     arena: &Bump,
 ) -> Result<(Binary128, bool), ParseFloatError> {
+    parse_rounding(text, arena, false)
+}
+
+/// As [`parse`], but rounding to odd: an inexact value keeps the truncated
+/// significand with its lowest bit set. A narrower format rounds that once
+/// more to nearest without the error of rounding twice to nearest, since
+/// 113 bits exceed twice its precision plus one (Boldo and Melquiond, "When
+/// double rounding is odd", 2005), so `_Float16` and `__bf16` constants read
+/// through it.
+pub(crate) fn parse_to_odd(text: &str, arena: &Bump) -> Result<Binary128, ParseFloatError> {
+    parse_rounding(text, arena, true).map(|(value, _)| value)
+}
+
+fn parse_rounding(
+    text: &str,
+    arena: &Bump,
+    to_odd: bool,
+) -> Result<(Binary128, bool), ParseFloatError> {
     let text = text.trim_end_matches('\0');
     let text = text.strip_suffix(['q', 'Q']).ok_or_else(|| error(None))?;
     let hex = text.starts_with("0x") || text.starts_with("0X");
@@ -216,10 +234,14 @@ pub(crate) fn parse_reporting_underflow(
         !remainder.compare(&three_quarters).is_lt()
     };
     let underflow = inexact && binary_exponent < -16382 && !rounds_to_normal;
-    numerator.shift(1);
-    let rounding = numerator.compare(&denominator);
-    if rounding.is_gt() || (rounding.is_eq() && quotient & 1 != 0) {
-        quotient += 1;
+    if to_odd {
+        quotient |= u128::from(inexact);
+    } else {
+        numerator.shift(1);
+        let rounding = numerator.compare(&denominator);
+        if rounding.is_gt() || (rounding.is_eq() && quotient & 1 != 0) {
+            quotient += 1;
+        }
     }
     if quotient == 0 {
         return Err(error(Some(FloatRangeError::Underflow)));

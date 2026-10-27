@@ -100,10 +100,23 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     None
                 }
             },
+            | S::Extended(super::ExtendedType::InterchangeFloat {
+                format: super::InterchangeFloat::Float16,
+                complex: true,
+            }) => {
+                self.error(
+                    SemanticErrorKind::UnsupportedComplexHalf,
+                    source,
+                    None,
+                    None,
+                );
+                None
+            },
             | S::Extended(super::ExtendedType::InterchangeFloat { format, complex }) => {
                 use super::InterchangeFloat as F;
                 let target = self.context.configuration.target();
                 let real = match format {
+                    | F::Float16 => Some(Scalar::Float16),
                     | F::Float32 => Some(Scalar::Float32),
                     | F::Float64 => Some(Scalar::Float64),
                     | F::Float32x => Some(Scalar::Float32x),

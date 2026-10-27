@@ -596,6 +596,7 @@ fn scalar_code(scalar: Scalar) -> &'static str {
         | Scalar::Float128 => "_T",
         // Clang's artificial-tag form for builtin types without an MSVC
         // code, as it mangles `_Float16`.
+        | Scalar::Float16 => "U_Float16@__clang@@",
         | Scalar::Float32 => "U_Float32@__clang@@",
         | Scalar::Float64 => "U_Float64@__clang@@",
         | Scalar::Float32x => "U_Float32x@__clang@@",

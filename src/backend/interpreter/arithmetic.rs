@@ -18,6 +18,7 @@ use super::{
 };
 use crate::{
     binary128::Binary128,
+    half_precision::HalfFormat,
     ir::{
         FloatCC,
         InstFlags,
@@ -251,6 +252,9 @@ pub(crate) fn convert(opcode: Opcode, from: Type, to: Type, a: RuntimeValue) -> 
     if a.is_poison() {
         return RuntimeValue::Poison;
     }
+    if let Some(value) = half_conversion(opcode, from, to, a) {
+        return value;
+    }
     if let Some(value) = binary128_conversion(opcode, from, to, a) {
         return value;
     }
@@ -332,16 +336,53 @@ fn binary128_conversion(
     })
 }
 
+/// A conversion to or from `f16`, as libgcc's `__extendhfsf2`,
+/// `__truncdfhf2`, `__fixhfti`, `__floattihf` and their relatives give it;
+/// `None` for any other conversion. A narrower integer converts through
+/// `f32`, which is exact, as GCC and Clang convert it. An out-of-range
+/// conversion to an integer is poison.
+/// C99: §6.3.1.4-§6.3.1.5, pp. 43-44; PDF pp. 55-56.
+fn half_conversion(opcode: Opcode, from: Type, to: Type, a: RuntimeValue) -> Option<RuntimeValue> {
+    const HALF: HalfFormat = HalfFormat::Binary16;
+    Some(match (opcode, a) {
+        | (Opcode::Fpext, RuntimeValue::F16(bits)) => match to {
+            | Type::F32 => RuntimeValue::F32(HALF.widen(bits)),
+            | Type::F64 => RuntimeValue::F64(f64::from(HALF.widen(bits))),
+            | Type::F80 => RuntimeValue::F80(HALF.to_x87(bits)),
+            | _ => RuntimeValue::F128(HALF.to_binary128(bits).to_bits()),
+        },
+        | (Opcode::Fptrunc, a) if to == Type::F16 => RuntimeValue::F16(match a {
+            | RuntimeValue::F32(a) => HALF.round_f32(a),
+            | RuntimeValue::F64(a) => HALF.round_f64(a),
+            | RuntimeValue::F80(a) => HALF.round_x87(a),
+            | RuntimeValue::F128(a) => HALF.round_binary128(Binary128::from_bits(a)),
+            | _ => return None,
+        }),
+        | (Opcode::Sitofp, RuntimeValue::Int(a)) if to == Type::F16 => {
+            let value = sext(from, a);
+            RuntimeValue::F16(HALF.round_integer(value < 0, value.unsigned_abs()))
+        },
+        | (Opcode::Uitofp, RuntimeValue::Int(a)) if to == Type::F16 =>
+            RuntimeValue::F16(HALF.round_integer(false, a)),
+        | (Opcode::Fptosi | Opcode::Fptoui, RuntimeValue::F16(bits)) => HALF
+            .to_integer(bits, opcode == Opcode::Fptosi, to.bits())
+            .map_or(RuntimeValue::Poison, |bits| RuntimeValue::int(to, bits)),
+        | _ => return None,
+    })
+}
+
 /// A `bitcast`: the same bits viewed as another type of the same width.
 fn bitcast(to: Type, value: RuntimeValue) -> RuntimeValue {
     let bits = match value {
         | RuntimeValue::Ptr(_) | RuntimeValue::Poison => return value,
         | RuntimeValue::Int(bits) | RuntimeValue::F128(bits) => bits,
+        | RuntimeValue::F16(bits) => u128::from(bits),
         | RuntimeValue::F32(value) => u128::from(value.to_bits()),
         | RuntimeValue::F64(value) => u128::from(value.to_bits()),
         | RuntimeValue::F80(value) => value.to_bits(),
     };
     match to {
+        | Type::F16 => RuntimeValue::F16(super::memory::truncate_u16(bits)),
         | Type::F32 => {
             #[expect(
                 clippy::cast_possible_truncation,

@@ -97,6 +97,8 @@ pub(super) enum Def {
     /// The result of an `iconst`, by its index in the draft's constants,
     /// kept so lowering can fold on it.
     Constant(u32),
+    /// The result of an `fconst`, its bits at that index.
+    FloatConstant(u32),
     Param(Block),
     Poison,
 }
@@ -391,6 +393,14 @@ impl<'s> Draft<'s> {
         }
     }
 
+    /// The bits an `fconst` defines, if `value` is one.
+    pub(super) fn float_constant(&self, value: Value) -> Option<u128> {
+        match self.values[self.resolve(value).index()].def {
+            | Def::FloatConstant(index) => Some(self.constants[index as usize].cast_unsigned()),
+            | _ => None,
+        }
+    }
+
     /// The value `value` stands for once redundant parameters are removed.
     pub(super) fn resolve(&self, mut value: Value) -> Value {
         while let Some(alias) = self.values[value.index()].alias {
@@ -431,6 +441,11 @@ impl<'s> Draft<'s> {
                 let index = u32::try_from(self.constants.len()).expect("too many constants");
                 self.constants.push(constant);
                 Def::Constant(index)
+            },
+            | Op::Fconst(_, bits) => {
+                let index = u32::try_from(self.constants.len()).expect("too many constants");
+                self.constants.push(bits.cast_signed());
+                Def::FloatConstant(index)
             },
             | _ => Def::Result,
         };

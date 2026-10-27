@@ -145,8 +145,10 @@ measurement; contiguous order is simpler and suits a fixed pipeline of rebuilds.
 
 ### Types
 
-`i1`, `i8`, `i16`, `i32`, `i64`, `i128`, `f32`, `f64`, `f80`, `f128`, `ptr`.
-Integers are signless: signedness is part of the operation (`sdiv`/`udiv`,
+`i1`, `i8`, `i16`, `i32`, `i64`, `i128`, `f16`, `f32`, `f64`, `f80`, `f128`,
+`ptr`. `f16` is IEEE binary16 and only moves and converts: the verifier
+rejects floating arithmetic, `fneg` and `fcmp` on it, since `_Float16`
+computes in `f32` (below). Integers are signless: signedness is part of the operation (`sdiv`/`udiv`,
 `slt`/`ult`, `sext`/`zext`). Pointers are opaque. Aggregates are never values;
 they live in stack slots or globals and are copied with `copy`. `i1` is the
 result of comparisons and the type of branch conditions; C's `_Bool` is an `i8`
@@ -967,7 +969,17 @@ comparisons are ordered `fcmp`s except `!=`, which is `une`, and conversions are
 sema's folded values, rounded to the destination format. Real and complex
 binary128 (`__float128`, `_Float128`) lower to `f128` with the same
 instructions; a folded binary128 constant becomes `fconst.f128`, and complex
-products and quotients call `__multc3` and `__divtc3`.
+products and quotients call `__multc3` and `__divtc3`. `_Float16` is `f16` in
+memory, arguments and results, and its values compute in `f32`
+(`lowering/half.rs`): an `Operand::Excess` carries an `f32` result of `+`,
+`-`, `*`, `/` or unary `+`/`-` with the range and precision it is evaluated
+to, `pop` rounds it with `fptrunc.f16` for every consumer that does not ask
+for it, and the operators read it with `excess`, so `a * b / c` rounds once.
+Under the GCC identity conversions to other types, comparisons, `?:` (an
+`f32` merge parameter), the comma operator and a folded constant keep the
+excess too, and an integer operand converts straight to `f32`; Clang's rule
+rounds at all of those. An integer converts to or from `f16` through `f32`,
+which is exact wherever binary16 is finite.
 
 Complex scalars use two immutable SSA component values retained in a sparse
 arena table; taking an lvalue's value immediately loads both components.
@@ -1299,7 +1311,9 @@ results and NaN constructors. Native libm evaluates float and double in their
 own precision; guest pointers stay in interpreter memory. Long double follows
 the target representation: binary64 on MSVC, and x87 `f80` on the GNU targets.
 
-`f128` values compute in `src/binary128.rs`, IEEE binary128 arithmetic in
+`f16` values are their bits, converted by `src/half_precision.rs`, which
+rounds once from each format bit for bit as libgcc's `__trunc*hf2` routines
+do. `f128` values compute in `src/binary128.rs`, IEEE binary128 arithmetic in
 software that rounds once to nearest even and propagates NaNs as libgcc's
 soft-float routines do on x86-64, so interpreted programs print what
 programs linked with libgcc print. The host provides glibc's `strtof128`
@@ -1500,7 +1514,9 @@ ranges, frame layout with CFI and SEH unwind directives for System V and Win64,
 and AT&T assembly, which the bundled clang assembles, or ELF and COFF
 objects it encodes itself; the bundled clang links executables. It compiles
 integer, pointer, `i128`, `f32` and `f64` code, `f80` on the x87 unit,
-`f128` through libgcc's soft-float routines (`isel/quad.rs`), variadic
+`f128` through libgcc's soft-float routines (`isel/quad.rs`), `f16` in SSE
+registers with libgcc's `__extendhfsf2` and `__trunc{sf,df,xf,tf}hf2`
+conversions, as GCC calls them without `-mf16c` (`isel/half.rs`), variadic
 definitions, dynamic stack allocation, computed `goto`, thread-local globals,
 calls that may return twice, C11 atomics and the GNU symbol attributes, and
 refuses everything else before writing any output.

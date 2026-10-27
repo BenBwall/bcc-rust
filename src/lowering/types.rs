@@ -114,6 +114,7 @@ fn scalar_repr(types: &Types<'_>, scalar: Scalar) -> Result<Repr, LoweringErrorK
     match scalar.representation() {
         | Scalar::Void => Ok(Repr::Void),
         | Scalar::Bool => Ok(Repr::Bool),
+        | Scalar::Float16 => Ok(Repr::Float { ty: Type::F16 }),
         | Scalar::Float => Ok(Repr::Float { ty: Type::F32 }),
         | Scalar::Double => Ok(Repr::Float { ty: Type::F64 }),
         | Scalar::LongDouble => Ok(Repr::Float {
@@ -492,6 +493,7 @@ fn scalar_leaves(
                 "an aggregate has a void member",
             )),
         | Scalar::Bool => (Type::I8, 1),
+        | Scalar::Float16 => (Type::F16, 1),
         | Scalar::Float => (Type::F32, 1),
         | Scalar::Double => (Type::F64, 1),
         | Scalar::LongDouble => (long_double(), 1),

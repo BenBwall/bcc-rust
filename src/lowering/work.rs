@@ -170,6 +170,8 @@ pub(super) enum Task<'tu> {
     ReadForUpdate(&'tu Expression<'tu>),
     /// Pop an operand that is not needed.
     Discard,
+    /// Round the `_Float16` excess on top of the stack (`half.rs`).
+    Settle,
     /// Evaluate `expression` as a condition: branch to `then` if it is
     /// nonzero, else to `otherwise`.
     Condition {
@@ -238,6 +240,9 @@ pub(super) enum Operand {
     /// An `int` that is 0 or 1, still held as the `i1` of a comparison, so a
     /// condition can branch on it directly.
     Truth(Value),
+    /// A `_Float16` value held as an `f32` with the range and precision it
+    /// is evaluated to, not yet rounded to `_Float16`; see `half.rs`.
+    Excess(Value),
     /// An lvalue or function designator.
     Place(Place),
     /// A structure or union rvalue names its backing place. The alignment

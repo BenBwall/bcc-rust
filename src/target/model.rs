@@ -15,7 +15,7 @@ pub(crate) struct TargetLayout {
     pub(crate) mb_len_max:         u32,
     pub(crate) wint_t:             Scalar,
     pub(crate) va_list:            Layout,
-    pub(crate) scalars:            [Option<Layout>; 23],
+    pub(crate) scalars:            [Option<Layout>; 24],
     pub(crate) pointer:            Layout,
     pub(crate) char_signed:        bool,
     pub(crate) size_t:             Scalar,
@@ -122,6 +122,7 @@ impl TargetLayout {
                 size:  32,
                 align: 16,
             }),
+            Some(Layout { size: 2, align: 2 }),
         ],
         pointer:            Layout { size: 8, align: 8 },
         char_signed:        true,
@@ -162,6 +163,11 @@ pub(crate) enum Scalar {
     /// `_Float128`.
     Float128,
     ComplexFloat128,
+    /// The interchange type `_Float16`, IEEE binary16. GCC and Clang compute
+    /// with it in `float` on x86-64.
+    /// C23: Annex H, §H.2.2 paragraph 1, p. 553; PDF p. 566. Extension to
+    /// C99 §6.2.5 paragraph 10, p. 34; PDF p. 46.
+    Float16,
     /// The interchange types `_Float32` and `_Float64` and the extended types
     /// `_Float32x` and `_Float64x`, with their complex types. Each is a
     /// distinct type with the representation of the standard type
@@ -205,6 +211,7 @@ impl Scalar {
             | Self::ComplexLongDouble => "long double _Complex",
             | Self::Float128 => "__float128",
             | Self::ComplexFloat128 => "__float128 _Complex",
+            | Self::Float16 => "_Float16",
             | Self::Float32 => "_Float32",
             | Self::Float64 => "_Float64",
             | Self::Float32x => "_Float32x",
@@ -294,9 +301,9 @@ impl Scalar {
     }
 
     /// Orders the floating types for the usual arithmetic conversions; 0 for
-    /// every other type. The set of values comes first: binary32, binary64,
-    /// the x87 format, then binary128, each class holding the types with
-    /// that representation, so `long double` joins the binary64 class
+    /// every other type. The set of values comes first: binary16, binary32,
+    /// binary64, the x87 format, then binary128, each class holding the types
+    /// with that representation, so `long double` joins the binary64 class
     /// where `long_double_is_double` (the MSVC target). Within a class of
     /// equal sets of values an interchange type is chosen, then
     /// `long double`, then `double` or `float`, then an extended type.
@@ -304,6 +311,7 @@ impl Scalar {
     /// paragraph 1, pp. 558-559; PDF pp. 571-572.
     pub(crate) const fn floating_rank(self, long_double_is_double: bool) -> u8 {
         let (class, preference) = match self.real_type() {
+            | Self::Float16 => (0, 3),
             | Self::Float => (1, 1),
             | Self::Float32 => (1, 3),
             | Self::Double => (2, 1),

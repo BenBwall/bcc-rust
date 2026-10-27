@@ -28,6 +28,7 @@ mod driver_cli;
 mod explorer;
 mod file_scope_asm;
 mod freestanding_cli;
+mod half_precision;
 mod hosted_cli;
 mod inline_asm;
 mod language_cli;

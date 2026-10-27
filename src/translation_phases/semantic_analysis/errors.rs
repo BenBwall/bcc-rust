@@ -404,6 +404,10 @@ pub(crate) enum SemanticErrorKind {
     /// C23: implementation-defined extended types, §H.2.4 paragraph 2,
     /// p. 554; PDF p. 567.
     UnsupportedInterchangeFloat,
+    /// `_Complex _Float16`, which GCC and Clang provide, is not implemented:
+    /// its arithmetic needs the complex helpers in binary16.
+    /// C23: §H.2.2 paragraph 3, p. 553; PDF p. 566.
+    UnsupportedComplexHalf,
     /// GCC Other Builtins: `choose_expr` requires an integer constant.
     /// GNU extension: GCC manual, "Other Builtins".
     /// <https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html>
@@ -620,8 +624,9 @@ impl SemanticErrorKind {
             | Self::PragmaPackUnterminated
             | Self::PragmaPackShow(_)
             | Self::PragmaPackIgnored => "packing directive",
-            | Self::UnsupportedFloat128 | Self::UnsupportedInterchangeFloat =>
-                "unsupported floating type",
+            | Self::UnsupportedFloat128
+            | Self::UnsupportedInterchangeFloat
+            | Self::UnsupportedComplexHalf => "unsupported floating type",
             | Self::InvalidVectorAttribute => "invalid vector size or element type",
             | Self::InvalidAlignmentAttribute => "alignment must be a power-of-two constant",
             | Self::InvalidStandardAlignment => "invalid alignment specifier",
@@ -993,6 +998,11 @@ impl SemanticErrorKind {
                 "this floating type is not supported on this target",
                 "C23 Annex H: _Float128 needs binary128 and _Float64x a format wider than \
                  binary64; this target's long double is binary64 and it has no binary128 type",
+            ),
+            | Self::UnsupportedComplexHalf => (
+                "_Complex _Float16 is not supported",
+                "bcc computes real _Float16 values in float as GCC and Clang do, but does not \
+                 implement the complex type",
             ),
             | Self::UnsupportedFloat128 => (
                 "__float128 is not supported on this target",

@@ -26,6 +26,7 @@ mod effects;
 mod emission_work;
 mod float128;
 mod fortify;
+mod half_precision;
 mod initializer_plans;
 mod int128;
 mod interchange_floats;

@@ -176,6 +176,14 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             self.push_item(operand, info.ty);
             return Ok(());
         }
+        // A folded `_Float16` keeps the excess its consumer may read.
+        if let Some(folded) = info.floating().filter(|_| !info.runtime_query)
+            && self.half(info.ty)
+        {
+            let operand = self.excess_constant(&folded.real, source)?;
+            self.push_item(operand, info.ty);
+            return Ok(());
+        }
         // A folded floating constant has exact bits (§6.6 paragraph 8).
         if let Some(folded) = info.floating().filter(|_| !info.runtime_query)
             && let Ok(Repr::Float { ty }) = repr(&self.unit.sema.types, info.ty)
@@ -236,6 +244,10 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     self.tasks.push(Task::Evaluate(left_expression));
                 },
                 | BinaryOperator::Comma => {
+                    // Clang's comma rounds a `_Float16` operand.
+                    if self.half(info.ty) && !self.half_in_float() {
+                        self.tasks.push(Task::Settle);
+                    }
                     self.tasks.push(Task::Evaluate(right_expression));
                     self.tasks.push(Task::Discard);
                     self.tasks.push(Task::Evaluate(left_expression));
@@ -453,7 +465,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             | E::Binary { operator, .. } if let Some(operation) = compound_operator(operator) => {
                 let left = self.pop();
                 let place = self.pop();
-                let right = self.pop();
+                let right = self.pop_excess();
                 let operation_type = info.operation_type.ok_or_else(|| {
                     LoweringError::missing("a compound assignment has no type", source)
                 })?;
@@ -495,8 +507,8 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 self.push_item(Operand::Place(Place::Memory(address)), info.ty);
             },
             | E::Binary { operator, .. } => {
-                let right = self.pop();
-                let left = self.pop();
+                let right = self.pop_excess();
+                let left = self.pop_excess();
                 let result = self.binary(operator, left, right, info.ty, source)?;
                 self.operands.push(result);
             },
@@ -614,7 +626,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         skip: usize,
     ) -> Result<(), LoweringError> {
         let source = expression.source_vectors;
-        let mut item = self.pop();
+        let mut item = self.pop_excess();
         for conversion in self.conversions(expression).iter().skip(skip) {
             if self.unit.sema.types.unanalyzed(conversion.ty) {
                 return Err(LoweringError::unanalyzed(
@@ -646,6 +658,21 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     };
                     Item {
                         operand: Operand::Value(address),
+                        ty:      conversion.ty,
+                    }
+                },
+                // GCC converts an integer operand of a `_Float16` operation
+                // straight to `float`.
+                | ConversionKind::Arithmetic
+                    if self.half_in_float()
+                        && self.half(conversion.ty)
+                        && matches!(self.repr(item.ty, source)?, Repr::Int { .. } | Repr::Bool) =>
+                {
+                    let from = self.repr(item.ty, source)?;
+                    let value = self.value(item, source)?;
+                    let value = self.float_from(value, from, Type::F32, source)?;
+                    Item {
+                        operand: Operand::Excess(value),
                         ty:      conversion.ty,
                     }
                 },
@@ -699,8 +726,15 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         to: TypeId,
         source: SourceVectors,
     ) -> Result<Item, LoweringError> {
+        let target = self.repr(to, source)?;
+        let item = match (item.operand, target) {
+            | (Operand::Excess(_), Repr::Float { ty: Type::F16 }) =>
+                return Ok(Item { ty: to, ..item }),
+            | (Operand::Excess(_), _) if self.half_in_float() =>
+                return self.convert_excess(item, to, target, source),
+            | _ => self.settle(item),
+        };
         let types = &self.unit.sema.types;
-        let target = repr(types, to).map_err(|kind| at(kind, source))?;
         if matches!(target, Repr::Complex { .. })
             || matches!(repr(types, item.ty), Ok(Repr::Complex { .. }))
         {
@@ -722,6 +756,16 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 let from = repr(types, item.ty).map_err(|kind| at(kind, source))?;
                 Operand::Value(match from {
                     | Repr::Pointer => self.convert(Opcode::Ptrtoint, ty, value),
+                    // A `_Float16` widens exactly first.
+                    | Repr::Float { ty: Type::F16 } => {
+                        let wide = self.widen_half(value);
+                        let opcode = if signed {
+                            Opcode::Fptosi
+                        } else {
+                            Opcode::Fptoui
+                        };
+                        self.convert(opcode, ty, wide)
+                    },
                     // A floating value truncates toward zero (§6.3.1.4p1).
                     | Repr::Float { .. } => {
                         let opcode = if signed {
@@ -795,6 +839,13 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 } else {
                     Opcode::Uitofp
                 };
+                // An integer becomes a `_Float16` through `float`, exactly
+                // where binary16 is finite and otherwise as an infinity
+                // either way, as GCC and Clang convert it.
+                if to == Type::F16 {
+                    let single = self.convert(opcode, Type::F32, value);
+                    return Ok(self.convert(Opcode::Fptrunc, Type::F16, single));
+                }
                 self.convert(opcode, to, value)
             },
             | _ =>
@@ -845,7 +896,9 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 let b = self.fcmp(FloatCC::Une, imag, zero);
                 return Ok(self.binary_inst(Opcode::Or, InstFlags::empty(), a, b));
             },
-            | Operand::Value(value) => value,
+            | Operand::Value(value) if self.draft.value_type(value) == Type::F16 =>
+                self.widen_half(value),
+            | Operand::Excess(value) | Operand::Value(value) => value,
             | _ => return Err(LoweringError::missing("a condition has no value", source)),
         };
         let ty = self.draft.value_type(value);
@@ -1032,7 +1085,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
 
     /// Pops a scalar and branches on it; a constant condition jumps.
     pub(super) fn branch(&mut self, then: Block, otherwise: Block) -> Result<(), LoweringError> {
-        let item = self.pop();
+        let item = self.pop_truth();
         let truth = self.truth(item, SourceVectors::empty())?;
         match self.draft.constant(truth) {
             | Some(0) => self.draft.jump(otherwise, &[]),
@@ -1052,7 +1105,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         right: Block,
         merge: Block,
     ) -> Result<(), LoweringError> {
-        let item = self.pop();
+        let item = self.pop_truth();
         let truth = self.truth(item, SourceVectors::empty())?;
         let decided = self.iconst(Type::I1, i128::from(!and));
         let (then, otherwise) = if and {
@@ -1080,8 +1133,21 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         merge: Block,
         truth: bool,
     ) -> Result<(), LoweringError> {
-        let item = self.pop();
         let source = SourceVectors::empty();
+        // GCC's `?:` keeps a `_Float16` excess in an `f32` parameter.
+        if !truth
+            && let &[param] = self.draft.block_params(merge)
+            && self.draft.value_type(param) == Type::F32
+        {
+            let item = self.pop_excess();
+            if self.half(item.ty) {
+                let value = self.excess(item, source)?;
+                self.draft.jump(merge, &[value]);
+                return Ok(());
+            }
+            self.operands.push(item);
+        }
+        let item = if truth { self.pop_truth() } else { self.pop() };
         if let Operand::Complex(id) = item.operand
             && !truth
         {
@@ -1124,6 +1190,8 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 self.retain_alignment(param, Align::BYTE);
                 Operand::Aggregate(param)
             },
+            | Some(&param) if self.half(ty) && self.draft.value_type(param) == Type::F32 =>
+                Operand::Excess(param),
             | Some(&param) => Operand::Value(param),
         };
         self.push_item(operand, ty);
@@ -1210,6 +1278,10 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         source: SourceVectors,
     ) -> Result<Item, LoweringError> {
         use BinaryOperator as B;
+        if self.half(left.ty) && (comparison(operator).is_some() || self.half(ty)) {
+            return self.half_binary(operator, left, right, ty, source);
+        }
+        let (left, right) = (self.settle(left), self.settle(right));
         if matches!(left.operand, Operand::Complex(_))
             || matches!(right.operand, Operand::Complex(_))
         {
@@ -1360,7 +1432,22 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         source: SourceVectors,
     ) -> Result<(), LoweringError> {
         use UnaryOperator as U;
-        let operand = self.pop();
+        if matches!(operator, U::Plus | U::Minus) && self.half(info.ty) {
+            let operand = self.pop_excess();
+            let value = self.excess(operand, source)?;
+            let result = if operator == U::Minus {
+                self.convert(Opcode::Fneg, Type::F32, value)
+            } else {
+                value
+            };
+            self.push_item(Operand::Excess(result), info.ty);
+            return Ok(());
+        }
+        let operand = if operator == U::LogicalNot {
+            self.pop_truth()
+        } else {
+            self.pop()
+        };
         let result = match operator {
             | U::AddressOf => match operand.operand {
                 | Operand::Place(Place::Memory(address)) => Operand::Value(address),
@@ -1410,6 +1497,11 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             },
             | U::LogicalNot => match operand.operand {
                 | Operand::Value(value) if self.draft.value_type(value).is_float() => {
+                    let value = if self.draft.value_type(value) == Type::F16 {
+                        self.widen_half(value)
+                    } else {
+                        value
+                    };
                     let ty = self.draft.value_type(value);
                     let zero = self.fconst(ty, 0);
                     Operand::Truth(self.fcmp(FloatCC::Oeq, value, zero))
@@ -1499,6 +1591,18 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     }
                 };
                 Operand::Value(self.ptr_add(value, offset))
+            },
+            // `_Float16` steps in `float` and rounds once.
+            | Repr::Float { ty: Type::F16 } => {
+                let wide = self.widen_half(value);
+                let one = self.fconst(Type::F32, u128::from(1.0_f32.to_bits()));
+                let opcode = if increment {
+                    Opcode::Fadd
+                } else {
+                    Opcode::Fsub
+                };
+                let stepped = self.binary_inst(opcode, InstFlags::empty(), wide, one);
+                Operand::Value(self.convert(Opcode::Fptrunc, Type::F16, stepped))
             },
             | Repr::Float { ty } => {
                 let bits = floats::from_integer(1, ty)
@@ -1597,6 +1701,9 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         let mut items = ArenaVec::with_capacity_in(count, self.scratch);
         items.extend_from_slice(&self.operands[start..]);
         self.operands.truncate(start);
+        for item in &mut items {
+            *item = self.settle(*item);
+        }
         let direct = self.resolved_direct_callee(call, source)?;
         // `(*f)(...)` of a function using the pack calls its copy too.
         let packed_callee = direct
@@ -2077,6 +2184,8 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             } => &[Type::F128, Type::F128],
             | Repr::Complex { .. } => &[Type::F80, Type::F80],
             | Repr::Float { ty } => match ty {
+                | Type::F16 if self.half_in_float() => &[Type::F32],
+                | Type::F16 => &[Type::F16],
                 | Type::F32 => &[Type::F32],
                 | Type::F64 => &[Type::F64],
                 | Type::F128 => &[Type::F128],
@@ -2135,7 +2244,7 @@ pub(super) fn literal_storage(
 }
 
 /// The IR comparison of a C relational or equality operator, signed form.
-fn comparison(operator: BinaryOperator) -> Option<IntCC> {
+pub(super) fn comparison(operator: BinaryOperator) -> Option<IntCC> {
     Some(match operator {
         | BinaryOperator::LessThan => IntCC::Slt,
         | BinaryOperator::GreaterThan => IntCC::Sgt,
@@ -2149,7 +2258,7 @@ fn comparison(operator: BinaryOperator) -> Option<IntCC> {
 
 /// The IR comparison of a floating relational or equality operator, given
 /// as its signed integer form: ordered, except `!=`.
-fn float_comparison(cc: IntCC) -> FloatCC {
+pub(super) fn float_comparison(cc: IntCC) -> FloatCC {
     match cc {
         | IntCC::Slt => FloatCC::Olt,
         | IntCC::Sgt => FloatCC::Ogt,

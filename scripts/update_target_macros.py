@@ -22,7 +22,7 @@ def exclusion(name):
         return "Existing language-mode preprocessor builtin; not a target definition."
     if name in {"__STDC_UTF_16__", "__STDC_UTF_32__"}:
         return "Encoded literal syntax exists, but its semantic types and storage are not implemented."
-    if name.startswith(("__FLT16_", "__BF16_")):
+    if name.startswith("__BF16_"):
         return "Half-precision floating types and arithmetic are not implemented."
     if name in {"__GXX_ABI_VERSION", "__GXX_TYPEINFO_EQUALITY_INLINE"}:
         return "C++ ABI and type-info semantics are not implemented."

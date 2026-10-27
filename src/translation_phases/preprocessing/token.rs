@@ -176,15 +176,17 @@ pub(crate) enum KeywordTokenType {
     InterchangeFloat128,
     Float32x,
     Float64x,
+    Float16,
 }
 
 /// The `_FloatN` and `_FloatNx` keywords bcc provides: the binary
-/// interchange types `_Float32`, `_Float64` and `_Float128`, and the extended
-/// types `_Float32x` and `_Float64x`.
+/// interchange types `_Float16`, `_Float32`, `_Float64` and `_Float128`, and
+/// the extended types `_Float32x` and `_Float64x`.
 /// C23: §H.2.2 paragraph 3, p. 553; PDF p. 566; §H.2.4 paragraph 2, p. 554;
 /// PDF p. 567.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub(crate) enum InterchangeFloat {
+    Float16,
     Float32,
     Float64,
     Float128,
@@ -201,6 +203,7 @@ impl InterchangeFloat {
             | KeywordTokenType::InterchangeFloat128 => Self::Float128,
             | KeywordTokenType::Float32x => Self::Float32x,
             | KeywordTokenType::Float64x => Self::Float64x,
+            | KeywordTokenType::Float16 => Self::Float16,
             | _ => return None,
         })
     }
@@ -213,6 +216,7 @@ impl InterchangeFloat {
             | Self::Float128 => "_Float128",
             | Self::Float32x => "_Float32x",
             | Self::Float64x => "_Float64x",
+            | Self::Float16 => "_Float16",
         }
     }
 }
@@ -314,6 +318,19 @@ pub(crate) enum FloatTokenType {
     Float64(Packed<f64>),
     Float32x(Packed<f64>),
     Float64x(LongDouble),
+    /// An `f16` constant.
+    /// C23: §H.5.2 paragraph 2, p. 560; PDF p. 573.
+    Float16(HalfConstant),
+}
+
+/// A `_Float16` constant: its binary16 value, and its value rounded once to
+/// binary32. GCC evaluates `_Float16` constants and operations to the range
+/// and precision of `float` (C99 §5.2.4.2.2 paragraph 7, p. 24; PDF p. 36,
+/// `FLT_EVAL_METHOD`) and reads the second; Clang reads the first.
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub(crate) struct HalfConstant {
+    pub(crate) bits:   u16,
+    pub(crate) single: f32,
 }
 
 /// A `character-constant` and its value.
@@ -468,6 +485,7 @@ impl FloatTokenType {
             | Self::Float64(_) => "_Float64",
             | Self::Float32x(_) => "_Float32x",
             | Self::Float64x(_) => "_Float64x",
+            | Self::Float16(_) => "_Float16",
         }
     }
 }
@@ -736,6 +754,7 @@ impl KeywordTokenType {
         Self::InterchangeFloat128,
         Self::Float32x,
         Self::Float64x,
+        Self::Float16,
     ];
 
     /// Classifies an identifier after preprocessing has finished. It is an
@@ -882,6 +901,16 @@ impl KeywordTokenType {
                 | Self::Float64x => (
                     configuration.accepts(Feature::InterchangeFloatTypes),
                     Some(Feature::InterchangeFloatTypes.origin()),
+                ),
+                // GCC reports the type before C23 under `-pedantic`; Clang
+                // does not.
+                | Self::Float16 => (
+                    configuration.accepts(Feature::Float16),
+                    matches!(
+                        configuration.compiler_identity(),
+                        crate::configuration::CompilerIdentity::Gcc
+                    )
+                    .then(|| Feature::Float16.origin()),
                 ),
                 | Self::Int128 => (
                     configuration.accepts(Feature::Int128),
@@ -1079,6 +1108,7 @@ impl KeywordTokenType {
             | Self::InterchangeFloat128 => "_Float128",
             | Self::Float32x => "_Float32x",
             | Self::Float64x => "_Float64x",
+            | Self::Float16 => "_Float16",
         }
     }
 }
@@ -1243,6 +1273,11 @@ impl Display for FloatTokenType {
             | Self::ImaginaryLongDouble(v) => write!(f, "{v}i"),
             | Self::Float128(v) => write!(f, "{v}"),
             | Self::ImaginaryFloat128(v) => write!(f, "{v}i"),
+            | Self::Float16(v) => write!(
+                f,
+                "{}",
+                crate::half_precision::HalfFormat::Binary16.widen(v.bits)
+            ),
         }
     }
 }

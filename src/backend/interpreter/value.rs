@@ -19,6 +19,8 @@ use crate::{
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub(crate) enum RuntimeValue {
     Int(u128),
+    /// IEEE binary16 bits, which only move and convert.
+    F16(u16),
     F32(f32),
     F64(f64),
     /// An x87 double-extended value; moves keep every one of its 80 bits.
@@ -42,6 +44,7 @@ impl RuntimeValue {
     pub(crate) const fn matches_type(self, ty: Type) -> bool {
         match self {
             | Self::Int(bits) => ty.is_int() && bits & !ty.mask() == 0,
+            | Self::F16(_) => matches!(ty, Type::F16),
             | Self::F32(_) => matches!(ty, Type::F32),
             | Self::F64(_) => matches!(ty, Type::F64),
             | Self::F80(_) => matches!(ty, Type::F80),
@@ -60,6 +63,7 @@ impl RuntimeValue {
     /// choice among the arbitrary values the IR allows.
     pub(crate) const fn zero(ty: Type) -> Self {
         match ty {
+            | Type::F16 => Self::F16(0),
             | Type::F32 => Self::F32(0.0),
             | Type::F64 => Self::F64(0.0),
             | Type::F80 => Self::F80(X87::zero(false)),

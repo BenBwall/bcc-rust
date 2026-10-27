@@ -233,6 +233,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     | FloatTokenType::Float64(_) => Scalar::Float64,
                     | FloatTokenType::Float32x(_) => Scalar::Float32x,
                     | FloatTokenType::Float64x(_) => Scalar::Float64x,
+                    | FloatTokenType::Float16(_) => Scalar::Float16,
                     | _ => {
                         self.retain_expression(info);
                         return;
@@ -245,6 +246,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     | FloatTokenType::Float64(value)
                     | FloatTokenType::Float32x(value) => LongDouble::from_double(value.get()),
                     | FloatTokenType::LongDouble(value) | FloatTokenType::Float64x(value) => value,
+                    | FloatTokenType::Float16(value) =>
+                        LongDouble::from_double(f64::from(self.half_constant(value))),
                     | _ => LongDouble::ZERO,
                 })));
                 info.set_floating(match value {

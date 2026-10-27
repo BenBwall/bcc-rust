@@ -243,6 +243,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             return None;
         };
         let minimum_exponent = match self.floating_precision(scalar)? {
+            // A `_Float16` is normal from 2^-14, whatever precision it was
+            // evaluated to.
+            | _ if scalar == Scalar::Float16 => 16383 - 14,
             | 1 => 16383 - 126,
             | 2 => 16383 - 1022,
             | _ => 1,

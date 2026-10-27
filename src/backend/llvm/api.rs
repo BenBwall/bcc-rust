@@ -118,6 +118,7 @@ use llvm_sys::{
         LLVMGetParam,
         LLVMGetPoison,
         LLVMGetTarget,
+        LLVMHalfTypeInContext,
         LLVMInstructionEraseFromParent,
         LLVMInt1TypeInContext,
         LLVMInt8TypeInContext,
@@ -372,6 +373,8 @@ impl<'id> Session<'id> {
             | Type::I64 => unsafe { LLVMInt64TypeInContext(self.context) },
             // SAFETY: The session owns the live context.
             | Type::I128 => unsafe { LLVMInt128TypeInContext(self.context) },
+            // SAFETY: The session owns the live context.
+            | Type::F16 => unsafe { LLVMHalfTypeInContext(self.context) },
             // SAFETY: The session owns the live context.
             | Type::F32 => unsafe { LLVMFloatTypeInContext(self.context) },
             // SAFETY: The session owns the live context.

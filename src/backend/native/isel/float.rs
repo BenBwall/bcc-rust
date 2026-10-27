@@ -502,10 +502,11 @@ pub(super) const fn float_test(cond: FloatCC) -> (bool, Test) {
     }
 }
 
-/// The SSE width of a float type: `B32` for `f32`, `B64` for `f64`.
+/// The SSE width of a float type: `B32` for `f32` (and `f16`, whose low
+/// bits it moves), `B64` for `f64`.
 pub(super) const fn float_width(ty: Type) -> Width {
     match ty {
-        | Type::F32 => Width::B32,
+        | Type::F16 | Type::F32 => Width::B32,
         | _ => Width::B64,
     }
 }

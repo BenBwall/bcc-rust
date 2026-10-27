@@ -18,7 +18,7 @@ use super::{
 
 /// A binary floating format's precision and exponent range.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(super) struct Binary {
+pub(crate) struct Binary {
     /// Significand bits, including the leading (hidden or explicit) bit.
     precision:    u32,
     /// The exponent of the leading bit of the smallest normal value.
@@ -28,6 +28,13 @@ pub(super) struct Binary {
 }
 
 impl Binary {
+    /// bfloat16, GCC's and Clang's `__bf16`: binary32's exponent range with
+    /// eight significand bits.
+    pub(crate) const BFLOAT: Self = Self {
+        precision:    8,
+        min_exponent: -126,
+        max_exponent: 127,
+    };
     /// IEEE binary64, C's `double`.
     pub(super) const DOUBLE: Self = Self {
         precision:    53,
@@ -40,6 +47,12 @@ impl Binary {
         min_exponent: 1 - BIAS,
         max_exponent: BIAS,
     };
+    /// IEEE binary16, C23's `_Float16`.
+    pub(crate) const HALF: Self = Self {
+        precision:    11,
+        min_exponent: -14,
+        max_exponent: 15,
+    };
     /// IEEE binary32, C's `float`.
     pub(super) const SINGLE: Self = Self {
         precision:    24,
@@ -50,6 +63,7 @@ impl Binary {
     /// The total width of an IEEE interchange encoding of this format.
     const fn width(self) -> u32 {
         match self.precision {
+            | 8 | 11 => 16,
             | 24 => 32,
             | _ => 64,
         }
@@ -206,7 +220,7 @@ impl X87 {
     /// signaling NaN is quieted, keeping its payload in the high fraction
     /// bits.
     /// C99: §6.3.1.5 paragraph 1, p. 44; PDF p. 56.
-    fn from_binary(format: Binary, bits: u64) -> Self {
+    pub(crate) fn from_binary(format: Binary, bits: u64) -> Self {
         let width = format.width();
         let fraction_bits = format.precision - 1;
         let negative = (bits >> (width - 1)) & 1 != 0;
@@ -249,7 +263,7 @@ impl X87 {
     /// NaN is quieted and keeps the high bits of its payload, and an invalid
     /// encoding gives the format's default NaN, whose sign bit is set.
     /// C99: §6.3.1.5 paragraph 2, p. 44; PDF p. 56.
-    fn to_binary(self, format: Binary) -> u64 {
+    pub(crate) fn to_binary(self, format: Binary) -> u64 {
         let width = format.width();
         let fraction_bits = format.precision - 1;
         let sign = u64::from(self.is_negative()) << (width - 1);
@@ -300,6 +314,14 @@ pub(crate) fn nearest_binary(single: bool, negative: bool, exponent: i32, magnit
     } else {
         Binary::DOUBLE
     };
+    nearest(format, negative, exponent, magnitude)
+}
+
+/// The IEEE `format` encoding nearest the exact value `magnitude ×
+/// 2^exponent` with the given sign, rounded once.
+/// C99: §6.3.1.4 paragraph 2, pp. 43-44; PDF pp. 55-56; §6.3.1.5 paragraph
+/// 2, p. 44; PDF p. 56.
+pub(crate) fn nearest(format: Binary, negative: bool, exponent: i32, magnitude: u128) -> u64 {
     encode(format, negative, round(format, exponent, magnitude))
 }
 
