@@ -89,6 +89,11 @@ impl Binary128 {
         self.to_bits() & SIGN_BIT != 0
     }
 
+    /// Whether the encoding is a signaling NaN.
+    pub(crate) const fn is_signaling(self) -> bool {
+        matches!(self.class(), Class::Nan { signaling: true })
+    }
+
     /// Whether the encoding is a NaN.
     pub(crate) const fn is_nan(self) -> bool {
         matches!(self.class(), Class::Nan { .. })
@@ -118,13 +123,13 @@ impl Binary128 {
     }
 
     /// The NaN GCC's `__builtin_nanf128` (`quiet`) or `__builtin_nansf128`
-    /// builds from a tag's payload: the payload's low bits below the quiet
-    /// bit; a signaling NaN whose payload is zero gets the bit below the
+    /// builds from a tag's payload: the payload's low 111 bits, below the
+    /// quiet bit; a signaling NaN whose payload is zero gets the bit below the
     /// quiet bit, so it stays a NaN.
     /// C99: §7.12.11.2 paragraph 2, p. 237; PDF p. 249
     /// (implementation-defined payload).
-    pub(crate) const fn nan(quiet: bool, payload: u64) -> Self {
-        let payload = payload as u128 & (QUIET_BIT - 1);
+    pub(crate) const fn nan(quiet: bool, payload: u128) -> Self {
+        let payload = payload & (QUIET_BIT - 1);
         let fraction = if quiet {
             QUIET_BIT | payload
         } else if payload == 0 {

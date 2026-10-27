@@ -146,24 +146,13 @@ fn x87_from_magnitude(sign: bool, magnitude: u128) -> u128 {
     u128::from(significand) | biased << 64
 }
 
-/// The integer a floating constant truncates to (C99 §6.3.1.4 paragraph 1),
-/// or `None` for a NaN, an infinity or a value beyond `i128`.
-pub(crate) fn to_integer(value: &LongDouble) -> Option<i128> {
+/// The bits of the integer of `width` bits and the given signedness that a
+/// floating constant truncates to (C99 §6.3.1.4 paragraph 1), or `None` for
+/// a NaN, an infinity or a value out of the destination's range.
+pub(crate) fn to_integer(value: &LongDouble, width: u32, signed: bool) -> Option<u128> {
     let (sign, exponent, significand) = parts(value)?;
-    if exponent == 0x7FFF {
-        return None;
-    }
-    let power = i64::from(exponent) - X87_BIAS;
-    let magnitude: i128 = if exponent == 0 || power < 0 {
-        0
-    } else if power >= 127 {
-        return None;
-    } else if power >= 63 {
-        i128::from(significand) << (power - 63)
-    } else {
-        i128::from(significand >> (63 - power))
-    };
-    Some(if sign { -magnitude } else { magnitude })
+    let bits = u128::from(significand) | u128::from(u16::from(sign) << 15 | exponent) << 64;
+    X87::from_bits(bits).to_integer(signed, width)
 }
 
 /// The bits of the binary128 constant `value` converted to the floating
@@ -180,10 +169,11 @@ pub(crate) fn binary128_bits(value: Binary128, ty: Type) -> Option<u128> {
     })
 }
 
-/// The integer a binary128 constant truncates to (C99 §6.3.1.4 paragraph
-/// 1), or `None` for a NaN, an infinity or a value beyond `i128`.
-pub(crate) fn binary128_to_integer(value: Binary128) -> Option<i128> {
-    value.to_integer(true, 128).map(u128::cast_signed)
+/// The bits of the integer of `width` bits and the given signedness that a
+/// binary128 constant truncates to (C99 §6.3.1.4 paragraph 1), or `None`
+/// for a NaN, an infinity or a value out of the destination's range.
+pub(crate) fn binary128_to_integer(value: Binary128, width: u32, signed: bool) -> Option<u128> {
+    value.to_integer(signed, width)
 }
 
 /// The bytes of a floating constant in memory: little-endian, `size` bytes,

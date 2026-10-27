@@ -127,7 +127,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     /// C99: §6.3.1.3-§6.3.1.8, pp. 43-45; PDF pp. 55-57.
     pub(super) fn floating_value(&self, info: ExpressionInfo<'tu>) -> Option<Floating> {
-        if let Some(value) = info.floating {
+        if let Some(value) = info.floating() {
             return Some(value);
         }
         let value = info.integer?;
@@ -141,8 +141,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     pub(super) fn constant_truth(info: ExpressionInfo<'tu>) -> Option<bool> {
         info.integer
             .map(|v| v.value != 0)
-            .or_else(|| info.floating.map(Floating::truth))
-            .or_else(|| info.binary128.map(|value| value.truth()))
+            .or_else(|| info.floating().map(Floating::truth))
+            .or_else(|| info.binary128().map(Binary128Value::truth))
     }
 
     /// C99: §6.3.1.5-§6.3.1.8, pp. 44-45; PDF pp. 56-57.
@@ -201,10 +201,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// C99: §6.3.1.4 paragraph 2, pp. 43-44; PDF pp. 55-56; §6.3.1.5
     /// paragraph 1, p. 44; PDF p. 56.
     pub(super) fn binary128_value(info: ExpressionInfo<'tu>) -> Option<Binary128Value> {
-        if let Some(&value) = info.binary128 {
+        if let Some(value) = info.binary128() {
             return Some(value);
         }
-        if let Some(value) = info.floating {
+        if let Some(value) = info.floating() {
             return Some(Binary128Value {
                 real: binary128_from_carrier(value.real)?,
                 imag: binary128_from_carrier(value.imag)?,
@@ -241,14 +241,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 self.types.nodes[ty.index],
                 TypeKind::Scalar(Scalar::ComplexFloat128)
             );
-            info.binary128 = self.retain_binary128(Self::binary128_value(operand).map(|value| {
+            info.set_binary128(Self::binary128_value(operand).map(|value| {
                 if complex {
                     value
                 } else {
                     Binary128Value::real(value.real)
                 }
             }));
-        } else if let Some(&value) = operand.binary128 {
+        } else if let Some(value) = operand.binary128() {
             if matches!(self.types.nodes[ty.index], TypeKind::Scalar(Scalar::Bool)) {
                 info.integer = Some(Integer::int(i128::from(value.truth())).cast(1, false));
             } else if let Some((bits, signed)) = self.integer_type(ty) {
@@ -257,18 +257,35 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     .to_integer(signed, bits)
                     .map(|bits_value| Integer::int(bits_value.cast_signed()).cast(bits, signed));
             } else if self.arithmetic(ty) {
-                info.floating = self.floating_from_binary128(value, ty);
+                info.set_floating(self.floating_from_binary128(value, ty));
             }
         }
         self.mark_unfolded_binary128(info);
     }
 
-    /// Keeps a folded binary128 value in the translation unit's arena.
-    pub(super) fn retain_binary128(
-        &self,
-        value: Option<Binary128Value>,
-    ) -> Option<&'tu Binary128Value> {
-        value.map(|value| &*self.types.tu.alloc(value))
+    /// Keeps only the value that belongs to a constant's type. An operator
+    /// whose operands were converted (a conditional's arms, a usual
+    /// arithmetic conversion) may have copied an operand's integer value or
+    /// a value of another floating format; the constant's value is the
+    /// converted one, rounded as its type rounds, so a floating constant
+    /// keeps no integer value and only a binary128 one keeps a binary128
+    /// value.
+    /// C99: §6.3.1.4 paragraph 2, pp. 43-44; PDF pp. 55-56; §6.3.1.5,
+    /// p. 44; PDF p. 56; §6.3.1.8 paragraph 1, pp. 44-45; PDF pp. 56-57.
+    pub(super) fn constrain_constant(&self, info: &mut ExpressionInfo<'tu>) {
+        let ty = self.types.non_atomic(info.ty);
+        let TypeKind::Scalar(scalar) = self.types.nodes[ty.index] else {
+            return;
+        };
+        if !scalar.floating() {
+            info.set_binary128(None);
+        } else if self.binary128_type(ty) {
+            info.integer = None;
+            info.set_floating(None);
+        } else {
+            info.integer = None;
+            info.set_binary128(None);
+        }
     }
 
     /// Marks a binary128 arithmetic constant whose value was not folded, so
@@ -276,7 +293,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     pub(super) fn mark_unfolded_binary128(&self, info: &mut ExpressionInfo<'tu>) {
         if self.binary128_type(info.ty)
             && info.constant == ConstantClass::Arithmetic
-            && info.binary128.is_none()
+            && info.binary128().is_none()
         {
             info.unfolded_binary128 = true;
         }
@@ -409,6 +426,26 @@ pub(crate) struct Binary128Value {
 }
 
 impl Binary128Value {
+    /// The two components' little-endian bytes, real first.
+    pub(super) fn to_bytes(self) -> [u8; 32] {
+        let mut bytes = [0; 32];
+        bytes[..16].copy_from_slice(&self.real.to_bits().to_le_bytes());
+        bytes[16..].copy_from_slice(&self.imag.to_bits().to_le_bytes());
+        bytes
+    }
+
+    pub(super) fn from_bytes(bytes: [u8; 32]) -> Self {
+        let component = |range: std::ops::Range<usize>| {
+            let mut part = [0; 16];
+            part.copy_from_slice(&bytes[range]);
+            Binary128::from_bits(u128::from_le_bytes(part))
+        };
+        Self {
+            real: component(0..16),
+            imag: component(16..32),
+        }
+    }
+
     pub(crate) const fn real(value: Binary128) -> Self {
         Self {
             real: value,

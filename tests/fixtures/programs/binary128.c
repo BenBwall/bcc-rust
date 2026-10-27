@@ -104,6 +104,19 @@ static const int truncated = (int)(-7.75Q);
 static const unsigned long long wide = (unsigned long long)1.8446744073709551615e19Q;
 static const _Bool truth = 0.5Q != 0;
 static const complex_quad complex_folded = 1.5Q + 2.0Qi;
+/* A converted operand's integer value does not survive the conversion:
+   2^113 + 1 rounds to 2^113 in binary128, as 2^62 + 1 does in double. */
+#define ROUNDS ((unsigned __int128)1 << 113)
+static const int converted_equal = (1 ? ROUNDS + 1 : 0.0Q) == (1 ? ROUNDS : 0.0Q);
+static const int converted_double = (1 ? (1LL << 62) + 1 : 0.0) == (1 ? 1LL << 62 : 0.0);
+static const unsigned __int128 converted_wide = 1 ? ROUNDS + 1 : 0.0Q;
+static const long long converted_long = 1 ? (1LL << 62) + 1 : 0.0;
+static const int converted_branch = (1 ? ROUNDS + 1 : 0.0Q) == ROUNDS ? 1 : 2;
+/* Unsigned 128-bit destinations hold 2^127 and up. */
+static const unsigned __int128 unsigned_top = 0x1p127Q;
+static const unsigned __int128 unsigned_top_double = 0x1.8p127;
+static const quad wide_nan = __builtin_nanf128("0x10000000000000000");
+static const quad wide_signaling = __builtin_nansf128("0xffffffffffffffffffffffffffffffffff");
 
 int main(void) {
     volatile quad values[] = {
@@ -248,6 +261,19 @@ int main(void) {
         text(label, formats[i], values[9]);
         text(label, formats[i], values[11]);
     }
+    printf("converted %d %d %llx %lld %d\n", converted_equal, converted_double,
+           (unsigned long long)(converted_wide >> 64), converted_long, converted_branch);
+    printf("unsigned %llx %llx\n", (unsigned long long)(unsigned_top >> 64),
+           (unsigned long long)(unsigned_top_double >> 64));
+    bits("wide_nan", wide_nan);
+    bits("wide_signaling", wide_signaling);
+    bits("wide_nan_dec", __builtin_nanf128("18446744073709551617"));
+    volatile quad quad_signaling = __builtin_nansf128("3");
+    bits("fmin_snan", fminf128(quad_signaling, 1.0Q));
+    bits("fmin_snan2", fminf128(1.0Q, quad_signaling));
+    bits("fmax_snan", fmaxf128(quad_signaling, 1.0Q));
+    bits("fmax_qnan", fmaxf128(values[10], 1.0Q));
+    bits("fmin_qnan", fminf128(1.0Q, values[11]));
     char small_buffer[4];
     printf("short %d ", strfromf128(small_buffer, sizeof small_buffer, "%f", values[5]));
     printf("%s\n", small_buffer);

@@ -136,7 +136,7 @@ impl DefaultHost<'_> {
                 self.text.clear();
                 memory.read_c_string(args[0], &mut self.text)?;
                 let payload = super::nan_payload(std::str::from_utf8(&self.text).unwrap_or(""));
-                Binary128::nan(true, payload)
+                Binary128::nan(true, u128::from(payload))
             },
             | _ => unreachable!("{} is not a binary128 function", call.name),
         };
@@ -216,8 +216,10 @@ impl DefaultHost<'_> {
     }
 }
 
-/// The `fmaxf128` or `fminf128` of two values: a NaN operand gives the other
-/// operand, and of equal values the first, as glibc's generic code gives.
+/// The `fmaxf128` or `fminf128` of two values, as glibc's generic code
+/// computes it: the ordered choice (the first of equal values), else, when
+/// either is a signaling NaN, `x + y`, which quiets it, else the operand
+/// that is not a NaN (the first when both are quiet NaNs).
 /// C99: §F.9.9.2 paragraph 2, p. 466; PDF p. 478.
 fn minimum_maximum(minimum: bool, x: Binary128, y: Binary128) -> Binary128 {
     match x.compare(y) {
@@ -229,10 +231,9 @@ fn minimum_maximum(minimum: bool, x: Binary128, y: Binary128) -> Binary128 {
             };
             if take_x { x } else { y }
         },
-        // Two NaNs, or a signaling one, give a NaN computed from both.
-        | None if x.is_nan() && y.is_nan() => x.add(y),
-        | None if x.is_nan() => y,
-        | None => x,
+        | None if x.is_signaling() || y.is_signaling() => x.add(y),
+        | None if y.is_nan() => x,
+        | None => y,
     }
 }
 
@@ -276,7 +277,10 @@ fn scan(
             }
         }
         let payload = super::nan_payload(payload);
-        return (Binary128::nan(true, payload).with_sign(negative), end);
+        return (
+            Binary128::nan(true, u128::from(payload)).with_sign(negative),
+            end,
+        );
     }
     let hex = (starts_with(b"0x"))
         && rest

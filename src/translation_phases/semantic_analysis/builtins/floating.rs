@@ -63,7 +63,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         } else {
             LongDouble::from_double(f64::INFINITY)
         };
-        result.floating = Some(Floating::real(value));
+        result.set_floating(Some(Floating::real(value)));
         result.constant = ConstantClass::Arithmetic;
         result
     }
@@ -133,7 +133,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     .and_then(|value| value.real.x87_parts())
                     .map(|parts| parts.0)
                 {
-                    result.floating = Some(Floating::real(value.real.with_sign(sign)));
+                    result.set_floating(Some(Floating::real(value.real.with_sign(sign))));
                     result.constant = ConstantClass::Arithmetic;
                 }
             } else if let Some(value) =
@@ -205,7 +205,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     .and_then(|value| self.round_floating(value, operand))
             };
             if self.binary128_type(operand) {
-                result.binary128 = self.retain_binary128(
+                result.set_binary128(
                     Self::binary128_value(real)
                         .zip(Self::binary128_value(imaginary))
                         .map(|(re, im)| Binary128Value {
@@ -216,10 +216,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 result.constant = ConstantClass::Arithmetic;
                 self.mark_unfolded_binary128(&mut result);
             } else if let Some((re, im)) = value(real).zip(value(imaginary)) {
-                result.floating = Some(Floating {
+                result.set_floating(Some(Floating {
                     real: re.real,
                     imag: im.real,
-                });
+                }));
                 result.constant = ConstantClass::Arithmetic;
             }
         }
@@ -286,6 +286,39 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 /// or unrecognized n-char sequence selects the implementation's default NaN.
 /// C99: §7.12.11.2p2, p. 237; PDF p. 249 (implementation-defined payload).
 pub(in crate::translation_phases::semantic_analysis) fn nan_payload(tag: &[u8]) -> u64 {
+    let Some((radix, digits)) = payload_digits(tag) else {
+        return 0;
+    };
+    let mut payload = 0_u64;
+    for digit in digits {
+        payload = payload
+            .saturating_mul(u64::from(radix))
+            .saturating_add(u64::from(digit));
+    }
+    payload
+}
+
+/// The payload a binary128 NaN builtin takes from its tag: the tag's
+/// unsigned value in base 0, of which GCC keeps the low bits that fit the
+/// fraction, so a payload may exceed 64 bits; an unrecognized tag gives
+/// zero.
+/// GNU extension: GCC manual, "Other Builtins" (`__builtin_nanf128`).
+pub(in crate::translation_phases::semantic_analysis) fn nan_payload_wide(tag: &[u8]) -> u128 {
+    let Some((radix, digits)) = payload_digits(tag) else {
+        return 0;
+    };
+    let mut payload = 0_u128;
+    for digit in digits {
+        payload = payload
+            .wrapping_mul(u128::from(radix))
+            .wrapping_add(u128::from(digit));
+    }
+    payload
+}
+
+/// The radix and digit values of a NaN tag in base 0, or `None` when a
+/// character is not a digit of the radix.
+fn payload_digits(tag: &[u8]) -> Option<(u32, impl Iterator<Item = u32>)> {
     let tag = tag.split(|&byte| byte == 0).next().unwrap_or_default();
     let (radix, digits) = if tag.starts_with(b"0x") || tag.starts_with(b"0X") {
         (16, &tag[2..])
@@ -294,14 +327,15 @@ pub(in crate::translation_phases::semantic_analysis) fn nan_payload(tag: &[u8]) 
     } else {
         (10, tag)
     };
-    let mut payload = 0_u64;
-    for &byte in digits {
-        let Some(digit) = char::from(byte).to_digit(radix) else {
-            return 0;
-        };
-        payload = payload
-            .saturating_mul(u64::from(radix))
-            .saturating_add(u64::from(digit));
-    }
-    payload
+    digits
+        .iter()
+        .all(|&byte| char::from(byte).is_digit(radix))
+        .then(|| {
+            (
+                radix,
+                digits
+                    .iter()
+                    .filter_map(move |&byte| char::from(byte).to_digit(radix)),
+            )
+        })
 }

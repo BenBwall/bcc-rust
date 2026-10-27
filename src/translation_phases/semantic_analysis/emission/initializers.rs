@@ -305,8 +305,8 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                         || info.constant == ConstantClass::Address
                         || (info.constant == ConstantClass::Arithmetic
                             && (info.integer.is_some()
-                                || info.floating.is_some()
-                                || info.binary128.is_some()
+                                || info.floating().is_some()
+                                || info.binary128().is_some()
                                 || info.unfolded_binary128))
                         || (info.static_address
                             && matches!(

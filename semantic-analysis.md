@@ -2648,8 +2648,16 @@ through every operation and conversion matched libgcc and glibc
 (`sqrtf128`, `fmodf128`) bit for bit; unit tests keep fixed vectors.
 
 Semantic analysis folds binary128 constants with it. `ExpressionInfo` keeps
-`binary128: Option<Binary128Value>` (real and imaginary components) beside
-`floating`, whose host-carrier values cannot hold 113 bits:
+a folded floating value in one byte-aligned slot that holds either a
+standard value in the host carrier or a binary128 one (real and imaginary
+components, 32 bytes), read through `floating()` and `binary128()`; a
+constant has one floating type, so the record stays 160 bytes. Whenever a
+record is retained (`constrain_constant`) its value is made to belong to its
+type: a floating constant keeps no integer value, and only a binary128 one
+keeps a binary128 value. An operator whose operand was converted, such as a
+conditional with an integer arm and a binary128 or `double` one, therefore
+cannot fold later operators with the unconverted integer; `(1 ? N + 1 :
+0.0q) == (1 ? N : 0.0q)` for `N` = 2^113 is 1, as in GCC and Clang. Folding:
 
 - a `q`/`Q`/`f128` literal is its parsed value, an imaginary literal its
   imaginary part;
@@ -2664,6 +2672,12 @@ Semantic analysis folds binary128 constants with it. `ExpressionInfo` keeps
   type with one rounding, as `__trunctfdf2` rounds, never through the x87
   carrier; to an integer type it truncates, and `(int)1.5q` is an integer
   constant expression like any cast of a floating constant (§6.6p6);
+- static initializers convert a floating constant to an integer object of
+  the destination's width and signedness, so `unsigned __int128` takes
+  values from 2^127 up;
+- `__builtin_nanf128` and `__builtin_nansf128` keep the low 111 bits of a
+  tag wider than 64 bits, as GCC and Clang do; glibc's run-time `nanf128`
+  saturates its payload at 64 bits instead;
 - the product and quotient of two complex values, which `__multc3` and
   `__divtc3` compute with their own infinity recovery, are not folded:
   `unfolded_binary128` now marks only those and what is computed from them,

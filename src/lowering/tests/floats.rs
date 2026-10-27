@@ -224,14 +224,26 @@ fn floating_constants_truncate_toward_zero_as_integers() {
         9.007199254740993e15,
     ] {
         assert_eq!(
-            to_integer(&LongDouble::from_double(value)),
-            Some(value as i128),
+            to_integer(&LongDouble::from_double(value), 128, true),
+            Some((value as i128).cast_unsigned()),
             "{value}"
         );
     }
-    assert_eq!(to_integer(&LongDouble::from_double(f64::NAN)), None);
-    assert_eq!(to_integer(&LongDouble::from_double(f64::INFINITY)), None);
-    assert_eq!(to_integer(&LongDouble::from_double(1e300)), None);
+    assert_eq!(
+        to_integer(&LongDouble::from_double(f64::NAN), 128, true),
+        None
+    );
+    assert_eq!(
+        to_integer(&LongDouble::from_double(f64::INFINITY), 128, true),
+        None
+    );
+    assert_eq!(to_integer(&LongDouble::from_double(1e300), 128, true), None);
+    // An unsigned 128-bit destination holds 2^127 and up; a signed one
+    // does not.
+    let high = LongDouble::from_double(2_f64.powi(127));
+    assert_eq!(to_integer(&high, 128, false), Some(1 << 127));
+    assert_eq!(to_integer(&high, 128, true), None);
+    assert_eq!(to_integer(&LongDouble::from_double(-1.0), 32, false), None);
 }
 
 #[test]

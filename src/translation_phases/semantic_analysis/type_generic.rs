@@ -197,7 +197,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 // GCC folds these, and `__builtin_nanf128` takes the tag's
                 // payload as `nanf128` does (C99 §7.12.11.2p2, p. 237;
                 // PDF p. 249).
-                let payload = super::builtins::nan_payload(tag.unwrap_or("").as_bytes());
+                let payload = super::builtins::nan_payload_wide(tag.unwrap_or("").as_bytes());
                 let operand = |index: usize| {
                     arguments
                         .get(index)
@@ -213,18 +213,18 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     | _ => Some(Binary128::infinity(false)),
                 }
                 .map(Binary128Value::real);
-                result.binary128 = self.retain_binary128(folded);
+                result.set_binary128(folded);
                 self.mark_unfolded_binary128(&mut result);
             } else if nan {
                 // GCC's `__builtin_nans` family: a signaling NaN of the
                 // result's format whose payload the tag names.
                 let payload = super::builtins::nan_payload(tag.unwrap_or("").as_bytes());
                 let precision = self.floating_precision(scalar).unwrap_or(3);
-                result.floating = Some(Floating::real(LongDouble::signaling_nan(
+                result.set_floating(Some(Floating::real(LongDouble::signaling_nan(
                     payload, precision,
-                )));
+                ))));
             } else {
-                result.floating = Some(Floating::real(LongDouble::from_double(f64::INFINITY)));
+                result.set_floating(Some(Floating::real(LongDouble::from_double(f64::INFINITY))));
             }
         }
         result
@@ -303,14 +303,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             result.constant = operand.constant;
         } else {
             result.unfolded_binary128 = operand.unfolded_binary128;
-            result.floating = operand.floating.map(|value| {
+            result.set_floating(operand.floating().map(|value| {
                 Floating::real(if op == UnaryOperator::Real {
                     value.real
                 } else {
                     value.imag
                 })
-            });
-            result.binary128 = self.retain_binary128(operand.binary128.map(|value| {
+            }));
+            result.set_binary128(operand.binary128().map(|value| {
                 Binary128Value::real(if op == UnaryOperator::Real {
                     value.real
                 } else {
@@ -320,12 +320,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             if !complex && op == UnaryOperator::Imag {
                 result.category = ValueCategory::Rvalue;
                 result.constant = operand.constant;
-                if operand.floating.is_some() {
-                    result.floating = Some(Floating::real(LongDouble::ZERO));
+                if operand.floating().is_some() {
+                    result.set_floating(Some(Floating::real(LongDouble::ZERO)));
                 }
                 if component == Scalar::Float128 && operand.constant == ConstantClass::Arithmetic {
-                    result.binary128 =
-                        self.retain_binary128(Some(Binary128Value::real(Binary128::zero(false))));
+                    result.set_binary128(Some(Binary128Value::real(Binary128::zero(false))));
                 }
             } else {
                 result.constant = operand.constant;
