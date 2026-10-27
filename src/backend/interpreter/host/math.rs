@@ -1,9 +1,10 @@
 //! C99 real math functions for the default interpreter host.
 //! Native libm computes f32/f64 results in their own precision. Target long
 //! double uses that target's IR representation: binary64 goes to native libm,
-//! and x87 `f80` to the software x87 model in `math/extended.rs`, which
-//! supports the functions with exact results. Guest pointers are never passed
-//! to native library code.
+//! and x87 `f80` to `math/extended.rs`, which computes glibc's x86-64 results
+//! on the software x87 model, with the host's x87 unit for the instructions
+//! whose results come from microcode. Guest pointers are never passed to
+//! native library code.
 //! C99: §7.12.4-§7.12.13, pp. 218-239; PDF pp. 230-251.
 
 use super::{

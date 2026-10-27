@@ -200,6 +200,161 @@ impl X87 {
     }
 }
 
+impl X87 {
+    /// `self × other + addend` rounded once, as a correctly rounded `fma`
+    /// gives it, for finite or zero operands; others give the product's
+    /// sum.
+    /// C99: §7.12.13.1 paragraph 2, p. 239; PDF p. 251.
+    pub(crate) fn mul_add(self, other: Self, addend: Self) -> Self {
+        let (
+            Class::Finite {
+                exponent: a_exponent,
+                significand: a,
+            },
+            Class::Finite {
+                exponent: b_exponent,
+                significand: b,
+            },
+        ) = (self.class(), other.class())
+        else {
+            return self.mul(other).add(addend);
+        };
+        let product_negative = self.is_negative() != other.is_negative();
+        let (c_exponent, c) = match addend.class() {
+            | Class::Zero => return self.mul(other),
+            | Class::Finite {
+                exponent,
+                significand,
+            } => (exponent, significand),
+            | _ => return self.mul(other).add(addend),
+        };
+        // Both terms as 256-bit magnitudes with their leading bit at 254,
+        // leaving a bit for the carry of a sum; the smaller one shifted to
+        // the larger's scale, its lost bits kept as a sticky bit.
+        let product = u128::from(a) * u128::from(b);
+        let product_shift = product.leading_zeros();
+        let product_exponent = a_exponent + b_exponent - product_shift as i32 - 127;
+        let product = Wide::from_high(product << product_shift).shift_right(1);
+        let c_shift = c.leading_zeros();
+        let c_exponent = c_exponent - c_shift as i32 - 63 - 128;
+        let c = Wide::from_high(u128::from(c << c_shift) << 64).shift_right(1);
+        let ((high_exponent, high, high_negative), (low_exponent, low, low_negative)) =
+            if product_exponent >= c_exponent {
+                (
+                    (product_exponent, product, product_negative),
+                    (c_exponent, c, addend.is_negative()),
+                )
+            } else {
+                (
+                    (c_exponent, c, addend.is_negative()),
+                    (product_exponent, product, product_negative),
+                )
+            };
+        let low = low.shift_right_sticky((high_exponent - low_exponent).unsigned_abs());
+        let (negative, sum) = if high_negative == low_negative {
+            (high_negative, high.add(low))
+        } else {
+            match high.cmp(&low) {
+                | Ordering::Greater => (high_negative, high.sub(low)),
+                | Ordering::Less => (low_negative, low.sub(high)),
+                | Ordering::Equal => return Self::zero(false),
+            }
+        };
+        let (exponent, magnitude) = sum.narrow(high_exponent);
+        Self::rounded(negative, exponent, magnitude)
+    }
+}
+
+/// A 256-bit magnitude, for the exact sum `mul_add` rounds.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+struct Wide {
+    high: u128,
+    low:  u128,
+}
+
+impl Wide {
+    const fn from_high(high: u128) -> Self {
+        Self { high, low: 0 }
+    }
+
+    /// Shifts right by `shift` bits, discarding them.
+    fn shift_right(self, shift: u32) -> Self {
+        match shift {
+            | 0 => self,
+            | 1..128 => Self {
+                high: self.high >> shift,
+                low:  (self.low >> shift) | (self.high << (128 - shift)),
+            },
+            | 128..256 => Self {
+                high: 0,
+                low:  self.high >> (shift - 128),
+            },
+            | _ => Self { high: 0, low: 0 },
+        }
+    }
+
+    /// Shifts right by `shift` bits, setting the lowest bit when any
+    /// nonzero bit is lost.
+    fn shift_right_sticky(self, shift: u32) -> Self {
+        let shifted = self.shift_right(shift);
+        let lost = if shift >= 256 {
+            self != Self::from_high(0)
+        } else {
+            shifted.shift_left(shift) != self
+        };
+        Self {
+            low: shifted.low | u128::from(lost),
+            ..shifted
+        }
+    }
+
+    fn shift_left(self, shift: u32) -> Self {
+        match shift {
+            | 0 => self,
+            | 1..128 => Self {
+                high: (self.high << shift) | (self.low >> (128 - shift)),
+                low:  self.low << shift,
+            },
+            | 128..256 => Self {
+                high: self.low << (shift - 128),
+                low:  0,
+            },
+            | _ => Self { high: 0, low: 0 },
+        }
+    }
+
+    fn add(self, other: Self) -> Self {
+        let (low, carry) = self.low.overflowing_add(other.low);
+        Self {
+            high: self.high + other.high + u128::from(carry),
+            low,
+        }
+    }
+
+    fn sub(self, other: Self) -> Self {
+        let (low, borrow) = self.low.overflowing_sub(other.low);
+        Self {
+            high: self.high - other.high - u128::from(borrow),
+            low,
+        }
+    }
+
+    /// The nonzero magnitude `self × 2^exponent` as its leading 128 bits
+    /// and their exponent, the lost low bits kept as a sticky bit.
+    fn narrow(self, exponent: i32) -> (i32, u128) {
+        let leading = if self.high == 0 {
+            128 + self.low.leading_zeros()
+        } else {
+            self.high.leading_zeros()
+        };
+        let normalized = self.shift_left(leading);
+        (
+            exponent + 128 - leading as i32,
+            normalized.high | u128::from(normalized.low != 0),
+        )
+    }
+}
+
 /// `a + b`, or `a - b` when `subtract`.
 fn add(a: X87, b: X87, subtract: bool) -> X87 {
     if let Some(result) = special_operands(a, b) {

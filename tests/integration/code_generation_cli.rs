@@ -946,6 +946,17 @@ int main(void) { char *p = malloc(16); return __builtin_object_size(p, 0) & 0xff
         }
     }
 
+    /// `tests/fixtures/programs/long_double_math.c` passes values of every
+    /// x87 encoding class through the transcendental `long double` libm
+    /// functions and prints the result bits: the interpreter, which runs
+    /// glibc's algorithms with the processor computing `f2xm1`, `fyl2x`,
+    /// `fyl2xp1` and `fpatan`, must print what the program built against
+    /// glibc prints on the same processor.
+    #[test]
+    fn long_double_transcendentals_match_glibc_bit_for_bit() {
+        interpreter_matches_glibc("long_double_math.c", &[]);
+    }
+
     /// `%Lf` reads the target's `long double` from a `va_list` after ABI
     /// lowering: an x87 value in the System V overflow area, a reference to
     /// one in a MinGW slot, and an inline binary64 in an MSVC slot.
@@ -1469,25 +1480,33 @@ int main(void) { wchar_t a[2] = {1, 2}, b[2]; wmemcpy(b, a, 1ULL << 62); return 
         assert!(stderr.contains("out-of-bounds access"), "{stderr}");
     }
 
-    /// The interpreter computes the exact x87 `long double` functions and
-    /// refuses the transcendental ones, whose glibc results it cannot
-    /// reproduce bit for bit.
+    /// The interpreter computes the x87 `long double` functions, including
+    /// the transcendental ones on an x86-64 host, and refuses those it does
+    /// not implement, such as `tgammal`.
     #[test]
-    fn host_math_runs_exact_x87_functions_and_refuses_transcendentals() {
+    fn host_math_runs_x87_functions_and_refuses_the_rest() {
         for target in [
             "--target=x86_64-w64-windows-gnu",
             "--target=x86_64-unknown-linux-gnu",
         ] {
-            for source in [
+            let mut sources = vec![
                 "long double fabsl(long double); int main(void) { return fabsl(-1.5L)!=1.5L; }",
                 "float nexttowardf(float,long double); int main(void) { return \
                  nexttowardf(1.0f,2.0L)<=1.0f; }",
-            ] {
+                "long double sinl(long double); int main(void) { return sinl(1.0L) <= 0.84L; }",
+            ];
+            if cfg!(target_arch = "x86_64") {
+                sources.push(
+                    "long double expl(long double); int main(void) { return expl(1.0L) <= 2.718L; \
+                     }",
+                );
+            }
+            for source in sources {
                 let output = bcc(source, &["--interpret", target]);
                 assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
             }
             let output = bcc(
-                "long double sinl(long double); int main(void) { return sinl(1.0L) > 0; }",
+                "long double tgammal(long double); int main(void) { return tgammal(3.0L) > 0; }",
                 &["--interpret", target],
             );
             assert_eq!(output.status.code(), Some(70), "{}", text(&output.stderr));

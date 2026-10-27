@@ -239,7 +239,7 @@ impl fmt::Display for UbKind {
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub(crate) enum Unsupported {
     /// `f128` arithmetic, or an `f80` library function the host does not
-    /// compute exactly.
+    /// compute as glibc does.
     WideFloat,
     /// An object larger than [`Limits::max_object_size`] or than memory.
     ///

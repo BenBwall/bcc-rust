@@ -1271,10 +1271,24 @@ exceptions masked): exact integer arithmetic rounded once, pseudo-denormals
 as valid operands, unnormals and pseudo-NaNs as invalid operands that give the
 negative "real indefinite" NaN, and the processor's NaN propagation. A test
 compares it with the host's x87 unit on random encodings of every class. The
-host computes the `long double` functions whose glibc results are exact or
-correctly rounded (rounding to integers, `sqrtl`, `fmodl`, `remainderl`,
-glibc's `remquol` algorithm, scaling, decomposition, neighbours, `nanl`)
-and refuses the transcendental ones and `fmal`. `printf` formats every
+host computes the `long double` functions as glibc's x86-64 versions do,
+bit for bit: the exact ones (rounding to integers, `sqrtl`, `fmodl`,
+`remainderl`, glibc's `remquol` algorithm, scaling, decomposition,
+neighbours, `nanl`) and the ports of glibc's C code (`sinl`, `cosl` and
+`tanl` with their argument reduction, `asinl`, the hyperbolic functions,
+`erfl`, `erfcl`, `cbrtl`, `hypotl`, and `fmal` correctly rounded) on the
+x87 model. The exponentials, logarithms, `powl` and the arctangents follow
+glibc's assembly language, whose `f2xm1`, `fyl2x`, `fyl2xp1` and `fpatan`
+results come from the processor's microcode: those four instructions run
+on the host's own x87 unit, so the results match glibc on the same
+processor (they may differ between processor makers, as glibc's do), and a
+host without an x87 unit refuses those functions. The return values of
+glibc's SVID wrappers apply (`NAN` for `asinl`, `acosl` and the logarithms
+of out-of-domain arguments). `lgammal` and `tgammal` are refused.
+`src/backend/interpreter/host/math/extended/tests.rs` compares every
+function with the test binary's glibc on random encodings, and
+`tests/fixtures/programs/long_double_math.c` with a program built against
+glibc. `printf` formats every
 conversion of `double` and `long double` exactly, digit for digit as glibc
 does, with halfway cases to even. Guest errno and floating-environment APIs
 remain outside the host implementation.
