@@ -19,8 +19,8 @@ use std::fmt::Write as _;
 use crate::{
     translation_phases::{
         Context,
-        SourcePosition,
         preprocessing::{
+            ReadAt,
             StringTokenType,
             Token,
             TokenType,
@@ -193,19 +193,30 @@ impl<'a> TextWriter<'a> {
 
     /// Writes `token`, starting a new line or a line marker first when it
     /// belongs to a later line or another file.
-    pub(crate) fn token(
-        &mut self,
-        context: &Context<'_>,
-        token: Token,
-        at: Option<(u32, SourcePosition)>,
-    ) {
+    pub(crate) fn token(&mut self, context: &Context<'_>, token: Token, at: Option<ReadAt>) {
         let spelled = context.get_source_vectors(token.source_vectors).first();
-        // Where the token belongs: its own place if the reader's file spells
-        // it, otherwise the line the reader is on.
+        // Where the token belongs: where the outermost invocation is for a
+        // token a macro produced, even when the macro is defined in the same
+        // file, otherwise its own place if the reader's file spells it, and
+        // failing both the line the reader is on.
         let (file, line, column) = match (spelled, at) {
-            | (Some(vector), Some((file, _))) if vector.source_file_index == file =>
-                (file, vector.line, vector.column),
-            | (_, Some((file, position))) => (file, position.line, 0),
+            | (
+                _,
+                Some(ReadAt {
+                    file,
+                    expansion: Some(invocation),
+                    ..
+                }),
+            ) if invocation.source_file_index == file => (file, invocation.line, invocation.column),
+            | (
+                Some(vector),
+                Some(ReadAt {
+                    file,
+                    expansion: None,
+                    ..
+                }),
+            ) if vector.source_file_index == file => (file, vector.line, vector.column),
+            | (_, Some(ReadAt { file, position, .. })) => (file, position.line, 0),
             | (Some(vector), None) => (vector.source_file_index, vector.line, vector.column),
             | (None, None) => (0, 0, 0),
         };

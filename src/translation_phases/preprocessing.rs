@@ -71,6 +71,7 @@ pub(crate) use errors::{
 use expression::PreprocessorExpressionParser;
 pub(crate) use macro_expansion::HashHash;
 use macro_expansion::MacroDefinition;
+pub(crate) use runtime::ReadAt;
 use runtime::{
     OutputPurpose,
     PreprocessorState,

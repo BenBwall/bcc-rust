@@ -69,6 +69,7 @@ pub(super) use frames::{
     TokenizerFrameType,
 };
 pub(super) use lifecycle::Resting;
+pub(crate) use text_output::ReadAt;
 
 use super::{
     conditional::ConditionalGroup,

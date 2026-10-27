@@ -341,6 +341,29 @@ mod tests {
     }
 
     #[test]
+    fn preprocessing_writes_an_expansion_where_its_invocation_is() {
+        let project = Project::new();
+        std::fs::write(
+            project.path("swap.c"),
+            "#define SWAP(a, b) do { \\\n    int t = (a); (a) = (b); (b) = t; } while (0)\nvoid \
+             f(int x, int y) {\n    if (x > y) {\n        SWAP(x, y);\n    }\n}\n",
+        )
+        .unwrap();
+        // The replacement list is spelled on line 1 of the same file, but
+        // its tokens belong on the invocation's line, indented like it, as
+        // GCC writes them.
+        for flags in [&["-E", "-P"][..], &["-E"]] {
+            let output = project.bcc(&[flags, &["swap.c"]].concat());
+            succeeds(&output);
+            let text = stdout(&output);
+            assert!(
+                text.contains("    if (x > y) {\n        do { int t ="),
+                "{text}"
+            );
+        }
+    }
+
+    #[test]
     fn preprocessing_writes_source_text_with_line_markers() {
         let project = Project::new();
         let output = project.bcc(&["-E", "main.c"]);
