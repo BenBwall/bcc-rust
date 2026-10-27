@@ -1400,9 +1400,39 @@ buffer size, with glibc's mode constants (or the Windows runtimes' on
 Windows targets). The command line replays `stdout` and `stderr` in the
 order a shared pipe or file would have received them. Host files are
 opt-in: with `--interpret-allow-fs`, `fopen` (including C11's exclusive
-`x`), `freopen` and `remove` act on the host's file system; without it they
-fail as glibc does for a permission error (`EACCES`), the command line notes
-the refusal, and `tmpnam` names files without looking at the file system.
+`x`), `freopen`, `remove`, `open`, `stat` and `unlink` act on the host's
+file system; without it they fail as glibc does for a permission error
+(`EACCES`), the command line notes the refusal, and `tmpnam` names files
+without looking at the file system.
+
+The POSIX descriptors (`host/posix.rs`) are a table of numbers from 0 to
+1023, of which only 0, 1 and 2 (the console) are open at the start, handed
+out lowest first: `open` and `openat` with Linux's flags and the mode
+after the umask, `creat`, `close`, `read`, `write`, `lseek`, `dup`,
+`dup2`, `dup3`, `pipe`, `fstat`, `stat`, `lstat` (and glibc's older
+`__xstat` forms) filling glibc's 144-byte x86-64 `struct stat`, `unlink`
+and `isatty`, each with the `errno` glibc's wrapper reports. A descriptor
+on a file holds a host duplicate, so offsets and `O_APPEND` are shared as
+an open file description shares them. A pipe is a host pipe kept
+non-blocking: the program is its only process, so a read of an empty
+pipe with an open write end, or a write to a full one, would wait
+forever, and a write to one without a reader raises `SIGPIPE`; the
+interpreter stops the program in all three cases, through a descriptor or
+a stream. The console's output and error descriptors present a pipe of
+the buffer size glibc would choose (a terminal under
+`--interpret-terminal-stdout`), which cannot seek. Streams and descriptors
+interoperate as glibc's do (`host/stdio/descriptors.rs`): each stream
+keeps its descriptor number (`fileno`), `fopen` takes the lowest free one
+and `freopen` keeps the old one, `fclose` closes it whatever it now refers
+to (failing with `EBADF` once it is closed), `fdopen` makes a stream on a
+descriptor with glibc's access checks, and a stream follows its number
+through `close`, `dup2` and reuse. `stdout` and `stderr` stay in the
+console model; after each call the host passes what they wrote out to what
+descriptors 1 and 2 refer to then (a file after `dup2`, nothing after
+`close`, which sets the stream's error indicator), and a `write` to the
+console lands after what it has received and before what the streams still
+buffer, so `write(1, ...)` overtakes buffered `printf` output exactly as
+with glibc.
 It provides the `fprintf`, `vprintf`, `vfprintf`, `vsprintf` and
 `vsnprintf` family and glibc's `__printf_chk` forms, with `%lc` and `%ls`;
 `sscanf`/`fscanf`/`scanf` with glibc's failure rules, the wide conversions

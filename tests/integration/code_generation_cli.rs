@@ -1195,6 +1195,91 @@ int main(void) {{ FILE *first = fopen(\"{path_text}\", \"r+\");
         }
     }
 
+    /// `tests/fixtures/programs/posix_descriptors.c` mixes descriptors with
+    /// the streams: `write(1)` and `write(2)` against buffered `stdout` and
+    /// `stderr`, `dup2` and `close` under `stdout`, `freopen`, `fdopen`,
+    /// `fileno`, files and pipes through descriptors, and `errno` on each
+    /// failure. With stdout and stderr in one file, the interpreter must
+    /// write what glibc writes and leave the same file.
+    #[test]
+    fn descriptors_and_streams_match_glibc() {
+        for mode in 0..=8 {
+            merged_mode_matches_glibc("posix_descriptors.c", mode);
+        }
+    }
+
+    /// `tests/fixtures/programs/posix_console.c`: on pipes, as the tests run
+    /// programs, `fstat`, `lseek` and `isatty` of descriptors 1 and 2 report
+    /// what glibc's do, and `write(1)` overtakes buffered `stdout`.
+    #[test]
+    fn console_descriptors_match_glibc_on_pipes() {
+        interpreter_matches_glibc("posix_console.c", &[]);
+    }
+
+    /// The program is a pipe's only process, so reading an empty pipe whose
+    /// write end is open, or filling one, would wait forever, and writing to
+    /// one nobody reads raises `SIGPIPE`: the interpreter stops the program,
+    /// through a descriptor or a stream. Without `--interpret-allow-fs`,
+    /// `open`, `stat` and `unlink` fail with `EACCES` and are noted, while
+    /// the console's descriptors and pipes still work.
+    #[test]
+    fn descriptors_stop_on_dead_pipes_and_need_file_access() {
+        if host() != Some("x86_64-unknown-linux-gnu") {
+            return;
+        }
+        let prelude = "typedef struct _IO_FILE FILE; int printf(const char *, ...);
+int pipe(int *); long read(int, void *, unsigned long); long write(int, const void *, unsigned \
+                       long);
+int close(int); FILE *fdopen(int, const char *); int fputs(const char *, FILE *);
+int fflush(FILE *); int fgetc(FILE *);
+";
+        for (body, message) in [
+            ("char c; read(p[0], &c, 1);", "wait forever"),
+            (
+                "static char big[100000]; write(p[1], big, sizeof big);",
+                "wait forever",
+            ),
+            ("close(p[0]); write(p[1], \"x\", 1);", "SIGPIPE"),
+            ("fgetc(fdopen(p[0], \"r\"));", "wait forever"),
+            (
+                "close(p[0]); FILE *f = fdopen(p[1], \"w\"); fputs(\"x\", f); fflush(f);",
+                "SIGPIPE",
+            ),
+        ] {
+            let source =
+                format!("{prelude}int main(void) {{ int p[2]; pipe(p); {body} return 0; }}\n");
+            let output = bcc(&source, &["--interpret"]);
+            let stderr = text(&output.stderr);
+            assert_eq!(output.status.code(), Some(70), "{body}: {stderr}");
+            assert!(stderr.contains(message), "{body}: {stderr}");
+        }
+        let path = temporary("descriptor-access.txt");
+        std::fs::write(&path, "kept\n").unwrap();
+        let path_text = path.to_str().unwrap();
+        let source = format!(
+            "int printf(const char *, ...); int open(const char *, int, ...); int \
+             *__errno_location(void);
+struct stat {{ char bytes[144]; }}; int stat(const char *, struct stat *); int unlink(const char \
+             *);
+long write(int, const void *, unsigned long); int pipe(int *);
+int main(void) {{ const char *name = \"{path_text}\"; struct stat st; int p[2];
+  int fd = open(name, 01 | 01000); int e1 = *__errno_location();
+  int s = stat(name, &st); int u = unlink(name); int e2 = *__errno_location();
+  printf(\"%d %d %d %d %d %ld %d\\n\", fd, e1, s, u, e2, write(1, \"\", 0), pipe(p)); return 0; }}
+"
+        );
+        let output = bcc(&source, &["--interpret"]);
+        assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
+        assert_eq!(text(&output.stdout), "-1 13 -1 -1 13 0 0\n");
+        let stderr = text(&output.stderr);
+        assert!(stderr.contains("refused 3 host file accesses"), "{stderr}");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "kept\n");
+        let output = bcc(&source, &["--interpret", "--interpret-allow-fs"]);
+        assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
+        assert_eq!(text(&output.stdout), "3 0 0 0 0 0 0\n");
+        assert!(!path.exists());
+    }
+
     /// A byte function on a wide-oriented stream, or a wide one on a
     /// byte-oriented stream, is undefined and traps.
     #[test]

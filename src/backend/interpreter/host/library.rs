@@ -4,8 +4,10 @@
 //! the catalog's functions do.
 //!
 //! C99: §6.5.2.2 paragraph 9, p. 72; PDF p. 84; the signatures are those of
-//! §7.4, §7.19, §7.20 and §7.21; `__ctype_b_loc` and the `__isoc99_` and
-//! `__*_chk` names are glibc's, `__acrt_iob_func` the Universal CRT's.
+//! §7.4, §7.19, §7.20 and §7.21, and POSIX's `<fcntl.h>`, `<unistd.h>` and
+//! `<sys/stat.h>` as glibc declares them on x86-64; `__ctype_b_loc` and the
+//! `__isoc99_`, `__*_chk` and `__*_2` names are glibc's, `__acrt_iob_func`
+//! the Universal CRT's.
 
 use super::{
     HostCall,
@@ -177,6 +179,24 @@ pub(super) fn signature(name: &str) -> Option<Signature> {
         | "gamma" => fixed(Double, &[Double]),
         | "gammaf" => fixed(Float, &[Float]),
         | "gammal" => fixed(LongDouble, &[LongDouble]),
+        | "fileno" => fixed(Int, &[Ptr]),
+        | "fdopen" => fixed(Ptr, &[Int, Ptr]),
+        // `mode_t` is `unsigned int`; `ssize_t` and `off_t` are `long`.
+        | "open" | "open64" => variadic(Int, &[Ptr, Int]),
+        | "__open_2" | "__open64_2" | "creat" | "creat64" => fixed(Int, &[Ptr, Int]),
+        | "openat" | "openat64" => variadic(Int, &[Int, Ptr, Int]),
+        | "__openat_2" | "__openat64_2" => fixed(Int, &[Int, Ptr, Int]),
+        | "close" | "dup" | "isatty" => fixed(Int, &[Int]),
+        | "dup2" => fixed(Int, &[Int, Int]),
+        | "dup3" => fixed(Int, &[Int, Int, Int]),
+        | "read" | "write" => fixed(Long, &[Int, Ptr, Wide64]),
+        | "__read_chk" => fixed(Long, &[Int, Ptr, Wide64, Wide64]),
+        | "lseek" | "lseek64" => fixed(Long, &[Int, Long, Int]),
+        | "pipe" | "unlink" => fixed(Int, &[Ptr]),
+        | "fstat" | "fstat64" => fixed(Int, &[Int, Ptr]),
+        | "stat" | "stat64" | "lstat" | "lstat64" => fixed(Int, &[Ptr, Ptr]),
+        | "__fxstat" | "__fxstat64" => fixed(Int, &[Int, Int, Ptr]),
+        | "__xstat" | "__xstat64" | "__lxstat" | "__lxstat64" => fixed(Int, &[Int, Ptr, Ptr]),
         | _ => return None,
     })
 }
@@ -230,6 +250,7 @@ fn every_added_host_function_has_a_signature() {
     for &name in super::stdio::FUNCTIONS
         .iter()
         .chain(super::stdio::WIDE_FUNCTIONS)
+        .chain(super::posix::FUNCTIONS)
         .chain(super::errno::FUNCTIONS)
         .chain(super::locale::FUNCTIONS)
         .chain(&crate::backend::interpreter::exit::FUNCTIONS)

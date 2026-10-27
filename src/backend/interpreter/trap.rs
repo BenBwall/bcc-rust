@@ -266,6 +266,13 @@ pub(crate) enum Unsupported {
     /// An exit handler the program does not define, such as a library
     /// function.
     HostExitHandler,
+    /// A read of an empty pipe whose write end is open, or a write to a
+    /// full one: no other process can drain or fill it, so the program
+    /// would wait forever.
+    PipeWait,
+    /// A write to a pipe that no descriptor reads, which raises `SIGPIPE`
+    /// and ends the program.
+    PipeSignal,
 }
 
 impl fmt::Display for Unsupported {
@@ -283,6 +290,8 @@ impl fmt::Display for Unsupported {
             | Self::CallbackEscape =>
                 "a longjmp out of a qsort or bsearch comparison or an exit handler",
             | Self::HostExitHandler => "an exit handler the program does not define",
+            | Self::PipeWait => "a pipe read or write that would wait forever for another process",
+            | Self::PipeSignal => "a write to a pipe without a reader, which raises SIGPIPE",
         })
     }
 }

@@ -57,8 +57,10 @@ pub(super) const FUNCTIONS: &[&str] = &[
 /// The Linux error numbers the host sets.
 pub(super) const EPERM: i32 = 1;
 pub(super) const ENOENT: i32 = 2;
+pub(super) const EIO: i32 = 5;
 pub(super) const E2BIG: i32 = 7;
 pub(super) const EBADF: i32 = 9;
+pub(super) const EAGAIN: i32 = 11;
 pub(super) const ENOMEM: i32 = 12;
 pub(super) const EACCES: i32 = 13;
 pub(super) const EEXIST: i32 = 17;
@@ -66,9 +68,13 @@ pub(super) const ENOTDIR: i32 = 20;
 pub(super) const EISDIR: i32 = 21;
 pub(super) const EINVAL: i32 = 22;
 pub(super) const EMFILE: i32 = 24;
+pub(super) const ENOTTY: i32 = 25;
 pub(super) const ESPIPE: i32 = 29;
+pub(super) const EPIPE: i32 = 32;
 pub(super) const EDOM: i32 = 33;
 pub(super) const ERANGE: i32 = 34;
+#[cfg(not(unix))]
+pub(super) const ENOSYS: i32 = 38;
 pub(super) const EILSEQ: i32 = 84;
 
 impl DefaultHost<'_> {
