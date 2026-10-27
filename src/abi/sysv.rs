@@ -292,7 +292,7 @@ pub(crate) fn classify(layout: AggregateLayout<'_>) -> Classification {
             | Type::I1 | Type::I8 | Type::I16 | Type::I32 | Type::I64 | Type::Ptr =>
                 (Class::Integer, None),
             | Type::I128 => (Class::Integer, Some(Class::Integer)),
-            | Type::F32 | Type::F64 => (Class::Sse, None),
+            | Type::F16 | Type::F32 | Type::F64 => (Class::Sse, None),
             | Type::F80 => (Class::X87, Some(Class::X87Up)),
             | Type::F128 => (Class::Sse, Some(Class::SseUp)),
         };
@@ -362,7 +362,7 @@ impl ArgumentRegisters {
 
     /// Takes the registers a scalar argument of type `ty` needs, if free:
     /// one general register for an integer or pointer, two for `i128`, one
-    /// vector register for `f32`, `f64` or `f128`, and none for `f80`,
+    /// vector register for `f16`, `f32`, `f64` or `f128`, and none for `f80`,
     /// which always goes on the stack.
     pub(crate) fn take_scalar(&mut self, ty: Type) -> bool {
         let (gp, sse) = scalar_registers(ty);
@@ -392,7 +392,7 @@ const fn scalar_registers(ty: Type) -> (u32, u32) {
     match ty {
         | Type::I1 | Type::I8 | Type::I16 | Type::I32 | Type::I64 | Type::Ptr => (1, 0),
         | Type::I128 => (2, 0),
-        | Type::F32 | Type::F64 | Type::F128 => (0, 1),
+        | Type::F16 | Type::F32 | Type::F64 | Type::F128 => (0, 1),
         | Type::F80 => (0, 0),
     }
 }

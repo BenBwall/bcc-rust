@@ -106,8 +106,14 @@ const fn integer(layout: AggregateLayout<'_>) -> Option<Type> {
 /// takes one 8-byte slot.
 pub(super) const fn check_va_arg(ty: Type) -> Result<(), AbiErrorKind> {
     match ty {
-        | Type::I8 | Type::I16 | Type::I32 | Type::I64 | Type::Ptr | Type::F32 | Type::F64 =>
-            Ok(()),
+        | Type::I8
+        | Type::I16
+        | Type::I32
+        | Type::I64
+        | Type::Ptr
+        | Type::F16
+        | Type::F32
+        | Type::F64 => Ok(()),
         | _ => Err(AbiErrorKind::VaArgType(ty)),
     }
 }

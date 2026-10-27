@@ -683,7 +683,7 @@ impl Verifier<'_, '_, '_, '_> {
                     checker.require(ty.is_int(), ty);
                     [ty, ty]
                 } else if opcode.is_float_binary() {
-                    checker.require(ty.is_float(), ty);
+                    checker.require(ty.computes(), ty);
                     [ty, ty]
                 } else if matches!(opcode, Opcode::PtrAdd | Opcode::Subobject) {
                     checker.require(ty == Type::Ptr, ty);
@@ -733,7 +733,7 @@ impl Verifier<'_, '_, '_, '_> {
                     checker.operand(0, arg, ty);
                 },
                 | Opcode::Fneg => {
-                    checker.require(ty.is_float(), ty);
+                    checker.require(ty.computes(), ty);
                     checker.operand(0, arg, ty);
                 },
                 | Opcode::Freeze => checker.operand(0, arg, ty),
@@ -764,7 +764,7 @@ impl Verifier<'_, '_, '_, '_> {
                 checker.operands(&args, &[ty, ty]);
             },
             | InstData::FloatCompare { ty, args, .. } => {
-                checker.require(ty.is_float(), ty);
+                checker.require(ty.computes(), ty);
                 checker.operands(&args, &[ty, ty]);
             },
             | InstData::Select { ty, args } => checker.operands(&args, &[Type::I1, ty, ty]),

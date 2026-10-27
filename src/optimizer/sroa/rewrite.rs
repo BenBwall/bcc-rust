@@ -443,7 +443,7 @@ fn fill_constant(draft: &mut Draft<'_, '_>, ty: Type, byte: u8) -> Value {
                 Some(ty),
             )
             .expect("`null` has a result"),
-        | Type::F32 | Type::F64 => draft
+        | Type::F16 | Type::F32 | Type::F64 => draft
             .add_inst(
                 Draft::entry(),
                 0,

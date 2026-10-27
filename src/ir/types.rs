@@ -19,6 +19,10 @@ pub(crate) enum Type {
     I32,
     I64,
     I128,
+    /// The IEEE 754 binary16 format. It is a storage and conversion type:
+    /// arithmetic converts to `f32` first, as GCC and Clang compute
+    /// `_Float16` on x86-64 without AVX512-FP16.
+    F16,
     F32,
     F64,
     /// The x87 80-bit extended format.
@@ -31,13 +35,14 @@ pub(crate) enum Type {
 
 impl Type {
     /// Every type, in declaration order.
-    pub(crate) const ALL: [Self; 11] = [
+    pub(crate) const ALL: [Self; 12] = [
         Self::I1,
         Self::I8,
         Self::I16,
         Self::I32,
         Self::I64,
         Self::I128,
+        Self::F16,
         Self::F32,
         Self::F64,
         Self::F80,
@@ -50,7 +55,7 @@ impl Type {
         match self {
             | Self::I1 => 1,
             | Self::I8 => 8,
-            | Self::I16 => 16,
+            | Self::I16 | Self::F16 => 16,
             | Self::I32 | Self::F32 => 32,
             | Self::I64 | Self::F64 | Self::Ptr => 64,
             | Self::F80 => 80,
@@ -72,7 +77,16 @@ impl Type {
     }
 
     pub(crate) const fn is_float(self) -> bool {
-        matches!(self, Self::F32 | Self::F64 | Self::F80 | Self::F128)
+        matches!(
+            self,
+            Self::F16 | Self::F32 | Self::F64 | Self::F80 | Self::F128
+        )
+    }
+
+    /// Whether floating arithmetic, negation and comparison take this type:
+    /// every floating type but `f16`, which converts to `f32` first.
+    pub(crate) const fn computes(self) -> bool {
+        self.is_float() && !matches!(self, Self::F16)
     }
 
     /// The mask of the low [`Type::bits`] bits.
@@ -88,6 +102,7 @@ impl Type {
             | Self::I32 => "i32",
             | Self::I64 => "i64",
             | Self::I128 => "i128",
+            | Self::F16 => "f16",
             | Self::F32 => "f32",
             | Self::F64 => "f64",
             | Self::F80 => "f80",

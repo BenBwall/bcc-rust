@@ -673,6 +673,10 @@ impl<'a> Rewriter<'a, '_, '_, '_> {
                 let bits = self.builder.convert(Opcode::Trunc, Type::I32, combined);
                 self.builder.convert(Opcode::Bitcast, Type::F32, bits)
             },
+            | Type::F16 => {
+                let bits = self.builder.convert(Opcode::Trunc, Type::I16, combined);
+                self.builder.convert(Opcode::Bitcast, Type::F16, bits)
+            },
             | _ => self.builder.convert(Opcode::Trunc, ty, combined),
         }
     }
