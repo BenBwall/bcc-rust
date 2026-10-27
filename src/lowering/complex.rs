@@ -36,7 +36,10 @@ use crate::{
     translation_phases::{
         SourceVectors,
         parsing::syntax::BinaryOperator,
-        semantic_analysis::TypeId,
+        semantic_analysis::{
+            Scalar,
+            TypeId,
+        },
     },
 };
 
@@ -107,6 +110,8 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
         item: Item,
         source: SourceVectors,
     ) -> Result<(), LoweringError> {
+        // A `_Complex _Float16` excess is rounded to the parts it stores.
+        let item = self.settle(item);
         let pair = self.complex_parts(item, source)?;
         let layout =
             types::layout(&self.unit.sema.types, item.ty).map_err(|kind| at(kind, source))?;
@@ -205,11 +210,16 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
         let target = self.repr(to, source)?;
         let operand = match target {
             | Repr::Complex { component } => {
-                let pair = if let Repr::Complex { component: old } = from {
+                let pair = if let Repr::Complex { .. } = from {
+                    // The parts' own type: `f32` for a `_Complex _Float16`
+                    // excess.
                     let pair = self.complex_parts(item, source)?;
+                    let old = Repr::Float {
+                        ty: self.draft.value_type(pair[0]),
+                    };
                     [
-                        self.float_from(pair[0], Repr::Float { ty: old }, component, source)?,
-                        self.float_from(pair[1], Repr::Float { ty: old }, component, source)?,
+                        self.float_from(pair[0], old, component, source)?,
+                        self.float_from(pair[1], old, component, source)?,
                     ]
                 } else {
                     let value = self.value(item, source)?;
@@ -237,7 +247,11 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
                 )?)
             },
             | Repr::Int { ty, signed } => {
-                let real = self.complex_parts(item, source)?[0];
+                let mut real = self.complex_parts(item, source)?[0];
+                // A 16-bit part widens exactly first.
+                if self.draft.value_type(real).half_format().is_some() {
+                    real = self.widen_half(real);
+                }
                 Operand::Value(self.convert(
                     if signed {
                         Opcode::Fptosi
@@ -356,22 +370,34 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
                 ];
                 self.complex_pair(pair)
             },
-            | B::Multiplication | B::Division =>
-                self.complex_runtime(operator == B::Division, a, b, ty, source)?,
+            | B::Multiplication | B::Division => {
+                let pair = self.complex_runtime(operator == B::Division, a, b, source)?;
+                self.complex_pair(pair)
+            },
             | _ => return Err(LoweringError::missing("invalid complex operator", source)),
         };
         Ok(Item { operand, ty })
     }
 
+    /// The product or quotient of two complex values from libgcc's
+    /// `__mulsc3`, `__divsc3` and their relatives, chosen by the parts'
+    /// type; a `_Complex _Float16` computes in `float _Complex`.
     fn complex_runtime(
         &mut self,
         divide: bool,
         a: [Value; 2],
         b: [Value; 2],
-        ty: TypeId,
         source: SourceVectors,
-    ) -> Result<Operand, LoweringError> {
+    ) -> Result<[Value; 2], LoweringError> {
         let component = self.draft.value_type(a[0]);
+        let scalar = match component {
+            | Type::F32 => Scalar::ComplexFloat,
+            | Type::F64 if self.unit.sema.types.target.long_double_is_double() =>
+                Scalar::ComplexLongDouble,
+            | Type::F64 => Scalar::ComplexDouble,
+            | Type::F80 => Scalar::ComplexLongDouble,
+            | _ => Scalar::ComplexFloat128,
+        };
         let name = match (divide, component) {
             | (false, Type::F32) => "__mulsc3",
             | (true, Type::F32) => "__divsc3",
@@ -383,7 +409,7 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
             | (true, Type::F128) => "__divtc3",
             | _ => return Err(LoweringError::missing("complex runtime precision", source)),
         };
-        let layout = types::complex_layout(&self.unit.sema.types, ty, self.scratch)
+        let layout = types::complex_scalar_layout(&self.unit.sema.types, scalar, self.scratch)
             .map_err(|kind| at(kind, source))?;
         let signature = Signature {
             params:           &[Type::Ptr, component, component, component, component],
@@ -418,6 +444,23 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
             .scratch
             .alloc_slice_copy(&[object, a[0], a[1], b[0], b[1]]);
         _ = self.draft.push(Op::Call(function, args), None);
-        self.load_complex(object, ty, source)
+        let half = layout.size / 2;
+        let align = crate::ir::Align::from_bytes(layout.align.bytes().min(half))
+            .expect("component alignment");
+        let mut parts = [object; 2];
+        for (index, part) in parts.iter_mut().enumerate() {
+            let address = self.offset_address(object, index as u64 * half);
+            *part = self.inst(
+                InstData::Load {
+                    ty: component,
+                    flags: InstFlags::empty(),
+                    align,
+                    tag: None,
+                    addr: address,
+                },
+                component,
+            );
+        }
+        Ok(parts)
     }
 }
