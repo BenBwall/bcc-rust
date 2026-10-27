@@ -19,8 +19,9 @@
 //! - Invocation: `arguments.rs`, `search.rs`, `errors.rs`.
 //! - Jobs and linking: `driver.rs`.
 //! - Driver personalities (`--gcc-mode`, `--msvc-mode`, ...): `personality.rs`.
-//! - Output: `output.rs`, `preprocessed.rs`, `token.rs`,
-//!   `diagnostic_reporter.rs`, `output_file.rs`.
+//! - Output: `output.rs`, `preprocessed.rs`, `output_file.rs`; the token view
+//!   and the diagnostic reporter it shares with the explorer live in
+//!   `pipeline/views.rs` and `diagnostics/reporter.rs`.
 //! - Code generation: `code_generation.rs`.
 //! - Measurement entry points: `measured.rs`.
 //! - CLI fixtures: `tests.rs`.
@@ -40,11 +41,9 @@ mod personality;
 
 // Output and diagnostic reporting
 mod code_generation;
-mod diagnostic_reporter;
 mod output;
 mod output_file;
 mod preprocessed;
-mod token;
 
 // Measurements
 mod measured;
@@ -78,7 +77,6 @@ pub use measured::{
 };
 use output::CliOutput;
 use search::CliHeaderSearch;
-pub(crate) use token::describe_token;
 
 use crate::configuration::LanguageMode;
 
@@ -94,7 +92,7 @@ pub fn run() -> Result<i32, MainError> {
 
 /// Address space reserved for the compilation worker's stack. Pages are
 /// committed only as recursion touches them, so the size costs no memory.
-const COMPILATION_STACK_BYTES: usize = 100 * 1024 * 1024 * 1024;
+pub(crate) const COMPILATION_STACK_BYTES: usize = 100 * 1024 * 1024 * 1024;
 
 /// Keeps all compilation arenas, phases and output on the same thread. A
 /// driver personality (`--gcc-mode`, or an executable named `gcc`)

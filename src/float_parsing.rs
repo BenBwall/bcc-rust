@@ -15,7 +15,8 @@
 //! - Other floating carriers: `conversion.rs`.
 //! - Native long-double representation: `representation.rs`.
 //! - Classification and conversion errors: `range.rs`.
-//! - Generated native bindings: `ffi.rs`.
+//! - Generated native bindings: `ffi.rs`, or without the C toolchain (the
+//!   explorer's WebAssembly build) their pure-Rust stand-in, `soft.rs`.
 //! - Conversion fixtures: `tests.rs`.
 //!
 //! C99: phase 7, §5.1.1.2 paragraph 1, p. 10; PDF p. 22.
@@ -32,9 +33,12 @@ mod conversion;
 mod range;
 
 // Native representations
+#[cfg(feature = "native")]
 mod ffi;
 mod representation;
-
+// The C bridge's pure-Rust stand-in; native tests compare the two.
+#[cfg(any(test, not(feature = "native")))]
+mod soft;
 use std::ffi::c_char;
 
 pub(crate) use complex::{
@@ -55,6 +59,8 @@ use range::{
     range_error,
 };
 pub(crate) use representation::LongDouble;
+#[cfg(not(feature = "native"))]
+use soft as ffi;
 
 use crate::translation_phases::preprocessing::FloatTokenType;
 

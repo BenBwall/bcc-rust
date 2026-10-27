@@ -12,8 +12,15 @@
 //! `pipeline::lower_translation_unit` for the middle end. Read `run` to
 //! follow a command-line compilation.
 //!
+//! The `native` feature (the default) builds all of it, with LLVM, the
+//! bundled clang and the command line. The `explorer` feature alone builds
+//! the pure-Rust compiler, from the preprocessor through the native back
+//! end's assembly and machine code, and the `explorer` interface over it;
+//! that build needs no C toolchain and targets `wasm32-unknown-unknown`.
+//!
 //! Files by role, each with any directory of the same name:
 //! - Compiler phases and driver: `pipeline.rs`, `translation_phases.rs`.
+//! - Every stage's output for the website's compiler tour: `explorer.rs`.
 //! - Middle end and back ends: `lowering.rs`, `ir.rs`, `optimizer.rs`,
 //!   `abi.rs`, `backend.rs`.
 //! - Invocation and language choices: `main.rs`, `cli.rs`, `configuration.rs`,
@@ -27,22 +34,33 @@
 //! clang.
 
 #![cfg_attr(feature = "portable-simd", feature(portable_simd))]
+#![cfg_attr(
+    all(feature = "explorer", not(feature = "native")),
+    expect(
+        dead_code,
+        unused_imports,
+        reason = "Without `native` the command line, LLVM and the interpreter are absent, and so \
+                  are the callers of much of the compiler's internal interface."
+    )
+)]
 
 // Browser execution engine, linked by the site in web/
 #[cfg(feature = "abstract-machine")]
 pub mod abstract_machine;
 
 // Compiler phases and driver
-#[cfg(feature = "native")]
+#[cfg(feature = "explorer")]
+pub mod explorer;
+#[cfg(feature = "explorer")]
 mod pipeline;
-#[cfg(feature = "native")]
+#[cfg(feature = "explorer")]
 pub(crate) mod translation_phases;
 
 // Middle end
-#[cfg(feature = "native")]
+#[cfg(feature = "explorer")]
 mod abi;
 #[cfg_attr(
-    not(test),
+    all(not(test), feature = "native"),
     expect(
         dead_code,
         unused_imports,
@@ -50,10 +68,10 @@ mod abi;
                   the re-exports for hosts, traps and tools serve their tests."
     )
 )]
-#[cfg(feature = "native")]
+#[cfg(feature = "explorer")]
 mod backend;
 #[cfg_attr(
-    not(test),
+    all(not(test), feature = "native"),
     expect(
         dead_code,
         unused_imports,
@@ -61,12 +79,12 @@ mod backend;
                   prints and optimizes modules."
     )
 )]
-#[cfg(feature = "native")]
+#[cfg(feature = "explorer")]
 pub(crate) mod ir;
-#[cfg(feature = "native")]
+#[cfg(feature = "explorer")]
 mod lowering;
 #[cfg_attr(
-    not(test),
+    all(not(test), feature = "native"),
     expect(
         dead_code,
         unused_imports,
@@ -74,7 +92,7 @@ mod lowering;
                   serve the optimizer's tests."
     )
 )]
-#[cfg(feature = "native")]
+#[cfg(feature = "explorer")]
 mod optimizer;
 
 // Isolated semantic experiment; never part of the compiler's default build.
@@ -90,25 +108,25 @@ mod c_ir_study;
 mod compilation_stack;
 
 // Invocation and language choices
-#[cfg(feature = "native")]
+#[cfg(feature = "explorer")]
 mod builtins;
 #[cfg(feature = "native")]
 mod cli;
-#[cfg(feature = "native")]
+#[cfg(feature = "explorer")]
 pub(crate) mod configuration;
-#[cfg(feature = "native")]
+#[cfg(feature = "explorer")]
 mod headers;
-#[cfg(feature = "native")]
+#[cfg(feature = "explorer")]
 mod target;
 
 // Values, storage, and reporting
-#[cfg(feature = "native")]
+#[cfg(feature = "explorer")]
 mod binary128;
-#[cfg(feature = "native")]
+#[cfg(feature = "explorer")]
 pub(crate) mod diagnostics;
-#[cfg(feature = "native")]
+#[cfg(feature = "explorer")]
 pub(crate) mod float_parsing;
-#[cfg(feature = "native")]
+#[cfg(feature = "explorer")]
 pub(crate) mod util;
 #[cfg(feature = "native")]
 mod x87;

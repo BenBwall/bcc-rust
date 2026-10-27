@@ -39,6 +39,30 @@ jobs:
         run: rustup toolchain install nightly --profile minimal --component rustfmt
       - run: cargo +nightly fmt --check
 
+  # The explorer's pure-Rust compiler for the website: no LLVM, C toolchain
+  # or build script work, so this job needs only rustup's wasm32 target.
+  wasm-explorer:
+    name: WebAssembly explorer
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install
+          rustup target add wasm32-unknown-unknown
+      - name: Cache Cargo dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: wasm-explorer
+      - run: cargo build --lib --target wasm32-unknown-unknown --no-default-features --features explorer
+      - run: cargo clippy --lib --target wasm32-unknown-unknown --no-default-features --features explorer,serde -- -D warnings
+      - run: cargo clippy --lib --no-default-features --features explorer -- -D warnings
+      - name: Smoke test in Node
+        working-directory: scripts/wasm_explorer_smoke
+        run: |
+          cargo build --release --target wasm32-unknown-unknown
+          node run.mjs target/wasm32-unknown-unknown/release/wasm_explorer_smoke.wasm
+
   llvm:
     name: Pinned LLVM toolchain
     runs-on: ubuntu-24.04

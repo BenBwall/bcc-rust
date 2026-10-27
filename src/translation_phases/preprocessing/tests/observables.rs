@@ -12,12 +12,12 @@ use std::{
 use proptest::prelude::*;
 
 use crate::{
-    cli::describe_token,
     diagnostics::{
         ColorChoice,
         Renderer,
         ToDiagnostic,
     },
+    pipeline::describe_token,
     translation_phases::{
         Context,
         GetSourceVectors,

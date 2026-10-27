@@ -47,12 +47,14 @@ mod isel;
 mod regalloc;
 
 // Output
+#[cfg(feature = "native")]
 mod driver;
 mod emit;
 mod object;
 
 use std::fmt;
 
+#[cfg(feature = "native")]
 pub(crate) use driver::{
     ObjectWriter,
     RequestedWriter,
@@ -61,6 +63,7 @@ pub(crate) use driver::{
     build_object,
     object_writer,
 };
+pub(crate) use object::FunctionCode;
 pub(crate) use support::Unsupported;
 
 use self::{
@@ -307,6 +310,17 @@ fn emit<'m>(
     }
     emitter.globals(&references)?;
     Ok(())
+}
+
+/// Each function's machine code, instruction by instruction, from the
+/// module's assembly for an ELF target, encoded as `--native-object` would.
+/// A listing the encoder does not handle, such as one with file-scope
+/// assembly, is refused with the encoder's reason.
+pub(crate) fn machine_code<'a>(
+    assembly: &'a str,
+    arena: &'a Bump,
+) -> Result<&'a [FunctionCode<'a>], &'static str> {
+    object::functions(assembly, arena).map_err(|error| error.0)
 }
 
 /// Why the back end produced no assembly.

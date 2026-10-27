@@ -1,6 +1,8 @@
 //! Loads and interns source files, configures header searches, and keeps
 //! original text and lazy line indices for diagnostics. Presumed filenames
-//! refer back to the physical source bytes.
+//! refer back to the physical source bytes. The context's [`FileSystem`]
+//! decides whether lookups and reads reach the host's files or only
+//! in-memory ones.
 //!
 //! C99: phases 1-7, §5.1.1.2 paragraph 1, pp. 9-10; PDF pp. 21-22.
 //! Diagnostic locations: §5.1.1.3 paragraph 1, p. 11; PDF p. 23.
@@ -9,6 +11,7 @@
 use std::{
     cell::OnceCell,
     ffi::OsStr,
+    io::Read,
     path::Path,
 };
 
@@ -59,7 +62,11 @@ impl<'tu> Context<'tu> {
             self.record_arena_source_text(index, text);
             return Ok(text);
         }
-        let text = self.tu.read_to_str_lossy(self.get_source_file(index))?;
+        let path = self.get_source_file(index);
+        let text = match self.file_system {
+            | FileSystem::Host => self.tu.read_to_str_lossy(path)?,
+            | FileSystem::InMemory(_) => self.in_memory_file(path).ok_or_else(not_found)?,
+        };
         self.record_arena_source_text(index, text);
         Ok(text)
     }
@@ -83,6 +90,49 @@ impl<'tu> Context<'tu> {
                     && path.is_file())
                 .then_some((index, path))
             })
+    }
+
+    /// Whether `path` names a file that can be included or embedded. Only
+    /// [`FileSystem::Host`] asks the host.
+    pub(crate) fn file_exists(&self, path: &Path) -> bool {
+        match self.file_system {
+            | FileSystem::Host => path.is_file(),
+            | FileSystem::InMemory(_) => self.in_memory_file(path).is_some(),
+        }
+    }
+
+    /// Opens the `#embed` resource at `path`, with its length in bytes.
+    pub(crate) fn open_resource(&self, path: &Path) -> std::io::Result<(Resource<'tu>, u64)> {
+        match self.file_system {
+            | FileSystem::Host => {
+                let file = std::fs::File::open(path)?;
+                let length = file.metadata()?.len();
+                Ok((Resource::Host(file), length))
+            },
+            | FileSystem::InMemory(_) => {
+                let bytes = self.in_memory_file(path).ok_or_else(not_found)?.as_bytes();
+                Ok((Resource::InMemory(bytes), bytes.len() as u64))
+            },
+        }
+    }
+
+    /// The length of the `#embed` resource at `path`, if it can be read.
+    pub(crate) fn resource_length(&self, path: &Path) -> Option<u64> {
+        match self.file_system {
+            | FileSystem::Host => std::fs::metadata(path).ok().map(|metadata| metadata.len()),
+            | FileSystem::InMemory(_) => self.in_memory_file(path).map(|text| text.len() as u64),
+        }
+    }
+
+    /// The text of the in-memory file at `path`, if there is one.
+    fn in_memory_file(&self, path: &Path) -> Option<&'tu str> {
+        let FileSystem::InMemory(files) = self.file_system else {
+            return None;
+        };
+        files
+            .iter()
+            .find(|&&(name, _)| name == path)
+            .map(|&(_, text)| text)
     }
 
     pub(crate) fn intern_source_file(&mut self, path: &Path) -> u32 {
@@ -223,11 +273,7 @@ impl<'tu> Context<'tu> {
     /// of its presumed filename.
     /// C99: presumed filenames, §6.10.4 paragraph 4, p. 158; PDF p. 170.
     pub(crate) fn in_system_header(&self, vector: &SourceVector) -> bool {
-        let physical = self
-            .presumed_files
-            .get(&vector.source_file_index)
-            .copied()
-            .unwrap_or(vector.source_file_index);
+        let physical = self.physical_source_file(vector.source_file_index);
         self.system_headers
             .get(&physical)
             .is_some_and(|&from| vector.index >= from)
@@ -326,6 +372,31 @@ impl<'tu> Context<'tu> {
         }))
     }
 
+    /// The file whose bytes `index` refers to: the physical file a `#line`
+    /// filename stands for, or `index` itself.
+    /// C99: presumed filenames, §6.10.4 paragraph 4, p. 158; PDF p. 170.
+    pub(crate) fn physical_source_file(&self, index: u32) -> u32 {
+        self.presumed_files.get(&index).copied().unwrap_or(index)
+    }
+
+    /// The 1-based physical line and character column of byte `offset` in
+    /// the physical file behind `index`, which `#line` does not change.
+    /// `None` when that file's text was not recorded.
+    pub(crate) fn physical_position(&self, index: u32, offset: usize) -> Option<(u32, u32)> {
+        let index = self.physical_source_file(index);
+        let text = self.source_text(index)?;
+        let starts = self.source_line_starts(index)?;
+        let offset = offset.min(text.len());
+        let line = starts.partition_point(|&start| start <= offset).max(1);
+        let column = text
+            .get(starts[line - 1]..offset)
+            .map_or(0, |prefix| prefix.chars().count());
+        Some((
+            u32::try_from(line).unwrap_or(u32::MAX),
+            u32::try_from(column + 1).unwrap_or(u32::MAX),
+        ))
+    }
+
     /// Returns the exact source spelling covered by a single-segment range.
     pub(crate) fn source_spelling(&self, source_vectors: SourceVectors) -> Option<&str> {
         let [vector] = self.get_source_vectors(source_vectors) else {
@@ -343,4 +414,37 @@ impl<'tu> Context<'tu> {
     pub(crate) fn is_system_include_directory(&self, index: usize) -> bool {
         index >= self.system_include_start
     }
+}
+
+/// Where included files and `#embed` resources come from. The embedded
+/// resource headers are found under either. C99: the places and the way a
+/// header is identified are implementation-defined, §6.10.2p2-3,
+/// pp. 149-150; PDF pp. 161-162.
+#[derive(Clone, Copy)]
+pub(crate) enum FileSystem<'tu> {
+    /// The host's file system, as the command line reads it.
+    Host,
+    /// Only these files, by path: the explorer's headers. The host's file
+    /// system is never probed or read, even for an absolute name.
+    InMemory(&'tu [(&'tu Path, &'tu str)]),
+}
+
+/// An opened `#embed` resource.
+pub(crate) enum Resource<'tu> {
+    Host(std::fs::File),
+    InMemory(&'tu [u8]),
+}
+
+impl Read for Resource<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        match self {
+            | Self::Host(file) => file.read(buf),
+            | Self::InMemory(bytes) => bytes.read(buf),
+        }
+    }
+}
+
+/// The error a lookup outside the in-memory files reports.
+fn not_found() -> std::io::Error {
+    std::io::ErrorKind::NotFound.into()
 }

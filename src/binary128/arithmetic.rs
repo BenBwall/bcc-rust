@@ -23,7 +23,7 @@ use crate::{
 };
 
 /// Nonnegative little-endian base-2^32 integer; storage belongs to scratch.
-pub(super) struct Natural<'a>(pub(super) ArenaVec<'a, u32>);
+pub(crate) struct Natural<'a>(pub(super) ArenaVec<'a, u32>);
 
 #[expect(
     clippy::cast_possible_truncation,
@@ -31,7 +31,7 @@ pub(super) struct Natural<'a>(pub(super) ArenaVec<'a, u32>);
               64-bit host."
 )]
 impl<'a> Natural<'a> {
-    pub(super) fn mul_add(&mut self, multiplier: u32, addend: u32) {
+    pub(crate) fn mul_add(&mut self, multiplier: u32, addend: u32) {
         let mut carry = u64::from(addend);
         for word in &mut self.0 {
             let value = u64::from(*word) * u64::from(multiplier) + carry;
@@ -43,7 +43,7 @@ impl<'a> Natural<'a> {
         }
     }
 
-    pub(super) fn shift(&mut self, count: i64) {
+    pub(crate) fn shift(&mut self, count: i64) {
         if self.0.is_empty() || count == 0 {
             return;
         }
@@ -62,7 +62,7 @@ impl<'a> Natural<'a> {
         self.trim();
     }
 
-    pub(super) fn subtract(&mut self, other: &Self) {
+    pub(crate) fn subtract(&mut self, other: &Self) {
         let mut borrow = 0_u64;
         for (index, word) in self.0.iter_mut().enumerate() {
             let sub = u64::from(other.0.get(index).copied().unwrap_or(0)) + borrow;
@@ -73,14 +73,14 @@ impl<'a> Natural<'a> {
         self.trim();
     }
 
-    pub(super) fn compare(&self, other: &Self) -> Ordering {
+    pub(crate) fn compare(&self, other: &Self) -> Ordering {
         self.0
             .len()
             .cmp(&other.0.len())
             .then_with(|| self.0.iter().rev().cmp(other.0.iter().rev()))
     }
 
-    pub(super) fn halve(&mut self) {
+    pub(crate) fn halve(&mut self) {
         let mut carry = 0;
         for word in self.0.iter_mut().rev() {
             let next = *word << 31;
@@ -90,7 +90,7 @@ impl<'a> Natural<'a> {
         self.trim();
     }
 
-    pub(super) fn bits(&self) -> i64 {
+    pub(crate) fn bits(&self) -> i64 {
         self.0.last().map_or(0, |word| {
             (self.0.len() as i64 - 1) * 32 + i64::from(32 - word.leading_zeros())
         })
@@ -102,13 +102,13 @@ impl<'a> Natural<'a> {
         }
     }
 
-    pub(super) fn copy(&self, arena: &'a Bump) -> Self {
+    pub(crate) fn copy(&self, arena: &'a Bump) -> Self {
         let mut words = ArenaVec::new_in(arena);
         words.extend_from_slice(&self.0);
         Self(words)
     }
 
-    pub(super) fn new(arena: &'a Bump, value: u32) -> Self {
+    pub(crate) fn new(arena: &'a Bump, value: u32) -> Self {
         let mut words = ArenaVec::new_in(arena);
         if value != 0 {
             words.push(value);
@@ -117,7 +117,7 @@ impl<'a> Natural<'a> {
     }
 }
 
-pub(super) fn exponent(text: &str) -> Option<i64> {
+pub(crate) fn exponent(text: &str) -> Option<i64> {
     let (negative, digits) = if let Some(rest) = text.strip_prefix('-') {
         (true, rest)
     } else {

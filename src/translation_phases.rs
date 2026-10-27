@@ -53,7 +53,10 @@ mod errors;
 mod extension;
 mod interface;
 
-pub(crate) use context::Context;
+pub(crate) use context::{
+    Context,
+    FileSystem,
+};
 pub(crate) use errors::{
     ErrorSeverity,
     GetSeverity,

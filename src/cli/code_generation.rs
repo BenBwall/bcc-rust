@@ -33,7 +33,6 @@ use clap::{
     ValueEnum,
 };
 
-use super::diagnostic_reporter::DiagnosticReporter;
 use crate::{
     backend::{
         interpreter::{
@@ -50,7 +49,10 @@ use crate::{
         },
         native,
     },
-    diagnostics::ColorChoice as RenderColor,
+    diagnostics::{
+        ColorChoice as RenderColor,
+        DiagnosticReporter,
+    },
     headers::HeaderSearch,
     ir::{
         Module,

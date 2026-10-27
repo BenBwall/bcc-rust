@@ -311,6 +311,39 @@ debug and test profiles as well as release builds.
 when empty; unset them for the standard build. The native build rejects
 overrides that remove linker LTO.
 
+### The explorer and WebAssembly
+
+The `explorer` feature builds the compiler without LLVM, the bundled clang,
+the command line or host threads: preprocessing, parsing, semantic analysis,
+the bcc IR and optimizer, ABI lowering, and the native x86-64 back end's
+assembly and in-process ELF encoding. Its
+[`bcc_rust::explorer`](src/explorer.rs) interface compiles one source and
+returns each stage's output as the command line prints it (`--tokens`,
+`--syntax-tree`, `--emit=ir|ir-abi|asm --backend=native`), each function's
+machine code instruction by instruction, a per-function line map, and
+structured diagnostics; the `serde` feature derives `Serialize` and
+`Deserialize` for those types. `native` (the default) implies `explorer` and
+adds `explorer::llvm_ir`, the `--emit=llvm` text. Without `native`, the C
+floating bridge is replaced by a pure-Rust model of it
+([`src/float_parsing/soft.rs`](src/float_parsing/soft.rs)), which native tests
+compare with the bridge, `__DATE__` and `__TIME__` default to the Unix epoch,
+and arena regions on WebAssembly are fixed 32 MiB allocations from linear
+memory. The site's build needs only rustup's wasm32 target:
+
+```sh
+cargo build --lib --target wasm32-unknown-unknown --no-default-features --features explorer
+(cd scripts/wasm_explorer_smoke && cargo build --release --target wasm32-unknown-unknown)
+node scripts/wasm_explorer_smoke/run.mjs \
+  scripts/wasm_explorer_smoke/target/wasm32-unknown-unknown/release/wasm_explorer_smoke.wasm
+```
+
+The smoke test runs the explorer in Node. In WebAssembly the explorer runs on
+the module's own stack, so its default nesting limit is
+`explorer::WASM_MAX_NESTING_DEPTH` (500) instead of the command line's 2^18;
+it fits the default 1 MiB stack, and input past it is a diagnostic. Overflowing
+the stack or a region instead traps, after which the instance must be
+replaced.
+
 ### Native C, static linking, and cross-language LTO
 
 [`build_support/native.rs`](build_support/native.rs) compiles the C helper,

@@ -12,14 +12,14 @@ use std::{
 
 use clap::Args;
 
-use super::{
-    describe_token,
-    diagnostic_reporter::DiagnosticReporter,
-};
 use crate::{
-    diagnostics::ColorChoice as RenderColor,
+    diagnostics::{
+        ColorChoice as RenderColor,
+        DiagnosticReporter,
+    },
     headers::HeaderSearch,
     pipeline::{
+        describe_token,
         parse_translation_unit,
         preprocess_with_diagnostics,
         with_preprocessor,

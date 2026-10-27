@@ -521,6 +521,21 @@ impl<'tu> SemanticTranslationUnit<'tu> {
         self.entities.function(binding)
     }
 
+    /// The assembler name a binding with an entity is emitted under: its
+    /// assembler label, otherwise its ABI name (with any MSVC decoration).
+    /// GNU extension: assembler labels extend C99 §6.2.2p2, p. 30; PDF p. 42.
+    pub(crate) fn symbol_name<'a>(
+        &self,
+        binding: usize,
+        context: &'a Context<'tu>,
+    ) -> Option<&'a str> {
+        let entity = self.entity(binding)?;
+        Some(entity.symbol.map_or_else(
+            || context.string_cache.at(entity.abi_name),
+            |request| request.name,
+        ))
+    }
+
     /// Open calls use the occurrence's type, never the final composite type.
     /// C99: §6.5.2.2p6, pp. 71-72; PDF pp. 83-84.
     pub(crate) fn unprototyped_external(&self, binding: usize) -> Option<bool> {

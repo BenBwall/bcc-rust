@@ -45,6 +45,7 @@ use std::path::Path;
 
 use expansion_sites::ExpansionSites;
 use rustc_hash::FxBuildHasher;
+pub(crate) use source_files::FileSystem;
 use source_text::SourceText;
 
 #[cfg(test)]
@@ -89,6 +90,10 @@ pub(crate) struct Context<'tu> {
     /// `#sccs` take effect; `#define` and `#undef` are read but, with
     /// replacement off, change nothing.
     pub(crate) preprocessed_input: bool,
+    /// Where included files and `#embed` resources are found and read:
+    /// the host's file system for the command line, only in-memory files
+    /// for the explorer.
+    pub(crate) file_system: FileSystem<'tu>,
     /// Output-token ordinals preserve directive order across includes/macros.
     pub(crate) preprocessed_tokens: usize,
     pub(crate) pack_pragmas: ArenaVec<'tu, super::pragma_pack::PackPragma<'tu>>,
