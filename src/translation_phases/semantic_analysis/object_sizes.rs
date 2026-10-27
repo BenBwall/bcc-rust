@@ -390,10 +390,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// answered. It may read named variables and compute addresses, but not
     /// read through a pointer (which may fault), read an atomic or volatile
     /// object, call a function (other than a nested object-size query), or
-    /// evaluate a variably modified `sizeof`. An explicit stack walks the
+    /// have a variably modified type anywhere (a cast's, `typeof`'s or
+    /// `sizeof`'s), whose bounds it evaluates. An explicit stack walks the
     /// operand, each node in the context it is evaluated in.
     /// C99: §6.5.3.2p4, p. 79; PDF p. 91 (`*` of an invalid pointer is
-    /// undefined); §6.3.2.1p2, p. 46; PDF p. 58 (lvalue conversion reads).
+    /// undefined); §6.3.2.1p2, p. 46; PDF p. 58 (lvalue conversion reads);
+    /// §6.7.5.2p5, p. 117; PDF p. 129 (array size expressions are evaluated).
     /// GNU extension: GCC manual, "Object Size Checking" (the operand is not
     /// evaluated).
     pub(super) fn deferrable_operand(&self, operand: &'tu Expression<'tu>) -> bool {
@@ -410,6 +412,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         while let Some((node, mut usage)) = stack.pop() {
             let node = self.selected_designator(node);
             let info = self.expression_info(node);
+            // A variably modified type evaluates its bounds where it is
+            // written: a cast to `char (*)[*n]` reads `*n` (C99 §6.7.5.2p5).
+            if self.variably_modified(info.ty) {
+                return false;
+            }
             if info.ice && usage == Use::Value {
                 continue;
             }

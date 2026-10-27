@@ -294,7 +294,8 @@ fn object_size_modes_check_and_fold_the_converted_int() {
 /// A query is deferred to the middle end only when evaluating its operand
 /// can do nothing GCC's unevaluated operand would not: a parameter, pointer
 /// arithmetic and nested queries are deferred; reads through a pointer,
-/// atomic or volatile reads and calls are answered as unknown at once.
+/// atomic or volatile reads, calls and variably modified types (whose
+/// bounds a cast evaluates) are answered as unknown at once.
 #[test]
 fn object_size_queries_defer_only_operands_safe_to_evaluate() {
     for (operand, deferred) in [
@@ -310,6 +311,8 @@ fn object_size_queries_defer_only_operands_safe_to_evaluate() {
         ("vp", false),
         ("get()", false),
         ("(n++, p)", false),
+        ("(char (*)[n])p", false),
+        ("(char (*)[*pp[0]])p", false),
     ] {
         let source = format!(
             "struct S {{ char buf[8]; char *ptr; }};\nchar *get(void);\nunsigned long f(void *p, \

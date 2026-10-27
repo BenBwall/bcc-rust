@@ -626,9 +626,10 @@ int main(void) { char *p = malloc(16); return __builtin_object_size(p, 0) & 0xff
 
     /// GCC never evaluates an object-size operand, so a query whose operand
     /// would read through a pointer, read an atomic or volatile object, or
-    /// call a function is answered as unknown without evaluating it (#151
-    /// review round 3): a null pointer is never read, by either builtin, on
-    /// any back end, at either level.
+    /// call a function, or evaluate a variably modified type's bound, is
+    /// answered as unknown without evaluating it (#151 review rounds 3 and
+    /// 4): a null pointer is never read, by either builtin, on any back end,
+    /// at either level.
     #[test]
     fn object_size_operands_are_never_evaluated() {
         if host() != Some("x86_64-unknown-linux-gnu") {
@@ -641,6 +642,10 @@ int main(void) { char *p = malloc(16); return __builtin_object_size(p, 0) & 0xff
             ("struct { char *s; } *p = 0;", "p->s"),
             ("char **p = 0;", "p[1]"),
             ("extern char *get(void);", "get()"),
+            // A variably modified cast evaluates its bound (round 4).
+            ("int *n = 0;", "(char (*)[*n])0"),
+            ("_Atomic(int) *n = 0;", "(char (*)[*n])0"),
+            ("int *n = 0;", "(__typeof__(char [*n]) *)0"),
         ];
         let executable = temporary("unevaluated-size.exe");
         for (declaration, operand) in operands {

@@ -217,7 +217,8 @@ which evaluates the operand. GCC never evaluates it, so only an operand
 whose evaluation reads named variables and computes addresses is deferred;
 one that has side effects, reads through a pointer (which may fault), reads
 an atomic or volatile object, calls a function other than a nested query,
-or evaluates a variably modified `sizeof` gets the unknown answer at once.
+or has a variably modified type anywhere (a cast to `char (*)[*n]` reads
+`*n`) gets the unknown answer at once.
 The rest of a deferred operand is dead once the query is answered and
 `dce` removes it. A deferred query is not an integer constant expression,
 as in Clang.
@@ -270,7 +271,13 @@ and 3. Not answered (the unknown answer, as before): pointers loaded from
 memory or passed to functions that are not expanded, offsets that stay
 runtime values in non-dynamic queries, and modes 1 and 3 of a pointer that
 is not a wrapper parameter's arithmetic (`char *p = s.name; strcpy (p,
-...)`, or a member address formed in a wrapper).
+...)`, or a member address formed in a wrapper). Heap buffers are the
+common case of the last: a `malloc`ed pointer held in a variable names no
+subobject at the call, so glibc's mode 1 checks (`strcpy`, `snprintf` at
+`_FORTIFY_SOURCE=2`) get no bound for it, though mode 0 ones (`memcpy`,
+`read` in GCC mode) do; Clang-mode wrappers that take `pass_object_size`
+(`read`) are answered by semantic analysis at the call, which sees no
+allocation.
 GNU extension: [GCC Object Size Checking](https://gcc.gnu.org/onlinedocs/gcc/Object-Size-Checking.html).
 
 Atomic memory operations carry their operation, success and failure orders,
