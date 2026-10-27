@@ -1,7 +1,7 @@
 /* errno as the host's C library functions set it, and its messages: what
    strerror, both forms of strerror_r and perror say for every code; the
    errno of failing conversions, allocations, stream and file operations and
-   math functions in each precision. The interpreter must print what the
+   math functions in each precision, binary128 included. The interpreter must print what the
    program built against glibc prints, to stdout and to stderr.
    Declarations are written out so that no system header is needed. */
 typedef struct _IO_FILE FILE;
@@ -62,6 +62,21 @@ double nexttoward(double, long double);
 float nexttowardf(float, long double);
 
 /* Prints the call, its result as text, and errno, then clears errno. */
+typedef __float128 quad;
+quad strtof128(const char *, char **);
+quad sqrtf128(quad), fmodf128(quad, quad), ldexpf128(quad, int), scalbnf128(quad, int),
+    fdimf128(quad, quad), rintf128(quad), fmaxf128(quad, quad), frexpf128(quad, int *);
+static volatile quad quad_zero = 0, quad_one = 1;
+
+/* As SHOW, for a binary128 call, whose value printf cannot print. */
+#define SHOW_QUAD(call)                                                        \
+  do {                                                                         \
+    errno = 0;                                                                 \
+    volatile quad value = call;                                                \
+    (void)value;                                                               \
+    printf("%-34s errno %d\n", #call, errno);                                  \
+  } while (0)
+
 #define SHOW(format, call)                                                     \
   do {                                                                         \
     errno = 0;                                                                 \
@@ -264,5 +279,37 @@ int main(void) {
   SHOW("%Lg", atan2l(1e-4000L, 1e4000L));
   SHOW("%Lg", hypotl(1e4932L, 1e4932L));
   SHOW("%Lg", atanl(1.0L / 0.0L));
+  /* The binary128 functions set errno as glibc's _Float128 wrappers do. */
+  int exponent;
+  SHOW_QUAD(sqrtf128(-quad_one));
+  SHOW_QUAD(sqrtf128(-quad_zero));
+  SHOW_QUAD(sqrtf128(-quad_one / quad_zero));
+  SHOW_QUAD(sqrtf128(quad_zero / quad_zero));
+  SHOW_QUAD(fmodf128(quad_one, quad_zero));
+  SHOW_QUAD(fmodf128(quad_one / quad_zero, quad_one));
+  SHOW_QUAD(fmodf128(quad_zero / quad_zero, quad_zero));
+  SHOW_QUAD(ldexpf128(quad_one, 100000));
+  SHOW_QUAD(ldexpf128(quad_one, -100000));
+  SHOW_QUAD(ldexpf128(quad_one, -16400));
+  SHOW_QUAD(ldexpf128(quad_zero, 100000));
+  SHOW_QUAD(scalbnf128(quad_one, 100000));
+  SHOW_QUAD(scalbnf128(quad_one, -16494));
+  SHOW_QUAD(fdimf128(ldexpf128(quad_one, 16383), -ldexpf128(quad_one, 16383)));
+  SHOW_QUAD(rintf128(ldexpf128(quad_one, 16383)));
+  SHOW_QUAD(fmaxf128(quad_zero / quad_zero, quad_one));
+  SHOW_QUAD(frexpf128(quad_one / quad_zero, &exponent));
+  SHOW_QUAD(strtof128("1e99999", &end));
+  SHOW_QUAD(strtof128("-1e99999", &end));
+  SHOW_QUAD(strtof128("1e-99999", &end));
+  SHOW_QUAD(strtof128("1e-4940", &end));
+  SHOW_QUAD(strtof128("0x1p-16494", &end));
+  SHOW_QUAD(strtof128("0x1p-16450", &end));
+  SHOW_QUAD(strtof128("0x1.8p-16494", &end));
+  SHOW_QUAD(strtof128("0x1p-16495", &end));
+  SHOW_QUAD(strtof128("0x1.ffffffffffffffffffffffffffff8p16383", &end));
+  SHOW_QUAD(strtof128("0x1.ffffffffffffffffffffffffffffp16383", &end));
+  SHOW_QUAD(strtof128("3.3621031431120935062626778173217526e-4932", &end));
+  SHOW_QUAD(strtof128("0e-99999", &end));
+  SHOW_QUAD(strtof128("1.5", &end));
   return 0;
 }

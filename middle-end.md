@@ -1350,7 +1350,9 @@ seeks and opens), and the math functions under glibc's `math_errhandling`
 `float` and `double`, with the positive `NAN` glibc's dynamic SVID wrappers
 return for `acos`, `asin`, `log10` and `tgamma` domain errors, and
 `host/math/extended_errno.rs` applies glibc's wrapper rules to the x87
-functions. `strerror`, the GNU `strerror_r`, the XSI `__xpg_strerror_r` that
+functions, and `host/quad.rs` those of glibc's `_Float128` wrappers to the
+binary128 ones (`strtof128` reporting `ERANGE` for an overflow, an
+underflow to zero or an inexact subnormal). `strerror`, the GNU `strerror_r`, the XSI `__xpg_strerror_r` that
 glibc's headers select without `_GNU_SOURCE`, and `perror` give glibc's
 Linux messages, "Unknown error N" for other codes.
 
