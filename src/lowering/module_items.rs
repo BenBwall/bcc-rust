@@ -447,7 +447,6 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
                     .iter()
                     .any(|refusal| refusal.owner == Some(binding));
             if !record.assembly
-                && !record.forwards_variadic
                 && !refused
                 && self
                     .sema

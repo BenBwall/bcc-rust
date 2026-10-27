@@ -58,7 +58,6 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
             entries: ArenaVec::new_in(scratch),
             visible: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             external: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
-            unchecked_wrappers: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             scope_entries: ArenaVec::new_in(scratch),
             parameters: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             work: ArenaVec::new_in(scratch),

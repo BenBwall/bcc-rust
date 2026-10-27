@@ -1914,10 +1914,6 @@ struct Analyzer<'a, 'tu, 's> {
     entries:                 ArenaVec<'s, Entry>,
     visible:                 ArenaMap<'s, (Namespace, StringCacheId), usize>,
     external:                ArenaMap<'s, StringCacheId, usize>,
-    /// The functions whose `always_inline` inline-only wrapper forwards
-    /// its variadic arguments (glibc's fortify wrappers), which calls
-    /// bypass, by name ([`FunctionRecord::forwards_variadic`]).
-    unchecked_wrappers:      ArenaMap<'s, StringCacheId, ()>,
     scope_entries:           ArenaVec<'s, &'s Collection<'s, usize>>,
     parameters:              ArenaMap<'s, usize, (&'tu [Parameter<'tu>], usize)>,
     work:                    ArenaVec<'s, Work<'tu, 's>>,

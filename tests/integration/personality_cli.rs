@@ -1190,7 +1190,7 @@ mod tests {
     }
 
     #[test]
-    fn fortify_wrappers_bcc_cannot_expand_warn() {
+    fn gcc_fortify_wrappers_reach_the_checked_functions() {
         if !cfg!(all(target_os = "linux", target_env = "gnu"))
             || !Path::new("/usr/include/x86_64-linux-gnu/bits/stdio2.h").is_file()
         {
@@ -1207,111 +1207,41 @@ mod tests {
         );
         let flags = ["-O2", "-D_FORTIFY_SOURCE=2", "f.c", "-o", "f"];
         // glibc's GCC wrappers for sprintf, printf and open forward their
-        // variadic arguments with __builtin_va_arg_pack, which bcc lacks:
-        // each call says it skips them. memcpy's wrapper still applies.
-        let output = directory.bcc("--gcc-mode", &flags);
-        succeeds(&output);
-        let warnings = stderr(&output);
-        for (place, name) in [("6:3", "sprintf"), ("7:3", "printf"), ("8:12", "open")] {
-            assert!(
-                warnings.contains(&format!(
-                    "f.c:{place}: warning: _FORTIFY_SOURCE checks for `{name}` are not supported; \
-                     calling the unchecked function"
-                )),
-                "{warnings}"
-            );
-        }
-        assert_eq!(warnings.matches(": warning:").count(), 3, "{warnings}");
-        let run = Command::new(directory.path("f")).output().unwrap();
-        assert_eq!(run.status.code(), Some(0));
-        // The warning follows -w and -Werror.
-        let mut quiet = vec!["-w"];
-        quiet.extend(flags);
-        let output = directory.bcc("--gcc-mode", &quiet);
-        succeeds(&output);
-        assert_eq!(stderr(&output), "");
+        // variadic arguments with __builtin_va_arg_pack, which bcc expands
+        // at each call, so they build without a warning, even under
+        // -Werror, and call the checked functions.
         let mut strict = vec!["-Werror"];
         strict.extend(flags);
         let output = directory.bcc("--gcc-mode", &strict);
-        assert_eq!(output.status.code(), Some(1));
-        assert!(
-            stderr(&output).contains("f.c:6:3: error: _FORTIFY_SOURCE checks for `sprintf`"),
-            "{}",
-            stderr(&output)
+        succeeds(&output);
+        assert_eq!(stderr(&output), "");
+        let run = Command::new(directory.path("f")).output().unwrap();
+        assert_eq!(stdout(&run), "1\n");
+        assert_eq!(run.status.code(), Some(0));
+        let output = directory.bcc(
+            "--gcc-mode",
+            &["-O2", "-D_FORTIFY_SOURCE=2", "-S", "-o", "-", "f.c"],
         );
-        // The callee is found through parentheses, `*` and `&`, which call
-        // the same function (GCC calls __sprintf_chk for each), and by entity:
-        // a parameter or local named like a wrapper is another function,
-        // while a block-scope extern declaration is the same one.
+        succeeds(&output);
+        let assembly = stdout(&output);
+        for checked in ["__sprintf_chk", "__printf_chk"] {
+            assert!(assembly.contains(checked), "{checked}: {assembly}");
+        }
+        // Every form of calling a wrapper reaches it: through parentheses,
+        // `*`, `&`, a block-scope extern declaration and compile-time
+        // selections. A parameter or local named like a wrapper is another
+        // function.
         directory.write(
             "forms.c",
             "#include <stdio.h>\nint a(char *b, const char *s) { return (*sprintf)(b, \"%s\", s); \
              }\nint c(char *b, const char *s) { return (&sprintf)(b, \"%s\", s); }\nint d(char \
              *b, const char *s) { return ((sprintf))(b, \"%s\", s); }\nint m(char *b) { extern \
-             int sprintf(char *, const char *, ...); return sprintf(b, \"x\"); }\n",
-        );
-        let forms = [
-            "-O2",
-            "-D_FORTIFY_SOURCE=2",
-            "-c",
-            "forms.c",
-            "-o",
-            "forms.o",
-        ];
-        let output = directory.bcc("--gcc-mode", &forms);
-        succeeds(&output);
-        let warnings = stderr(&output);
-        for place in ["2:42", "3:42", "4:42", "5:72"] {
-            assert!(
-                warnings.contains(&format!(
-                    "forms.c:{place}: warning: _FORTIFY_SOURCE checks for `sprintf`"
-                )),
-                "{place}: {warnings}"
-            );
-        }
-        assert_eq!(warnings.matches(": warning:").count(), 4, "{warnings}");
-        let mut strict = vec!["-Werror"];
-        strict.extend(forms);
-        assert_eq!(directory.bcc("--gcc-mode", &strict).status.code(), Some(1));
-        // Compile-time selections designate their chosen operand, so a
-        // callee selected by `_Generic`, `__builtin_choose_expr` or
-        // `__extension__` is the wrapper too (GCC calls __sprintf_chk).
-        directory.write(
-            "selected.c",
-            "#include <stdio.h>\nint a(char *b, const char *s) { return _Generic(0, int: \
-             sprintf)(b, \"%s\", s); }\nint c(char *b, const char *s) { return \
-             __builtin_choose_expr(1, sprintf, 0)(b, \"%s\", s); }\nint d(char *b, const char *s) \
-             { return (__extension__ sprintf)(b, \"%s\", s); }\nint e(char *b, const char *s) { \
-             return (*_Generic(0, int: &sprintf))(b, \"%s\", s); }\nint h(int (*sprintf)(int)) { \
-             return _Generic(0, int: sprintf)(7); }\n",
-        );
-        let selected = [
-            "-O2",
-            "-D_FORTIFY_SOURCE=2",
-            "-c",
-            "selected.c",
-            "-o",
-            "selected.o",
-        ];
-        let output = directory.bcc("--gcc-mode", &selected);
-        succeeds(&output);
-        let warnings = stderr(&output);
-        for place in ["2:57", "3:65", "4:55", "5:60"] {
-            assert!(
-                warnings.contains(&format!(
-                    "selected.c:{place}: warning: _FORTIFY_SOURCE checks for `sprintf`"
-                )),
-                "{place}: {warnings}"
-            );
-        }
-        assert_eq!(warnings.matches(": warning:").count(), 4, "{warnings}");
-        let mut strict = vec!["-Werror"];
-        strict.extend(selected);
-        assert_eq!(directory.bcc("--gcc-mode", &strict).status.code(), Some(1));
-        directory.write(
-            "shadow.c",
-            "#include <stdio.h>\nint h(int (*sprintf)(int)) { return sprintf(7); }\nint k(void) { \
-             int (*printf)(int) = 0; return printf ? printf(1) : 0; }\n",
+             int sprintf(char *, const char *, ...); return sprintf(b, \"x\"); }\nint g(char *b, \
+             const char *s) { return _Generic(0, int: sprintf)(b, \"%s\", s); }\nint e(char *b, \
+             const char *s) { return __builtin_choose_expr(1, sprintf, 0)(b, \"%s\", s); }\nint \
+             x(char *b, const char *s) { return (__extension__ sprintf)(b, \"%s\", s); }\nint \
+             h(int (*sprintf)(int)) { return sprintf(7); }\nint k(void) { int (*printf)(int) = 0; \
+             return printf ? printf(1) : 0; }\n",
         );
         let output = directory.bcc(
             "--gcc-mode",
@@ -1320,9 +1250,9 @@ mod tests {
                 "-O2",
                 "-D_FORTIFY_SOURCE=2",
                 "-c",
-                "shadow.c",
+                "forms.c",
                 "-o",
-                "shadow.o",
+                "forms.o",
             ],
         );
         succeeds(&output);

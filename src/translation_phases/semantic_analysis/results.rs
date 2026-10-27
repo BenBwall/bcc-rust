@@ -246,15 +246,6 @@ pub(crate) struct FunctionRecord<'tu> {
     /// GNU inline body then keeps calling the external definition rather
     /// than a private copy, as MinGW-w64's `intrin-impl.h` expects.
     pub(crate) assembly:          bool,
-    /// The body forwards its variadic arguments with GCC's
-    /// `__builtin_va_arg_pack` or `__builtin_va_arg_pack_len` (glibc's
-    /// fortify wrappers), which only an inlined call can do and bcc does
-    /// not implement: the body keeps calling the external definition, as
-    /// for [`Self::assembly`], and each call warns that the wrapper's checks
-    /// are skipped. C99: §6.7.4p6, pp. 112-113; PDF pp. 124-125 (a call may
-    /// use the external definition). GNU extension: GCC manual,
-    /// "Constructing Calls", `__builtin_va_arg_pack`.
-    pub(crate) forwards_variadic: bool,
     /// The body calls `__builtin_va_arg_pack` or `__builtin_va_arg_pack_len`,
     /// so lowering expands a copy of it at each direct call instead of
     /// lowering it once. GNU extension: GCC manual, "Constructing Calls".
