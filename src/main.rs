@@ -6,12 +6,11 @@
     unused_crate_dependencies,
     reason = "We have a bunch of dependencies that are not used in our main module."
 )]
-#[cfg(not(feature = "benchmarking-internals"))]
-use std::io::Write as _;
-#[cfg(not(feature = "benchmarking-internals"))]
-use std::process::ExitCode;
+use std::{
+    io::Write as _,
+    process::ExitCode,
+};
 
-#[cfg(not(feature = "benchmarking-internals"))]
 fn main() -> ExitCode {
     match bcc_rust::run() {
         | Ok(0) => ExitCode::SUCCESS,
@@ -26,14 +25,5 @@ fn main() -> ExitCode {
             drop(writeln!(std::io::stderr().lock(), "{error}"));
             ExitCode::FAILURE
         },
-    }
-}
-
-#[cfg(feature = "benchmarking-internals")]
-fn main() {
-    for _ in 0..100_000_000_000_000i64 {
-        _ = bcc_rust::preprocess_one_million();
-        #[cfg(unix)]
-        coz::progress!("LOOOP!!");
     }
 }

@@ -172,7 +172,7 @@ pub use cli::{
     compile_file_with_arguments_measured,
     run,
 };
-// Only the benchmarking binary emits coz progress points.
+// Only the `coz_preprocessing` example emits coz progress points.
 #[cfg(all(unix, feature = "benchmarking-internals"))]
 use coz as _;
 
