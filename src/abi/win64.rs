@@ -112,6 +112,7 @@ pub(super) const fn check_va_arg(ty: Type) -> Result<(), AbiErrorKind> {
         | Type::I64
         | Type::Ptr
         | Type::F16
+        | Type::BF16
         | Type::F32
         | Type::F64 => Ok(()),
         | _ => Err(AbiErrorKind::VaArgType(ty)),
