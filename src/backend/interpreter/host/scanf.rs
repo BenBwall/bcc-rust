@@ -316,11 +316,9 @@ impl DefaultHost<'_> {
                         converted.clear();
                         if wide.is_some() || !whole {
                             converted.push(0);
-                        } else if !super::locale::encode(
-                            self.locale.utf8(),
-                            character,
-                            &mut converted,
-                        ) {
+                        } else if !suppress
+                            && !super::locale::encode(self.locale.utf8(), character, &mut converted)
+                        {
                             unconverted = true;
                             break;
                         }

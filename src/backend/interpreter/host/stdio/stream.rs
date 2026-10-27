@@ -361,7 +361,11 @@ impl Stream<'_> {
     /// C99: §7.19.9.2 paragraphs 2-5, p. 303; PDF p. 315.
     pub(super) fn seek(&mut self, offset: i64, whence: Whence) -> bool {
         let mut offset = offset;
-        // A seek gives up the wide characters pushed back.
+        // A seek gives up the wide characters pushed back, counting them
+        // for `SEEK_CUR` (`_IO_wfile_seekoff`).
+        if whence == Whence::Current {
+            offset = offset.wrapping_sub(to_offset(self.wide_backup_bytes()));
+        }
         self.wide_backup.clear();
         // `_IO_seekoff_unlocked` gives up the pushback area of a stream a byte
         // operation has oriented, counting its unread bytes for `SEEK_CUR`.
@@ -485,7 +489,11 @@ impl Stream<'_> {
     /// pushback area.
     /// C99: §7.19.9.4 paragraph 2, p. 304; PDF p. 316.
     pub(super) fn tell(&mut self) -> Option<i64> {
-        if !self.pending.is_empty() {
+        // A wide stream's unwritten characters count as the bytes they
+        // convert to, and its pushed-back ones before its position.
+        let held = self.pending.len() + (self.wide_log.len() - self.wide_written);
+        let pushed = to_offset(self.wide_backup_bytes());
+        if held > 0 {
             // The bytes glibc holds count after the descriptor's offset; an
             // appending stream's go at the file's end.
             let at = if self.appending {
@@ -495,11 +503,9 @@ impl Stream<'_> {
             } else {
                 self.descriptor_seek(SeekFrom::Current(0)).ok()?
             };
-            return i64::try_from(at)
-                .ok()
-                .map(|at| at + to_offset(self.pending.len()));
+            return i64::try_from(at).ok().map(|at| at + to_offset(held));
         }
-        let at = i64::try_from(self.descriptor_seek(SeekFrom::Current(0)).ok()?).ok()?;
+        let at = i64::try_from(self.descriptor_seek(SeekFrom::Current(0)).ok()?).ok()? - pushed;
         if self.size == 0 {
             return Some(at);
         }
@@ -818,6 +824,7 @@ impl Stream<'_> {
                 self.allocate();
                 self.line_buffered = false;
             }
+            self.wide_mode();
             return true;
         };
         if !self.sync() {
@@ -835,6 +842,7 @@ impl Stream<'_> {
             self.size = size;
             self.user_buffer = true;
         }
+        self.wide_mode();
         true
     }
 
@@ -868,6 +876,28 @@ impl Stream<'_> {
             self.wide_area.put(&self.wide_log, before, kind);
         }
         self.write_wide()
+    }
+
+    /// How many bytes the pushed-back wide characters take in the stream's
+    /// conversion.
+    fn wide_backup_bytes(&self) -> usize {
+        self.wide_backup
+            .iter()
+            .map(|&character| match char::from_u32(character) {
+                | Some(character) if self.utf8 => character.len_utf8(),
+                | _ => 1,
+            })
+            .sum()
+    }
+
+    /// Sets the wide put area's mode to the stream's, as glibc's wide
+    /// functions read the stream's flags afresh.
+    fn wide_mode(&mut self) {
+        self.wide_area.mode = match (self.unbuffered, self.line_buffered) {
+            | (true, _) => Mode::Unbuffered,
+            | (false, true) => Mode::Line,
+            | (false, false) => Mode::Full,
+        };
     }
 
     /// Writes to the file what the wide put area has written out since the

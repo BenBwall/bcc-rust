@@ -222,6 +222,14 @@ impl DefaultHost<'_> {
             },
             | "swprintf" | "vswprintf" => {
                 let limit = integer(arg(1))?;
+                // glibc fails a call with no room before it formats
+                // anything, leaving `errno` alone.
+                if limit == 0 {
+                    return Ok(HostReturn::Value(Some(RuntimeValue::int(
+                        Type::I32,
+                        u128::from(u32::MAX),
+                    ))));
+                }
                 let mut values = match va_list_operand(call.name) {
                     | Some(list) =>
                         FormatArguments::from_va_list(args[list], call.va_list, memory)?,

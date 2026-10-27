@@ -20,6 +20,10 @@ int snprintf(char *, size_t, const char *, ...);
 int sscanf(const char *, const char *, ...) __asm__("__isoc99_sscanf");
 FILE *fopen(const char *, const char *);
 int fclose(FILE *);
+int fflush(FILE *);
+long ftell(FILE *);
+int fseek(FILE *, long, int);
+void setlinebuf(FILE *);
 int fputs(const char *, FILE *);
 int fgetc(FILE *);
 int ferror(FILE *);
@@ -157,12 +161,47 @@ int main(void) {
   /* swprintf with no room leaves errno alone. */
   errno = 77;
   printf("swprintf zero %d errno %d\n", swprintf(buffer, 0, L"abc"), errno);
+  errno = 77;
+  count = swprintf(buffer, 0, L"%s", "\xff");
+  printf("swprintf zero, unconvertible %d errno %d\n", count, errno);
   /* The wide scanf family converts narrow conversions with the locale and
      matches a scanset by character. */
   narrow[0] = 0;
   errno = 0;
   count = swscanf(L"\xe9", L"%s", narrow);
   printf("swscanf %%s of e9 in C: %d errno %d [%s]\n", count, errno, narrow);
+  /* A suppressed conversion stores nothing, so it converts nothing. */
+  number = -1;
+  errno = 0;
+  count = swscanf(L"\xe9 42", L"%*s%d", &number);
+  printf("swscanf %%*s of e9 in C: %d %d errno %d\n", count, number, errno);
+
+  /* ftell counts the wide characters a stream holds and those pushed back;
+     a seek from the current position counts the pushed-back ones too. */
+  file = fopen(name, "w+");
+  fputws(L"abc", file);
+  printf("ftell holding %ld\n", ftell(file));
+  rewind(file);
+  wint_t first = fgetwc(file);
+  printf("first %x at %ld\n", first, ftell(file));
+  ungetwc(first, file);
+  printf("pushed back at %ld\n", ftell(file));
+  count = fseek(file, 0, 1);
+  printf("seek %d at %ld, next %x\n", count, ftell(file), fgetwc(file));
+  fclose(file);
+
+  /* setlinebuf changes the buffering of a wide stream already writing. */
+  file = fopen(name, "w");
+  fputws(L"a", file);
+  setlinebuf(file);
+  fputws(L"b\n", file);
+  FILE *reader = fopen(name, "r");
+  printf("line-buffered wide file holds");
+  while ((byte = fgetc(reader)) != -1)
+    printf(" %02x", byte);
+  printf("\n");
+  fclose(reader);
+  fclose(file);
   setlocale(6, "C.UTF-8");
   count = swscanf(L"\xe9\xeaZ", L"%l[\xe9]%n", wide, &number);
   printf("swscanf scanset %d %d %x %x\n", count, number, wide[0], wide[1]);
@@ -171,6 +210,14 @@ int main(void) {
   errno = 0;
   count = swprintf(buffer, 8, L"%s", "\xf0");
   printf("swprintf cut sequence %d errno %d\n", count, errno);
+  file = fopen(name, "w+");
+  fputwc(L'A', file);
+  printf("ftell after A %ld", ftell(file));
+  fputwc(0xe9, file);
+  printf(", after e9 %ld", ftell(file));
+  fflush(file);
+  printf(", after fflush %ld\n", ftell(file));
+  fclose(file);
   remove(name);
   return 0;
 }
