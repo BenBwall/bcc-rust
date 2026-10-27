@@ -209,6 +209,14 @@ static void conversions(void) {
     printf("folded %04x %04x %04x %04x %04x\n", bits((B)0x1.0100000000001p0Q),
            bits(from_quad(0x1.0100000000001p0Q)), bits((B)0x1.0100000000001p0L),
            hbits((_Float16)0x1.0020000000001p0Q), hbits((_Float16)0x1.0020000000001p0L));
+    /* And from a 128-bit integer, whose last bit decides the tie. */
+#define WIDE (((__int128)0x8080000000000000ull << 32) + 1)
+    {
+        static B wide = (B)WIDE;
+        static float single = WIDE;
+        printf("folded integers %04x %04x %04x %a\n", bits(wide), bits((B)WIDE),
+               bits(from_int128(WIDE)), (double)single);
+    }
 }
 
 /* small * small is 2^-140: a float subnormal, but zero as a __bf16. */

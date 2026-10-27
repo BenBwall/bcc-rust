@@ -2733,6 +2733,12 @@ read like `f16` ones and have GCC's "non-standard suffix" extension
 diagnostic; Clang has no such suffix. `_Complex __bf16` is refused for both
 identities (`ComplexBFloat16`), as both compilers refuse it.
 
+An integer constant converts to a floating type with one rounding from its
+exact value (`converted_floating`), not through the 64-bit x87 carrier
+`floating_value` holds it in, so a 128-bit integer whose last bit decides
+a tie folds as GCC and Clang fold it; binary128 constants convert to the
+16-bit types with one rounding too.
+
 `Scalar::Fp16` is Clang's `__fp16` (Clang identities only): binary16
 storage whose values `promote` to `float` before any operation, as integers
 promote to `int`, and to `double` as a variadic or unprototyped argument.

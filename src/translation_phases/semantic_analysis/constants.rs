@@ -146,6 +146,43 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         Some(Floating::real(string_to_long_double(text).ok()?))
     }
 
+    /// `info`'s value converted to the arithmetic type `ty`. An integer
+    /// rounds once from its exact value: [`Self::floating_value`] holds it
+    /// at the x87 format's 64 bits, and rounding that again to a narrower
+    /// format would round a 128-bit integer twice.
+    /// C99: §6.3.1.4 paragraph 2, pp. 43-44; PDF pp. 55-56; §6.3.1.5,
+    /// p. 44; PDF p. 56.
+    pub(super) fn converted_floating(
+        &self,
+        info: ExpressionInfo<'tu>,
+        ty: TypeId,
+    ) -> Option<Floating> {
+        if info.floating().is_none()
+            && let Some(integer) = info.integer
+            && let TypeKind::Scalar(scalar) = self.types.nodes[self.types.non_atomic(ty).index]
+            && let Some(format) = self.carrier_type(scalar.real_type())
+        {
+            return integer_value(integer, format).map(Floating::real);
+        }
+        self.floating_value(info)
+            .and_then(|value| self.round_floating(value, ty))
+    }
+
+    /// The IR format a real floating scalar's value has, for those the x87
+    /// carrier holds exactly; `None` for binary128 and every other type.
+    fn carrier_type(&self, scalar: Scalar) -> Option<crate::ir::Type> {
+        use crate::ir::Type;
+        Some(match scalar.representation() {
+            | Scalar::Float16 | Scalar::Fp16 => Type::F16,
+            | Scalar::BFloat16 => Type::BF16,
+            | Scalar::Float => Type::F32,
+            | Scalar::Double => Type::F64,
+            | Scalar::LongDouble if self.types.target.long_double_is_double() => Type::F64,
+            | Scalar::LongDouble => Type::F80,
+            | _ => return None,
+        })
+    }
+
     /// Tests scalar constant truth for logical and conditional evaluation.
     /// C99: §6.5.3.3 paragraph 5, p. 79; PDF p. 91.
     /// C99: §6.5.15 paragraph 4, p. 90; PDF p. 102.
@@ -268,6 +305,18 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             || (self.half_in_float() && self.half_type(info.ty))
         {
             return info.floating();
+        }
+        // An integer rounds once, to `float` for GCC and to the type for
+        // Clang.
+        if info.floating().is_none()
+            && let Some(integer) = info.integer
+        {
+            let to = match (self.half_in_float(), format) {
+                | (true, _) => crate::ir::Type::F32,
+                | (false, HalfFormat::Binary16) => crate::ir::Type::F16,
+                | (false, HalfFormat::BFloat16) => crate::ir::Type::BF16,
+            };
+            return integer_value(integer, to).map(Floating::real);
         }
         let value = self.floating_value(info)?;
         Some(if self.half_in_float() {
@@ -536,6 +585,31 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 }
 
 /// The exact binary128 value of a standard floating constant's carrier.
+/// The value of `integer` rounded once to the floating format `ty`, held
+/// exactly in the x87 carrier.
+/// C99: §6.3.1.4 paragraph 2, pp. 43-44; PDF pp. 55-56.
+fn integer_value(integer: Integer, ty: crate::ir::Type) -> Option<LongDouble> {
+    use crate::{
+        float_parsing::bits,
+        ir::Type,
+    };
+    let bits = if integer.signed {
+        bits::from_integer(integer.value, ty)?
+    } else {
+        bits::from_unsigned(integer.value.cast_unsigned(), ty)?
+    };
+    let narrow = |bits: u128| u32::try_from(bits).ok();
+    Some(match ty {
+        | Type::F16 | Type::BF16 => {
+            let format = ty.half_format()?;
+            LongDouble::from_double(f64::from(format.widen(u16::try_from(bits).ok()?)))
+        },
+        | Type::F32 => LongDouble::from_double(f64::from(f32::from_bits(narrow(bits)?))),
+        | Type::F64 => LongDouble::from_double(f64::from_bits(u64::try_from(bits).ok()?)),
+        | _ => LongDouble::from_x87(X87::from_bits(bits))?,
+    })
+}
+
 /// Both parts of `value` rounded to binary16 or bfloat16.
 /// C99: §6.3.1.5 paragraph 2, p. 44; PDF p. 56; §6.3.1.6, p. 44; PDF p. 56.
 fn round_halves(value: Floating, format: HalfFormat) -> Floating {

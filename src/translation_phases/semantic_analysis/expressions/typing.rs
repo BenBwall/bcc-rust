@@ -603,8 +603,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 if half {
                     self.half_operand(info, operand_type)
                 } else {
-                    self.floating_value(info)
-                        .and_then(|v| self.round_floating(v, operand_type))
+                    self.converted_floating(info, operand_type)
                 }
             };
             if floating && let Some((left_value, right_value)) = operand(left).zip(operand(right)) {
@@ -780,10 +779,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 // GCC's `?:` keeps the selected operand's excess.
                 info.set_floating(self.half_operand(selected, ty));
             } else if self.arithmetic(ty) && self.integer_type(ty).is_none() {
-                info.set_floating(
-                    self.floating_value(selected)
-                        .and_then(|v| self.round_floating(v, ty)),
-                );
+                info.set_floating(self.converted_floating(selected, ty));
             }
             if let Some((bits, signed)) = self.integer_type(ty) {
                 info.integer = info.integer.map(|v| v.cast(bits, signed));
@@ -1282,10 +1278,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             };
         }
         if self.arithmetic(target) && self.integer_type(target).is_none() {
-            info.set_floating(
-                self.floating_value(operand)
-                    .and_then(|value| self.round_floating(value, target)),
-            );
+            info.set_floating(self.converted_floating(operand, target));
         }
         if self.arithmetic(target) && operand.constant == ConstantClass::Arithmetic {
             info.constant = ConstantClass::Arithmetic;

@@ -181,3 +181,33 @@ fn diagnostics_follow_the_identity() {
         );
     }
 }
+
+/// An integer constant converts to every floating type with one rounding
+/// from its exact value, however wide: each value's last bit decides a
+/// tie that rounding to the x87 format's 64 bits first would lose. Each
+/// assertion holds in GCC 15 and the pinned Clang.
+#[test]
+fn integer_constants_round_once() {
+    let source = r#"
+#define T(top, tie) (((unsigned __int128)1 << top) + ((unsigned __int128)1 << tie) + 1)
+_Static_assert((float)T(100, 76) == 0x1.000002p100f, "float");
+_Static_assert((double)T(100, 47) == 0x1.0000000000001p100, "double");
+_Static_assert((float)(__bf16)T(100, 92) == 0x1.02p100f, "bf16");
+_Static_assert((float)(_Float16)T(15, 4) == 0x1.004p15f, "f16");
+_Static_assert((long double)T(100, 36) == 0x1.0000000000000002p100L, "x87");
+_Static_assert((float)-(__int128)T(100, 76) == -0x1.000002p100f, "signed");
+_Static_assert((double)(__int128)T(100, 47) + 0.0 == 0x1.0000000000001p100, "arithmetic");
+_Static_assert((float)(__bf16)((__int128)T(100, 92) + 0) == 0x1.02p100f, "cast of a sum");
+"#;
+    for id in [CompilerIdentity::Gcc, CompilerIdentity::Clang] {
+        let configuration = identity(id, ExtensionPolicy::Allow).with_gnu_extensions(true);
+        with_configuration(source, configuration, |context, _| {
+            assert_eq!(
+                context.pending_error_count(),
+                0,
+                "{id:?}: {:?}",
+                messages(context)
+            );
+        });
+    }
+}
