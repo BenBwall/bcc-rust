@@ -211,20 +211,36 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 Self::constant_truth(operand).map(|truth| Integer::int(i128::from(!truth)));
         }
         if self.integer_type(ty).is_none() {
-            info.floating = self
-                .floating_value(operand)
-                .map(|value| {
-                    if op == U::Minus {
-                        Self::floating_negate(value)
-                    } else {
-                        value
-                    }
-                })
-                .and_then(|value| self.round_floating(value, ty));
+            info.set_floating(
+                self.floating_value(operand)
+                    .map(|value| {
+                        if op == U::Minus {
+                            Self::floating_negate(value)
+                        } else {
+                            value
+                        }
+                    })
+                    .and_then(|value| self.round_floating(value, ty)),
+            );
         }
         info.ice = operand.ice;
         if operand.constant == ConstantClass::Arithmetic {
             info.constant = ConstantClass::Arithmetic;
+        }
+        if self.binary128_type(ty) {
+            // Unary plus converts nothing and minus flips the sign, NaNs
+            // included (C99 Annex F.3).
+            let folded = (op == U::Minus || op == U::Plus)
+                .then(|| Self::binary128_value(operand))
+                .flatten();
+            info.set_binary128(folded.map(|value| {
+                if op == U::Minus {
+                    value.negate()
+                } else {
+                    value
+                }
+            }));
+            self.mark_unfolded_binary128(&mut info);
         }
         info
     }
@@ -312,7 +328,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             {
                 result.constant = ConstantClass::Arithmetic;
                 result.integer = right.integer;
-                result.floating = right.floating;
+                result.set_floating(right.floating());
+                result.set_binary128(right.binary128());
                 result.unfolded_binary128 = right.unfolded_binary128;
             }
             return result;
@@ -531,12 +548,38 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | _ => {},
         }
         if self.arithmetic(info.ty) {
-            info.unfolded_binary128 = left.unfolded_binary128
-                || right.unfolded_binary128
-                || (self.binary128_type(info.ty)
-                    && left.constant == ConstantClass::Arithmetic
-                    && right.constant == ConstantClass::Arithmetic);
-            let floating = left.floating.is_some() || right.floating.is_some();
+            info.unfolded_binary128 = left.unfolded_binary128 || right.unfolded_binary128;
+            let operand_type = arithmetic_operands.unwrap_or(info.ty);
+            if self.binary128_type(operand_type)
+                && left.constant == ConstantClass::Arithmetic
+                && right.constant == ConstantClass::Arithmetic
+            {
+                let complex_type = |ty: TypeId| {
+                    matches!(
+                        self.types.nodes[ty.index],
+                        TypeKind::Scalar(s) if s.complex()
+                    )
+                };
+                let domains = u8::from(complex_type(lt)) | (u8::from(complex_type(rt)) << 1);
+                if let Some((left_value, right_value)) =
+                    Self::binary128_value(left).zip(Self::binary128_value(right))
+                {
+                    if self.binary128_type(info.ty) {
+                        info.set_binary128(Self::binary128_binary(
+                            op,
+                            left_value,
+                            right_value,
+                            domains,
+                        ));
+                    } else {
+                        info.integer = Self::binary128_comparison(op, left_value, right_value);
+                    }
+                }
+                if info.binary128().is_none() && info.integer.is_none() {
+                    info.unfolded_binary128 = true;
+                }
+            }
+            let floating = left.floating().is_some() || right.floating().is_some();
             if floating
                 && let Some((left_value, right_value)) = self
                     .floating_value(left)
@@ -559,9 +602,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     )
                 };
                 let domains = u8::from(complex_type(lt)) | (u8::from(complex_type(rt)) << 1);
-                info.floating =
+                info.set_floating(
                     Self::floating_binary(op, left_value, right_value, precision, domains)
-                        .and_then(|value| self.round_floating(value, info.ty));
+                        .and_then(|value| self.round_floating(value, info.ty)),
+                );
                 info.integer = Self::floating_comparison(op, left_value, right_value);
             }
             info.ice = left.ice && right.ice;
@@ -708,13 +752,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             // C99 §6.6p3,6: only the selected arm is evaluated (§6.5.15p4),
             // but an ICE must still have integer type.
             info.ice = self.integer_type(ty).is_some() && condition.ice && selected.ice;
-            info.unfolded_binary128 = selected.unfolded_binary128
-                || (self.binary128_type(ty) && selected.constant == ConstantClass::Arithmetic);
+            info.unfolded_binary128 = selected.unfolded_binary128;
             info.integer = selected.integer;
             if self.arithmetic(ty) && self.integer_type(ty).is_none() {
-                info.floating = self
-                    .floating_value(selected)
-                    .and_then(|v| self.round_floating(v, ty));
+                info.set_floating(
+                    self.floating_value(selected)
+                        .and_then(|v| self.round_floating(v, ty)),
+                );
             }
             if let Some((bits, signed)) = self.integer_type(ty) {
                 info.integer = info.integer.map(|v| v.cast(bits, signed));
@@ -734,6 +778,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             }
             if info.constant == ConstantClass::Address {
                 info.selected_expression = Some(selected.expression);
+            }
+            if self.arithmetic(ty) {
+                self.convert_binary128(selected, ty, &mut info);
             }
         }
         info
@@ -1169,8 +1216,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
         self.convert(operand.expression, target, ConversionKind::Assignment);
         let mut info = Self::expression_result(e, target.unqualified());
-        info.unfolded_binary128 = operand.unfolded_binary128
-            || (self.binary128_type(target) && operand.constant == ConstantClass::Arithmetic);
+        info.unfolded_binary128 = operand.unfolded_binary128;
         let mut immediate = operand.expression;
         while let ExpressionType::Parenthesized { expression } = immediate.kind {
             immediate = expression;
@@ -1194,7 +1240,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             info.ice = operand.ice
                 || matches!(immediate.kind, ExpressionType::Constant(Constant::Float(_)));
         }
-        if let Some(value) = operand.floating
+        if let Some(value) = operand.floating()
             && self.integer_type(target).is_some()
         {
             info.integer = if matches!(
@@ -1207,16 +1253,18 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             };
         }
         if self.arithmetic(target) && self.integer_type(target).is_none() {
-            info.floating = self
-                .floating_value(operand)
-                .and_then(|value| self.round_floating(value, target));
+            info.set_floating(
+                self.floating_value(operand)
+                    .and_then(|value| self.round_floating(value, target)),
+            );
         }
         if self.arithmetic(target) && operand.constant == ConstantClass::Arithmetic {
             info.constant = ConstantClass::Arithmetic;
+            self.convert_binary128(operand, target, &mut info);
         }
         if info.unfolded_binary128 {
             info.integer = None;
-            info.floating = None;
+            info.set_floating(None);
             info.ice = false;
         }
         // Known pointer truth is an accepted arithmetic constant form, but
@@ -1329,6 +1377,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if self.expression_indices.contains_key(&key) {
             return;
         }
+        self.constrain_constant(&mut info);
         _ = self.expression_indices.insert(key, self.expressions.len());
         // Call and builtin-instance facts precede their effect summaries.
         self.retain_designation(info);
@@ -1343,7 +1392,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             // an empty action list preserves its existing constant eligibility.
             info.ice = false;
             info.integer = None;
-            info.floating = None;
+            info.set_floating(None);
+            info.set_binary128(None);
             info.constant = ConstantClass::None;
         }
         _ = self.retain_effect_recipes(info, effects);
@@ -1446,7 +1496,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             vector_element: false,
             static_address: false,
             unfolded_binary128: false,
-            floating: None,
+            folded: None,
             integer: None,
             ice: false,
             constant: ConstantClass::None,

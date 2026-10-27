@@ -250,7 +250,7 @@ fn signaling_nan_builtins_keep_their_payload() {
                         | TypeKind::Scalar(Scalar::Float32) => crate::ir::Type::F32,
                         | _ => crate::ir::Type::F64,
                     };
-                    crate::float_parsing::bits::constant_bits(&info.floating.unwrap().real, ty)
+                    crate::float_parsing::bits::constant_bits(&info.floating().unwrap().real, ty)
                         .unwrap()
                 })
                 .collect();

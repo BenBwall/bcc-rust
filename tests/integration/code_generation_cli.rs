@@ -1492,7 +1492,7 @@ int main(void) { wchar_t a[2] = {1, 2}, b[2]; wmemcpy(b, a, 1ULL << 62); return 
             );
             assert_eq!(output.status.code(), Some(70), "{}", text(&output.stderr));
             assert!(
-                text(&output.stderr).contains("f80 library function"),
+                text(&output.stderr).contains("f80 or f128 library function"),
                 "{}",
                 text(&output.stderr)
             );

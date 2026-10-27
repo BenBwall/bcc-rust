@@ -1608,7 +1608,7 @@ GNU-source math and stdlib probes cover quad sqrt/pow/fabs, complex sin,
 and the standard float/double/long-double selections. Clang accepts the
 `f128` builtin names and rejects the old GCC `q` builtin names; the bridge
 keeps the native names for fabs and copy-sign. Their binary128 results
-retain constant eligibility without numerical or NaN-payload folding. The bridge
+retain constant eligibility and, since 2026-10-27, fold to their bits. The bridge
 requires ordinary resource-before-libc search order; explicit earlier
 `-isystem` directories can bypass it.
 
@@ -1621,15 +1621,11 @@ underflow have bit-exact unit coverage. An independent batch of 250 decimal
 and 100 hexadecimal literals matches Clang IR constant bits exactly. Token storage remains packed at the
 existing alignment and all compiler allocation stays in arenas.
 
-This implements the brief's explicitly permitted limited constant-evaluation
-fallback: literal bits are exact, but binary128 arithmetic, comparisons and
-casts are **not numerically folded**. Expression information marks arithmetic
-constants as `unfolded_binary128`, clears approximate integer/x87 values, and
-keeps them out of integer constant expressions. Static arithmetic initializers
-remain valid; assertions, enum values and array bounds requiring a binary128
-numerical result are unavailable. The x87 helper and Rust's unstable native
-`f128` are not used. Implementing full IEEE software operations remains a
-separate gap; no numerical equality or conversion result is fabricated.
+This first implemented a limited constant-evaluation fallback in which
+binary128 arithmetic, comparisons and casts were not numerically folded.
+Since 2026-10-27 they fold exactly; see
+[Binary128 arithmetic and folding](#binary128-arithmetic-and-folding-2026-10-27).
+The x87 helper and Rust's unstable native `f128` are still not used.
 
 GNU `typeof` preserves operand type without array/function decay;
 `typeof_unqual` removes top qualifiers, qualifiers carried by array elements and
@@ -2630,3 +2626,66 @@ over redeclarations; later direct calls check constant null arguments.
 Predefined signature typedef sugar is looked up at the function declaration's
 scope rather than the first use's active body scope. C89 `__func__` follows
 Clang's reserved-identifier behavior without a C99 extension diagnostic.
+
+## Binary128 arithmetic and folding (2026-10-27)
+
+`crate::binary128` computes IEEE binary128 in software: addition,
+subtraction, multiplication, division, `fmodf128`, square root and
+comparison, conversions to and from every integer width, binary32, binary64
+and the x87 format, and the exact `<math.h>` operations (rounding to
+integers, scaling, decomposition). Each operation unpacks its operands,
+computes the exact result with integers (or with a sticky bit for an inexact
+quotient or root) and rounds once to nearest even at 113 bits, denormalizing
+first below the smallest normal. NaNs follow libgcc's soft-float routines on
+x86-64 (`config/i386/sfp-machine.h`): of two NaNs the one with the larger
+fraction wins, a tie going to the first operand of `+` and `*` and to the
+second of `-` and `/`; the result keeps its sign and is quieted, an invalid
+operation gives the negative default NaN, and conversions keep the top of a
+payload. `__extendxftf2` ignores the x87 integer bit, so unnormals and
+pseudo-denormals convert as their fields say. A differential run of 200,000
+random operand pairs (subnormals, NaNs, infinities and values near one)
+through every operation and conversion matched libgcc and glibc
+(`sqrtf128`, `fmodf128`) bit for bit; unit tests keep fixed vectors.
+
+Semantic analysis folds binary128 constants with it. `ExpressionInfo` keeps
+a folded floating value in one byte-aligned slot that holds either a
+standard value in the host carrier or a binary128 one (real and imaginary
+components, 32 bytes), read through `floating()` and `binary128()`; a
+constant has one floating type, so the record stays 160 bytes. Whenever a
+record is retained (`constrain_constant`) its value is made to belong to its
+type: a floating constant keeps no integer value, and only a binary128 one
+keeps a binary128 value. An operator whose operand was converted, such as a
+conditional with an integer arm and a binary128 or `double` one, therefore
+cannot fold later operators with the unconverted integer; `(1 ? N + 1 :
+0.0q) == (1 ? N : 0.0q)` for `N` = 2^113 is 1, as in GCC and Clang. Folding:
+
+- a `q`/`Q`/`f128` literal is its parsed value, an imaginary literal its
+  imaginary part;
+- unary `+` and `-`, binary `+ - * /`, comparisons (an integer result, false
+  for an unordered pair except `!=`), conditionals, the comma operator,
+  `__real__`/`__imag__`, `__builtin_complex` and the
+  `__builtin_{inf,huge_val,nan,nans,fabs,copysign}f128` builtins fold; a
+  mixed real and complex operation computes only the components the real
+  operand takes part in (C99 Annex G.5.1);
+- `convert_binary128` converts any arithmetic constant to binary128 exactly
+  (integers round to nearest) and a binary128 value to a standard floating
+  type with one rounding, as `__trunctfdf2` rounds, never through the x87
+  carrier; to an integer type it truncates, and `(int)1.5q` is an integer
+  constant expression like any cast of a floating constant (§6.6p6);
+- static initializers convert a floating constant to an integer object of
+  the destination's width and signedness, so `unsigned __int128` takes
+  values from 2^127 up;
+- `__builtin_nanf128` and `__builtin_nansf128` keep the low 111 bits of a
+  tag wider than 64 bits, as GCC and Clang do; glibc's run-time `nanf128`
+  saturates its payload at 64 bits instead;
+- the product and quotient of two complex values, which `__multc3` and
+  `__divtc3` compute with their own infinity recovery, are not folded:
+  `unfolded_binary128` now marks only those and what is computed from them,
+  and keeps them out of integer constant expressions.
+
+Lowering emits a folded binary128 value as `fconst.f128` (or converts it to
+the destination format for a static initializer), and static initializers
+read it through `float_parsing::bits::binary128_bits`. A folded invalid
+operation gives the run-time result, the negative default NaN; the pinned
+Clang folds `0.0q/0.0q` through LLVM's `APFloat` to a positive NaN, so the
+sign of such a statically folded NaN differs from Clang's.

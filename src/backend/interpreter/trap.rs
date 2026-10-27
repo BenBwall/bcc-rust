@@ -20,7 +20,7 @@ pub(crate) enum Trap {
     /// The program did something the IR leaves undefined.
     UndefinedBehavior(UbKind, Location),
     /// The program used something the interpreter does not implement, such
-    /// as `f128` arithmetic.
+    /// as an `f80` transcendental function.
     Unsupported(Unsupported, Location),
     /// The program called a declared function that neither the module nor
     /// the host defines.
@@ -231,8 +231,8 @@ impl fmt::Display for UbKind {
 /// Something the interpreter does not implement.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub(crate) enum Unsupported {
-    /// `f128` arithmetic, or an `f80` library function the host does not
-    /// compute exactly.
+    /// An `f80` or `f128` library function the host does not compute
+    /// exactly.
     WideFloat,
     /// An object larger than [`Limits::max_object_size`] or than memory.
     ///
@@ -260,7 +260,7 @@ pub(crate) enum Unsupported {
 impl fmt::Display for Unsupported {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
-            | Self::WideFloat => "f128 arithmetic or an f80 library function",
+            | Self::WideFloat => "an f80 or f128 library function",
             | Self::ObjectSize => "an object larger than the size limit",
             | Self::AddressSpace => "more objects than the interpreter can address",
             | Self::FormatConversion => "a printf or scanf conversion the host does not implement",

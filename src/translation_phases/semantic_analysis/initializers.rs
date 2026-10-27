@@ -703,7 +703,8 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         } else if self.arithmetic(target) {
             (info.constant == ConstantClass::Arithmetic
                 && (info.integer.is_some()
-                    || info.floating.is_some()
+                    || info.floating().is_some()
+                    || info.binary128().is_some()
                     || info.unfolded_binary128))
                 // GNU extension: GCC "Labels as
                 // Values"; as in Clang, not into a

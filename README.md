@@ -133,11 +133,11 @@ the Windows targets, while on Linux the bundled clang assembles that assembly;
 with file-scope or inline `asm`, or a listing the encoder cannot represent (such as a
 section name outside `[A-Za-z0-9_.$-]`), is assembled by default, and
 `--native-object` refuses it. The bundled clang links executables. It
-compiles integer, pointer, `__int128`, `float` and `double` code, variadic
-definitions and variable length arrays; a module that uses anything else (x87
-`long double`, `__float128`, `__int128` conversions to floats) is refused with
-`error: not yet supported by the native back end: ...` and status 1 before any
-output is written.
+compiles integer, pointer, `__int128`, `float`, `double`, x87 `long double`
+and `__float128` (through libgcc's soft-float routines) code, variadic
+definitions and variable length arrays; a module that uses anything else is
+refused with `error: not yet supported by the native back end: ...` and status
+1 before any output is written.
 
 Diagnostics are rendered like `rustc`'s: a lowercase message, the
 `file:line:column` location, the quoted source line with `^` under the problem

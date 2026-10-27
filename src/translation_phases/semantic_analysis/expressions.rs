@@ -56,7 +56,10 @@ use super::{
     BindingKind,
     Duration,
     SemanticErrorKind,
-    constants::Floating,
+    constants::{
+        Binary128Value,
+        Floating,
+    },
     integer::Integer,
     scopes::Namespace,
     types::{
@@ -205,20 +208,17 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 info.ice = true;
                 info.constant = ConstantClass::Arithmetic;
             },
-            | E::Constant(Constant::Float(
-                FloatTokenType::Float128(_) | FloatTokenType::ImaginaryFloat128(_),
-            )) => {
-                info.ty = self.types.scalar(
-                    if matches!(
-                        e.kind,
-                        E::Constant(Constant::Float(FloatTokenType::ImaginaryFloat128(_)))
-                    ) {
-                        Scalar::ComplexFloat128
-                    } else {
-                        Scalar::Float128
-                    },
-                );
-                info.unfolded_binary128 = true;
+            | E::Constant(Constant::Float(FloatTokenType::Float128(value))) => {
+                info.ty = self.types.scalar(Scalar::Float128);
+                info.set_binary128(Some(Binary128Value::real(value)));
+                info.constant = ConstantClass::Arithmetic;
+            },
+            | E::Constant(Constant::Float(FloatTokenType::ImaginaryFloat128(value))) => {
+                info.ty = self.types.scalar(Scalar::ComplexFloat128);
+                info.set_binary128(Some(Binary128Value {
+                    real: crate::binary128::Binary128::zero(false),
+                    imag: value,
+                }));
                 info.constant = ConstantClass::Arithmetic;
             },
             | E::Constant(Constant::Float(value)) => {
@@ -238,7 +238,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         return;
                     },
                 });
-                info.floating = Some(Floating::real(match value {
+                info.set_floating(Some(Floating::real(match value {
                     | FloatTokenType::Float(value) | FloatTokenType::Float32(value) =>
                         LongDouble::from_double(f64::from(value)),
                     | FloatTokenType::Double(value)
@@ -246,8 +246,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     | FloatTokenType::Float32x(value) => LongDouble::from_double(value.get()),
                     | FloatTokenType::LongDouble(value) | FloatTokenType::Float64x(value) => value,
                     | _ => LongDouble::ZERO,
-                }));
-                info.floating = match value {
+                })));
+                info.set_floating(match value {
                     | FloatTokenType::ImaginaryFloat(value) => Some(Floating {
                         real: LongDouble::ZERO,
                         imag: LongDouble::from_double(f64::from(value)),
@@ -260,8 +260,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         real: LongDouble::ZERO,
                         imag: value,
                     }),
-                    | _ => info.floating,
-                };
+                    | _ => info.floating(),
+                });
                 info.constant = ConstantClass::Arithmetic;
             },
             | E::StringLiteral(value) => {
@@ -474,14 +474,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
         if info.unfolded_binary128 {
             info.integer = None;
-            info.floating = None;
+            info.set_floating(None);
+            info.set_binary128(None);
             info.ice = false;
         }
         if e.recovered {
             info.unfolded_binary128 = false;
             info.ty = self.types.unknown();
             info.integer = None;
-            info.floating = None;
+            info.set_floating(None);
+            info.set_binary128(None);
             info.ice = false;
             info.constant = ConstantClass::None;
         }
@@ -608,12 +610,63 @@ pub(crate) struct ExpressionInfo<'tu> {
     /// Whether designation can form an address constant without reading an
     /// object.
     pub(crate) static_address: bool,
-    /// An arithmetic constant containing binary128, retained without
-    /// approximate folding.
+    /// An arithmetic constant containing a binary128 operation that is not
+    /// folded (the product or quotient of two complex values), retained
+    /// without approximate folding.
     pub(crate) unfolded_binary128: bool,
-    pub(crate) floating: Option<Floating>,
+    /// The folded value of a floating constant: a standard floating value
+    /// in the host carrier, or a binary128 value computed with IEEE
+    /// binary128 arithmetic. A constant has one floating type, so one slot
+    /// holds either and the record keeps its size; read it through
+    /// [`Self::floating`] and [`Self::binary128`].
+    pub(in crate::translation_phases::semantic_analysis) folded: Option<FoldedFloating>,
     pub(crate) integer: Option<Integer>,
     pub(crate) ice: bool,
     pub(crate) constant: ConstantClass,
     pub(crate) folding: ConstantFolding,
+}
+
+impl ExpressionInfo<'_> {
+    /// The folded value of a constant of standard floating type.
+    pub(crate) fn floating(&self) -> Option<Floating> {
+        match self.folded {
+            | Some(FoldedFloating::Standard(value)) => Some(value),
+            | _ => None,
+        }
+    }
+
+    /// The folded value of a constant of binary128 type.
+    pub(crate) fn binary128(&self) -> Option<Binary128Value> {
+        match self.folded {
+            | Some(FoldedFloating::Binary128(bytes)) => Some(Binary128Value::from_bytes(bytes)),
+            | _ => None,
+        }
+    }
+
+    /// Records a standard floating value; `None` clears only such a value.
+    pub(crate) fn set_floating(&mut self, value: Option<Floating>) {
+        match value {
+            | Some(value) => self.folded = Some(FoldedFloating::Standard(value)),
+            | None if self.floating().is_some() => self.folded = None,
+            | None => {},
+        }
+    }
+
+    /// Records a binary128 value; `None` clears only such a value.
+    pub(crate) fn set_binary128(&mut self, value: Option<Binary128Value>) {
+        match value {
+            | Some(value) => self.folded = Some(FoldedFloating::Binary128(value.to_bytes())),
+            | None if self.binary128().is_some() => self.folded = None,
+            | None => {},
+        }
+    }
+}
+
+/// The slot behind [`ExpressionInfo::floating`] and
+/// [`ExpressionInfo::binary128`]. A binary128 value is kept as bytes, so the
+/// slot has byte alignment and the size of the standard value alone.
+#[derive(Debug, Clone, Copy)]
+pub(in crate::translation_phases::semantic_analysis) enum FoldedFloating {
+    Standard(Floating),
+    Binary128([u8; 32]),
 }

@@ -18,6 +18,7 @@
 mod native;
 
 mod bench_corpus;
+mod binary128;
 mod call_diagnostics;
 mod cli;
 mod code_generation_cli;

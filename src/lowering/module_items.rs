@@ -1568,19 +1568,23 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
                 )
         });
         if let Repr::Complex { component } = representation {
-            let real = match (info.floating, integer) {
+            let real = match (info.floating(), integer) {
+                | _ if let Some(value) = info.binary128() =>
+                    floats::binary128_bits(value.real, component),
                 | (Some(value), _) => floats::constant_bits(&value.real, component),
                 | (_, Some(value)) if value.signed => floats::from_integer(value.value, component),
                 | (_, Some(value)) => floats::from_unsigned(value.value as u128, component),
                 | _ => None,
             }
             .ok_or_else(unsupported)?;
-            let imag = info
-                .floating
-                .map_or(Some(0), |value| {
+            let imag = if let Some(value) = info.binary128() {
+                floats::binary128_bits(value.imag, component)
+            } else {
+                info.floating().map_or(Some(0), |value| {
                     floats::constant_bits(&value.imag, component)
                 })
-                .ok_or_else(unsupported)?;
+            }
+            .ok_or_else(unsupported)?;
             for (index, bits) in [real, imag].into_iter().enumerate() {
                 let stride = size / 2;
                 let target = bytes
@@ -1593,7 +1597,9 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
             return Ok(());
         }
         if let Repr::Float { ty: float } = representation {
-            let bits = match (info.floating, integer) {
+            let bits = match (info.floating(), integer) {
+                | _ if let Some(folded) = info.binary128() =>
+                    floats::binary128_bits(folded.real, float),
                 | (Some(folded), _) => floats::constant_bits(&folded.real, float),
                 | (None, Some(value)) =>
                     if value.signed {
@@ -1612,7 +1618,17 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
         }
         let value = if let Some(value) = integer {
             Some(value.value)
-        } else if let Some(folded) = info.floating
+        } else if let Some(folded) = info.binary128()
+            && matches!(representation, Repr::Int { .. } | Repr::Bool)
+        {
+            if representation == Repr::Bool {
+                Some(i128::from(!folded.real.is_zero() || !folded.imag.is_zero()))
+            } else {
+                let (width, signed) = integer_destination(representation);
+                let bits = floats::binary128_to_integer(folded.real, width, signed);
+                Some(bits.ok_or_else(unsupported)?.cast_signed())
+            }
+        } else if let Some(folded) = info.floating()
             && matches!(representation, Repr::Int { .. } | Repr::Bool)
         {
             // A floating constant truncates toward zero (§6.3.1.4p1); `_Bool`
@@ -1620,7 +1636,9 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
             if representation == Repr::Bool {
                 Some(i128::from(!folded.real.is_zero() || !folded.imag.is_zero()))
             } else {
-                Some(floats::to_integer(&folded.real).ok_or_else(unsupported)?)
+                let (width, signed) = integer_destination(representation);
+                let bits = floats::to_integer(&folded.real, width, signed);
+                Some(bits.ok_or_else(unsupported)?.cast_signed())
             }
         } else {
             None
@@ -2153,4 +2171,14 @@ fn string_form(literal: StringTokenType) -> (LiteralId, u8) {
         | StringTokenType::EncodedString(id, LiteralEncoding::Utf16) => (id, 3),
         | StringTokenType::EncodedString(id, LiteralEncoding::Utf32) => (id, 4),
     }
+}
+
+/// The width and signedness of an integer leaf, which a floating constant
+/// converts to directly, so an `unsigned __int128` takes values from 2^127
+/// up (C99 §6.3.1.4 paragraph 1, p. 43; PDF p. 55).
+fn integer_destination(representation: Repr) -> (u32, bool) {
+    (
+        representation.value_type().map_or(128, Type::bits),
+        representation.signed(),
+    )
 }

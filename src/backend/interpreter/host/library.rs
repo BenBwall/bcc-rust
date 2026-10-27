@@ -27,6 +27,8 @@ pub(super) enum P {
     Ptr,
     /// `wchar_t`: 32 bits on GNU/Linux, 16 on Windows.
     WChar,
+    /// `_Float128`.
+    Quad,
 }
 
 /// A function's result, fixed parameters and whether it is variadic.
@@ -63,6 +65,7 @@ pub(super) fn signature(name: &str) -> Option<Signature> {
         Int,
         Long,
         Ptr,
+        Quad,
         Void,
         WChar,
         Wide64,
@@ -115,6 +118,15 @@ pub(super) fn signature(name: &str) -> Option<Signature> {
         | "wcschr" | "wcsrchr" => fixed(Ptr, &[Ptr, WChar]),
         | "wmemset" | "wmemchr" => fixed(Ptr, &[Ptr, WChar, Wide64]),
         | "qsort" => fixed(Void, &[Ptr, Wide64, Wide64, Ptr]),
+        | "strtof128" => fixed(Quad, &[Ptr, Ptr]),
+        | "strfromf128" => fixed(Int, &[Ptr, Wide64, Ptr, Quad]),
+        | "fabsf128" | "sqrtf128" | "ceilf128" | "floorf128" | "truncf128" | "roundf128"
+        | "rintf128" | "nearbyintf128" => fixed(Quad, &[Quad]),
+        | "copysignf128" | "fmodf128" | "fmaxf128" | "fminf128" | "fdimf128" =>
+            fixed(Quad, &[Quad, Quad]),
+        | "ldexpf128" | "scalbnf128" => fixed(Quad, &[Quad, Int]),
+        | "frexpf128" => fixed(Quad, &[Quad, Ptr]),
+        | "nanf128" => fixed(Quad, &[Ptr]),
         | "bsearch" => fixed(Ptr, &[Ptr, Ptr, Wide64, Wide64, Ptr]),
         | _ => return None,
     })
@@ -141,6 +153,7 @@ pub(super) fn check(
             | P::Ptr => Type::Ptr,
             | P::WChar if windows => Type::I16,
             | P::WChar => Type::I32,
+            | P::Quad => Type::F128,
         })
     };
     let fixed = signature.parameters.len();
@@ -164,6 +177,7 @@ fn every_added_host_function_has_a_signature() {
     for &name in super::stdio::FUNCTIONS
         .iter()
         .chain(super::strings::FUNCTIONS)
+        .chain(super::quad::FUNCTIONS)
         .chain(&crate::backend::interpreter::callbacks::FUNCTIONS)
         .chain(&[
             "sscanf",

@@ -109,7 +109,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         };
         let item = if common
             && !info.ice
-            && info.floating.is_none()
+            && info.floating().is_none()
             && !self.unit.sema.types.unanalyzed(info.ty)
         {
             // Entry actions were pushed last by evaluate_raw, so they precede

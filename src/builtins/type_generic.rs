@@ -3,8 +3,8 @@
 //! and folded, or selected, by `semantic_analysis/type_generic.rs`;
 //! lowering reads the retained constant or selected operand. The binary128
 //! spellings are the Clang primitives behind glibc's older-compiler
-//! `_Float128` aliases; their constants stay unfolded and lowering keeps its
-//! existing refusal. No `__builtin_tgmath` support is invented.
+//! `_Float128` aliases; their constants fold to binary128 values. No
+//! `__builtin_tgmath` support is invented.
 //!
 //! GNU extension: GCC manual, "Other Builtins" and "Floating Types".
 //! <https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html>
@@ -142,6 +142,7 @@ const fn math128(
             arguments,
             tag,
             arithmetic,
+            quiet: matches!(id, Id::Nanf128),
         }),
         O::Math128,
         arguments,

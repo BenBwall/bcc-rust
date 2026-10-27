@@ -965,7 +965,9 @@ comparisons are ordered `fcmp`s except `!=`, which is `une`, and conversions are
 `sitofp`/`uitofp`/`fptosi`/`fptoui`/`fpext`/`fptrunc` (a value converts to
 `_Bool` by comparing with zero). Floating constants and static initializers use
 sema's folded values, rounded to the destination format. Real and complex
-binary128 C lowering still report the existing unsupported diagnostic.
+binary128 (`__float128`, `_Float128`) lower to `f128` with the same
+instructions; a folded binary128 constant becomes `fconst.f128`, and complex
+products and quotients call `__multc3` and `__divtc3`.
 
 Complex scalars use two immutable SSA component values retained in a sparse
 arena table; taking an lvalue's value immediately loads both components.
@@ -995,9 +997,10 @@ The default interpreter host bridges F32/F64 arithmetic helpers through real
 scalar inputs and host output temporaries and implements `crealf`/`creal` and
 `cimagf`/`cimag` extraction, including target ABI coercions. LLVM supports x87
 complex arithmetic and transport; the interpreter extracts x87 parts with
-`creall`/`cimagl` but refuses the `__mulxc3`/`__divxc3` helpers, and the native
+`creall`/`cimagl` but refuses the `__mulxc3`/`__divxc3` and binary128
+`__multc3`/`__divtc3` helpers, and the native
 backend retains its existing explicit F80 arithmetic limitation. This does not implement the
-complete complex math library, binary128 C lowering, or GNU complex conjugation
+complete complex math library or GNU complex conjugation
 and increment/decrement extensions. Atomic complex object operations retain an
 explicit unsupported diagnostic.
 
@@ -1194,6 +1197,35 @@ a memory return area; the interpreter transports the same 128 bits.
 widened (`zeroext`), as Clang does; other narrow integers leave their upper bits
 unspecified.
 
+bcc classifies aggregates that contain a `__float128` as the psABI says,
+as GCC does, in every compiler identity and position (named parameters,
+results, variadic and unprototyped arguments, `va_arg`). Clang deviates for
+an aggregate with a `__float128` at offset 0 and a member of class SSE over
+its second eightbyte: it classifies the eightbytes as SSE and SSE (or SSE
+and INTEGER) but its IR type for the aggregate starts with `fp128`, which
+`GetX86_64ByValArgumentPair` widens to `i64`, so it passes the low eightbyte
+in a general register while counting a vector one, and its own `va_arg`
+reads both eightbytes from the vector save area. So code built by Clang
+does not link with GCC's or bcc's for these shapes (`Q` is `__float128`),
+checked against bundled Clang 23.1.1 and GCC 15:
+
+| Union | Clang | psABI, GCC and bcc |
+| --- | --- | --- |
+| `{ Q q; double d[2]; }`, and with the members swapped | `i64`, `double` | `double`, `double` |
+| `{ Q q; float f[4]; }` | `i64`, `double` | `double`, `double` |
+| `{ Q q; _Complex double z; }` | `i64`, `double` | `double`, `double` |
+| `{ Q q; struct { double a; long b; } s; }` | `i64`, `i64` | `double`, `i64` |
+
+A structure wrapping one of these passes like it. Clang follows the psABI
+for `{ Q q; double d; }` and `{ Q q; Q r; }` (one vector register), for
+unions whose low eightbyte is INTEGER anyway (`{ Q q; long l; }`, `int`,
+`char`, `long l[2]`, `struct { long a; double b; }`), for a lone
+`__float128` and `struct { Q q; }`, and passes `{ Q q; long double ld; }` in
+memory, so those link with Clang. `tests/integration/binary128.rs` links
+bcc's halves with GCC's in both directions and with Clang's for the shapes
+it follows, and `tests/fixtures/programs/binary128_varargs.c` checks every
+later variadic argument after such unions.
+
 The LLVM back end emits register extension and `noundef` independently and
 exactly as the signature records them, on declarations, definitions and both
 kinds of call. A C `signed char` parameter on System V becomes
@@ -1267,6 +1299,15 @@ results and NaN constructors. Native libm evaluates float and double in their
 own precision; guest pointers stay in interpreter memory. Long double follows
 the target representation: binary64 on MSVC, and x87 `f80` on the GNU targets.
 
+`f128` values compute in `src/binary128.rs`, IEEE binary128 arithmetic in
+software that rounds once to nearest even and propagates NaNs as libgcc's
+soft-float routines do on x86-64, so interpreted programs print what
+programs linked with libgcc print. The host provides glibc's `strtof128`
+and `strfromf128` (with `printf`'s exact digits, since glibc's `printf`
+has no binary128 conversion) and the exact `_Float128` math functions
+(`sqrtf128`, `fabsf128`, `floorf128`, `fmodf128`, `frexpf128`, …); the
+others, like the complex helpers, are refused.
+
 x87 values compute in `src/x87.rs`, a software model of the processor's x87
 unit under the default control word (64-bit precision, round to nearest even,
 exceptions masked): exact integer arithmetic rounded once, pseudo-denormals
@@ -1320,11 +1361,11 @@ virtual registers, linear-scan register allocation with fixed-register
 ranges, frame layout with CFI and SEH unwind directives for System V and Win64,
 and AT&T assembly, which the bundled clang assembles, or ELF and COFF
 objects it encodes itself; the bundled clang links executables. It compiles
-integer, pointer, `i128`, `f32` and `f64` code, variadic definitions, dynamic
-stack allocation, computed `goto`, thread-local globals, calls that may
-return twice, C11 atomics and the GNU symbol attributes, and refuses
-everything else (`f80`, `f128`, `i128` float conversions) before writing any
-output.
+integer, pointer, `i128`, `f32` and `f64` code, `f80` on the x87 unit,
+`f128` through libgcc's soft-float routines (`isel/quad.rs`), variadic
+definitions, dynamic stack allocation, computed `goto`, thread-local globals,
+calls that may return twice, C11 atomics and the GNU symbol attributes, and
+refuses everything else before writing any output.
 `--backend=native` selects it for `-o`, `-c` and `-S`, and `--emit=asm` with
 it prints its assembly.
 For `-o` it encodes COFF objects directly on the Windows targets and has the
