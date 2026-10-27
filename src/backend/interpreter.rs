@@ -127,7 +127,6 @@ pub(crate) use value::{
 
 use crate::{
     ir::{
-        FuncId,
         Module,
         Type,
     },
@@ -204,7 +203,7 @@ pub(crate) fn run_main_with_limits(
 /// host ends it normally, writing out its streams, or at once.
 fn exit(
     machine: &mut Machine<'_, '_, '_>,
-    destructors: &[FuncId],
+    destructors: &startup::Destructors<'_>,
     outcome: Outcome,
     host: &mut dyn Host,
 ) -> Result<Outcome, Trap> {

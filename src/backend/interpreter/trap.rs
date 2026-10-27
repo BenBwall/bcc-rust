@@ -260,7 +260,8 @@ pub(crate) enum Unsupported {
     /// Inline assembly, whose machine code the interpreter cannot run.
     /// GNU extension: GCC manual, "Extended Asm".
     InlineAsm,
-    /// A `longjmp` out of a function `qsort` or `bsearch` called.
+    /// A `longjmp` out of a function `qsort` or `bsearch` called, or out of
+    /// an exit handler or destructor.
     CallbackEscape,
     /// An exit handler the program does not define, such as a library
     /// function.
@@ -279,7 +280,8 @@ impl fmt::Display for Unsupported {
             | Self::ReturnsTwice => "a returns-twice function other than setjmp",
             | Self::InlineAsm =>
                 "inline assembly, which only compiled code can run; compile it with -o instead",
-            | Self::CallbackEscape => "a longjmp out of a qsort or bsearch comparison",
+            | Self::CallbackEscape =>
+                "a longjmp out of a qsort or bsearch comparison or an exit handler",
             | Self::HostExitHandler => "an exit handler the program does not define",
         })
     }

@@ -238,6 +238,7 @@ impl DefaultHost<'_> {
                         .transpose()?
                 },
                 | b'c' | b's' | b'[' => {
+                    let set_start = position;
                     let (set, negated) = if conversion == b'[' {
                         Self::scanset(&directives, &mut position)
                     } else {
@@ -249,55 +250,104 @@ impl DefaultHost<'_> {
                         width
                     };
                     // `%lc`, `%ls` and `%l[` store each character as a
-                    // `wchar_t`, converted from its multibyte form.
+                    // `wchar_t`, converted from its multibyte form; the wide
+                    // functions read whole wide characters, match a scanset
+                    // by character, and convert what `%c`, `%s` and `%[`
+                    // store with the locale (`wcrtomb`).
                     let wide = (length == Length::Long).then(|| self.wide_type());
-                    let utf8 = matches!(input, Input::Wide { .. }) || self.locale.utf8();
+                    let wide_input = matches!(input, Input::Wide { .. });
+                    let utf8 = wide_input || self.locale.utf8();
+                    let whole = wide_input || wide.is_some();
+                    let mut ranges = super::ArenaVec::new_in(self.allocator);
+                    if wide_input && conversion == b'[' {
+                        Self::wide_scanset(&directives, set_start, &mut ranges);
+                    }
                     let element = wide.unwrap_or(Type::I8);
-                    let mut count = 0;
+                    let (mut count, mut stored) = (0, 0_u64);
                     let mut ended = false;
                     let mut unconverted = false;
+                    let mut converted = super::ArenaVec::new_in(self.allocator);
                     while count < width {
-                        let Some(byte) = self.next(&mut input, memory)? else {
+                        let Some(first) = self.next(&mut input, memory)? else {
                             ended = true;
                             break;
                         };
-                        let accepted = match conversion {
-                            | b'c' => true,
-                            | b's' => !is_space(byte),
-                            | _ => set[usize::from(byte)] != negated,
+                        let mut sequence = [first, 0, 0, 0];
+                        let mut length = 1;
+                        if whole {
+                            length = super::locale::sequence_length(utf8, first);
+                            for (index, slot) in
+                                sequence.iter_mut().enumerate().take(length).skip(1)
+                            {
+                                let Some(byte) = self.next(&mut input, memory)? else {
+                                    length = index;
+                                    break;
+                                };
+                                *slot = byte;
+                            }
+                        }
+                        let character = if whole {
+                            super::locale::decode(utf8, &sequence[..length])
+                                .map(|(character, _)| character)
+                        } else {
+                            Some(u32::from(first))
+                        };
+                        let accepted = match (conversion, character) {
+                            | (b'c', _) | (_, None) => true,
+                            | (b's', Some(character)) =>
+                                !u8::try_from(character).is_ok_and(is_space),
+                            | (_, Some(character)) if wide_input =>
+                                ranges
+                                    .iter()
+                                    .any(|&(low, high)| (low..=high).contains(&character))
+                                    != negated,
+                            | _ => set[usize::from(first)] != negated,
                         };
                         if !accepted {
-                            self.unread(&mut input, byte);
+                            for &byte in sequence[..length].iter().rev() {
+                                self.unread(&mut input, byte);
+                            }
                             break;
                         }
-                        let mut value = u32::from(byte);
-                        if wide.is_some() {
-                            let length = super::locale::sequence_length(utf8, byte);
-                            let mut sequence = [byte, 0, 0, 0];
-                            for slot in sequence.iter_mut().take(length).skip(1) {
-                                *slot = self.next(&mut input, memory)?.unwrap_or(0);
-                            }
-                            let Some((character, _)) =
-                                super::locale::decode(utf8, &sequence[..length])
-                            else {
-                                unconverted = true;
-                                break;
-                            };
-                            value = character;
+                        let Some(character) = character else {
+                            unconverted = true;
+                            break;
+                        };
+                        converted.clear();
+                        if wide.is_some() || !whole {
+                            converted.push(0);
+                        } else if !super::locale::encode(
+                            self.locale.utf8(),
+                            character,
+                            &mut converted,
+                        ) {
+                            unconverted = true;
+                            break;
                         }
                         if !suppress {
-                            let at = memory.ptr_add(
-                                destination,
-                                RuntimeValue::Int(u128::from(count) * u128::from(element.bytes())),
-                                true,
-                            );
-                            memory.store(
-                                element,
-                                RuntimeValue::int(element, u128::from(value)),
-                                at,
-                                Align::BYTE,
-                            )?;
+                            for (index, &byte) in converted.iter().enumerate() {
+                                let value = if wide.is_some() || !whole {
+                                    character
+                                } else {
+                                    u32::from(byte)
+                                };
+                                let at = memory.ptr_add(
+                                    destination,
+                                    RuntimeValue::Int(
+                                        u128::from(stored + index as u64)
+                                            * u128::from(element.bytes()),
+                                    ),
+                                    true,
+                                );
+                                memory.store(
+                                    element,
+                                    RuntimeValue::int(element, u128::from(value)),
+                                    at,
+                                    Align::BYTE,
+                                )?;
+                            }
                         }
+                        stored += converted.len() as u64;
                         count += 1;
                     }
                     if unconverted {
@@ -317,7 +367,7 @@ impl DefaultHost<'_> {
                     if conversion != b'c' && !suppress {
                         let at = memory.ptr_add(
                             destination,
-                            RuntimeValue::Int(u128::from(count) * u128::from(element.bytes())),
+                            RuntimeValue::Int(u128::from(stored) * u128::from(element.bytes())),
                             true,
                         );
                         memory.store(element, RuntimeValue::int(element, 0), at, Align::BYTE)?;
@@ -360,9 +410,14 @@ impl DefaultHost<'_> {
             held,
         } = input
         {
-            for &byte in &pending[..usize::from(held)] {
-                self.push_back(stream, byte);
+            let mut ahead = [0; 8];
+            for (slot, &byte) in ahead
+                .iter_mut()
+                .zip(pending[..usize::from(held)].iter().rev())
+            {
+                *slot = byte;
             }
+            self.push_back_wide(stream, &ahead[..usize::from(held)]);
         }
         Ok(match failure {
             | Some(Failure::Input) if assigned == 0 => -1,
@@ -559,6 +614,42 @@ impl DefaultHost<'_> {
             }
         }
         (set, negated)
+    }
+
+    /// The characters a wide `[` conversion starting at `position` accepts,
+    /// as ranges of wide characters, by the same reading as [`Self::scanset`]
+    /// applied to the characters of the format's UTF-8.
+    fn wide_scanset(
+        directives: &[u8],
+        mut position: usize,
+        ranges: &mut super::ArenaVec<'_, (u32, u32)>,
+    ) {
+        let at = |position: usize| {
+            super::locale::decode(true, &directives[position..])
+                .unwrap_or((u32::from(directives[position]), 1))
+        };
+        position += usize::from(directives.get(position) == Some(&b'^'));
+        let mut previous = None;
+        if let Some(&first @ (b']' | b'-')) = directives.get(position) {
+            ranges.push((u32::from(first), u32::from(first)));
+            previous = Some(u32::from(first));
+            position += 1;
+        }
+        while position < directives.len() {
+            let (character, length) = at(position);
+            position += length;
+            if character == u32::from(b']') {
+                break;
+            }
+            let next = (position < directives.len()).then(|| at(position).0);
+            match (previous, next) {
+                | (Some(low), Some(high))
+                    if character == u32::from(b'-') && high != u32::from(b']') && low <= high =>
+                    ranges.push((low, high)),
+                | _ => ranges.push((character, character)),
+            }
+            previous = Some(character);
+        }
     }
 
     /// Takes the next byte into `field` if it satisfies `accept` and the

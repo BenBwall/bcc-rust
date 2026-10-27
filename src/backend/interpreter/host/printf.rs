@@ -441,9 +441,14 @@ impl DefaultHost<'_> {
             if first == 0 {
                 break;
             }
+            // A sequence the string's null cuts short is an encoding error;
+            // nothing past the null is read.
             let length = super::locale::sequence_length(utf8, first);
             for (index, slot) in sequence.iter_mut().enumerate().take(length) {
                 *slot = byte(offset + index as u64)?;
+                if *slot == 0 {
+                    return Ok(false);
+                }
             }
             let Some((_, length)) = super::locale::decode(utf8, &sequence[..length]) else {
                 return Ok(false);

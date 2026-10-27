@@ -34,7 +34,10 @@ use super::{
         EINVAL,
         from_io,
     },
+    Channel,
     Console,
+    Mode,
+    Written,
 };
 use crate::{
     backend::interpreter::value::Pointer,
@@ -63,64 +66,79 @@ const DIRECT_READ_BUFFERS: usize = 16;
     reason = "Independent indicators and modes, as glibc keeps them in a stream's flag bits."
 )]
 pub(super) struct Stream<'a> {
-    pub(super) target:    Target,
+    pub(super) target:      Target,
     /// The end-of-file and error indicators.
-    pub(super) eof:       bool,
-    pub(super) error:     bool,
+    pub(super) eof:         bool,
+    pub(super) error:       bool,
     /// The access its mode gives (glibc's `_IO_NO_READS` and
     /// `_IO_NO_WRITES`), and whether it appends.
-    pub(super) readable:  bool,
-    pub(super) writable:  bool,
-    pub(super) appending: bool,
+    pub(super) readable:    bool,
+    pub(super) writable:    bool,
+    pub(super) appending:   bool,
     /// Whether to treat the stream as a terminal whatever it reads
     /// (`--interpret-terminal-stdin`).
-    pub(super) terminal:  bool,
+    pub(super) terminal:    bool,
     /// The memory object of a stream `fopen` made, freed by `fclose`.
-    pub(super) object:    Option<Pointer>,
+    pub(super) object:      Option<Pointer>,
     /// The buffer's size once it is allocated (`_IO_buf_end -
     /// _IO_buf_base`), else 0, and whether glibc line-buffers the stream,
     /// as it does a terminal, or leaves it unbuffered (`_IO_UNBUFFERED`,
     /// with a one-byte buffer), as `setvbuf` may.
-    size:                 usize,
-    line_buffered:        bool,
-    unbuffered:           bool,
+    size:                   usize,
+    line_buffered:          bool,
+    unbuffered:             bool,
     /// The buffer up to `_IO_read_end`, with `_IO_read_base` and
     /// `_IO_read_ptr` as indices. While the pushback area holds bytes, the
     /// read position stays where `ungetc` left the buffer, and the base
     /// moves up to it, as glibc's `_IO_default_pbackfail` sets it.
-    bytes:                ArenaVec<'a, u8>,
-    base:                 usize,
-    position:             usize,
+    bytes:                  ArenaVec<'a, u8>,
+    base:                   usize,
+    position:               usize,
     /// The pushback area's unread bytes, the next one last, and whether
     /// glibc reads from the area (`_IO_IN_BACKUP`), which it still does
     /// after the last byte until a read moves back to the buffer.
-    backup:               ArenaVec<'a, u8>,
-    in_backup:            bool,
+    backup:                 ArenaVec<'a, u8>,
+    in_backup:              bool,
     /// The file offset at the buffer's end, when glibc knows it (`_offset`;
     /// `None` is `_IO_pos_BAD`). Only a seek or a write sets it; a read keeps
     /// it up to date, and a read that finds the end forgets it.
-    offset:               Option<i64>,
+    offset:                 Option<i64>,
     /// Whether a byte operation has oriented the stream (`_IO_fwide`), as a
     /// write, `fgets`, `fscanf` or a refill does; until then a seek leaves
     /// the pushback area alone.
-    pub(super) oriented:  bool,
+    pub(super) oriented:    bool,
     /// Whether the orientation is wide (`_mode > 0`), as a wide character
     /// function or `fwide` makes it.
-    pub(super) wide:      bool,
+    pub(super) wide:        bool,
+    /// Whether the conversion a wide orientation fixed (glibc's
+    /// `_codecvt`, from the locale then) is UTF-8.
+    pub(super) utf8:        bool,
+    /// The wide characters `ungetwc` and the `wscanf` family pushed back,
+    /// the next one last.
+    pub(super) wide_backup: ArenaVec<'a, u32>,
+    /// A wide stream's put area, over what its characters converted to
+    /// (`wide_log`), of which the first `wide_written` bytes are in the
+    /// file.
+    wide_area:              Channel,
+    wide_log:               ArenaVec<'a, u8>,
+    wide_written:           usize,
+    /// Whether `setvbuf` supplied the buffer (`_IO_USER_BUF`), which sizes
+    /// a wide put area.
+    user_buffer:            bool,
     /// glibc's put area while the stream writes (`_IO_CURRENTLY_PUTTING`):
     /// where in the buffer the bytes it holds start, and those bytes, which
     /// reach the file only when glibc writes them out.
-    putting:              bool,
-    write_base:           usize,
-    pending:              ArenaVec<'a, u8>,
+    putting:                bool,
+    write_base:             usize,
+    pending:                ArenaVec<'a, u8>,
     /// When the stream was opened, which orders `fflush(NULL)` and the
     /// flush at exit: glibc's `_IO_list_all` puts each stream it opens
     /// first.
-    pub(super) opened:    u64,
+    pub(super) opened:      u64,
     /// The `errno` the last failing operation set, until the host passes it
     /// to the program: `EBADF` for a direction the mode does not allow, and
     /// the system's code when a read, write or seek fails.
-    pub(super) errno:     Option<i32>,
+    pub(super) errno:       Option<i32>,
 }
 
 /// Where a stream's bytes go or come from.
@@ -155,8 +173,8 @@ impl Release<'_, '_, '_> {
             return;
         };
         match stdout.target {
-            | Target::Output if self.console.output.mode == super::Mode::Line =>
-                self.console.output.flushed = self.written,
+            | Target::Output if self.console.output.mode == Mode::Line =>
+                self.console.output.flush(self.written),
             | Target::File(_) if stdout.line_buffered && stdout.writable => {
                 let _ = stdout.write_out();
             },
@@ -343,6 +361,8 @@ impl Stream<'_> {
     /// C99: §7.19.9.2 paragraphs 2-5, p. 303; PDF p. 315.
     pub(super) fn seek(&mut self, offset: i64, whence: Whence) -> bool {
         let mut offset = offset;
+        // A seek gives up the wide characters pushed back.
+        self.wide_backup.clear();
         // `_IO_seekoff_unlocked` gives up the pushback area of a stream a byte
         // operation has oriented, counting its unread bytes for `SEEK_CUR`.
         // Before glibc 2.41 (commit 3e1d8d1d1dca) it skipped a stream whose
@@ -542,6 +562,10 @@ impl Stream<'_> {
     /// they all reach the file: the buffer is empty afterwards either way,
     /// and a failed write sets the error indicator. Whether it worked.
     pub(super) fn write_out(&mut self) -> bool {
+        if self.wide_written < self.wide_log.len() {
+            self.wide_area.flush(self.wide_log.len());
+            return self.write_wide();
+        }
         if self.pending.is_empty() {
             return true;
         }
@@ -586,9 +610,10 @@ impl Stream<'_> {
     /// fully buffered stream that is writing has room, a byte as `fputc`
     /// writes it when the area fills, and otherwise through a 128-byte
     /// staging area that each fill or the end writes as `fputs` would. A
-    /// stream that may not write fails even with nothing to write. Whether
-    /// all of it was written.
-    pub(super) fn put_formatted(&mut self, bytes: &[u8]) -> bool {
+    /// stream that may not write fails even with nothing to write. A call
+    /// that `failed`, on a character it could not convert, discards what its
+    /// staging area holds at the end. Whether all it kept was written.
+    pub(super) fn put_formatted(&mut self, bytes: &[u8], failed: bool) -> bool {
         self.oriented = true;
         if !self.writable {
             self.error = true;
@@ -614,6 +639,9 @@ impl Stream<'_> {
                 }
             } else {
                 let chunk = (bytes.len() - at).min(super::console::PRINTF_STAGE);
+                if failed && at + chunk == bytes.len() {
+                    break;
+                }
                 if self.put_block(&bytes[at..at + chunk]) != chunk {
                     return false;
                 }
@@ -781,8 +809,7 @@ impl Stream<'_> {
     /// and then turns off the line buffering a terminal would have given
     /// it. Whether it worked, which only the write-out can stop.
     /// C99: §7.19.5.6 paragraphs 2-3, p. 274; PDF p. 286.
-    pub(super) fn set_buffering(&mut self, mode: super::Mode, size: Option<usize>) -> bool {
-        use super::Mode;
+    pub(super) fn set_buffering(&mut self, mode: Mode, size: Option<usize>) -> bool {
         self.line_buffered = mode == Mode::Line;
         self.unbuffered = mode == Mode::Unbuffered;
         let size = if self.unbuffered { Some(0) } else { size };
@@ -806,8 +833,62 @@ impl Stream<'_> {
             self.size = 1;
         } else {
             self.size = size;
+            self.user_buffer = true;
         }
         true
+    }
+
+    /// Writes what a wide function converted for this wide-oriented stream,
+    /// as `kind` writes it, into the wide put area (`_IO_wfile_overflow`,
+    /// `_IO_wfile_xsputn`), whose write-outs convert and write all it holds
+    /// (`_IO_wdo_write`); a `failed` `wprintf` discards what its staging area
+    /// held. Whether it worked.
+    pub(super) fn put_wide(&mut self, bytes: &[u8], kind: Written, failed: bool) -> bool {
+        self.oriented = true;
+        let writing = self.putting;
+        if !self.start_write() {
+            return false;
+        }
+        if !writing && self.wide_log.is_empty() {
+            let mode = match (self.unbuffered, self.line_buffered) {
+                | (true, _) => Mode::Unbuffered,
+                | (false, true) => Mode::Line,
+                | (false, false) => Mode::Full,
+            };
+            let area = self.wide_area;
+            self.wide_area = Channel::for_wide_stream(mode, self.size, self.user_buffer, self.utf8);
+            self.wide_area.keep_position(&area);
+        }
+        let before = self.wide_log.len();
+        self.wide_log.extend_from_slice(bytes);
+        if failed {
+            let kept = self.wide_area.put_failed_formatted(&self.wide_log, before);
+            self.wide_log.truncate(kept);
+        } else {
+            self.wide_area.put(&self.wide_log, before, kind);
+        }
+        self.write_wide()
+    }
+
+    /// Writes to the file what the wide put area has written out since the
+    /// last time; whether it worked.
+    fn write_wide(&mut self) -> bool {
+        let upto = self.wide_area.flushed.min(self.wide_log.len());
+        if upto <= self.wide_written {
+            return true;
+        }
+        let (written, complete) = write_file(
+            &mut self.target,
+            &self.wide_log[self.wide_written..upto],
+            &mut self.errno,
+        );
+        self.wide_written = upto;
+        if self.wide_written == self.wide_log.len() {
+            self.wide_log.clear();
+            self.wide_written = 0;
+            self.wide_area.flush(0);
+        }
+        self.wrote(written, complete)
     }
 
     /// Opens the process's standard input as a file on Unix, so that it
@@ -867,7 +948,10 @@ impl Stream<'_> {
         (self.base, self.position) = (0, 0);
         self.drop_backup();
         self.offset = None;
-        (self.oriented, self.wide) = (false, false);
+        (self.oriented, self.wide, self.utf8) = (false, false, false);
+        self.wide_backup.clear();
+        self.wide_log.clear();
+        (self.wide_written, self.user_buffer) = (0, false);
         (self.putting, self.write_base) = (false, 0);
         self.pending.clear();
     }
@@ -901,6 +985,12 @@ impl<'a> Stream<'a> {
             pending:       ArenaVec::new_in(arena),
             opened:        0,
             errno:         None,
+            utf8:          false,
+            wide_backup:   ArenaVec::new_in(arena),
+            wide_area:     Channel::new(Mode::Full),
+            wide_log:      ArenaVec::new_in(arena),
+            wide_written:  0,
+            user_buffer:   false,
         }
     }
 }

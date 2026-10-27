@@ -1092,6 +1092,26 @@ int main(void) {{ FILE *first = fopen(\"{path_text}\", \"r+\");
         interpreter_writes("scanf_cases_modern_glibc.c", &[], &expected, "");
     }
 
+    /// `tests/fixtures/programs/long_double_modern_glibc.c` raises
+    /// non-canonical x87 bases to the powers -3 to 3, which glibc 2.43's
+    /// rewritten `powl` computes differently from 2.39: the interpreter
+    /// follows 2.43, so it must write the checked-in `.expected` output on
+    /// any glibc, and a host with glibc 2.43 or later must still write it
+    /// too.
+    #[test]
+    fn long_double_powers_match_modern_glibc() {
+        if host() != Some("x86_64-unknown-linux-gnu") {
+            return;
+        }
+        let expected =
+            std::fs::read_to_string(fixture_program("long_double_modern_glibc.expected")).unwrap();
+        if host_glibc_version() >= (2, 43) {
+            let glibc = glibc_output("long_double_modern_glibc.c");
+            assert_eq!(text(&glibc.stdout), expected, "glibc");
+        }
+        interpreter_writes("long_double_modern_glibc.c", &[], &expected, "");
+    }
+
     /// `tests/fixtures/programs/stdio_modern_glibc.c` runs the stdio cases
     /// glibc changed after 2.39: flushing streams that read (2.42:
     /// `fflush(NULL)` gives back what they read ahead, `fflush` drops a
@@ -1148,7 +1168,7 @@ int main(void) {{ FILE *first = fopen(\"{path_text}\", \"r+\");
     /// nothing at all for `_Exit` and `_exit`.
     #[test]
     fn exit_functions_end_programs_as_glibc_does() {
-        for mode in 0..=5 {
+        for mode in 0..=7 {
             merged_mode_matches_glibc("exit_handlers.c", mode);
         }
     }
@@ -1160,7 +1180,7 @@ int main(void) {{ FILE *first = fopen(\"{path_text}\", \"r+\");
     /// agree at each step.
     #[test]
     fn stream_buffering_modes_match_glibc() {
-        for mode in 0..=11 {
+        for mode in 0..=12 {
             merged_mode_matches_glibc("stdio_buffering.c", mode);
         }
     }

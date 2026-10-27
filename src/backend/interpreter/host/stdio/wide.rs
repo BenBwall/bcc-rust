@@ -32,6 +32,7 @@ use super::{
     FormatArguments,
     HostCall,
     HostReturn,
+    Target,
     Written,
     integer,
     va_list_operand,
@@ -101,11 +102,14 @@ impl DefaultHost<'_> {
                 // stays.
                 let stream = self.stream(arg(0), memory)?;
                 let mode = sext(Type::I32, integer(arg(1))?);
-                let entry = &mut self.streams.entries[stream];
-                if mode != 0 && !entry.oriented {
-                    entry.oriented = true;
-                    entry.wide = mode > 0;
+                if mode != 0 && !self.streams.entries[stream].oriented {
+                    if mode > 0 {
+                        self.orient_wide(stream)?;
+                    } else {
+                        self.streams.entries[stream].oriented = true;
+                    }
                 }
+                let entry = &self.streams.entries[stream];
                 let orientation: i32 = match (entry.oriented, entry.wide) {
                     | (false, _) => 0,
                     | (true, true) => 1,
@@ -179,18 +183,16 @@ impl DefaultHost<'_> {
             | "ungetwc" => {
                 let stream = self.stream(arg(1), memory)?;
                 self.orient_wide(stream)?;
-                let wide = integer(arg(0))?;
-                if wide & 0xFFFF_FFFF == WEOF {
+                // glibc keeps the wide character itself in the wide pushback
+                // area, unconverted.
+                let wide = integer(arg(0))? & 0xFFFF_FFFF;
+                if wide == WEOF {
                     RuntimeValue::Int(WEOF)
                 } else {
-                    self.text.clear();
-                    let utf8 = self.locale.utf8();
-                    locale::encode_for_stream(utf8, truncate_u32(wide), &mut self.text);
-                    for index in (0..self.text.len()).rev() {
-                        let byte = self.text[index];
-                        self.push_back(stream, byte);
-                    }
-                    RuntimeValue::Int(wide & 0xFFFF_FFFF)
+                    let entry = &mut self.streams.entries[stream];
+                    entry.wide_backup.push(truncate_u32(wide));
+                    entry.eof = false;
+                    RuntimeValue::Int(wide)
                 }
             },
             | "wprintf" | "fwprintf" | "vwprintf" | "vfwprintf" => {
@@ -211,7 +213,7 @@ impl DefaultHost<'_> {
                     return Err(fault);
                 }
                 let count = characters_in(&self.output[before..]);
-                self.convert_for_stream(before);
+                self.convert_for_stream(stream, before);
                 if self.move_output(stream, before, Written::Formatted) {
                     RuntimeValue::Int(count as u128)
                 } else {
@@ -231,13 +233,15 @@ impl DefaultHost<'_> {
                     formatted.and_then(|()| self.store_wide_output(before, arg(0), limit, memory));
                 self.output.truncate(before);
                 match result? {
-                    | Some(count) => RuntimeValue::Int(count as u128),
-                    | None => {
-                        // glibc fails when the output and its null do not
-                        // fit, after storing what fits.
+                    | Stored::All(count) => RuntimeValue::Int(count as u128),
+                    // glibc fails when the output and its null do not fit,
+                    // after storing what fits; with no room at all it fails
+                    // at once, leaving `errno` alone.
+                    | Stored::Truncated => {
                         self.set_errno(memory, E2BIG)?;
                         RuntimeValue::Int(u128::from(u32::MAX))
                     },
+                    | Stored::NoRoom => RuntimeValue::Int(u128::from(u32::MAX)),
                 }
             },
             | name => return self.wide_scanf(call, name, memory),
@@ -301,11 +305,20 @@ impl DefaultHost<'_> {
         &mut self,
         stream: usize,
     ) -> Result<(), Fault> {
+        let utf8 = self.locale.utf8();
         let entry = &mut self.streams.entries[stream];
         if entry.oriented && !entry.wide {
             return Err(UbKind::StreamOrientation.into());
         }
-        (entry.oriented, entry.wide) = (true, true);
+        if !entry.wide {
+            // The conversion is the locale's now, and stays the stream's.
+            (entry.oriented, entry.wide, entry.utf8) = (true, true, utf8);
+            match entry.target {
+                | Target::Output => self.console.output.set_wide(utf8),
+                | Target::Errors => self.console.error.set_wide(utf8),
+                | _ => {},
+            }
+        }
         Ok(())
     }
 
@@ -325,7 +338,7 @@ impl DefaultHost<'_> {
     ) -> Result<bool, Fault> {
         self.orient_wide(stream)?;
         let before = self.output.len();
-        let utf8 = self.locale.utf8();
+        let utf8 = self.streams.entries[stream].utf8;
         for &character in characters {
             locale::encode_for_stream(utf8, character, &mut self.output);
         }
@@ -333,10 +346,11 @@ impl DefaultHost<'_> {
     }
 
     /// Replaces the UTF-8 the wide `printf` engine appended after `before`
-    /// with what a stream writes for it in the locale: the same in
-    /// "C.UTF-8", `?` for each character beyond ASCII in "C".
-    fn convert_for_stream(&mut self, before: usize) {
-        if self.locale.utf8() {
+    /// with what `stream` writes for it with the conversion its orientation
+    /// fixed: the same for "C.UTF-8", `?` for each character beyond ASCII
+    /// for "C".
+    fn convert_for_stream(&mut self, stream: usize, before: usize) {
+        if self.streams.entries[stream].utf8 {
             return;
         }
         self.text.clear();
@@ -358,7 +372,11 @@ impl DefaultHost<'_> {
         &mut self,
         stream: usize,
     ) -> Option<u32> {
-        let utf8 = self.locale.utf8();
+        let entry = &mut self.streams.entries[stream];
+        if let Some(character) = entry.wide_backup.pop() {
+            return Some(character);
+        }
+        let utf8 = entry.utf8;
         let first = self.read(stream)?;
         let length = locale::sequence_length(utf8, first);
         let mut sequence = [first, 0, 0, 0];
@@ -402,8 +420,8 @@ impl DefaultHost<'_> {
 
     /// Stores the UTF-8 formatted after `before` as wide characters at
     /// `destination`, which holds `limit` of them: all of them and a null,
-    /// with their count, or when they do not fit as many as do and a null,
-    /// with `None`.
+    /// or when they do not fit as many as do and a null, or nothing in no
+    /// room.
     /// C99: §7.24.2.3 paragraph 3, p. 362; PDF p. 374.
     fn store_wide_output(
         &self,
@@ -411,7 +429,7 @@ impl DefaultHost<'_> {
         destination: RuntimeValue,
         limit: u128,
         memory: &mut Memory<'_>,
-    ) -> Result<Option<usize>, Fault> {
+    ) -> Result<Stored, Fault> {
         let wide = self.wide_type();
         let text = &self.output[before..];
         let count = characters_in(text);
@@ -422,7 +440,7 @@ impl DefaultHost<'_> {
             usize::try_from(limit.saturating_sub(1)).unwrap_or(usize::MAX)
         };
         if limit == 0 {
-            return Ok(None);
+            return Ok(Stored::NoRoom);
         }
         let mut index = 0;
         let mut position = 0;
@@ -434,8 +452,41 @@ impl DefaultHost<'_> {
             index += 1;
         }
         store_wide(memory, destination, stored as i128, wide, 0)?;
-        Ok(fits.then_some(count))
+        Ok(if fits {
+            Stored::All(count)
+        } else {
+            Stored::Truncated
+        })
     }
+
+    /// Pushes the UTF-8 characters of `bytes`, in reading order, back onto
+    /// the wide stream `stream`, as the `wscanf` family's `ungetwc` of what
+    /// it read ahead does.
+    pub(in crate::backend::interpreter::host) fn push_back_wide(
+        &mut self,
+        stream: usize,
+        bytes: &[u8],
+    ) {
+        let entry = &mut self.streams.entries[stream];
+        let start = entry.wide_backup.len();
+        let mut at = 0;
+        while let Some((character, length)) = locale::decode(true, &bytes[at..]) {
+            entry.wide_backup.push(character);
+            at += length;
+        }
+        entry.wide_backup[start..].reverse();
+        entry.eof = false;
+    }
+}
+
+/// What `swprintf` stored.
+enum Stored {
+    /// Everything and a null, this many characters.
+    All(usize),
+    /// What fits and a null.
+    Truncated,
+    /// Nothing: the destination holds no character.
+    NoRoom,
 }
 
 /// How many characters the UTF-8 `text` holds.

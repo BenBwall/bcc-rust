@@ -297,7 +297,7 @@ impl DefaultHost<'_> {
                     let entry = &mut self.streams.entries[stream];
                     match entry.target {
                         | Target::Output => {
-                            self.console.output.flushed = self.output.len();
+                            self.console.output.flush(self.output.len());
                             true
                         },
                         | Target::Errors => {
@@ -702,7 +702,7 @@ impl DefaultHost<'_> {
     fn flush_before_closing(&mut self, stream: usize) -> bool {
         let entry = &mut self.streams.entries[stream];
         match entry.target {
-            | Target::Output => self.console.output.flushed = self.output.len(),
+            | Target::Output => self.console.output.flush(self.output.len()),
             | Target::Errors => self.console.flush_errors(&self.output),
             | _ => return entry.write_out(),
         }
@@ -740,6 +740,9 @@ impl DefaultHost<'_> {
     /// `stream`, which may be the output itself, writing it as `kind`
     /// writes; says whether it was written.
     fn move_output(&mut self, stream: usize, before: usize, kind: Written) -> bool {
+        // A `printf` that met a character it could not convert discards
+        // what its staging area held.
+        let failed = self.format_error && kind == Written::Formatted;
         let entry = &mut self.streams.entries[stream];
         let bytes = &self.output[before..];
         let written = match entry.target {
@@ -751,11 +754,13 @@ impl DefaultHost<'_> {
                 entry.oriented = true;
                 let start = self.console.errors.len();
                 self.console.errors.extend_from_slice(bytes);
-                self.console.put_errors(start, kind, &self.output[..before]);
+                self.console
+                    .put_errors(start, kind, failed, &self.output[..before]);
                 true
             },
+            | _ if entry.wide => entry.put_wide(bytes, kind, failed),
             | _ => match kind {
-                | Written::Formatted => entry.put_formatted(bytes),
+                | Written::Formatted => entry.put_formatted(bytes, failed),
                 | Written::Byte => bytes.iter().all(|&byte| entry.put_char(byte)),
                 | Written::Block => entry.put_block(bytes) == bytes.len(),
                 // `puts` writes the string as a block and then its newline.
@@ -807,7 +812,7 @@ impl DefaultHost<'_> {
         for index in order {
             let entry = &mut self.streams.entries[index];
             match entry.target {
-                | Target::Output => self.console.output.flushed = self.output.len(),
+                | Target::Output => self.console.output.flush(self.output.len()),
                 | Target::Errors => self.console.flush_errors(&self.output),
                 | Target::Closed => {},
                 | _ => {
@@ -1055,7 +1060,7 @@ fn write_to(
             let start = console.errors.len();
             console.errors.extend_from_slice(bytes);
             let kind = if block { Written::Block } else { Written::Byte };
-            console.put_errors(start, kind, output);
+            console.put_errors(start, kind, false, output);
         },
         | _ if block => return entry.put_block(bytes),
         | _ => return usize::from(entry.put_char(bytes[0])),
@@ -1185,5 +1190,24 @@ mod tests {
             write(&mut output, &mut small, b"one\n", Written::Formatted),
             4
         );
+        // A wide UTF-8 stream given a 64-byte buffer holds 16 characters,
+        // however many bytes they take.
+        output.clear();
+        let mut wide = Channel::new(Mode::Full);
+        wide.set_buffering(Mode::Full, Some(64), 0);
+        wide.set_wide(true);
+        let accents = "\u{e9}".repeat(16);
+        assert_eq!(
+            write(&mut output, &mut wide, accents.as_bytes(), Written::Byte),
+            0
+        );
+        assert_eq!(write(&mut output, &mut wide, b"x", Written::Byte), 32);
+        // A failing `printf` keeps what it wrote into the put area and drops
+        // what its staging area held.
+        output.clear();
+        output.extend_from_slice(b"before");
+        let mut failing = Channel::new(Mode::Unbuffered);
+        assert_eq!(failing.put_failed_formatted(&output, 0), 0);
+        assert_eq!(failing.flushed, 0);
     }
 }

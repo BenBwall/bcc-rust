@@ -1,6 +1,8 @@
 /* How a program ends, chosen by MODE: returning from main (0), exit (1),
-   quick_exit (2), _Exit (3), _exit (4), and exit from inside an exit
-   handler (5). The handlers print as they run; the stream to PATH holds
+   quick_exit (2), _Exit (3), _exit (4), exit from inside an exit handler
+   (5), a handler reading main's automatic object after main called exit,
+   which leaves it live (6), and exit from inside a destructor, after which
+   the handlers it registered still run (7). The handlers print as they run; the stream to PATH holds
    unwritten bytes, which only a normal end writes out. The interpreter must
    end as the program built against glibc does: the same output to one
    pipe or file, the same status and the same file.
@@ -39,10 +41,17 @@ static void exits_again(void) {
   exit(7);
 }
 static void from_destructor(void) { printf("registered by a destructor\n"); }
+static int *automatic;
+static void reads_main(void) { printf("main's automatic object holds %d\n", *automatic); }
 
 __attribute__((destructor)) static void destructor(void) {
   printf("destructor\n");
   atexit(from_destructor);
+  if (MODE == 7)
+    exit(9);
+}
+__attribute__((destructor(200))) static void later_destructor(void) {
+  printf("destructor of lower priority\n");
 }
 __attribute__((constructor)) static void constructor(void) { atexit(first); }
 
@@ -57,6 +66,10 @@ int main(void) {
   at_quick_exit(quick_second);
   if (MODE == 5)
     atexit(exits_again);
+  int local = 42;
+  automatic = &local;
+  if (MODE == 6)
+    atexit(reads_main);
   switch (MODE) {
   case 1:
     exit(4);
@@ -67,6 +80,8 @@ int main(void) {
   case 4:
     _exit(8);
   case 5:
+  case 6:
+  case 7:
     exit(2);
   }
   return 3;

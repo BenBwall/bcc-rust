@@ -3,8 +3,9 @@
    tanl, asinl, the hyperbolic and error functions, cbrtl, hypotl and fmal in C on
    long double arithmetic, and the exponentials, logarithms, powl and the
    arctangents with the x87 instructions f2xm1, fyl2x, fyl2xp1 and fpatan;
-   the interpreter must print glibc's bits. powl of an invalid exponent is
-   left out: glibc 2.39 and 2.43 differ there. */
+   the interpreter must print glibc's bits. powl of an invalid exponent, and
+   of a non-canonical base to a small integer power, are left out: glibc 2.39
+   and 2.43 differ there (long_double_modern_glibc.c pins the second). */
 int printf(const char *, ...);
 void *memcpy(void *, const void *, unsigned long);
 long double sinl(long double), cosl(long double), tanl(long double);
@@ -43,6 +44,21 @@ static int invalid(long double value)
   memcpy(b, &value, 16);
   unsigned exponent = (b[9] & 0x7f) << 8 | b[8];
   return exponent != 0 && !(b[7] & 0x80);
+}
+
+/* Whether powl(base, power) is one glibc 2.43's rewritten small-integer
+   path (y in [-3, 3]) computes differently from 2.39: a pseudo-denormal or
+   invalid base to such a power. */
+static int version_dependent(long double base, long double power)
+{
+  unsigned char b[16];
+  memcpy(b, &base, 16);
+  unsigned exponent = (b[9] & 0x7f) << 8 | b[8];
+  int noncanonical = invalid(base) || (exponent == 0 && (b[7] & 0x80));
+  for (int n = -3; n <= 3; n++)
+    if (power == n)
+      return noncanonical;
+  return 0;
 }
 
 int main(void)
@@ -99,9 +115,9 @@ int main(void)
       bits(atan2l(x, y));
       bits(atan2l(y, x));
       bits(hypotl(x, y));
-      if (!invalid(y))
+      if (!invalid(y) && !version_dependent(x, y))
         bits(powl(x, y));
-      if (!invalid(x))
+      if (!invalid(x) && !version_dependent(y, x))
         bits(powl(y, x));
     }
     printf("\n");

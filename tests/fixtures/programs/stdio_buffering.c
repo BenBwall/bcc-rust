@@ -3,8 +3,10 @@
    reaches one pipe or file in which order shows when glibc writes each
    buffer out (a full 4096-byte block, a newline, at once, or a custom
    size). Writes to a file through a small buffer show where it is written
-   out, and ftell counts the bytes it holds. The interpreter must write what
-   the program built against glibc writes.
+   out, and ftell counts the bytes it holds. MODE 12 writes wide characters
+   to a stdout given a 64-byte buffer, whose wide put area holds a quarter
+   as many, and ends with _Exit, losing what it holds. The interpreter must
+   write what the program built against glibc writes.
    Declarations are written out so that no system header is needed. */
 typedef struct _IO_FILE FILE;
 typedef unsigned long size_t;
@@ -24,6 +26,11 @@ void setbuf(FILE *, char *);
 void setbuffer(FILE *, char *, size_t);
 void setlinebuf(FILE *);
 void *memset(void *, int, size_t);
+typedef int wchar_t;
+unsigned fputwc(wchar_t, FILE *);
+int fputws(const wchar_t *, FILE *);
+int fwprintf(FILE *, const wchar_t *, ...);
+void _Exit(int);
 
 static char big[10000];
 static char small[64];
@@ -40,6 +47,17 @@ static void show_file(const char *when) {
 
 int main(void) {
   memset(big, 'x', sizeof big - 1);
+  if (MODE == 12) {
+    setvbuf(stdout, small, 0, sizeof small);
+    for (int i = 0; i < 40; i++)
+      fputwc(L'w', stdout);
+    fprintf(stderr, "E1\n");
+    fputws(L"0123456789", stdout);
+    fprintf(stderr, "E2\n");
+    fwprintf(stdout, L"%ls|%d", L"formatted", 12345);
+    fprintf(stderr, "E3\n");
+    _Exit(0);
+  }
   FILE *file = fopen(PATH, "w+");
   switch (MODE) {
   case 1: setvbuf(stdout, 0, 2, 0); break;

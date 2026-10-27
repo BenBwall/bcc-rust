@@ -9,9 +9,13 @@
 //! and its argument. The module's destructors run where glibc's dynamic
 //! linker registered its own handler, before `main` and its constructors
 //! could register any, so they run after every handler the program
-//! registered and before one a destructor registers. A handler registered
-//! while the handlers run is called next, and a handler that calls `exit`
-//! continues the list with the new status. Then the host writes out its
+//! registered. A handler registered while the handlers run is called next;
+//! one a destructor registers with `atexit` runs from crtbegin's
+//! `__cxa_finalize`, between the destructors without a priority and the
+//! prioritized ones. A handler or destructor that
+//! calls `exit` continues the list with the new status (a destructor ends
+//! the destructors). The handlers run on top of the frames that called
+//! `exit`, whose automatic objects stay live. Then the host writes out its
 //! streams. `quick_exit` calls the `at_quick_exit` handlers the same way
 //! and ends without writing them out; `_Exit` and `_exit` end at once. A
 //! handler is checked when it is registered: it must be a function the
@@ -25,9 +29,12 @@ use super::{
     Machine,
     Outcome,
     Termination,
+    callbacks::Callback,
     host::Host,
+    startup::Destructors,
     trap::{
         Fault,
+        Location,
         Trap,
         UbKind,
         Unsupported,
@@ -36,6 +43,8 @@ use super::{
 };
 use crate::{
     ir::{
+        Block,
+        Entity as _,
         FuncId,
         Type,
     },
@@ -174,18 +183,16 @@ impl Machine<'_, '_, '_> {
     /// Ends a program that returned from `main` or called an exit
     /// function: runs the handlers its ending calls, and the destructors on
     /// a normal end, keeping its termination unless a handler exits again
-    /// or aborts.
+    /// or aborts. `exit` does not return, so the frames that called it, and
+    /// their automatic objects, stay live while the handlers run on top of
+    /// them; after a return from `main` only its caller's are left.
     pub(super) fn finish(
         &mut self,
-        destructors: &[FuncId],
+        destructors: &Destructors<'_>,
         ended: Outcome,
         host: &mut dyn Host,
     ) -> Result<Outcome, Trap> {
         let mut termination = ended.termination;
-        let mut last = ended;
-        // `exit` ends the program from inside its frames; their automatic
-        // objects no longer exist when the handlers run.
-        self.unwind();
         loop {
             let handler = match self.exit.ending {
                 | Ending::Normal => self.exit.handlers.pop(),
@@ -201,48 +208,129 @@ impl Machine<'_, '_, '_> {
                 | Termination::Returned(Some(RuntimeValue::Int(bits))) => bits as u32 as i32,
                 | _ => 0,
             };
-            match handler {
-                | Handler::Destructors => {
-                    for &func in destructors {
-                        self.enter_function(func)?;
-                        last = self.run(host)?;
-                        if !matches!(last.termination, Termination::Returned(_)) {
-                            return Ok(last);
-                        }
-                    }
-                    continue;
-                },
-                | Handler::Plain(func) => self.enter_handler(func, &[])?,
-                | Handler::WithStatus(func, argument) => self.enter_handler(
+            let ended = match handler {
+                // A destructor that exits ends the destructors, and glibc
+                // goes on with the handlers registered since.
+                | Handler::Destructors => self.run_destructors(destructors, host)?,
+                | Handler::Plain(func) => self.call_handler(func, &[], host)?,
+                | Handler::WithStatus(func, argument) => self.call_handler(
                     func,
                     &[
                         RuntimeValue::int(Type::I32, u128::from(status.cast_unsigned())),
                         argument,
                     ],
+                    host,
                 )?,
-            }
-            last = self.run(host)?;
-            match last.termination {
-                | Termination::Returned(_) => {},
+            };
+            match ended {
                 // glibc resumes the list after the handler, with the new
                 // status, or switches to the quick list or stops.
-                | Termination::Exited(_) => {
-                    termination = last.termination;
-                    self.unwind();
+                | Some(exited @ Termination::Exited(_)) => termination = exited,
+                | Some(Termination::Aborted) => {
+                    termination = Termination::Aborted;
+                    break;
                 },
-                | Termination::Aborted => return Ok(last),
+                | None | Some(Termination::Returned(_)) => {},
             }
         }
         Ok(Outcome {
             termination,
-            ..last
+            steps: self.steps,
+            #[cfg(test)]
+            memory_cells: self.memory.backing_cells(),
         })
     }
 
-    /// Enters the exit handler `func` with `args`.
-    fn enter_handler(&mut self, func: FuncId, args: &[RuntimeValue]) -> Result<(), Trap> {
+    /// Runs the destructors as glibc's `_dl_fini` runs the program's
+    /// `.fini_array`, backwards: those without a priority, then crtbegin's
+    /// `__do_global_dtors_aux`, whose `__cxa_finalize` calls the `atexit`
+    /// handlers they registered (newest first; `on_exit` handlers wait for
+    /// the list), then the prioritized ones. A destructor or handler that
+    /// exits ends the destructors: `None`, or how the program ended.
+    fn run_destructors(
+        &mut self,
+        destructors: &Destructors<'_>,
+        host: &mut dyn Host,
+    ) -> Result<Option<Termination>, Trap> {
+        for (index, &func) in destructors.functions.iter().enumerate() {
+            if index == destructors.unprioritized
+                && let Some(ended) = self.finalize(host)?
+            {
+                return Ok(Some(ended));
+            }
+            if let Some(ended) = self.call_handler(func, &[], host)? {
+                return Ok(Some(ended));
+            }
+        }
+        if destructors.unprioritized == destructors.functions.len() {
+            return self.finalize(host);
+        }
+        Ok(None)
+    }
+
+    /// `__cxa_finalize` for the program: calls every `atexit` handler still
+    /// registered, newest first, including those they register.
+    fn finalize(&mut self, host: &mut dyn Host) -> Result<Option<Termination>, Trap> {
+        while let Some(index) = self
+            .exit
+            .handlers
+            .iter()
+            .rposition(|handler| matches!(handler, Handler::Plain(_)))
+        {
+            let Handler::Plain(func) = self.exit.handlers.remove(index) else {
+                unreachable!("found a plain handler");
+            };
+            if let Some(ended) = self.call_handler(func, &[], host)? {
+                return Ok(Some(ended));
+            }
+        }
+        Ok(None)
+    }
+
+    /// Calls the exit handler or destructor `func` with `args` on top of the
+    /// frames still live, and runs it to its return: `None` then, or how
+    /// the program ended inside it.
+    fn call_handler(
+        &mut self,
+        func: FuncId,
+        args: &[RuntimeValue],
+        host: &mut dyn Host,
+    ) -> Result<Option<Termination>, Trap> {
         let module = self.module;
-        self.enter(module.function(func).name, args)
+        let func = module.function_definition(func);
+        let floor = self.frames.len();
+        let outer = self.callback.replace(Callback::Waiting(floor));
+        let result = self.enter(module.function(func).name, args).and_then(|()| {
+            loop {
+                if let Some(Callback::Returned(_)) = self.callback {
+                    break Ok(None);
+                }
+                if self.frames.len() <= floor {
+                    // A `longjmp` left the handler for a frame below it.
+                    let location = self.entry_location(func);
+                    break Err(Trap::Unsupported(Unsupported::CallbackEscape, location));
+                }
+                if let Some(termination) = self.step(host)? {
+                    break Ok(Some(termination));
+                }
+            }
+        });
+        self.callback = outer;
+        result
+    }
+
+    /// The first instruction of the defined function `func`.
+    fn entry_location(&self, func: FuncId) -> Location {
+        let body = self
+            .module
+            .function(func)
+            .body
+            .as_ref()
+            .expect("exit handlers are defined");
+        Location {
+            func,
+            inst: body.block_insts(Block::new(0))[0],
+        }
     }
 }
 

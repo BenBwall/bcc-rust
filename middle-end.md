@@ -1288,7 +1288,8 @@ of out-of-domain arguments). `lgammal` and `tgammal` are refused.
 `src/backend/interpreter/host/math/extended/tests.rs` compares every
 function with the test binary's glibc on random encodings, and
 `tests/fixtures/programs/long_double_math.c` with a program built against
-glibc. `printf` formats every
+glibc; `long_double_modern_glibc.c` pins the `powl` cases (non-canonical
+bases to small integer powers) on which glibc 2.39 and 2.43 differ. `printf` formats every
 conversion of `double` and `long double` exactly, digit for digit as glibc
 does, with halfway cases to even. The floating-environment APIs remain
 outside the host implementation.
@@ -1312,10 +1313,14 @@ Linux messages, "Unknown error N" for other codes.
 
 A normal end runs the `atexit` and `on_exit` handlers in reverse order of
 registration, with the destructors where glibc's dynamic linker registered
-its own handler (after every handler `main` or a constructor registered,
-before one a destructor registers), calls a handler registered meanwhile
-next, continues the list with the new status when a handler calls `exit`,
-and then writes out the streams (`exit.rs`). `quick_exit` runs the
+its own handler (after every handler `main` or a constructor registered),
+calls a handler registered meanwhile next (an `atexit` handler a destructor
+registers runs from crtbegin's `__cxa_finalize`, between the destructors
+without a priority and the prioritized ones), continues the list with the
+new status when a handler or destructor calls `exit`, and then writes out
+the streams (`exit.rs`). The handlers run on top of the frames that called
+`exit`, whose automatic objects stay live; only a return from `main` ends
+its frame first. `quick_exit` runs the
 `at_quick_exit` handlers and `_Exit` and `_exit` nothing; both lose what the
 streams hold, `stdout` included, as glibc does. A handler must be a function
 the program defines, of its registration's type, checked when it is
@@ -1353,11 +1358,18 @@ undefined; `setlocale` for glibc's "C" and "C.UTF-8" locales
 (`host/locale.rs`; the empty name selects "C", as an environment without
 locale variables does), whose `LC_CTYPE` decides how wide streams and
 `%lc`/`%ls` convert: in "C" a wide stream writes `?` for a character beyond
-ASCII and reads such a byte as `EILSEQ`, and in "C.UTF-8" both are UTF-8.
-The `wscanf` family's field widths count the UTF-8 bytes of a character
-beyond ASCII, and glibc's separate wide buffer is not modelled: wide output
-reaches the byte buffer at once, which writes out the same bytes at the
-same points for ASCII text. It also provides string search and
+ASCII and reads such a byte as `EILSEQ`, and in "C.UTF-8" both are UTF-8; a
+stream keeps the conversion of the locale it was oriented in. A wide
+stream has glibc's wide put area, as many wide characters as the byte
+buffer holds bytes (a quarter as many in a `setvbuf` buffer), whose
+write-outs convert and write all it holds, and a wide pushback area that
+`ungetwc` fills with the characters themselves. The `wscanf` family reads
+whole characters, matches scansets by character and converts what `%c`,
+`%s` and `%[` store with the current locale (`EILSEQ` when it cannot); a
+`printf` or `wprintf` that meets a character it cannot convert keeps what
+it wrote into the put area and discards its 128-unit staging area. The
+`wscanf` family's field widths count the UTF-8 bytes of a character beyond
+ASCII. It also provides string search and
 concatenation, `strtol` and its relatives, the "C" locale's character classes
 including the tables glibc's `<ctype.h>` reads through `__ctype_b_loc`, the
 wide-string basics at the target's `wchar_t` width, and `conj`, `cproj`,

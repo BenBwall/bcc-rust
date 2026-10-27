@@ -507,20 +507,6 @@ impl<'m, 'ir> Machine<'m, 'ir, '_> {
         self.dynamic_slots.truncate(position);
     }
 
-    /// Discards every frame, as `exit` does, freeing their stack objects.
-    /// C99: §7.20.4.3p2-4, pp. 315-316; PDF pp. 327-328.
-    pub(super) fn unwind(&mut self) {
-        for &slot in self.slots.iter().chain(self.dynamic_slots.iter()) {
-            self.memory
-                .free(slot.provenance.expect("slots have provenance"));
-        }
-        self.slots.clear();
-        self.dynamic_slots.clear();
-        self.frames.clear();
-        self.values.clear();
-        self.varargs.clear();
-    }
-
     /// Takes the edge `call`: assigns its arguments to the target block's
     /// parameters, all at once, and continues at the block's start.
     pub(super) fn branch(&mut self, body: &Body<'_>, call: BlockCall) {

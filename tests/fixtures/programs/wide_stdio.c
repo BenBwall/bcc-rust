@@ -127,6 +127,50 @@ int main(void) {
   for (int i = 0; i < count; i++)
     printf(" %02x", (unsigned char)text[i]);
   printf("\n");
+  /* A stream keeps the conversion it was oriented with. */
+  file = fopen(name, "w+");
+  fwide(file, 1);
+  setlocale(6, "C");
+  printf("fputwc e9 after C %x\n", fputwc(0xe9, file));
+  rewind(file);
+  printf("fgetwc %x\n", fgetwc(file));
+  /* ungetwc keeps the wide character itself, even one "C" cannot write. */
+  printf("ungetwc %x then fgetwc %x\n", ungetwc(0xe9, file), fgetwc(file));
+  fclose(file);
+  file = fopen(name, "r");
+  printf("bytes");
+  while ((byte = fgetc(file)) != -1)
+    printf(" %02x", byte);
+  printf("\n");
+  fclose(file);
+
+  /* A conversion that fails discards what the staging area held. */
+  file = fopen(name, "w");
+  errno = 0;
+  count = fwprintf(file, L"before%safter", "\xff");
+  printf("fwprintf failing %d errno %d\n", count, errno);
+  fclose(file);
+  file = fopen(name, "r");
+  printf("kept %d bytes\n", fgetc(file) == -1 ? 0 : 1);
+  fclose(file);
+
+  /* swprintf with no room leaves errno alone. */
+  errno = 77;
+  printf("swprintf zero %d errno %d\n", swprintf(buffer, 0, L"abc"), errno);
+  /* The wide scanf family converts narrow conversions with the locale and
+     matches a scanset by character. */
+  narrow[0] = 0;
+  errno = 0;
+  count = swscanf(L"\xe9", L"%s", narrow);
+  printf("swscanf %%s of e9 in C: %d errno %d [%s]\n", count, errno, narrow);
+  setlocale(6, "C.UTF-8");
+  count = swscanf(L"\xe9\xeaZ", L"%l[\xe9]%n", wide, &number);
+  printf("swscanf scanset %d %d %x %x\n", count, number, wide[0], wide[1]);
+  count = swscanf(L"\xe9z", L"%2s", narrow);
+  printf("swscanf %%s of e9 in UTF-8: %d [%s]\n", count, narrow);
+  errno = 0;
+  count = swprintf(buffer, 8, L"%s", "\xf0");
+  printf("swprintf cut sequence %d errno %d\n", count, errno);
   remove(name);
   return 0;
 }

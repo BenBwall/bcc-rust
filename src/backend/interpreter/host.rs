@@ -208,9 +208,19 @@ impl Host for DefaultHost<'_> {
         let before = self.output.len();
         let mut result = self.dispatch(call, memory);
         let redirected = self.redirect_output(before, call.name);
-        // What remains past `before` went to the captured standard output.
+        // What remains past `before` went to the captured standard output;
+        // a `printf` that met a character it could not convert discards
+        // what its staging area held.
         let kind = stdio::written_by(call.name);
-        self.console.output.put(&self.output, before, kind);
+        if self.format_error && kind == stdio::Written::Formatted {
+            let kept = self
+                .console
+                .output
+                .put_failed_formatted(&self.output, before);
+            self.output.truncate(kept);
+        } else {
+            self.console.output.put(&self.output, before, kind);
+        }
         // A stream operation that failed passes its `errno` on.
         if let Some(code) = self.streams.take_errno()
             && result.is_ok()

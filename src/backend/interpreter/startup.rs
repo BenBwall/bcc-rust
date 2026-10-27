@@ -26,11 +26,19 @@ use crate::{
     },
 };
 
+/// The destructors in run order, the first `unprioritized` of them those
+/// without a priority (65535), which the ELF `.fini_array` runs before
+/// crtbegin's `__do_global_dtors_aux` and the prioritized ones after it.
+pub(super) struct Destructors<'a> {
+    pub(super) functions:     ArenaVec<'a, FuncId>,
+    pub(super) unprioritized: usize,
+}
+
 /// The constructors and the destructors of `module`, each in run order.
 pub(super) fn order<'a>(
     module: &Module<'_>,
     arena: &'a Bump,
-) -> (ArenaVec<'a, FuncId>, ArenaVec<'a, FuncId>) {
+) -> (ArenaVec<'a, FuncId>, Destructors<'a>) {
     let mut constructors = ArenaVec::new_in(arena);
     let mut destructors = ArenaVec::new_in(arena);
     for init in module.init_functions() {
@@ -50,7 +58,17 @@ pub(super) fn order<'a>(
         result.extend(list.iter().map(|&(_, func)| func));
         result
     };
-    (functions(constructors), functions(destructors))
+    let unprioritized = destructors
+        .iter()
+        .take_while(|&&(priority, _)| priority == u16::MAX)
+        .count();
+    (
+        functions(constructors),
+        Destructors {
+            functions: functions(destructors),
+            unprioritized,
+        },
+    )
 }
 
 impl Machine<'_, '_, '_> {
