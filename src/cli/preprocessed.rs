@@ -22,9 +22,11 @@ use std::{
     path::Path,
 };
 
-use super::diagnostic_reporter::DiagnosticReporter;
 use crate::{
-    diagnostics::ColorChoice as RenderColor,
+    diagnostics::{
+        ColorChoice as RenderColor,
+        DiagnosticReporter,
+    },
     headers::HeaderSearch,
     pipeline::with_preprocessor,
     translation_phases::{
