@@ -267,3 +267,43 @@ function @truth(ptr aggregate(size 0, align 1), i8 bool) -> i8 bool external
         );
     }
 }
+
+/// A union of a `__float128` and two doubles classifies as SSE and SSE for
+/// both compilers, but Clang passes the low eightbyte as an `i64` in a
+/// general register while still counting a vector register for it, and GCC
+/// passes two doubles (see `sysv::Dialect`). A lone `__float128` travels in
+/// one vector register for both.
+#[test]
+fn split_binary128_unions_follow_the_compilers_dialect() {
+    use Type::*;
+    use sysv::{
+        ArgumentRegisters,
+        Dialect,
+    };
+
+    use crate::abi::plan::ArgPlan;
+    let split = layout(
+        16,
+        16,
+        AggregateFlags::empty(),
+        &[(0, F128), (0, F64), (8, F64)],
+    );
+    let whole = layout(16, 16, AggregateFlags::empty(), &[(0, F128), (0, F64)]);
+    let parts = |layout, dialect, registers: &mut ArgumentRegisters| match sysv::argument(
+        layout, registers, dialect,
+    )
+    .unwrap()
+    {
+        | ArgPlan::Registers { parts, .. } => parts.types().to_vec(),
+        | other => panic!("{other:?}"),
+    };
+    let mut registers = ArgumentRegisters { gp: 6, sse: 0 };
+    assert_eq!(parts(split, Dialect::Clang, &mut registers), [I64, F64]);
+    assert_eq!(registers, ArgumentRegisters { gp: 6, sse: 2 });
+    let mut registers = ArgumentRegisters::default();
+    assert_eq!(parts(split, Dialect::Gcc, &mut registers), [F64, F64]);
+    for dialect in [Dialect::Clang, Dialect::Gcc] {
+        let mut registers = ArgumentRegisters::default();
+        assert_eq!(parts(whole, dialect, &mut registers), [F128]);
+    }
+}

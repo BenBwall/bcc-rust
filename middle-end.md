@@ -1195,6 +1195,18 @@ a memory return area; the interpreter transports the same 128 bits.
 widened (`zeroext`), as Clang does; other narrow integers leave their upper bits
 unspecified.
 
+GCC and Clang disagree on one System V case: an aggregate with a
+`__float128` at offset 0 and another member covering its second eightbyte,
+such as `union { __float128 q; double d[2]; }`. Both classify it as the
+psABI says (SSE and SSE, or SSE and INTEGER); GCC passes it so, but Clang's
+IR type for it starts with `fp128`, and `GetX86_64ByValArgumentPair` widens
+that low part to `i64`, which travels in a general register while still
+counting a vector one. ABI lowering follows the compiler identity
+(`sysv::Dialect`): Clang's by default, GCC's under `--compiler-identity=gcc`,
+and a test links each with code built by that compiler in both directions.
+Clang's own `va_arg` of such an aggregate reads both eightbytes from the
+vector save area; bcc's reads them from where callers put them.
+
 The LLVM back end emits register extension and `noundef` independently and
 exactly as the signature records them, on declarations, definitions and both
 kinds of call. A C `signed char` parameter on System V becomes

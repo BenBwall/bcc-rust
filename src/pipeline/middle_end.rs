@@ -13,8 +13,10 @@
 use crate::{
     abi::{
         AbiError,
-        lower_abi,
+        lower_abi_as,
+        sysv::Dialect,
     },
+    configuration::CompilerIdentity,
     ir::{
         Module,
         Profile,
@@ -186,12 +188,19 @@ fn lower_diagnosed<'tu, 'ir>(
         crate::lowering::retained_call_diagnostics(&module, call_diagnostics, arena, &scratch);
     if profile == Profile::PostAbi {
         scratch.reset();
-        lower_abi(&mut module, target, &scratch).map_err(|error| MiddleEndError::Abi {
-            source: function_sources
-                .iter()
-                .find(|(function, _)| *function == error.function)
-                .map(|(_, source)| *source),
-            error,
+        // Aggregates link with the compiler bcc claims to be.
+        let dialect = match context.configuration.compiler_identity() {
+            | CompilerIdentity::Gcc => Dialect::Gcc,
+            | _ => Dialect::Clang,
+        };
+        lower_abi_as(&mut module, target, dialect, &scratch).map_err(|error| {
+            MiddleEndError::Abi {
+                source: function_sources
+                    .iter()
+                    .find(|(function, _)| *function == error.function)
+                    .map(|(_, source)| *source),
+                error,
+            }
         })?;
     }
     Ok(DiagnosedModule {

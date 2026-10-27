@@ -71,13 +71,14 @@ pub(super) fn check_va_arg(target: Target, ty: Type) -> Result<(), AbiErrorKind>
     }
 }
 
-/// Rebuilds the body of `func`, if it has one. `plans` holds the plan of
-/// every pre-ABI signature, and `old_signatures` each function's pre-ABI
-/// signature, which its callers were planned for.
+/// Rebuilds the body of `func`, if it has one, for the target and System V
+/// dialect its plans were made for. `plans` holds the plan of every pre-ABI
+/// signature, and `old_signatures` each function's pre-ABI signature, which
+/// its callers were planned for.
 pub(super) fn rewrite_body(
     module: &mut Module<'_>,
     func: FuncId,
-    target: Target,
+    (target, dialect): (Target, sysv::Dialect),
     plans: &[SignaturePlan<'_>],
     lowered_signatures: &[SigId],
     old_signatures: &[SigId],
@@ -95,6 +96,7 @@ pub(super) fn rewrite_body(
         lowered_signatures,
         old_signatures,
         convention: Convention::of(target),
+        dialect,
         scratch,
         wide_result: None,
     };
@@ -119,6 +121,8 @@ struct Rewriter<'a, 'm, 'ir, 's> {
     lowered_signatures: &'a [SigId],
     old_signatures:     &'a [SigId],
     convention:         Convention,
+    /// Whose classification an aggregate `va_arg` follows.
+    dialect:            sysv::Dialect,
     scratch:            &'a Bump,
     /// A scalar i128 result's post-ABI register return area.
     wide_result:        Option<Value>,
@@ -823,8 +827,12 @@ impl<'a> Rewriter<'a, '_, '_, '_> {
             overflow_size:  layout.size.next_multiple_of(8),
             overflow_align: layout.align.bytes().max(8),
         };
-        let arg = sysv::argument(layout, &mut sysv::ArgumentRegisters::default())
-            .expect("aggregate descriptor preflight");
+        let arg = sysv::argument(
+            layout,
+            &mut sysv::ArgumentRegisters::default(),
+            self.dialect,
+        )
+        .expect("aggregate descriptor preflight");
         let ArgPlan::Registers { parts, .. } = arg else {
             if !matches!(arg, ArgPlan::Ignore(_)) {
                 let address = self.overflow_arg(list, stack_class);

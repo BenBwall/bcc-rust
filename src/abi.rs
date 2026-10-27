@@ -4,7 +4,7 @@
 //! expands `va_arg` into loads from the target's `va_list`. Both back ends
 //! then see the same calling-convention decisions.
 //!
-//! [`lower_abi`] works in three steps. It first checks every `va_arg` type
+//! [`lower_abi_as`] works in three steps. It first checks every `va_arg` type
 //! and plans every interned signature with the target's rules
 //! ([`plan_signature`]), so an unsupported case is reported before anything
 //! changes, including interning signatures. It then interns the lowered
@@ -26,7 +26,7 @@
 //! same pair is 16 bytes, which is not 1, 2, 4 or 8, so the result becomes
 //! `sret` and the argument stays a pointer to the caller's copy.
 //!
-//! Read [`lower_abi`], then [`plan_signature`] and the plan types in
+//! Read [`lower_abi_as`], then [`plan_signature`] and the plan types in
 //! `plan.rs`, then `rewrite.rs`.
 //!
 //! - Decisions: `plan.rs` holds the target-independent plan of a signature and
@@ -84,21 +84,35 @@ use crate::{
     },
 };
 
-/// Lowers every signature, call, parameter and `va_arg` of a verified
-/// pre-ABI `module` for `target`, leaving a post-ABI module that the back
-/// ends accept. `scratch` holds module plans; a separate arena holds
-/// rewrite and verification work and is reset after each function.
-///
-/// An unsupported case (a `va_arg` of a type the target's expansion does not
-/// handle, or an aggregate the classification cannot place) is reported
-/// before the module changes.
+/// [`lower_abi_as`] in Clang's dialect, as the tests that link with Clang
+/// use it.
+#[cfg(test)]
 pub(crate) fn lower_abi<'ir>(
     module: &mut Module<'ir>,
     target: Target,
     scratch: &Bump,
 ) -> Result<(), AbiError<'ir>> {
+    lower_abi_as(module, target, sysv::Dialect::Clang, scratch)
+}
+
+/// Lowers every signature, call, parameter and `va_arg` of a verified
+/// pre-ABI `module` for `target`, leaving a post-ABI module that the back
+/// ends accept, with System V aggregates classified as `dialect`'s compiler
+/// classifies them where GCC and Clang disagree. `scratch` holds module
+/// plans; a separate arena holds rewrite and verification work and is reset
+/// after each function.
+///
+/// An unsupported case (a `va_arg` of a type the target's expansion does not
+/// handle, or an aggregate the classification cannot place) is reported
+/// before the module changes.
+pub(crate) fn lower_abi_as<'ir>(
+    module: &mut Module<'ir>,
+    target: Target,
+    dialect: sysv::Dialect,
+    scratch: &Bump,
+) -> Result<(), AbiError<'ir>> {
     let mut function_scratch = Bump::new();
-    lower_abi_with_function_scratch(module, target, scratch, &mut function_scratch)
+    lower_abi_with_function_scratch(module, target, dialect, scratch, &mut function_scratch)
 }
 
 /// Lowers with independently owned function scratch. Callee parameter
@@ -107,6 +121,7 @@ pub(crate) fn lower_abi<'ir>(
 fn lower_abi_with_function_scratch<'ir>(
     module: &mut Module<'ir>,
     target: Target,
+    dialect: sysv::Dialect,
     scratch: &Bump,
     function_scratch: &mut Bump,
 ) -> Result<(), AbiError<'ir>> {
@@ -134,10 +149,11 @@ fn lower_abi_with_function_scratch<'ir>(
     let mut plans = ArenaVec::with_capacity_in(count, scratch);
     for index in 0..count {
         let sig = SigId::new(index);
-        let plan = plan_signature(module, target, sig, scratch).map_err(|kind| AbiError {
-            function: signature_user(module, sig),
-            kind,
-        })?;
+        let plan =
+            plan_signature(module, target, dialect, sig, scratch).map_err(|kind| AbiError {
+                function: signature_user(module, sig),
+                kind,
+            })?;
         plans.push(plan);
     }
     let mut lowered_signatures = ArenaVec::with_capacity_in(count, scratch);
@@ -163,7 +179,7 @@ fn lower_abi_with_function_scratch<'ir>(
         rewrite::rewrite_body(
             module,
             func,
-            target,
+            (target, dialect),
             &plans,
             &lowered_signatures,
             &old_signatures,

@@ -36,6 +36,7 @@ use crate::{
 pub(crate) fn plan_signature<'ir: 's, 's>(
     module: &Module<'ir>,
     target: Target,
+    dialect: sysv::Dialect,
     sig: SigId,
     scratch: &'s Bump,
 ) -> Result<SignaturePlan<'s>, AbiErrorKind> {
@@ -51,7 +52,7 @@ pub(crate) fn plan_signature<'ir: 's, 's>(
     let mut registers = sysv::ArgumentRegisters::default();
     let result = match signature.param_abi(0) {
         | Some(ParamAbi::Result(layout)) => match convention {
-            | Convention::SystemV => sysv::result(layout, &mut registers)?,
+            | Convention::SystemV => sysv::result(layout, &mut registers, dialect)?,
             | Convention::Win64 => win64::result(layout),
         },
         | _ if convention == Convention::Win64 && signature.result == Some(Type::I128) =>
@@ -65,7 +66,7 @@ pub(crate) fn plan_signature<'ir: 's, 's>(
     for (index, &ty) in signature.params.iter().enumerate().skip(first) {
         let plan = match signature.param_abi(index) {
             | Some(ParamAbi::Aggregate(layout)) => match convention {
-                | Convention::SystemV => sysv::argument(layout, &mut registers)?,
+                | Convention::SystemV => sysv::argument(layout, &mut registers, dialect)?,
                 | Convention::Win64 => win64::argument(layout),
             },
             | _ if convention == Convention::Win64 && ty == Type::I128 => ArgPlan::IndirectI128,

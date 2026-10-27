@@ -172,6 +172,179 @@ strto 0.100000000000000000000000000000000005
         }
     }
 
+    /// Declarations shared by the two halves of the union ABI program.
+    const UNION_SHAPES: &str = r"typedef __float128 Q;
+union A { Q q; double d[2]; };
+union B { Q q; float f[4]; };
+union C { Q q; struct { double a; long b; } s; };
+union D { Q q; _Complex double z; };
+union E { Q q; long l; };
+union G { Q q; double d; };
+struct F { union A u; };
+union A fa(union A x, double y);
+union B fb(union B x);
+union C fc(union C x);
+union D fd(union D x);
+union E fe(union E x);
+union G fg(union G x);
+struct F ff(struct F x);
+union A full(long a, long b, long c, long d, long e, long f, union A x, union A y);
+union A vsum(int count, ...);
+";
+
+    /// Callees that change and return each union or structure shape.
+    const UNION_CALLEE: &str = r"#include <stdarg.h>
+union A fa(union A x, double y) { x.q = x.q * 2 + y; return x; }
+union B fb(union B x) { x.q += 1; return x; }
+union C fc(union C x) { x.q -= 3; return x; }
+union D fd(union D x) { x.q *= 5; return x; }
+union E fe(union E x) { x.q /= 2; return x; }
+union G fg(union G x) { x.q += 0.5Q; return x; }
+struct F ff(struct F x) { x.u.q += 7; return x; }
+union A full(long a, long b, long c, long d, long e, long f, union A x, union A y) {
+    x.q += y.q + a + b + c + d + e + f; return x; }
+union A vsum(int count, ...) {
+    va_list list; union A total = {0}; va_start(list, count);
+    for (int i = 0; i < count; i++) total.q += va_arg(list, union A).q;
+    va_end(list); return total; }
+";
+
+    /// A caller that checks each result; it exits with the failing check.
+    const UNION_CALLER: &str = r"int main(void) {
+    union A a = {1.5Q}; union B b = {2.5Q}; union C c = {3.5Q}; union D d = {4.5Q};
+    union E e = {5.5Q}; union G g = {6.5Q}; struct F f = {{7.5Q}};
+    if (fa(a, 0.25).q != 3.25Q) return 1;
+    if (fb(b).q != 3.5Q) return 2;
+    if (fc(c).q != 0.5Q) return 3;
+    if (fd(d).q != 22.5Q) return 4;
+    if (fe(e).q != 2.75Q) return 5;
+    if (fg(g).q != 7.0Q) return 6;
+    if (ff(f).u.q != 14.5Q) return 7;
+    if (full(1, 2, 3, 4, 5, 6, a, a).q != 24.0Q) return 8;
+#ifndef NO_VARARGS
+    if (vsum(3, a, a, a).q != 4.5Q) return 9;
+#endif
+    return 0;
+}
+";
+
+    /// Unions that mix a `__float128` with other members link with the
+    /// compiler bcc claims to be, whose classification of them differs:
+    /// with the default (Clang) identity a callee or caller built by bcc
+    /// links with one built by the bundled Clang, and with the GCC identity
+    /// with one built by GCC, on both back ends and in both directions,
+    /// including an argument after the general registers run out. Clang's
+    /// own `va_arg` of such a union reads the wrong registers, so Clang's
+    /// callee is not given variadic ones. The interpreter runs the whole
+    /// program.
+    #[test]
+    fn binary128_unions_link_with_the_claimed_compiler() {
+        if !cfg!(all(
+            target_arch = "x86_64",
+            target_os = "linux",
+            target_env = "gnu"
+        )) {
+            return;
+        }
+        let directory = temporary("unions");
+        std::fs::create_dir_all(&directory).unwrap();
+        let write = |name: &str, body: &str| {
+            let path = directory.join(name);
+            std::fs::write(&path, format!("{UNION_SHAPES}{body}")).unwrap();
+            path.to_str().unwrap().to_owned()
+        };
+        let definitions = write("callee.c", UNION_CALLEE);
+        let checks = write("caller.c", UNION_CALLER);
+        let whole = write("whole.c", &format!("{UNION_CALLEE}{UNION_CALLER}"));
+        let object = |name: &str| directory.join(name).to_str().unwrap().to_owned();
+        let compile = |program: &str, args: &[&str], output: &str| {
+            let built = Command::new(program)
+                .args(args)
+                .args(["-c", "-o", output])
+                .output()
+                .unwrap();
+            assert!(
+                built.status.success(),
+                "{program} {args:?}: {}",
+                text(&built.stderr)
+            );
+        };
+        let run = |first: &str, second: &str| {
+            let executable = object("program.exe");
+            let linked = Command::new("target/llvm/bin/clang")
+                .args([first, second, "-lm", "-o", &executable])
+                .output()
+                .unwrap();
+            assert!(linked.status.success(), "{}", text(&linked.stderr));
+            run_native(&mut Command::new(&executable))
+                .unwrap()
+                .status
+                .code()
+        };
+        let bcc_binary = env!("CARGO_BIN_EXE_bcc-rust");
+        let clang = "target/llvm/bin/clang";
+        compile(clang, &[&definitions], &object("clang-callee.o"));
+        compile(clang, &[&checks], &object("clang-caller.o"));
+        let gcc = Command::new("gcc")
+            .arg("--version")
+            .output()
+            .is_ok_and(|output| output.status.success());
+        if gcc {
+            compile("gcc", &[&definitions], &object("gcc-callee.o"));
+            compile("gcc", &[&checks], &object("gcc-caller.o"));
+        }
+        for backend in ["--backend=llvm", "--backend=native"] {
+            let bcc = |identity: &str, source: &str, extra: &[&str], output: &str| {
+                let mut args = vec![backend, identity, source];
+                args.extend_from_slice(extra);
+                compile(bcc_binary, &args, output);
+            };
+            let identity = "--compiler-identity=clang";
+            bcc(identity, &definitions, &[], &object("bcc-callee.o"));
+            bcc(
+                identity,
+                &checks,
+                &["-DNO_VARARGS"],
+                &object("bcc-caller.o"),
+            );
+            assert_eq!(
+                run(&object("clang-callee.o"), &object("bcc-caller.o")),
+                Some(0),
+                "{backend}"
+            );
+            assert_eq!(
+                run(&object("bcc-callee.o"), &object("clang-caller.o")),
+                Some(0),
+                "{backend}"
+            );
+            if gcc {
+                let identity = "--compiler-identity=gcc";
+                bcc(identity, &definitions, &[], &object("bccg-callee.o"));
+                bcc(identity, &checks, &[], &object("bccg-caller.o"));
+                assert_eq!(
+                    run(&object("gcc-callee.o"), &object("bccg-caller.o")),
+                    Some(0),
+                    "{backend}"
+                );
+                assert_eq!(
+                    run(&object("bccg-callee.o"), &object("gcc-caller.o")),
+                    Some(0),
+                    "{backend}"
+                );
+            }
+        }
+        for identity in ["--compiler-identity=clang", "--compiler-identity=gcc"] {
+            let output = bcc(&[identity, "--interpret", &whole]);
+            assert_eq!(
+                output.status.code(),
+                Some(0),
+                "{identity}: {}",
+                text(&output.stderr)
+            );
+        }
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
     fn bcc(args: &[&str]) -> Output {
         run_native(
             Command::new(env!("CARGO_BIN_EXE_bcc-rust"))

@@ -246,6 +246,7 @@ fn function_rewrite_and_verification_scratch_is_reclaimed() {
         lower_abi_with_function_scratch(
             &mut module,
             Target::LinuxGnu,
+            sysv::Dialect::Clang,
             &scratch,
             &mut function_scratch,
         )
