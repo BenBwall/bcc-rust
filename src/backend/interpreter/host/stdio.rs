@@ -15,36 +15,41 @@
 //! flush is not modelled). [`Console`] records where each error write falls
 //! among those flushes.
 //!
-//! `stdin` reads through a buffer as glibc's does, one `read` of the
-//! process's standard input at a time ([`Input`]). glibc line-buffers a
-//! terminal's standard input and output, and flushes a line-buffered
-//! `stdout` only when a line-buffered input stream has to be refilled
-//! (`_IO_new_file_underflow` in `libio/fileops.c`): reading what the buffer
-//! still holds, or reading a pipe or file, flushes nothing.
+//! Streams read as glibc's do ([`stream`]): through a buffer of the size
+//! glibc picks, refilled by one `read` at a time, with glibc's pushback and
+//! seeks. glibc line-buffers a terminal, and refilling a line-buffered input
+//! stream releases a line-buffered `stdout`; reading what the buffer still
+//! holds, reading straight into a large `fread` array, or reading a pipe or
+//! file releases nothing.
 //!
 //! Host files are opt-in (`--interpret-allow-fs`): without it, `fopen`,
 //! `freopen` and `remove` fail as glibc does on `EACCES`, returning null or
 //! -1, and the host counts the refusal for the command line to note;
-//! `tmpnam` then names files without looking at the file system. Files are
-//! unbuffered, so every write reaches the file at once and a later `fopen` of
-//! the same name reads it back. `errno` is not modelled: a failing call only
-//! returns its failure value.
+//! `tmpnam` then names files without looking at the file system. Writes to
+//! files are not buffered, so each reaches the file at once and a later
+//! `fopen` of the same name reads it back. `errno` is not modelled: a
+//! failing call only returns its failure value.
 //!
 //! C99: §7.19.3, pp. 264-266; PDF pp. 276-278 (files); §7.19.4-§7.19.10,
 //! pp. 268-304; PDF pp. 280-316 (operations, access, I/O, positioning and
 //! errors).
 
+mod stream;
+
 use std::{
-    fs::{
-        File,
-        OpenOptions,
-    },
+    fs::OpenOptions,
     io::{
-        Read as _,
         Seek as _,
         SeekFrom,
         Write as _,
     },
+};
+
+use stream::{
+    Release,
+    Stream,
+    Target,
+    Whence,
 };
 
 use super::{
@@ -66,10 +71,7 @@ use crate::{
             Fault,
             UbKind,
         },
-        value::{
-            Pointer,
-            RuntimeValue,
-        },
+        value::RuntimeValue,
     },
     ir::{
         Align,
@@ -127,16 +129,6 @@ const TMPNAM_NAMES: u32 = 1_000_000;
 /// included.
 const MAX_STREAMS: usize = 64;
 
-/// glibc's `BUFSIZ`, the size of its buffer for a `stdin` that is not a
-/// terminal.
-const BUFSIZ: usize = 8192;
-
-/// The size of glibc's buffer for a terminal's `stdin`: the device's
-/// `st_blksize` (1024 on Linux), which glibc takes when it is below
-/// `BUFSIZ`. A refill reads at most this much, so a longer line takes
-/// several refills.
-const TERMINAL_BUFFER: usize = 1024;
-
 /// What the program wrote to the standard streams, in the order the
 /// command line shows it.
 pub(super) struct Console<'a> {
@@ -148,8 +140,8 @@ pub(super) struct Console<'a> {
     /// How much of the output buffer `fflush` has released.
     pub(super) flushed:       usize,
     /// Whether standard output is a terminal, which glibc line-buffers: each
-    /// newline releases what precedes it, and refilling a terminal's `stdin`
-    /// releases all.
+    /// newline releases what precedes it, and refilling a line-buffered input
+    /// stream releases all.
     pub(super) line_buffered: bool,
     /// How much of the output buffer [`Console::released`] has searched for
     /// newlines, and the end of the last one it found, so that a run looks
@@ -180,99 +172,27 @@ impl Console<'_> {
     }
 }
 
-/// glibc's buffer for `stdin`: what the last `read` of the process's
-/// standard input returned, and how much of it the program has taken.
-pub(super) struct Input<'a> {
-    pub(super) bytes:    super::ArenaVec<'a, u8>,
-    pub(super) taken:    usize,
-    /// Whether standard input is a terminal, which glibc line-buffers.
-    pub(super) terminal: bool,
-}
-
-impl Input<'_> {
-    /// The next byte of standard input, or `None` at its end. An empty buffer
-    /// is refilled by one `read`, which on a terminal returns at most a line;
-    /// refilling a terminal's buffer first releases a line-buffered `stdout`,
-    /// whose buffer holds `written` bytes.
-    fn next(&mut self, console: &mut Console<'_>, written: usize) -> std::io::Result<Option<u8>> {
-        if self.taken == self.bytes.len() {
-            if self.terminal && console.line_buffered {
-                console.flushed = written;
-            }
-            let size = if self.terminal {
-                TERMINAL_BUFFER
-            } else {
-                BUFSIZ
-            };
-            self.bytes.clear();
-            self.bytes.resize(size, 0);
-            self.taken = 0;
-            match std::io::stdin().lock().read(&mut self.bytes) {
-                | Ok(count) => self.bytes.truncate(count),
-                | Err(error) => {
-                    self.bytes.clear();
-                    return Err(error);
-                },
-            }
-        }
-        let byte = self.bytes.get(self.taken).copied();
-        self.taken += usize::from(byte.is_some());
-        Ok(byte)
-    }
-}
-
 /// The host's stream table.
-pub(super) struct Streams {
-    entries: [Stream; MAX_STREAMS],
+pub(super) struct Streams<'a> {
+    entries: [Stream<'a>; MAX_STREAMS],
     /// Names `tmpnam` has handed out.
     names:   u32,
 }
 
-/// One stream's destination and state.
-#[derive(Default)]
-struct Stream {
-    target:       Target,
-    /// The end-of-file and error indicators.
-    eof:          bool,
-    error:        bool,
-    /// A byte `ungetc` pushed back.
-    pushed:       Option<u8>,
-    /// The byte glibc's buffer holds just before the read position: the
-    /// last one read, unless it came from a separate pushback area or a
-    /// seek or write came after it. After a seek glibc's buffer can hold
-    /// the byte before the new position too (when that is not on a block
-    /// boundary), which the host does not model.
-    behind:       Option<u8>,
-    /// Whether `pushed` is the byte `behind`, which glibc's `ungetc` pushes
-    /// back by stepping its read position back over it instead of into a
-    /// separate pushback area. A failed seek discards the area but keeps the
-    /// step back (`_IO_seekoff_unlocked` in `libio/ioseekoff.c`).
-    stepped_back: bool,
-    /// The memory object of a stream `fopen` made, freed by `fclose`.
-    object:       Option<Pointer>,
-}
-
-/// Where a stream's bytes go or come from.
-#[derive(Default)]
-enum Target {
-    #[default]
-    Closed,
-    /// The host's captured standard output.
-    Output,
-    /// The host's captured standard error.
-    Errors,
-    /// The process's standard input.
-    Input,
-    File(File),
-}
-
-impl Default for Streams {
-    fn default() -> Self {
-        let mut entries: [Stream; MAX_STREAMS] = std::array::from_fn(|_| Stream::default());
-        entries[0].target = Target::Input;
-        entries[1].target = Target::Output;
-        entries[2].target = Target::Errors;
+impl<'a> Streams<'a> {
+    /// The standard streams open, the rest closed, with their buffers in
+    /// `arena`.
+    pub(super) fn new_in(arena: &'a crate::util::bump::Bump) -> Self {
+        let mut entries: [Stream<'a>; MAX_STREAMS] = std::array::from_fn(|_| Stream::new_in(arena));
+        entries[0].reopen(Target::Input, true, false, false);
+        entries[1].reopen(Target::Output, false, true, false);
+        entries[2].reopen(Target::Errors, false, true, false);
         Self { entries, names: 0 }
+    }
+
+    /// Treats the process's standard input as a terminal.
+    pub(super) fn set_terminal_input(&mut self, terminal: bool) {
+        self.entries[0].terminal = terminal;
     }
 }
 
@@ -317,8 +237,7 @@ impl DefaultHost<'_> {
                 let stream = self.stream(arg(0), memory)?;
                 self.flush_before_closing(stream);
                 let entry = &mut self.streams.entries[stream];
-                entry.target = Target::Closed;
-                entry.pushed = None;
+                entry.reopen(Target::Closed, false, false, false);
                 if let Some(object) = entry.object.take() {
                     memory.free(object.provenance.expect("streams have provenance"));
                 }
@@ -326,15 +245,26 @@ impl DefaultHost<'_> {
             },
             | "fflush" => {
                 // C99 §7.19.5.2p3: a null pointer flushes every stream.
-                let stream = if arg(0) == RuntimeValue::NULL {
-                    1
+                // glibc 2.43 also gives back what each stream read ahead
+                // (`_IO_flush_all`); 2.39 leaves streams that read alone.
+                let every = arg(0) == RuntimeValue::NULL;
+                let streams = if every {
+                    0..MAX_STREAMS
                 } else {
-                    self.stream(arg(0), memory)?
+                    let stream = self.stream(arg(0), memory)?;
+                    stream..stream + 1
                 };
-                if matches!(self.streams.entries[stream].target, Target::Output) {
-                    self.console.flushed = self.output.len();
+                let mut flushed = true;
+                for stream in streams {
+                    let entry = &mut self.streams.entries[stream];
+                    match entry.target {
+                        | Target::Output => self.console.flushed = self.output.len(),
+                        | Target::Closed => {},
+                        | _ if every && !entry.reads_ahead() => {},
+                        | _ => flushed &= entry.sync(),
+                    }
                 }
-                RuntimeValue::Int(0)
+                RuntimeValue::Int(if flushed { 0 } else { EOF })
             },
             | "fputc" | "putc" => {
                 let stream = self.stream(arg(1), memory)?;
@@ -387,21 +317,22 @@ impl DefaultHost<'_> {
                 let stream = self.stream(arg(3), memory)?;
                 let (size, count) = (integer(arg(1))?, integer(arg(2))?);
                 let total = size.checked_mul(count).ok_or(UbKind::OutOfBounds)?;
-                let mut read = 0_u128;
-                while read < total {
-                    let Some(byte) = self.read(stream) else {
-                        break;
-                    };
-                    let at = memory.ptr_add(arg(0), RuntimeValue::Int(read), true);
-                    memory.store(
-                        Type::I8,
-                        RuntimeValue::Int(u128::from(byte)),
-                        at,
-                        Align::BYTE,
-                    )?;
-                    read += 1;
-                }
-                RuntimeValue::Int(read.checked_div(size).unwrap_or(0))
+                let total = usize::try_from(total).map_err(|_| UbKind::OutOfBounds)?;
+                let mut stored = 0_u128;
+                let read = self.read_block(stream, total, |bytes| {
+                    for &byte in bytes {
+                        let at = memory.ptr_add(arg(0), RuntimeValue::Int(stored), true);
+                        memory.store(
+                            Type::I8,
+                            RuntimeValue::Int(u128::from(byte)),
+                            at,
+                            Align::BYTE,
+                        )?;
+                        stored += 1;
+                    }
+                    Ok::<(), Fault>(())
+                })?;
+                RuntimeValue::Int((read as u128).checked_div(size).unwrap_or(0))
             },
             | "fgetc" | "getc" | "getchar" => {
                 let stream = if call.name == "getchar" {
@@ -419,6 +350,9 @@ impl DefaultHost<'_> {
                 if limit <= 0 {
                     return Ok(HostReturn::Value(Some(RuntimeValue::NULL)));
                 }
+                // glibc fails a call that meets a new read error, even after
+                // reading part of a line, and keeps an earlier error set.
+                let earlier_error = std::mem::take(&mut self.streams.entries[stream].error);
                 let mut count = 0_i128;
                 while count + 1 < limit {
                     let Some(byte) = self.read(stream) else {
@@ -436,9 +370,12 @@ impl DefaultHost<'_> {
                         break;
                     }
                 }
+                let entry = &mut self.streams.entries[stream];
+                let failed = entry.error;
+                entry.error |= earlier_error;
                 // C99 §7.19.7.2p3: a null pointer when end-of-file comes
                 // before any character, leaving the array unchanged.
-                if count == 0 && limit > 1 {
+                if (count == 0 || failed) && limit > 1 {
                     RuntimeValue::NULL
                 } else {
                     let end = memory.ptr_add(arg(0), RuntimeValue::Int(count.unsigned_abs()), true);
@@ -475,41 +412,24 @@ impl DefaultHost<'_> {
             },
             | "fseek" | "rewind" => {
                 let stream = self.stream(arg(0), memory)?;
-                let position = if call.name == "rewind" {
-                    Some(SeekFrom::Start(0))
+                let (offset, whence) = if call.name == "rewind" {
+                    (0, Whence::Start)
                 } else {
                     let offset = sext(call.arg_types[1], integer(arg(1))?);
                     let offset = i64::try_from(offset).map_err(|_| UbKind::SignatureMismatch)?;
-                    // A byte `ungetc` pushed back stands before the file
-                    // position, so the current position is one less. A
-                    // negative start and an offset past the range fail, as
-                    // `lseek` does (EINVAL); glibc refuses an unknown
-                    // `whence` before it touches the stream.
-                    let pushed = i64::from(self.streams.entries[stream].pushed.is_some());
-                    match int(arg(2))? {
-                        | 0 => u64::try_from(offset).ok().map(SeekFrom::Start),
-                        | 1 => offset.checked_sub(pushed).map(SeekFrom::Current),
-                        | 2 => Some(SeekFrom::End(offset)),
+                    // glibc refuses an unknown `whence` before it touches
+                    // the stream.
+                    let whence = match int(arg(2))? {
+                        | 0 => Whence::Start,
+                        | 1 => Whence::Current,
+                        | 2 => Whence::End,
                         | _ =>
                             return Ok(HostReturn::Value(Some(RuntimeValue::int(Type::I32, EOF)))),
-                    }
+                    };
+                    (offset, whence)
                 };
                 let entry = &mut self.streams.entries[stream];
-                let moved = match (position, &mut entry.target) {
-                    | (Some(position), Target::File(file)) => file.seek(position).is_ok(),
-                    | _ => false,
-                };
-                // C99 §7.19.9.2p5: a successful seek undoes `ungetc` and
-                // clears the end-of-file indicator. One that fails keeps
-                // the indicator, and glibc still discards a separate
-                // pushback area.
-                if moved {
-                    entry.eof = false;
-                    entry.behind = None;
-                }
-                if moved || !entry.stepped_back {
-                    entry.pushed = None;
-                }
+                let moved = entry.seek(offset, whence);
                 if call.name == "rewind" {
                     // glibc's `rewind` clears both indicators even when the
                     // seek fails.
@@ -521,19 +441,8 @@ impl DefaultHost<'_> {
             },
             | "ftell" => {
                 let stream = self.stream(arg(0), memory)?;
-                let entry = &mut self.streams.entries[stream];
-                let pushed = u64::from(entry.pushed.is_some());
-                let position = match &mut entry.target {
-                    // A byte pushed back at the start has no position.
-                    | Target::File(file) => file
-                        .stream_position()
-                        .ok()
-                        .and_then(|at| at.checked_sub(pushed)),
-                    | _ => None,
-                };
-                position.map_or(RuntimeValue::Int(u128::MAX), |at| {
-                    RuntimeValue::Int(u128::from(at))
-                })
+                let position = self.streams.entries[stream].tell();
+                RuntimeValue::Int(position.map_or(u128::MAX, |at| at.cast_unsigned().into()))
             },
             | "remove" => {
                 let allowed = self.file_access;
@@ -660,23 +569,26 @@ impl DefaultHost<'_> {
     /// `stream`, which may be the output itself; says whether it was written.
     fn move_output(&mut self, stream: usize, before: usize) -> bool {
         let entry = &mut self.streams.entries[stream];
-        let written = match &mut entry.target {
-            | Target::Output => return true,
-            | Target::Errors => {
-                self.console
-                    .errors
-                    .extend_from_slice(&self.output[before..]);
-                let end = self.console.errors.len();
-                let released = self.console.released(&self.output[..before]);
-                self.console.marks.push((released, end));
-                true
-            },
-            | Target::File(file) => {
-                entry.behind = None;
-                file.write_all(&self.output[before..]).is_ok()
-            },
-            | Target::Input | Target::Closed => false,
-        };
+        if matches!(entry.target, Target::Output) {
+            return true;
+        }
+        let written = entry.start_write()
+            && match &mut entry.target {
+                | Target::Errors => {
+                    self.console
+                        .errors
+                        .extend_from_slice(&self.output[before..]);
+                    let end = self.console.errors.len();
+                    let released = self.console.released(&self.output[..before]);
+                    self.console.marks.push((released, end));
+                    true
+                },
+                | Target::File(file) => file.write_all(&self.output[before..]).is_ok(),
+                | Target::Output | Target::Input | Target::Closed => false,
+            };
+        if written {
+            entry.wrote(self.output.len() - before);
+        }
         entry.error |= !written;
         self.output.truncate(before);
         written
@@ -692,54 +604,36 @@ impl DefaultHost<'_> {
 
     /// Reads one byte from `stream`, setting its end-of-file or error
     /// indicator when there is none.
-    /// C99: §7.19.7.1 paragraphs 2-3, p. 296; PDF p. 308.
     pub(super) fn read(&mut self, stream: usize) -> Option<u8> {
-        let entry = &mut self.streams.entries[stream];
-        if let Some(byte) = entry.pushed.take() {
-            entry.behind = entry.stepped_back.then_some(byte);
-            return Some(byte);
-        }
-        // A set end-of-file indicator fails the read without reading, as
-        // glibc's `_IO_EOF_SEEN` does.
-        if entry.eof {
-            return None;
-        }
-        let read = match &mut entry.target {
-            | Target::File(file) => {
-                let mut byte = [0];
-                file.read(&mut byte)
-                    .map(|count| (count == 1).then_some(byte[0]))
-            },
-            | Target::Input => self.input.next(&mut self.console, self.output.len()),
-            | _ => {
-                entry.error = true;
-                return None;
-            },
+        let linked = matches!(self.streams.entries[1].target, Target::Output);
+        let mut stdout = Release {
+            console: &mut self.console,
+            written: self.output.len(),
+            linked,
         };
-        entry.behind = None;
-        match read {
-            | Ok(Some(byte)) => {
-                entry.behind = Some(byte);
-                Some(byte)
-            },
-            | Ok(None) => {
-                entry.eof = true;
-                None
-            },
-            | Err(_) => {
-                entry.error = true;
-                None
-            },
-        }
+        self.streams.entries[stream].read(&mut stdout)
+    }
+
+    /// Reads up to `wanted` bytes from `stream` for `fread`, passing them to
+    /// `store`; how many it read.
+    fn read_block<E>(
+        &mut self,
+        stream: usize,
+        wanted: usize,
+        store: impl FnMut(&[u8]) -> Result<(), E>,
+    ) -> Result<usize, E> {
+        let linked = matches!(self.streams.entries[1].target, Target::Output);
+        let mut stdout = Release {
+            console: &mut self.console,
+            written: self.output.len(),
+            linked,
+        };
+        self.streams.entries[stream].read_block(wanted, &mut stdout, store)
     }
 
     /// Pushes `byte` back onto `stream`, as `ungetc` does.
     pub(super) fn push_back(&mut self, stream: usize, byte: u8) {
-        let entry = &mut self.streams.entries[stream];
-        entry.stepped_back = entry.behind == Some(byte);
-        entry.behind = None;
-        entry.pushed = Some(byte);
-        entry.eof = false;
+        self.streams.entries[stream].push_back(byte);
     }
 
     /// `fopen`, or `freopen` of `reopen`: the stream on success, else null.
@@ -762,7 +656,8 @@ impl DefaultHost<'_> {
         let plus = modifiers.contains(&b'+');
         let exclusive = modifiers.contains(&b'x');
         let mut options = OpenOptions::new();
-        let _ = match self.text.first() {
+        let access = self.text.first().copied();
+        let _ = match access {
             | Some(b'r') => options.read(true).write(plus),
             | Some(b'w') if exclusive => options.write(true).create_new(true).read(plus),
             | Some(b'w') => options.write(true).create(true).truncate(true).read(plus),
@@ -770,11 +665,22 @@ impl DefaultHost<'_> {
             | Some(b'a') => options.append(true).create(true).read(plus),
             | _ => return Ok(RuntimeValue::NULL),
         };
+        let readable = access == Some(b'r') || plus;
+        let writable = access != Some(b'r') || plus;
+        let appending = access == Some(b'a');
         let allowed = self.file_access;
-        let file = self
+        let mut file = self
             .path(path, memory)?
             .filter(|_| allowed)
             .and_then(|path| options.open(path).ok());
+        // glibc starts a stream that only appends at the end of the file
+        // (`_IO_file_open`); one that also reads starts at its beginning.
+        if appending
+            && !readable
+            && let Some(opened) = &mut file
+        {
+            _ = opened.seek(SeekFrom::End(0)).ok();
+        }
         if !allowed {
             self.deny_file_access();
         }
@@ -784,19 +690,14 @@ impl DefaultHost<'_> {
             // with it.
             self.flush_before_closing(stream);
             let entry = &mut self.streams.entries[stream];
-            let object = entry.object;
-            *entry = Stream::default();
             let Some(file) = file else {
-                if let Some(object) = object {
+                entry.reopen(Target::Closed, false, false, false);
+                if let Some(object) = entry.object.take() {
                     memory.free(object.provenance.expect("streams have provenance"));
                 }
                 return Ok(RuntimeValue::NULL);
             };
-            *entry = Stream {
-                target: Target::File(file),
-                object,
-                ..Stream::default()
-            };
+            entry.reopen(Target::File(file), readable, writable, appending);
             return Ok(pointer);
         }
         let Some(file) = file else {
@@ -809,11 +710,9 @@ impl DefaultHost<'_> {
         };
         let number = u32::try_from(index).expect("a small table");
         let object = memory.allocate(ObjectKind::Stream(number), 0, Align::BYTE)?;
-        self.streams.entries[index] = Stream {
-            target: Target::File(file),
-            object: Some(object),
-            ..Stream::default()
-        };
+        let entry = &mut self.streams.entries[index];
+        entry.reopen(Target::File(file), readable, writable, appending);
+        entry.object = Some(object);
         Ok(RuntimeValue::Ptr(object))
     }
 
@@ -897,28 +796,29 @@ const fn truncate_u8(bits: u128) -> u8 {
 /// Writes `bytes` to the stream `entry`, setting its error indicator on
 /// failure; standard output and error go to the host's buffers.
 fn write_to(
-    entry: &mut Stream,
+    entry: &mut Stream<'_>,
     output: &mut super::ArenaVec<'_, u8>,
     console: &mut Console<'_>,
     bytes: &[u8],
 ) -> bool {
-    let written = match &mut entry.target {
-        | Target::Output => {
-            output.extend_from_slice(bytes);
-            true
-        },
-        | Target::Errors => {
-            console.errors.extend_from_slice(bytes);
-            let released = console.released(output);
-            console.marks.push((released, console.errors.len()));
-            true
-        },
-        | Target::File(file) => {
-            entry.behind = None;
-            file.write_all(bytes).is_ok()
-        },
-        | Target::Input | Target::Closed => false,
-    };
+    let written = entry.start_write()
+        && match &mut entry.target {
+            | Target::Output => {
+                output.extend_from_slice(bytes);
+                true
+            },
+            | Target::Errors => {
+                console.errors.extend_from_slice(bytes);
+                let released = console.released(output);
+                console.marks.push((released, console.errors.len()));
+                true
+            },
+            | Target::File(file) => file.write_all(bytes).is_ok(),
+            | Target::Input | Target::Closed => false,
+        };
+    if written {
+        entry.wrote(bytes.len());
+    }
     entry.error |= !written;
     written
 }

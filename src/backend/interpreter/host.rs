@@ -134,15 +134,13 @@ pub(crate) struct DefaultHost<'a> {
     /// What the program wrote to `stderr`, and where it falls among the
     /// flushes of `stdout`.
     console:       stdio::Console<'a>,
-    /// glibc's buffer for `stdin`.
-    input:         stdio::Input<'a>,
     /// Whether the program may open, create and remove host files.
     file_access:   bool,
     /// How many file-system accesses were refused, and the first path.
     denied_files:  u32,
     denied_path:   ArenaVec<'a, u8>,
     /// The open streams.
-    streams:       stdio::Streams,
+    streams:       stdio::Streams<'a>,
     /// A file name being passed to the host's file system.
     path:          ArenaVec<'a, u8>,
     /// `tmpnam`'s static buffer, once made.
@@ -555,7 +553,7 @@ impl DefaultHost<'_> {
     /// Treats standard input as a terminal, which glibc line-buffers:
     /// refilling its buffer flushes a terminal's stdout.
     pub(crate) fn set_terminal_input(&mut self, terminal: bool) {
-        self.input.terminal = terminal;
+        self.streams.set_terminal_input(terminal);
     }
 
     /// How many file-system accesses were refused, with the first path, if
@@ -688,15 +686,10 @@ impl<'a> DefaultHost<'a> {
                 scanned:       0,
                 line_end:      0,
             },
-            input:         stdio::Input {
-                bytes:    ArenaVec::new_in(arena),
-                taken:    0,
-                terminal: false,
-            },
             file_access:   false,
             denied_files:  0,
             denied_path:   ArenaVec::new_in(arena),
-            streams:       stdio::Streams::default(),
+            streams:       stdio::Streams::new_in(arena),
             path:          ArenaVec::new_in(arena),
             tmpnam_buffer: None,
             ctype:         [None; 3],

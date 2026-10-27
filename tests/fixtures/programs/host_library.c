@@ -145,6 +145,131 @@ static void report(FILE *stream, const char *format, ...)
   printf("[%d %s]\n", length, text);
 }
 
+/* Writes `count` copies of `fill` and then `tail` to a new file `name`. */
+static void make_file(const char *name, int fill, int count, const char *tail)
+{
+  FILE *file = fopen(name, "wb");
+  for (int i = 0; i < count; i++)
+    fputc(fill, file);
+  fputs(tail, file);
+  fclose(file);
+}
+
+/* glibc's read buffering: a buffer of the file's block size, refilled when
+   empty; reads of at least a buffer go straight into the array; ungetc
+   steps back over the byte just read from the buffer, else pushes into a
+   separate area that any seek discards; and a seek refills the buffer up to
+   the new position from the block boundary below it. */
+static void buffering(void)
+{
+  static char block[8192];
+  char name[32], other[32];
+  tmpnam(name);
+  tmpnam(other);
+  /* A set end-of-file indicator stops refills but not a read straight into
+     a large array. */
+  make_file(name, 'x', 3, "");
+  FILE *file = fopen(name, "rb");
+  while (fgetc(file) != -1)
+    ;
+  FILE *more = fopen(name, "ab");
+  for (int i = 0; i < 4096; i++)
+    fputc('q', more);
+  fclose(more);
+  size_t got = fread(block, 1, 4096, file);
+  int eof = !!feof(file);
+  size_t small = fread(block, 1, 10, file);
+  int next = fgetc(file);
+  printf("buffer eof %lu %d %lu %d\n", got, eof, small, next);
+  fclose(file);
+  /* Bytes read straight into the array are not in the buffer, so ungetc
+     pushes the last of them into the area a failed seek discards. */
+  make_file(name, 'a', 4096, "B");
+  file = fopen(name, "rb");
+  fread(block, 1, 4096, file);
+  ungetc(block[4095], file);
+  int failed = fseek(file, -1, 0);
+  long at = ftell(file);
+  next = fgetc(file);
+  printf("direct %d %ld %c\n", failed, at, next);
+  fclose(file);
+  /* After a seek off a block boundary the buffer holds the bytes before the
+     position; a seek within the buffer moves within it; a seek relative to
+     an offset glibc does not know yet empties it. */
+  make_file(name, '0', 0, "0123456789");
+  file = fopen(name, "rb");
+  fseek(file, 1, 0);
+  ungetc('0', file);
+  failed = fseek(file, -1, 0);
+  next = fgetc(file);
+  printf("seek %d %c ", failed, next);
+  fgetc(file);
+  fgetc(file);
+  fseek(file, 5, 0);
+  ungetc('4', file);
+  failed = fseek(file, -1, 0);
+  next = fgetc(file);
+  printf("%d %c ", failed, next);
+  fclose(file);
+  file = fopen(name, "rb");
+  fgetc(file);
+  fseek(file, 2, 1);
+  ungetc('2', file);
+  failed = fseek(file, -1, 0);
+  next = fgetc(file);
+  printf("%d %c\n", failed, next);
+  fclose(file);
+  /* ftell counts the pushback area only once there is a buffer, and then
+     subtracts the buffer's unread bytes behind it without a sign check. */
+  file = fopen(name, "rb");
+  ungetc('Z', file);
+  at = ftell(file);
+  next = fgetc(file);
+  printf("tell %ld %c ", at, next);
+  ungetc('Y', file);
+  printf("%ld ", ftell(file));
+  next = fgetc(file);
+  int first = fgetc(file);
+  ungetc('W', file);
+  printf("%c %c %ld ", next, first, ftell(file));
+  ungetc('V', file);
+  ungetc('U', file);
+  printf("%ld", ftell(file));
+  for (int i = 0; i < 4; i++)
+    printf(" %c", fgetc(file));
+  printf("\n");
+  fclose(file);
+  /* A stream that only appends starts at the end, one that also reads at
+     the beginning. */
+  file = fopen(name, "a");
+  at = ftell(file);
+  fclose(file);
+  file = fopen(name, "a+");
+  printf("append %ld %ld\n", at, ftell(file));
+  fclose(file);
+  /* The buffer keeps what it read when another stream rewrites the file;
+     fflush gives it back, so the next read sees the new bytes. */
+  make_file(other, 'a', 0, "abc");
+  file = fopen(other, "rb");
+  fgetc(file);
+  FILE *writer = fopen(other, "r+b");
+  fseek(writer, 1, 0);
+  fputc('X', writer);
+  fclose(writer);
+  next = fgetc(file);
+  fseek(file, 0, 0);
+  fgetc(file);
+  writer = fopen(other, "r+b");
+  fseek(writer, 1, 0);
+  fputc('Y', writer);
+  fclose(writer);
+  int flushed = fflush(file);
+  printf("stale %c %d %c\n", next, flushed, fgetc(file));
+  fclose(file);
+  remove(name);
+  remove(other);
+}
+
 int main(void)
 {
   int values[] = {5, -3, 9, 0, 9, 2, -8, 7, 1, 4, 4, 6};
@@ -305,6 +430,7 @@ int main(void)
   fclose(exclusive);
   remove(name);
   printf("fopen missing %d\n", fopen(name, "r") == 0);
+  buffering();
 
   /* Comparison traces: offsets of the compared elements from the base,
      into the array as it is merged for small elements, and where the

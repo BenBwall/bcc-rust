@@ -584,6 +584,30 @@ int main(void) { volatile long double x = 1.5L; printf(\"%Lf %d \", x, 7);
         interpreter_writes("scanf_cases_modern_glibc.c", &[], &expected, "");
     }
 
+    /// `tests/fixtures/programs/stdio_modern_glibc.c` flushes streams that
+    /// read, which glibc 2.43 changed (`fflush(NULL)` gives back what they
+    /// read ahead; `fflush` drops a pushback area): the interpreter follows
+    /// 2.43, so it must write the checked-in `.expected` output on any
+    /// glibc, and a host with glibc 2.43 or later must still write it too.
+    #[test]
+    fn stdio_flushes_match_modern_glibc() {
+        if host() != Some("x86_64-unknown-linux-gnu") {
+            return;
+        }
+        let expected =
+            std::fs::read_to_string(fixture_program("stdio_modern_glibc.expected")).unwrap();
+        if host_glibc_version() >= (2, 43) {
+            let glibc = glibc_output("stdio_modern_glibc.c");
+            assert_eq!(text(&glibc.stdout), expected, "glibc");
+        }
+        interpreter_writes(
+            "stdio_modern_glibc.c",
+            &["--interpret-allow-fs"],
+            &expected,
+            "",
+        );
+    }
+
     /// Builds a fixture with clang against glibc and checks that the
     /// interpreter, with `flags`, writes the same stdout and stderr under
     /// both optimization settings. GNU/Linux hosts only.
@@ -784,6 +808,25 @@ int fputs(const char *, FILE *); int getchar(void);
                 "{body} {flags:?}"
             );
         }
+        // An `fread` of at least the terminal's 1024-byte buffer reads the
+        // line straight into the array, without a refill to flush before;
+        // a smaller one refills.
+        let mut line = vec![b'x'; 1023];
+        line.push(b'\n');
+        for (size, expected) in [(1024, "BA"), (1023, "AB")] {
+            let source = format!(
+                "{prelude}typedef unsigned long size_t; size_t fread(void *, size_t, size_t, FILE \
+                 *);
+extern FILE *stdin;
+int main(void) {{ static char buffer[1024]; fputs(\"A\", stdout);
+  fread(buffer, 1, {size}, stdin); fputs(\"B\", stderr); return 0; }}\n"
+            );
+            assert_eq!(
+                interpret_merged(&source, &[stdout, stdin], &line),
+                expected,
+                "fread {size}"
+            );
+        }
     }
 
     /// Interprets `source` with `flags` and `input` piped to its stdin, with
@@ -901,10 +944,14 @@ int main(void) { double d = 1, e = 1; unsigned long long bits;
   printf(\"%d %a %llx %d\\n\", n, d, bits, fseek(stdin, -9223372036854775807L - 1, 1));
   return 0; }
 ";
-        let output = bcc(
-            source,
-            &["--interpret", "--target=x86_64-unknown-linux-gnu"],
-        );
+        // stdin is a pipe, which cannot seek; glibc's seek on /dev/null
+        // would succeed.
+        let output = Command::new(env!("CARGO_BIN_EXE_bcc-rust"))
+            .args(["--interpret", "--target=x86_64-unknown-linux-gnu"])
+            .args(["--input", source])
+            .stdin(std::process::Stdio::piped())
+            .output()
+            .unwrap();
         assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr));
         assert_eq!(text(&output.stdout), "2 0x0p+0 7fffffffffffffff -1\n");
         let source = "typedef int wchar_t; wchar_t *wmemcpy(wchar_t *, const wchar_t *, unsigned \
