@@ -266,6 +266,85 @@ static void buffering(void)
   int flushed = fflush(file);
   printf("stale %c %d %c\n", next, flushed, fgetc(file));
   fclose(file);
+  /* A seek right after writing reads a whole buffer at the block boundary
+     when glibc still held unwritten bytes, and only up to the position when
+     it had written them all; reading the rest then takes a refill or a read
+     straight into the array, which decides what ungetc steps back over. */
+  for (int how = 0; how < 4; how++) {
+    file = fopen(name, "w+");
+    for (int i = 0; i < 8192; i++)
+      block[i] = 'a';
+    if (how == 0) {
+      for (int i = 0; i < 8192; i++)
+        fputc('a', file);
+      fputc('B', file);
+    } else if (how == 1) {
+      fwrite(block, 1, 8192, file);
+      fputs("B", file);
+      fflush(file);
+    } else if (how == 2) {
+      block[8192 - 1] = 'a';
+      fwrite(block, 1, 8192, file);
+      fwrite("B", 1, 1, file);
+    } else {
+      for (int i = 0; i < 8192; i++)
+        fprintf(file, "a");
+      fprintf(file, "B");
+    }
+    fseek(file, 1, 0);
+    got = fread(block, 1, 8191, file);
+    ungetc(block[got - 1], file);
+    failed = fseek(file, -1, 0);
+    at = ftell(file);
+    next = fgetc(file);
+    printf("written %d %lu %d %ld %c\n", how, got, failed, at, next);
+    fclose(file);
+  }
+  /* An empty fread or fputs leaves the stream alone. */
+  file = fopen(name, "r+");
+  ungetc('X', file);
+  long before = ftell(file);
+  char byte;
+  got = fread(&byte, 0, 1, file);
+  at = ftell(file);
+  fputs("", file);
+  next = fgetc(file);
+  printf("empty %ld %lu %ld %c\n", before, got, at, next);
+  fclose(file);
+  /* Until a byte operation orients a stream, a seek leaves its pushback
+     area alone: dropped uncounted before the first buffer, counted alone
+     after it, and kept when the seek fails. */
+  file = fopen(name, "rb");
+  ungetc('X', file);
+  failed = fseek(file, 1, 1);
+  at = ftell(file);
+  next = fgetc(file);
+  printf("unoriented %d %ld %c ", failed, at, next);
+  fclose(file);
+  file = fopen(name, "rb");
+  fseek(file, 0, 0);
+  ungetc('X', file);
+  failed = fseek(file, 1, 1);
+  at = ftell(file);
+  next = fgetc(file);
+  printf("%d %ld %c ", failed, at, next);
+  fclose(file);
+  file = fopen(name, "rb");
+  fseek(file, 0, 0);
+  ungetc('X', file);
+  failed = fseek(file, -5, 1);
+  at = ftell(file);
+  next = fgetc(file);
+  printf("%d %ld %c\n", failed, at, next);
+  fclose(file);
+  /* Once its pushback area is read, a stream still reads from it until the
+     next read: ftell subtracts the buffer's unread bytes behind it. */
+  file = fopen("/dev/zero", "rb");
+  fgetc(file);
+  ungetc('X', file);
+  fgetc(file);
+  printf("device %ld\n", ftell(file));
+  fclose(file);
   remove(name);
   remove(other);
 }

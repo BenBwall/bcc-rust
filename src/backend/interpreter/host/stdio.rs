@@ -260,7 +260,7 @@ impl DefaultHost<'_> {
                     match entry.target {
                         | Target::Output => self.console.flushed = self.output.len(),
                         | Target::Closed => {},
-                        | _ if every && !entry.reads_ahead() => {},
+                        | _ if every && !entry.reads_ahead() => entry.flush_writes(),
                         | _ => flushed &= entry.sync(),
                     }
                 }
@@ -270,7 +270,7 @@ impl DefaultHost<'_> {
                 let stream = self.stream(arg(1), memory)?;
                 let byte = truncate_u8(integer(arg(0))?);
                 let entry = &mut self.streams.entries[stream];
-                if write_to(entry, &mut self.output, &mut self.console, &[byte]) {
+                if write_to(entry, &mut self.output, &mut self.console, &[byte], false) {
                     RuntimeValue::Int(u128::from(byte))
                 } else {
                     RuntimeValue::Int(EOF)
@@ -285,6 +285,7 @@ impl DefaultHost<'_> {
                     &mut self.output,
                     &mut self.console,
                     &self.text,
+                    true,
                 );
                 RuntimeValue::Int(if written { 1 } else { EOF })
             },
@@ -310,6 +311,7 @@ impl DefaultHost<'_> {
                     &mut self.output,
                     &mut self.console,
                     &self.text,
+                    true,
                 );
                 RuntimeValue::Int(if written { count } else { 0 })
             },
@@ -317,6 +319,11 @@ impl DefaultHost<'_> {
                 let stream = self.stream(arg(3), memory)?;
                 let (size, count) = (integer(arg(1))?, integer(arg(2))?);
                 let total = size.checked_mul(count).ok_or(UbKind::OutOfBounds)?;
+                // glibc reads nothing and returns 0 for an empty request,
+                // before it touches the stream.
+                if total == 0 {
+                    return Ok(HostReturn::Value(Some(RuntimeValue::Int(0))));
+                }
                 let total = usize::try_from(total).map_err(|_| UbKind::OutOfBounds)?;
                 let mut stored = 0_u128;
                 let read = self.read_block(stream, total, |bytes| {
@@ -352,7 +359,9 @@ impl DefaultHost<'_> {
                 }
                 // glibc fails a call that meets a new read error, even after
                 // reading part of a line, and keeps an earlier error set.
-                let earlier_error = std::mem::take(&mut self.streams.entries[stream].error);
+                let entry = &mut self.streams.entries[stream];
+                entry.oriented = true;
+                let earlier_error = std::mem::take(&mut entry.error);
                 let mut count = 0_i128;
                 while count + 1 < limit {
                     let Some(byte) = self.read(stream) else {
@@ -572,7 +581,14 @@ impl DefaultHost<'_> {
         if matches!(entry.target, Target::Output) {
             return true;
         }
-        let written = entry.start_write()
+        if self.output.len() == before {
+            // Formatting nothing only orients the stream, though glibc's
+            // `vfprintf` first fails on a stream that may not write.
+            entry.oriented = true;
+            entry.error |= !entry.writable;
+            return entry.writable;
+        }
+        let written = entry.start_write().is_some()
             && match &mut entry.target {
                 | Target::Errors => {
                     self.console
@@ -587,7 +603,7 @@ impl DefaultHost<'_> {
                 | Target::Output | Target::Input | Target::Closed => false,
             };
         if written {
-            entry.wrote(self.output.len() - before);
+            entry.wrote_bytes(self.output.len() - before);
         }
         entry.error |= !written;
         self.output.truncate(before);
@@ -634,6 +650,11 @@ impl DefaultHost<'_> {
     /// Pushes `byte` back onto `stream`, as `ungetc` does.
     pub(super) fn push_back(&mut self, stream: usize, byte: u8) {
         self.streams.entries[stream].push_back(byte);
+    }
+
+    /// Orients `stream` for bytes, as `fscanf` does before it reads.
+    pub(super) fn orient(&mut self, stream: usize) {
+        self.streams.entries[stream].oriented = true;
     }
 
     /// `fopen`, or `freopen` of `reopen`: the stream on success, else null.
@@ -794,30 +815,41 @@ const fn truncate_u8(bits: u128) -> u8 {
 }
 
 /// Writes `bytes` to the stream `entry`, setting its error indicator on
-/// failure; standard output and error go to the host's buffers.
+/// failure; standard output and error go to the host's buffers. A `block`
+/// is written as `fputs` and `fwrite` write, else byte by byte as `fputc`.
 fn write_to(
     entry: &mut Stream<'_>,
     output: &mut super::ArenaVec<'_, u8>,
     console: &mut Console<'_>,
     bytes: &[u8],
+    block: bool,
 ) -> bool {
-    let written = entry.start_write()
-        && match &mut entry.target {
-            | Target::Output => {
-                output.extend_from_slice(bytes);
-                true
-            },
-            | Target::Errors => {
-                console.errors.extend_from_slice(bytes);
-                let released = console.released(output);
-                console.marks.push((released, console.errors.len()));
-                true
-            },
-            | Target::File(file) => file.write_all(bytes).is_ok(),
-            | Target::Input | Target::Closed => false,
-        };
-    if written {
-        entry.wrote(bytes.len());
+    // glibc's `fputs` of an empty string only orients the stream.
+    if bytes.is_empty() {
+        entry.oriented = true;
+        return true;
+    }
+    let Some(writing) = entry.start_write() else {
+        return false;
+    };
+    let written = match &mut entry.target {
+        | Target::Output => {
+            output.extend_from_slice(bytes);
+            true
+        },
+        | Target::Errors => {
+            console.errors.extend_from_slice(bytes);
+            let released = console.released(output);
+            console.marks.push((released, console.errors.len()));
+            true
+        },
+        | Target::File(file) => file.write_all(bytes).is_ok(),
+        | Target::Input | Target::Closed => false,
+    };
+    if written && block {
+        entry.wrote_block(bytes.len(), writing);
+    } else if written {
+        entry.wrote_bytes(bytes.len());
     }
     entry.error |= !written;
     written
