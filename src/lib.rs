@@ -127,6 +127,8 @@ pub(crate) mod diagnostics;
 #[cfg(feature = "explorer")]
 pub(crate) mod float_parsing;
 #[cfg(feature = "explorer")]
+mod half_precision;
+#[cfg(feature = "explorer")]
 pub(crate) mod util;
 #[cfg(feature = "explorer")]
 mod x87;
