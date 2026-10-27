@@ -309,6 +309,9 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         }; 6];
         items[..count].copy_from_slice(&self.operands[start..]);
         self.operands.truncate(start);
+        for item in &mut items[..count] {
+            *item = self.settle(*item);
+        }
         let source = e.source_vectors;
         let result = match builtin {
             | CommonBuiltin::Atomic(atomic) =>

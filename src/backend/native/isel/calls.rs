@@ -535,7 +535,9 @@ impl Selector<'_, '_, '_> {
             }
             for (offset, ty, register) in result_registers(registers) {
                 let dst = mem.offset(offset);
-                if ty.is_float() {
+                if ty == Type::F16 {
+                    self.half_store(Reg::Phys(register), dst);
+                } else if ty.is_float() {
                     self.emit(MInst::XStore {
                         width: width(ty),
                         dst,

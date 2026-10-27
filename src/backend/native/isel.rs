@@ -24,7 +24,8 @@
 //! block labels and the parallel copies that replace block parameters in
 //! `isel/edges.rs`; loads, stores, `copy`, `fill` and thread-local
 //! addresses in `isel/memory.rs`; `f32` and `f64` operations in
-//! `isel/float.rs`; `i128` register pairs in `isel/wide.rs`; `f80` through
+//! `isel/float.rs`; `f16` moves and conversions in `isel/half.rs`; `i128`
+//! register pairs in `isel/wide.rs`; `f80` through
 //! the x87 unit in `isel/x87.rs`; `f128` through runtime routines in
 //! `isel/quad.rs`; dynamic stack allocation in `isel/stack.rs`; inline
 //! assembly in `isel/asm.rs`; atomic operations in `isel/atomic.rs`.
@@ -44,6 +45,7 @@ mod atomic;
 mod calls;
 mod edges;
 mod float;
+mod half;
 mod memory;
 mod quad;
 mod stack;
@@ -573,6 +575,8 @@ impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
                 let dst = self.result_pair(inst);
                 self.wide_select(dst, args);
             },
+            | InstData::Unary { opcode, ty, arg } if ty == Type::F16 || self.ty(arg) == Type::F16 =>
+                self.half_conversion(inst, opcode, ty, arg)?,
             | InstData::Unary { opcode, ty, arg } if wide_float(ty, self.ty(arg)) =>
                 self.wide_float_unary(inst, opcode, ty, arg)?,
             | InstData::Unary { opcode, ty, arg }
@@ -1510,7 +1514,7 @@ const fn wide_float(ty: Type, from: Type) -> bool {
 /// The register class that holds a value of `ty`; a pair's halves are
 /// general registers.
 pub(super) const fn class_of(ty: Type) -> RegClass {
-    if matches!(ty, Type::F32 | Type::F64) {
+    if matches!(ty, Type::F16 | Type::F32 | Type::F64) {
         RegClass::Xmm
     } else {
         RegClass::Gpr

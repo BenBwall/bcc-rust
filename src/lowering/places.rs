@@ -248,6 +248,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         value: Item,
         source: SourceVectors,
     ) -> Result<Item, LoweringError> {
+        let value = self.settle(value);
         let ty = place.ty;
         let Operand::Place(target) = place.operand else {
             return Err(LoweringError::missing(
@@ -425,7 +426,24 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             .map_or(32, |(bits, _)| bits)
     }
 
+    /// Pops the top operand, rounding a `_Float16` excess (`half.rs`).
     pub(super) fn pop(&mut self) -> Item {
+        let item = self.pop_excess();
+        self.settle(item)
+    }
+
+    /// Pops the operand a truth test reads: GCC tests a `_Float16` excess
+    /// itself, Clang the rounded value (`half.rs`).
+    pub(super) fn pop_truth(&mut self) -> Item {
+        if self.half_in_float() {
+            self.pop_excess()
+        } else {
+            self.pop()
+        }
+    }
+
+    /// Pops the top operand, keeping a `_Float16` excess.
+    pub(super) fn pop_excess(&mut self) -> Item {
         self.operands.pop().expect("an operand is on the stack")
     }
 

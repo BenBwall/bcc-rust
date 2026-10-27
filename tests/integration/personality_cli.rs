@@ -391,7 +391,7 @@ mod tests {
     }
 
     /// The floating-point macros of the GCC identity are the host GCC's,
-    /// apart from the types bcc lacks (`_Float16`, `__bf16`), the standard
+    /// apart from the type bcc lacks (`__bf16`), the standard
     /// types' constants, which bcc spells as Clang does, and what glibc's
     /// `stdc-predef.h` adds.
     #[test]
@@ -408,6 +408,7 @@ mod tests {
                         return false;
                     };
                     [
+                        "__FLT16",
                         "__FLT32",
                         "__FLT64",
                         "__FLT128",
@@ -421,9 +422,7 @@ mod tests {
                     ]
                     .iter()
                     .any(|prefix| name.starts_with(prefix))
-                        || name.contains("_IS_IEC_60559__")
-                            && !name.starts_with("__FLT16")
-                            && !name.starts_with("__BFLT16")
+                        || name.contains("_IS_IEC_60559__") && !name.starts_with("__BFLT16")
                 })
                 .map(str::to_owned)
                 .collect();

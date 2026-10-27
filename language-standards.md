@@ -543,6 +543,7 @@ mode gate and policy diagnostics (`Imaginary` reports an unsupported type); a
 | QuotedHeaderBackslash | - | - | - | - | - | - | - | extension | preprocessor |
 | UnnamedDefinitionParameters | - | - | - | - | - | Y | Y | extension (warning fallback) | parser/semantic analysis |
 | InterchangeFloatTypes | - | - | - | - | - | Y | Y | `gcc` identity or `-ffloatn-types` | lexer/parser/semantic analysis |
+| Float16 | - | - | - | - | - | Y | Y | `gcc` and `clang` identities | lexer/parser/semantic analysis |
 | EmptyMacroArguments | - | - | Y | Y | Y | Y | Y | extension | lexer/preprocessor |
 | Inline | - | - | Y | Y | Y | Y | Y | GNU earlier | parser |
 | Restrict | - | - | Y | Y | Y | Y | Y | native | parser |
@@ -1275,21 +1276,6 @@ backend work before they can be enabled.
 | `_M_FP_PRECISE` | MS floating code-generation modes are not implemented. |
 | `__BITINT_MAXWIDTH__` | Extended integer syntax exists but these widths lack semantic types. |
 | `__CONSTANT_CFSTRINGS__` | Objective-C and CoreFoundation string intrinsics are not implemented. |
-| `__FLT16_DECIMAL_DIG__` | Half-precision floating types and arithmetic are not implemented. |
-| `__FLT16_DENORM_MIN__` | Half-precision floating types and arithmetic are not implemented. |
-| `__FLT16_DIG__` | Half-precision floating types and arithmetic are not implemented. |
-| `__FLT16_EPSILON__` | Half-precision floating types and arithmetic are not implemented. |
-| `__FLT16_HAS_DENORM__` | Half-precision floating types and arithmetic are not implemented. |
-| `__FLT16_HAS_INFINITY__` | Half-precision floating types and arithmetic are not implemented. |
-| `__FLT16_HAS_QUIET_NAN__` | Half-precision floating types and arithmetic are not implemented. |
-| `__FLT16_MANT_DIG__` | Half-precision floating types and arithmetic are not implemented. |
-| `__FLT16_MAX_10_EXP__` | Half-precision floating types and arithmetic are not implemented. |
-| `__FLT16_MAX_EXP__` | Half-precision floating types and arithmetic are not implemented. |
-| `__FLT16_MAX__` | Half-precision floating types and arithmetic are not implemented. |
-| `__FLT16_MIN_10_EXP__` | Half-precision floating types and arithmetic are not implemented. |
-| `__FLT16_MIN_EXP__` | Half-precision floating types and arithmetic are not implemented. |
-| `__FLT16_MIN__` | Half-precision floating types and arithmetic are not implemented. |
-| `__FLT16_NORM_MAX__` | Half-precision floating types and arithmetic are not implemented. |
 | `__FPCLASS_NEGINF` | Floating classification intrinsics are not implemented. |
 | `__FPCLASS_NEGNORMAL` | Floating classification intrinsics are not implemented. |
 | `__FPCLASS_NEGSUBNORMAL` | Floating classification intrinsics are not implemented. |
@@ -1528,8 +1514,49 @@ nonzero value). The resource `<float.h>` defines GCC's TS 18661-3 names
 resource `<tgmath.h>` takes the types with the standard type's functions and
 result types (above), and refuses `_Float128`; GNU vector element types,
 imaginary `_FloatN` constants such as `1.0f32i`, and `__builtin_*f128` math
-beyond the existing primitives remain unsupported. `_Float16`, `__fp16` and
-`__bf16` are not implemented.
+beyond the existing primitives remain unsupported. `_Float16` follows in
+[Half-precision floating types](#half-precision-floating-types-2026-10-27);
+`__fp16` and `__bf16` are not implemented.
+
+## Half-precision floating types (2026-10-27)
+
+`_Float16` (C23 Annex H's binary16 interchange type) is a keyword with its
+`f16`/`F16` constant suffix for the identities whose compilers provide it on
+x86-64 with SSE2: GCC 12 and later, and Clang (`clang` and `clang-cl`), in
+every C mode (`Feature::Float16`). MSVC and TCC have no such type, so the
+name stays an identifier there. GCC reports the type and the suffix before
+C23 under `-pedantic`; Clang reports neither. Out-of-range constants warn
+as other floating constants do. The predefined `__FLT16_*__` macros are
+Clang's for the Clang identities (the frozen target tables no longer
+exclude them) and GCC 15's, with `__FLT16_IS_IEC_60559__`, for the GCC
+identity; `<float.h>` defines `FLT16_MANT_DIG` through `FLT16_TRUE_MIN`
+under `__STDC_WANT_IEC_60559_TYPES_EXT__` where `__FLT16_MANT_DIG__` is
+predefined. `FLT_EVAL_METHOD` and `__FLT_EVAL_METHOD__` stay 0, as both
+compilers keep them.
+
+Neither compiler computes in binary16: an operation converts its operands
+to `float`, and the excess precision is removed where each compiler removes
+it, which bcc follows per identity (verified against GCC 15 and the pinned
+Clang on each back end, `tests/integration/half_precision.rs`):
+
+| Use of a `_Float16` value | GCC | Clang |
+| --- | --- | --- |
+| Operand of `+ - * /`, unary `+ -` | excess kept | excess kept |
+| Assignment, cast to `_Float16`, argument, return | rounded | rounded |
+| Comparison, truth value | excess | rounded |
+| Conversion to another type (`(double)x`, `float f = x`) | excess converted | rounded first |
+| `?:`, comma operator | excess kept | rounded |
+| `f16` constant | rounded to `float` | binary16 |
+| Integer operand of an operation | converted to `float` | converted to `_Float16` |
+| Constant expressions (`static_assert`, static initializers) | as above | each operation rounded |
+
+Default argument promotions do not apply (a `_Float16` travels through `...`
+as itself), and the System V ABI passes it in the low 16 bits of an SSE
+register; structures and unions of halves are classified as usual. Native
+code converts with libgcc's `__extendhfsf2` and `__trunc{sf,df,xf,tf}hf2`,
+as GCC does without `-mf16c`. Limits: `_Complex _Float16` is refused,
+GCC's `__builtin_*f16` constant builtins and `FLT16_SNAN` are absent, and
+`__fp16` (Clang's storage-only type) and `__bf16` remain unsupported.
 
 ## GNU vectors and x86 SIMD resources (2026-10-09)
 

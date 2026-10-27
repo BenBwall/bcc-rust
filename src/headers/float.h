@@ -109,9 +109,22 @@
 #endif
 /* ISO/IEC TS 18661-3 (C23 Annex H.11): the _FloatN and _FloatNx
    characteristics, as GCC's <float.h> defines them for the types whose
-   __FLTN_MANT_DIG__ the compiler predefines (the GCC identity and
-   -ffloatn-types). */
+   __FLTN_MANT_DIG__ the compiler predefines (_Float16 for the GCC and
+   Clang identities, the others for the GCC identity and -ffloatn-types). */
 #ifdef __STDC_WANT_IEC_60559_TYPES_EXT__
+#ifdef __FLT16_MANT_DIG__
+#define FLT16_MANT_DIG __FLT16_MANT_DIG__
+#define FLT16_DIG __FLT16_DIG__
+#define FLT16_MIN_EXP __FLT16_MIN_EXP__
+#define FLT16_MIN_10_EXP __FLT16_MIN_10_EXP__
+#define FLT16_MAX_EXP __FLT16_MAX_EXP__
+#define FLT16_MAX_10_EXP __FLT16_MAX_10_EXP__
+#define FLT16_MAX __FLT16_MAX__
+#define FLT16_EPSILON __FLT16_EPSILON__
+#define FLT16_MIN __FLT16_MIN__
+#define FLT16_DECIMAL_DIG __FLT16_DECIMAL_DIG__
+#define FLT16_TRUE_MIN __FLT16_DENORM_MIN__
+#endif
 #ifdef __FLT32_MANT_DIG__
 #define FLT32_MANT_DIG __FLT32_MANT_DIG__
 #define FLT32_DIG __FLT32_DIG__

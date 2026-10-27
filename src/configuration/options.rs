@@ -63,6 +63,7 @@ impl CompilerConfiguration {
                     | None => !self.gnu && (self.standard as u8) <= CStandard::C17 as u8,
                 },
                 | Feature::InterchangeFloatTypes => self.interchange_float_types(),
+                | Feature::Float16 => self.half_precision_types(),
                 | _ => true,
             };
             if accepted {
@@ -208,6 +209,27 @@ impl CompilerConfiguration {
             | Some(enabled) => enabled,
             | None => matches!(self.identity, super::CompilerIdentity::Gcc),
         }
+    }
+
+    /// Whether `_Float16` is a type, as GCC 12 and later and Clang provide
+    /// it on x86-64 with SSE2. MSVC and TCC have no half-precision type.
+    pub(crate) const fn half_precision_types(self) -> bool {
+        matches!(
+            self.identity,
+            super::CompilerIdentity::Gcc
+                | super::CompilerIdentity::Clang
+                | super::CompilerIdentity::ClangCl
+        )
+    }
+
+    /// Whether every `_Float16` value is evaluated to the range and
+    /// precision of `float` and rounded only by a conversion to `_Float16`,
+    /// as GCC evaluates it on x86-64; otherwise only chains of arithmetic
+    /// operators keep the excess, as Clang evaluates it. Semantic analysis
+    /// documents both rules (`Analyzer::half_in_float`).
+    /// C99: §5.2.4.2.2 paragraph 7, p. 24; PDF p. 36 (evaluation formats).
+    pub(crate) const fn half_in_float(self) -> bool {
+        matches!(self.identity, super::CompilerIdentity::Gcc)
     }
 
     /// Selects the compiler the identity macros claim, and with it whether

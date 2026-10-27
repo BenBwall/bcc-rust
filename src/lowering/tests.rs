@@ -16,6 +16,7 @@ mod extensions;
 mod floats;
 mod fortify;
 mod golden;
+mod half;
 mod inline;
 mod layout;
 mod numeric_programs;

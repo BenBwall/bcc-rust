@@ -279,6 +279,7 @@ impl Checker<'_, '_> {
                                 | Type::I32
                                 | Type::I64
                                 | Type::Ptr
+                                | Type::F16
                                 | Type::F32
                                 | Type::F64
                         ) {

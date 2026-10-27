@@ -211,17 +211,26 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 Self::constant_truth(operand).map(|truth| Integer::int(i128::from(!truth)));
         }
         if self.integer_type(ty).is_none() {
-            info.set_floating(
+            // Unary `+` and `-` keep a `_Float16` operand's excess.
+            let half = self.half_type(ty) && matches!(op, U::Minus | U::Plus);
+            let value = if half {
+                operand.floating()
+            } else {
                 self.floating_value(operand)
-                    .map(|value| {
-                        if op == U::Minus {
-                            Self::floating_negate(value)
-                        } else {
-                            value
-                        }
-                    })
-                    .and_then(|value| self.round_floating(value, ty)),
-            );
+            };
+            let value = value.map(|value| {
+                if op == U::Minus {
+                    Self::floating_negate(value)
+                } else {
+                    value
+                }
+            });
+            let value = if half {
+                value.map(|value| self.half_result(value, &mut info))
+            } else {
+                value.and_then(|value| self.round_floating(value, ty))
+            };
+            info.set_floating(value);
         }
         info.ice = operand.ice;
         if operand.constant == ConstantClass::Arithmetic {
@@ -328,7 +337,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             {
                 result.constant = ConstantClass::Arithmetic;
                 result.integer = right.integer;
-                result.set_floating(right.floating());
+                // Clang's comma reads its right operand rounded.
+                result.set_floating(if self.half_type(rt) {
+                    self.floating_value(right)
+                } else {
+                    right.floating()
+                });
                 result.set_binary128(right.binary128());
                 result.unfolded_binary128 = right.unfolded_binary128;
             }
@@ -580,15 +594,19 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 }
             }
             let floating = left.floating().is_some() || right.floating().is_some();
-            if floating
-                && let Some((left_value, right_value)) = self
-                    .floating_value(left)
-                    .and_then(|v| self.round_floating(v, arithmetic_operands.unwrap_or(info.ty)))
-                    .zip(self.floating_value(right).and_then(|v| {
-                        self.round_floating(v, arithmetic_operands.unwrap_or(info.ty))
-                    }))
-            {
-                let operand_type = arithmetic_operands.unwrap_or(info.ty);
+            // A `_Float16` operation computes in `float`; Clang compares the
+            // rounded values.
+            let half =
+                self.half_type(operand_type) && (self.half_in_float() || self.half_type(info.ty));
+            let operand = |info| {
+                if half {
+                    self.half_operand(info)
+                } else {
+                    self.floating_value(info)
+                        .and_then(|v| self.round_floating(v, operand_type))
+                }
+            };
+            if floating && let Some((left_value, right_value)) = operand(left).zip(operand(right)) {
                 let TypeKind::Scalar(scalar) = self.types.nodes[operand_type.index] else {
                     unreachable!("floating scalar operation")
                 };
@@ -602,10 +620,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     )
                 };
                 let domains = u8::from(complex_type(lt)) | (u8::from(complex_type(rt)) << 1);
-                info.set_floating(
-                    Self::floating_binary(op, left_value, right_value, precision, domains)
-                        .and_then(|value| self.round_floating(value, info.ty)),
-                );
+                let value = Self::floating_binary(op, left_value, right_value, precision, domains);
+                let value = if half {
+                    value.map(|value| self.half_result(value, &mut info))
+                } else {
+                    value.and_then(|value| self.round_floating(value, info.ty))
+                };
+                info.set_floating(value);
                 info.integer = Self::floating_comparison(op, left_value, right_value);
             }
             info.ice = left.ice && right.ice;
@@ -754,7 +775,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             info.ice = self.integer_type(ty).is_some() && condition.ice && selected.ice;
             info.unfolded_binary128 = selected.unfolded_binary128;
             info.integer = selected.integer;
-            if self.arithmetic(ty) && self.integer_type(ty).is_none() {
+            if self.half_type(ty) && self.half_in_float() {
+                // GCC's `?:` keeps the selected operand's excess.
+                info.set_floating(self.half_operand(selected));
+            } else if self.arithmetic(ty) && self.integer_type(ty).is_none() {
                 info.set_floating(
                     self.floating_value(selected)
                         .and_then(|v| self.round_floating(v, ty)),
@@ -1240,7 +1264,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             info.ice = operand.ice
                 || matches!(immediate.kind, ExpressionType::Constant(Constant::Float(_)));
         }
-        if let Some(value) = operand.floating()
+        if operand.floating().is_some()
+            && let Some(value) = self.floating_value(operand)
             && self.integer_type(target).is_some()
         {
             info.integer = if matches!(

@@ -39,14 +39,15 @@
 //!   lists.
 //! - Function bodies: `work.rs` defines tasks and operands; `statements.rs`
 //!   lowers statements and declarations; `expressions.rs` operators, calls and
-//!   conversions, including the floating ones; `argument_pack.rs` the copies of
-//!   a function using GNU `__builtin_va_arg_pack ()` made for its calls;
-//!   `places.rs` lvalues, loads and stores; `alignment.rs` owns backing-place
-//!   guarantees and all memory and allocation alignment; `bit_fields.rs`
-//!   bit-field reads and writes; `initializers.rs` walks braced initializers;
-//!   `assembly.rs` lowers GNU `asm` statements; `vla.rs` evaluates saved array
-//!   extents and runs the cleanups of the regions an exit leaves: dynamic stack
-//!   restores, and GNU cleanup calls from `cleanup.rs`.
+//!   conversions, including the floating ones; `half.rs` the `_Float16` values
+//!   evaluated in `float`; `argument_pack.rs` the copies of a function using
+//!   GNU `__builtin_va_arg_pack ()` made for its calls; `places.rs` lvalues,
+//!   loads and stores; `alignment.rs` owns backing-place guarantees and all
+//!   memory and allocation alignment; `bit_fields.rs` bit-field reads and
+//!   writes; `initializers.rs` walks braced initializers; `assembly.rs` lowers
+//!   GNU `asm` statements; `vla.rs` evaluates saved array extents and runs the
+//!   cleanups of the regions an exit leaves: dynamic stack restores, and GNU
+//!   cleanup calls from `cleanup.rs`.
 //! - Construction: `ssa.rs` holds the draft function and its SSA variables;
 //!   `emit.rs` copies a finished draft into the module; `types.rs` maps C types
 //!   to IR types; shared `crate::float_parsing::bits` turns folded floating
@@ -76,6 +77,7 @@ mod cleanup;
 mod complex;
 mod expressions;
 mod gnu;
+mod half;
 mod initializers;
 mod places;
 #[cfg(feature = "recursive-lowering-study")]
@@ -505,7 +507,12 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
                 self.convert_recorded(expression, 0)
             },
             | Task::Discard => {
-                _ = self.pop();
+                _ = self.pop_excess();
+                Ok(())
+            },
+            | Task::Settle => {
+                let item = self.pop();
+                self.operands.push(item);
                 Ok(())
             },
             | Task::Condition {

@@ -1661,6 +1661,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                                 | super::preprocessing::FloatTokenType::Float64(_)
                                 | super::preprocessing::FloatTokenType::Float32x(_)
                                 | super::preprocessing::FloatTokenType::Float64x(_)
+                                | super::preprocessing::FloatTokenType::Float16(_)
                         )
                     {
                         self.exceptional_constant(source);
