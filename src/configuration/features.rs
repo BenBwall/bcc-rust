@@ -202,6 +202,14 @@ pub(crate) enum Feature {
     /// PDF p. 573. GCC manual, "Additional Floating Types",
     /// <https://gcc.gnu.org/onlinedocs/gcc/Floating-Types.html>.
     InterchangeFloatTypes,
+    /// The `_Float16` keyword and its `f16` constant suffix. Accepted for
+    /// the GCC and Clang identities, as both provide the type on x86-64 in
+    /// every mode; GCC reports it as an extension before C23 and Clang does
+    /// not.
+    /// C23: Annex H, §H.5.1 paragraph 1 and §H.5.2 paragraph 2, p. 560;
+    /// PDF p. 573. GCC manual, "Half-Precision Floating Point",
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Half-Precision.html>.
+    Float16,
 }
 
 impl Feature {
@@ -260,6 +268,7 @@ impl Feature {
             | Self::Nullptr
             | Self::UnnamedDefinitionParameters
             | Self::InterchangeFloatTypes
+            | Self::Float16
             | Self::WideEnumerators => FeatureOrigin::Standard(CStandard::C23),
 
             | Self::OctalPrefix
@@ -474,6 +483,7 @@ impl Feature {
         Self::ForwardEnumReference,
         Self::SameTypeCasts,
         Self::InterchangeFloatTypes,
+        Self::Float16,
     ];
 }
 

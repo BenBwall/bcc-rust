@@ -1,8 +1,9 @@
 //! The characteristics macros of the interchange and extended floating
-//! types, `__FLT32_MANT_DIG__` through `__FLT128_IS_IEC_60559__`, as GCC 7
+//! types, `__FLT16_MANT_DIG__` through `__FLT128_IS_IEC_60559__`, as GCC 7
 //! and later predefine them for its `<float.h>` and the C library. The
 //! values are those GCC 15 predefines for x86-64; the pinned Clang defines
-//! none of them.
+//! only the `_Float16` ones, spelled otherwise and without
+//! `__FLT16_IS_IEC_60559__`, which the frozen target tables keep.
 //!
 //! C23: the `<float.h>` characteristics of these types, §H.3 paragraph 7,
 //! pp. 556-558; PDF pp. 569-571, named after those of the standard types,
@@ -34,6 +35,12 @@ impl Target {
             }
         }
         _ = out.write_str("#define __FLT_EVAL_METHOD_TS_18661_3__ 0\n");
+    }
+
+    /// Appends GCC's characteristics macros of `_Float16`, which it defines
+    /// whenever the type exists, apart from the other interchange types.
+    pub(crate) fn write_half_float_macros(out: &mut impl Write) {
+        HALF.write(out);
     }
 }
 
@@ -88,6 +95,23 @@ impl InterchangeCharacteristics {
         );
     }
 }
+
+/// GCC 15's x86-64 values of `_Float16`, binary16.
+const HALF: InterchangeCharacteristics = InterchangeCharacteristics {
+    name:        "FLT16",
+    suffix:      "F16",
+    mant_dig:    11,
+    dig:         3,
+    min_exp:     -13,
+    min_10_exp:  -4,
+    max_exp:     16,
+    max_10_exp:  4,
+    decimal_dig: 5,
+    max:         "6.55040000000000000000000000000000000e+4",
+    min:         "6.10351562500000000000000000000000000e-5",
+    epsilon:     "9.76562500000000000000000000000000000e-4",
+    denorm_min:  "5.96046447753906250000000000000000000e-8",
+};
 
 /// GCC 15's x86-64 values: binary32, binary64, binary64, the x87 extended
 /// format and binary128.

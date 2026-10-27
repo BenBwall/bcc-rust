@@ -28,7 +28,11 @@ use crate::{
         LongDouble,
         string_to_long_double,
     },
-    translation_phases::parsing::syntax::BinaryOperator,
+    half_precision::HalfFormat,
+    translation_phases::{
+        parsing::syntax::BinaryOperator,
+        preprocessing::HalfConstant,
+    },
     x87::X87,
 };
 
@@ -125,9 +129,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         Some(Integer::int(i128::from(result)))
     }
 
-    /// C99: §6.3.1.3-§6.3.1.8, pp. 43-45; PDF pp. 55-57.
+    /// C99: §6.3.1.3-§6.3.1.8, pp. 43-45; PDF pp. 55-57. A `_Float16`
+    /// value is the one its consumer reads: see [`Self::half_operand`].
     pub(super) fn floating_value(&self, info: ExpressionInfo<'tu>) -> Option<Floating> {
         if let Some(value) = info.floating() {
+            if self.half_type(info.ty) && !self.half_in_float() {
+                return Some(Floating::real(round_half(value.real)));
+            }
             return Some(value);
         }
         let value = info.integer?;
@@ -151,6 +159,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let TypeKind::Scalar(scalar) = self.types.nodes[ty.index] else {
             return None;
         };
+        if scalar == Scalar::Float16 {
+            return Some(Floating::real(round_half(value.real)));
+        }
         let precision = self.floating_precision(scalar)?;
         let complex = scalar.complex();
         Some(Floating {
@@ -164,14 +175,17 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     /// The carrier's rounding precision for a real or complex floating
-    /// scalar: 1 for binary32, 2 for binary64 and 3 for x87 extended.
+    /// scalar: 1 for binary32 and binary16, 2 for binary64 and 3 for x87
+    /// extended.
     /// Binary128 has no carrier precision. An interchange or extended type
     /// rounds as the standard type whose representation it shares.
     /// C99: implementation-defined floating representations §6.2.5p10,
     /// p. 34; PDF p. 46; characteristics §5.2.4.2.2, pp. 23-27; PDF pp. 35-39.
     pub(super) fn floating_precision(&self, scalar: Scalar) -> Option<i32> {
         Some(match scalar.representation() {
-            | Scalar::Float | Scalar::ComplexFloat => 1,
+            // `_Float16` arithmetic computes in `float`; see
+            // [`Self::half_operand`].
+            | Scalar::Float | Scalar::ComplexFloat | Scalar::Float16 => 1,
             | Scalar::Double | Scalar::ComplexDouble => 2,
             | Scalar::LongDouble | Scalar::ComplexLongDouble =>
                 if self.types.target.long_double_is_double() {
@@ -181,6 +195,73 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 },
             | _ => return None,
         })
+    }
+
+    /// Whether every `_Float16` value is evaluated to the range and
+    /// precision of `float` and rounded only by a conversion to `_Float16`
+    /// (an assignment, a cast, an argument or a return), as GCC evaluates it
+    /// on x86-64 (`-fexcess-precision=standard`): constants, the arithmetic
+    /// operators, `?:` and the comma operator keep the excess, and a
+    /// conversion to another type converts the excess value. Otherwise, as
+    /// Clang evaluates it (`-ffloat16-excess-precision=standard`), only an
+    /// operand of `+`, `-`, `*`, `/` or unary `+` and `-` that is itself one
+    /// of those keeps its excess, and every other use reads the value
+    /// rounded to `_Float16`.
+    /// C99: §5.2.4.2.2 paragraph 7, p. 24; PDF p. 36 (evaluation formats,
+    /// implementation-defined); §6.3.1.8 paragraph 2, p. 45; PDF p. 57.
+    pub(super) fn half_in_float(&self) -> bool {
+        self.context.configuration.half_in_float()
+    }
+
+    /// Whether `ty` is `_Float16`.
+    pub(super) fn half_type(&self, ty: TypeId) -> bool {
+        matches!(
+            self.types.nodes[self.types.non_atomic(ty).index],
+            TypeKind::Scalar(Scalar::Float16)
+        )
+    }
+
+    /// The value an operand of a `_Float16` operator contributes: its own
+    /// folded value, excess included, when it is a `_Float16`; an integer
+    /// converted to `float` for GCC and to `_Float16` for Clang. The result
+    /// of the operator keeps its `float` precision; see
+    /// [`Self::half_in_float`].
+    /// C99: §6.3.1.8 paragraph 1, pp. 44-45; PDF pp. 56-57.
+    pub(super) fn half_operand(&self, info: ExpressionInfo<'tu>) -> Option<Floating> {
+        if self.half_type(info.ty) {
+            return info.floating();
+        }
+        let value = self.floating_value(info)?;
+        Some(Floating::real(if self.half_in_float() {
+            value.real.arithmetic(LongDouble::ZERO, 4, 1)
+        } else {
+            round_half(value.real)
+        }))
+    }
+
+    /// The folded value of a `_Float16` arithmetic operator computed in
+    /// `float` as `value`. GCC keeps it. Clang's constant evaluator rounds
+    /// each operation to `_Float16` (`static_assert ((int) (60000.0f16 * 2 /
+    /// 4) == 30000)` fails there), while its function code keeps the excess
+    /// through the chain, so the rounded value is the constant-context one
+    /// and function code evaluates the operator itself
+    /// ([`ExpressionInfo::runtime_query`]).
+    pub(super) fn half_result(&self, value: Floating, info: &mut ExpressionInfo<'tu>) -> Floating {
+        if self.half_in_float() || !self.half_type(info.ty) {
+            return value;
+        }
+        info.runtime_query = true;
+        Floating::real(round_half(value.real))
+    }
+
+    /// The literal value of an `f16` constant: binary32 for GCC, binary16
+    /// for Clang.
+    pub(super) fn half_constant(&self, constant: HalfConstant) -> f32 {
+        if self.half_in_float() {
+            constant.single
+        } else {
+            HalfFormat::Binary16.widen(constant.bits)
+        }
     }
 
     /// Negation keeps the sign of zero (Annex F.3).
@@ -409,6 +490,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 }
 
 /// The exact binary128 value of a standard floating constant's carrier.
+/// `value` rounded to binary16, to nearest with ties to even.
+/// C99: §6.3.1.5 paragraph 2, p. 44; PDF p. 56.
+pub(super) fn round_half(value: LongDouble) -> LongDouble {
+    crate::float_parsing::bits::constant_bits(&value, crate::ir::Type::F16)
+        .and_then(|bits| u16::try_from(bits).ok())
+        .map_or(value, |bits| {
+            LongDouble::from_double(f64::from(HalfFormat::Binary16.widen(bits)))
+        })
+}
+
 fn binary128_from_carrier(value: LongDouble) -> Option<Binary128> {
     let (negative, exponent, significand) = value.x87_parts()?;
     let bits =

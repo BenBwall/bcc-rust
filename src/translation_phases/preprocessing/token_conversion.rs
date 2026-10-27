@@ -27,6 +27,7 @@ use super::{
     token::{
         CharacterTokenType,
         FloatTokenType,
+        HalfConstant,
         ImaginaryIntegerKind,
         IntegerSuffix,
         IntegerTokenType,
@@ -50,6 +51,7 @@ use crate::{
         Feature,
     },
     float_parsing::{
+        FloatRangeError,
         ParseFloatError,
         string_to_double,
         string_to_float,
@@ -529,7 +531,8 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                     FloatTokenType::Float32(_)
                     | FloatTokenType::Float64(_)
                     | FloatTokenType::Float32x(_)
-                    | FloatTokenType::Float64x(_),
+                    | FloatTokenType::Float64x(_)
+                    | FloatTokenType::Float16(_),
                 ) => {
                     self.context.preprocessor_error(PreprocessorError {
                         error_type:     PreprocessorErrorType::InvalidDecimalFloatLiteral,
@@ -1232,6 +1235,14 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
         } else {
             &normalized
         };
+        if self.context.configuration.accepts(Feature::Float16)
+            && let Some(length) = half_suffix(contents)
+        {
+            let mut quad = ArenaString::new_in(self.scratch);
+            quad.push_str(&contents[..contents.len() - 1 - length]);
+            quad.push_str("q\0");
+            return self.parse_half(invalid_float_literal_error, token, &quad);
+        }
         // An interchange or extended suffix reads its value as the standard
         // suffix of the same representation would, then names its own type.
         let interchange = self
@@ -1247,7 +1258,8 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                 | InterchangeFloat::Float32 => "f",
                 | InterchangeFloat::Float64 | InterchangeFloat::Float32x => "",
                 | InterchangeFloat::Float64x => "l",
-                | InterchangeFloat::Float128 => "q",
+                // `f16` constants read through `parse_half`.
+                | InterchangeFloat::Float128 | InterchangeFloat::Float16 => "q",
             });
             standard.push('\0');
             &standard
@@ -1327,6 +1339,64 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                 }
             },
         }
+    }
+
+    /// Converts a pp-number with an `f16` or `F16` suffix, respelled with
+    /// `q` in `quad`, to binary16, and to binary32 for GCC's evaluation
+    /// format, rounding each once: the spelling is read rounded to odd at
+    /// binary128's precision, which both formats round to nearest exactly.
+    ///
+    /// C23: §H.5.2 paragraph 2, p. 560; PDF p. 573. A value the type cannot
+    /// represent violates C99 §6.4.4 paragraph 2, p. 54; PDF p. 66.
+    fn parse_half(
+        &mut self,
+        invalid_float_literal_error: PreprocessorErrorType<'tu>,
+        token: PreprocessorToken,
+        quad: &str,
+    ) -> Token {
+        use crate::half_precision::HalfFormat;
+        let constant = |value: crate::binary128::Binary128| HalfConstant {
+            bits:   HalfFormat::Binary16.round_binary128(value),
+            single: value.to_f32(),
+        };
+        let (kind, error) = match crate::binary128::parse_to_odd(quad, self.scratch) {
+            | Ok(value) => {
+                let constant = constant(value);
+                let range = if constant.bits & 0x7FFF == HalfFormat::Binary16.infinity() {
+                    Some(FloatRangeError::Overflow)
+                } else if constant.bits.trailing_zeros() >= 15 && !value.is_zero() {
+                    Some(FloatRangeError::Underflow)
+                } else {
+                    None
+                };
+                (
+                    constant,
+                    range.map(|error| PreprocessorErrorType::FloatConstantOutOfRange {
+                        type_name: "_Float16",
+                        error,
+                    }),
+                )
+            },
+            // Beyond binary128's range: infinity or zero in both formats.
+            | Err(ParseFloatError::OutOfRange(_, error)) => (
+                constant(crate::binary128::Binary128::infinity(false)),
+                Some(PreprocessorErrorType::FloatConstantOutOfRange {
+                    type_name: "_Float16",
+                    error,
+                }),
+            ),
+            | Err(ParseFloatError::Invalid(_)) => (
+                constant(crate::binary128::Binary128::zero(false)),
+                Some(invalid_float_literal_error),
+            ),
+        };
+        if let Some(error_type) = error {
+            self.context.preprocessor_error(PreprocessorError {
+                error_type,
+                source_vectors: token.source_vectors,
+            });
+        }
+        Self::build_token(token, TokenType::Float(FloatTokenType::Float16(kind)))
     }
 
     fn parse_hexadecimal_float(&mut self, token: PreprocessorToken) -> Token {
@@ -1603,6 +1673,17 @@ fn literal_encoding(spelling: &str) -> Option<LiteralEncoding> {
     } else {
         None
     }
+}
+
+/// The length of a floating constant's `f16` or `F16` suffix, if it has one
+/// after a significand (a hexadecimal one after its binary exponent).
+/// `contents` ends with a NUL.
+/// C23: §H.5.2 paragraph 2, p. 560; PDF p. 573.
+fn half_suffix(contents: &str) -> Option<usize> {
+    let spelling = contents.strip_suffix('\0').unwrap_or(contents);
+    let hexadecimal = spelling.starts_with("0x") || spelling.starts_with("0X");
+    let rest = spelling.strip_suffix("16")?.strip_suffix(['f', 'F'])?;
+    (!rest.is_empty() && (!hexadecimal || rest.contains(['p', 'P']))).then_some(3)
 }
 
 /// The interchange or extended format a floating constant's suffix names,

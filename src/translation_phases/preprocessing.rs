@@ -83,6 +83,7 @@ use runtime::{
 pub(crate) use token::{
     CharacterTokenType,
     FloatTokenType,
+    HalfConstant,
     IntegerTokenType,
     InterchangeFloat,
     KeywordTokenType,

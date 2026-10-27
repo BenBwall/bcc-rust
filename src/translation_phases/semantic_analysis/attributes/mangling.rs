@@ -510,6 +510,7 @@ fn scalar_code(scalar: Scalar) -> &'static str {
         | Scalar::ComplexFloat128 => "Cg",
         // Itanium C++ ABI, "Builtin types": `DF <number> _` and
         // `DF <number> x`.
+        | Scalar::Float16 => "DF16_",
         | Scalar::Float32 => "DF32_",
         | Scalar::Float64 => "DF64_",
         | Scalar::Float32x => "DF32x",

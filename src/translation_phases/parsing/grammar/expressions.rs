@@ -404,6 +404,14 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                         token,
                     );
                 }
+                // GCC reports the suffix before C23 under `-pedantic`; Clang
+                // does not.
+                if matches!(value, FloatTokenType::Float16(_))
+                    && self.context.configuration.compiler_identity()
+                        == crate::configuration::CompilerIdentity::Gcc
+                {
+                    self.extension(Feature::Float16, "_Float16 floating constant suffix", token);
+                }
                 ExpressionType::Constant(Constant::Float(value))
             },
             | TokenType::Character(value) => ExpressionType::Constant(Constant::Char(value)),
