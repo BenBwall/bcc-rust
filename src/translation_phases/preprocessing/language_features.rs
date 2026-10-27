@@ -1089,7 +1089,10 @@ pub(super) fn with_identity_macros<'a>(
 /// GCC's `c-family/c-cppbuiltin.cc` give it for x86-64: `__GCC_IEC_559` is 2
 /// (IEC 60559 arithmetic) unless an option gives up signed zeros, exact
 /// division or the order of operations, and `__GCC_IEC_559_COMPLEX` is 2
-/// unless that is 0 or complex arithmetic takes the limited range. Each
+/// unless that is 0 or complex arithmetic takes the limited range or
+/// Fortran's rules: `-f[no-]cx-fortran-rules` decides that when given (in
+/// GCC 15, `-fcx-fortran-rules -fno-cx-limited-range` still limits it), and
+/// `-f[no-]cx-limited-range` only otherwise. Each
 /// option also defines its own macro. `-fassociative-math` counts only with
 /// `-fno-signed-zeros` and `-fno-trapping-math`, as GCC drops it otherwise.
 /// bcc's code keeps IEC 60559 semantics under all of these, which they
@@ -1111,11 +1114,14 @@ fn write_gcc_floating_point_macros(configuration: CompilerConfiguration, out: &m
         } else {
             2
         };
-    let complex = if relaxed(Relaxed::ComplexRange) {
-        0
+    // `-f[no-]cx-fortran-rules`, when given, decides the complex
+    // arithmetic alone; `-fcx-limited-range` only otherwise.
+    let limited_complex = if configuration.gives_floating_point(Relaxed::CxFortranRules) {
+        relaxed(Relaxed::CxFortranRules)
     } else {
-        iec_559
+        relaxed(Relaxed::CxLimitedRange)
     };
+    let complex = if limited_complex { 0 } else { iec_559 };
     _ = write!(
         out,
         "#define __GCC_IEC_559 {iec_559}\n#define __GCC_IEC_559_COMPLEX {complex}\n"

@@ -615,15 +615,15 @@ impl LanguageFlag {
                     RelaxedFloatingPoint::AssociativeMath,
                     text == "-fassociative-math",
                 )),
-            | "-fcx-limited-range" | "-fcx-fortran-rules" =>
+            | "-fcx-limited-range" | "-fno-cx-limited-range" =>
                 return Some(Self::RelaxedFloatingPoint(
-                    RelaxedFloatingPoint::ComplexRange,
-                    true,
+                    RelaxedFloatingPoint::CxLimitedRange,
+                    text == "-fcx-limited-range",
                 )),
-            | "-fno-cx-limited-range" | "-fno-cx-fortran-rules" =>
+            | "-fcx-fortran-rules" | "-fno-cx-fortran-rules" =>
                 return Some(Self::RelaxedFloatingPoint(
-                    RelaxedFloatingPoint::ComplexRange,
-                    false,
+                    RelaxedFloatingPoint::CxFortranRules,
+                    text == "-fcx-fortran-rules",
                 )),
             | "-fno-fast-math" => return Some(Self::StrictFloatingPoint { fast_math: true }),
             | "-fno-unsafe-math-optimizations" =>

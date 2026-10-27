@@ -419,7 +419,8 @@ Besides those above:
 - `<tgmath.h>` gives a `_FloatN` argument the function of the standard type
   with its format, so `sqrt` of a `_Float32` is `sqrtf`'s value with type
   `float`, where GCC's `__builtin_tgmath` calls `sqrtf32` and keeps the type
-  `_Float32`. `_Float128` arguments are refused, as `__float128` ones are.
+  `_Float32`. `_Float128` arguments are refused, as `__float128` ones are,
+  and so is a `_FloatN` first argument of `nexttoward`, as in GCC.
 - GCC warns that `-fassociative-math` is disabled without
   `-fno-signed-zeros` and `-fno-trapping-math`; bcc drops it the same way
   but silently.

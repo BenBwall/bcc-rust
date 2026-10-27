@@ -129,8 +129,11 @@ encodings). It also defines GCC's `__FLT_IS_IEC_60559__`,
 later), and `__GCC_IEC_559` and `__GCC_IEC_559_COMPLEX` as GCC computes them
 from the options: `2`, or `0` under `-fno-signed-zeros`, `-freciprocal-math`
 or an effective `-fassociative-math` (one with `-fno-signed-zeros` and
-`-fno-trapping-math`), and the complex one also under `-fcx-limited-range`
-or `-fcx-fortran-rules`. Those options, `-f[no-]trapping-math` and
+`-fno-trapping-math`), and the complex one also under limited or Fortran
+complex arithmetic: `-f[no-]cx-fortran-rules` decides that alone when given,
+so `-fcx-fortran-rules -fno-cx-limited-range` still gives `0` and
+`-fno-cx-fortran-rules -fcx-limited-range` `2`, as in GCC 15, and
+`-f[no-]cx-limited-range` decides only otherwise. Those options, `-f[no-]trapping-math` and
 `-f[no-]math-errno` also define `__NO_SIGNED_ZEROS__`,
 `__RECIPROCAL_MATH__`, `__ASSOCIATIVE_MATH__`, `__NO_TRAPPING_MATH__` and
 `__NO_MATH_ERRNO__` there, and `-fno-fast-math` and
@@ -1437,11 +1440,16 @@ variadic fallback. It is checked against pinned Clang in C17, GNU17 and C23
 on all four targets. Its binary128 calls retain Clang's ambiguous-overload
 diagnostic; the header does not define a binary128 promotion overload. The
 resource and its LLVM license are distributed together under `src/headers/`.
-bcc adds one block to it: where the interchange floating types are on
+bcc changes it in three places. Where the interchange floating types are on
 (`__FLT32_MANT_DIG__` under `__bcc__`), `_Float32`, `_Float64`, `_Float32x`,
 `_Float64x` and their complex types promote to the standard type with the
 same format, so a call gives the value GCC's `_FloatN` function gives, with
-the standard type as its type; `_Float128` stays refused like `__float128`.
+the standard type as its type; `_Float128` stays refused like `__float128`,
+and `nexttoward` refuses a `_FloatN` first argument, as GCC's tgmath does
+(the C library has no such function). And in every mode `conj` of a real
+argument returns imaginary part -0, the conjugate of the +0 a real number
+has as a complex one (§7.22p6, §7.3.9.3), as glibc and GCC give; Clang's
+header returns the argument unchanged, with +0.
 
 Binary128 literals are parsed exactly with arena-backed integer rational
 conversion and one IEEE round-to-nearest-even step. Binary128 arithmetic,

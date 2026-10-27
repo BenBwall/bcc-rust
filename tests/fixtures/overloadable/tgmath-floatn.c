@@ -16,7 +16,14 @@ TYPE(cimag((_Complex _Float32x)1), double);
 TYPE(conj(1.0f32), float _Complex);
 TYPE(fma(1.0f32, 2.0f32, 3.0f32), float);
 TYPE(lrint(1.0f64), long);
-TYPE(nexttoward(1.0f32, 2.0L), float);
+/* As in GCC, nexttoward takes no _FloatN first argument (the C library has
+ * no such function), but any second one. */
+TYPE(nexttoward(1.0f, 2.0f32), float);
+TYPE(nexttoward(1.0, 2.0f64x), double);
+TYPE(nexttoward((short)1, 2.0L), double);
+#ifdef NEXTTOWARD_FIRST
+TYPE(nexttoward((NEXTTOWARD_FIRST)1, 2.0L), double);
+#endif
 #ifdef __FLT64X_MANT_DIG__
 TYPE(sqrt(1.0f64x), long double);
 TYPE(atan2(1.0f64x, 2.0), long double);

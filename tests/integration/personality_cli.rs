@@ -360,12 +360,14 @@ mod tests {
              x) { return sqrt(x); }\nint main(void) {\n  _Float64 y = pow(2.0f64, 10);\n  \
              _Complex _Float32 z = 3.0f32 + 4.0f32 * I;\n  printf(\"%g %g %g %g %g\\n\", \
              (double)root(2.25f32), (double)y, (double)fabs(z), (double)fabs(-1.5f32x), \
-             (double)creal(sqrt(-4.0f64 + 0.0f64 * I)));\n  return 0;\n}\n",
+             (double)creal(sqrt(-4.0f64 + 0.0f64 * I)));\n  volatile _Float32 x = 1;\n  volatile \
+             double w = 1;\n  printf(\"%d %d\\n\", !!signbit(cimag(conj(x))), \
+             !!signbit(cimag(conj(w))));\n  return 0;\n}\n",
         );
         for standard in ["-std=gnu17", "-std=c11", "-std=c23"] {
             succeeds(&directory.bcc("--gcc-mode", &[standard, "tg.c", "-lm"]));
             let run = Command::new(directory.path("a.out")).output().unwrap();
-            assert_eq!(stdout(&run), "1.5 1024 5 1.5 0\n", "{standard}");
+            assert_eq!(stdout(&run), "1.5 1024 5 1.5 0\n1 1\n", "{standard}");
             std::fs::remove_file(directory.path("a.out")).unwrap();
         }
     }
@@ -424,7 +426,7 @@ mod tests {
 
     /// GCC's options that give up part of IEC 60559 semantics, alone and
     /// in the combinations whose order or interplay decides the macros.
-    const FLOATING_POINT_OPTIONS: [&[&str]; 17] = [
+    const FLOATING_POINT_OPTIONS: [&[&str]; 24] = [
         &[],
         &["-fno-signed-zeros"],
         &["-freciprocal-math"],
@@ -441,6 +443,29 @@ mod tests {
         &["-fcx-limited-range"],
         &["-fcx-fortran-rules"],
         &["-fcx-limited-range", "-fno-cx-fortran-rules"],
+        &["-fcx-fortran-rules", "-fno-cx-limited-range"],
+        &["-fno-cx-fortran-rules", "-fcx-limited-range"],
+        &[
+            "-fcx-fortran-rules",
+            "-fno-cx-fortran-rules",
+            "-fcx-limited-range",
+        ],
+        &[
+            "-fcx-limited-range",
+            "-fno-cx-limited-range",
+            "-fcx-fortran-rules",
+        ],
+        &[
+            "-fcx-limited-range",
+            "-fcx-fortran-rules",
+            "-fno-cx-limited-range",
+        ],
+        &[
+            "-fcx-limited-range",
+            "-fcx-fortran-rules",
+            "-fno-cx-fortran-rules",
+        ],
+        &["-fno-cx-limited-range"],
         &["-fno-signed-zeros", "-fsigned-zeros"],
         &["-fno-signed-zeros", "-fno-math-errno", "-fno-fast-math"],
         &["-fcx-limited-range", "-fno-fast-math"],
@@ -466,8 +491,21 @@ mod tests {
             (&["-fno-signed-zeros"], "0", "0", &["__NO_SIGNED_ZEROS__"]),
             (&["-freciprocal-math"], "0", "0", &["__RECIPROCAL_MATH__"]),
             (&["-fcx-limited-range"], "2", "0", &[]),
+            // `-f[no-]cx-fortran-rules`, when given, decides alone.
             (
                 &["-fcx-fortran-rules", "-fno-cx-limited-range"],
+                "2",
+                "0",
+                &[],
+            ),
+            (
+                &["-fno-cx-fortran-rules", "-fcx-limited-range"],
+                "2",
+                "2",
+                &[],
+            ),
+            (
+                &["-fcx-limited-range", "-fno-cx-limited-range"],
                 "2",
                 "2",
                 &[],

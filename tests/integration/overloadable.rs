@@ -165,6 +165,22 @@ mod tests {
                     (&["--compiler-identity=gcc"][..], true),
                     (&["-ffloatn-types"], true),
                     (&["--compiler-identity=gcc", "-fno-floatn-types"], false),
+                    (
+                        &["--compiler-identity=gcc", "-DNEXTTOWARD_FIRST=_Float32"],
+                        false,
+                    ),
+                    (
+                        &["--compiler-identity=gcc", "-DNEXTTOWARD_FIRST=_Float64"],
+                        false,
+                    ),
+                    (
+                        &["--compiler-identity=gcc", "-DNEXTTOWARD_FIRST=_Float32x"],
+                        false,
+                    ),
+                    (
+                        &["--compiler-identity=gcc", "-DNEXTTOWARD_FIRST=double"],
+                        true,
+                    ),
                 ] {
                     let output = Command::new(env!("CARGO_BIN_EXE_bcc-rust"))
                         .args([
@@ -189,6 +205,31 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    /// `conj` of a real argument gives imaginary part -0, as GCC's and
+    /// glibc's do, for the standard types and integers in every identity and
+    /// for the `_FloatN` types under GCC's. The pinned Clang's header gives
+    /// +0, so bcc's resource copy differs from it here.
+    #[test]
+    fn tgmath_conj_of_a_real_argument_negates_the_imaginary_zero() {
+        for options in [&[][..], &["--compiler-identity=gcc"], &["-std=c11"]] {
+            let output = Command::new(env!("CARGO_BIN_EXE_bcc-rust"))
+                .args(["-nostdlibinc", "-isystem", "tests/fixtures/overloadable"])
+                .args(options)
+                .args(["--interpret", "tests/fixtures/overloadable/tgmath-conj.c"])
+                .env("NO_COLOR", "1")
+                .env_remove("CPATH")
+                .env_remove("C_INCLUDE_PATH")
+                .output()
+                .unwrap();
+            assert_eq!(
+                output.status.code(),
+                Some(0),
+                "{options:?}:\n{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
         }
     }
 }

@@ -1089,6 +1089,31 @@ static long double
 #undef nexttoward
 #define nexttoward(__x, __y) __tg_nexttoward(__tg_promote1((__x))(__x), (__y))
 
+/* bcc: the C library has no nexttoward for the _FloatN types, so GCC's
+   tgmath finds no function for one as the first argument; neither does
+   this one. Every other type keeps the call above. */
+#if defined(__bcc__) && defined(__FLT32_MANT_DIG__)
+static int _TG_ATTRSp __tg_nexttoward_first(int);
+static int _TG_ATTRSp __tg_nexttoward_first(unsigned int);
+static int _TG_ATTRSp __tg_nexttoward_first(long);
+static int _TG_ATTRSp __tg_nexttoward_first(unsigned long);
+static int _TG_ATTRSp __tg_nexttoward_first(long long);
+static int _TG_ATTRSp __tg_nexttoward_first(unsigned long long);
+static int _TG_ATTRSp __tg_nexttoward_first(float);
+static int _TG_ATTRSp __tg_nexttoward_first(double);
+static int _TG_ATTRSp __tg_nexttoward_first(long double);
+static int _TG_ATTRSp __tg_nexttoward_first(_Float32) __attribute__((__unavailable__));
+static int _TG_ATTRSp __tg_nexttoward_first(_Float64) __attribute__((__unavailable__));
+static int _TG_ATTRSp __tg_nexttoward_first(_Float32x) __attribute__((__unavailable__));
+#ifdef __FLT64X_MANT_DIG__
+static int _TG_ATTRSp __tg_nexttoward_first(_Float64x) __attribute__((__unavailable__));
+#endif
+#undef nexttoward
+#define nexttoward(__x, __y) \
+  ((void)sizeof(__tg_nexttoward_first(__x)), \
+   __tg_nexttoward(__tg_promote1((__x))(__x), (__y)))
+#endif
+
 // remainder
 
 static float
@@ -1292,17 +1317,20 @@ static long double
 
 // conj
 
+/* bcc: a real argument is a complex number with imaginary part +0, whose
+   conjugate has imaginary part -0 (C99 7.22p6, 7.3.9.3), as glibc's and
+   GCC's conj give. */
 static float _Complex
     _TG_ATTRS
-    __tg_conj(float __x) {return __x;}
+    __tg_conj(float __x) {return __builtin_complex(__x, -0.0f);}
 
 static double _Complex
     _TG_ATTRS
-    __tg_conj(double __x) {return __x;}
+    __tg_conj(double __x) {return __builtin_complex(__x, -0.0);}
 
 static long double _Complex
     _TG_ATTRS
-    __tg_conj(long double __x) {return __x;}
+    __tg_conj(long double __x) {return __builtin_complex(__x, -0.0L);}
 
 static float _Complex
     _TG_ATTRS

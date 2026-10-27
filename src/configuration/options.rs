@@ -282,11 +282,18 @@ impl CompilerConfiguration {
         } else {
             self.relaxed_floating_point &= !option.bit();
         }
+        self.given_floating_point |= option.bit();
         self
     }
 
     pub(crate) const fn relaxes_floating_point(self, option: super::RelaxedFloatingPoint) -> bool {
         self.relaxed_floating_point & option.bit() != 0
+    }
+
+    /// Whether `option` was given in either form, rather than left at its
+    /// default.
+    pub(crate) const fn gives_floating_point(self, option: super::RelaxedFloatingPoint) -> bool {
+        self.given_floating_point & option.bit() != 0
     }
 
     /// Packs every structure and union as the `packed` attribute does and
@@ -414,6 +421,7 @@ impl CompilerConfiguration {
             pack_structures: false,
             default_visibility: super::DefaultVisibility::Default,
             relaxed_floating_point: 0,
+            given_floating_point: 0,
             suppress_warnings: false,
             max_nesting_depth: super::DEFAULT_MAX_NESTING_DEPTH,
             warnings_as_errors: false,

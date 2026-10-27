@@ -167,14 +167,17 @@ pub(crate) enum RelaxedFloatingPoint {
     /// `-fassociative-math`, which GCC drops unless signed zeros and traps
     /// are given up too.
     AssociativeMath,
-    /// `-fcx-limited-range` or `-fcx-fortran-rules`: complex multiplication
-    /// and division without Annex G's treatment of infinities. The last of
-    /// these and their `-fno-` forms wins, as in GCC 15.
-    ComplexRange,
+    /// `-fcx-limited-range`: complex multiplication and division without
+    /// Annex G's treatment of infinities, unless `-fcx-fortran-rules` or
+    /// its `-fno-` form is given, which then decides alone, as in GCC 15.
+    CxLimitedRange,
+    /// `-fcx-fortran-rules`: Fortran's complex division, also without
+    /// Annex G's treatment of infinities.
+    CxFortranRules,
 }
 
 impl RelaxedFloatingPoint {
-    /// What `-fno-fast-math` restores: all but the complex range.
+    /// What `-fno-fast-math` restores: all but the complex arithmetic.
     pub(crate) const FAST_MATH: [Self; 5] = [
         Self::NoSignedZeros,
         Self::ReciprocalMath,
