@@ -192,6 +192,203 @@ mod tests {
         assert_eq!(sorted, listing.lines().collect::<Vec<_>>());
     }
 
+    /// Flag 3 of a line marker makes the following lines a system header
+    /// until the next marker, so `-E` output compiles with the system
+    /// header's warnings withheld, as GCC and Clang read it; the user's
+    /// own warnings remain, including in a system macro's expansion.
+    #[test]
+    fn line_marker_flag_three_withholds_system_header_warnings() {
+        let project = Project::new();
+        std::fs::create_dir_all(project.path("sys")).unwrap();
+        std::fs::write(
+            project.path("sys/s.h"),
+            "static int s(void) { return ({ 1; }); }\n#define SYS ({ 2; })\n",
+        )
+        .unwrap();
+        std::fs::write(
+            project.path("u.c"),
+            "#include <s.h>\nint u(void) { return ({ 3; }); }\nint m(void) { return SYS; }\n",
+        )
+        .unwrap();
+        let output = project.bcc(&["-E", "-isystem", "sys", "u.c", "-o", "u.i"]);
+        succeeds(&output);
+        let text = std::fs::read_to_string(project.path("u.i")).unwrap();
+        assert!(text.contains("# 1 \"sys/s.h\" 3\n"), "{text}");
+        let warnings = |output: &Output| {
+            stderr(output)
+                .lines()
+                .filter_map(|line| line.trim().strip_prefix("--> "))
+                .map(|location| location.split(':').take(2).collect::<Vec<_>>().join(":"))
+                .collect::<Vec<_>>()
+        };
+        let reread = project.bcc(&["-fsyntax-only", "-std=c11", "-pedantic", "u.i"]);
+        succeeds(&reread);
+        assert_eq!(warnings(&reread), ["u.c:2", "u.c:3"], "{}", stderr(&reread));
+        // Without the flag the same text is user code.
+        std::fs::write(project.path("plain.i"), text.replace("\" 3\n", "\"\n")).unwrap();
+        let plain = project.bcc(&["-fsyntax-only", "-std=c11", "-pedantic", "plain.i"]);
+        assert_eq!(
+            warnings(&plain),
+            ["sys/s.h:1", "u.c:2", "u.c:3"],
+            "{}",
+            stderr(&plain)
+        );
+        // Ordinary source takes the markers too; a marker without the flag
+        // ends the region.
+        std::fs::write(
+            project.path("m.c"),
+            "# 1 \"h.h\" 1 3\nint h(void) { return ({ 1; }); }\n# 9 \"m.c\" 2\nint g(void) { \
+             return ({ 2; }); }\n",
+        )
+        .unwrap();
+        let marked = project.bcc(&["-fsyntax-only", "-std=c11", "-pedantic", "m.c"]);
+        assert_eq!(warnings(&marked), ["m.c:9"], "{}", stderr(&marked));
+        // A quoted include from a marked region is a system header too, as
+        // in GCC and Clang, and one after the region is not.
+        std::fs::write(
+            project.path("q.h"),
+            "static int q(void) { return ({ 1; }); }\n",
+        )
+        .unwrap();
+        std::fs::write(
+            project.path("r.h"),
+            "static int r(void) { return ({ 2; }); }\n",
+        )
+        .unwrap();
+        std::fs::write(
+            project.path("inc.c"),
+            "# 1 \"h.h\" 1 3\n#include \"q.h\"\n# 5 \"inc.c\" 2\n#include \"r.h\"\n",
+        )
+        .unwrap();
+        let included = project.bcc(&["-fsyntax-only", "-std=c11", "-pedantic", "inc.c"]);
+        assert_eq!(warnings(&included), ["r.h:1"], "{}", stderr(&included));
+        // So is one found through `-I` or named by an absolute path, as GCC
+        // takes the including position's system status on every path.
+        std::fs::create_dir_all(project.path("idir")).unwrap();
+        for (name, function) in [("idir/i.h", "i"), ("abs.h", "a")] {
+            std::fs::write(
+                project.path(name),
+                format!("static int {function}(void) {{ return ({{ 3; }}); }}\n"),
+            )
+            .unwrap();
+        }
+        let absolute = project.path("abs.h");
+        std::fs::write(
+            project.path("paths.c"),
+            format!(
+                "# 1 \"h.h\" 1 3\n#include \"i.h\"\n#include \"{}\"\n# 5 \"paths.c\" 2\nint x;\n",
+                absolute.display()
+            ),
+        )
+        .unwrap();
+        let paths = project.bcc(&[
+            "-fsyntax-only",
+            "-std=c11",
+            "-pedantic",
+            "-I",
+            "idir",
+            "paths.c",
+        ]);
+        succeeds(&paths);
+        assert!(warnings(&paths).is_empty(), "{}", stderr(&paths));
+        std::fs::write(
+            project.path("user.c"),
+            format!(
+                "#include \"i.h\"\n#include \"{}\"\nint x;\n",
+                absolute.display()
+            ),
+        )
+        .unwrap();
+        let user = project.bcc(&[
+            "-fsyntax-only",
+            "-std=c11",
+            "-pedantic",
+            "-I",
+            "idir",
+            "user.c",
+        ]);
+        assert_eq!(warnings(&user).len(), 2, "{}", stderr(&user));
+        // `#warning` is still emitted inside the region, as GCC and Clang do.
+        std::fs::write(
+            project.path("warn.c"),
+            "# 1 \"h.h\" 1 3\n#warning still shown\n# 3 \"warn.c\" 2\nint x;\n",
+        )
+        .unwrap();
+        // The resource `<x86intrin.h>` does not reach the deprecated
+        // `<mm3dnow.h>`, whose `#warning` would now show, as in Clang.
+        std::fs::write(project.path("intrin.c"), "#include <x86intrin.h>\nint x;\n").unwrap();
+        let intrin = project.bcc(&["-fsyntax-only", "-ffreestanding", "intrin.c"]);
+        succeeds(&intrin);
+        assert!(!stderr(&intrin).contains("warning"), "{}", stderr(&intrin));
+        std::fs::write(project.path("dnow.c"), "#include <mm3dnow.h>\nint x;\n").unwrap();
+        let dnow = project.bcc(&["-fsyntax-only", "-ffreestanding", "dnow.c"]);
+        assert!(
+            stderr(&dnow).contains("header is deprecated"),
+            "{}",
+            stderr(&dnow)
+        );
+        let warned = project.bcc(&["-fsyntax-only", "warn.c"]);
+        succeeds(&warned);
+        assert!(
+            stderr(&warned).contains("still shown"),
+            "{}",
+            stderr(&warned)
+        );
+    }
+
+    /// Line-marker flags follow GCC's order `[1|2] [3 [4]]`: anything else
+    /// is an error that stops reading them, so a malformed marker makes no
+    /// system header.
+    #[test]
+    fn line_marker_flags_must_follow_gcc_order() {
+        let project = Project::new();
+        let body = "static int f(void) { return ({ 1; }); }\n";
+        for (flags, system) in [
+            ("3", true),
+            ("1 3", true),
+            ("2 3 4", true),
+            ("3 4", true),
+            ("1", false),
+        ] {
+            std::fs::write(project.path("ok.c"), format!("# 1 \"h.h\" {flags}\n{body}")).unwrap();
+            let output = project.bcc(&["-fsyntax-only", "-std=c11", "-pedantic", "ok.c"]);
+            succeeds(&output);
+            assert_eq!(
+                stderr(&output).contains("warning:"),
+                !system,
+                "{flags}: {}",
+                stderr(&output)
+            );
+        }
+        for (flags, bad) in [
+            ("1 2 3", "2"),
+            ("1 wat 3", "wat"),
+            ("3 1", "1"),
+            ("4", "4"),
+            ("1 4", "4"),
+            ("3 3", "3"),
+        ] {
+            std::fs::write(
+                project.path("bad.c"),
+                format!("# 1 \"h.h\" {flags}\n{body}"),
+            )
+            .unwrap();
+            let output = project.bcc(&["-fsyntax-only", "-std=c11", "-pedantic", "bad.c"]);
+            let text = stderr(&output);
+            assert_eq!(output.status.code(), Some(1), "{flags}: {text}");
+            assert!(
+                text.contains(&format!("error: invalid flag `{bad}` in line marker")),
+                "{flags}: {text}"
+            );
+            // A 3 read before the bad flag still applies, as in GCC.
+            assert_eq!(
+                text.contains("warning:"),
+                !flags.starts_with('3'),
+                "{flags}: {text}"
+            );
+        }
+    }
+
     #[test]
     fn preprocessed_output_keeps_pack_and_weak_pragmas() {
         let project = Project::new();

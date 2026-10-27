@@ -61,8 +61,10 @@ impl Expander<'_, '_, '_, '_> {
     /// A GNU line marker, `# 12 "file.c" 1 3`: the form GCC and Clang write
     /// in preprocessed output, which they read back as a `#line` directive
     /// whose name is followed by flags. `number` is the line number after
-    /// the `#`. The flags (1 entering an include, 2 returning from one, 3 a
-    /// system header, 4 extern "C") are read and ignored.
+    /// the `#`. Of the flags (1 entering an include, 2 returning from one, 3
+    /// a system header, 4 extern "C"), 3 makes the following lines a system
+    /// header until the next line marker, as GCC and Clang read it, so
+    /// their warnings are withheld; the others are ignored.
     ///
     /// GNU extension: GCC manual, "Preprocessor Output"
     /// <https://gcc.gnu.org/onlinedocs/cpp/Preprocessor-Output.html>, over
@@ -135,6 +137,7 @@ impl Expander<'_, '_, '_, '_> {
             return;
         };
         let mut filename = None;
+        let mut system = false;
         if let t @ PreprocessorToken {
             kind: PreprocessorTokenType::String | PreprocessorTokenType::GeneratedString,
             ..
@@ -174,7 +177,7 @@ impl Expander<'_, '_, '_, '_> {
                 }
             }
             if marker {
-                self.skip_until_newline();
+                system = self.line_marker_flags();
             } else if self
                 .expect_token_without_rewind::<true>(
                     |_, t| t.kind == PreprocessorTokenType::Newline,
@@ -211,6 +214,65 @@ impl Expander<'_, '_, '_, '_> {
                 self.context.add_presumed_source_file(filename, physical)
             };
             self.set_source_file_index(source_file_index);
+            if marker {
+                let at = self.context.first_source_vector(token.source_vectors).index;
+                self.context.mark_system_region(physical, at, system);
+            }
+        }
+    }
+
+    /// Reads a line marker's flags through the end of its line and returns
+    /// whether flag 3 is among them. As GCC's `read_flag` does, the flags
+    /// must be one of 1 or 2, then 3, then 4 (only after 3), each optional
+    /// and in that order; the first token out of that order is an error, and
+    /// it and the flags after it are ignored.
+    /// GNU extension: GCC preprocessor manual, "Preprocessor Output".
+    fn line_marker_flags(&mut self) -> bool {
+        let mut system = false;
+        let mut last = 0;
+        let mut failed = false;
+        loop {
+            let token = match Self::next_ignore_whitespace(&mut self.tokenizer, self.context) {
+                | Some(PreprocessorToken {
+                    kind: PreprocessorTokenType::Newline,
+                    ..
+                })
+                | None => {
+                    self.resume_at_line_start();
+                    return system;
+                },
+                | Some(token) => token,
+            };
+            if failed {
+                continue;
+            }
+            let text = self
+                .context
+                .string_cache
+                .at(token.contents)
+                .trim_end_matches('\0');
+            let flag = match text {
+                | "1" => 1,
+                | "2" => 2,
+                | "3" => 3,
+                | "4" => 4,
+                | _ => 0,
+            };
+            if token.kind != PreprocessorTokenType::Number
+                || flag <= last
+                || (flag == 2 && last != 0)
+                || (flag == 4 && last != 3)
+            {
+                failed = true;
+                let text = self.context.diagnostic_text(text);
+                self.context.preprocessor_error(PreprocessorError {
+                    error_type:     PreprocessorErrorType::InvalidLineMarkerFlag(text),
+                    source_vectors: token.source_vectors,
+                });
+                continue;
+            }
+            system |= flag == 3;
+            last = flag;
         }
     }
 }

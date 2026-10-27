@@ -1053,8 +1053,20 @@ system_header` (also through `_Pragma`) makes the rest of the current header
 a system header; in the primary source file it is ignored with a warning, as
 in GCC and Clang. A `#line` directive gives the following lines a new file
 identity that is not a system header. A GNU line marker (`# 12 "file.c" 1 3`),
-the form `-E` writes, is read as `#line 12 "file.c"`; its flags are ignored,
-so flag 3 does not make what follows a system header. Already
+the form `-E` writes, is read as `#line 12 "file.c"`. Flag 3 makes the
+following lines a system header until the next line marker in the same
+physical file, which ends the region unless it has flag 3 too, as GCC and
+Clang read preprocessed output; the other flags are ignored, and a `#line`
+directive does not end the region. The flags must come in GCC's order, one of
+`1` or `2`, then `3`, then `4` (only after `3`): the first token out of that
+order is an error ("invalid flag"), and it and the flags after it are ignored,
+so `1 2 3` or `1 wat 3` makes no system header. A header included from a
+system header, a marked region or the part after `#pragma GCC system_header`
+included, is a system header too however it is found (beside the includer,
+through `-I`, or by an absolute path), as GCC takes the including position's
+status. A header that is a system header by its
+directory or pragma stays one. So `-E` output compiled again withholds its
+system headers' warnings, also from ordinary source. Already
 preprocessed input (`.i`, `-x cpp-output`) is read as GCC's
 `-fpreprocessed` reads it: phases 1 and 2 replace no trigraph and delete no
 line splice (CR and CRLF still end lines), no macro, builtin or not, is
@@ -1067,7 +1079,9 @@ any other operand is an error. glibc's `__glibc_macro_warning`, which bcc
 reaches as Clang does, uses the warning form for deprecated macros.
 
 Inside a system header, warnings, extension diagnostics and warning-group
-diagnostics are withheld, the latter two at every severity: under
+diagnostics are withheld, the latter two at every severity, except the
+message of a `#warning` directive, which GCC and Clang also emit there
+(`#pragma GCC warning` stays withheld, as in GCC): under
 `-pedantic-errors` an extension in a system header is not reported, and
 neither is an `-Wincompatible-pointer-types`, `-Wint-conversion` or
 `-Wincompatible-function-pointer-types` error, matching Clang, where such
