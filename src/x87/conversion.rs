@@ -128,7 +128,7 @@ pub(super) fn round(format: Binary, exponent: i32, magnitude: u128) -> Rounded {
 
 impl X87 {
     /// The x87 value nearest `magnitude × 2^exponent` with the given sign.
-    pub(super) fn rounded(negative: bool, exponent: i32, magnitude: u128) -> Self {
+    pub(crate) fn rounded(negative: bool, exponent: i32, magnitude: u128) -> Self {
         match round(Binary::EXTENDED, exponent, magnitude) {
             | Rounded::Zero => Self::zero(negative),
             | Rounded::Infinite => Self::infinity(negative),
