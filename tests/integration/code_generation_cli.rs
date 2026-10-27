@@ -198,6 +198,52 @@ int main(void) {
         );
     }
 
+    /// An unknown escape sequence stands for its character after a
+    /// warning in every mode, as GCC and Clang do: `-pedantic-errors` makes
+    /// it an error, and its `unknown-escape-sequence` group controls it.
+    #[test]
+    fn unknown_escape_sequences_warn_and_use_the_character() {
+        let source = "int main(void) { return '\\j' == 'j' && sizeof \"\\%\" == 2 ? 7 : 1; }\n";
+        for flags in [
+            &["--interpret"][..],
+            &["--interpret", "-std=c11"],
+            &["--interpret", "-std=gnu17", "-pedantic"],
+        ] {
+            let result = bcc(source, flags);
+            assert_eq!(
+                result.status.code(),
+                Some(7),
+                "{flags:?}: {}",
+                text(&result.stderr)
+            );
+            let stderr = text(&result.stderr);
+            assert!(
+                stderr.contains("warning: unknown escape sequence `\\j`")
+                    && stderr.contains("[-Wunknown-escape-sequence]"),
+                "{flags:?}: {stderr}"
+            );
+        }
+        for flags in [
+            &["--interpret", "-pedantic-errors"][..],
+            &["--interpret", "-Werror=unknown-escape-sequence"],
+        ] {
+            let result = bcc(source, flags);
+            assert_eq!(result.status.code(), Some(1), "{flags:?}");
+            assert!(
+                text(&result.stderr).contains("error: unknown escape sequence `\\j`"),
+                "{flags:?}: {}",
+                text(&result.stderr)
+            );
+        }
+        let quiet = bcc(source, &["--interpret", "-Wno-unknown-escape-sequence"]);
+        assert_eq!(quiet.status.code(), Some(7));
+        assert!(
+            !text(&quiet.stderr).contains("warning"),
+            "{}",
+            text(&quiet.stderr)
+        );
+    }
+
     #[test]
     fn interpreter_step_limit_applies_to_both_main_signatures() {
         for source in [

@@ -859,7 +859,14 @@ Phase 5 preserves Unicode encoding in literal tokens and distinguishes numeric
 escapes from source characters. UTF-8/UTF-16/UTF-32 character constants must fit
 one code unit; numeric escapes have the selected code-unit range. C2y delimited
 escapes are `\x{...}` and `\o{...}`, with empty, unterminated, invalid-radix,
-and out-of-range forms diagnosed. Phase 6 concatenates ordinary strings with
+and out-of-range forms diagnosed. An unknown escape such as `\j` or `\%`
+stands for its character after the warning "unknown escape sequence `\j`
+[-Wunknown-escape-sequence]", in every mode, strict ISO included, as GCC and
+Clang do: C99 requires only a diagnostic (§6.4.4.4 footnote 65) and §6.11.4
+leaves non-lowercase escapes to extensions. `-pedantic-errors` makes it an
+error, as Clang's extension warning is; `-Wno-unknown-escape-sequence`
+silences it and `-Werror=unknown-escape-sequence` promotes it, and a system
+header withholds it. Phase 6 concatenates ordinary strings with
 encoded strings while keeping the encoding, and diagnoses incompatible
 nonordinary prefixes. Phase 7 adds encoding-bearing literal, bit-precise
 integer, and imaginary constant token variants. Semantic analysis types the

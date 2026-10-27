@@ -253,7 +253,7 @@ The lexer no longer forms header names: an `#include` operand is ordinary prepro
 | `HeaderFileInaccessible` | environment-dependent; not covered | Requires a discovered header whose subsequent read fails, such as a permissions/sharing violation or filesystem race. A normal checked-in C/header pair cannot establish that condition portably; the OS error wording is also host-dependent. |
 | `HashHashUsedOutsideOfMacro` | rendered | [pp-hash-hash-used-outside-of-macro.c](pp-hash-hash-used-outside-of-macro.c) |
 | `CannotUseHashHashAfterFunctionLikeMacroCall` | rendered | [pp-cannot-use-hash-hash-after-function-like-macro-call.c](pp-cannot-use-hash-hash-after-function-like-macro-call.c). A `##` at either end of a replacement list is now rejected with its definition, so the remaining trigger is a `##` that pasting `#` and `#` creates (C99 §6.10.3.3p4); the message's "invocation" wording does not fit it. |
-| `InvalidEscapeSequence` | rendered | [pp-invalid-escape-sequence.c](pp-invalid-escape-sequence.c) |
+| `UnknownEscapeSequence` | rendered | [pp-unknown-escape-sequence.c](pp-unknown-escape-sequence.c) |
 | `UnterminatedEscapeSequence` | reached; folded | [pp-unterminated-escape-sequence.c](pp-unterminated-escape-sequence.c) |
 | `InvalidHexEscapeSequence` | rendered | [pp-invalid-hex-escape-sequence.c](pp-invalid-hex-escape-sequence.c) |
 | `HexEscapeSequenceTooLarge` | rendered | [pp-hex-escape-sequence-too-large.c](pp-hex-escape-sequence-too-large.c) |
