@@ -269,6 +269,7 @@ impl Machine<'_, '_, '_> {
             | data @ (InstData::Const { ty, .. } | InstData::WideConst { ty, .. }) => {
                 let bits = body.const_bits(&data).expect("constants have bits");
                 match ty {
+                    | Type::F16 => RuntimeValue::F16(super::memory::truncate_u16(bits)),
                     | Type::F32 => {
                         #[expect(clippy::cast_possible_truncation, reason = "An f32 has 32 bits.")]
                         let bits = bits as u32;
