@@ -1305,8 +1305,12 @@ soft-float routines do on x86-64, so interpreted programs print what
 programs linked with libgcc print. The host provides glibc's `strtof128`
 and `strfromf128` (with `printf`'s exact digits, since glibc's `printf`
 has no binary128 conversion) and the exact `_Float128` math functions
-(`sqrtf128`, `fabsf128`, `floorf128`, `fmodf128`, `frexpf128`, …); the
-others, like the complex helpers, are refused.
+(`sqrtf128`, `fabsf128`, `floorf128`, `fmodf128`, `frexpf128`, …), and
+the complex helpers `__multc3` and `__divtc3` as libgcc computes them
+(`host/complex/quad.rs`: Annex G's recovery of infinities, the scaling
+of a divisor near the range's ends, and the operand order GCC 13 and 15
+compile libgcc's sums and products in, which decides a NaN result's sign
+and payload); the other `_Float128` functions are refused.
 
 x87 values compute in `src/x87.rs`, a software model of the processor's x87
 unit under the default control word (64-bit precision, round to nearest even,

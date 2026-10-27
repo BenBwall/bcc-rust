@@ -90,6 +90,52 @@ mod tests {
         }
     }
 
+    /// Complex binary128 multiplication and division
+    /// (`tests/fixtures/programs/binary128_complex.c`) on special values and
+    /// random encodings: the interpreter's `__multc3` and `__divtc3` print
+    /// the bits libgcc's give the Clang-built program, NaN signs and
+    /// payloads included, before and after optimization.
+    #[test]
+    fn interpreted_complex_binary128_matches_libgcc() {
+        if !cfg!(all(
+            target_arch = "x86_64",
+            target_os = "linux",
+            target_env = "gnu"
+        )) {
+            return;
+        }
+        let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/programs/binary128_complex.c");
+        let source = source.to_str().unwrap();
+        let reference = temporary("complex.exe");
+        let built = Command::new("target/llvm/bin/clang")
+            .args([source, "-std=c99", "-O0", "-fno-builtin", "-o"])
+            .arg(&reference)
+            .output()
+            .unwrap();
+        assert!(built.status.success(), "{}", text(&built.stderr));
+        let expected = run_native(&mut Command::new(&reference)).unwrap();
+        assert_eq!(expected.status.code(), Some(0));
+        std::fs::remove_file(reference).unwrap();
+        for optimize in ["--opt=none", "--opt=bcc"] {
+            let output = bcc(&[source, "--interpret", optimize]);
+            assert_eq!(
+                output.status.code(),
+                Some(0),
+                "{optimize}: {}",
+                text(&output.stderr)
+            );
+            assert!(
+                text(&output.stdout) == text(&expected.stdout),
+                "{optimize}: the first difference is at line {:?}",
+                text(&output.stdout)
+                    .lines()
+                    .zip(text(&expected.stdout).lines())
+                    .position(|(ours, theirs)| ours != theirs)
+            );
+        }
+    }
+
     /// Under the GCC identity `_Float128` is a keyword with `f128`
     /// constants, glibc's headers declare its functions, and `<float.h>`
     /// gives GCC's `FLT128_*` names when TS 18661-3 is requested; the
