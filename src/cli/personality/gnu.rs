@@ -21,6 +21,7 @@ use super::{
     Personality,
     Plan,
     Step,
+    TemporaryDirectory,
     host_target,
     known::{
         Compiler,
@@ -114,14 +115,47 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
     }
     let links = state.stages.is_empty() && !state.syntax_only;
     let mut steps = Vec::new();
+    let mut temporary = None;
     for job in jobs {
+        if job.outputs == Outputs::Discarded {
+            let directory = match &temporary {
+                | Some(TemporaryDirectory(directory)) => directory.clone(),
+                | None => {
+                    let created = TemporaryDirectory::create().map_err(|source| {
+                        MainError::WriteOutputFileError {
+                            path: std::env::temp_dir(),
+                            source,
+                        }
+                    })?;
+                    let path = created.0.clone();
+                    temporary = Some(created);
+                    path
+                },
+            };
+            for (index, input) in state.inputs.iter().enumerate() {
+                if input.dropped || !job.inputs.take(input) {
+                    continue;
+                }
+                let mut bcc = common.clone();
+                bcc.extend(state.arguments(Inputs::One(input.at), links));
+                bcc.extend(job.stages.iter().map(OsString::from));
+                let mut option = OsString::from("--output=");
+                option.push(directory.join(format!("{index}.o")));
+                bcc.push(option);
+                steps.push(bcc);
+            }
+            continue;
+        }
         let mut bcc = common.clone();
         bcc.extend(state.arguments(job.inputs, links));
         bcc.extend(job.stages.iter().map(OsString::from));
-        if job.outputs {
+        if job.outputs == Outputs::Named {
+            // `--output=` keeps a name such as `-.o` from reading as an
+            // option.
             for output in &state.outputs {
-                bcc.push("-o".into());
-                bcc.push(output.clone());
+                let mut option = OsString::from("--output=");
+                option.push(output);
+                bcc.push(option);
             }
         }
         if links && state.outputs.is_empty() && !state.inputs.is_empty() {
@@ -141,6 +175,7 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
     // and each runs whether the other fails, as in the compilers.
     let mut plan = Plan {
         keep_going: true,
+        temporary,
         ..Plan::default()
     };
     if state.verbose || state.dry_run {
@@ -176,7 +211,20 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
 struct Job {
     inputs:  Inputs,
     stages:  Vec<&'static str>,
-    outputs: bool,
+    outputs: Outputs,
+}
+
+/// Where a [`Job`] writes.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Outputs {
+    /// Where the stage writes, without `-o`.
+    Default,
+    /// To the `-o` operands.
+    Named,
+    /// Each input to its own object in a temporary directory, which is
+    /// removed: GCC's `-fsyntax-only` still assembles assembly inputs when
+    /// it does not stop before, and keeps nothing.
+    Discarded,
 }
 
 /// Which of the command line's inputs a [`Job`] takes.
@@ -188,14 +236,17 @@ enum Inputs {
     CAndLink,
     /// The assembly inputs.
     Assembly,
+    /// The one input at this index in [`State::out`].
+    One(usize),
 }
 
 impl Inputs {
-    fn take(self, kind: InputKind) -> bool {
+    fn take(self, input: &Input) -> bool {
         match self {
             | Self::All => true,
-            | Self::CAndLink => matches!(kind, InputKind::C | InputKind::Link),
-            | Self::Assembly => matches!(kind, InputKind::Assembly { .. }),
+            | Self::CAndLink => matches!(input.kind, InputKind::C | InputKind::Link),
+            | Self::Assembly => matches!(input.kind, InputKind::Assembly { .. }),
+            | Self::One(at) => input.at == at,
         }
     }
 }
@@ -417,7 +468,7 @@ impl State<'_> {
             .filter(|(at, argument)| {
                 let input = self.inputs.iter().find(|input| input.at == *at);
                 match input {
-                    | Some(input) => !input.dropped && inputs.take(input.kind),
+                    | Some(input) => !input.dropped && inputs.take(input),
                     // GCC ignores what links when it stops before linking.
                     | None =>
                         links || !matches!(argument.to_str(), Some("-shared" | "-pie" | "-no-pie")),
@@ -492,7 +543,8 @@ impl State<'_> {
     /// checks the C sources and writes nothing for them, overriding `-c`,
     /// `-S` and `-o` there, while `-E`, `-M` and `-MM` override it. It
     /// leaves assembly to the assembler: GCC still assembles each `-c`
-    /// input, and Clang leaves `.s` files unused (it preprocesses `.S`
+    /// input unless `-S` is given, keeping the objects only for `-c`, and
+    /// Clang leaves `.s` files unused (it preprocesses `.S`
     /// files, which bcc's `-E` does not). Clang warns about what it leaves
     /// unused, and so about the linker's inputs whenever it does not link.
     fn jobs(&mut self) -> Vec<Job> {
@@ -522,7 +574,7 @@ impl State<'_> {
             return vec![Job {
                 inputs:  Inputs::All,
                 stages:  self.stages.clone(),
-                outputs: true,
+                outputs: Outputs::Named,
             }];
         }
         let mut jobs = Vec::new();
@@ -530,7 +582,7 @@ impl State<'_> {
             jobs.push(Job {
                 inputs:  Inputs::CAndLink,
                 stages:  vec!["--syntax-only"],
-                outputs: false,
+                outputs: Outputs::Default,
             });
         }
         if clang {
@@ -539,11 +591,17 @@ impl State<'_> {
                     "argument unused during compilation: '{stage}'"
                 ));
             }
-        } else if self.stages.contains(&"-c") && self.has(Inputs::Assembly) {
+        } else if !self.stages.contains(&"-S") && self.has(Inputs::Assembly) {
+            // GCC assembles them unless `-S` stops before the assembler,
+            // keeping the objects only for `-c`.
             jobs.push(Job {
                 inputs:  Inputs::Assembly,
                 stages:  vec!["-c"],
-                outputs: true,
+                outputs: if self.stages.contains(&"-c") {
+                    Outputs::Named
+                } else {
+                    Outputs::Discarded
+                },
             });
         }
         jobs
@@ -553,7 +611,7 @@ impl State<'_> {
     fn has(&self, inputs: Inputs) -> bool {
         self.inputs
             .iter()
-            .any(|input| !input.dropped && inputs.take(input.kind))
+            .any(|input| !input.dropped && inputs.take(input))
     }
 
     /// Warns, in order, as Clang does, that the inputs of the kinds `unused`
@@ -588,12 +646,14 @@ impl State<'_> {
         {
             return;
         }
+        // The warning is on by default, so `-Weverything`, which turns on
+        // only the warnings no option has set, leaves it as it is.
         let mut enabled = true;
         let mut all_errors = false;
         let mut error = None;
         for option in &self.warning_options {
             let option = option.as_str();
-            if option == "-Weverything" || option.strip_prefix("-W") == Some(GROUP) {
+            if option.strip_prefix("-W") == Some(GROUP) {
                 enabled = true;
             } else if option == "-Wno-everything" || option.strip_prefix("-Wno-") == Some(GROUP) {
                 enabled = false;

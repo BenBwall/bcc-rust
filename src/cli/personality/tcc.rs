@@ -163,6 +163,12 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
                         };
                         if option == "-o" {
                             output = true;
+                            // `--output=` keeps a name such as `-.o` from
+                            // reading as an option.
+                            let mut option = OsString::from("--output=");
+                            option.push(value);
+                            out.push(option);
+                            continue;
                         } else if option == "-x" {
                             inputs.language = match value.to_str() {
                                 | Some("c") => Some(true),

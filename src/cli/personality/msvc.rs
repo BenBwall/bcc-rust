@@ -993,6 +993,9 @@ fn named(option: Option<&Path>, source: &OsStr, extension: &str) -> PathBuf {
         | Some(option) if is_directory(option) => option.join(stem),
         | Some(option) if option.extension().is_none() => option.with_extension(extension),
         | Some(option) => option.into(),
+        // Standard input's `-.obj`, which bcc's command line must not read
+        // as an option.
+        | None if stem.as_os_str().to_string_lossy().starts_with('-') => Path::new(".").join(stem),
         | None => stem,
     }
 }

@@ -219,8 +219,9 @@ reports `cc1: fatal error: missing.c: No such file or directory` and
 skipped, and the exit status is 1. A directory reads as a missing file.
 `-fsyntax-only` checks the C sources and writes nothing for them, so it
 overrides `-c`, `-S` and `-o` there, while `-E`, `-M` and `-MM` override it;
-it leaves assembly to the assembler, so `-c` still assembles each assembly
-input, to `-o` if given.
+it leaves assembly to the assembler, which still assembles each assembly
+input unless `-S` is given (also with `-c`), keeping the object, at `-o`
+if given, only for `-c`.
 `-o` with `-c`, `-S` or `-E` and several compiled inputs is `gcc: fatal
 error: cannot specify '-o' with '-c', '-S' or '-E' with multiple files`,
 also under `-fsyntax-only`; with `-M` or `-MM` alone each unit's rules
@@ -306,7 +307,8 @@ unused`. These warnings follow the warning options, as Clang's
 `-Wno-unused-command-line-argument` silences them, and `-Werror` or
 `-Werror=unused-command-line-argument` makes them errors (`[-Werror,...]`,
 exit status 1) unless `-Wno-error=unused-command-line-argument` exempts
-them. After a source that fails to compile, Clang compiles the others, as
+them; `-Weverything` turns on only the warnings no option has set, so it
+does not undo `-Wno-unused-command-line-argument` or `-Wno-everything`. After a source that fails to compile, Clang compiles the others, as
 GCC does.
 
 **Identity.** bcc's default: the pinned Clang 23.1.1 and the GCC 4.2.1 Clang

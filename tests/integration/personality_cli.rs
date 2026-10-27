@@ -1586,10 +1586,27 @@ mod tests {
         assert!(!directory.path("good.o").exists());
         let missing = directory.bcc("--gcc-mode", &["-fsyntax-only", "-c", "missing.s"]);
         assert_eq!(missing.status.code(), Some(1), "{}", stderr(&missing));
-        // Linking is what makes an object of an assembly input otherwise.
+        // Without `-c` GCC still assembles, but keeps nothing; `-S` stops
+        // before the assembler, also with `-c`.
         std::fs::remove_file(directory.path("f.o")).unwrap();
-        succeeds(&directory.bcc("--gcc-mode", &["-fsyntax-only", "good.c", "f.s"]));
-        assert!(!directory.path("f.o").exists());
+        for args in [
+            &["-fsyntax-only", "good.c", "f.s"][..],
+            &["-fsyntax-only", "f.s", "-o", "out"],
+            &["-fsyntax-only", "-c", "-S", "missing.s"],
+            &["-fsyntax-only", "-S", "-c", "f.s"],
+        ] {
+            succeeds(&directory.bcc("--gcc-mode", args));
+            for output in ["f.o", "out", "a.out", "f.s.o"] {
+                assert!(!directory.path(output).exists(), "{args:?}: {output}");
+            }
+        }
+        for args in [
+            &["-fsyntax-only", "missing.s"][..],
+            &["-fsyntax-only", "good.c", "missing.s"],
+        ] {
+            let missing = directory.bcc("--gcc-mode", args);
+            assert_eq!(missing.status.code(), Some(1), "{args:?}");
+        }
         let clang = directory.bcc(
             "--clang-mode",
             &["-fsyntax-only", "-c", "good.c", "f.s", "f1.o"],
@@ -1617,12 +1634,15 @@ mod tests {
     /// Clang's warnings about unused arguments follow its warning options:
     /// `-w` and `-Wno-unused-command-line-argument` silence them, and
     /// `-Werror` or `-Werror=unused-command-line-argument` make them errors
-    /// unless `-Wno-error=unused-command-line-argument` exempts them.
+    /// unless `-Wno-error=unused-command-line-argument` exempts them, and
+    /// `-Weverything` does not undo an explicit `-Wno-`.
     #[test]
     fn clang_unused_argument_warnings_follow_the_warning_options() {
         let directory = Directory::new();
         directory.write("good.c", "int good;\n");
-        let unused = "argument unused during compilation: '-c'";
+        // An object for `-c` compiles nothing, so only the driver warns.
+        directory.write("x.o", "");
+        let unused = "x.o: 'linker' input unused";
         for (options, expected, status) in [
             (
                 &[][..],
@@ -1658,11 +1678,33 @@ mod tests {
                 format!("clang: warning: {unused} [-Wunused-command-line-argument]\n"),
                 0,
             ),
+            // `-Weverything` turns on only what no option set, and this
+            // warning is on by default.
+            (
+                &[
+                    "-Wno-unused-command-line-argument",
+                    "-Weverything",
+                    "-Werror",
+                ],
+                String::new(),
+                0,
+            ),
+            (&["-Wno-everything", "-Weverything"], String::new(), 0),
+            (
+                &["-Wno-everything", "-Werror=unused-command-line-argument"],
+                format!("clang: error: {unused} [-Werror,-Wunused-command-line-argument]\n"),
+                1,
+            ),
+            (
+                &[
+                    "-Werror=unused-command-line-argument",
+                    "-Wno-unused-command-line-argument",
+                ],
+                String::new(),
+                0,
+            ),
         ] {
-            let output = directory.bcc(
-                "--clang-mode",
-                &[options, &["-fsyntax-only", "-c", "good.c"]].concat(),
-            );
+            let output = directory.bcc("--clang-mode", &[options, &["-c", "x.o"]].concat());
             assert_eq!(output.status.code(), Some(status), "{options:?}");
             assert_eq!(stderr(&output), expected, "{options:?}");
         }
@@ -1722,6 +1764,21 @@ mod tests {
             stderr(&compiled),
             "clang-cl: error: use /Tc or /Tp to set input type for standard input\n"
         );
+        // The object is `-.obj`, and an output named like an option is
+        // written as given.
+        for args in [
+            &["/nologo", "/c", "/Tc-"][..],
+            &["/nologo", "/c", "/TC", "-"],
+        ] {
+            succeeds(&piped("--clang-cl-mode", args));
+            assert!(directory.path("-.obj").is_file(), "{args:?}");
+            std::fs::remove_file(directory.path("-.obj")).unwrap();
+        }
+        for mode in ["--gcc-mode", "--clang-mode", "--tcc-mode"] {
+            succeeds(&piped(mode, &["-c", "-x", "c", "-", "-o", "-named.o"]));
+            assert!(directory.path("-named.o").is_file(), "{mode}");
+            std::fs::remove_file(directory.path("-named.o")).unwrap();
+        }
     }
 
     #[test]
