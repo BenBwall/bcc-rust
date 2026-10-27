@@ -259,8 +259,14 @@ fn report_unreadable(args: &Cli, path: &Path, error: &io::Error, arena: &Bump) {
     let path = path.display();
     match args.diagnostic_format {
         | Format::Bcc => report_stderr(format_args!("error: cannot read `{path}`: {error}")),
+        // GCC's preprocessor reports a directory as a missing file.
         | Format::Gcc => report_stderr(format_args!(
-            "cc1: fatal error: {path}: {reason}\ncompilation terminated."
+            "cc1: fatal error: {path}: {}\ncompilation terminated.",
+            if error.kind() == io::ErrorKind::IsADirectory {
+                "No such file or directory"
+            } else {
+                reason
+            }
         )),
         | Format::Msvc | Format::MsvcClassic | Format::MsvcCaret
             if args.compiler_identity != Identity::ClangCl =>

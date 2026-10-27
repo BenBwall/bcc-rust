@@ -193,15 +193,39 @@ fn by_extension(path: &Path) -> Input<'_> {
     }
 }
 
-/// Whether the driver compiles `path` without `-x`, as C or assembly,
-/// rather than passing it to the linker.
-pub(in crate::cli) fn compiles(path: &Path) -> bool {
-    !matches!(by_extension(path), Input::Link(_))
+/// What the driver does with an input, for the personalities.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(in crate::cli) enum InputKind {
+    /// Compile it as C, preprocessed or not.
+    C,
+    /// Assemble it, after preprocessing it (`.S`, `.sx`) or not (`.s`).
+    Assembly { preprocessed: bool },
+    /// Pass it to the linker.
+    Link,
 }
 
-/// Whether the driver compiles `path` without `-x` as C.
-pub(in crate::cli) fn is_c(path: &Path) -> bool {
-    matches!(by_extension(path), Input::C(_))
+/// What the driver does with `path` without `-x`.
+pub(in crate::cli) fn kind(path: &Path) -> InputKind {
+    match by_extension(path) {
+        | Input::C(_) => InputKind::C,
+        | Input::Assembly(assembly) => InputKind::Assembly {
+            preprocessed: assembly.preprocessed(),
+        },
+        | Input::Link(_) => InputKind::Link,
+    }
+}
+
+/// What the driver does with an input under the `-x` language `name`, or
+/// `None` when the name does not decide it (`none`, or one bcc refuses).
+pub(in crate::cli) fn kind_of_language(name: &str) -> Option<InputKind> {
+    Some(match name {
+        | "c" | "c-header" | "cpp-output" => InputKind::C,
+        | "assembler" => InputKind::Assembly {
+            preprocessed: false,
+        },
+        | "assembler-with-cpp" => InputKind::Assembly { preprocessed: true },
+        | _ => return None,
+    })
 }
 
 /// The `-o` path, or the input's file name with `extension` in the working
@@ -219,11 +243,12 @@ pub(super) fn output_or_stem(
     if let Some(output) = output {
         return Ok(output.to_path_buf());
     }
-    if input == Path::new("<input>") || input == Path::new("-") {
+    if input == Path::new("<input>") {
         return Err(MainError::Driver(
-            "-c and -S name their output after the input file; give -o for --input or stdin",
+            "-c and -S name their output after the input file; give -o for --input",
         ));
     }
+    // Stdin's output is `-.o` or `-.s`, as GCC and Clang name it.
     let name = input.file_name().map_or(input.as_os_str(), |name| name);
     Ok(Path::new(name).with_extension(extension))
 }

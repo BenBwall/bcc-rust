@@ -44,8 +44,9 @@ use inputs::{
     output_or_stem,
 };
 pub(super) use inputs::{
-    compiles,
-    is_c,
+    InputKind,
+    kind,
+    kind_of_language,
 };
 use job::{
     Job,
@@ -92,9 +93,12 @@ pub(super) fn run(args: &Cli, matches: &ArgMatches) -> Result<i32, MainError> {
         Stage::Inspect
     };
     if stage != Stage::Link {
-        // GCC lets `-M` and `-MM` without `-E` write each unit's rules to
-        // `-o` in turn, every unit replacing the one before.
-        let rules_only = args.driver.dependencies.is_some() && !args.driver.preprocess;
+        // GCC lets `-M` and `-MM` without `-E`, `-c` or `-S` write each
+        // unit's rules to `-o` in turn, every unit replacing the one before.
+        let rules_only = args.driver.dependencies.is_some()
+            && !args.driver.preprocess
+            && !generation.object
+            && !generation.assembly;
         if output.is_some() && sources > 1 && !rules_only {
             return Err(MainError::Driver(
                 "cannot specify '-o' with '-c', '-S' or '-E' with multiple files",

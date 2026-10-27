@@ -64,7 +64,12 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
             state.sources.push(Source::new(argument, false));
             continue;
         };
-        let Some(option) = text.strip_prefix('/').or_else(|| text.strip_prefix('-')) else {
+        // clang-cl reads `-` as standard input.
+        let Some(option) = text
+            .strip_prefix('/')
+            .or_else(|| text.strip_prefix('-'))
+            .filter(|_| !(clang_cl && text == "-"))
+        else {
             state.sources.push(Source::new(argument, false));
             continue;
         };
@@ -814,16 +819,35 @@ impl State {
     /// and compiles the others. `cl` warns that a file whose extension it
     /// does not know is assumed to be an object (warning D9024), and both
     /// say that `/c` leaves the linker's inputs unused (`cl`'s warning
-    /// D9027).
+    /// D9027). clang-cl preprocesses standard input (`-`) as C, but
+    /// compiles it only as `/Tc` or `/Tp` names its language.
     fn check_inputs(&mut self, invocation: &Invocation) {
         let clang_cl = invocation.personality == Personality::ClangCl;
         let links = !self.compile_only && self.preprocess.is_none() && !self.syntax_only;
-        let given = self.sources.len();
-        self.sources.retain(|source| {
+        let preprocess = self.preprocess.is_some();
+        let mut missing = 0;
+        let mut errors = 0;
+        self.sources.retain_mut(|source| {
             let path = Path::new(&source.path).display();
+            if clang_cl && source.path == "-" && !source.is_c() && !source.cpp {
+                if preprocess {
+                    source.c = true;
+                    return true;
+                }
+                invocation.error(format_args!(
+                    "use /Tc or /Tp to set input type for standard input"
+                ));
+                errors += 1;
+                return false;
+            }
             let compiled = source.is_c() || source.cpp;
-            if clang_cl && compiled && std::fs::metadata(&source.path).is_err() {
+            if clang_cl
+                && compiled
+                && source.path != "-"
+                && std::fs::metadata(&source.path).is_err()
+            {
                 invocation.error(format_args!("no such file or directory: '{path}'"));
+                missing += 1;
                 return false;
             }
             if compiled {
@@ -865,11 +889,9 @@ impl State {
             }
             true
         });
-        if self.sources.len() != given {
-            self.errors += 1;
-            if self.sources.is_empty() {
-                invocation.error(format_args!("no input files"));
-            }
+        self.errors += errors + missing;
+        if missing != 0 && self.sources.is_empty() {
+            invocation.error(format_args!("no input files"));
         }
     }
 

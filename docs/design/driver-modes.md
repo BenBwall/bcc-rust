@@ -63,8 +63,11 @@ without a personality as well:
   `-Xlinker`, `-static`, `-rdynamic`, `-pthread`, `-nostdlib` and their
   relatives, in command-line order;
 - `-M`, `-MM`, `-MD`, `-MMD`, `-MF`, `-MT`, `-MQ` and `-MP` dependency rules,
-  named after the stage and output as GCC names them; `-M` and `-MM` take
-  `-o` with several inputs, each unit's rules replacing the last, as in GCC;
+  named after the stage and output as GCC names them; `-M` and `-MM`
+  without `-E`, `-c` or `-S` take `-o` with several inputs, each unit's
+  rules replacing the last, as in GCC;
+- standard input (`-`) as a source, whose `-c` and `-S` outputs are `-.o`
+  and `-.s`, as GCC and Clang name them;
 - `-fsyntax-only` (`--syntax-only`), and a failing exit status from every
   mode, the inspection views included, after an error;
 - an input that cannot be read failing its own job alone, reported in the
@@ -213,8 +216,11 @@ bcc does not do.
 **Inputs and stages.** GCC's driver leaves a missing input to `cc1`, which
 reports `cc1: fatal error: missing.c: No such file or directory` and
 `compilation terminated.`; the other inputs are still compiled, the link is
-skipped, and the exit status is 1. `-fsyntax-only` writes nothing, so it
-overrides `-c`, `-S` and `-o`, while `-E`, `-M` and `-MM` override it.
+skipped, and the exit status is 1. A directory reads as a missing file.
+`-fsyntax-only` checks the C sources and writes nothing for them, so it
+overrides `-c`, `-S` and `-o` there, while `-E`, `-M` and `-MM` override it;
+it leaves assembly to the assembler, so `-c` still assembles each assembly
+input, to `-o` if given.
 `-o` with `-c`, `-S` or `-E` and several compiled inputs is `gcc: fatal
 error: cannot specify '-o' with '-c', '-S' or '-E' with multiple files`,
 also under `-fsyntax-only`; with `-M` or `-MM` alone each unit's rules
@@ -288,11 +294,20 @@ none is left, and nothing is compiled (exit status 1). A file that exists
 but cannot be read reaches the front end: `error: error reading 'x.c':
 Permission denied`. A stage that writes a file per input refuses `-o` for
 several inputs, `-M` and `-MM` too: `clang: error: cannot specify -o when
-generating multiple output files`. `-fsyntax-only` overrides `-c`, `-S` and
-`-o`, with `clang: warning: argument unused during compilation: '-c'
-[-Wunused-command-line-argument]` for each stage option, and `-E`, `-M` and
-`-MM` override it with the same warning for `-fsyntax-only`. After a source
-that fails to compile, Clang compiles the others, as GCC does.
+generating multiple output files`; only the inputs it kept count.
+`-fsyntax-only` overrides `-c`, `-S` and `-o`, with `clang: warning:
+argument unused during compilation: '-c' [-Wunused-command-line-argument]`
+for each stage option, and leaves `.s` inputs unused (`clang: warning: f.s:
+'assembler' input unused`); `-E`, `-M` and `-MM` override it with the same
+warning for `-fsyntax-only`. A command line that does not link leaves the
+linker's input files unused, with `clang: warning: a.o: 'linker' input
+unused`. These warnings follow the warning options, as Clang's
+`-Wunused-command-line-argument` does: `-w` or
+`-Wno-unused-command-line-argument` silences them, and `-Werror` or
+`-Werror=unused-command-line-argument` makes them errors (`[-Werror,...]`,
+exit status 1) unless `-Wno-error=unused-command-line-argument` exempts
+them. After a source that fails to compile, Clang compiles the others, as
+GCC does.
 
 **Identity.** bcc's default: the pinned Clang 23.1.1 and the GCC 4.2.1 Clang
 claims. `--version` prints `clang version 23.1.1 (bcc 0.1.0, ...)` with the
@@ -366,8 +381,9 @@ to MSVC's codes is documented, so bcc writes no code rather than an invented
 one. The MSVC codes bcc writes are those Microsoft documents for the
 driver's own messages: warnings D9002 (an unknown option), D9024 and D9027
 (inputs), error D8036 (`/Fo` for several sources), and fatal error C1083
-for a source that cannot be opened. `cl` writes compiler diagnostics to
-stdout; bcc writes them to stderr, as in its other modes.
+for a source that cannot be opened. `cl` writes compiler diagnostics,
+C1083 among them, to stdout; bcc writes them to stderr, as in its other
+modes, and writes only the source names to stdout, as `cl` does.
 
 **Banner.** `bcc 0.1.0, compatible with Microsoft (R) C/C++ Optimizing
 Compiler Version 19.33.0 for x64; not a Microsoft product`, to stderr. Tools
@@ -388,7 +404,10 @@ missing source before compiling any (`clang-cl: error: no such file or
 directory: 'missing.c'`), warns that a stage before linking leaves an input
 for the linker unused (`clang-cl: warning: x: 'linker' input unused
 [-Wunused-command-line-argument]`), stops at the first source that fails to
-compile, and exits with status 1 after an error.
+compile, and exits with status 1 after an error. It reads `-` as standard
+input, which `/E` preprocesses as C and which compiles only when `/Tc`
+names its language (`clang-cl: error: use /Tc or /Tp to set input type for
+standard input` otherwise).
 
 ## TCC
 
@@ -408,10 +427,10 @@ those GCC knows are treated as the GCC personality treats them, so one that
 would change the program (`-fshort-enums`) is refused rather than silently
 dropped. `-std=c11` and `gnu11` select `gnu11`, any
 other value `gnu99`, as TCC sets `__STDC_VERSION__`. TCC reads its inputs
-in order and stops at the first it cannot add, so the inputs after a
-missing one are dropped and the run fails with `tcc: error: file
-'missing.c' not found` (exit status 1), after compiling the C sources
-before it.
+in order and stops at the first it cannot add, so the inputs after one it
+cannot open, missing or unreadable, are dropped and the run fails with
+`tcc: error: file 'missing.c' not found` (exit status 1), after compiling
+the C sources before it.
 
 **Identity.** `__TINYC__ 927` (TCC 0.9.27), no GNU or Clang macro, and
 `__STDC_VERSION__ 199901L` by default. glibc's headers take their portable
@@ -506,8 +525,15 @@ These driver behaviours still differ from the compilers mimicked:
 
 - Messages from bcc's own driver do not name the driver: `warning: a.o:
   linker input file unused because linking not done` where GCC writes
-  `gcc: warning: ...` and Clang `clang: warning: a.o: 'linker' input unused
-  [-Wunused-command-line-argument]`.
+  `gcc: warning: ...`. Clang's personality warns about unused linker input
+  files itself but not about unused `-l` and `-Wl,` options, which Clang
+  also reports.
+- bcc's `-E` skips assembly inputs, so Clang's `-fsyntax-only`, which
+  preprocesses a `.S` input to `-o` or stdout, writes nothing for one, and
+  neither does GCC's `-fsyntax-only -S`, which prints a `.S` input
+  preprocessed.
+- The `cl` personality reads `-` as an unknown option (warning D9002);
+  Microsoft does not document whether `cl` reads standard input.
 - A missing assembly input is reported by the bundled clang (`error: cannot
   assemble ...: clang: error: no such file or directory`) rather than as
   GCC's assembler (`Error: can't open missing.s for reading`) or `cc1` (for

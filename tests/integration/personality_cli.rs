@@ -1372,6 +1372,16 @@ mod tests {
             stderr(&clang),
             "clang: error: no such file or directory: 'missing.c'\n"
         );
+        // Only the inputs Clang keeps count as outputs of `-o`.
+        let clang = run(
+            "--clang-mode",
+            &["-c", "missing.c", "good.c", "-o", "out.o"],
+            &[],
+        );
+        assert_eq!(
+            stderr(&clang),
+            "clang: error: no such file or directory: 'missing.c'\n"
+        );
         let clang = run("--clang-mode", &["-c", "missing.o"], &[]);
         assert_eq!(clang.status.code(), Some(1));
         assert_eq!(
@@ -1427,6 +1437,33 @@ mod tests {
         let tcc = run("--tcc-mode", &["-c", "missing.o", "good.c"], &[]);
         assert_eq!(tcc.status.code(), Some(1));
         assert_eq!(stderr(&tcc), "tcc: error: file 'missing.o' not found\n");
+        // GCC's preprocessor reports a directory as a missing file.
+        std::fs::create_dir(directory.path("dir.c")).unwrap();
+        let gcc = run("--gcc-mode", &["-c", "dir.c"], &[]);
+        assert_eq!(gcc.status.code(), Some(1));
+        if cfg!(unix) {
+            assert_eq!(
+                stderr(&gcc),
+                format!("cc1: fatal error: dir.c: {missing}\ncompilation terminated.\n")
+            );
+        }
+        // TCC stops at a file it cannot open, also one that exists.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            directory.write("locked.c", "int locked;\n");
+            std::fs::set_permissions(
+                directory.path("locked.c"),
+                std::fs::Permissions::from_mode(0o000),
+            )
+            .unwrap();
+            // A privileged user reads it anyway.
+            if std::fs::File::open(directory.path("locked.c")).is_err() {
+                let tcc = run("--tcc-mode", &["-c", "locked.c", "good.c"], &[]);
+                assert_eq!(tcc.status.code(), Some(1));
+                assert_eq!(stderr(&tcc), "tcc: error: file 'locked.c' not found\n");
+            }
+        }
     }
 
     /// `cl` and clang-cl after a source that fails: `cl` compiles the rest,
@@ -1530,6 +1567,160 @@ mod tests {
         assert_eq!(
             stderr(&gcc),
             "gcc: fatal error: no input files\ncompilation terminated.\n"
+        );
+    }
+
+    /// `-fsyntax-only` checks only the C sources: GCC still assembles each
+    /// assembly input under `-c`, to `-o` if given, and Clang leaves `.s`
+    /// files unused, as it does the linker's inputs, with a warning.
+    #[test]
+    fn syntax_only_leaves_assembly_to_the_assembler_as_each_does() {
+        let directory = Directory::new();
+        directory.write("good.c", "int good;\n");
+        directory.write("f.s", ".globl f\nf:\n ret\n");
+        let gcc = directory.bcc("--gcc-mode", &["-fsyntax-only", "-c", "f.s", "-o", "f1.o"]);
+        succeeds(&gcc);
+        assert!(directory.path("f1.o").is_file());
+        succeeds(&directory.bcc("--gcc-mode", &["-fsyntax-only", "-c", "good.c", "f.s"]));
+        assert!(directory.path("f.o").is_file());
+        assert!(!directory.path("good.o").exists());
+        let missing = directory.bcc("--gcc-mode", &["-fsyntax-only", "-c", "missing.s"]);
+        assert_eq!(missing.status.code(), Some(1), "{}", stderr(&missing));
+        // Linking is what makes an object of an assembly input otherwise.
+        std::fs::remove_file(directory.path("f.o")).unwrap();
+        succeeds(&directory.bcc("--gcc-mode", &["-fsyntax-only", "good.c", "f.s"]));
+        assert!(!directory.path("f.o").exists());
+        let clang = directory.bcc(
+            "--clang-mode",
+            &["-fsyntax-only", "-c", "good.c", "f.s", "f1.o"],
+        );
+        succeeds(&clang);
+        assert_eq!(
+            stderr(&clang),
+            "clang: warning: f.s: 'assembler' input unused \
+             [-Wunused-command-line-argument]\nclang: warning: f1.o: 'linker' input unused \
+             [-Wunused-command-line-argument]\nclang: warning: argument unused during \
+             compilation: '-c' [-Wunused-command-line-argument]\n"
+        );
+        assert!(!directory.path("f.o").exists());
+        for args in [&["-c", "good.c", "f1.o"][..], &["-c", "f1.o"]] {
+            let clang = directory.bcc("--clang-mode", args);
+            succeeds(&clang);
+            assert_eq!(
+                stderr(&clang),
+                "clang: warning: f1.o: 'linker' input unused [-Wunused-command-line-argument]\n",
+                "{args:?}"
+            );
+        }
+    }
+
+    /// Clang's warnings about unused arguments follow its warning options:
+    /// `-w` and `-Wno-unused-command-line-argument` silence them, and
+    /// `-Werror` or `-Werror=unused-command-line-argument` make them errors
+    /// unless `-Wno-error=unused-command-line-argument` exempts them.
+    #[test]
+    fn clang_unused_argument_warnings_follow_the_warning_options() {
+        let directory = Directory::new();
+        directory.write("good.c", "int good;\n");
+        let unused = "argument unused during compilation: '-c'";
+        for (options, expected, status) in [
+            (
+                &[][..],
+                format!("clang: warning: {unused} [-Wunused-command-line-argument]\n"),
+                0,
+            ),
+            (
+                &["-Werror"],
+                format!("clang: error: {unused} [-Werror,-Wunused-command-line-argument]\n"),
+                1,
+            ),
+            (
+                &["-Werror=unused-command-line-argument"],
+                format!("clang: error: {unused} [-Werror,-Wunused-command-line-argument]\n"),
+                1,
+            ),
+            (
+                &["-Werror", "-Wno-error=unused-command-line-argument"],
+                format!("clang: warning: {unused} [-Wunused-command-line-argument]\n"),
+                0,
+            ),
+            (&["-w", "-Werror"], String::new(), 0),
+            (
+                &["-Werror", "-Wno-unused-command-line-argument"],
+                String::new(),
+                0,
+            ),
+            (
+                &[
+                    "-Wno-unused-command-line-argument",
+                    "-Wunused-command-line-argument",
+                ],
+                format!("clang: warning: {unused} [-Wunused-command-line-argument]\n"),
+                0,
+            ),
+        ] {
+            let output = directory.bcc(
+                "--clang-mode",
+                &[options, &["-fsyntax-only", "-c", "good.c"]].concat(),
+            );
+            assert_eq!(output.status.code(), Some(status), "{options:?}");
+            assert_eq!(stderr(&output), expected, "{options:?}");
+        }
+        let preprocessed = directory.bcc(
+            "--clang-mode",
+            &["-Werror", "-fsyntax-only", "-E", "good.c"],
+        );
+        assert_eq!(preprocessed.status.code(), Some(1));
+        assert!(
+            stderr(&preprocessed).contains("argument unused during compilation: '-fsyntax-only'"),
+            "{}",
+            stderr(&preprocessed)
+        );
+    }
+
+    /// Standard input's outputs are named `-.o` and `-.s`, and clang-cl
+    /// preprocesses it but compiles it only with `/Tc`.
+    #[test]
+    fn standard_input_is_read_as_each_compiler_reads_it() {
+        use std::io::Write as _;
+        let directory = Directory::new();
+        let piped = |mode: &str, args: &[&str]| {
+            let mut child = Command::new(env!("CARGO_BIN_EXE_bcc-rust"))
+                .arg(mode)
+                .args(args)
+                .current_dir(&directory.0)
+                .env("NO_COLOR", "1")
+                .env_remove("INCLUDE")
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+                .unwrap();
+            child
+                .stdin
+                .take()
+                .unwrap()
+                .write_all(b"int from_stdin;\n")
+                .unwrap();
+            child.wait_with_output().unwrap()
+        };
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            succeeds(&piped(mode, &["-c", "-x", "c", "-"]));
+            assert!(directory.path("-.o").is_file(), "{mode}");
+            std::fs::remove_file(directory.path("-.o")).unwrap();
+        }
+        let preprocessed = piped("--clang-cl-mode", &["/nologo", "/E", "-"]);
+        succeeds(&preprocessed);
+        assert!(
+            stdout(&preprocessed).contains("int from_stdin;"),
+            "{}",
+            stdout(&preprocessed)
+        );
+        let compiled = piped("--clang-cl-mode", &["/nologo", "/c", "-"]);
+        assert_eq!(compiled.status.code(), Some(1));
+        assert_eq!(
+            stderr(&compiled),
+            "clang-cl: error: use /Tc or /Tp to set input type for standard input\n"
         );
     }
 

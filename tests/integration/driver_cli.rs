@@ -266,7 +266,14 @@ mod tests {
     #[test]
     fn stages_that_stop_early_take_outputs_and_linker_inputs_as_gcc_does() {
         let project = Project::new();
-        for stage in [&["-c"][..], &["-S"], &["-E"], &["-E", "-M"]] {
+        for stage in [
+            &["-c"][..],
+            &["-S"],
+            &["-E"],
+            &["-E", "-M"],
+            &["-M", "-c"],
+            &["-MM", "-S"],
+        ] {
             let refused = project.bcc(&[stage, &["a.c", "main.c", "-o", "out"]].concat());
             assert_eq!(refused.status.code(), Some(1), "{stage:?}");
             assert!(

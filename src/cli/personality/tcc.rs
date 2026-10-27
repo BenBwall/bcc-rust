@@ -37,7 +37,10 @@ use super::{
 use crate::{
     cli::{
         arguments::implements_language_option,
-        driver::is_c,
+        driver::{
+            InputKind,
+            kind,
+        },
     },
     target::Target,
 };
@@ -244,32 +247,36 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
 #[derive(Default)]
 struct Inputs {
     count:    usize,
-    /// Whether an input was missing, after which TCC reads no more.
-    missing:  bool,
+    /// Whether an input could not be opened, after which TCC reads no
+    /// more.
+    failed:   bool,
     /// The `-x` language in effect: C, another, or none (by extension).
     language: Option<bool>,
 }
 
 impl Inputs {
     /// Adds an input file to bcc's command line `out`, as TCC reads its
-    /// inputs in order and stops at the first that fails
-    /// (`tcc.c`, `main`): the inputs after a missing one are dropped. bcc's
-    /// job reports a missing C source in TCC's words, after compiling the
-    /// ones before it; another missing file is reported here, and nothing
-    /// runs.
+    /// inputs in order and stops at the first that fails (`tcc.c`,
+    /// `main`): the inputs after one it cannot open, missing or unreadable,
+    /// are dropped. bcc's job reports such a C source in TCC's words, after
+    /// compiling the ones before it; another such file is reported here,
+    /// and nothing runs.
     fn add(
         &mut self,
         invocation: &Invocation,
         input: &OsStr,
         out: &mut Vec<OsString>,
     ) -> Result<(), MainError> {
-        if self.missing {
+        if self.failed {
             return Ok(());
         }
         self.count += 1;
-        if input != "-" && std::fs::metadata(input).is_err() {
-            self.missing = true;
-            if !self.language.unwrap_or_else(|| is_c(Path::new(input))) {
+        if input != "-" && std::fs::File::open(input).is_err() {
+            self.failed = true;
+            if !self
+                .language
+                .unwrap_or_else(|| kind(Path::new(input)) == InputKind::C)
+            {
                 invocation.error(format_args!("file '{}' not found", input.to_string_lossy()));
                 return Err(MainError::Reported(1));
             }
