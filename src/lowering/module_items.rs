@@ -158,6 +158,18 @@ pub(super) struct Unit<'a, 'tu, 'ir> {
     /// Symbols whose entity names a visibility, which `-fvisibility=`
     /// leaves alone.
     pub(super) explicit_visibility: ArenaSet<'a, Symbol>,
+    /// The definitions whose bodies use `__builtin_va_arg_pack ()` or its
+    /// length, by entity identity, as for `private_bodies`.
+    pub(super) pack_functions: ArenaMap<'a, StringCacheId, &'tu FunctionRecord<'tu>>,
+    /// Their copies specialized for calls, in declaration order
+    /// (`argument_pack.rs`), each copy's index by function, and the indexes
+    /// of the copies a lowered body calls that are still to be lowered.
+    pub(super) pack_copies: ArenaVec<'a, super::argument_pack::PackCopy<'a, 'tu>>,
+    pub(super) pack_copy_index: ArenaMap<'a, FuncId, usize>,
+    /// The declarations of internal functions using the pack whose address
+    /// is taken, with their definitions, whose bodies
+    /// `argument_pack::lower_live_copies` lowers if the address is live.
+    pub(super) pack_addresses: ArenaMap<'a, FuncId, &'tu FunctionRecord<'tu>>,
 }
 
 impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
@@ -487,6 +499,22 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
                 source,
             ));
         }
+        // GNU extension: GCC manual, "Constructing Calls". Each direct call
+        // gets its own copy of a body that uses the argument pack. A `used`
+        // one is declared now: it is emitted whatever calls it, so the walk
+        // over live code (`argument_pack::lower_live_copies`) lowers its own
+        // body, as for a live address.
+        if self.copies_only(record) {
+            if self.sema.bindings[binding].linkage == Linkage::Internal
+                && self
+                    .sema
+                    .entity_attributes(binding)
+                    .is_some_and(|attributes| attributes.used)
+            {
+                _ = self.function(binding).map_err(|kind| at(kind, source))?;
+            }
+            return Ok(None);
+        }
         if self.sema.function_policy(binding).is_some_and(|policy| {
             matches!(
                 policy.body,
@@ -682,6 +710,15 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             .module
             .declare_function(name, signature, self.ir_linkage(binding));
         self.symbol_attributes(binding, Symbol::Function(func));
+        // Only calls reach the copies of an internal function using the
+        // argument pack; its address designates its own body, lowered only if
+        // live code takes it (`argument_pack::lower_live_copies`).
+        if data.linkage == Linkage::Internal
+            && let Some(record) = self.pack_function(binding)
+            && self.copies_only(record)
+        {
+            _ = self.pack_addresses.insert(func, record);
+        }
         Ok(func)
     }
 
@@ -1190,7 +1227,7 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
 
     /// `base`, or the next unoccupied `base.N`, probing each suffix once.
     /// C99: §6.2.2 paragraph 2, p. 30; PDF p. 42 (distinct unlinked objects).
-    fn unique_name(&mut self, base: &'a str) -> &'a str {
+    pub(super) fn unique_name(&mut self, base: &'a str) -> &'a str {
         if self.name_available(base) {
             return base;
         }
@@ -2050,6 +2087,17 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             }
         }
         let defined_objects = ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, tables);
+        let mut pack_functions = ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, tables);
+        for function in sema.functions {
+            // Only the definition calls reach: a later definition replaces
+            // a GNU `extern inline` body (GCC manual, "Inline").
+            if function.va_arg_pack
+                && let Some(entity) = function.binding.and_then(|binding| sema.entity(binding))
+                && entity.function == function.binding
+            {
+                _ = pack_functions.insert(entity.identity, function);
+            }
+        }
         Ok(Self {
             retain_local_statics: true,
             reachable: ArenaSet::with_hasher_in(rustc_hash::FxBuildHasher, tables),
@@ -2075,6 +2123,10 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             private_bodies: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, tables),
             plain_inline: ArenaSet::with_hasher_in(rustc_hash::FxBuildHasher, tables),
             explicit_visibility: ArenaSet::with_hasher_in(rustc_hash::FxBuildHasher, tables),
+            pack_functions,
+            pack_copies: ArenaVec::new_in(tables),
+            pack_copy_index: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, tables),
+            pack_addresses: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, tables),
         })
     }
 }

@@ -39,13 +39,14 @@
 //!   lists.
 //! - Function bodies: `work.rs` defines tasks and operands; `statements.rs`
 //!   lowers statements and declarations; `expressions.rs` operators, calls and
-//!   conversions, including the floating ones; `places.rs` lvalues, loads and
-//!   stores; `alignment.rs` owns backing-place guarantees and all memory and
-//!   allocation alignment; `bit_fields.rs` bit-field reads and writes;
-//!   `initializers.rs` walks braced initializers; `assembly.rs` lowers GNU
-//!   `asm` statements; `vla.rs` evaluates saved array extents and runs the
-//!   cleanups of the regions an exit leaves: dynamic stack restores, and GNU
-//!   cleanup calls from `cleanup.rs`.
+//!   conversions, including the floating ones; `argument_pack.rs` the copies of
+//!   a function using GNU `__builtin_va_arg_pack ()` made for its calls;
+//!   `places.rs` lvalues, loads and stores; `alignment.rs` owns backing-place
+//!   guarantees and all memory and allocation alignment; `bit_fields.rs`
+//!   bit-field reads and writes; `initializers.rs` walks braced initializers;
+//!   `assembly.rs` lowers GNU `asm` statements; `vla.rs` evaluates saved array
+//!   extents and runs the cleanups of the regions an exit leaves: dynamic stack
+//!   restores, and GNU cleanup calls from `cleanup.rs`.
 //! - Construction: `ssa.rs` holds the draft function and its SSA variables;
 //!   `emit.rs` copies a finished draft into the module; `types.rs` maps C types
 //!   to IR types; shared `crate::float_parsing::bits` turns folded floating
@@ -66,6 +67,7 @@ mod symbols;
 
 // Function bodies
 mod alignment;
+mod argument_pack;
 mod assembly;
 mod bit_fields;
 mod builtin_effects;
@@ -260,7 +262,9 @@ fn lower_unit<'tu, 'ir>(
                 sema.bindings[binding].name.source_vectors,
             ));
         }
-        if let Err(error) = FunctionLowerer::lower(&mut unit, record.0, func, scratch, options) {
+        if let Err(error) =
+            FunctionLowerer::lower(&mut unit, record.0, func, None, scratch, options)
+        {
             // A plain inline-only body is optional: one that lowering
             // refuses is not emitted, and calls keep reaching the external
             // definition (C99 §6.7.4p6). Its copy stays bodiless.
@@ -276,6 +280,13 @@ fn lower_unit<'tu, 'ir>(
             }
         }
     }
+    argument_pack::lower_live_copies(
+        &mut unit,
+        scratch,
+        options,
+        &mut errors,
+        &mut function_sources,
+    );
     let result = if errors.is_empty() {
         let call_diagnostics = arena.alloc_slice_copy(&unit.call_diagnostics);
         Ok(LoweredUnit {
@@ -314,15 +325,18 @@ pub(crate) fn lower_translation_unit<'tu, 'ir>(
 }
 
 impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
-    /// Lowers one function definition and installs its body.
+    /// Lowers one function definition and installs its body; `copy` makes
+    /// it the copy of a function using the argument pack for one call's
+    /// anonymous arguments (`argument_pack.rs`).
     fn lower(
         unit: &'u mut Unit<'a, 'tu, 'ir>,
         record: &'tu FunctionRecord<'tu>,
         func: FuncId,
+        copy: Option<argument_pack::PackCopy<'a, 'tu>>,
         scratch: &'s Bump,
         options: &mut LoweringOptions,
     ) -> Result<(), LoweringError> {
-        let mut lowerer = Self::new(unit, record, func, scratch)?;
+        let mut lowerer = Self::new(unit, record, func, copy, scratch)?;
         #[cfg(feature = "recursive-lowering-study")]
         {
             lowerer.recursion = recursive::State::new(options.recursive, options.sample_stack);
@@ -474,6 +488,7 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
             | Task::BuiltinEffects(expression, context) =>
                 self.builtin_effects(expression, context),
             | Task::SnapshotArgument(expression) => self.snapshot_argument(expression),
+            | Task::ForwardPack(expression) => self.forward_pack(expression),
             | Task::Convert { expression, skip } => self.convert_recorded(expression, skip),
             | Task::Finish(expression) => self.finish(expression),
             | Task::FinishBuiltin(expression, builtin) => self.finish_builtin(expression, builtin),
@@ -551,6 +566,9 @@ struct FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
     vla_tokens:         ArenaMap<'s, RegionId, ssa::Var>,
     /// The block computed gotos branch through, once one exists.
     indirect:           Option<Block>,
+    /// In a copy made for a call (`argument_pack.rs`), the anonymous
+    /// arguments it received.
+    pack:               Option<&'s [Item]>,
 }
 
 /// Traversal controls kept outside the AST and retained IR.

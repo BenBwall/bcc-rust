@@ -244,6 +244,125 @@ int main(void) {
         );
     }
 
+    /// Presenting as GCC (GCC's version macros, no Clang ones), glibc
+    /// chooses its GCC `_FORTIFY_SOURCE` wrappers, which forward their
+    /// anonymous arguments with `__builtin_va_arg_pack ()` and count them
+    /// with `__builtin_va_arg_pack_len ()`. Every call then reaches the
+    /// checked function, with and without the bcc optimizer, on both back
+    /// ends and in the interpreter, whose host has the checked formatting
+    /// functions but not `__printf_chk`, files or `%f`.
+    #[test]
+    fn glibc_gcc_fortify_wrappers_forward_argument_packs() {
+        if host() != Some("x86_64-unknown-linux-gnu")
+            || !Path::new("/usr/include/x86_64-linux-gnu/bits/stdio2.h").is_file()
+        {
+            eprintln!("skipping glibc GCC fortify test: no Linux GNU host headers");
+            return;
+        }
+        let gcc = [
+            "--target=x86_64-unknown-linux-gnu",
+            "-U__clang__",
+            "-U__clang_major__",
+            "-U__clang_minor__",
+            "-U__clang_patchlevel__",
+            "-U__GNUC__",
+            "-D__GNUC__=14",
+            "-U__GNUC_MINOR__",
+            "-D__GNUC_MINOR__=2",
+            "-D_FORTIFY_SOURCE=2",
+            "-O2",
+            "--idirafter",
+            "/usr/include/x86_64-linux-gnu",
+            "--idirafter",
+            "/usr/include",
+        ];
+        let source = r#"
+#include <fcntl.h>
+#include <stdio.h>
+#include <unistd.h>
+#if !defined __va_arg_pack || !defined __va_arg_pack_len || __USE_FORTIFY_LEVEL != 2
+#error glibc did not choose its GCC fortify wrappers
+#endif
+int main(int argc, char **argv) {
+    char buf[16], back[16] = {0};
+    int n = snprintf(buf, sizeof buf, "%s:%d", "ab", 12);
+    n += sprintf(buf + n, "/%c%.1f", 'z', 2.5);
+    printf("%s %d %ld\n", buf, n, 7L);
+    int fd = open(argv[1], O_CREAT | O_WRONLY | O_TRUNC, 0600);
+    if (fd < 0 || write(fd, buf, n) != n || close(fd)) return 1;
+    fd = open(argv[1], O_RDONLY);
+    if (fd < 0 || read(fd, back, sizeof back) != n || close(fd)) return 2;
+    return printf("%s\n", back) < 0;
+}
+"#;
+        let ir = bcc(source, &[&gcc[..], &["--opt=none", "--emit=ir"]].concat());
+        assert!(ir.status.success(), "{}", text(&ir.stderr));
+        let ir = text(&ir.stdout);
+        for call in [
+            "call @__snprintf_chk(",
+            "call @__sprintf_chk(",
+            "call @__printf_chk(",
+            "call @__open_2(",
+            "call @open(",
+        ] {
+            assert!(ir.contains(call), "{call}:\n{ir}");
+        }
+        assert!(!ir.contains("call @__open_too_many_args"), "{ir}");
+        assert!(!ir.contains("call @__open_missing_mode"), "{ir}");
+        let file = temporary("fortify-open.txt");
+        let executable = temporary("fortify-pack.exe");
+        for options in [
+            &["--opt=none"][..],
+            &["--opt=bcc"][..],
+            &["--opt=none", "--backend=native"][..],
+            &["--opt=bcc", "--backend=native"][..],
+        ] {
+            let built = bcc(
+                source,
+                &[&gcc[..], options, &["-o", executable.to_str().unwrap()]].concat(),
+            );
+            assert!(
+                built.status.success(),
+                "{options:?}: {}",
+                text(&built.stderr)
+            );
+            let output = run_native(Command::new(&executable).arg(&file)).unwrap();
+            assert_eq!(
+                (output.status.code(), text(&output.stdout).as_str()),
+                (Some(0), "ab:12/z2.5 10 7\nab:12/z2.5\n"),
+                "{options:?}: {}",
+                text(&output.stderr)
+            );
+        }
+        let interpreted = r#"
+#include <stdio.h>
+#ifndef __va_arg_pack
+#error glibc did not choose its GCC fortify wrappers
+#endif
+int main(void) {
+    char buf[16];
+    int n = snprintf(buf, sizeof buf, "%s:%d", "ab", 12);
+    n += sprintf(buf + n, "/%c%d", 'z', 25);
+    puts(buf);
+    return n;
+}
+"#;
+        for optimizer in ["--opt=none", "--opt=bcc"] {
+            let output = bcc(
+                interpreted,
+                &[&gcc[..], &[optimizer, "--interpret"]].concat(),
+            );
+            assert_eq!(
+                (output.status.code(), text(&output.stdout).as_str()),
+                (Some(9), "ab:12/z25\n"),
+                "{optimizer}: {}",
+                text(&output.stderr)
+            );
+        }
+        std::fs::remove_file(file).unwrap();
+        std::fs::remove_file(executable).unwrap();
+    }
+
     #[test]
     fn interpreter_step_limit_applies_to_both_main_signatures() {
         for source in [

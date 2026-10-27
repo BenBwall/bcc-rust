@@ -1001,6 +1001,7 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
         unit: &'u mut super::Unit<'a, 'tu, 'ir>,
         record: &'tu FunctionRecord<'tu>,
         func: FuncId,
+        copy: Option<super::argument_pack::PackCopy<'a, 'tu>>,
         scratch: &'s Bump,
     ) -> Result<Self, LoweringError> {
         let source = record.syntax.source_vectors;
@@ -1048,6 +1049,7 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
             bounds: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, scratch),
             vla_tokens: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, scratch),
             indirect: None,
+            pack: None,
         };
         // Address-taken labels become IR labels in their semantic address
         // order, so a label's address index is its IR label number, also in
@@ -1143,6 +1145,9 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
                 lowerer.convert_value(argument, declared.unqualified(), parameter_source)?;
             lowerer.operands.push(converted);
             lowerer.initialize(Object::Local(parameter), 0, declared, None)?;
+        }
+        if let Some(copy) = copy {
+            lowerer.pack_items(copy.pack, ir_index, source)?;
         }
         // Bound expressions refer to prototype bindings. Semantic analysis
         // retains their body correspondence; no translation-unit scan or

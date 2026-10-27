@@ -69,6 +69,8 @@
 //!   and division rewrites), `gvn.rs` (value numbering over the dominator tree,
 //!   including load reuse and store forwarding) and `licm.rs` (loop-invariant
 //!   code motion).
+//! - Not a pipeline: [`fold_constant_branches`] runs `fold`, `simplify-cfg` and
+//!   `dce` on one function for lowering, at every optimization level.
 //! - Not a pass: `always_inline.rs` ([`resolve_inline_copies`]) makes LLVM's
 //!   always-inliner choices between inline definitions and external ones for
 //!   the interpreter and the native back end, after the pipeline if it runs.
@@ -200,6 +202,39 @@ fn optimize_with_function_scratch(
         _ = write!(sink.borrow_mut(), "{report}");
     }
     report
+}
+
+/// Folds the constant conditions of `func` and removes the code they make
+/// unreachable, with `fold`, `simplify-cfg` and `dce`, whether or not the
+/// optimizer runs. Lowering applies it to the copies of a function using
+/// GNU `__builtin_va_arg_pack ()`, whose length is a constant in each copy,
+/// as GCC folds such branches when it inlines even without optimization:
+/// glibc's `open` guards a call GCC's `error` attribute rejects with a
+/// condition on that length. These rewrites are not counted against
+/// `--opt-bisect-limit`. GNU extension: GCC manual, "Constructing Calls".
+pub(crate) fn fold_constant_branches(module: &mut Module<'_>, func: FuncId, scratch: &Bump) {
+    let Some(body) = module.function_mut(func).body.take() else {
+        return;
+    };
+    let mut draft = Draft::lift(&body, scratch);
+    let mut report = OptimizationReport::new(None);
+    let mut changed = false;
+    for _ in 0..MAX_ROUNDS {
+        let signature = module.function_signature(func);
+        let round = fold::run(&mut draft, signature, &mut report)
+            | simplify_cfg::run(&mut draft, &mut report)
+            | dce::run(&mut draft, &mut report);
+        changed |= round;
+        if !round {
+            break;
+        }
+    }
+    if changed {
+        draft.lower(module, func);
+    } else {
+        drop(draft);
+        module.function_mut(func).body = Some(body);
+    }
 }
 
 /// The state of one function's run: whether the module holds a body that

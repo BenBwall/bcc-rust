@@ -255,6 +255,10 @@ pub(crate) struct FunctionRecord<'tu> {
     /// use the external definition). GNU extension: GCC manual,
     /// "Constructing Calls", `__builtin_va_arg_pack`.
     pub(crate) forwards_variadic: bool,
+    /// The body calls `__builtin_va_arg_pack` or `__builtin_va_arg_pack_len`,
+    /// so lowering expands a copy of it at each direct call instead of
+    /// lowering it once. GNU extension: GCC manual, "Constructing Calls".
+    pub(crate) va_arg_pack:       bool,
 }
 
 /// A lexical scope and its enclosing scope.

@@ -806,6 +806,8 @@ pub(crate) enum BuiltinId {
     Nansf32x = 788,
     Nansf64 = 789,
     Nansf64x = 790,
+    VaArgPack = 791,
+    VaArgPackLen = 792,
 }
 
 impl BuiltinId {
@@ -904,6 +906,8 @@ impl BuiltinId {
             | Self::Rdtsc => &scalar::BUILTINS[89],
             | Self::Debugbreak => &scalar::BUILTINS[90],
             | Self::Annotation => &scalar::BUILTINS[91],
+            | Self::VaArgPack => &scalar::BUILTINS[92],
+            | Self::VaArgPackLen => &scalar::BUILTINS[93],
             | Self::LibraryAbort => &library::BUILTINS[0],
             | Self::LibraryAbs => &library::BUILTINS[1],
             | Self::LibraryCalloc => &library::BUILTINS[2],
@@ -2455,6 +2459,8 @@ const NAMES: &[(&str, BuiltinId)] = &[
     ("__builtin_usubl_overflow", BuiltinId::UsublOverflow),
     ("__builtin_usubll_overflow", BuiltinId::UsubllOverflow),
     ("__builtin_va_arg", BuiltinId::VaArg),
+    ("__builtin_va_arg_pack", BuiltinId::VaArgPack),
+    ("__builtin_va_arg_pack_len", BuiltinId::VaArgPackLen),
     ("__builtin_va_copy", BuiltinId::VaCopy),
     ("__builtin_va_end", BuiltinId::VaEnd),
     ("__builtin_va_start", BuiltinId::VaStart),

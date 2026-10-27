@@ -136,6 +136,10 @@ pub(super) enum Task<'tu> {
     /// Preserve an aggregate argument's value before evaluating the next one.
     /// C99: §6.5.16p3, p. 91; PDF p. 103; §6.5.2.2p10, p. 72; PDF p. 84.
     SnapshotArgument(&'tu Expression<'tu>),
+    /// Push the anonymous arguments a copy received, which the call whose
+    /// last argument is this `__builtin_va_arg_pack ()` passes on.
+    /// GNU extension: GCC manual, "Constructing Calls".
+    ForwardPack(&'tu Expression<'tu>),
     /// Evaluate an expression without its conversions, leaving a place for
     /// an lvalue.
     EvaluateRaw(&'tu Expression<'tu>),

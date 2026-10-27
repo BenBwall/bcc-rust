@@ -217,6 +217,7 @@ fn ten_thousand_static_locals_use_linear_name_storage() {
             &mut unit,
             record,
             function.unwrap(),
+            None,
             &scratch,
             &mut LoweringOptions::default_for_build(true),
         )
@@ -581,6 +582,7 @@ fn m2_many_functions_and_declarations_have_linear_correspondence_work() {
             &mut unit,
             record,
             function.unwrap(),
+            None,
             &scratch,
             &mut LoweringOptions::default_for_build(true),
         )

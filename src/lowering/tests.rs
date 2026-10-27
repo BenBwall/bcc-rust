@@ -5,6 +5,7 @@
 //! (`refusals.rs`), and valid incomplete-type and void-expression edge cases
 //! (`void_and_incomplete.rs`).
 
+mod argument_pack;
 mod assembly;
 mod call_diagnostics;
 mod complex;

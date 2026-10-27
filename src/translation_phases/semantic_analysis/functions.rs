@@ -283,6 +283,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             parameter_aliases: &[],
             assembly: false,
             forwards_variadic: false,
+            va_arg_pack: false,
         });
         self.functions.current = Some(FunctionContext {
             id,
@@ -790,6 +791,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             }
         }
         self.finish_labels();
+        for i in 0..self.functions.argument_pack_uses.len() {
+            let ArgumentPackUse {
+                function,
+                sizeof,
+                reference_context,
+            } = self.functions.argument_pack_uses[i];
+            if self.context_evaluated(sizeof, reference_context) {
+                self.function_records[function].va_arg_pack = true;
+            }
+        }
         let mut entities = ArenaVec::new_in(self.scratch);
         entities.extend(self.functions.entities.values().copied());
         entities.sort_unstable_by_key(|entity| entity.latest);
@@ -2107,6 +2118,22 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             .flatten()
     }
 
+    /// Records a use of `__builtin_va_arg_pack ()` or its length in the
+    /// current function, which marks the function
+    /// ([`FunctionRecord::va_arg_pack`]) at the end of the unit if the use
+    /// is evaluated: an operand of `sizeof` or an unselected generic
+    /// association needs no argument. GNU extension: GCC manual,
+    /// "Constructing Calls"; C99: §6.5.3.4p2, p. 80; PDF p. 92.
+    pub(super) fn argument_pack_use(&mut self) {
+        if let Some(function) = self.functions.current {
+            self.functions.argument_pack_uses.push(ArgumentPackUse {
+                function:          function.id,
+                sizeof:            self.functions.sizeof,
+                reference_context: self.functions.reference_context,
+            });
+        }
+    }
+
     /// A generated `break` gives its innermost switch or loop an exit edge.
     /// A nested target's break cannot make an enclosing infinite loop exit.
     /// C99: §6.8.6.3p2, p. 138; PDF p. 150.
@@ -2728,6 +2755,15 @@ struct GeneratedBreak {
     reference_context: Option<usize>,
 }
 
+/// A use of a GNU argument pack builtin, by function record and evaluation
+/// contexts ([`Analyzer::argument_pack_use`]).
+#[derive(Clone, Copy)]
+struct ArgumentPackUse {
+    function:          usize,
+    sizeof:            Option<usize>,
+    reference_context: Option<usize>,
+}
+
 #[derive(Clone, Copy)]
 struct SizeofContext<'tu> {
     expression: &'tu Expression<'tu>,
@@ -2837,6 +2873,7 @@ pub(super) struct State<'tu, 's> {
     /// Target and evaluation contexts of emitted breaks. Semantic jumps
     /// and references remain independent of this code-generation fact.
     generated_breaks: ArenaVec<'s, GeneratedBreak>,
+    argument_pack_uses: ArenaVec<'s, ArgumentPackUse>,
     inline_objects: ArenaVec<'s, InlineObject>,
     /// The `__func__` and `__PRETTY_FUNCTION__` objects of file scope.
     pub(super) outside: [Option<usize>; 2],
@@ -2880,6 +2917,7 @@ impl<'s> State<'_, 's> {
             emission: super::emission::State::new(scratch),
             arm_ends: ArenaVec::new_in(scratch),
             generated_breaks: ArenaVec::new_in(scratch),
+            argument_pack_uses: ArenaVec::new_in(scratch),
             inline_objects: ArenaVec::new_in(scratch),
             outside: [None; 2],
             generic_marks: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
