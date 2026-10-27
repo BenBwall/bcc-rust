@@ -30,6 +30,8 @@ use super::Cli;
 use crate::{
     configuration::{
         CompilerConfiguration,
+        CompilerIdentity,
+        DiagnosticFormat,
         DiagnosticGroup,
         ExtensionPolicy,
         LanguageMode,
@@ -91,6 +93,8 @@ pub(super) fn normalize_language_arguments(
             normalized.push(format!("--preprocessing-option={}", &text[1..]).into());
         } else if let Some(option) = dependency_option(text, &mut arguments) {
             normalized.push(option);
+        } else if let Some(format) = text.strip_prefix("-fdiagnostics-format=") {
+            normalized.push(format!("--diagnostic-format={format}").into());
         } else if text == "-fsyntax-only" {
             normalized.push("--syntax-only".into());
         } else if text == "-dM" {
@@ -197,6 +201,8 @@ pub(super) fn normalize_language_arguments(
                     | "--assembler-option"
                     | "--dependency-file"
                     | "--dependency-target"
+                    | "--compiler-identity"
+                    | "--diagnostic-format"
                     | "-o"
                     | "--output"
             );
@@ -335,6 +341,8 @@ impl Cli {
             .with_optimization(self.code_generation.optimization_macros())
             .with_source_date_epoch(self.source_date_epoch.and_then(|epoch| epoch.0))
             .with_suppress_warnings(self.suppress_warnings)
+            .with_compiler_identity(self.compiler_identity.into())
+            .with_diagnostic_format(self.diagnostic_format.into())
             .with_max_nesting_depth(self.max_nesting_depth)
     }
 
@@ -394,6 +402,37 @@ impl Cli {
             .map(String::as_str)
     }
 
+    /// The library functions code generation may treat as builtins, from
+    /// `-fbuiltin`, `-fno-builtin` and `-fno-builtin-NAME` in order, as
+    /// GCC reads them. `-ffreestanding` allows none, which lowering applies.
+    pub(super) fn library_builtins<'tu>(
+        &self,
+        arena: &'tu crate::util::bump::Bump,
+    ) -> crate::configuration::LibraryBuiltins<'tu> {
+        use crate::configuration::LibraryBuiltins;
+        let mut none = false;
+        let mut excluded = crate::util::bump::ArenaVec::new_in(arena);
+        for option in &self.language_option {
+            match option.as_str() {
+                // As in GCC, `-fbuiltin` undoes `-fno-builtin` but keeps
+                // the functions `-fno-builtin-NAME` named.
+                | "-fbuiltin" => none = false,
+                | "-fno-builtin" => none = true,
+                | _ =>
+                    if let Some(name) = option.strip_prefix("-fno-builtin-") {
+                        excluded.push(&*arena.alloc_str(name));
+                    },
+            }
+        }
+        if none {
+            LibraryBuiltins::None
+        } else if excluded.is_empty() {
+            LibraryBuiltins::All
+        } else {
+            LibraryBuiltins::Except(excluded.leak())
+        }
+    }
+
     pub(super) fn configure_preprocessing(&self, context: &mut Context<'_>) {
         let tu = context.tu_arena();
         context.preprocessing_options =
@@ -406,6 +445,77 @@ impl Cli {
                     | _ => PreprocessingOption::Include(value),
                 }
             }));
+    }
+}
+
+/// Whether bcc implements the GCC-style `-W`, `-f`, `-pedantic` or
+/// `-Werror` option `text` itself, rather than only accepting it for a
+/// driver personality.
+pub(super) fn implements_language_option(text: &str) -> bool {
+    text.starts_with("-ftls-model=")
+        || text.starts_with("-fdiagnostics-format=")
+        || LanguageFlag::parse(text)
+            .is_some_and(|flag| !matches!(flag, LanguageFlag::UnknownWarning))
+}
+
+/// `--compiler-identity`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, clap::ValueEnum)]
+pub(super) enum Identity {
+    Clang,
+    Gcc,
+    Msvc,
+    ClangCl,
+    Tcc,
+}
+
+impl From<Identity> for CompilerIdentity {
+    fn from(identity: Identity) -> Self {
+        match identity {
+            | Identity::Clang => Self::Clang,
+            | Identity::Gcc => Self::Gcc,
+            | Identity::Msvc => Self::Msvc,
+            | Identity::ClangCl => Self::ClangCl,
+            | Identity::Tcc => Self::Tcc,
+        }
+    }
+}
+
+/// `--diagnostic-format`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, clap::ValueEnum)]
+pub(super) enum Format {
+    Bcc,
+    Clang,
+    Gcc,
+    /// `file(line,col):`, as clang-cl writes and `cl /diagnostics:column`.
+    Msvc,
+    /// `file(line):`, `cl /diagnostics:classic`.
+    MsvcClassic,
+    /// `file(line,col):` and the snippet, `cl /diagnostics:caret`.
+    MsvcCaret,
+    /// `file:line:`, without a snippet.
+    Tcc,
+}
+
+impl From<Format> for DiagnosticFormat {
+    fn from(format: Format) -> Self {
+        match format {
+            | Format::Bcc => Self::Bcc,
+            | Format::Clang => Self::Clang,
+            | Format::Gcc => Self::Gcc,
+            | Format::Msvc => Self::Msvc {
+                column: true,
+                caret:  false,
+            },
+            | Format::MsvcClassic => Self::Msvc {
+                column: false,
+                caret:  false,
+            },
+            | Format::MsvcCaret => Self::Msvc {
+                column: true,
+                caret:  true,
+            },
+            | Format::Tcc => Self::Tcc,
+        }
     }
 }
 
@@ -434,6 +544,19 @@ enum LanguageFlag {
     /// `-ffloatn-types` or `-fno-floatn-types`, bcc's own switch for the
     /// `_FloatN` keywords a GCC identity provides.
     InterchangeFloatTypes(bool),
+    /// `-trigraphs` or `-ftrigraphs` (true), or `-fno-trigraphs`.
+    Trigraphs(bool),
+    /// `-fwrapv` (true), or `-fno-wrapv` and `-fstrict-overflow`.
+    Wrapv(bool),
+    /// `-fpack-struct=N`.
+    PackStruct(u32),
+    /// `-fpack-struct` (true) or `-fno-pack-struct`, which also clears N.
+    PackAll(bool),
+    /// `-fvisibility=default|hidden|protected|internal`.
+    Visibility(crate::configuration::DefaultVisibility),
+    /// `-fbuiltin`, `-fno-builtin` or `-fno-builtin-NAME`, which
+    /// [`Cli::library_builtins`] reads in order.
+    Builtins,
     /// A `-fpic`-family flag, which [`Cli::code_options`] reads in order.
     Relocation,
 }
@@ -459,6 +582,37 @@ impl LanguageFlag {
             | "-funsigned-char" | "-fno-signed-char" => return Some(Self::CharSigned(false)),
             | "-ffloatn-types" => return Some(Self::InterchangeFloatTypes(true)),
             | "-fno-floatn-types" => return Some(Self::InterchangeFloatTypes(false)),
+            | "-trigraphs" | "-ftrigraphs" => return Some(Self::Trigraphs(true)),
+            | "-fno-trigraphs" => return Some(Self::Trigraphs(false)),
+            | "-fwrapv" => return Some(Self::Wrapv(true)),
+            | "-fno-wrapv" | "-fstrict-overflow" => return Some(Self::Wrapv(false)),
+            | "-fbuiltin" | "-fno-builtin" => return Some(Self::Builtins),
+            | "-fpack-struct" => return Some(Self::PackAll(true)),
+            | "-fno-pack-struct" => return Some(Self::PackAll(false)),
+            | _ => {},
+        }
+        if text
+            .strip_prefix("-fno-builtin-")
+            .is_some_and(|name| !name.is_empty())
+        {
+            return Some(Self::Builtins);
+        }
+        if let Some(value) = text.strip_prefix("-fvisibility=") {
+            use crate::configuration::DefaultVisibility as V;
+            return match value {
+                | "default" => Some(Self::Visibility(V::Default)),
+                | "hidden" | "internal" => Some(Self::Visibility(V::Hidden)),
+                | "protected" => Some(Self::Visibility(V::Protected)),
+                | _ => None,
+            };
+        }
+        if let Some(value) = text.strip_prefix("-fpack-struct=") {
+            return match value {
+                | "1" | "2" | "4" | "8" | "16" => value.parse().ok().map(Self::PackStruct),
+                | _ => None,
+            };
+        }
+        match text {
             | _ => {},
         }
         if Relocation::parse(text).is_some() {
@@ -493,7 +647,8 @@ impl LanguageFlag {
 
     fn apply(self, configuration: CompilerConfiguration) -> CompilerConfiguration {
         match self {
-            | Self::UnknownWarning | Self::ExtraWarnings | Self::Relocation => configuration,
+            | Self::UnknownWarning | Self::ExtraWarnings | Self::Relocation | Self::Builtins =>
+                configuration,
             | Self::AllWarnings(enabled) => configuration.with_warning_option(
                 DiagnosticGroup::UnusedFunction,
                 WarningOption::Enable(enabled),
@@ -522,6 +677,14 @@ impl LanguageFlag {
             | Self::CharSigned(signed) => configuration.with_char_signed(signed),
             | Self::InterchangeFloatTypes(enabled) =>
                 configuration.with_interchange_float_types(enabled),
+            | Self::Trigraphs(enabled) => configuration.with_trigraphs(enabled),
+            | Self::Wrapv(enabled) => configuration.with_wrapv(enabled),
+            | Self::PackStruct(alignment) => configuration.with_default_pack(alignment),
+            | Self::PackAll(true) => configuration.with_pack_structures(true),
+            | Self::PackAll(false) => configuration
+                .with_pack_structures(false)
+                .with_default_pack(0),
+            | Self::Visibility(visibility) => configuration.with_default_visibility(visibility),
         }
     }
 }

@@ -35,6 +35,7 @@ mod features;
 mod options;
 
 pub(crate) use diagnostics::{
+    DiagnosticFormat,
     DiagnosticGroup,
     WarningOption,
 };
@@ -44,8 +45,11 @@ pub(crate) use features::{
 };
 pub(crate) use language::{
     CStandard,
+    CompilerIdentity,
+    DefaultVisibility,
     ExtensionPolicy,
     LanguageMode,
+    LibraryBuiltins,
     MsvcFeature,
     PreprocessingOption,
 };
@@ -87,8 +91,24 @@ pub(crate) struct CompilerConfiguration {
     /// `-fsigned-char` and `-funsigned-char` do.
     char_signed: Option<bool>,
     interchange_float_types: bool,
+    /// `-ftrigraphs` or `-fno-trigraphs`, over the mode's default.
+    trigraphs: Option<bool>,
+    /// Signed integer overflow wraps (`-fwrapv`).
+    wrapv: bool,
+    /// Every structure is packed and `#pragma pack` ignored (`-fpack-struct`
+    /// without a value).
+    pack_structures: bool,
+    /// The visibility of definitions that name none (`-fvisibility=`).
+    default_visibility: DefaultVisibility,
+    /// The structure packing in effect before any `#pragma pack`, and that
+    /// `#pragma pack()` restores (`-fpack-struct=N`, `cl /ZpN`); 0 for
+    /// none.
+    default_pack: u32,
     suppress_warnings: bool,
     warnings_as_errors: bool,
+    /// The compiler the identity macros claim.
+    identity: CompilerIdentity,
+    diagnostic_format: DiagnosticFormat,
     /// Most recursive grammar productions active at once; see
     /// [`DEFAULT_MAX_NESTING_DEPTH`].
     max_nesting_depth: u32,

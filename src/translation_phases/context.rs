@@ -82,6 +82,8 @@ pub(crate) struct Context<'tu> {
     tu: &'tu Bump,
     pub(crate) configuration: CompilerConfiguration,
     pub(crate) preprocessing_options: &'tu [crate::configuration::PreprocessingOption<'tu>],
+    /// The library functions code generation may treat as builtins.
+    pub(crate) library_builtins: crate::configuration::LibraryBuiltins<'tu>,
     /// The source is already preprocessed (GCC's `-fpreprocessed`): no
     /// macro is replaced, and only line markers, `#pragma`, `#ident` and
     /// `#sccs` take effect; `#define` and `#undef` are read but, with

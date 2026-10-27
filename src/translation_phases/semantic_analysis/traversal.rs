@@ -45,6 +45,24 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             && let E::Identifier(name) = e.kind
             && self.builtin_name(name)
         {
+            // Only an inlined call can forward the caller's variadic
+            // arguments; a body that does keeps calling the external
+            // definition instead (`FunctionRecord::forwards_variadic`).
+            // GNU extension: GCC manual, "Constructing Calls".
+            if matches!(
+                self.context.string_cache.at(name.name),
+                "__builtin_va_arg_pack" | "__builtin_va_arg_pack_len"
+            ) && let Some(function) = self.functions.current
+            {
+                self.function_records[function.id].forwards_variadic = true;
+                if let Some(binding) = function.binding
+                    && self.bindings[binding].linkage == super::Linkage::External
+                {
+                    _ = self
+                        .unchecked_wrappers
+                        .insert(self.bindings[binding].name.name, ());
+                }
+            }
             self.implicit_function(e);
         }
         if matches!(e.kind, E::SizeofExpr(_) | E::SizeofType(_)) {

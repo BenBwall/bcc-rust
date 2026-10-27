@@ -118,6 +118,49 @@ ordinary macros that `#undef` may remove. OS identity
 macros such as `__linux__` and `_WIN32` follow the selected target, below. The identity and target definitions are read from the synthetic
 `<built-in>/predefined.h` before user input.
 
+`--compiler-identity` claims another compiler than Clang, as the driver
+personalities ([docs/design/driver-modes.md](docs/design/driver-modes.md)) do.
+`gcc` defines `__GNUC__` `14`, `__GNUC_MINOR__` `2`, `__GNUC_PATCHLEVEL__`
+`0`, `__VERSION__` `"14.2.0"` and GCC's execution character set names, and no
+Clang macro (`__clang__` and its versions, `__llvm__`, the literal
+encodings). Because GCC 7 and later name the TS 18661-3 types as keywords,
+glibc's headers then stop declaring them, so this identity also defines
+`_Float32`, `_Float64`, `_Float32x`, `_Float64x` and `_Float128` as macros for
+the standard types of the same representation (`float`, `double`, `double`,
+`long double`, `__float128`); they are not distinct types. glibc's GCC fortify
+wrappers for the `printf` family, `open` and `syslog` need
+`__builtin_va_arg_pack`, which bcc lacks, so under this identity a call to
+one of them calls the library function without the wrapper's checks and
+warns that it does (`-w` and `-Werror` apply). `msvc` (`cl.exe`) removes the
+GNU and Clang macros and the inline-semantics macro, and defines `_MT` and
+`_MSVC_TRADITIONAL` `0` (bcc's preprocessor is conforming, like `cl
+/Zc:preprocessor`); `_MSC_VER` still needs `-fms-extensions` on the MSVC
+target, which the `cl` personality selects. `clang-cl` removes the GNU macros
+and keeps Clang's. `tcc` removes the GNU and Clang macros and defines
+`__TINYC__` `927` (TCC 0.9.27). Every identity keeps `__bcc__`, the ISO
+macros and the target's definitions, as clang-cl keeps `__x86_64__`.
+
+Several options change rules the mode otherwise fixes. `-ftrigraphs` and
+`-fno-trigraphs` (also GCC's `-trigraphs`) turn phase 1 trigraph replacement
+on or off whatever the mode; the `cl` personality turns it off, as `cl`
+replaces trigraphs only under `/Zc:trigraphs`. `-fwrapv` makes signed integer
+`+`, `-`, `*`, `<<`, negation and `++`/`--` wrap in two's complement, so
+lowering marks none of them `nsw`; pointer arithmetic is unaffected, as in
+GCC. `-fpack-struct=N` (1, 2, 4, 8 or 16) sets the packing in effect before
+any `#pragma pack`, which `#pragma pack()` restores, as GCC documents and
+`cl /ZpN` does. `-fpack-struct` without a value instead packs every
+structure and union as the `packed` attribute does (an `aligned` member keeps
+its alignment) and ignores `#pragma pack` with GCC's warning, as GCC 15.2
+does. `-fno-pack-struct` undoes both. `-fno-builtin` keeps LLVM from
+treating any library function as a builtin (no `sqrt` instruction, no
+`memset` formed from a loop, no `printf` turned into `puts`);
+`-fno-builtin-NAME` does so for NAME, `-fbuiltin` undoes `-fno-builtin` but
+keeps the named exclusions, as in GCC, and
+`-ffreestanding` implies `-fno-builtin`, as in Clang. `-fvisibility=hidden`
+(or `protected`, `internal` as hidden, `default`) gives that visibility to
+the definitions with linkage that name none; declarations keep the default,
+as in GCC.
+
 Claiming Clang changes the paths the C libraries take. In glibc,
 `sys/cdefs.h` drops its pre-C11 `_Noreturn` and `_Static_assert` fallbacks
 (bcc accepts both keywords in every mode, as Clang does), marks socket

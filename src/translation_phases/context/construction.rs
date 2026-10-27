@@ -49,6 +49,7 @@ impl<'tu> Context<'tu> {
             configuration,
             preprocessing_options: &[],
             preprocessed_input: false,
+            library_builtins: crate::configuration::LibraryBuiltins::All,
             preprocessed_tokens: 0,
             pack_pragmas: ArenaVec::new_in(tu),
             weak_pragmas: ArenaVec::new_in(tu),

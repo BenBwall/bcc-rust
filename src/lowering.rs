@@ -232,6 +232,15 @@ fn lower_unit<'tu, 'ir>(
         },
     };
     unit.retain_local_statics = options.retain_locals;
+    // A freestanding program supplies its own library, so no library
+    // function is a builtin there, as Clang's -ffreestanding implies
+    // -fno-builtin. C99: §5.1.2.1, p. 11; PDF p. 23.
+    unit.module
+        .set_library_builtins(if context.configuration.hosted() {
+            context.library_builtins
+        } else {
+            crate::configuration::LibraryBuiltins::None
+        });
     let plain_inline = options.plain_inline && unit.lower_plain_inline_bodies();
     let functions = unit.declare_items(syntax, &mut errors);
     let mut function_sources = ArenaVec::new_in(arena);

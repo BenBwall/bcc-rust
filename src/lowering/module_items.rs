@@ -155,6 +155,9 @@ pub(super) struct Unit<'a, 'tu, 'ir> {
     /// that the LLVM back end emits as `available_externally` bodies
     /// ([`Unit::lower_plain_inline_bodies`]).
     plain_inline: ArenaSet<'a, usize>,
+    /// Symbols whose entity names a visibility, which `-fvisibility=`
+    /// leaves alone.
+    pub(super) explicit_visibility: ArenaSet<'a, Symbol>,
 }
 
 impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
@@ -432,6 +435,7 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
                     .iter()
                     .any(|refusal| refusal.owner == Some(binding));
             if !record.assembly
+                && !record.forwards_variadic
                 && !refused
                 && self
                     .sema
@@ -2069,6 +2073,7 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             next_name_suffix: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, tables),
             private_bodies: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, tables),
             plain_inline: ArenaSet::with_hasher_in(rustc_hash::FxBuildHasher, tables),
+            explicit_visibility: ArenaSet::with_hasher_in(rustc_hash::FxBuildHasher, tables),
         })
     }
 }

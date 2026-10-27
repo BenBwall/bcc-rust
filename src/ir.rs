@@ -164,23 +164,26 @@ use crate::util::bump::{
 /// A translation unit's IR: its functions, globals and interned signatures,
 /// and the target they are for. Everything it holds lives in its `'ir` arena.
 pub(crate) struct Module<'ir> {
-    arena:          &'ir Bump,
-    triple:         &'ir str,
-    data_layout:    &'ir str,
+    arena:            &'ir Bump,
+    triple:           &'ir str,
+    data_layout:      &'ir str,
     /// Whether ABI lowering has run.
-    profile:        Profile,
-    functions:      Table<'ir, FuncId, Function<'ir>>,
-    globals:        Table<'ir, GlobalId, Global<'ir>>,
-    signatures:     Table<'ir, SigId, Signature<'ir>>,
-    signature_ids:  ArenaMap<'ir, Signature<'ir>, SigId>,
+    profile:          Profile,
+    functions:        Table<'ir, FuncId, Function<'ir>>,
+    globals:          Table<'ir, GlobalId, Global<'ir>>,
+    signatures:       Table<'ir, SigId, Signature<'ir>>,
+    signature_ids:    ArenaMap<'ir, Signature<'ir>, SigId>,
     /// Functions and globals share one namespace.
-    symbols:        ArenaMap<'ir, &'ir str, Symbol>,
+    symbols:          ArenaMap<'ir, &'ir str, Symbol>,
     /// Functions run before or after the program's entry, in this order of
     /// registration; back ends sort them by priority.
-    init_functions: ArenaVec<'ir, InitFunction>,
+    init_functions:   ArenaVec<'ir, InitFunction>,
     /// File-scope assembly blocks, in source order, each passed to the
     /// assembler verbatim before any function or global.
-    asm_blocks:     ArenaVec<'ir, &'ir str>,
+    asm_blocks:       ArenaVec<'ir, &'ir str>,
+    /// The library functions a back end may recognize by name in the
+    /// module's functions and replace or transform.
+    library_builtins: crate::configuration::LibraryBuiltins<'ir>,
 }
 
 /// A function of a module. It is defined if it has a body.

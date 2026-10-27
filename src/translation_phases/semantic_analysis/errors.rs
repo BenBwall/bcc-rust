@@ -56,6 +56,13 @@ pub(crate) enum SemanticErrorKind {
     PragmaPackPopNameAlignment,
     PragmaPackUnterminated,
     PragmaPackShow(u32),
+    /// `-fpack-struct` packs every structure, so a pack pragma does nothing.
+    PragmaPackIgnored,
+    /// A call to a `_FORTIFY_SOURCE` wrapper that forwards its variadic
+    /// arguments with `__builtin_va_arg_pack`, which bcc does not implement,
+    /// so the call reaches the unchecked library function.
+    /// GNU extension: GCC manual, "Constructing Calls".
+    UncheckedFortifyWrapper,
     /// C99: §7.15p3, p. 249; PDF p. 261.
     InvalidVaList,
     /// C99: §7.15.1.1p2, pp. 249-250; PDF pp. 261-262.
@@ -604,7 +611,9 @@ impl SemanticErrorKind {
             | Self::PragmaPackPopEmpty
             | Self::PragmaPackPopNameAlignment
             | Self::PragmaPackUnterminated
-            | Self::PragmaPackShow(_) => "packing directive",
+            | Self::PragmaPackShow(_)
+            | Self::PragmaPackIgnored => "packing directive",
+            | Self::UncheckedFortifyWrapper => "calls the unchecked function",
             | Self::UnsupportedFloat128 | Self::UnsupportedInterchangeFloat =>
                 "unsupported floating type",
             | Self::InvalidVectorAttribute => "invalid vector size or element type",
@@ -898,6 +907,8 @@ impl SemanticErrorKind {
             | Self::PragmaPackPopNameAlignment => ("specifying both a name and alignment to 'pop' is undefined", "Clang warns and applies the named pop followed by the alignment"),
             | Self::PragmaPackUnterminated => ("unterminated '#pragma pack(push, ...)' at end of file", "restore the saved packing state with #pragma pack(pop)"),
             | Self::PragmaPackShow(_) => ("current #pragma pack alignment value", "GCC/MSVC packing state at this directive"),
+            | Self::PragmaPackIgnored => ("'#pragma pack' has no effect with '-fpack-struct' - ignored", "GCC packs every structure under -fpack-struct without a value"),
+            | Self::UncheckedFortifyWrapper => ("_FORTIFY_SOURCE checks are not supported for this function; calling the unchecked function", "glibc's wrapper forwards its variadic arguments with __builtin_va_arg_pack, which bcc does not implement"),
             | Self::BuiltinRequiresHeader => (
                 "this builtin's prototype needs the FILE type of <stdio.h>",
                 "GNU extension: the checked stream builtin takes a FILE pointer; Clang rejects its use until FILE is declared",
@@ -1793,7 +1804,13 @@ impl ToDiagnostic for SemanticError {
         arena: &'d Bump,
     ) -> Diagnostic<'d> {
         let (message, note) = self.kind.explanation();
-        let message = if let SemanticErrorKind::ImplicitLibraryFunction(ty) = self.kind {
+        let message = if self.kind == SemanticErrorKind::UncheckedFortifyWrapper {
+            format_in!(
+                arena,
+                "_FORTIFY_SOURCE checks for {} are not supported; calling the unchecked function",
+                quote_spelling(self.name.map_or("", |name| context.string_cache.at(name)))
+            )
+        } else if let SemanticErrorKind::ImplicitLibraryFunction(ty) = self.kind {
             format_in!(
                 arena,
                 "implicitly declaring library function {} with type `{}`",
@@ -1914,6 +1931,8 @@ impl GetSeverity for SemanticError {
                 | SemanticErrorKind::PragmaPackPopNameAlignment
                 | SemanticErrorKind::PragmaPackUnterminated
                 | SemanticErrorKind::PragmaPackShow(_)
+                | SemanticErrorKind::PragmaPackIgnored
+                | SemanticErrorKind::UncheckedFortifyWrapper
                 | SemanticErrorKind::EmptyCaseRange
                 | SemanticErrorKind::MissingReturnValueWarning
                 | SemanticErrorKind::PredefinedOutsideFunction

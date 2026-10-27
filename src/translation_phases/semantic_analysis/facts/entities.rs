@@ -314,6 +314,7 @@ impl<'tu> EntityFacts<'tu> {
                     // weak; C99: §6.7.4p6, pp. 112-113; PDF pp. 124-125.
                     BodyEmission::Definition
                 } else if !function.assembly
+                    && !function.forwards_variadic
                     && attributes.is_some_and(|a| a.inlining == Inlining::Always)
                 {
                     BodyEmission::PrivateInline

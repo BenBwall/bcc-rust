@@ -58,7 +58,10 @@ impl CompilerConfiguration {
                 | Feature::HasCAttribute
                 | Feature::VaOpt
                 | Feature::Inline => native || self.gnu,
-                | Feature::Trigraphs => !self.gnu && (self.standard as u8) <= CStandard::C17 as u8,
+                | Feature::Trigraphs => match self.trigraphs {
+                    | Some(enabled) => enabled,
+                    | None => !self.gnu && (self.standard as u8) <= CStandard::C17 as u8,
+                },
                 | Feature::InterchangeFloatTypes => self.interchange_float_types,
                 | _ => true,
             };
@@ -200,6 +203,83 @@ impl CompilerConfiguration {
         self.interchange_float_types
     }
 
+    /// Selects the compiler the identity macros claim.
+    pub(crate) const fn with_compiler_identity(
+        mut self,
+        identity: super::CompilerIdentity,
+    ) -> Self {
+        self.identity = identity;
+        self
+    }
+
+    pub(crate) const fn compiler_identity(self) -> super::CompilerIdentity {
+        self.identity
+    }
+
+    /// Overrides whether phase 1 replaces trigraphs, which the mode
+    /// otherwise decides (strict C89 through C17), as Clang's
+    /// `-f[no-]trigraphs` and GCC's `-trigraphs` do.
+    /// C99: §5.2.1.1, p. 18; PDF p. 30.
+    pub(crate) const fn with_trigraphs(mut self, enabled: bool) -> Self {
+        self.trigraphs = Some(enabled);
+        self.derive_features()
+    }
+
+    /// Makes signed integer overflow wrap in two's complement instead of
+    /// being undefined, as GCC's `-fwrapv` does. Extension:
+    /// C99 §6.5 paragraph 5, p. 67; PDF p. 79 leaves the overflow undefined.
+    pub(crate) const fn with_wrapv(mut self, enabled: bool) -> Self {
+        self.wrapv = enabled;
+        self
+    }
+
+    /// Whether signed integer overflow wraps (`-fwrapv`).
+    pub(crate) const fn wrapv(self) -> bool {
+        self.wrapv
+    }
+
+    /// Sets the structure packing in effect before any `#pragma pack`, as
+    /// GCC's `-fpack-struct=N` and `cl /ZpN` do; 0 packs nothing.
+    /// Implementation-defined: C99 §6.7.2.1 paragraph 12, p. 103; PDF p. 115.
+    pub(crate) const fn with_default_pack(mut self, alignment: u32) -> Self {
+        self.default_pack = alignment;
+        self
+    }
+
+    /// Sets the visibility of external definitions that name none, as
+    /// GCC's `-fvisibility=` does.
+    pub(crate) const fn with_default_visibility(
+        mut self,
+        visibility: super::DefaultVisibility,
+    ) -> Self {
+        self.default_visibility = visibility;
+        self
+    }
+
+    /// The visibility of external definitions that name none.
+    pub(crate) const fn default_visibility(self) -> super::DefaultVisibility {
+        self.default_visibility
+    }
+
+    /// Packs every structure and union as the `packed` attribute does and
+    /// ignores `#pragma pack`, as GCC's `-fpack-struct` without a value
+    /// does. Implementation-defined: C99 §6.7.2.1 paragraph 12, p. 103;
+    /// PDF p. 115.
+    pub(crate) const fn with_pack_structures(mut self, enabled: bool) -> Self {
+        self.pack_structures = enabled;
+        self
+    }
+
+    /// Whether every structure is packed (`-fpack-struct`).
+    pub(crate) const fn pack_structures(self) -> bool {
+        self.pack_structures
+    }
+
+    /// The structure packing in effect before any `#pragma pack`.
+    pub(crate) const fn default_pack(self) -> u32 {
+        self.default_pack
+    }
+
     pub(crate) const fn with_suppress_warnings(mut self, enabled: bool) -> Self {
         self.suppress_warnings = enabled;
         self
@@ -300,9 +380,16 @@ impl CompilerConfiguration {
             gnu89_inline: None,
             char_signed: None,
             interchange_float_types: false,
+            trigraphs: None,
+            wrapv: false,
+            default_pack: 0,
+            pack_structures: false,
+            default_visibility: super::DefaultVisibility::Default,
             suppress_warnings: false,
             max_nesting_depth: super::DEFAULT_MAX_NESTING_DEPTH,
             warnings_as_errors: false,
+            identity: super::CompilerIdentity::Clang,
+            diagnostic_format: super::DiagnosticFormat::Bcc,
             warning_options: [super::diagnostics::WarningSettings::DEFAULT;
                 super::DiagnosticGroup::COUNT],
         }
