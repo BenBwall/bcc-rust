@@ -320,8 +320,7 @@ impl<'s> Solver<'_, '_, 's> {
             .draft
             .block(block)
             .term
-            .edges()
-            .nth(index)
+            .edge(index)
             .expect("the edge exists")
             .target;
         if !self.executable[target.index()] {

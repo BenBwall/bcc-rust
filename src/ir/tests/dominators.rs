@@ -202,3 +202,98 @@ fn deep_chains_need_no_native_recursion() {
         assert_eq!(tree.idom(Block::new(depth)), Some(Block::new(depth - 1)));
     });
 }
+
+/// Whether `a` is `b` or one of its dominators, by walking up the tree.
+fn dominates_by_walk(tree: &DominatorTree<'_>, a: Block, mut b: Block) -> bool {
+    if !tree.is_reachable(a) || !tree.is_reachable(b) {
+        return false;
+    }
+    loop {
+        if a == b {
+            return true;
+        }
+        match tree.idom(b) {
+            | Some(parent) => b = parent,
+            | None => return false,
+        }
+    }
+}
+
+#[test]
+fn interval_dominance_agrees_with_the_tree_walk() {
+    // Nested loops, a diamond, a shared exit and an unreachable block.
+    with_tree(
+        "\
+function @f(i1) external {
+block0(v0: i1):
+    brif v0, block1, block6
+block1:
+    brif v0, block2, block3
+block2:
+    jump block4
+block3:
+    jump block4
+block4:
+    brif v0, block1, block5
+block5:
+    brif v0, block4, block6
+block6:
+    return
+block7:
+    jump block4
+}
+",
+        |body, _, tree| {
+            for a in body.blocks() {
+                for b in body.blocks() {
+                    assert_eq!(
+                        tree.dominates(a, b),
+                        dominates_by_walk(tree, a, b),
+                        "{a} dominates {b}"
+                    );
+                }
+            }
+        },
+    );
+}
+
+#[test]
+fn dominance_queries_on_deep_trees_take_constant_time() {
+    // A chain of diamonds, as a long sequence of `if` statements lowers to:
+    // every query below would otherwise walk the whole tree.
+    let diamonds = 20_000;
+    let mut text = String::from("function @f(i1) external {\nblock0(v0: i1):\n");
+    for diamond in 0..diamonds {
+        let head = diamond * 3;
+        writeln!(
+            text,
+            "    brif v0, block{}, block{}\nblock{}:\n    jump block{}\nblock{}:\n    jump \
+             block{}\nblock{}:",
+            head + 1,
+            head + 2,
+            head + 1,
+            head + 3,
+            head + 2,
+            head + 3,
+            head + 3
+        )
+        .unwrap();
+    }
+    text.push_str("    return\n}\n");
+    with_tree(&text, |_, _, tree| {
+        let last = Block::new(diamonds * 3);
+        let start = std::time::Instant::now();
+        for diamond in 0..diamonds {
+            let head = Block::new(diamond * 3);
+            assert!(tree.dominates(head, last));
+            assert!(!tree.dominates(last, head));
+            assert!(!tree.dominates(Block::new(diamond * 3 + 1), last));
+        }
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(1),
+            "{} dominance queries took {:?}; they must not walk the tree",
+            3 * diamonds,
+            start.elapsed()
+        );
+    });
+}

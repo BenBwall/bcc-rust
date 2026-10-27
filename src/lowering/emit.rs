@@ -289,9 +289,8 @@ fn reverse_post_order<'s>(draft: &Draft<'s>) -> ArenaVec<'s, Block> {
             .terminator
             .as_ref()
             .and_then(|terminator| {
-                let count = terminator.edges().count();
-                let index = count.checked_sub(*visited_edges + 1)?;
-                terminator.edges().nth(index)
+                let index = terminator.edge_count().checked_sub(*visited_edges + 1)?;
+                terminator.edge(index)
             })
             .map(|edge| edge.target);
         *visited_edges += 1;
@@ -337,8 +336,7 @@ fn remove_redundant_params(draft: &mut Draft<'_>, order: &[Block], reachable: &[
                         .as_ref()
                         .expect("a predecessor ends in a branch");
                     let arg = terminator
-                        .edges()
-                        .nth(edge as usize)
+                        .edge(edge as usize)
                         .expect("the edge exists")
                         .args[index];
                     let arg = draft.resolve(arg);
