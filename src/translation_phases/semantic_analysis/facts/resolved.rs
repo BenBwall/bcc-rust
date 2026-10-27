@@ -15,7 +15,9 @@ use super::{
         BindingKind,
         ConversionKind,
         ExpressionInfo,
+        ObjectSize,
         SemanticTranslationUnit,
+        SubobjectArgument,
         TypeId,
         TypeKind,
     },
@@ -312,6 +314,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             },
             | _ => Callee::Indirect(ExprId(self.expression_indices[&identity(expression)])),
         };
+        if matches!(callee, Callee::Direct { .. }) {
+            for &argument in arguments {
+                self.retain_subobject_argument(argument);
+            }
+        }
         let ty = selected.map_or_else(
             || self.expression_info(expression).ty,
             |selected| self.bindings[selected.binding].ty,
@@ -365,6 +372,41 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 arguments,
             },
         );
+    }
+
+    /// Retains what a direct call's pointer argument says about the closest
+    /// subobject it designates (`FunctionExtensions::subobject_arguments`):
+    /// its constant number of bytes left, the answer
+    /// `__builtin_object_size (argument, 1)` would give in the caller, or
+    /// the parameter whose caller's argument it still designates. An
+    /// inlined callee's query of its parameter then reaches it.
+    /// GNU extension: GCC manual, "Object Size Checking".
+    fn retain_subobject_argument(&mut self, argument: &'tu Expression<'tu>) {
+        let ty = self
+            .resolved
+            .conversions
+            .get(&identity(argument))
+            .map_or(self.expression_info(argument).ty, |c| c.ty);
+        if !matches!(
+            self.types.nodes[self.types.non_atomic(ty).index],
+            TypeKind::Pointer(_)
+        ) {
+            return;
+        }
+        let fact = if let ObjectSize::Constant(most) = self.infer_object_size(argument, 1, false)
+            && let ObjectSize::Constant(least) = self.infer_object_size(argument, 3, false)
+            && most == least
+        {
+            SubobjectArgument::Size(most)
+        } else if let Some(parameter) = self.pointer_parameter_base(argument) {
+            SubobjectArgument::Through(parameter)
+        } else {
+            return;
+        };
+        _ = self
+            .function_extensions
+            .subobject_arguments
+            .insert(identity(argument), fact);
     }
 
     /// Forward only the immediate label's completed value tail; compound

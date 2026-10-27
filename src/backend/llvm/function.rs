@@ -357,6 +357,8 @@ impl<'id, 'm> BodyBuilder<'_, 'id, 'm, '_> {
                         api.extract_value(pair, 1)
                     },
                     | Opcode::PtrAdd => api.gep(a, b, flags.contains(InstFlags::INBOUNDS)),
+                    // A size hint for `object_size`; LLVM has no use for it.
+                    | Opcode::Subobject => a,
                     | Opcode::VaCopy =>
                         self.intrinsic("llvm.va_copy", &[a, b], &[api.ty(Type::Ptr)]),
                     | _ => {
@@ -399,6 +401,13 @@ impl<'id, 'm> BodyBuilder<'_, 'id, 'm, '_> {
                     value
                 }
             },
+            // The middle end answers every query before a back end runs
+            // (`optimizer::resolve_object_sizes`), so that all back ends
+            // agree; one left in text gets the answer for an unknown object.
+            // `llvm.objectsize` would answer it after LLVM's inlining, but
+            // differently from the interpreter, and it cannot tell modes 1
+            // and 3 a member from its enclosing object.
+            | InstData::ObjectSize { ty, query, .. } => api.bits(ty, query.unknown(ty)),
             | InstData::DynAlloca { size, align, .. } => {
                 let value = api.array_alloca(api.ty(Type::I8), self.value(size)?);
                 api.alignment(value, align.bytes());

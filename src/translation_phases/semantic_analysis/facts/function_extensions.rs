@@ -22,6 +22,7 @@ use crate::{
         arena_list::ArenaList,
         bump::{
             ArenaMap,
+            ArenaSet,
             Bump,
         },
         string_cache::StringCacheId,
@@ -59,6 +60,17 @@ pub(crate) struct FunctionExtensions<'tu> {
         ArenaMap<'tu, usize, StringCacheId>,
     pub(in crate::translation_phases::semantic_analysis) object_sizes:
         ArenaMap<'tu, usize, ObjectSize<'tu>>,
+    /// What each pointer argument of a direct call says about the closest
+    /// surrounding subobject it designates, by argument expression.
+    /// Lowering passes it to `always_inline` callees, whose `object_size`
+    /// queries of modes 1 and 3 need the subobject the IR's addresses do
+    /// not record.
+    pub(in crate::translation_phases::semantic_analysis) subobject_arguments:
+        ArenaMap<'tu, usize, SubobjectArgument>,
+    /// The parameters an assignment, increment or decrement writes, or whose
+    /// address `&` takes: their value may no longer be the pointer the
+    /// caller passed.
+    pub(in crate::translation_phases::semantic_analysis) written_parameters:  ArenaSet<'tu, usize>,
     /// Hidden size of a cleanup call's synthetic address argument, keyed by
     /// the automatic object's binding rather than expression syntax.
     pub(in crate::translation_phases::semantic_analysis) cleanup_sizes:
@@ -68,18 +80,20 @@ pub(crate) struct FunctionExtensions<'tu> {
 impl<'tu> FunctionExtensions<'tu> {
     pub(in crate::translation_phases::semantic_analysis) fn new(arena: &'tu Bump) -> Self {
         Self {
-            functions:          ArenaMap::with_hasher_in(FxBuildHasher, arena),
-            calls:              ArenaMap::with_hasher_in(FxBuildHasher, arena),
-            values:             ArenaMap::with_hasher_in(FxBuildHasher, arena),
-            anonymous_names:    ArenaMap::with_hasher_in(FxBuildHasher, arena),
-            local_names:        ArenaMap::with_hasher_in(FxBuildHasher, arena),
-            abi_names:          ArenaMap::with_hasher_in(FxBuildHasher, arena),
-            written_types:      ArenaMap::with_hasher_in(FxBuildHasher, arena),
-            written_fields:     ArenaMap::with_hasher_in(FxBuildHasher, arena),
-            written_type_names: ArenaMap::with_hasher_in(FxBuildHasher, arena),
-            typedef_names:      ArenaMap::with_hasher_in(FxBuildHasher, arena),
-            object_sizes:       ArenaMap::with_hasher_in(FxBuildHasher, arena),
-            cleanup_sizes:      ArenaMap::with_hasher_in(FxBuildHasher, arena),
+            functions:           ArenaMap::with_hasher_in(FxBuildHasher, arena),
+            calls:               ArenaMap::with_hasher_in(FxBuildHasher, arena),
+            values:              ArenaMap::with_hasher_in(FxBuildHasher, arena),
+            anonymous_names:     ArenaMap::with_hasher_in(FxBuildHasher, arena),
+            local_names:         ArenaMap::with_hasher_in(FxBuildHasher, arena),
+            abi_names:           ArenaMap::with_hasher_in(FxBuildHasher, arena),
+            written_types:       ArenaMap::with_hasher_in(FxBuildHasher, arena),
+            written_fields:      ArenaMap::with_hasher_in(FxBuildHasher, arena),
+            written_type_names:  ArenaMap::with_hasher_in(FxBuildHasher, arena),
+            typedef_names:       ArenaMap::with_hasher_in(FxBuildHasher, arena),
+            object_sizes:        ArenaMap::with_hasher_in(FxBuildHasher, arena),
+            subobject_arguments: ArenaMap::with_hasher_in(FxBuildHasher, arena),
+            written_parameters:  ArenaSet::with_hasher_in(FxBuildHasher, arena),
+            cleanup_sizes:       ArenaMap::with_hasher_in(FxBuildHasher, arena),
         }
     }
 
@@ -97,6 +111,20 @@ impl<'tu> FunctionExtensions<'tu> {
 
     pub(crate) fn object_size(&self, expression: &Expression<'tu>) -> Option<ObjectSize<'tu>> {
         self.object_sizes.get(&identity(expression)).copied()
+    }
+
+    /// See [`Self::subobject_arguments`].
+    pub(crate) fn subobject_argument(
+        &self,
+        argument: &Expression<'tu>,
+    ) -> Option<SubobjectArgument> {
+        self.subobject_arguments.get(&identity(argument)).copied()
+    }
+
+    /// Whether an assignment, increment or decrement writes the parameter
+    /// `binding`.
+    pub(crate) fn parameter_written(&self, binding: usize) -> bool {
+        self.written_parameters.contains(&binding)
     }
 
     pub(crate) fn cleanup_size(&self, variable: usize) -> Option<ObjectSize<'tu>> {
@@ -201,6 +229,32 @@ pub(crate) enum ObjectSize<'tu> {
         binding: usize,
         offset:  u64,
     },
+    /// A query of a pointer whose object only inlining can reveal, such as
+    /// an `always_inline` wrapper's parameter: lowering emits an IR
+    /// `object_size` of the evaluated pointer, which the middle end answers
+    /// after inlining (`optimizer::resolve_object_sizes`). GNU extension:
+    /// GCC manual, "Object Size Checking".
+    Deferred {
+        mode:    u8,
+        dynamic: bool,
+        /// The pointer parameter the operand is computed from by pointer
+        /// arithmetic and casts alone ([`SubobjectArgument::Through`]).
+        through: Option<usize>,
+    },
+}
+
+/// What a pointer argument says about the closest surrounding subobject it
+/// designates. GNU extension: GCC manual, "Object Size Checking".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SubobjectArgument {
+    /// It designates one with this many bytes left: the constant answer
+    /// `__builtin_object_size (argument, 1)` and `(argument, 3)` agree on.
+    Size(u64),
+    /// It is the pointer parameter `binding`, offset by pointer arithmetic
+    /// and converted by casts alone: no member access or subscript narrows
+    /// the subobject on the way, so it is the one the caller's argument for
+    /// `binding` designates.
+    Through(usize),
 }
 
 pub(in crate::translation_phases::semantic_analysis) fn identity(

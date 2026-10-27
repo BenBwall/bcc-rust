@@ -201,12 +201,31 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     .and_then(Integer::to_u64)
                     .and_then(|mode| u8::try_from(mode).ok())
                     .unwrap_or(0);
-                let size = if self.effects_pure(args[0], super::super::EffectContext::Value) {
+                let pure = self.effects_pure(args[0], super::super::EffectContext::Value);
+                let size = if pure {
                     self.infer_object_size(args[0], mode, dynamic)
                 } else {
                     super::super::ObjectSize::Unknown
                 };
+                // In a function the object may be known after inlining, as
+                // for a wrapper's parameter: the query is then no constant
+                // expression, as in Clang, and the middle end answers it. An
+                // operand whose evaluation could do anything GCC's
+                // unevaluated one does not (side effects, reads through a
+                // pointer, atomic or volatile reads, calls) is not
+                // evaluated, so its answer is the unknown one now (GCC
+                // manual, "Object Size Checking").
                 let size = match size {
+                    | super::super::ObjectSize::Unknown
+                        if pure
+                            && self.functions.current.is_some()
+                            && mode <= 3
+                            && self.deferrable_operand(args[0]) =>
+                        super::super::ObjectSize::Deferred {
+                            mode,
+                            dynamic,
+                            through: self.pointer_parameter_base(args[0]),
+                        },
                     | super::super::ObjectSize::Unknown =>
                         super::super::ObjectSize::Constant(if mode >= 2 { 0 } else { u64::MAX }),
                     | size => size,

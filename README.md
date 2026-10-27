@@ -617,8 +617,9 @@ to make a benchmark pass. Keep temporary counters out of production changes.
 Run the checks listed under [Build, test, and inspect](#build-test-and-inspect),
 including both `benchmarking-internals` commands.
 
-The binary built with `benchmarking-internals` runs a preprocessing workload
-instead of the normal CLI. Its Unix `coz` progress point measures preprocessing,
+`bcc-rust` is the normal CLI in every feature set. For causal profiling, the
+`coz_preprocessing` example (`--features benchmarking-internals`) repeats a
+preprocessing workload; its Unix `coz` progress point measures preprocessing,
 not parser time. Use the parser benchmark groups for parser measurements.
 
 ### External torture corpus

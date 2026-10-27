@@ -687,6 +687,36 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 offset,
             ),
             | ObjectSize::Unknown => return Ok(self.iconst(Type::I64, i128::from(u64::MAX))),
+            | ObjectSize::Deferred {
+                mode,
+                dynamic,
+                through,
+            } => {
+                let query = crate::ir::ObjectSizeQuery::new(mode, dynamic)
+                    .ok_or_else(|| LoweringError::missing("an object-size mode above 3", source))?;
+                // Modes 1 and 3 need a call site's `subobject` hint, which
+                // holds only for a parameter offset by pointer arithmetic
+                // ([`Self::subobject_hints_pass`]); a pointer formed here
+                // by a member access may name a narrower subobject.
+                if query.subobject() && !through.is_some_and(|p| self.subobject_hints_pass(p)) {
+                    let unknown = query.unknown(Type::I64);
+                    return Ok(self.iconst(
+                        Type::I64,
+                        i128::try_from(unknown).expect("an i64 answer fits"),
+                    ));
+                }
+                let ptr = pointer.ok_or_else(|| {
+                    LoweringError::missing("an object-size pointer was not evaluated", source)
+                })?;
+                return Ok(self.inst(
+                    InstData::ObjectSize {
+                        ty: Type::I64,
+                        query,
+                        ptr,
+                    },
+                    Type::I64,
+                ));
+            },
         };
         if offset == 0 {
             return Ok(size);

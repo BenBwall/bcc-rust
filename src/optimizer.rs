@@ -74,6 +74,8 @@
 //! - Not a pass: `always_inline.rs` ([`resolve_inline_copies`]) makes LLVM's
 //!   always-inliner choices between inline definitions and external ones for
 //!   the interpreter and the native back end, after the pipeline if it runs.
+//!   `object_size.rs` ([`resolve_object_sizes`]) then answers the `object_size`
+//!   queries that expansion reveals, for every back end.
 //! - `tests.rs` and `tests/` exercise each pass on textual IR, the pipeline as
 //!   a whole, and run programs in the interpreter before and after
 //!   optimization.
@@ -108,6 +110,7 @@ mod gvn;
 mod inline;
 mod known_bits;
 mod licm;
+mod object_size;
 mod promote;
 mod sccp;
 mod simplify_cfg;
@@ -130,6 +133,7 @@ use std::time::Instant;
 
 pub(crate) use always_inline::resolve_inline_copies;
 use draft::Draft;
+pub(crate) use object_size::resolve_object_sizes;
 pub(crate) use options::{
     OptimizerOptions,
     Pass,

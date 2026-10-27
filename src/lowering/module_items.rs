@@ -661,6 +661,20 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
         self.function(binding)
     }
 
+    /// Whether every direct call of the function `binding` passes its
+    /// pointer arguments through `subobject` hints: it is `always_inline`,
+    /// or uses the GNU argument pack, whose calls call `always_inline`
+    /// copies. Expanded into its callers, its object-size queries can then
+    /// find the subobject each argument names.
+    /// GNU extension: GCC manual, "Object Size Checking".
+    pub(super) fn hints_subobjects(&self, binding: usize) -> bool {
+        self.pack_function(binding).is_some()
+            || self
+                .sema
+                .entity_attributes(binding)
+                .is_some_and(|attributes| attributes.inlining == Inlining::Always)
+    }
+
     /// The function a function binding names, declaring it on first use
     /// with the signature of the binding's type.
     pub(super) fn function(&mut self, binding: usize) -> Result<FuncId, LoweringErrorKind> {

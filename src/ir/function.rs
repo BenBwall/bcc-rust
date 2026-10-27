@@ -260,6 +260,7 @@ impl<'ir> Body<'ir> {
                 args.into_iter().for_each(visit),
             | InstData::Unary { arg: value, .. }
             | InstData::Load { addr: value, .. }
+            | InstData::ObjectSize { ptr: value, .. }
             | InstData::VaArgAggregate { list: value, .. }
             | InstData::DynAlloca { size: value, .. } => visit(value),
             | InstData::Atomic { args, .. }

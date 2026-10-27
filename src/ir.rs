@@ -121,6 +121,7 @@ pub(crate) use instructions::{
     IntCC,
     MemFlags,
     MemoryOrder,
+    ObjectSizeQuery,
     Opcode,
     ValueList,
 };
