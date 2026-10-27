@@ -92,9 +92,16 @@ mod tests {
     /// The `#define` lines `mode` predefines, from `-E -dM` (`/E` for the
     /// `cl` personalities, which list them through a probe).
     fn macros(mode: &str) -> String {
+        macros_with(mode, &[])
+    }
+
+    /// The `#define` lines `mode` predefines with `options`.
+    fn macros_with(mode: &str, options: &[&str]) -> String {
         let directory = Directory::new();
         directory.write("empty.c", "");
-        let output = directory.bcc(mode, &["-E", "-dM", "empty.c"]);
+        let mut args = options.to_vec();
+        args.extend(["-E", "-dM", "empty.c"]);
+        let output = directory.bcc(mode, &args);
         succeeds(&output);
         stdout(&output)
     }
@@ -207,18 +214,40 @@ mod tests {
         }
         // `cl /J` defines `_CHAR_UNSIGNED`, as clang-cl's does; bcc keeps
         // Clang's `__CHAR_UNSIGNED__` beside it, as clang-cl does.
+        let signed_cl = "(- 127 - 1) (char)-1 < 0 __CHAR_UNSIGNED__ _CHAR_UNSIGNED";
+        let unsigned_cl = "0 (char)-1 < 0 1 1";
         for mode in ["--msvc-mode", "--clang-cl-mode"] {
-            assert_eq!(
-                expand(mode, &[]),
-                "(- 127 - 1) (char)-1 < 0 __CHAR_UNSIGNED__ _CHAR_UNSIGNED",
-                "{mode}"
-            );
-            assert_eq!(expand(mode, &["/J"]), "0 (char)-1 < 0 1 1", "{mode}");
+            assert_eq!(expand(mode, &[]), signed_cl, "{mode}");
+            assert_eq!(expand(mode, &["/J"]), unsigned_cl, "{mode}");
         }
-        assert_eq!(
-            expand("--clang-cl-mode", &["-funsigned-char"]),
-            "0 (char)-1 < 0 1 1"
-        );
+        // clang-cl reads `/clang:` options after its own, wherever they
+        // stand, and ignores the char options given bare.
+        for (options, expected) in [
+            (&["/clang:-fsigned-char", "/J"][..], signed_cl),
+            (&["/J", "/clang:-fsigned-char"], signed_cl),
+            (&["/clang:-funsigned-char"], unsigned_cl),
+            (
+                &["/clang:-funsigned-char", "/clang:-fsigned-char", "/J"],
+                signed_cl,
+            ),
+        ] {
+            assert_eq!(expand("--clang-cl-mode", options), expected, "{options:?}");
+        }
+        for (options, expected) in [
+            (&["-funsigned-char"][..], signed_cl),
+            (&["-fsigned-char", "/J"], unsigned_cl),
+        ] {
+            assert_eq!(expand("--clang-cl-mode", options), expected, "{options:?}");
+            let mut args = options.to_vec();
+            args.extend(["/EP", "probe.c"]);
+            let output = directory.bcc("--clang-cl-mode", &args);
+            succeeds(&output);
+            assert!(
+                stderr(&output).contains("unknown argument ignored in clang-cl: '-f"),
+                "{}",
+                stderr(&output)
+            );
+        }
         // The program compiles with the signedness the macros claim.
         directory.write(
             "char.c",
@@ -314,16 +343,43 @@ mod tests {
         ));
     }
 
+    /// `<tgmath.h>` takes `_FloatN` arguments under the GCC identity, with
+    /// the host's glibc, giving the values GCC's `_FloatN` functions give.
+    #[test]
+    fn gcc_mode_tgmath_takes_floatn_arguments() {
+        if !cfg!(all(target_os = "linux", target_env = "gnu"))
+            || !Path::new("/usr/include/tgmath.h").is_file()
+        {
+            eprintln!("skipping: the test links with the Linux GNU host's C library");
+            return;
+        }
+        let directory = Directory::new();
+        directory.write(
+            "tg.c",
+            "#define _GNU_SOURCE\n#include <stdio.h>\n#include <tgmath.h>\n_Float32 root(_Float32 \
+             x) { return sqrt(x); }\nint main(void) {\n  _Float64 y = pow(2.0f64, 10);\n  \
+             _Complex _Float32 z = 3.0f32 + 4.0f32 * I;\n  printf(\"%g %g %g %g %g\\n\", \
+             (double)root(2.25f32), (double)y, (double)fabs(z), (double)fabs(-1.5f32x), \
+             (double)creal(sqrt(-4.0f64 + 0.0f64 * I)));\n  return 0;\n}\n",
+        );
+        for standard in ["-std=gnu17", "-std=c11", "-std=c23"] {
+            succeeds(&directory.bcc("--gcc-mode", &[standard, "tg.c", "-lm"]));
+            let run = Command::new(directory.path("a.out")).output().unwrap();
+            assert_eq!(stdout(&run), "1.5 1024 5 1.5 0\n", "{standard}");
+            std::fs::remove_file(directory.path("a.out")).unwrap();
+        }
+    }
+
     /// The floating-point macros of the GCC identity are the host GCC's,
     /// apart from the types bcc lacks (`_Float16`, `__bf16`), the standard
     /// types' constants, which bcc spells as Clang does, and what glibc's
     /// `stdc-predef.h` adds.
     #[test]
     fn gcc_mode_floating_macros_match_the_host_gcc() {
-        let Some(host) = host_gcc_macros() else {
+        if host_gcc_macros(&[]).is_none() {
             eprintln!("skipping: no x86-64 Linux GCC 13 or later on the host");
             return;
-        };
+        }
         let compared = |listing: &str| -> Vec<String> {
             let mut lines: Vec<String> = listing
                 .lines()
@@ -337,6 +393,11 @@ mod tests {
                         "__FLT128",
                         "__FLT_EVAL_METHOD_TS",
                         "__GCC_IEC_559",
+                        "__ASSOCIATIVE_MATH__",
+                        "__NO_MATH_ERRNO__",
+                        "__NO_SIGNED_ZEROS__",
+                        "__NO_TRAPPING_MATH__",
+                        "__RECIPROCAL_MATH__",
                     ]
                     .iter()
                     .any(|prefix| name.starts_with(prefix))
@@ -351,13 +412,121 @@ mod tests {
         };
         let bcc = compared(&macros("--gcc-mode"));
         assert!(bcc.len() > 70, "{bcc:#?}");
-        assert_eq!(bcc, compared(&host));
+        for options in FLOATING_POINT_OPTIONS {
+            let host = host_gcc_macros(options).expect("the host GCC takes the options");
+            assert_eq!(
+                compared(&macros_with("--gcc-mode", options)),
+                compared(&host),
+                "{options:?}"
+            );
+        }
     }
 
-    /// `gcc -std=gnu17 -dM -E` of an empty file, from a host GCC that
-    /// targets x86-64 Linux and defines the floating-point macros as GCC 13
-    /// and later do.
-    fn host_gcc_macros() -> Option<String> {
+    /// GCC's options that give up part of IEC 60559 semantics, alone and
+    /// in the combinations whose order or interplay decides the macros.
+    const FLOATING_POINT_OPTIONS: [&[&str]; 17] = [
+        &[],
+        &["-fno-signed-zeros"],
+        &["-freciprocal-math"],
+        &["-fno-trapping-math"],
+        &["-ftrapping-math"],
+        &["-fno-math-errno"],
+        &["-fassociative-math"],
+        &["-fno-signed-zeros", "-fassociative-math"],
+        &[
+            "-fno-signed-zeros",
+            "-fno-trapping-math",
+            "-fassociative-math",
+        ],
+        &["-fcx-limited-range"],
+        &["-fcx-fortran-rules"],
+        &["-fcx-limited-range", "-fno-cx-fortran-rules"],
+        &["-fno-signed-zeros", "-fsigned-zeros"],
+        &["-fno-signed-zeros", "-fno-math-errno", "-fno-fast-math"],
+        &["-fcx-limited-range", "-fno-fast-math"],
+        &[
+            "-freciprocal-math",
+            "-fno-math-errno",
+            "-fno-unsafe-math-optimizations",
+        ],
+        &[
+            "-fassociative-math",
+            "-fno-signed-zeros",
+            "-fno-trapping-math",
+            "-fsigned-zeros",
+        ],
+    ];
+
+    /// The GCC identity reports the options that give up IEC 60559
+    /// semantics as GCC 14 does, without the host GCC.
+    #[test]
+    fn gcc_mode_floating_macros_follow_the_options() {
+        for (options, iec_559, complex, flags) in [
+            (&[][..], "2", "2", &[][..]),
+            (&["-fno-signed-zeros"], "0", "0", &["__NO_SIGNED_ZEROS__"]),
+            (&["-freciprocal-math"], "0", "0", &["__RECIPROCAL_MATH__"]),
+            (&["-fcx-limited-range"], "2", "0", &[]),
+            (
+                &["-fcx-fortran-rules", "-fno-cx-limited-range"],
+                "2",
+                "2",
+                &[],
+            ),
+            (&["-fno-trapping-math"], "2", "2", &["__NO_TRAPPING_MATH__"]),
+            (&["-fno-math-errno"], "2", "2", &["__NO_MATH_ERRNO__"]),
+            (
+                &[
+                    "-fno-signed-zeros",
+                    "-fno-trapping-math",
+                    "-fassociative-math",
+                ],
+                "0",
+                "0",
+                &[
+                    "__ASSOCIATIVE_MATH__",
+                    "__NO_SIGNED_ZEROS__",
+                    "__NO_TRAPPING_MATH__",
+                ],
+            ),
+            (&["-fassociative-math"], "2", "2", &[]),
+            (&["-fno-signed-zeros", "-fno-fast-math"], "2", "2", &[]),
+        ] {
+            let listing = macros_with("--gcc-mode", options);
+            assert_eq!(
+                defines(&listing, "__GCC_IEC_559").as_deref(),
+                Some(iec_559),
+                "{options:?}"
+            );
+            assert_eq!(
+                defines(&listing, "__GCC_IEC_559_COMPLEX").as_deref(),
+                Some(complex),
+                "{options:?}"
+            );
+            for name in [
+                "__ASSOCIATIVE_MATH__",
+                "__NO_MATH_ERRNO__",
+                "__NO_SIGNED_ZEROS__",
+                "__NO_TRAPPING_MATH__",
+                "__RECIPROCAL_MATH__",
+            ] {
+                assert_eq!(
+                    defines(&listing, name).as_deref(),
+                    flags.contains(&name).then_some("1"),
+                    "{options:?} {name}"
+                );
+            }
+        }
+        // Clang defines none of these but `__NO_MATH_ERRNO__`, which bcc's
+        // Clang identity leaves out with Clang's target-dependent default.
+        let clang = macros_with("--clang-mode", &["-fno-signed-zeros"]);
+        assert_eq!(defines(&clang, "__GCC_IEC_559"), None);
+        assert_eq!(defines(&clang, "__NO_SIGNED_ZEROS__"), None);
+    }
+
+    /// `gcc -std=gnu17 OPTIONS -dM -E` of an empty file, from a host GCC
+    /// (not Clang under its name) that targets x86-64 Linux and defines the
+    /// floating-point macros as GCC 13 and later do.
+    fn host_gcc_macros(options: &[&str]) -> Option<String> {
         let gcc = |args: &[&str]| {
             Command::new("gcc")
                 .args(args)
@@ -378,12 +547,11 @@ mod tests {
         }
         let directory = Directory::new();
         directory.write("empty.c", "");
-        gcc(&[
-            "-std=gnu17",
-            "-dM",
-            "-E",
-            directory.path("empty.c").to_str()?,
-        ])
+        let empty = directory.path("empty.c");
+        let mut args = vec!["-std=gnu17"];
+        args.extend(options);
+        args.extend(["-dM", "-E", empty.to_str()?]);
+        gcc(&args).filter(|listing| defines(listing, "__clang__").is_none())
     }
 
     #[test]

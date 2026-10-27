@@ -269,6 +269,26 @@ impl CompilerConfiguration {
         self.default_visibility
     }
 
+    /// Gives up (or keeps) part of IEC 60559 semantics, as GCC's
+    /// `-fno-signed-zeros` and its relatives do. Only predefined macros
+    /// read it.
+    pub(crate) const fn with_relaxed_floating_point(
+        mut self,
+        option: super::RelaxedFloatingPoint,
+        relaxed: bool,
+    ) -> Self {
+        if relaxed {
+            self.relaxed_floating_point |= option.bit();
+        } else {
+            self.relaxed_floating_point &= !option.bit();
+        }
+        self
+    }
+
+    pub(crate) const fn relaxes_floating_point(self, option: super::RelaxedFloatingPoint) -> bool {
+        self.relaxed_floating_point & option.bit() != 0
+    }
+
     /// Packs every structure and union as the `packed` attribute does and
     /// ignores `#pragma pack`, as GCC's `-fpack-struct` without a value
     /// does. Implementation-defined: C99 §6.7.2.1 paragraph 12, p. 103;
@@ -393,6 +413,7 @@ impl CompilerConfiguration {
             default_pack: 0,
             pack_structures: false,
             default_visibility: super::DefaultVisibility::Default,
+            relaxed_floating_point: 0,
             suppress_warnings: false,
             max_nesting_depth: super::DEFAULT_MAX_NESTING_DEPTH,
             warnings_as_errors: false,

@@ -132,10 +132,6 @@ const REFUSED: &[(&str, &str)] = &[
         "bcc assumes the default rounding mode when it folds constants",
     ),
     ("-fsignaling-*", "bcc does not preserve signaling NaNs"),
-    (
-        "-ftrapping-math",
-        "bcc does not preserve floating-point exception flags",
-    ),
     ("-ftrapv*", "bcc does not trap on signed overflow"),
     (
         "-fsemantic-interposition",
@@ -484,17 +480,9 @@ const IGNORED: &[&str] = &[
     "-f[no-]openmp-simd",
     // Permissions bcc need not use, and the floating-point behavior bcc
     // already has: no contraction, no excess precision on x86-64, errno set
-    // by the math functions, IEEE results.
-    "-f[no-]associative-math",
-    "-f[no-]reciprocal-math",
-    "-f[no-]signed-zeros",
-    "-fno-trapping-math",
-    "-f[no-]cx-limited-range",
-    "-f[no-]cx-fortran-rules",
-    "-f[no-]math-errno",
-    "-fno-fast-math",
+    // by the math functions, IEEE results. bcc's own command line takes
+    // `-fno-signed-zeros` and its relatives, for the macros GCC defines.
     "-fno-finite-math-only",
-    "-fno-unsafe-math-optimizations",
     "-fno-rounding-math",
     "-fno-signaling-*",
     "-f[no-]approx-func",
@@ -1061,7 +1049,7 @@ mod tests {
             "-fno-strict-aliasing",
             "-fstrict-aliasing",
             "-fno-common",
-            "-fno-math-errno",
+            "-fno-finite-math-only",
             "-fvisibility-inlines-hidden",
             "-flto=auto",
             "-ffat-lto-objects",

@@ -146,4 +146,49 @@ mod tests {
             }
         }
     }
+
+    /// Under the GCC identity the `_FloatN` types are distinct, and the
+    /// resource `<tgmath.h>` sends each to the functions of the standard
+    /// type with its format, as GCC's `__builtin_tgmath` reaches the
+    /// `_FloatN` functions with the same values. Without the types the
+    /// fixture's names are unknown.
+    #[test]
+    fn tgmath_resource_takes_floatn_arguments_under_the_gcc_identity() {
+        for target in [
+            "x86_64-unknown-linux-gnu",
+            "x86_64-unknown-linux-musl",
+            "x86_64-w64-windows-gnu",
+            "x86_64-pc-windows-msvc",
+        ] {
+            for standard in ["c11", "gnu17", "c23"] {
+                for (options, succeeds) in [
+                    (&["--compiler-identity=gcc"][..], true),
+                    (&["-ffloatn-types"], true),
+                    (&["--compiler-identity=gcc", "-fno-floatn-types"], false),
+                ] {
+                    let output = Command::new(env!("CARGO_BIN_EXE_bcc-rust"))
+                        .args([
+                            &format!("--target={target}"),
+                            &format!("-std={standard}"),
+                            "-nostdlibinc",
+                            "-isystem",
+                            "tests/fixtures/overloadable",
+                        ])
+                        .args(options)
+                        .arg("tests/fixtures/overloadable/tgmath-floatn.c")
+                        .env("NO_COLOR", "1")
+                        .env_remove("CPATH")
+                        .env_remove("C_INCLUDE_PATH")
+                        .output()
+                        .unwrap();
+                    let diagnostics = String::from_utf8_lossy(&output.stderr);
+                    assert_eq!(
+                        output.status.success() && !diagnostics.contains("error:"),
+                        succeeds,
+                        "{target} {standard} {options:?}:\n{diagnostics}"
+                    );
+                }
+            }
+        }
+    }
 }

@@ -52,6 +52,7 @@ pub(crate) use language::{
     LibraryBuiltins,
     MsvcFeature,
     PreprocessingOption,
+    RelaxedFloatingPoint,
 };
 
 impl CompilerConfiguration {
@@ -101,6 +102,8 @@ pub(crate) struct CompilerConfiguration {
     pack_structures: bool,
     /// The visibility of definitions that name none (`-fvisibility=`).
     default_visibility: DefaultVisibility,
+    /// One bit per [`RelaxedFloatingPoint`] option given.
+    relaxed_floating_point: u8,
     /// The structure packing in effect before any `#pragma pack`, and that
     /// `#pragma pack()` restores (`-fpack-struct=N`, `cl /ZpN`); 0 for
     /// none.

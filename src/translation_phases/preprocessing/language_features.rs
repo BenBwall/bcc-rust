@@ -1058,6 +1058,9 @@ pub(super) fn with_identity_macros<'a>(
              _Float64x long double\n#define _Float128 __float128\n",
         );
     }
+    if identity == CompilerIdentity::Gcc {
+        write_gcc_floating_point_macros(configuration, &mut out);
+    }
     // The relocation model `-fpic` and its family select, as Clang spells
     // it (GCC manual, "Code Gen Options").
     let relocation = configuration
@@ -1081,13 +1084,63 @@ pub(super) fn with_identity_macros<'a>(
     out.into_str()
 }
 
+/// GCC's report of the floating-point semantics in effect, as
+/// `cpp_iec_559_value`, `cpp_iec_559_complex_value` and `c_cpp_builtins` in
+/// GCC's `c-family/c-cppbuiltin.cc` give it for x86-64: `__GCC_IEC_559` is 2
+/// (IEC 60559 arithmetic) unless an option gives up signed zeros, exact
+/// division or the order of operations, and `__GCC_IEC_559_COMPLEX` is 2
+/// unless that is 0 or complex arithmetic takes the limited range. Each
+/// option also defines its own macro. `-fassociative-math` counts only with
+/// `-fno-signed-zeros` and `-fno-trapping-math`, as GCC drops it otherwise.
+/// bcc's code keeps IEC 60559 semantics under all of these, which they
+/// permit. The options GCC also counts that change what a program means
+/// (`-ffinite-math-only`, `-fsingle-precision-constant`, `-ffast-math`) are
+/// refused by the GCC personality.
+/// C99: Annex F, §F.1 paragraph 1, p. 444; PDF p. 456; Annex G, §G.1
+/// paragraph 1, p. 467; PDF p. 479; extension to §6.10.8 paragraph 4,
+/// p. 161; PDF p. 173.
+fn write_gcc_floating_point_macros(configuration: CompilerConfiguration, out: &mut impl Write) {
+    use crate::configuration::RelaxedFloatingPoint as Relaxed;
+    let relaxed = |option| configuration.relaxes_floating_point(option);
+    let associative = relaxed(Relaxed::AssociativeMath)
+        && relaxed(Relaxed::NoSignedZeros)
+        && relaxed(Relaxed::NoTrappingMath);
+    let iec_559 =
+        if associative || relaxed(Relaxed::ReciprocalMath) || relaxed(Relaxed::NoSignedZeros) {
+            0
+        } else {
+            2
+        };
+    let complex = if relaxed(Relaxed::ComplexRange) {
+        0
+    } else {
+        iec_559
+    };
+    _ = write!(
+        out,
+        "#define __GCC_IEC_559 {iec_559}\n#define __GCC_IEC_559_COMPLEX {complex}\n"
+    );
+    for (defined, name) in [
+        (associative, "__ASSOCIATIVE_MATH__"),
+        (relaxed(Relaxed::NoMathErrno), "__NO_MATH_ERRNO__"),
+        (relaxed(Relaxed::NoSignedZeros), "__NO_SIGNED_ZEROS__"),
+        (relaxed(Relaxed::NoTrappingMath), "__NO_TRAPPING_MATH__"),
+        (relaxed(Relaxed::ReciprocalMath), "__RECIPROCAL_MATH__"),
+    ] {
+        if defined {
+            _ = writeln!(out, "#define {name} 1");
+        }
+    }
+}
+
 /// The macros that change when bcc claims another compiler than Clang
 /// (`--compiler-identity`), read after the target's definitions and the GNU
 /// claim, which they adjust. GCC 14.2 defines no Clang macros, and its
 /// `__VERSION__` and execution character set names are GCC's; it claims
-/// IEC 60559 arithmetic (`__GCC_IEC_559` 2, as without `-ffast-math`) and
-/// formats for the standard floating types (`__FLT_IS_IEC_60559__`, which
-/// GCC 13 and later define as 1 for x86-64's three formats); its `_FloatN`
+/// IEC 60559 formats for the standard floating types
+/// (`__FLT_IS_IEC_60559__`, which GCC 13 and later define as 1 for x86-64's
+/// three formats), and its IEC 60559 arithmetic follows the options
+/// ([`write_gcc_floating_point_macros`]); its `_FloatN`
 /// keywords come with the identity (`interchange_float_types`), not from
 /// here. MSVC 19.33 (`cl.exe`)
 /// defines neither GNU nor Clang macros, `_MSVC_TRADITIONAL` as 0 for bcc's
@@ -1108,7 +1161,6 @@ fn identity_claim(identity: CompilerIdentity) -> &'static str {
             "#define __VERSION__ \"14.2.0\"\n",
             "#define __GNUC_EXECUTION_CHARSET_NAME \"UTF-8\"\n",
             "#define __GNUC_WIDE_EXECUTION_CHARSET_NAME \"UTF-32LE\"\n",
-            "#define __GCC_IEC_559 2\n#define __GCC_IEC_559_COMPLEX 2\n",
             "#define __FLT_IS_IEC_60559__ 1\n#define __DBL_IS_IEC_60559__ 1\n#define \
              __LDBL_IS_IEC_60559__ 1\n",
         ),

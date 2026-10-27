@@ -46,6 +46,23 @@ static float _Complex       _TG_ATTRSp __tg_promote(float _Complex);
 static double _Complex      _TG_ATTRSp __tg_promote(double _Complex);
 static long double _Complex _TG_ATTRSp __tg_promote(long double _Complex);
 
+/* bcc: the TS 18661-3 types bcc's GCC identity provides (-ffloatn-types)
+   take the functions of the standard type with the same format, so the
+   values are those of GCC's _FloatN functions but the result has the
+   standard type. _Float128 has no functions here, like __float128. */
+#if defined(__bcc__) && defined(__FLT32_MANT_DIG__)
+static float                _TG_ATTRSp __tg_promote(_Float32);
+static double               _TG_ATTRSp __tg_promote(_Float64);
+static double               _TG_ATTRSp __tg_promote(_Float32x);
+static float _Complex       _TG_ATTRSp __tg_promote(_Float32 _Complex);
+static double _Complex      _TG_ATTRSp __tg_promote(_Float64 _Complex);
+static double _Complex      _TG_ATTRSp __tg_promote(_Float32x _Complex);
+#ifdef __FLT64X_MANT_DIG__
+static long double          _TG_ATTRSp __tg_promote(_Float64x);
+static long double _Complex _TG_ATTRSp __tg_promote(_Float64x _Complex);
+#endif
+#endif
+
 #define __tg_promote1(__x)           (__typeof__(__tg_promote(__x)))
 #define __tg_promote2(__x, __y)      (__typeof__(__tg_promote(__x) + \
                                                  __tg_promote(__y)))
