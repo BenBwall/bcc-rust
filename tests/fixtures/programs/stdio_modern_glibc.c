@@ -11,7 +11,9 @@
    descriptors on the same open file description then see (commit
    be6818be31e7, bug 12724), and ftell of a device whose offset stays 0
    fail with ESPIPE, which that seek ignores, rather than EINVAL (commit
-   7b47b3dd214c). The expected output is in stdio_modern_glibc.expected.
+   7b47b3dd214c); a wide stream's seek counts what its wide buffer has
+   read, and fails where do_ftell_wide does, as on such a device. The
+   expected output is in stdio_modern_glibc.expected.
    Declarations are written out so that no system header is needed. */
 typedef struct _IO_FILE FILE;
 typedef unsigned long size_t;
@@ -39,6 +41,9 @@ FILE *fdopen(int, const char *);
 unsigned fgetwc(FILE *);
 unsigned ungetwc(unsigned, FILE *);
 int *__errno_location(void);
+int setvbuf(FILE *, char *, int, size_t);
+char *setlocale(int, const char *);
+long write(int, const void *, unsigned long);
 
 /* After ungetc and a SEEK_CUR of 1, where the stream is and what it reads:
    since glibc 2.41 a stream that some operation oriented counts the
@@ -143,6 +148,45 @@ int main(void)
     close(copy);
   }
   printf("\n");
+  /* glibc 2.39 gives 0 0. */
+  reader = fopen("/dev/zero", "r");
+  fgetwc(reader);
+  *__errno_location() = 0;
+  closed = fclose(reader);
+  failed = *__errno_location();
+  printf("wide device %d %d\n", closed, failed);
+  /* UTF-8 characters through small buffers: where fclose leaves the
+     shared offset after reading 1 to 4 characters, as they are, with the
+     last pushed back, and with another character pushed back. glibc 2.39
+     leaves it where the reads left it, and never fails. */
+  setlocale(6, "C.UTF-8");
+  writer = fopen(name, "w");
+  fputs("a\xc3\xa9\xe2\x82\xac\xf0\x9f\x98\x80" "bcd", writer);
+  fclose(writer);
+  for (int size = 1; size <= 5; size++) {
+    printf("wide size %d:", size);
+    for (int count = 1; count <= 4; count++)
+      for (int push = 0; push < 3; push++) {
+        fd = open(name, 0);
+        copy = dup(fd);
+        reader = fdopen(fd, "r");
+        char buffer[8];
+        setvbuf(reader, buffer, 0, size);
+        unsigned character = 0;
+        for (int i = 0; i < count; i++)
+          character = fgetwc(reader);
+        if (push)
+          ungetwc(push == 1 ? character : 'Z', reader);
+        *__errno_location() = 0;
+        closed = fclose(reader);
+        failed = *__errno_location();
+        offset = lseek(copy, 0, 1);
+        printf(" %d/%d/%ld", closed, failed, offset);
+        close(copy);
+      }
+    printf("\n");
+  }
+  setlocale(6, "C");
   /* So does printf to a redirected stdout that has no buffer yet. */
   freopen(name, "r+", stdout);
   ungetc('X', stdout);

@@ -21,10 +21,7 @@
 
 use super::{
     super::{
-        errno::{
-            E2BIG,
-            EILSEQ,
-        },
+        errno::E2BIG,
         locale,
         scanf,
     },
@@ -380,29 +377,13 @@ impl DefaultHost<'_> {
         &mut self,
         stream: usize,
     ) -> Option<u32> {
-        let entry = &mut self.streams.entries[stream];
-        if let Some(character) = entry.pop_wide_backup() {
-            return Some(character);
-        }
-        let utf8 = entry.utf8;
-        let first = self.read(stream)?;
-        let length = locale::sequence_length(utf8, first);
-        let mut sequence = [first, 0, 0, 0];
-        for slot in sequence.iter_mut().take(length).skip(1) {
-            match self.read(stream) {
-                | Some(byte) => *slot = byte,
-                | None => break,
-            }
-        }
-        match locale::decode(utf8, &sequence[..length]) {
-            | Some((character, _)) => Some(character),
-            | None => {
-                let entry = &mut self.streams.entries[stream];
-                entry.error = true;
-                entry.errno = Some(EILSEQ);
-                None
-            },
-        }
+        let (entry, stdout) = self.streams.reading(stream);
+        let mut release = super::Release {
+            console: &mut self.console,
+            written: self.output.len(),
+            stdout,
+        };
+        entry.read_wide(&mut release)
     }
 
     /// The wide characters of the null-terminated wide string at `string`.

@@ -10,6 +10,7 @@
 #define _GNU_SOURCE 1
 #include <errno.h>
 #include <fcntl.h>
+#include <locale.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -287,6 +288,23 @@ int main(void) {
         SHOW("ftell after reading it", ftell(f));
         fclose(f);
     }
+    /* A character read through a one-byte buffer, its bytes gathered
+       across refills, counts as the bytes it took, pushed back or not. */
+    setlocale(LC_ALL, "C.UTF-8");
+    FILE *u = fopen(PATH, "w");
+    fputs("\xc3\xa9x", u);
+    fclose(u);
+    FILE *v = fopen(PATH, "r");
+    char one[1];
+    setvbuf(v, one, _IOFBF, sizeof one);
+    wint_t e = fgetwc(v);
+    SHOW("ftell split", ftell(v));
+    ungetwc(e, v);
+    SHOW("ftell split pushed back", ftell(v));
+    wint_t again = fgetwc(v);
+    wint_t last = fgetwc(v);
+    printf("again %d %d\n", again == e, (int)last);
+    fclose(v);
     /* ftell of a device whose offset stays 0 has no position. */
     FILE *z = fopen("/dev/zero", "r");
     int c = fgetc(z);

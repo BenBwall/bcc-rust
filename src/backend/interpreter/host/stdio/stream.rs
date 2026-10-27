@@ -32,6 +32,7 @@ use super::{
     super::{
         errno::{
             EBADF,
+            EILSEQ,
             EINVAL,
             ESPIPE,
             from_io,
@@ -124,6 +125,15 @@ pub(super) struct Stream<'a> {
     /// position back (`_IO_sputbackwc`).
     pub(super) wide_backup: ArenaVec<'a, u32>,
     wide_backed_up: bool,
+    /// The wide read buffer (`_wide_data`'s get area): the characters the
+    /// last conversion of the byte buffer produced, of which the first
+    /// `wide_read_position` have been read, and how many it holds
+    /// (`_IO_wfile_doallocate`), 0 until allocated. The byte buffer's
+    /// `base` is where that conversion started (`_IO_read_base`) and its
+    /// `position` where it stopped.
+    wide_read: ArenaVec<'a, u32>,
+    wide_read_position: usize,
+    wide_capacity: usize,
     /// A wide stream's put area, over what its characters converted to
     /// (`wide_log`), of which the first `wide_written` bytes are in the
     /// file.
@@ -387,6 +397,7 @@ impl Stream<'_> {
     /// `SEEK_CUR` relative to the descriptor and empties the buffer.
     /// C99: §7.19.9.2 paragraphs 2-5, p. 303; PDF p. 315.
     pub(super) fn seek(&mut self, offset: i64, whence: Whence) -> bool {
+        self.give_back_wide();
         let mut offset = offset;
         // A seek gives up the wide characters pushed back, counting them
         // for `SEEK_CUR` (`_IO_wfile_seekoff`).
@@ -539,6 +550,9 @@ impl Stream<'_> {
             };
             return Some(at + to_offset(held));
         }
+        if self.wide {
+            return self.tell_wide();
+        }
         let at = self.file_offset()? - pushed;
         if self.size == 0 {
             return Some(at);
@@ -567,6 +581,40 @@ impl Stream<'_> {
         Some(position - to_offset(behind))
     }
 
+    /// `ftell` of a wide stream (`do_ftell_wide`). For the "C" locale's
+    /// one byte a character, the file offset less the wide buffer's unread
+    /// characters and the bytes not yet converted; for UTF-8, less the
+    /// bytes from where the last conversion started, plus those that
+    /// convert to the characters read since then. Once the backup area's
+    /// characters are read (ftell refuses them before), the first counts
+    /// from where they were pushed back and the second as if none of the
+    /// buffer's characters were read.
+    fn tell_wide(&mut self) -> Option<i64> {
+        let mut offset = 0;
+        if self.wide_capacity > 0 {
+            offset = if self.utf8 {
+                let read = if self.wide_backed_up {
+                    0
+                } else {
+                    self.wide_read_position
+                };
+                let consumed = self.converted_length(read);
+                -to_offset(self.bytes.len() - self.base - consumed)
+            } else {
+                -to_offset(
+                    self.wide_read.len() - self.wide_read_position + self.bytes.len()
+                        - self.position,
+                )
+            };
+        }
+        let at = self.file_offset()? + offset;
+        if at < 0 {
+            self.errno = Some(EINVAL);
+            return None;
+        }
+        Some(at)
+    }
+
     /// The file offset at the buffer's end: the cached one while glibc knows
     /// it (`_offset`), even after a `lseek` of the descriptor behind the
     /// stream's back, else the descriptor's (`do_ftell`).
@@ -584,16 +632,21 @@ impl Stream<'_> {
     /// descriptors sharing the open file description continue from there
     /// (commit be6818be31e7, bug 12724); a descriptor that cannot seek
     /// (`ESPIPE`) is left as it is, while a position `ftell` cannot give,
-    /// as with wide characters in the backup area, fails the close. A wide
-    /// stream has read ahead while it holds unread bytes or pushed-back
-    /// characters. glibc 2.39 left the offset where the reads left it.
+    /// as with wide characters in the backup area or a wide stream on a
+    /// device whose offset stays 0, fails the close. A wide stream has read
+    /// ahead while its backup area is in use or its wide buffer holds
+    /// unread characters; bytes not yet converted do not count. glibc 2.39
+    /// left the offset where the reads left it.
     pub(super) fn close_out(&mut self) -> bool {
         let putting = self.writable && self.putting;
         if !self.write_out() {
             return false;
         }
-        let read_ahead =
-            self.in_backup || self.position < self.bytes.len() || !self.wide_backup.is_empty();
+        let read_ahead = if self.wide {
+            self.wide_backed_up || self.wide_read_position < self.wide_read.len()
+        } else {
+            self.in_backup || self.position < self.bytes.len()
+        };
         if putting || !read_ahead || matches!(self.target, Target::Detached) {
             return true;
         }
@@ -616,6 +669,7 @@ impl Stream<'_> {
         if !self.write_out() {
             return false;
         }
+        self.give_back_wide();
         let ahead = if self.in_backup {
             self.backup.len() + self.bytes.len() - self.base
         } else {
@@ -636,6 +690,9 @@ impl Stream<'_> {
     /// Whether the area being read has unread bytes, which glibc 2.43's
     /// `fflush(NULL)` gives back.
     pub(super) fn reads_ahead(&self) -> bool {
+        if self.wide_read_position < self.wide_read.len() {
+            return true;
+        }
         if self.in_backup {
             !self.backup.is_empty()
         } else {
@@ -824,6 +881,7 @@ impl Stream<'_> {
         if self.putting {
             return true;
         }
+        self.give_back_wide();
         self.allocate();
         // Pushed-back bytes are given up, and the write position moves back
         // over as many bytes of the buffer; reading that used the whole
@@ -963,37 +1021,234 @@ impl Stream<'_> {
         self.write_wide()
     }
 
-    /// Pushes `character` back as `ungetwc` does: the character before the
-    /// read position, read since the buffer was last filled, only moves the
-    /// position back; any other goes into the wide backup area.
+    /// Pushes `character` back as `ungetwc` does (`_IO_sputbackwc`): the
+    /// wide character just read only moves the wide read position back.
+    /// Otherwise `_IO_wdefault_pbackfail` moves the byte position back when
+    /// the byte before it equals the character, as glibc compares them, and
+    /// else keeps the character in the wide backup area.
     pub(super) fn push_back_wide(&mut self, character: u32) {
-        let rewound = self.position.saturating_sub(self.wide_backup_bytes());
-        let mut start = rewound;
-        while start > self.base
-            && rewound - start < 4
-            && (start == rewound || (self.utf8 && self.bytes[start] & 0xC0 == 0x80))
-        {
-            start -= 1;
+        let read = !self.wide_backed_up && self.wide_read_position > 0;
+        if read && self.wide_read[self.wide_read_position - 1] == character {
+            self.wide_read_position -= 1;
+            return;
         }
-        let previous = (start < rewound)
-            .then(|| super::super::locale::decode(self.utf8, &self.bytes[start..rewound]))
-            .flatten()
-            .filter(|&(_, length)| start + length == rewound)
-            .map(|(previous, _)| previous);
-        if previous != Some(character) {
-            self.wide_backed_up = true;
+        if read && self.position > 0 && u32::from(self.bytes[self.position - 1]) == character {
+            self.position -= 1;
+            return;
         }
+        self.wide_backed_up = true;
         self.wide_backup.push(character);
     }
 
-    /// The next pushed-back wide character, leaving the backup area once
-    /// none is left.
-    pub(super) fn pop_wide_backup(&mut self) -> Option<u32> {
-        let character = self.wide_backup.pop();
-        if self.wide_backup.is_empty() {
-            self.wide_backed_up = false;
+    /// The next wide character (`_IO_getwc_unlocked`): from the backup
+    /// area, which glibc leaves only when a read finds it empty, else from
+    /// the wide buffer, refilled as `_IO_wfile_underflow` refills it.
+    /// `None` at the end of the file or on an error, which set the
+    /// indicators and `errno`.
+    pub(super) fn read_wide(&mut self, stdout: &mut Release<'_, '_, '_>) -> Option<u32> {
+        if !self.end_write() {
+            return None;
         }
-        character
+        if let Some(character) = self.wide_backup.pop() {
+            return Some(character);
+        }
+        self.wide_backed_up = false;
+        if self.wide_read_position >= self.wide_read.len() {
+            self.wide_underflow(stdout)?;
+        }
+        let character = self.wide_read[self.wide_read_position];
+        self.wide_read_position += 1;
+        Some(character)
+    }
+
+    /// Refills the empty wide buffer (`_IO_wfile_underflow`): it converts
+    /// what the byte buffer still holds; failing that, it moves an
+    /// incomplete sequence to the buffer's start and reads after it,
+    /// keeping too short a buffer's bytes aside until they complete a
+    /// character. A set end-of-file indicator fails without reading.
+    fn wide_underflow(&mut self, stdout: &mut Release<'_, '_, '_>) -> Option<()> {
+        if self.eof {
+            return None;
+        }
+        if !self.readable {
+            self.error = true;
+            self.errno = Some(EBADF);
+            return None;
+        }
+        self.wide_read.clear();
+        self.wide_read_position = 0;
+        if self.position < self.bytes.len() {
+            let start = self.position;
+            let (used, conversion) = self.convert(start, None);
+            (self.base, self.position) = (start, start + used);
+            if !self.wide_read.is_empty() {
+                return Some(());
+            }
+            if conversion == Conversion::Invalid {
+                return self.invalid_sequence();
+            }
+            drop(self.bytes.drain(..self.position));
+        } else {
+            self.bytes.clear();
+        }
+        (self.base, self.position) = (0, 0);
+        self.allocate();
+        if self.wide_capacity == 0 {
+            self.wide_capacity = if self.unbuffered {
+                1
+            } else if self.user_buffer {
+                self.size.div_ceil(4)
+            } else {
+                self.size
+            };
+        }
+        if self.line_buffered || self.unbuffered {
+            stdout.release();
+        }
+        self.oriented = true;
+        // Bytes of an incomplete character kept aside (`accbuf`, at most
+        // `MB_LEN_MAX`).
+        let mut held = [0_u8; 16];
+        let mut holding = 0;
+        loop {
+            let end = self.bytes.len();
+            self.bytes.resize(self.size.max(end), 0);
+            let read = read_from(&mut self.target, &mut self.bytes[end..]);
+            let count = *read.as_ref().unwrap_or(&0);
+            self.bytes.truncate(end + count);
+            if count == 0 {
+                match read {
+                    | Ok(_) if holding == 0 => {
+                        self.eof = true;
+                        self.offset = None;
+                    },
+                    | Ok(_) => {
+                        self.error = true;
+                        self.errno = Some(EILSEQ);
+                    },
+                    | Err(error) => {
+                        self.error = true;
+                        self.errno = Some(from_io(&error));
+                    },
+                }
+                return None;
+            }
+            self.offset = self.offset.map(|offset| offset + to_offset(count));
+            self.base = self.position;
+            let (used, conversion) = if holding == 0 {
+                let (used, conversion) = self.convert(self.position, None);
+                self.position += used;
+                (used, conversion)
+            } else {
+                let copied = (held.len() - holding).min(count);
+                held[holding..holding + copied]
+                    .copy_from_slice(&self.bytes[self.position..self.position + copied]);
+                holding += copied;
+                let (used, conversion) = self.convert(0, Some(&held[..holding]));
+                self.position += used.saturating_sub(holding - copied);
+                (used, conversion)
+            };
+            if !self.wide_read.is_empty() {
+                return Some(());
+            }
+            if conversion == Conversion::Invalid {
+                return self.invalid_sequence();
+            }
+            // The bytes read make no complete character: read again.
+            if holding == 0 {
+                if self.base < self.position {
+                    drop(self.bytes.drain(self.base..self.position));
+                    self.position = self.base;
+                    continue;
+                }
+                holding = self.bytes.len() - self.position;
+                if holding >= held.len() {
+                    return self.invalid_sequence();
+                }
+                held[..holding].copy_from_slice(&self.bytes[self.position..]);
+            } else {
+                if used > 0 {
+                    held.copy_within(used..holding, 0);
+                    holding -= used;
+                }
+                if holding == held.len() {
+                    return self.invalid_sequence();
+                }
+            }
+            self.bytes.truncate(self.base);
+            self.position = self.base;
+        }
+    }
+
+    /// Converts the bytes from `start` of the buffer, or `held` instead,
+    /// into the wide buffer while it has room: how many bytes it used, and
+    /// why it stopped.
+    fn convert(&mut self, start: usize, held: Option<&[u8]>) -> (usize, Conversion) {
+        let from = held.unwrap_or(&self.bytes[start..]);
+        let mut at = 0;
+        while self.wide_read.len() < self.wide_capacity.max(1) {
+            let Some(&first) = from.get(at) else {
+                return (at, Conversion::Done);
+            };
+            let length = super::super::locale::sequence_length(self.utf8, first);
+            if at + length > from.len() {
+                // An incomplete sequence is partial while what there is of
+                // it continues a valid start.
+                let valid = length > 1 && from[at + 1..].iter().all(|&byte| byte & 0xC0 == 0x80);
+                return (
+                    at,
+                    if valid {
+                        Conversion::Partial
+                    } else {
+                        Conversion::Invalid
+                    },
+                );
+            }
+            match super::super::locale::decode(self.utf8, &from[at..at + length]) {
+                | Some((character, used)) => {
+                    self.wide_read.push(character);
+                    at += used;
+                },
+                | None => return (at, Conversion::Invalid),
+            }
+        }
+        (at, Conversion::Done)
+    }
+
+    /// Fails a read on bytes the stream's conversion rejects.
+    fn invalid_sequence(&mut self) -> Option<()> {
+        self.errno = Some(EILSEQ);
+        self.error = true;
+        None
+    }
+
+    /// Gives the wide buffer's unread characters back to the byte buffer,
+    /// as `_IO_wfile_sync` and a seek do, so that the byte position is
+    /// where the characters read so far end.
+    fn give_back_wide(&mut self) {
+        if self.wide_read.is_empty() {
+            return;
+        }
+        self.position = self.base + self.converted_length(self.wide_read_position);
+        self.wide_read.clear();
+        self.wide_read_position = 0;
+    }
+
+    /// How many bytes of the buffer, from where the last conversion
+    /// started, convert to `characters` characters, or to as many as they
+    /// do (`__libio_codecvt_length`): fewer than the characters took when
+    /// a character's first bytes came through an earlier, too small
+    /// buffer.
+    fn converted_length(&self, characters: usize) -> usize {
+        let bytes = &self.bytes[self.base..];
+        let mut at = 0;
+        for _ in 0..characters {
+            match super::super::locale::decode(self.utf8, &bytes[at..]) {
+                | Some((_, length)) => at += length,
+                | None => break,
+            }
+        }
+        at
     }
 
     /// How many bytes the pushed-back wide characters take in the stream's
@@ -1101,6 +1356,8 @@ impl Stream<'_> {
         (self.oriented, self.wide, self.utf8) = (false, false, false);
         self.wide_backup.clear();
         self.wide_backed_up = false;
+        self.wide_read.clear();
+        (self.wide_read_position, self.wide_capacity) = (0, 0);
         self.wide_log.clear();
         (self.wide_written, self.user_buffer) = (0, false);
         (self.putting, self.write_base) = (false, 0);
@@ -1113,39 +1370,42 @@ impl<'a> Stream<'a> {
     /// A closed stream whose buffers live in `arena`.
     pub(super) fn new_in(arena: &'a Bump) -> Self {
         Self {
-            target:         Target::Closed,
-            eof:            false,
-            error:          false,
-            readable:       false,
-            writable:       false,
-            appending:      false,
-            terminal:       false,
-            object:         None,
-            size:           0,
-            line_buffered:  false,
-            unbuffered:     false,
-            bytes:          ArenaVec::new_in(arena),
-            base:           0,
-            position:       0,
-            backup:         ArenaVec::new_in(arena),
-            in_backup:      false,
-            offset:         None,
-            oriented:       false,
-            wide:           false,
-            putting:        false,
-            write_base:     0,
-            pending:        ArenaVec::new_in(arena),
-            opened:         0,
-            errno:          None,
-            utf8:           false,
-            wide_backup:    ArenaVec::new_in(arena),
-            wide_backed_up: false,
-            wide_area:      Channel::new(Mode::Full),
-            wide_log:       ArenaVec::new_in(arena),
-            wide_written:   0,
-            user_buffer:    false,
-            descriptor:     None,
-            console_writes: ArenaVec::new_in(arena),
+            target:             Target::Closed,
+            eof:                false,
+            error:              false,
+            readable:           false,
+            writable:           false,
+            appending:          false,
+            terminal:           false,
+            object:             None,
+            size:               0,
+            line_buffered:      false,
+            unbuffered:         false,
+            bytes:              ArenaVec::new_in(arena),
+            base:               0,
+            position:           0,
+            backup:             ArenaVec::new_in(arena),
+            in_backup:          false,
+            offset:             None,
+            oriented:           false,
+            wide:               false,
+            putting:            false,
+            write_base:         0,
+            pending:            ArenaVec::new_in(arena),
+            opened:             0,
+            errno:              None,
+            utf8:               false,
+            wide_backup:        ArenaVec::new_in(arena),
+            wide_backed_up:     false,
+            wide_read:          ArenaVec::new_in(arena),
+            wide_read_position: 0,
+            wide_capacity:      0,
+            wide_area:          Channel::new(Mode::Full),
+            wide_log:           ArenaVec::new_in(arena),
+            wide_written:       0,
+            user_buffer:        false,
+            descriptor:         None,
+            console_writes:     ArenaVec::new_in(arena),
         }
     }
 }
@@ -1198,6 +1458,17 @@ fn read_from(target: &mut Target, buffer: &mut [u8]) -> io::Result<usize> {
         | Target::Output | Target::Errors | Target::Closed =>
             Err(io::Error::from(io::ErrorKind::PermissionDenied)),
     }
+}
+
+/// Why a conversion into the wide buffer stopped.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Conversion {
+    /// It used the bytes it was given or filled the buffer.
+    Done,
+    /// The bytes end inside a character.
+    Partial,
+    /// The bytes are not a character in the stream's conversion.
+    Invalid,
 }
 
 /// The origin of a seek: `SEEK_SET`, `SEEK_CUR` or `SEEK_END`.

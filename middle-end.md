@@ -1431,9 +1431,9 @@ to (failing with `EBADF` once it is closed) and, as glibc 2.42 does
 (commit be6818be31e7), first seeks a stream that has read ahead (or holds
 pushed-back characters, wide ones included) back to its position, ignoring
 `ESPIPE`, which `ftell` reports since commit 7b47b3dd214c for a device
-whose offset stays 0, and failing where `ftell` cannot place a wide
-character in glibc's backup area (an `ungetwc` of anything but the
-character just read), `fdopen` makes a stream on a descriptor with glibc's access
+whose offset stays 0 (a wide stream's `do_ftell_wide` still gives
+`EINVAL`, which fails the close), and failing where `ftell` cannot place
+a wide character in glibc's backup area, `fdopen` makes a stream on a descriptor with glibc's access
 checks (in an appending mode setting `O_APPEND`, and starting at the end
 only when it had to set it), `ftell` counts from the offset the stream
 cached rather than the descriptor's, and a stream follows its number
@@ -1460,8 +1460,14 @@ ASCII and reads such a byte as `EILSEQ`, and in "C.UTF-8" both are UTF-8; a
 stream keeps the conversion of the locale it was oriented in. A wide
 stream has glibc's wide put area, as many wide characters as the byte
 buffer holds bytes (a quarter as many in a `setvbuf` buffer), whose
-write-outs convert and write all it holds, and a wide pushback area that
-`ungetwc` fills with the characters themselves. The `wscanf` family reads
+write-outs convert and write all it holds, and glibc's wide get area:
+`_IO_wfile_underflow` converts the byte buffer into a wide buffer of that
+size, carrying an incomplete character's bytes over refills; `ungetwc` of
+the character just read steps back within it, and any other character
+goes into a backup area where `ftell` fails with `EINVAL`; and `ftell`,
+`fflush`, seeks and `fclose` count the wide buffer as `do_ftell_wide` and
+`_IO_wfile_sync` do, by the fixed width of the "C" locale's conversion or
+by reconverting UTF-8 from where the last conversion started. The `wscanf` family reads
 whole characters, matches scansets by character and converts what `%c`,
 `%s` and `%[` store with the current locale (`EILSEQ` when it cannot); a
 `printf` or `wprintf` that meets a character it cannot convert keeps what
