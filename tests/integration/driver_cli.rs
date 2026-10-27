@@ -153,14 +153,19 @@ mod tests {
     }
 
     /// One failing input fails the run whichever position it holds, and the
-    /// driver still runs the other jobs, as GCC does.
+    /// driver still runs the other jobs but not the link, as GCC does. An
+    /// input that cannot be read fails only its own job.
     #[test]
     fn a_failing_input_fails_a_multi_file_run() {
         let project = Project::new();
         std::fs::write(project.path("bad.c"), "int x = ;\n").unwrap();
         std::fs::write(project.path("stop.c"), "#error stop\n").unwrap();
-        for bad in ["bad.c", "stop.c"] {
-            for sources in [[bad, "a.c"], ["a.c", bad]] {
+        // Without a failing input, these link.
+        if linkable_host() {
+            succeeds(&project.bcc(&["main.c", "a.c", "-o", "linked"]));
+        }
+        for bad in ["bad.c", "stop.c", "missing.c"] {
+            for sources in [[bad, "main.c", "a.c"], ["main.c", "a.c", bad]] {
                 for stage in [
                     &["-c"][..],
                     &["-S"],
@@ -171,19 +176,31 @@ mod tests {
                     let failed = project.bcc(&[stage, &sources[..]].concat());
                     assert_eq!(failed.status.code(), Some(1), "{stage:?} {sources:?}");
                 }
-                drop(std::fs::remove_file(project.path("a.o")));
-                assert_eq!(
-                    project.bcc(&["-c", sources[0], sources[1]]).status.code(),
-                    Some(1)
-                );
-                assert!(project.path("a.o").is_file(), "{sources:?}");
-                assert!(!project.path(&bad.replace(".c", ".o")).exists());
+                assert!(!project.path("app").exists(), "{sources:?}");
+                for compiler in [&[][..], &["--gcc-mode"]] {
+                    drop(std::fs::remove_file(project.path("a.o")));
+                    let failed = project.bcc(&[compiler, &["-c"], &sources[..]].concat());
+                    assert_eq!(failed.status.code(), Some(1), "{compiler:?} {sources:?}");
+                    assert!(project.path("a.o").is_file(), "{compiler:?} {sources:?}");
+                    assert!(!project.path(&bad.replace(".c", ".o")).exists());
+                }
             }
-            let failed = project.bcc(&["-E", "a.c", "stop.c"]);
-            assert_eq!(failed.status.code(), Some(1));
-            assert!(stdout(&failed).contains("helper"), "{}", stdout(&failed));
+            // A syntax error is not a preprocessing error.
+            if bad == "bad.c" {
+                continue;
+            }
+            for sources in [[bad, "a.c"], ["a.c", bad]] {
+                let failed = project.bcc(&[&["-E"][..], &sources[..]].concat());
+                assert_eq!(failed.status.code(), Some(1), "{sources:?}");
+                assert!(stdout(&failed).contains("helper"), "{}", stdout(&failed));
+            }
         }
-        assert!(!project.path("app").exists());
+        let missing = project.bcc(&["-c", "missing.c", "a.c"]);
+        assert!(
+            stderr(&missing).contains("error: cannot read `missing.c`"),
+            "{}",
+            stderr(&missing)
+        );
     }
 
     /// An interpreted program's status reaches the shell as a native build's
