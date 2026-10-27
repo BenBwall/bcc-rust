@@ -237,7 +237,10 @@ struct Path {
 
 /// Follows `ptr` back to the objects it may point into, with constant
 /// offsets, and combines the bytes left in each: the most for modes 0 and
-/// 1, the fewest for 2 and 3, as GCC combines the arms of a conditional.
+/// 1, the fewest for 2 and 3, as GCC combines the arms of a conditional for
+/// `__builtin_object_size`. A dynamic query whose alternatives differ is
+/// unknown: GCC selects among them at run time, which bcc does not, and no
+/// single constant is right for every one.
 /// An explicit stack replaces recursion through `select` operands and the
 /// arguments block parameters receive.
 fn walk(
@@ -256,6 +259,10 @@ fn walk(
     // loop that passes its pointer on unchanged) adds no object.
     let mut visited = ArenaVec::new_in(draft.scratch);
     let mut combined: Option<u64> = None;
+    // A dynamic query answers for the object the pointer points into at run
+    // time; the most or fewest of different objects' bytes would overstate
+    // or understate it, so differing alternatives leave it unknown.
+    let mut differ = false;
     let mut unknown = false;
     let mut variable = false;
     let mut branched = false;
@@ -348,20 +355,22 @@ fn walk(
             | Object::Unknown => subobject_left(query, path),
         };
         match bytes {
-            | Some(bytes) =>
+            | Some(bytes) => {
+                differ |= combined.is_some_and(|other| other != bytes);
                 combined = Some(combined.map_or(bytes, |other| {
                     if query.minimum() {
                         other.min(bytes)
                     } else {
                         other.max(bytes)
                     }
-                })),
+                }));
+            },
             | None => unknown = true,
         }
     }
     if variable {
         Walk::Variable { branched }
-    } else if unknown {
+    } else if unknown || (differ && query.dynamic()) {
         Walk::Unknown
     } else {
         combined.map_or(Walk::Unknown, Walk::Known)

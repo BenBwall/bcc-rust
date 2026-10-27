@@ -1831,13 +1831,16 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
     /// names the closest subobject of a pointer this function computes from
     /// it by pointer arithmetic: the function is one whose calls carry hints
     /// for every pointer argument (`always_inline`, or an argument pack
-    /// copy), and nothing writes the parameter. Elsewhere, and for a written
+    /// copy), and nothing writes the parameter, directly, through its
+    /// address, or in inline assembly. Elsewhere, and for a written
     /// parameter, an inlined call could reach a hint from further out
     /// across a narrowing member access.
     pub(super) fn subobject_hints_pass(&self, parameter: usize) -> bool {
-        self.record
-            .binding
-            .is_some_and(|binding| self.unit.hints_subobjects(binding))
+        !self.record.assembly
+            && self
+                .record
+                .binding
+                .is_some_and(|binding| self.unit.hints_subobjects(binding))
             && !self
                 .unit
                 .sema

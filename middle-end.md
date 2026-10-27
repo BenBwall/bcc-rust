@@ -223,7 +223,8 @@ IR's addresses do not record subobjects, so this is how a callee's mode 1
 or 3 query of its parameter finds `s.name` once the call is expanded. The
 hint closest to the query decides, and it holds only across pointer
 arithmetic: an argument that is the calling wrapper's own parameter, offset
-by pointer arithmetic and casts alone and never assigned, gets no hint (its
+by pointer arithmetic and casts alone, never assigned, incremented or
+decremented, and whose address `&` never takes, gets no hint (its
 caller's still names the subobject), and every other argument gets a
 `subobject ptr, -1`, "not known", so that no hint from further out answers
 across a member access (`char *q = &p->a[1]`) that narrowed the subobject.
@@ -247,7 +248,9 @@ need a `subobject` on the path and answer the fewer of its bytes and the
 object's. Offsets must be constant: queries whose offset another query
 decides wait while `fold` makes it constant (`p + ((B(p) + 1) & 1)`).
 A dynamic query on one path computes a runtime answer from a runtime size or
-offset; any other query left gets the answer for an unknown object,
+offset; a dynamic query whose alternatives differ is unknown, since it
+answers for the object reached at run time (GCC selects among them at run
+time; bcc does not yet); any other query left gets the answer for an unknown object,
 `(size_t) -1` for modes 0 and 1 and 0 for modes 2 and 3. Positions past the
 end leave 0 bytes, before the start 0 (mode 1 before its subobject: unknown),
 so no answer exceeds the bytes the pointer has left, and a checked call

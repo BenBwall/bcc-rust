@@ -232,6 +232,28 @@ block3(v9: ptr):
         ));
         assert_eq!(answer(&text, &[0]), 2 * expected, "mode {mode}:\n{text}");
     }
+    // A dynamic query answers for the object reached at run time, which
+    // neither constant is for every run: unknown, never 16 for a 4-byte
+    // array.
+    for (mode, unknown) in [(0, UNKNOWN), (2, 0)] {
+        let text = resolve(&format!(
+            "\
+function @f(i64) -> i64 external {{
+    slot0 = stack_slot 16, align 8
+    slot1 = stack_slot 4, align 4
+block0(v0: i64):
+    v1 = stack_addr slot0
+    v2 = stack_addr slot1
+    v3 = iconst.i64 0
+    v4 = icmp.i64 eq v0, v3
+    v5 = select.ptr v4, v1, v2
+    v6 = object_size.i64 dynamic v5, {mode}
+    return v6
+}}
+"
+        ));
+        assert_eq!(answer(&text, &[1]), unknown, "mode {mode}:\n{text}");
+    }
 }
 
 /// Pointers whose object is not known (a parameter, an integer, a loaded

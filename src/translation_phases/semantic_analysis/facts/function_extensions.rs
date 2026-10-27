@@ -67,8 +67,9 @@ pub(crate) struct FunctionExtensions<'tu> {
     /// not record.
     pub(in crate::translation_phases::semantic_analysis) subobject_arguments:
         ArenaMap<'tu, usize, SubobjectArgument>,
-    /// The parameters an assignment, increment or decrement writes: their
-    /// value may no longer be the pointer the caller passed.
+    /// The parameters an assignment, increment or decrement writes, or whose
+    /// address `&` takes: their value may no longer be the pointer the
+    /// caller passed.
     pub(in crate::translation_phases::semantic_analysis) written_parameters:  ArenaSet<'tu, usize>,
     /// Hidden size of a cleanup call's synthetic address argument, keyed by
     /// the automatic object's binding rather than expression syntax.

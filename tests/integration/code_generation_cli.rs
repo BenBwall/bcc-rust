@@ -475,7 +475,8 @@ int main(int argc, char **argv) { char a[4]; return (argc > 1 ? g(a, \"x\") : f(
     }
 
     /// A pointer an inlined function forms by a member access names a
-    /// narrower subobject than its caller's argument (#151 review round 1):
+    /// narrower subobject than its caller's argument (#151 review rounds 1
+    /// and 2, also when written through the parameter's address):
     /// modes 1 and 3 of it, queried there or in a further wrapper, get the
     /// unknown answers (GCC finds 3), never the 15 bytes left in the
     /// structure the caller named. A parameter offset by pointer arithmetic
@@ -503,6 +504,20 @@ int main(void) { struct S s; return f(&s) & 0xff; }
 INLINE unsigned long f(char *p) { p = &((struct S *)p)->b[1]; return __builtin_object_size(p, 1); }
 int main(void) { char buf[16]; return f(buf); }
 ";
+        // Written through its address (#151 review round 2).
+        let through_address = "\
+INLINE unsigned long f(char *p) { char **q = &p; *q = &((struct S *)p)->a[1]; return \
+                               __builtin_object_size(p, 3); }
+int main(void) { struct S s; return f((char *)&s); }
+";
+        // A dynamic query of one of two objects (round 2): GCC selects 4 at
+        // run time; bcc answers unknown, never the larger 16. The static
+        // query takes the larger, as GCC's does.
+        let dynamic_pick = "\
+volatile int pick = 0;
+INLINE unsigned long f(char *p) { return __builtin_dynamic_object_size(p, 0); }
+int main(void) { char small[4], large[16]; return f(pick ? large : small) & 0xff; }
+";
         let arithmetic = "\
 INLINE unsigned long g(char *q) { return __builtin_object_size(q + 1, 1); }
 INLINE unsigned long f(char *p) { return g(p + 2); }
@@ -529,6 +544,28 @@ int main(void) { struct S s; return f(s.b) * 10 + g(&s.a[1]); }
             ),
             (forwarded.to_owned(), 255),
             (written.to_owned(), 255),
+            (through_address.to_owned(), 0),
+            (through_address.replace(", 3)", ", 1)"), 255),
+            (
+                through_address.replace(
+                    "__builtin_object_size(p, 3)",
+                    "__builtin_dynamic_object_size(p, 3)",
+                ),
+                0,
+            ),
+            (
+                through_address.replace(
+                    "__builtin_object_size(p, 3)",
+                    "__builtin_dynamic_object_size(p, 1)",
+                ),
+                255,
+            ),
+            (through_address.replace("char **q = &p; *q =", "*(&p) ="), 0),
+            (dynamic_pick.to_owned(), 255),
+            (
+                dynamic_pick.replace("__builtin_dynamic_object_size", "__builtin_object_size"),
+                16,
+            ),
             (arithmetic.to_owned(), 92),
         ];
         let executable = temporary("subobject-hints.exe");

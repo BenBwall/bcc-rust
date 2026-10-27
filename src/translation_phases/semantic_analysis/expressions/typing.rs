@@ -89,6 +89,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
         if op == U::AddressOf {
             let operand = self.resolve_function_value(operand, None);
+            // Anything may write a parameter through its address.
+            self.note_parameter_write(operand.binding);
             if operand.vector_element {
                 return self.vector_error(e);
             }

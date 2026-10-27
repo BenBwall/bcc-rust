@@ -382,7 +382,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     /// Records that an assignment, increment or decrement writes the
-    /// object `binding` names, if it is a parameter.
+    /// object `binding` names, if it is a parameter, or that `&` takes its
+    /// address, through which anything may write it.
     pub(super) fn note_parameter_write(&mut self, binding: Option<usize>) {
         if let Some(binding) = binding
             && self.bindings[binding].kind == super::BindingKind::Parameter
