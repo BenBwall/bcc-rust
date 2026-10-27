@@ -9,9 +9,12 @@
 //! exiting with its status. Bounds checking (`-b`) and backtraces (`-bt`)
 //! are accepted with a warning: bcc has neither.
 
-use std::ffi::{
-    OsStr,
-    OsString,
+use std::{
+    ffi::{
+        OsStr,
+        OsString,
+    },
+    path::Path,
 };
 
 use super::{
@@ -32,7 +35,13 @@ use super::{
     version,
 };
 use crate::{
-    cli::arguments::implements_language_option,
+    cli::{
+        arguments::implements_language_option,
+        driver::{
+            InputKind,
+            kind,
+        },
+    },
     target::Target,
 };
 
@@ -45,7 +54,7 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
     let mut standard = "gnu99";
     let mut stage = false;
     let mut output = false;
-    let mut inputs = 0;
+    let mut inputs = Inputs::default();
     let mut run: Option<Vec<OsString>> = None;
     let mut arguments = invocation.arguments.iter().map(OsString::as_os_str);
     while let Some(argument) = arguments.next() {
@@ -53,8 +62,7 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
             .to_str()
             .filter(|text| text.starts_with('-') && *text != "-")
         else {
-            inputs += 1;
-            out.push(argument.into());
+            inputs.add(invocation, argument, &mut out)?;
             continue;
         };
         let operand = |arguments: &mut dyn Iterator<Item = &OsStr>, joined: &str| {
@@ -88,8 +96,7 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
                     invocation.error(format_args!("argument to '-run' is missing"));
                     return Err(MainError::Reported(1));
                 };
-                inputs += 1;
-                out.push(file.into());
+                inputs.add(invocation, file, &mut out)?;
                 run = Some(arguments.by_ref().map(OsString::from).collect());
             },
             | "-c" | "-E" => {
@@ -156,6 +163,18 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
                         };
                         if option == "-o" {
                             output = true;
+                            // `--output=` keeps a name such as `-.o` from
+                            // reading as an option.
+                            let mut option = OsString::from("--output=");
+                            option.push(value);
+                            out.push(option);
+                            continue;
+                        } else if option == "-x" {
+                            inputs.language = match value.to_str() {
+                                | Some("c") => Some(true),
+                                | Some("none" | "n") => None,
+                                | _ => Some(false),
+                            };
                         }
                         out.push(option.into());
                         out.push(value);
@@ -189,7 +208,7 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
             },
         }
     }
-    if inputs == 0 {
+    if inputs.count == 0 {
         invocation.error(format_args!("no input files"));
         return Err(MainError::Reported(1));
     }
@@ -228,6 +247,49 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
     }
     plan.steps.push(Step::Bcc(bcc));
     Ok(plan)
+}
+
+/// The input files read so far.
+#[derive(Default)]
+struct Inputs {
+    count:    usize,
+    /// Whether an input could not be opened, after which TCC reads no
+    /// more.
+    failed:   bool,
+    /// The `-x` language in effect: C, another, or none (by extension).
+    language: Option<bool>,
+}
+
+impl Inputs {
+    /// Adds an input file to bcc's command line `out`, as TCC reads its
+    /// inputs in order and stops at the first that fails (`tcc.c`,
+    /// `main`): the inputs after one it cannot open, missing or unreadable,
+    /// are dropped. bcc's job reports such a C source in TCC's words, after
+    /// compiling the ones before it; another such file is reported here,
+    /// and nothing runs.
+    fn add(
+        &mut self,
+        invocation: &Invocation,
+        input: &OsStr,
+        out: &mut Vec<OsString>,
+    ) -> Result<(), MainError> {
+        if self.failed {
+            return Ok(());
+        }
+        self.count += 1;
+        if input != "-" && std::fs::File::open(input).is_err() {
+            self.failed = true;
+            if !self
+                .language
+                .unwrap_or_else(|| kind(Path::new(input)) == InputKind::C)
+            {
+                invocation.error(format_args!("file '{}' not found", input.to_string_lossy()));
+                return Err(MainError::Reported(1));
+            }
+        }
+        out.push(input.into());
+        Ok(())
+    }
 }
 
 /// `-h`.

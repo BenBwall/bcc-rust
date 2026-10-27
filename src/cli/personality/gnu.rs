@@ -12,6 +12,7 @@ use std::{
         OsString,
     },
     fmt::Write as _,
+    path::Path,
 };
 
 use super::{
@@ -20,6 +21,7 @@ use super::{
     Personality,
     Plan,
     Step,
+    TemporaryDirectory,
     host_target,
     known::{
         Compiler,
@@ -33,7 +35,14 @@ use super::{
     version,
 };
 use crate::{
-    cli::arguments::implements_language_option,
+    cli::{
+        arguments::implements_language_option,
+        driver::{
+            InputKind,
+            kind,
+            kind_of_language,
+        },
+    },
     target::Target,
 };
 
@@ -52,9 +61,12 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         errors: 0,
         target: invocation.target,
         sysroot: None,
-        stage: None,
-        output: false,
-        inputs: 0,
+        stages: Vec::new(),
+        syntax_only: false,
+        outputs: Vec::new(),
+        inputs: Vec::new(),
+        language: None,
+        warning_options: Vec::new(),
         verbose: false,
         dry_run: false,
         machine: Vec::new(),
@@ -67,29 +79,31 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
     }
     let target = state.target.unwrap_or_else(|| host_target(personality));
     state.machine_options(target);
+    state.check_inputs();
+    let jobs = state.jobs();
     if state.errors != 0 {
         return Err(MainError::Reported(1));
     }
-    let mut bcc = vec![invocation.program.clone()];
-    bcc.push(
+    let mut common = vec![invocation.program.clone()];
+    common.push(
         match personality {
             | Personality::Gcc => "--compiler-identity=gcc",
             | _ => "--compiler-identity=clang",
         }
         .into(),
     );
-    bcc.push(
+    common.push(
         match personality {
             | Personality::Gcc => "--diagnostic-format=gcc",
             | _ => "--diagnostic-format=clang",
         }
         .into(),
     );
-    bcc.push(format!("--target={}", target.triple()).into());
+    common.push(format!("--target={}", target.triple()).into());
     if invocation.name.ends_with("c89") {
-        bcc.push("-std=c89".into());
+        common.push("-std=c89".into());
     } else if invocation.name.ends_with("c99") {
-        bcc.push("-std=c99".into());
+        common.push("-std=c99".into());
     }
     // bcc searches the host's C library when it compiles for the host, as
     // these compilers do, and the selected root's otherwise, also for the
@@ -97,76 +111,187 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
     if let Some(sysroot) = &state.sysroot {
         let mut option = OsString::from("--sysroot=");
         option.push(sysroot);
-        bcc.push(option);
+        common.push(option);
     }
-    let links = state.stage.is_none();
-    if !links {
-        // GCC ignores what links when it stops before linking.
-        state
-            .out
-            .retain(|option| !matches!(option.to_str(), Some("-shared" | "-pie" | "-no-pie")));
-    }
-    bcc.append(&mut state.out);
-    if links && !state.output && state.inputs != 0 {
-        bcc.push("-o".into());
-        bcc.push(
-            if matches!(target, Target::WindowsGnu | Target::WindowsMsvc) {
-                "a.exe"
-            } else {
-                "a.out"
+    let links = state.stages.is_empty() && !state.syntax_only;
+    let mut steps = Vec::new();
+    let mut temporary = None;
+    for job in jobs {
+        if job.outputs == Outputs::Discarded {
+            let directory = match &temporary {
+                | Some(TemporaryDirectory(directory)) => directory.clone(),
+                | None => {
+                    let created = TemporaryDirectory::create().map_err(|source| {
+                        MainError::WriteOutputFileError {
+                            path: std::env::temp_dir(),
+                            source,
+                        }
+                    })?;
+                    let path = created.0.clone();
+                    temporary = Some(created);
+                    path
+                },
+            };
+            for (index, input) in state.inputs.iter().enumerate() {
+                if input.dropped || !job.inputs.take(input) {
+                    continue;
+                }
+                let mut bcc = common.clone();
+                bcc.extend(state.arguments(Inputs::One(input.at), links));
+                bcc.extend(job.stages.iter().map(OsString::from));
+                let mut option = OsString::from("--output=");
+                option.push(directory.join(format!("{index}.o")));
+                bcc.push(option);
+                steps.push(bcc);
             }
-            .into(),
-        );
+            continue;
+        }
+        let mut bcc = common.clone();
+        bcc.extend(state.arguments(job.inputs, links));
+        bcc.extend(job.stages.iter().map(OsString::from));
+        if job.outputs == Outputs::Named {
+            // `--output=` keeps a name such as `-.o` from reading as an
+            // option.
+            for output in &state.outputs {
+                let mut option = OsString::from("--output=");
+                option.push(output);
+                bcc.push(option);
+            }
+        }
+        if links && state.outputs.is_empty() && !state.inputs.is_empty() {
+            bcc.push("-o".into());
+            bcc.push(
+                if matches!(target, Target::WindowsGnu | Target::WindowsMsvc) {
+                    "a.exe"
+                } else {
+                    "a.out"
+                }
+                .into(),
+            );
+        }
+        steps.push(bcc);
     }
-    let mut plan = Plan::default();
+    // Under `-fsyntax-only` the C and assembly inputs form separate jobs,
+    // and each runs whether the other fails, as in the compilers.
+    let mut plan = Plan {
+        keep_going: true,
+        temporary,
+        ..Plan::default()
+    };
     if state.verbose || state.dry_run {
         let mut text = version::verbose(personality, target);
         if state.dry_run {
-            text.push_str(" \"bcc\"");
-            for argument in &bcc[1..] {
-                _ = write!(text, " \"{}\"", argument.to_string_lossy());
+            for bcc in &steps {
+                text.push_str(" \"bcc\"");
+                for argument in &bcc[1..] {
+                    _ = write!(text, " \"{}\"", argument.to_string_lossy());
+                }
+                text.push('\n');
             }
-            text.push('\n');
         }
         plan.steps.push(Step::Print { text, stderr: true });
-        if state.dry_run || state.inputs == 0 {
+        if state.dry_run || state.inputs.is_empty() {
             return Ok(plan);
         }
     }
-    if state.inputs == 0 {
-        invocation.error(format_args!(
-            "{}no input files",
-            if personality == Personality::Gcc {
-                "fatal error: "
-            } else {
-                ""
-            }
-        ));
+    if state.inputs.is_empty() {
+        if personality == Personality::Gcc {
+            invocation.fatal(format_args!("no input files"));
+        } else {
+            invocation.error(format_args!("no input files"));
+        }
         return Err(MainError::Reported(1));
     }
-    plan.steps.push(Step::Bcc(bcc));
+    plan.steps.extend(steps.into_iter().map(Step::Bcc));
     Ok(plan)
+}
+
+/// One bcc command line of a plan: the inputs it takes, and the stage
+/// options and `-o` it adds to the other options.
+struct Job {
+    inputs:  Inputs,
+    stages:  Vec<&'static str>,
+    outputs: Outputs,
+}
+
+/// Where a [`Job`] writes.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Outputs {
+    /// Where the stage writes, without `-o`.
+    Default,
+    /// To the `-o` operands.
+    Named,
+    /// Each input to its own object in a temporary directory, which is
+    /// removed: GCC's `-fsyntax-only` still assembles assembly inputs when
+    /// it does not stop before, and keeps nothing.
+    Discarded,
+}
+
+/// Which of the command line's inputs a [`Job`] takes.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Inputs {
+    /// Every input.
+    All,
+    /// The C sources and the files for the linker.
+    CAndLink,
+    /// The assembly inputs.
+    Assembly,
+    /// The one input at this index in [`State::out`].
+    One(usize),
+}
+
+impl Inputs {
+    fn take(self, input: &Input) -> bool {
+        match self {
+            | Self::All => true,
+            | Self::CAndLink => matches!(input.kind, InputKind::C | InputKind::Link),
+            | Self::Assembly => matches!(input.kind, InputKind::Assembly { .. }),
+            | Self::One(at) => input.at == at,
+        }
+    }
+}
+
+/// An input file on the command line.
+struct Input {
+    path:    OsString,
+    kind:    InputKind,
+    /// Its index in [`State::out`].
+    at:      usize,
+    /// Whether no job takes it: Clang refused it as missing, or left it
+    /// unused.
+    dropped: bool,
 }
 
 /// The translation so far.
 struct State<'a> {
-    invocation: &'a Invocation,
-    compiler:   Compiler,
+    invocation:      &'a Invocation,
+    compiler:        Compiler,
     /// bcc's options and inputs, in order.
-    out:        Vec<OsString>,
-    errors:     usize,
-    target:     Option<Target>,
-    sysroot:    Option<OsString>,
-    /// The option that stops before linking: `-c`, `-S`, `-E`, `-M`, `-MM`
-    /// or `-fsyntax-only`.
-    stage:      Option<&'static str>,
-    output:     bool,
-    inputs:     usize,
-    verbose:    bool,
-    dry_run:    bool,
+    out:             Vec<OsString>,
+    errors:          usize,
+    target:          Option<Target>,
+    sysroot:         Option<OsString>,
+    /// The options that stop before linking, in order: `-c`, `-S`, `-E`,
+    /// `-M` and `-MM`.
+    stages:          Vec<&'static str>,
+    /// `-fsyntax-only`, which the preprocessing stages override and which
+    /// overrides the others.
+    syntax_only:     bool,
+    /// The `-o` operands.
+    outputs:         Vec<OsString>,
+    /// The input files.
+    inputs:          Vec<Input>,
+    /// The kind of input the `-x` language in effect makes a file, or
+    /// `None` to decide by its extension.
+    language:        Option<InputKind>,
+    /// The `-w` and `-W` options, in order, which decide how Clang reports
+    /// an argument it leaves unused.
+    warning_options: Vec<String>,
+    verbose:         bool,
+    dry_run:         bool,
     /// The known `-m` options bcc does not implement, judged once the
     /// target is known, since `--target` may come after them.
-    machine:    Vec<String>,
+    machine:         Vec<String>,
 }
 
 /// Options bcc reads in GCC's spelling, which take their operand as the next
@@ -288,20 +413,14 @@ impl State<'_> {
                 return Some(Plan::print(help(personality, &self.invocation.name))),
             | "-v" => self.verbose = true,
             | "-###" => self.dry_run = true,
-            | "-c" | "-S" | "-E" | "-M" | "-MM" => {
-                self.stage = Some(match text {
-                    | "-c" => "-c",
-                    | "-S" => "-S",
-                    | "-E" => "-E",
-                    | "-M" => "-M",
-                    | _ => "-MM",
-                });
-                self.out.push(text.into());
-            },
-            | "-fsyntax-only" => {
-                self.stage = Some("-fsyntax-only");
-                self.out.push("--syntax-only".into());
-            },
+            | "-c" | "-S" | "-E" | "-M" | "-MM" => self.stages.push(match text {
+                | "-c" => "-c",
+                | "-S" => "-S",
+                | "-E" => "-E",
+                | "-M" => "-M",
+                | _ => "-MM",
+            }),
+            | "-fsyntax-only" => self.syntax_only = true,
             | "-ansi" => self.out.push("-std=c89".into()),
             | "-nostdinc" => self.out.push("--nostdinc".into()),
             | "-s" => self.out.push("-Wl,-s".into()),
@@ -331,8 +450,233 @@ impl State<'_> {
 
     /// An input file, or `-` for stdin.
     fn input(&mut self, argument: &OsStr) {
-        self.inputs += 1;
+        self.inputs.push(Input {
+            path:    argument.into(),
+            kind:    self.language.unwrap_or_else(|| kind(Path::new(argument))),
+            at:      self.out.len(),
+            dropped: false,
+        });
         self.out.push(argument.into());
+    }
+
+    /// bcc's options and the inputs `inputs` takes, in order, without the
+    /// link options when the command line does not link.
+    fn arguments(&self, inputs: Inputs, links: bool) -> Vec<OsString> {
+        self.out
+            .iter()
+            .enumerate()
+            .filter(|(at, argument)| {
+                let input = self.inputs.iter().find(|input| input.at == *at);
+                match input {
+                    | Some(input) => !input.dropped && inputs.take(input),
+                    // GCC ignores what links when it stops before linking.
+                    | None =>
+                        links || !matches!(argument.to_str(), Some("-shared" | "-pie" | "-no-pie")),
+                }
+            })
+            .map(|(_, argument)| argument.clone())
+            .collect()
+    }
+
+    /// Diagnoses the inputs as the driver does before it runs anything:
+    /// Clang's refuses a missing file and runs no job, and both refuse `-o`
+    /// for several outputs. GCC leaves a missing file to its compiler,
+    /// which reports it and goes on with the others, as bcc's driver does.
+    fn check_inputs(&mut self) {
+        let clang = self.compiler == Compiler::Clang;
+        if clang {
+            for input in &mut self.inputs {
+                if input.path != "-" && std::fs::metadata(&input.path).is_err() {
+                    input.dropped = true;
+                    self.errors += 1;
+                    self.invocation.error(format_args!(
+                        "no such file or directory: '{}'",
+                        input.path.to_string_lossy()
+                    ));
+                }
+            }
+            if self.inputs.iter().all(|input| input.dropped) && !self.inputs.is_empty() {
+                self.error(format_args!("no input files"));
+            }
+        }
+        // Clang counts the outputs of the inputs it kept.
+        let compiled = self
+            .inputs
+            .iter()
+            .filter(|input| input.kind != InputKind::Link && !input.dropped)
+            .count();
+        if self.outputs.is_empty() || compiled < 2 {
+            return;
+        }
+        // GCC refuses `-o` with `-c`, `-S` or `-E` given, even when
+        // `-fsyntax-only` leaves nothing to write, but lets each unit's `-M`
+        // rules replace the one before; Clang refuses any stage that writes
+        // a file per input.
+        if clang {
+            let preprocesses = self.preprocesses();
+            if preprocesses || (!self.syntax_only && !self.stages.is_empty()) {
+                self.error(format_args!(
+                    "cannot specify -o when generating multiple output files"
+                ));
+            }
+        } else if self
+            .stages
+            .iter()
+            .any(|stage| matches!(*stage, "-c" | "-S" | "-E"))
+        {
+            self.errors += 1;
+            self.invocation.fatal(format_args!(
+                "cannot specify '-o' with '-c', '-S' or '-E' with multiple files"
+            ));
+        }
+    }
+
+    /// Whether `-E`, `-M` or `-MM` stops the command line after
+    /// preprocessing.
+    fn preprocesses(&self) -> bool {
+        self.stages
+            .iter()
+            .any(|stage| matches!(*stage, "-E" | "-M" | "-MM"))
+    }
+
+    /// The bcc command lines the stages and inputs need. `-fsyntax-only`
+    /// checks the C sources and writes nothing for them, overriding `-c`,
+    /// `-S` and `-o` there, while `-E`, `-M` and `-MM` override it. It
+    /// leaves assembly to the assembler: GCC still assembles each `-c`
+    /// input unless `-S` is given, keeping the objects only for `-c`, and
+    /// Clang leaves `.s` files unused (it preprocesses `.S`
+    /// files, which bcc's `-E` does not). Clang warns about what it leaves
+    /// unused, and so about the linker's inputs whenever it does not link.
+    fn jobs(&mut self) -> Vec<Job> {
+        let clang = self.compiler == Compiler::Clang;
+        let preprocesses = self.preprocesses();
+        if self.syntax_only && preprocesses {
+            self.unused(format_args!(
+                "argument unused during compilation: '-fsyntax-only'"
+            ));
+            self.syntax_only = false;
+        }
+        if clang && (self.syntax_only || !self.stages.is_empty()) {
+            let syntax_only = self.syntax_only;
+            self.warn_unused_inputs(|kind| match kind {
+                | InputKind::Link => Some("linker"),
+                | InputKind::Assembly {
+                    preprocessed: false,
+                } if syntax_only => Some("assembler"),
+                | _ => None,
+            });
+        }
+        if !self.syntax_only {
+            // Clang runs nothing when it left every input unused.
+            if !self.inputs.is_empty() && !self.has(Inputs::All) {
+                return Vec::new();
+            }
+            return vec![Job {
+                inputs:  Inputs::All,
+                stages:  self.stages.clone(),
+                outputs: Outputs::Named,
+            }];
+        }
+        let mut jobs = Vec::new();
+        if self.has(Inputs::CAndLink) {
+            jobs.push(Job {
+                inputs:  Inputs::CAndLink,
+                stages:  vec!["--syntax-only"],
+                outputs: Outputs::Default,
+            });
+        }
+        if clang {
+            for stage in self.stages.clone() {
+                self.unused(format_args!(
+                    "argument unused during compilation: '{stage}'"
+                ));
+            }
+        } else if !self.stages.contains(&"-S") && self.has(Inputs::Assembly) {
+            // GCC assembles them unless `-S` stops before the assembler,
+            // keeping the objects only for `-c`.
+            jobs.push(Job {
+                inputs:  Inputs::Assembly,
+                stages:  vec!["-c"],
+                outputs: if self.stages.contains(&"-c") {
+                    Outputs::Named
+                } else {
+                    Outputs::Discarded
+                },
+            });
+        }
+        jobs
+    }
+
+    /// Whether any input that is not dropped is one `inputs` takes.
+    fn has(&self, inputs: Inputs) -> bool {
+        self.inputs
+            .iter()
+            .any(|input| !input.dropped && inputs.take(input))
+    }
+
+    /// Warns, in order, as Clang does, that the inputs of the kinds `unused`
+    /// names are unused (`a.o: 'linker' input unused`), and drops them.
+    fn warn_unused_inputs(&mut self, unused: impl Fn(InputKind) -> Option<&'static str>) {
+        let names: Vec<(OsString, &str)> = self
+            .inputs
+            .iter_mut()
+            .filter(|input| !input.dropped)
+            .filter_map(|input| {
+                let what = unused(input.kind)?;
+                input.dropped = true;
+                Some((input.path.clone(), what))
+            })
+            .collect();
+        for (name, what) in names {
+            self.unused(format_args!(
+                "{}: '{what}' input unused",
+                name.to_string_lossy()
+            ));
+        }
+    }
+
+    /// Reports an argument Clang leaves unused, as its
+    /// `-Wunused-command-line-argument` warning: suppressed by `-w` or
+    /// `-Wno-unused-command-line-argument`, an error under `-Werror` or
+    /// `-Werror=unused-command-line-argument`.
+    fn unused(&mut self, message: std::fmt::Arguments<'_>) {
+        const GROUP: &str = "unused-command-line-argument";
+        if self.compiler != Compiler::Clang
+            || self.warning_options.iter().any(|option| option == "-w")
+        {
+            return;
+        }
+        // The warning is on by default, so `-Weverything`, which turns on
+        // only the warnings no option has set, leaves it as it is.
+        let mut enabled = true;
+        let mut all_errors = false;
+        let mut error = None;
+        for option in &self.warning_options {
+            let option = option.as_str();
+            if option.strip_prefix("-W") == Some(GROUP) {
+                enabled = true;
+            } else if option == "-Wno-everything" || option.strip_prefix("-Wno-") == Some(GROUP) {
+                enabled = false;
+            } else if option == "-Werror" {
+                all_errors = true;
+            } else if option == "-Wno-error" {
+                all_errors = false;
+            } else if option.strip_prefix("-Werror=") == Some(GROUP) {
+                enabled = true;
+                error = Some(true);
+            } else if option.strip_prefix("-Wno-error=") == Some(GROUP) {
+                error = Some(false);
+            }
+        }
+        if !enabled {
+            return;
+        }
+        if error.unwrap_or(all_errors) {
+            self.error(format_args!("{message} [-Werror,-W{GROUP}]"));
+        } else {
+            self.invocation
+                .warning(format_args!("{message} [-W{GROUP}]"));
+        }
     }
 
     /// The option and its operand, joined or the next argument, of an
@@ -410,6 +754,7 @@ impl State<'_> {
                 self.out.push("-Xassembler".into());
                 self.out.push(operand.into());
             },
+            | "-o" => self.outputs.push(operand.into()),
             // Tuning parameters of GCC's optimizers.
             | "--param" => {},
             | "-B" => self.invocation.warning(format_args!(
@@ -431,8 +776,8 @@ impl State<'_> {
                 .into(),
             ),
             | _ => {
-                if option == "-o" {
-                    self.output = true;
+                if option == "-x" {
+                    self.language = kind_of_language(&lossy);
                 }
                 self.out.push(option.into());
                 self.out.push(operand.into());
@@ -442,6 +787,14 @@ impl State<'_> {
 
     /// Translates an option without an operand.
     fn flag(&mut self, text: &str) {
+        if text == "-w"
+            || (text.starts_with("-W")
+                && !["-Wl,", "-Wa,", "-Wp,"]
+                    .iter()
+                    .any(|prefix| text.starts_with(prefix)))
+        {
+            self.warning_options.push(text.into());
+        }
         if PLAIN_OPTIONS.contains(&text)
             || text.starts_with("-std=")
             || text.starts_with("-O")

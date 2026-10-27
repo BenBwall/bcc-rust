@@ -2692,7 +2692,7 @@ printf(\"%f %f %F\\n\",1e100,-0.0,1.0/0.0); return 0; }",
         let output = bcc(SUM, &["-c"]);
         assert_eq!(output.status.code(), Some(1));
         assert!(
-            text(&output.stderr).contains("give -o for --input or stdin"),
+            text(&output.stderr).contains("give -o for --input"),
             "{}",
             text(&output.stderr)
         );
