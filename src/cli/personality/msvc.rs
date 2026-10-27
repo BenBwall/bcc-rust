@@ -38,10 +38,22 @@ use super::{
     version,
 };
 
+/// Clang options that clang-cl takes only after `/clang:`; given bare, it
+/// ignores them with a warning, as for an unknown `/` option.
+const CLANG_ONLY_OPTIONS: [&str; 4] = [
+    "-fsigned-char",
+    "-fno-signed-char",
+    "-funsigned-char",
+    "-fno-unsigned-char",
+];
+
 /// Translates a `cl.exe` or clang-cl command line.
 pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
     let clang_cl = invocation.personality == Personality::ClangCl;
     let mut state = State::default();
+    // clang-cl reads its `/clang:` options after the others, wherever they
+    // stand, so they win over `cl`'s (`/clang:-fsigned-char` over `/J`).
+    let mut clang_options: Vec<OsString> = Vec::new();
     let mut arguments = invocation.arguments.iter().map(OsString::as_os_str);
     while let Some(argument) = arguments.next() {
         if state.linking {
@@ -61,11 +73,11 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         }
         if clang_cl && let Some(clang) = option.strip_prefix("clang:") {
             // `/clang:OPTION` gives clang-cl a Clang option; bcc reads most.
-            state.bcc.push(clang.into());
+            clang_options.push(clang.into());
             continue;
         }
         if !state.option(invocation, option, &mut arguments) {
-            if clang_cl && text.starts_with('-') {
+            if clang_cl && text.starts_with('-') && !CLANG_ONLY_OPTIONS.contains(&text) {
                 // clang-cl also takes Clang's options; bcc reads most of them.
                 state.bcc.push(argument.into());
             } else if clang_cl {
@@ -154,6 +166,7 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         }
     }
     common.append(&mut state.bcc);
+    common.append(&mut clang_options);
     let mut plan = Plan::default();
     if !state.nologo && !clang_cl {
         plan.steps.push(Step::Print {
@@ -583,7 +596,8 @@ impl State {
                 .push(format!("-fpack-struct={}", &option[2..]).into()),
             | "Zc:trigraphs" => self.bcc.push("-ftrigraphs".into()),
             | "Zc:trigraphs-" => self.bcc.push("-fno-trigraphs".into()),
-            | "J" => self.unsupported(invocation, option, "plain char is always signed in bcc"),
+            // An unsigned plain `char`, which also defines `_CHAR_UNSIGNED`.
+            | "J" => self.bcc.push("-funsigned-char".into()),
             | "Zs" => self.syntax_only = true,
             | "diagnostics:classic" => self.diagnostics = "msvc-classic",
             | "diagnostics:column" => self.diagnostics = "msvc",

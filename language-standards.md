@@ -91,7 +91,8 @@ true exactly where plain `char` is signed, as in GCC and Clang; wide constants
 keep their `wchar_t` value. `-ffloatn-types` adds GCC 7's `_FloatN` keywords,
 constants, macros and builtins (see
 [Interchange floating types](#interchange-floating-types-2026-10-26)); it is
-off by default, as for Clang. Only `__STRICT_ANSI__` distinguishes
+on by default only under the `gcc` compiler identity, below, and off
+otherwise, as for Clang. Only `__STRICT_ANSI__` distinguishes
 strict modes from GNU modes in these macros. On the MSVC target,
 explicitly enabling `-fms-extensions` defines
 `_MSC_VER` `1933`, `_MSC_FULL_VER` `193300000`, `_MSC_BUILD` `1` and
@@ -123,11 +124,31 @@ personalities ([docs/design/driver-modes.md](docs/design/driver-modes.md)) do.
 `gcc` defines `__GNUC__` `14`, `__GNUC_MINOR__` `2`, `__GNUC_PATCHLEVEL__`
 `0`, `__VERSION__` `"14.2.0"` and GCC's execution character set names, and no
 Clang macro (`__clang__` and its versions, `__llvm__`, the literal
-encodings). Because GCC 7 and later name the TS 18661-3 types as keywords,
-glibc's headers then stop declaring them, so this identity also defines
-`_Float32`, `_Float64`, `_Float32x`, `_Float64x` and `_Float128` as macros for
-the standard types of the same representation (`float`, `double`, `double`,
-`long double`, `__float128`); they are not distinct types. glibc's GCC fortify
+encodings). It also defines GCC's `__FLT_IS_IEC_60559__`,
+`__DBL_IS_IEC_60559__` and `__LDBL_IS_IEC_60559__` (`1`, as GCC 13 and
+later), and `__GCC_IEC_559` and `__GCC_IEC_559_COMPLEX` as GCC computes them
+from the options: `2`, or `0` under `-fno-signed-zeros`, `-freciprocal-math`
+or an effective `-fassociative-math` (one with `-fno-signed-zeros` and
+`-fno-trapping-math`), and the complex one also under limited or Fortran
+complex arithmetic: `-f[no-]cx-fortran-rules` decides that alone when given,
+so `-fcx-fortran-rules -fno-cx-limited-range` still gives `0` and
+`-fno-cx-fortran-rules -fcx-limited-range` `2`, as in GCC 15, and
+`-f[no-]cx-limited-range` decides only otherwise. Those options, `-f[no-]trapping-math` and
+`-f[no-]math-errno` also define `__NO_SIGNED_ZEROS__`,
+`__RECIPROCAL_MATH__`, `__ASSOCIATIVE_MATH__`, `__NO_TRAPPING_MATH__` and
+`__NO_MATH_ERRNO__` there, and `-fno-fast-math` and
+`-fno-unsafe-math-optimizations` restore them as in GCC
+(`CompilerConfiguration::with_relaxed_floating_point`). bcc's code keeps
+IEC 60559 semantics under all of them, which they permit; the other
+identities accept them with no effect, since the pinned Clang's only
+counterpart, `__NO_MATH_ERRNO__`, has a target-dependent default bcc's macro
+tables leave out. Because GCC 7 and later
+name the TS 18661-3 types as keywords, glibc's headers then stop declaring
+them, so this identity turns on `-ffloatn-types` unless `-fno-floatn-types`
+is given; with that, it defines `_Float32`, `_Float64`, `_Float32x`,
+`_Float64x` and `_Float128` as macros for the standard types of the same
+representation (`float`, `double`, `double`, `long double`, `__float128`)
+instead, which are not distinct types. glibc's GCC fortify
 wrappers for the `printf` family, `open` and `syslog` forward their arguments
 with `__builtin_va_arg_pack`, which lowering expands at each call, so under
 this identity they reach the checked functions. `msvc` (`cl.exe`) removes the
@@ -521,7 +542,7 @@ mode gate and policy diagnostics (`Imaginary` reports an unsupported type); a
 | MacroExpandedDefined | - | - | - | - | - | - | - | extension (object-like warning baseline) | preprocessor |
 | QuotedHeaderBackslash | - | - | - | - | - | - | - | extension | preprocessor |
 | UnnamedDefinitionParameters | - | - | - | - | - | Y | Y | extension (warning fallback) | parser/semantic analysis |
-| InterchangeFloatTypes | - | - | - | - | - | Y | Y | `-ffloatn-types` only | lexer/parser/semantic analysis |
+| InterchangeFloatTypes | - | - | - | - | - | Y | Y | `gcc` identity or `-ffloatn-types` | lexer/parser/semantic analysis |
 | EmptyMacroArguments | - | - | Y | Y | Y | Y | Y | extension | lexer/preprocessor |
 | Inline | - | - | Y | Y | Y | Y | Y | GNU earlier | parser |
 | Restrict | - | - | Y | Y | Y | Y | Y | native | parser |
@@ -1386,7 +1407,7 @@ C23 and GNU23. bcc follows that contract by default: glibc supplies its
 `_FloatN` typedefs, so the names must stay identifiers. `-ffloatn-types`
 (`CompilerConfiguration::with_interchange_float_types`, see
 [Interchange floating types](#interchange-floating-types-2026-10-26)) gives
-GCC 7's contract instead, for a GCC identity. Because bcc claims Clang, glibc's own `bits/floatn.h` enables
+GCC 7's contract instead, and the `gcc` identity turns it on. Because bcc claims Clang, glibc's own `bits/floatn.h` enables
 `__HAVE_FLOAT128` through `__glibc_clang_prereq (3, 9)` and declares the
 complex type as `_Complex float __attribute__ ((__mode__ (__TC__)))`. The GNU
 `mode` attribute selects real (`SF`, `DF`, `XF`, `TF`, `KF`) and complex
@@ -1419,6 +1440,17 @@ variadic fallback. It is checked against pinned Clang in C17, GNU17 and C23
 on all four targets. Its binary128 calls retain Clang's ambiguous-overload
 diagnostic; the header does not define a binary128 promotion overload. The
 resource and its LLVM license are distributed together under `src/headers/`.
+bcc changes it in three places. Where the interchange floating types are on
+(`__FLT32_MANT_DIG__` under `__bcc__`), `_Float32`, `_Float64`, `_Float32x`,
+`_Float64x` and their complex types promote to the standard type with the
+same format, so a call gives the value GCC's `_FloatN` function gives, with
+the standard type as its type; `_Float128` stays refused like `__float128`,
+and `nexttoward` refuses a `_FloatN` first argument, as GCC's tgmath does
+(the C library has no such function). And under the GCC identity `conj` of
+a real argument returns imaginary part -0, the conjugate of the +0 a real
+number has as a complex one (§7.22p6, §7.3.9.3), as glibc and GCC give;
+otherwise it returns the argument with +0, as Clang's header and the pinned
+Clang do.
 
 Binary128 literals are parsed exactly with arena-backed integer rational
 conversion and one IEEE round-to-nearest-even step. Binary128 arithmetic,
@@ -1437,8 +1469,11 @@ later have them in every C mode, with the C23 Annex H constant suffixes
 `f32`, `f64`, `f128`, `f32x` and `f64x`, with `f` or `F` but only a lowercase
 `x`, as GCC requires (§H.5.1-H.5.2). It is
 off by default because glibc's `bits/floatn.h` declares these names as
-typedefs for the Clang identity bcc claims; a GCC identity, which makes
-glibc expect the keywords, should turn it on. The `Feature` row is
+typedefs for the Clang identity bcc claims by default. The `gcc` identity
+(`--compiler-identity=gcc`, which the GCC personality selects), which makes
+glibc expect the keywords, turns it on unless `-fno-floatn-types` is given;
+`CompilerConfiguration::interchange_float_types` is the explicit choice, or
+else whether the identity is GCC's. The `Feature` row is
 `InterchangeFloatTypes`: origin C23, so `-pedantic` before C23 warns
 "'_Float32' is a C23 extension" where GCC says "ISO C does not support the
 '_Float32' type before C23".
@@ -1462,7 +1497,11 @@ is chosen over `long double`, then `double`, then the extended type
 With the switch, the `__FLT32_*__`, `__FLT64_*__`, `__FLT32X_*__`,
 `__FLT64X_*__` and `__FLT128_*__` characteristics macros are predefined
 with GCC 15's x86-64 values (`target/interchange_floats.rs`), omitting the
-types the target lacks, and the constant builtins glibc's GCC paths call
+types the target lacks, with `__FLT_EVAL_METHOD_TS_18661_3__` `0`, which
+glibc's `<math.h>` prefers to `__FLT_EVAL_METHOD__`. A personality test
+compares them with the host GCC's `-dM -E` (GCC 13 or later) when one is
+installed. GCC defines no `__STDC_IEC_60559_TYPES__` for x86-64 and bcc
+none either. The constant builtins glibc's GCC paths call
 exist: `__builtin_huge_valfN`, `__builtin_inffN`, `__builtin_nanfN` and
 `__builtin_nansfN` for `f32`, `f64`, `f32x` and `f64x` (the `f128` ones
 already exist). The `nans` family, `__builtin_nans` included, gives a
@@ -1475,10 +1514,11 @@ Verified against real glibc 2.43 headers (`<math.h>`, `<complex.h>`,
 GCC 14 identity (`-U__clang__ -U__GNUC__ -D__GNUC__=14 ...`) in C11, GNU17
 and C23, and programs using `HUGE_VAL_F32`, `sqrtf32`, `strtof64` and the
 builtins print what GCC 15's builds print (`signbit` returns another
-nonzero value). Limits: the resource
-`<tgmath.h>` and `<float.h>` are Clang's and know none of these types
-(no `FLT32_MAX`), so a GCC identity still needs GCC's own `<float.h>`
-macros; GNU vector element types, imaginary `_FloatN` constants such as
+nonzero value). Limits: the resource `<float.h>` is Clang's and knows
+none of these types (no `FLT32_MAX`), so a GCC identity still needs GCC's
+own `<float.h>` macros; the resource `<tgmath.h>` takes them with the
+standard type's functions and result types (above), and refuses
+`_Float128`; GNU vector element types, imaginary `_FloatN` constants such as
 `1.0f32i`, `__builtin_*f128` math beyond the existing primitives, and
 binary128 arithmetic in lowering remain unsupported.
 

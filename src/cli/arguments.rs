@@ -36,6 +36,7 @@ use crate::{
         ExtensionPolicy,
         LanguageMode,
         MsvcFeature,
+        RelaxedFloatingPoint,
         WarningOption,
     },
     target::{
@@ -544,6 +545,14 @@ enum LanguageFlag {
     /// `-ffloatn-types` or `-fno-floatn-types`, bcc's own switch for the
     /// `_FloatN` keywords a GCC identity provides.
     InterchangeFloatTypes(bool),
+    /// `-fno-signed-zeros`, `-freciprocal-math` and their relatives (true),
+    /// or their opposites, such as `-fsigned-zeros`.
+    RelaxedFloatingPoint(RelaxedFloatingPoint, bool),
+    /// `-fno-fast-math` (true) or `-fno-unsafe-math-optimizations`, which
+    /// restore the options they imply.
+    StrictFloatingPoint {
+        fast_math: bool,
+    },
     /// `-trigraphs` or `-ftrigraphs` (true), or `-fno-trigraphs`.
     Trigraphs(bool),
     /// `-fwrapv` (true), or `-fno-wrapv` and `-fstrict-overflow`.
@@ -581,6 +590,44 @@ impl LanguageFlag {
             | "-fsigned-char" | "-fno-unsigned-char" => return Some(Self::CharSigned(true)),
             | "-funsigned-char" | "-fno-signed-char" => return Some(Self::CharSigned(false)),
             | "-ffloatn-types" => return Some(Self::InterchangeFloatTypes(true)),
+            | "-fno-signed-zeros" | "-fsigned-zeros" =>
+                return Some(Self::RelaxedFloatingPoint(
+                    RelaxedFloatingPoint::NoSignedZeros,
+                    text == "-fno-signed-zeros",
+                )),
+            | "-freciprocal-math" | "-fno-reciprocal-math" =>
+                return Some(Self::RelaxedFloatingPoint(
+                    RelaxedFloatingPoint::ReciprocalMath,
+                    text == "-freciprocal-math",
+                )),
+            | "-fno-trapping-math" | "-ftrapping-math" =>
+                return Some(Self::RelaxedFloatingPoint(
+                    RelaxedFloatingPoint::NoTrappingMath,
+                    text == "-fno-trapping-math",
+                )),
+            | "-fno-math-errno" | "-fmath-errno" =>
+                return Some(Self::RelaxedFloatingPoint(
+                    RelaxedFloatingPoint::NoMathErrno,
+                    text == "-fno-math-errno",
+                )),
+            | "-fassociative-math" | "-fno-associative-math" =>
+                return Some(Self::RelaxedFloatingPoint(
+                    RelaxedFloatingPoint::AssociativeMath,
+                    text == "-fassociative-math",
+                )),
+            | "-fcx-limited-range" | "-fno-cx-limited-range" =>
+                return Some(Self::RelaxedFloatingPoint(
+                    RelaxedFloatingPoint::CxLimitedRange,
+                    text == "-fcx-limited-range",
+                )),
+            | "-fcx-fortran-rules" | "-fno-cx-fortran-rules" =>
+                return Some(Self::RelaxedFloatingPoint(
+                    RelaxedFloatingPoint::CxFortranRules,
+                    text == "-fcx-fortran-rules",
+                )),
+            | "-fno-fast-math" => return Some(Self::StrictFloatingPoint { fast_math: true }),
+            | "-fno-unsafe-math-optimizations" =>
+                return Some(Self::StrictFloatingPoint { fast_math: false }),
             | "-fno-floatn-types" => return Some(Self::InterchangeFloatTypes(false)),
             | "-trigraphs" | "-ftrigraphs" => return Some(Self::Trigraphs(true)),
             | "-fno-trigraphs" => return Some(Self::Trigraphs(false)),
@@ -611,9 +658,6 @@ impl LanguageFlag {
                 | "1" | "2" | "4" | "8" | "16" => value.parse().ok().map(Self::PackStruct),
                 | _ => None,
             };
-        }
-        match text {
-            | _ => {},
         }
         if Relocation::parse(text).is_some() {
             return Some(Self::Relocation);
@@ -677,6 +721,20 @@ impl LanguageFlag {
             | Self::CharSigned(signed) => configuration.with_char_signed(signed),
             | Self::InterchangeFloatTypes(enabled) =>
                 configuration.with_interchange_float_types(enabled),
+            | Self::RelaxedFloatingPoint(option, relaxed) =>
+                configuration.with_relaxed_floating_point(option, relaxed),
+            | Self::StrictFloatingPoint { fast_math } => {
+                let options: &[RelaxedFloatingPoint] = if fast_math {
+                    &RelaxedFloatingPoint::FAST_MATH
+                } else {
+                    &RelaxedFloatingPoint::UNSAFE_MATH
+                };
+                options
+                    .iter()
+                    .fold(configuration, |configuration, &option| {
+                        configuration.with_relaxed_floating_point(option, false)
+                    })
+            },
             | Self::Trigraphs(enabled) => configuration.with_trigraphs(enabled),
             | Self::Wrapv(enabled) => configuration.with_wrapv(enabled),
             | Self::PackStruct(alignment) => configuration.with_default_pack(alignment),

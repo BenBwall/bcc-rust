@@ -146,6 +146,58 @@ pub(crate) enum DefaultVisibility {
     Protected,
 }
 
+/// A GCC option that gives up part of IEC 60559 semantics. Each permits
+/// transformations that bcc does not make, so the program bcc builds is the
+/// same with or without it, but GCC reports it in predefined macros
+/// (`__GCC_IEC_559`, `__NO_SIGNED_ZEROS__` and the rest), which bcc's GCC
+/// identity follows.
+/// C99: Annex F, §F.1 paragraph 1, p. 444; PDF p. 456; Annex G, §G.1
+/// paragraph 1, p. 467; PDF p. 479. GNU extension: GCC manual, "Optimize
+/// Options"; `cpp_iec_559_value` in GCC's `c-family/c-cppbuiltin.cc`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RelaxedFloatingPoint {
+    /// `-fno-signed-zeros`.
+    NoSignedZeros,
+    /// `-freciprocal-math`.
+    ReciprocalMath,
+    /// `-fno-trapping-math`.
+    NoTrappingMath,
+    /// `-fno-math-errno`.
+    NoMathErrno,
+    /// `-fassociative-math`, which GCC drops unless signed zeros and traps
+    /// are given up too.
+    AssociativeMath,
+    /// `-fcx-limited-range`: complex multiplication and division without
+    /// Annex G's treatment of infinities, unless `-fcx-fortran-rules` or
+    /// its `-fno-` form is given, which then decides alone, as in GCC 15.
+    CxLimitedRange,
+    /// `-fcx-fortran-rules`: Fortran's complex division, also without
+    /// Annex G's treatment of infinities.
+    CxFortranRules,
+}
+
+impl RelaxedFloatingPoint {
+    /// What `-fno-fast-math` restores: all but the complex arithmetic.
+    pub(crate) const FAST_MATH: [Self; 5] = [
+        Self::NoSignedZeros,
+        Self::ReciprocalMath,
+        Self::NoTrappingMath,
+        Self::NoMathErrno,
+        Self::AssociativeMath,
+    ];
+    /// What `-fno-unsafe-math-optimizations` restores.
+    pub(crate) const UNSAFE_MATH: [Self; 4] = [
+        Self::NoSignedZeros,
+        Self::ReciprocalMath,
+        Self::NoTrappingMath,
+        Self::AssociativeMath,
+    ];
+
+    pub(crate) const fn bit(self) -> u8 {
+        1 << self as u8
+    }
+}
+
 /// Which standard library functions the compiler may treat as builtins:
 /// recognize a call by its name and replace or transform it (`sqrt` as an
 /// instruction, a copying loop as `memcpy`). GCC's `-fno-builtin` and

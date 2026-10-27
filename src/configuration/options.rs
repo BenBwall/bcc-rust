@@ -62,7 +62,7 @@ impl CompilerConfiguration {
                     | Some(enabled) => enabled,
                     | None => !self.gnu && (self.standard as u8) <= CStandard::C17 as u8,
                 },
-                | Feature::InterchangeFloatTypes => self.interchange_float_types,
+                | Feature::InterchangeFloatTypes => self.interchange_float_types(),
                 | _ => true,
             };
             if accepted {
@@ -189,27 +189,35 @@ impl CompilerConfiguration {
 
     /// Makes `_Float32`, `_Float64`, `_Float128`, `_Float32x` and `_Float64x`
     /// keywords naming distinct types, as GCC 7 and later do, and predefines
-    /// their `__FLT32_*__`-family characteristics macros. Off by default:
-    /// glibc declares these names as typedefs for the Clang identity bcc
-    /// claims, so they must stay identifiers there; a GCC identity turns it
-    /// on.
+    /// their `__FLT32_*__`-family characteristics macros, overriding the
+    /// identity's default.
     /// C23: §H.5.1 paragraph 1, p. 560; PDF p. 573.
     pub(crate) const fn with_interchange_float_types(mut self, enabled: bool) -> Self {
-        self.interchange_float_types = enabled;
+        self.interchange_float_types = Some(enabled);
         self.derive_features()
     }
 
+    /// Whether the `_FloatN` keywords name distinct types: as
+    /// [`Self::with_interchange_float_types`] chose, or else for a GCC
+    /// identity alone, since GCC 7 and later provide them in every mode.
+    /// glibc declares these names as typedefs for the Clang, MSVC and TCC
+    /// identities, none of whose compilers provides them in C, so they stay
+    /// identifiers there.
     pub(crate) const fn interchange_float_types(self) -> bool {
-        self.interchange_float_types
+        match self.interchange_float_types {
+            | Some(enabled) => enabled,
+            | None => matches!(self.identity, super::CompilerIdentity::Gcc),
+        }
     }
 
-    /// Selects the compiler the identity macros claim.
+    /// Selects the compiler the identity macros claim, and with it whether
+    /// the `_FloatN` keywords are accepted.
     pub(crate) const fn with_compiler_identity(
         mut self,
         identity: super::CompilerIdentity,
     ) -> Self {
         self.identity = identity;
-        self
+        self.derive_features()
     }
 
     pub(crate) const fn compiler_identity(self) -> super::CompilerIdentity {
@@ -259,6 +267,33 @@ impl CompilerConfiguration {
     /// The visibility of external definitions that name none.
     pub(crate) const fn default_visibility(self) -> super::DefaultVisibility {
         self.default_visibility
+    }
+
+    /// Gives up (or keeps) part of IEC 60559 semantics, as GCC's
+    /// `-fno-signed-zeros` and its relatives do. Only predefined macros
+    /// read it.
+    pub(crate) const fn with_relaxed_floating_point(
+        mut self,
+        option: super::RelaxedFloatingPoint,
+        relaxed: bool,
+    ) -> Self {
+        if relaxed {
+            self.relaxed_floating_point |= option.bit();
+        } else {
+            self.relaxed_floating_point &= !option.bit();
+        }
+        self.given_floating_point |= option.bit();
+        self
+    }
+
+    pub(crate) const fn relaxes_floating_point(self, option: super::RelaxedFloatingPoint) -> bool {
+        self.relaxed_floating_point & option.bit() != 0
+    }
+
+    /// Whether `option` was given in either form, rather than left at its
+    /// default.
+    pub(crate) const fn gives_floating_point(self, option: super::RelaxedFloatingPoint) -> bool {
+        self.given_floating_point & option.bit() != 0
     }
 
     /// Packs every structure and union as the `packed` attribute does and
@@ -379,12 +414,14 @@ impl CompilerConfiguration {
             optimization: (false, false),
             gnu89_inline: None,
             char_signed: None,
-            interchange_float_types: false,
+            interchange_float_types: None,
             trigraphs: None,
             wrapv: false,
             default_pack: 0,
             pack_structures: false,
             default_visibility: super::DefaultVisibility::Default,
+            relaxed_floating_point: 0,
+            given_floating_point: 0,
             suppress_warnings: false,
             max_nesting_depth: super::DEFAULT_MAX_NESTING_DEPTH,
             warnings_as_errors: false,

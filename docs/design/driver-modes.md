@@ -85,15 +85,31 @@ without a personality as well:
 | Microsoft extensions | off | off | all (`-fms-extensions`) | all | off | off |
 | `__GNUC__` | 14.2.0 | 4.2.1 | undefined | undefined | undefined | 4.2.1 |
 | `__clang__`, `__llvm__` | undefined | 23.1.1 | undefined | 23.1.1 | undefined | 23.1.1 |
-| Other identity | `__VERSION__ "14.2.0"`, execution charset names | | `_MSC_VER 1933`, `_MSC_FULL_VER`, `_MT`, `_MSVC_TRADITIONAL 0` | `_MSC_VER 1933`, `_MT` | `__TINYC__ 927` | |
+| Other identity | `__VERSION__ "14.2.0"`, execution charset names, `__GCC_IEC_559` | | `_MSC_VER 1933`, `_MSC_FULL_VER`, `_MT`, `_MSVC_TRADITIONAL 0` | `_MSC_VER 1933`, `_MT` | `__TINYC__ 927` | |
+| `_Float32` ... `_Float128` | keywords, distinct types | identifiers | identifiers | identifiers | identifiers | identifiers (`-ffloatn-types`) |
+| Unsigned plain `char` | `-funsigned-char` | `-funsigned-char` | `/J` | `/J`, `-funsigned-char` | `-funsigned-char` | `-funsigned-char` |
 | System headers | host's `/usr/local/include`, multiarch, `/usr/include` | same | `%INCLUDE%` (unless `/X`) | same | host's | the host's when compiling for the host; none for a cross target unless asked |
 | Diagnostics | `file:line:col: error:` + snippet | same + `N errors generated.` | `file(line,col): error:` | same | `file:line: error:` | annotated snippet |
 | Default output | `a.out` (`a.exe` on Windows) | same | `first.exe`, objects kept | same | `a.out` | none (analysis only) |
 | `__bcc__` | defined | defined | defined | defined | defined | defined |
 
-Plain `char` is signed in every personality, as GCC, Clang, MSVC and TCC
-default to on x86-64. bcc has no unsigned-char mode, so `-funsigned-char`
-and `cl /J` are refused rather than ignored.
+Plain `char` is signed by default in every personality, as GCC, Clang, MSVC
+and TCC default to on x86-64. `-funsigned-char` and `-fno-signed-char` make it
+unsigned and `-fsigned-char` and `-fno-unsigned-char` signed, the last one
+winning, in the GCC, Clang, TCC and clang-cl personalities; `cl /J` makes it
+unsigned in `cl` and clang-cl. bcc then defines `__CHAR_UNSIGNED__`, and
+`_CHAR_UNSIGNED` on the MSVC target, so `<limits.h>` gives `CHAR_MIN` 0.
+
+The `_FloatN` types follow the compiler too. GCC 7 and later make
+`_Float32`, `_Float64`, `_Float32x`, `_Float64x` and `_Float128` keywords in
+every C mode, so the GCC personality's identity turns on bcc's
+`-ffloatn-types`: distinct types, the `f32`-style suffixes, the
+`__FLT32_*__`-family macros and the `__builtin_inff32`-family builtins. The
+pinned Clang 23 rejects all five names and the suffixes in C (it has
+`_Float16` and `__fp16`, which bcc lacks), and neither `cl` nor TCC has them,
+so the other personalities leave them identifiers for glibc's typedefs.
+bcc's own `-ffloatn-types` and `-fno-floatn-types`, which the GCC, Clang,
+TCC and clang-cl personalities pass on, override either default.
 
 ## Options a compiler knows and bcc does not implement
 
@@ -105,13 +121,12 @@ for GCC, Clang and TCC; `msvc.rs` for `cl` and clang-cl):
   `-fdebug-prefix-map=`), reports and dumps, build mechanics (`-pipe`,
   `-save-temps`, `-flto`, `-fuse-ld=`), optimizations
   the compiler is permitted but not required to make (`-funroll-loops`,
-  `-fomit-frame-pointer`, `-fstrict-aliasing`, `-fno-math-errno`,
-  `-fassociative-math`), code generation tuning (`-mtune=`, `-falign-*`,
+  `-fomit-frame-pointer`, `-fstrict-aliasing`), code generation tuning (`-mtune=`, `-falign-*`,
   `-mtls-dialect=`), what bcc always does (`-fno-common`,
   `-fno-strict-aliasing`: bcc emits no type-based alias information;
   `-ffp-contract=off`: bcc forms no fused operations; `-fexcess-precision=`:
   x86-64 has none; `-mno-avx`: bcc uses only the baseline instruction set;
-  `-fmath-errno`: the math functions set `errno`; `-march=x86-64`), the
+  `-march=x86-64`), the
   target's own ABI choices (`-mms-bitfields` for a Windows target,
   `-mlong-double-80` for Linux; `-m` options are judged for the target,
   after the whole command line is read), options that only change
@@ -147,8 +162,14 @@ Where bcc can do what the option asks cheaply, the personality maps it
 instead: `-fwrapv` (lowering marks signed arithmetic without `nsw`),
 `-fpack-struct=N` and `cl /ZpN` (the packing before any `#pragma pack`),
 `-fpack-struct` alone (every structure packed, the pragmas ignored with
-GCC's warning), `-fno-builtin` and `-fno-builtin-NAME` (the LLVM functions
-carry `no-builtins` or `no-builtin-NAME`, so LLVM neither replaces library
+GCC's warning), the options that give up part of IEC 60559 semantics
+(`-fno-signed-zeros`, `-freciprocal-math`, `-f[no-]trapping-math`,
+`-f[no-]math-errno`, `-fassociative-math`, `-fcx-limited-range`,
+`-fcx-fortran-rules`, their opposites, and `-fno-fast-math` and
+`-fno-unsafe-math-optimizations`, which restore them): bcc's code keeps
+IEC 60559 semantics, which they permit, and the GCC identity's macros
+report them as GCC's do (`__GCC_IEC_559` 0, `__NO_SIGNED_ZEROS__`, ...),
+`-fno-builtin` and `-fno-builtin-NAME` (the LLVM functions carry `no-builtins` or `no-builtin-NAME`, so LLVM neither replaces library
 calls nor forms them from loops; `-ffreestanding` implies it, and GCC's
 `-fno-tree-loop-distribute-patterns` maps onto `memset`, `memcpy` and
 `memmove`), `-fvisibility=` (definitions with linkage and no visibility
@@ -187,20 +208,31 @@ The `-W`, `-f` and `-m` names GCC knows are those GCC 15.2 lists in
 ignores them; the known `-f` and `-m` options bcc does not implement are
 treated as the section above describes. Many of them do change what a
 program means (`-fwrapv`, `-fshort-enums`, `-fpack-struct`, `-mno-sse`),
-so they are not all ignored. `-funsigned-char`, `-m32`, `-mx32`, `-m16`,
-`-traditional` and `-imacros` are refused as well.
+so they are not all ignored. `-m32`, `-mx32`, `-m16`, `-traditional` and
+`-imacros` are refused as well.
 
 **Identity.** `__GNUC__` 14, `__GNUC_MINOR__` 2, `__GNUC_PATCHLEVEL__` 0,
-`__VERSION__ "14.2.0"`, `__GNUC_EXECUTION_CHARSET_NAME`, and no Clang macro.
-Headers then take their GCC paths. Two of glibc's GCC paths need features
-bcc lacks:
+`__VERSION__ "14.2.0"`, `__GNUC_EXECUTION_CHARSET_NAME`, GCC's
+`__FLT_IS_IEC_60559__` family (1, as GCC 13 and later define them),
+`__GCC_IEC_559` and `__GCC_IEC_559_COMPLEX` (2, or 0 under the options
+that give up IEC 60559 semantics, with `__NO_SIGNED_ZEROS__`,
+`__RECIPROCAL_MATH__`, `__NO_TRAPPING_MATH__`, `__NO_MATH_ERRNO__` and
+`__ASSOCIATIVE_MATH__` as GCC defines them), and no Clang macro. Headers then
+take their GCC paths. Two of glibc's GCC paths rely on GCC features, which
+bcc provides under this identity:
 
 - GCC 7 and later name the TS 18661-3 types `_Float32`, `_Float64`,
   `_Float32x`, `_Float64x` and `_Float128` as keywords, and glibc's
-  `bits/floatn.h` stops declaring them. In the GCC identity bcc predefines
-  them as macros for `float`, `double`, `double`, `long double` and
-  `__float128`, which have the same representations. They are not distinct
-  types, so `_Generic` cannot tell `_Float64` from `double`.
+  `bits/floatn.h` stops declaring them. The GCC identity turns on
+  `-ffloatn-types`, so they are distinct keyword types with their suffixes,
+  builtins and `__FLT32_*__`, `__FLT64_*__`, `__FLT32X_*__`, `__FLT64X_*__`,
+  `__FLT128_*__` and `__FLT_EVAL_METHOD_TS_18661_3__` macros, which match
+  `gcc -dM -E` for x86-64 Linux. Like GCC there, bcc defines no
+  `__STDC_IEC_60559_TYPES__`. With `-fno-floatn-types` bcc instead
+  predefines the five names as macros for `float`, `double`, `double`,
+  `long double` and `__float128`, the types with the same representations,
+  which keeps glibc's headers working but cannot tell `_Float64` from
+  `double`.
 - With `_FORTIFY_SOURCE` and optimization, glibc's GCC fortify wrappers for
   the `printf` family, `open`/`openat`, `syslog` and a few others forward
   their variadic arguments with `__builtin_va_arg_pack` or
@@ -262,12 +294,13 @@ warning D9002 : ignoring unknown option '/foo'` and is ignored.
 | `/Zp`, `/ZpN` | `-fpack-struct=1`, `-fpack-struct=N`; another N is error D8021 |
 | `/Za`, `/Ze` | the last wins: `/Za` turns off Microsoft's anonymous tagged members and `_MSC_EXTENSIONS` |
 | `/Zc:trigraphs`, `/Zc:trigraphs-` | `-ftrigraphs`, `-fno-trigraphs` (the default, as in `cl`) |
+| `/J` | `-funsigned-char`: plain `char` is unsigned and `_CHAR_UNSIGNED` defined |
 | `/external:I DIR`, `/external:env:VAR` | `-isystem` |
 | `/showIncludes` | `--show-includes`: `Note: including file: PATH` to stderr |
 | `/diagnostics:classic`, `column`, `caret` | `file(line):`, `file(line,col):`, and with the snippet |
 | `/nologo`, `/Zi`, `/Z7`, `/Zc:inline` and the other `/Zc:` switches for C++, `/utf-8`, `/EH*`, `/wd####`, `/MP`, `/FS`, `/Fd`, `/Gy`, `/GL`, `/Oi`, `/Oy`, `/arch:SSE2`, `/fp:precise`, `/fp:fast`, `/volatile:iso` ... | accepted, no effect |
 | `/GS`, `/sdl`, `/RTC*`, `/guard:cf`, `/guard:ehcont`, `/Qspectre*`, `/d1*`, `/d2*` | accepted with a warning |
-| `/TP`, `/Tp`, `/std:c++*`, `.cpp` inputs, `/J`, `/Gv`, `/arch:` other than SSE2, `/fp:strict`, `/fp:except`, `/volatile:ms`, `/Zc:preprocessor-`, non-UTF-8 charsets | refused with `cl : Command line error : ...` |
+| `/TP`, `/Tp`, `/std:c++*`, `.cpp` inputs, `/Gv`, `/arch:` other than SSE2, `/fp:strict`, `/fp:except`, `/volatile:ms`, `/Zc:preprocessor-`, non-UTF-8 charsets | refused with `cl : Command line error : ...` |
 
 **Defaults.** The `x86_64-pc-windows-msvc` target with every Microsoft
 extension bcc implements (`-fms-extensions`), which on that target also
@@ -300,7 +333,10 @@ read the version and `for x64` from it.
 clang-cl reads `cl`'s options and also Clang's (`-fsomething`, `-Wfoo`,
 `/clang:` options). The personality reads `cl`'s, passes an unknown `-`
 option to bcc (which reads most Clang options), and warns about an unknown
-`/` option as clang-cl does (`unknown argument ignored in clang-cl`). The
+`/` option as clang-cl does (`unknown argument ignored in clang-cl`). Like
+clang-cl it reads the `/clang:` options after all the others, wherever they
+stand, so `/clang:-fsigned-char /J` leaves `char` signed, and ignores a
+bare `-fsigned-char` or `-funsigned-char` with the same warning. The
 identity keeps the Clang macros and drops the GNU ones, as clang-cl does. It
 prints no banner and no source names.
 
@@ -344,8 +380,9 @@ paths. TCC's diagnostics are `file:line: error: message`.
 - **Claim the compiler mimicked.** The GCC and TCC personalities claim GCC and
   TCC in the predefined macros rather than Clang, because build systems and
   headers choose their paths from them (CMake reads `__GNUC__` and
-  `__clang__`; glibc and many projects test `__GNUC_PREREQ`). The cost is the
-  two glibc paths above. Use `--clang-mode`, or `-Xbcc
+  `__clang__`; glibc and many projects test `__GNUC_PREREQ`). The identity
+  therefore brings the GCC features those paths use: the `_FloatN` types
+  and `__builtin_va_arg_pack`. Use `--clang-mode`, or `-Xbcc
   --compiler-identity=clang`, to keep Clang's paths.
 - **Name bcc.** Every banner names bcc and says it is not the compiler it
   mimics; `__bcc__` stays defined in every identity.
@@ -368,10 +405,28 @@ Besides those above:
   Adjacent string literals are joined, as phase 6 joins them. A macro's
   expansion keeps the spacing of its definition, so the text differs from
   GCC's in whitespace.
-- GNU line markers are read; their flags are not. A `.i` file's system
-  header sections are therefore not marked as system headers.
+- Of a GNU line marker's flags, only 3 has an effect: it makes the lines
+  up to the next marker a system header, as in GCC, so a `.i` file's system
+  header sections keep their warnings withheld. Flags 1 and 2 (entering and
+  leaving an include) do not rebuild the include stack.
 - The `-dM` listing holds the macros bcc predefines, not the ones GCC or the
-  real Clang would; the target tables are Clang's.
+  real Clang would; the target tables are Clang's. The GCC identity's
+  floating-point macros for the types bcc has match GCC's, but the standard
+  types' constants keep Clang's spelling, and GCC's `_Float16` and `__bf16`
+  macros (`__FLT16_*__`, `__BFLT16_*__`) are missing with those types.
+  GCC's `__STDC_IEC_559__` family comes from glibc's `stdc-predef.h`, which
+  GCC includes before every file and bcc, like the pinned Clang, does not.
+- `<tgmath.h>` gives a `_FloatN` argument the function of the standard type
+  with its format, so `sqrt` of a `_Float32` is `sqrtf`'s value with type
+  `float`, where GCC's `__builtin_tgmath` calls `sqrtf32` and keeps the type
+  `_Float32`. `_Float128` arguments are refused, as `__float128` ones are,
+  and so is a `_FloatN` first argument of `nexttoward`, as in GCC.
+- GCC warns that `-fassociative-math` is disabled without
+  `-fno-signed-zeros` and `-fno-trapping-math`; bcc drops it the same way
+  but silently.
+- `cl /J` defines `__CHAR_UNSIGNED__` as well as `_CHAR_UNSIGNED`, as
+  clang-cl does; `cl` defines only the latter. The MSVC identity keeps
+  Clang's target macros, as for `__x86_64__`.
 - The MSVC personality links through Clang's driver and LLD (`lld-link`),
   which needs the Windows SDK and MSVC libraries (from `%LIB%`); on a Linux
   host without them only `/c`, `/E`, `/P` and `/Fa` work.
@@ -398,7 +453,10 @@ would use:
 
 - `-fsemantic-interposition`, `-fwrapv-pointer`,
   `-fno-delete-null-pointer-checks` and common symbols (`-fcommon`).
-- `_Float32`, `_Float64`, `_Float32x`, `_Float64x` and `_Float128` as distinct
-  keyword types, and their `f32`/`f64`/`f128` constant suffixes.
-- An unsigned plain `char` (`-funsigned-char`, `cl /J`).
-- Region-based system-header marking, for line marker flag 3.
+- `_Float16` (GCC 12 and Clang on x86-64), `__bf16` (GCC 13) and Clang's
+  `__fp16`, with their macros.
+- `<float.h>` names for the `_FloatN` types (`FLT32_MAX` and the rest):
+  bcc's resource header is Clang's, which knows none of them.
+- Binary128 arithmetic in lowering: `_Float128` and `__float128` values
+  type-check, and glibc's declarations of them compile, but computing with
+  them is refused.

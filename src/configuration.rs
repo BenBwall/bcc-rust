@@ -52,6 +52,7 @@ pub(crate) use language::{
     LibraryBuiltins,
     MsvcFeature,
     PreprocessingOption,
+    RelaxedFloatingPoint,
 };
 
 impl CompilerConfiguration {
@@ -90,7 +91,8 @@ pub(crate) struct CompilerConfiguration {
     /// Whether plain `char` is signed, overriding the target's choice, as
     /// `-fsigned-char` and `-funsigned-char` do.
     char_signed: Option<bool>,
-    interchange_float_types: bool,
+    /// `-ffloatn-types` or `-fno-floatn-types`, over the identity's default.
+    interchange_float_types: Option<bool>,
     /// `-ftrigraphs` or `-fno-trigraphs`, over the mode's default.
     trigraphs: Option<bool>,
     /// Signed integer overflow wraps (`-fwrapv`).
@@ -100,6 +102,10 @@ pub(crate) struct CompilerConfiguration {
     pack_structures: bool,
     /// The visibility of definitions that name none (`-fvisibility=`).
     default_visibility: DefaultVisibility,
+    /// One bit per [`RelaxedFloatingPoint`] option in effect.
+    relaxed_floating_point: u8,
+    /// One bit per [`RelaxedFloatingPoint`] option given in either form.
+    given_floating_point: u8,
     /// The structure packing in effect before any `#pragma pack`, and that
     /// `#pragma pack()` restores (`-fpack-struct=N`, `cl /ZpN`); 0 for
     /// none.

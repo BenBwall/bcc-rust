@@ -92,9 +92,16 @@ mod tests {
     /// The `#define` lines `mode` predefines, from `-E -dM` (`/E` for the
     /// `cl` personalities, which list them through a probe).
     fn macros(mode: &str) -> String {
+        macros_with(mode, &[])
+    }
+
+    /// The `#define` lines `mode` predefines with `options`.
+    fn macros_with(mode: &str, options: &[&str]) -> String {
         let directory = Directory::new();
         directory.write("empty.c", "");
-        let output = directory.bcc(mode, &["-E", "-dM", "empty.c"]);
+        let mut args = options.to_vec();
+        args.extend(["-E", "-dM", "empty.c"]);
+        let output = directory.bcc(mode, &args);
         succeeds(&output);
         stdout(&output)
     }
@@ -159,6 +166,448 @@ mod tests {
             "1933 __GNUC__ 1"
         );
         assert_eq!(cl_expand("--msvc-mode", &["/DX#5", "/DY=6"], "X Y"), "5 6");
+    }
+
+    /// `-funsigned-char` and its relatives in GCC, Clang and TCC, and `/J`
+    /// in `cl` and clang-cl, make plain `char` unsigned, with the macros
+    /// each compiler defines for `<limits.h>`; the last option wins.
+    #[test]
+    fn plain_char_signedness_follows_each_compilers_options() {
+        let directory = Directory::new();
+        directory.write(
+            "probe.c",
+            "#include <limits.h>\nCHAR_MIN (char)-1 < 0 __CHAR_UNSIGNED__ _CHAR_UNSIGNED\n",
+        );
+        let expand = |mode: &str, options: &[&str]| {
+            let mut args = options.to_vec();
+            if mode.ends_with("cl-mode") || mode == "--msvc-mode" {
+                args.extend(["/nologo", "/EP", "probe.c"]);
+            } else {
+                args.extend(["-E", "-P", "probe.c"]);
+            }
+            let output = directory.bcc(mode, &args);
+            succeeds(&output);
+            stdout(&output)
+                .lines()
+                .find(|line| line.contains("(char)"))
+                .unwrap_or_default()
+                .to_owned()
+        };
+        let signed = "(- 127 - 1) (char)-1 < 0 __CHAR_UNSIGNED__ _CHAR_UNSIGNED";
+        let unsigned = "0 (char)-1 < 0 1 _CHAR_UNSIGNED";
+        for mode in ["--gcc-mode", "--clang-mode", "--tcc-mode"] {
+            assert_eq!(expand(mode, &[]), signed, "{mode}");
+            for options in [
+                &["-funsigned-char"][..],
+                &["-fno-signed-char"],
+                &["-fsigned-char", "-funsigned-char"],
+            ] {
+                assert_eq!(expand(mode, options), unsigned, "{mode} {options:?}");
+            }
+            for options in [
+                &["-fno-unsigned-char"][..],
+                &["-funsigned-char", "-fsigned-char"],
+                &["-fno-signed-char", "-fno-unsigned-char"],
+            ] {
+                assert_eq!(expand(mode, options), signed, "{mode} {options:?}");
+            }
+        }
+        // `cl /J` defines `_CHAR_UNSIGNED`, as clang-cl's does; bcc keeps
+        // Clang's `__CHAR_UNSIGNED__` beside it, as clang-cl does.
+        let signed_cl = "(- 127 - 1) (char)-1 < 0 __CHAR_UNSIGNED__ _CHAR_UNSIGNED";
+        let unsigned_cl = "0 (char)-1 < 0 1 1";
+        for mode in ["--msvc-mode", "--clang-cl-mode"] {
+            assert_eq!(expand(mode, &[]), signed_cl, "{mode}");
+            assert_eq!(expand(mode, &["/J"]), unsigned_cl, "{mode}");
+        }
+        // clang-cl reads `/clang:` options after its own, wherever they
+        // stand, and ignores the char options given bare.
+        for (options, expected) in [
+            (&["/clang:-fsigned-char", "/J"][..], signed_cl),
+            (&["/J", "/clang:-fsigned-char"], signed_cl),
+            (&["/clang:-funsigned-char"], unsigned_cl),
+            (
+                &["/clang:-funsigned-char", "/clang:-fsigned-char", "/J"],
+                signed_cl,
+            ),
+        ] {
+            assert_eq!(expand("--clang-cl-mode", options), expected, "{options:?}");
+        }
+        for (options, expected) in [
+            (&["-funsigned-char"][..], signed_cl),
+            (&["-fsigned-char", "/J"], unsigned_cl),
+        ] {
+            assert_eq!(expand("--clang-cl-mode", options), expected, "{options:?}");
+            let mut args = options.to_vec();
+            args.extend(["/EP", "probe.c"]);
+            let output = directory.bcc("--clang-cl-mode", &args);
+            succeeds(&output);
+            assert!(
+                stderr(&output).contains("unknown argument ignored in clang-cl: '-f"),
+                "{}",
+                stderr(&output)
+            );
+        }
+        // The program compiles with the signedness the macros claim.
+        directory.write(
+            "char.c",
+            "#include <limits.h>\n_Static_assert(((char)-1 < 0) == (CHAR_MIN < 0), \
+             \"\");\n_Static_assert(CHAR_MIN == 0, \"\");\n",
+        );
+        for (mode, options) in [
+            ("--gcc-mode", &["-c", "-funsigned-char", "char.c"][..]),
+            ("--clang-mode", &["-c", "-fno-signed-char", "char.c"]),
+            ("--tcc-mode", &["-c", "-funsigned-char", "char.c"]),
+            ("--msvc-mode", &["/nologo", "/c", "/J", "char.c"]),
+            ("--clang-cl-mode", &["/c", "/J", "char.c"]),
+        ] {
+            succeeds(&directory.bcc(mode, options));
+        }
+    }
+
+    /// GCC 7 and later provide `_Float32`, `_Float64`, `_Float32x`,
+    /// `_Float64x` and `_Float128` as distinct types with `f32`-style
+    /// suffixes and `__FLT32_*__`-family macros, in every mode; Clang, `cl`
+    /// and TCC provide none of them in C, so the names stay identifiers
+    /// for glibc's typedefs there.
+    #[test]
+    fn gcc_mode_provides_the_floatn_types_as_gcc_does() {
+        let gcc = macros("--gcc-mode");
+        for (name, value) in [
+            ("__FLT32_MANT_DIG__", "24"),
+            ("__FLT64_MAX_EXP__", "1024"),
+            ("__FLT32X_DIG__", "15"),
+            ("__FLT64X_MANT_DIG__", "64"),
+            (
+                "__FLT128_MAX__",
+                "1.18973149535723176508575932662800702e+4932F128",
+            ),
+            ("__FLT_EVAL_METHOD_TS_18661_3__", "0"),
+            ("__GCC_IEC_559", "2"),
+            ("__LDBL_IS_IEC_60559__", "1"),
+        ] {
+            assert_eq!(defines(&gcc, name).as_deref(), Some(value), "{name}");
+        }
+        // GCC 14 defines no `__STDC_IEC_60559_TYPES__` for x86-64, and the
+        // types are keywords, not macros.
+        assert_eq!(defines(&gcc, "__STDC_IEC_60559_TYPES__"), None);
+        assert_eq!(defines(&gcc, "_Float32"), None);
+        for mode in ["--clang-mode", "--tcc-mode"] {
+            let listing = macros(mode);
+            assert_eq!(defines(&listing, "__FLT32_MANT_DIG__"), None, "{mode}");
+            assert_eq!(defines(&listing, "__GCC_IEC_559"), None, "{mode}");
+            assert_eq!(defines(&listing, "_Float32"), None, "{mode}");
+        }
+        assert_eq!(
+            cl_expand("--msvc-mode", &[], "__FLT32_MANT_DIG__ _Float32"),
+            "__FLT32_MANT_DIG__ _Float32"
+        );
+        let directory = Directory::new();
+        directory.write(
+            "types.c",
+            "_Static_assert(_Generic(1.0f64, double: 0, _Float64: 1), \
+             \"\");\n_Static_assert(_Generic((_Float32)1, float: 0, _Float32: 1), \
+             \"\");\n_Static_assert(_Generic(1.0f64x, long double: 0, _Float64x: 1), \
+             \"\");\n_Static_assert(sizeof(_Float128) == 16 && sizeof(_Float32x) == 8, \
+             \"\");\n_Complex _Float32 z;\n",
+        );
+        for std in ["-std=gnu17", "-std=c11", "-std=c23"] {
+            succeeds(&directory.bcc("--gcc-mode", &["-fsyntax-only", std, "types.c"]));
+        }
+        // Without the types the GCC identity spells them as the standard
+        // types, which glibc's GCC paths then use, and rejects the suffixes.
+        directory.write(
+            "names.c",
+            "_Float64 x = 1.0; long double *y = (_Float64x *)0;\n",
+        );
+        succeeds(&directory.bcc(
+            "--gcc-mode",
+            &["-fsyntax-only", "-fno-floatn-types", "names.c"],
+        ));
+        assert_eq!(
+            directory
+                .bcc(
+                    "--gcc-mode",
+                    &["-fsyntax-only", "-fno-floatn-types", "types.c"]
+                )
+                .status
+                .code(),
+            Some(1)
+        );
+        // Clang 23 knows none of these names in C.
+        let clang = directory.bcc("--clang-mode", &["-fsyntax-only", "types.c"]);
+        assert_eq!(clang.status.code(), Some(1), "{}", stderr(&clang));
+        succeeds(&directory.bcc(
+            "--clang-mode",
+            &["-fsyntax-only", "-ffloatn-types", "types.c"],
+        ));
+    }
+
+    /// `<tgmath.h>` takes `_FloatN` arguments under the GCC identity, with
+    /// the host's glibc, giving the values GCC's `_FloatN` functions give.
+    #[test]
+    fn gcc_mode_tgmath_takes_floatn_arguments() {
+        if !cfg!(all(target_os = "linux", target_env = "gnu"))
+            || !Path::new("/usr/include/tgmath.h").is_file()
+        {
+            eprintln!("skipping: the test links with the Linux GNU host's C library");
+            return;
+        }
+        let directory = Directory::new();
+        directory.write(
+            "tg.c",
+            "#define _GNU_SOURCE\n#include <stdio.h>\n#include <tgmath.h>\n_Float32 root(_Float32 \
+             x) { return sqrt(x); }\nint main(void) {\n  _Float64 y = pow(2.0f64, 10);\n  \
+             _Complex _Float32 z = 3.0f32 + 4.0f32 * I;\n  printf(\"%g %g %g %g %g\\n\", \
+             (double)root(2.25f32), (double)y, (double)fabs(z), (double)fabs(-1.5f32x), \
+             (double)creal(sqrt(-4.0f64 + 0.0f64 * I)));\n  volatile _Float32 x = 1;\n  volatile \
+             double w = 1;\n  printf(\"%d %d\\n\", !!signbit(cimag(conj(x))), \
+             !!signbit(cimag(conj(w))));\n  return 0;\n}\n",
+        );
+        for standard in ["-std=gnu17", "-std=c11", "-std=c23"] {
+            succeeds(&directory.bcc("--gcc-mode", &[standard, "tg.c", "-lm"]));
+            let run = Command::new(directory.path("a.out")).output().unwrap();
+            assert_eq!(stdout(&run), "1.5 1024 5 1.5 0\n1 1\n", "{standard}");
+            std::fs::remove_file(directory.path("a.out")).unwrap();
+        }
+        // `conj` of a real argument keeps the imaginary +0 the pinned Clang
+        // gives, in bcc's own mode and the Clang personality; GCC gives -0.
+        directory.write(
+            "conj.c",
+            "#include <stdio.h>\n#include <tgmath.h>\nint main(void) {\n  volatile double w = \
+             1;\n  printf(\"%d\\n\", !!signbit(cimag(conj(w))));\n  return 0;\n}\n",
+        );
+        for (mode, args) in [
+            ("", &["conj.c", "-o", "a.out", "-lm"][..]),
+            ("--clang-mode", &["conj.c", "-lm"]),
+            ("--gcc-mode", &["conj.c", "-lm"]),
+        ] {
+            succeeds(&directory.bcc(mode, args));
+            let run = Command::new(directory.path("a.out")).output().unwrap();
+            let expected = if mode == "--gcc-mode" { "1\n" } else { "0\n" };
+            assert_eq!(stdout(&run), expected, "{mode}");
+            std::fs::remove_file(directory.path("a.out")).unwrap();
+        }
+    }
+
+    /// The floating-point macros of the GCC identity are the host GCC's,
+    /// apart from the types bcc lacks (`_Float16`, `__bf16`), the standard
+    /// types' constants, which bcc spells as Clang does, and what glibc's
+    /// `stdc-predef.h` adds.
+    #[test]
+    fn gcc_mode_floating_macros_match_the_host_gcc() {
+        if host_gcc_macros(&[]).is_none() {
+            eprintln!("skipping: no x86-64 Linux GCC 13 or later on the host");
+            return;
+        }
+        let compared = |listing: &str| -> Vec<String> {
+            let mut lines: Vec<String> = listing
+                .lines()
+                .filter(|line| {
+                    let Some(name) = line.strip_prefix("#define ") else {
+                        return false;
+                    };
+                    [
+                        "__FLT32",
+                        "__FLT64",
+                        "__FLT128",
+                        "__FLT_EVAL_METHOD_TS",
+                        "__GCC_IEC_559",
+                        "__ASSOCIATIVE_MATH__",
+                        "__NO_MATH_ERRNO__",
+                        "__NO_SIGNED_ZEROS__",
+                        "__NO_TRAPPING_MATH__",
+                        "__RECIPROCAL_MATH__",
+                    ]
+                    .iter()
+                    .any(|prefix| name.starts_with(prefix))
+                        || name.contains("_IS_IEC_60559__")
+                            && !name.starts_with("__FLT16")
+                            && !name.starts_with("__BFLT16")
+                })
+                .map(str::to_owned)
+                .collect();
+            lines.sort();
+            lines
+        };
+        let bcc = compared(&macros("--gcc-mode"));
+        assert!(bcc.len() > 70, "{bcc:#?}");
+        for options in FLOATING_POINT_OPTIONS {
+            let host = host_gcc_macros(options).expect("the host GCC takes the options");
+            assert_eq!(
+                compared(&macros_with("--gcc-mode", options)),
+                compared(&host),
+                "{options:?}"
+            );
+        }
+    }
+
+    /// GCC's options that give up part of IEC 60559 semantics, alone and
+    /// in the combinations whose order or interplay decides the macros.
+    const FLOATING_POINT_OPTIONS: [&[&str]; 24] = [
+        &[],
+        &["-fno-signed-zeros"],
+        &["-freciprocal-math"],
+        &["-fno-trapping-math"],
+        &["-ftrapping-math"],
+        &["-fno-math-errno"],
+        &["-fassociative-math"],
+        &["-fno-signed-zeros", "-fassociative-math"],
+        &[
+            "-fno-signed-zeros",
+            "-fno-trapping-math",
+            "-fassociative-math",
+        ],
+        &["-fcx-limited-range"],
+        &["-fcx-fortran-rules"],
+        &["-fcx-limited-range", "-fno-cx-fortran-rules"],
+        &["-fcx-fortran-rules", "-fno-cx-limited-range"],
+        &["-fno-cx-fortran-rules", "-fcx-limited-range"],
+        &[
+            "-fcx-fortran-rules",
+            "-fno-cx-fortran-rules",
+            "-fcx-limited-range",
+        ],
+        &[
+            "-fcx-limited-range",
+            "-fno-cx-limited-range",
+            "-fcx-fortran-rules",
+        ],
+        &[
+            "-fcx-limited-range",
+            "-fcx-fortran-rules",
+            "-fno-cx-limited-range",
+        ],
+        &[
+            "-fcx-limited-range",
+            "-fcx-fortran-rules",
+            "-fno-cx-fortran-rules",
+        ],
+        &["-fno-cx-limited-range"],
+        &["-fno-signed-zeros", "-fsigned-zeros"],
+        &["-fno-signed-zeros", "-fno-math-errno", "-fno-fast-math"],
+        &["-fcx-limited-range", "-fno-fast-math"],
+        &[
+            "-freciprocal-math",
+            "-fno-math-errno",
+            "-fno-unsafe-math-optimizations",
+        ],
+        &[
+            "-fassociative-math",
+            "-fno-signed-zeros",
+            "-fno-trapping-math",
+            "-fsigned-zeros",
+        ],
+    ];
+
+    /// The GCC identity reports the options that give up IEC 60559
+    /// semantics as GCC 14 does, without the host GCC.
+    #[test]
+    fn gcc_mode_floating_macros_follow_the_options() {
+        for (options, iec_559, complex, flags) in [
+            (&[][..], "2", "2", &[][..]),
+            (&["-fno-signed-zeros"], "0", "0", &["__NO_SIGNED_ZEROS__"]),
+            (&["-freciprocal-math"], "0", "0", &["__RECIPROCAL_MATH__"]),
+            (&["-fcx-limited-range"], "2", "0", &[]),
+            // `-f[no-]cx-fortran-rules`, when given, decides alone.
+            (
+                &["-fcx-fortran-rules", "-fno-cx-limited-range"],
+                "2",
+                "0",
+                &[],
+            ),
+            (
+                &["-fno-cx-fortran-rules", "-fcx-limited-range"],
+                "2",
+                "2",
+                &[],
+            ),
+            (
+                &["-fcx-limited-range", "-fno-cx-limited-range"],
+                "2",
+                "2",
+                &[],
+            ),
+            (&["-fno-trapping-math"], "2", "2", &["__NO_TRAPPING_MATH__"]),
+            (&["-fno-math-errno"], "2", "2", &["__NO_MATH_ERRNO__"]),
+            (
+                &[
+                    "-fno-signed-zeros",
+                    "-fno-trapping-math",
+                    "-fassociative-math",
+                ],
+                "0",
+                "0",
+                &[
+                    "__ASSOCIATIVE_MATH__",
+                    "__NO_SIGNED_ZEROS__",
+                    "__NO_TRAPPING_MATH__",
+                ],
+            ),
+            (&["-fassociative-math"], "2", "2", &[]),
+            (&["-fno-signed-zeros", "-fno-fast-math"], "2", "2", &[]),
+        ] {
+            let listing = macros_with("--gcc-mode", options);
+            assert_eq!(
+                defines(&listing, "__GCC_IEC_559").as_deref(),
+                Some(iec_559),
+                "{options:?}"
+            );
+            assert_eq!(
+                defines(&listing, "__GCC_IEC_559_COMPLEX").as_deref(),
+                Some(complex),
+                "{options:?}"
+            );
+            for name in [
+                "__ASSOCIATIVE_MATH__",
+                "__NO_MATH_ERRNO__",
+                "__NO_SIGNED_ZEROS__",
+                "__NO_TRAPPING_MATH__",
+                "__RECIPROCAL_MATH__",
+            ] {
+                assert_eq!(
+                    defines(&listing, name).as_deref(),
+                    flags.contains(&name).then_some("1"),
+                    "{options:?} {name}"
+                );
+            }
+        }
+        // Clang defines none of these but `__NO_MATH_ERRNO__`, which bcc's
+        // Clang identity leaves out with Clang's target-dependent default.
+        let clang = macros_with("--clang-mode", &["-fno-signed-zeros"]);
+        assert_eq!(defines(&clang, "__GCC_IEC_559"), None);
+        assert_eq!(defines(&clang, "__NO_SIGNED_ZEROS__"), None);
+    }
+
+    /// `gcc -std=gnu17 OPTIONS -dM -E` of an empty file, from a host GCC
+    /// (not Clang under its name) that targets x86-64 Linux and defines the
+    /// floating-point macros as GCC 13 and later do.
+    fn host_gcc_macros(options: &[&str]) -> Option<String> {
+        let gcc = |args: &[&str]| {
+            Command::new("gcc")
+                .args(args)
+                .output()
+                .ok()
+                .filter(|output| output.status.success())
+                .map(|output| stdout(&output))
+        };
+        let machine = gcc(&["-dumpmachine"])?;
+        let major: u32 = gcc(&["-dumpversion"])?
+            .trim()
+            .split('.')
+            .next()?
+            .parse()
+            .ok()?;
+        if !machine.starts_with("x86_64-") || !machine.contains("linux") || major < 13 {
+            return None;
+        }
+        let directory = Directory::new();
+        directory.write("empty.c", "");
+        let empty = directory.path("empty.c");
+        let mut args = vec!["-std=gnu17"];
+        args.extend(options);
+        args.extend(["-dM", "-E", empty.to_str()?]);
+        gcc(&args).filter(|listing| defines(listing, "__clang__").is_none())
     }
 
     #[test]
@@ -231,11 +680,6 @@ mod tests {
                 "clang: error: unknown argument: '-fbogus'",
             ),
             ("--tcc-mode", "-q", "tcc: error: invalid option -- '-q'"),
-            (
-                "--gcc-mode",
-                "-funsigned-char",
-                "plain char is always signed in bcc",
-            ),
         ] {
             let output = directory.bcc(mode, &["-c", option, "x.c"]);
             assert_eq!(output.status.code(), Some(1), "{mode} {option}");
