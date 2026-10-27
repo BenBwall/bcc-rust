@@ -52,6 +52,7 @@ use super::{
         AsmMachine,
         Base,
         Callee,
+        FrameObject,
         MBlock,
         MFunction,
         MInst,
@@ -116,6 +117,9 @@ pub(crate) struct Emitter<'o, 'm, 'ir> {
     /// The next number an inline assembly `${:uid}` (GCC's `%=`) takes,
     /// unique in the listing.
     asm_uid:           u32,
+    /// The next number a [`MInst::SjljSetjmp`]'s resume labels take, unique
+    /// in the listing.
+    resume_uid:        u32,
 }
 
 impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
@@ -132,6 +136,7 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
             target,
             stubs: ArenaSet::with_hasher_in(rustc_hash::FxBuildHasher, arena),
             asm_uid: 0,
+            resume_uid: 0,
         }
     }
 
@@ -927,6 +932,33 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
             | MInst::InlineAsm { .. } => unreachable!("inline assembly is written apart"),
             | MInst::Ud2 => writeln!(out, "\tud2"),
             | MInst::Int3 => writeln!(out, "\tint3"),
+            // LLVM's `EH_SjLj_SetJmp` expansion, with the resume block in
+            // line.
+            | MInst::SjljSetjmp { .. } => {
+                let uid = self.resume_uid;
+                self.resume_uid += 1;
+                writeln!(out, "\tleaq\t.LSJ{uid}(%rip), %rax")?;
+                writeln!(out, "\tmovq\t%rax, 8(%rdi)")?;
+                writeln!(out, "\txorl\t%eax, %eax")?;
+                writeln!(out, "\tjmp\t.LSJE{uid}")?;
+                writeln!(out, ".LSJ{uid}:")?;
+                // `%rbp` holds the frame address, a fixed distance above
+                // the address the frame's objects are relative to.
+                if frame.rbp_based {
+                    let (base, offset) = frame.address(FrameObject::FrameAddress);
+                    debug_assert_eq!(base, PReg::Rbp, "an rbp-based frame");
+                    writeln!(out, "\tleaq\t{}(%rbp), %rbp", -offset)?;
+                }
+                writeln!(out, "\tmovl\t$1, %eax")?;
+                writeln!(out, ".LSJE{uid}:")
+            },
+            // LLVM's `EH_SjLj_LongJmp` expansion.
+            | MInst::SjljLongjmp => {
+                writeln!(out, "\tmovq\t(%rdi), %rbp")?;
+                writeln!(out, "\tmovq\t8(%rdi), %rax")?;
+                writeln!(out, "\tmovq\t16(%rdi), %rsp")?;
+                writeln!(out, "\tjmpq\t*%rax")
+            },
         }
     }
 

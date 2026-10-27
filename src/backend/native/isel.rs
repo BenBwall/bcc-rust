@@ -594,6 +594,19 @@ impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
                 arg,
                 ..
             } => self.stack_restore(arg),
+            | InstData::Unary {
+                opcode: Opcode::SjljSetjmp,
+                arg,
+                ..
+            } => {
+                let dst = self.result_reg(result);
+                self.builtin_setjmp(dst, arg);
+            },
+            | InstData::Unary {
+                opcode: Opcode::SjljLongjmp,
+                arg,
+                ..
+            } => self.builtin_longjmp(arg),
             | InstData::Binary { ty, args, .. } if opcode.is_float_binary() => {
                 let dst = self.result_reg(result);
                 self.float_binary(opcode, ty, dst, args)?;

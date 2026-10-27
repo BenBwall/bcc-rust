@@ -201,6 +201,14 @@ pub(crate) enum SemanticErrorKind {
     /// level constraint.
     /// <https://gcc.gnu.org/onlinedocs/gcc/Return-Address.html>
     InvalidFrameLevel,
+    /// GNU extension: GCC "Nonlocal Gotos": the second argument of
+    /// `__builtin_longjmp` must be the constant 1.
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Nonlocal-Gotos.html>
+    InvalidLongjmpValue,
+    /// Clang's `-Wconstant-conversion`: an implicit conversion changes an
+    /// integer constant's value; the payload is the interned message.
+    /// C99: §6.3.1.3p3, p. 43; PDF p. 55.
+    ConstantConversion(StringCacheId),
     /// GNU extension: GCC "Other Builtins" probability constraint.
     /// <https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html>
     InvalidBuiltinProbability,
@@ -594,6 +602,7 @@ impl SemanticErrorKind {
             | Self::DllImportDropped | Self::DllExportAdded =>
                 Some(DiagnosticGroup::InconsistentDllimport),
             | Self::CallAttributeWarning => Some(DiagnosticGroup::AttributeWarning),
+            | Self::ConstantConversion(_) => Some(DiagnosticGroup::ConstantConversion),
             | _ => None,
         }
     }
@@ -679,6 +688,8 @@ impl SemanticErrorKind {
                 "expected an integer constant from 0 to 3",
             | Self::InvalidBuiltinProbability => "expected a constant probability from 0 to 1",
             | Self::InvalidFrameLevel => "expected an integer constant frame level",
+            | Self::InvalidLongjmpValue => "expected the constant 1",
+            | Self::ConstantConversion(_) => "the converted value differs",
             | Self::InvalidBuiltinAlignment => "expected a constant power-of-two alignment",
             | Self::InvalidPrefetchReadWrite => "expected an integer constant of 0 or 1",
             | Self::InvalidUnaryOperand | Self::InvalidAdditiveOperands =>
@@ -896,7 +907,8 @@ impl SemanticErrorKind {
                     | crate::configuration::DiagnosticGroup::InitializerOverrides
                     | crate::configuration::DiagnosticGroup::GnuFoldingConstant
                     | crate::configuration::DiagnosticGroup::GnuNullPointerArithmetic
-                    | crate::configuration::DiagnosticGroup::ConstantPromotion => "warning-group diagnostic",
+                    | crate::configuration::DiagnosticGroup::ConstantPromotion
+                    | crate::configuration::DiagnosticGroup::ConstantConversion => "warning-group diagnostic",
                 },
                 "C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1",
             ),
@@ -921,6 +933,16 @@ impl SemanticErrorKind {
             | Self::InvalidFrameLevel => (
                 "the frame level must be an integer constant",
                 "GNU extension: GCC requires the level of __builtin_frame_address and __builtin_return_address to be a constant unsigned integer",
+            ),
+            | Self::ConstantConversion(_) => (
+                "implicit conversion changes the value of an integer constant",
+                "C99 §6.3.1.3p3: the conversion to a signed type that cannot represent the value \
+                 is implementation-defined; bcc, GCC and Clang reduce it modulo 2^N",
+            ),
+            | Self::InvalidLongjmpValue => (
+                "the value argument must be the integer constant 1",
+                "GNU extension: GCC Nonlocal Gotos requires the second argument of \
+                 __builtin_longjmp to be the integer constant 1",
             ),
             | Self::InvalidBuiltinProbability => (
                 "the probability argument must be a constant from 0 to 1",
@@ -1832,6 +1854,8 @@ impl ToDiagnostic for SemanticError {
                     "non-zero bytes"
                 }
             )
+        } else if let SemanticErrorKind::ConstantConversion(text) = self.kind {
+            arena.alloc_str(context.string_cache.at(text))
         } else if let SemanticErrorKind::PragmaPackShow(value) = self.kind {
             format_in!(arena, "value of #pragma pack(show) == {value}")
         } else if let Some(name) = self.name {
@@ -1943,6 +1967,7 @@ impl GetSeverity for SemanticError {
                 | SemanticErrorKind::TransparentUnionPlacement(_)
                 | SemanticErrorKind::InitializerOverride
                 | SemanticErrorKind::PartialInitializerOverride
+                | SemanticErrorKind::ConstantConversion(_)
                 | SemanticErrorKind::AttributeAfterDefinition
                 | SemanticErrorKind::UnevaluatedStringPrefix
                 | SemanticErrorKind::UnsupportedDeclspec

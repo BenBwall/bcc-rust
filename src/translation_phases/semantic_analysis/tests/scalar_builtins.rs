@@ -702,3 +702,103 @@ fn builtin_spellings_respect_function_typedef_and_enumerator_bindings() {
         },
     );
 }
+
+/// GCC's `int __builtin_setjmp(void *)` takes any object pointer, and the
+/// value of `void __builtin_longjmp(void *, int)` must be an integer
+/// constant that is 1 after conversion to `int`, as GCC and Clang require;
+/// one the conversion changes gets Clang's `-Wconstant-conversion`.
+/// GNU extension: GCC manual, "Nonlocal Gotos".
+#[test]
+fn builtin_longjmp_values_must_be_the_constant_one() {
+    let prefix = "void *b[5]; long words[5]; void f(int n){";
+    for call in [
+        "__builtin_longjmp(b,1)",
+        "__builtin_longjmp(words,'\\1')",
+        "__builtin_longjmp(&words,1L)",
+        "int r = __builtin_setjmp(words) + __builtin_setjmp(&b)",
+    ] {
+        with_source(&format!("{prefix}{call};}}"), |context, unit| {
+            let errors = context.take_pending_errors();
+            assert_eq!(unit.errors, 0, "{call}: {errors:?}");
+        });
+    }
+    for (call, converted) in [
+        (
+            "__builtin_longjmp(b,4294967297LL)",
+            "`long long` to `int` changes value from 4294967297",
+        ),
+        (
+            "__builtin_longjmp(b,0x100000001)",
+            "`long` to `int` changes value from 4294967297",
+        ),
+        (
+            "__builtin_longjmp(b,-4294967295LL)",
+            "`long long` to `int` changes value from -4294967295",
+        ),
+    ] {
+        with_source(&format!("{prefix}{call};}}"), |context, unit| {
+            let errors = context.take_pending_errors();
+            assert_eq!(unit.errors, 0, "{call}: {errors:?}");
+            let [
+                TranslationError::Semantic(SemanticError {
+                    kind: SemanticErrorKind::ConstantConversion(text),
+                    ..
+                }),
+            ] = errors.as_slice()
+            else {
+                panic!("{call}: {errors:?}");
+            };
+            assert_eq!(
+                context.string_cache.at(*text),
+                format!("implicit conversion from {converted} to 1"),
+                "{call}"
+            );
+        });
+    }
+    for (call, expected) in [
+        (
+            "__builtin_longjmp(b,n)",
+            SemanticErrorKind::InvalidLongjmpValue,
+        ),
+        (
+            "__builtin_longjmp(b,2)",
+            SemanticErrorKind::InvalidLongjmpValue,
+        ),
+        (
+            "__builtin_longjmp(b,0)",
+            SemanticErrorKind::InvalidLongjmpValue,
+        ),
+        (
+            "__builtin_longjmp(b,1.0)",
+            SemanticErrorKind::InvalidLongjmpValue,
+        ),
+        (
+            "__builtin_longjmp(n,1)",
+            SemanticErrorKind::InvalidArgumentType,
+        ),
+        (
+            "__builtin_setjmp(5)",
+            SemanticErrorKind::InvalidArgumentType,
+        ),
+        (
+            "__builtin_longjmp(b)",
+            SemanticErrorKind::InvalidArgumentCount,
+        ),
+        (
+            "__builtin_setjmp(b,1)",
+            SemanticErrorKind::InvalidArgumentCount,
+        ),
+    ] {
+        with_source(&format!("{prefix}{call};}}"), |context, unit| {
+            let errors = context.take_pending_errors();
+            assert_eq!(unit.errors, 1, "{call}: {errors:?}");
+            assert!(
+                matches!(
+                    errors.as_slice(),
+                    [TranslationError::Semantic(SemanticError { kind, .. })] if *kind == expected
+                ),
+                "{call}: {errors:?}"
+            );
+        });
+    }
+}

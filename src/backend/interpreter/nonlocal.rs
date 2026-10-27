@@ -14,6 +14,13 @@
 //! `volatile` one lives in memory. MinGW-w64's `mingw_getsp` returns the
 //! frame address, which its `_setjmp` ignores here.
 //!
+//! GCC's `__builtin_setjmp` (`sjlj_setjmp`) keeps the same record in the
+//! three words of its five-word buffer that the frame address (word 0) and
+//! the stack position (word 2) leave free: word 1 holds the block and the
+//! position after the instruction, word 3 the activation, and word 4 the
+//! depth and the dynamic-allocation mark. `sjlj_longjmp` resumes it with 1.
+//! GNU extension: GCC manual, "Nonlocal Gotos".
+//!
 //! C99: §7.13.1.1 paragraphs 2-3, p. 243; PDF p. 255;
 //! §7.13.2.1 paragraphs 2-4, p. 244; PDF p. 256.
 
@@ -36,6 +43,7 @@ use crate::{
         Block,
         Entity,
         InstData,
+        Opcode,
         Type,
         Value,
     },
@@ -122,19 +130,99 @@ impl Machine<'_, '_, '_> {
     fn restore_environment(&mut self, buffer: RuntimeValue, value: u128) -> Result<(), Fault> {
         let mut words = [0_usize; JMP_BUF_WORDS];
         for (index, word) in words.iter_mut().enumerate() {
-            let address = self.word(buffer, index);
-            let RuntimeValue::Int(bits) = self.memory.load(Type::I64, address, Align::BYTE)? else {
-                return Err(UbKind::InvalidJmpBuf.into());
-            };
-            *word = usize::try_from(bits).map_err(|_| UbKind::InvalidJmpBuf)?;
+            *word = self.load_word(buffer, index)?;
         }
         let [activation, depth, block, next, mark] = words;
+        let saved = Saved {
+            activation,
+            depth,
+            block,
+            next,
+            mark,
+        };
+        self.resume(saved, value, |inst| {
+            matches!(inst, InstData::Call { .. } | InstData::CallIndirect { .. })
+        })
+    }
+
+    /// Runs `sjlj_setjmp`: records the executing frame and its position
+    /// after the instruction in words 1, 3 and 4 of the buffer at `buffer`.
+    pub(super) fn save_builtin_environment(&mut self, buffer: RuntimeValue) -> Result<(), Fault> {
+        let frame = *self.frame();
+        let pack = |high: usize, low: usize| -> Result<u64, Fault> {
+            let (Ok(high), Ok(low)) = (u32::try_from(high), u32::try_from(low)) else {
+                return Err(Fault::Unsupported(Unsupported::AddressSpace));
+            };
+            Ok(u64::from(high) << 32 | u64::from(low))
+        };
+        let words = [
+            (1, pack(frame.block.index(), frame.next)?),
+            (3, frame.activation),
+            (4, pack(self.frames.len() - 1, self.dynamic_slots.len())?),
+        ];
+        for (index, word) in words {
+            let address = self.word(buffer, index);
+            self.memory.store(
+                Type::I64,
+                RuntimeValue::Int(u128::from(word)),
+                address,
+                Align::BYTE,
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Runs `sjlj_longjmp`: resumes the `sjlj_setjmp` that filled `buffer`
+    /// with 1, discarding the frames called since.
+    pub(super) fn restore_builtin_environment(
+        &mut self,
+        buffer: RuntimeValue,
+    ) -> Result<(), Fault> {
+        let resume = self.load_word(buffer, 1)?;
+        let activation = self.load_word(buffer, 3)?;
+        let depth = self.load_word(buffer, 4)?;
+        let low = |word: usize| word & usize::try_from(u32::MAX).expect("a 64-bit host");
+        let saved = Saved {
+            activation,
+            depth: depth >> 32,
+            block: resume >> 32,
+            next: low(resume),
+            mark: low(depth),
+        };
+        self.resume(saved, 1, |inst| {
+            matches!(
+                inst,
+                InstData::Unary {
+                    opcode: Opcode::SjljSetjmp,
+                    ..
+                }
+            )
+        })
+    }
+
+    /// Resumes the frame `saved` describes after the instruction that saved
+    /// it, which `saving` accepts and whose `i32` result becomes `value`, or
+    /// 1 for 0; traps when the frame is no longer that activation or the
+    /// record is corrupt.
+    fn resume(
+        &mut self,
+        saved: Saved,
+        value: u128,
+        saving: impl Fn(&InstData) -> bool,
+    ) -> Result<(), Fault> {
+        let Saved {
+            activation,
+            depth,
+            block,
+            next,
+            mark,
+        } = saved;
         let Some(&frame) = self.frames.get(depth) else {
             return Err(UbKind::InvalidJmpBuf.into());
         };
         let body = self.body(frame.func);
         // The frame must be the activation that saved the buffer, and the
-        // position must follow the call to `setjmp` that has a result.
+        // position must follow the saving instruction, which has a result.
         // The block word is untrusted: range-check it before it becomes a
         // `Block`, whose constructor only accepts valid indices.
         let block = (block < body.block_count()).then(|| Block::new(block));
@@ -143,12 +231,7 @@ impl Machine<'_, '_, '_> {
             .map(|block| body.block_insts(block))
             .and_then(|insts| next.checked_sub(1).and_then(|last| insts.get(last)))
             .copied()
-            .filter(|&inst| {
-                matches!(
-                    body.inst(inst),
-                    InstData::Call { .. } | InstData::CallIndirect { .. }
-                )
-            })
+            .filter(|&inst| saving(body.inst(inst)))
             .and_then(|inst| body.inst_result(inst))
             .filter(|&result| body.value_type(result) == Type::I32);
         // The saving frame's own dynamic objects end where the next frame's
@@ -181,11 +264,32 @@ impl Machine<'_, '_, '_> {
         Ok(())
     }
 
+    /// Word `index` of the buffer at `buffer`, which must be an integer.
+    fn load_word(&mut self, buffer: RuntimeValue, index: usize) -> Result<usize, Fault> {
+        let address = self.word(buffer, index);
+        let RuntimeValue::Int(bits) = self.memory.load(Type::I64, address, Align::BYTE)? else {
+            return Err(UbKind::InvalidJmpBuf.into());
+        };
+        Ok(usize::try_from(bits).map_err(|_| UbKind::InvalidJmpBuf)?)
+    }
+
     /// The address of word `index` of the buffer at `buffer`.
     fn word(&self, buffer: RuntimeValue, index: usize) -> RuntimeValue {
         self.memory
             .ptr_add(buffer, RuntimeValue::Int(8 * index as u128), true)
     }
+}
+
+/// A saved environment: the saving frame's activation and depth, the block
+/// and position after the saving instruction, and the dynamic-allocation
+/// mark.
+#[derive(Clone, Copy)]
+struct Saved {
+    activation: usize,
+    depth:      usize,
+    block:      usize,
+    next:       usize,
+    mark:       usize,
 }
 
 /// Whether `types` are the arguments of a `setjmp`-family call on an x86-64

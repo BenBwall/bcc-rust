@@ -187,7 +187,8 @@ enum MemoryWrite {
 /// scanning a join's region log what it returns, so an instruction that
 /// writes cannot be missed by one of them. A volatile access, a call, a range
 /// operation, an atomic (including relaxed loads and fences), or a `va_*`
-/// operation, breakpoint, or cycle-counter observation is a full barrier.
+/// operation, breakpoint, cycle-counter observation or builtin non-local
+/// jump (`sjlj_setjmp`, `sjlj_longjmp`) is a full barrier.
 /// A new instruction that
 /// may write memory or synchronize must be added here.
 fn memory_write(draft: &Draft<'_, '_>, data: InstData) -> MemoryWrite {
@@ -211,7 +212,13 @@ fn memory_write(draft: &Draft<'_, '_>, data: InstData) -> MemoryWrite {
         | InstData::VaArgAggregate { .. }
         | InstData::MemoryRange { .. }
         | InstData::Unary {
-            opcode: Opcode::VaStart | Opcode::VaArg | Opcode::VaEnd | Opcode::StackRestore,
+            opcode:
+                Opcode::VaStart
+                | Opcode::VaArg
+                | Opcode::VaEnd
+                | Opcode::StackRestore
+                | Opcode::SjljSetjmp
+                | Opcode::SjljLongjmp,
             ..
         }
         | InstData::Binary {

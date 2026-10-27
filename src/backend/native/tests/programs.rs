@@ -948,6 +948,14 @@ int main(void) {
     return 0;
 }"#,
     },
+    // GCC's `__builtin_setjmp` and `__builtin_longjmp` ("Nonlocal Gotos"):
+    // nested frames, values of every register class live across the setjmp,
+    // the caller's callee-saved registers, loops, VLAs and alloca, a copied
+    // buffer and nested handlers; GCC and Clang print the same.
+    Program {
+        name:   "builtin_setjmp",
+        source: include_str!("../../../../tests/fixtures/programs/builtin_setjmp.c"),
+    },
     // C11 §7.17 and the GNU builtins: loads and stores in every order,
     // exchange, strong and weak compare-exchange that succeed and fail,
     // every fetch operation at every width with its old value used and

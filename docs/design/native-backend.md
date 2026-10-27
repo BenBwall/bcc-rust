@@ -745,6 +745,17 @@ Values defined again after the call, block parameters of a loop around
 are indeterminate after the second return (C99 §7.13.2.1p3), as with
 LLVM's `returns_twice`.
 
+GCC's `__builtin_setjmp` (`sjlj_setjmp`) saves no register at all:
+`__builtin_longjmp` (`sjlj_longjmp`) restores only `%rbp` and `%rsp` from
+words 0 and 2 of the buffer and jumps to the resume address in word 1
+(LLVM's `EH_SjLj_SetJmp` and `EH_SjLj_LongJmp`). `MInst::SjljSetjmp`
+therefore clobbers every register but `%rsp`, and `%rbp` unless it
+addresses the frame: nothing lives in a register across it, the prologue
+saves every callee-saved register, and the same coalescing rule keeps each
+value live across it in its own spill slot. At the resume label a frame
+addressed from `%rbp` derives `%rbp` from the frame address it arrives
+with, a fixed distance above the frame's base.
+
 ### Atomic operations
 
 `isel/atomic.rs` selects the IR's `atomic` instructions with the standard

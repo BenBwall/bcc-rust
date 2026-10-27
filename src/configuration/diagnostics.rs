@@ -236,6 +236,8 @@ diagnostic_groups! {
     /// Valid C99 that neither GCC nor Clang diagnoses, so it stays off; the
     /// bcc-only `-Wconstant-promotion` reports it.
     ConstantPromotion => Some("constant-promotion"), Ignored, false;
+    /// An integer constant whose implicit conversion changes its value.
+    ConstantConversion => Some("constant-conversion"), Warning, false;
 }
 
 /// A group's severity when no option names it.
