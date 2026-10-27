@@ -407,6 +407,7 @@ mod tests {
         }
         // Without the library the hosted resource headers stand alone.
         let output = bcc(&[
+            "-nostdlibinc",
             "--input",
             "#include <limits.h>\n#include <stdint.h>\n_Static_assert(MB_LEN_MAX == 4, \
              \"\");\n_Static_assert(sizeof(int64_t) == 8, \"\");\n",

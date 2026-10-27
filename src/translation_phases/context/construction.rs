@@ -48,6 +48,7 @@ impl<'tu> Context<'tu> {
             tu,
             configuration,
             preprocessing_options: &[],
+            preprocessed_input: false,
             preprocessed_tokens: 0,
             pack_pragmas: ArenaVec::new_in(tu),
             weak_pragmas: ArenaVec::new_in(tu),

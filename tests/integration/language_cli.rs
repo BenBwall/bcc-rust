@@ -315,7 +315,9 @@ mod tests {
             let output = run(&flags, source);
             let tree = String::from_utf8_lossy(&output.stderr);
             assert!(
-                output.status.success() && tree.contains("error:") && tree.contains(diagnostic),
+                output.status.code() == Some(1)
+                    && tree.contains("error:")
+                    && tree.contains(diagnostic),
                 "{flags:?}: {tree}"
             );
             assert!(tree.contains("declarator following"), "{flags:?}: {tree}");
@@ -340,7 +342,11 @@ mod tests {
                     format!("#if {expression}\n#endif\nint after;\n#if 1\nint later;\n#endif\n");
                 let output = run(&["-std", mode], &source);
                 let tree = String::from_utf8_lossy(&output.stderr);
-                assert!(output.status.success(), "{mode}: {expression}: {tree}");
+                assert_eq!(
+                    output.status.code(),
+                    Some(1),
+                    "{mode}: {expression}: {tree}"
+                );
                 assert!(tree.contains(diagnostic), "{mode}: {expression}: {tree}");
                 assert_eq!(
                     tree.matches("error:").count(),

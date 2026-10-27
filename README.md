@@ -26,8 +26,9 @@ language parser, and semantic analysis, and prints diagnostics. Pass
 `--semantic-types` for resolved declarations and types, `--syntax-tree` for a stable,
 source-oriented tree, `--syntax-locations` to add locations, `--raw-syntax` for
 the raw Rust debug form of the tree, or `--tokens` for parser-facing
-preprocessing tokens. Normal operation does not dump internal storage. These
-views exit with status 0 whatever they diagnose.
+preprocessing tokens. Normal operation does not dump internal storage. Every
+view, like every other mode, exits with status 1 when it reported an error
+(including `-pedantic-errors` and `-Werror` diagnostics) and 0 otherwise.
 
 Code generation runs only when asked for, after the same diagnostics:
 
@@ -41,7 +42,47 @@ bcc-rust x.c --target=x86_64-w64-windows-gnu -c -o x.o
 bcc-rust x.c --target=x86_64-w64-windows-gnu --backend=native -o x.exe
 bcc-rust x.c --target=x86_64-unknown-linux-gnu --backend=native --emit=asm
 bcc-rust lib.c -fPIC -shared -o libx.so   # a shared library (Linux)
+bcc-rust -c a.c b.c                    # a.o and b.o, as GCC names them
+bcc-rust -S a.c                        # a.s, LLVM's assembly
+bcc-rust a.c b.o -lm -o app            # compile, then link in order
+bcc-rust -E a.c [-P] [-o a.i]          # the preprocessed source
+bcc-rust -E -dM a.c                    # the macros defined at the end
+bcc-rust -MM a.c / -c -MMD a.c         # make dependency rules
+bcc-rust -fsyntax-only a.c             # check only; exit 1 after an error
 ```
+
+The driver takes several inputs and runs one job per input, as GCC does: C
+sources (`.c`, `.h`, or any file after `-x c`; `-` reads stdin), preprocessed
+C (`.i`, or `-x cpp-output`), assembly (`.s`, or `.S` and `.sx`, which the C
+preprocessor reads first with the `-D`, `-U`, `-include` and header search
+options; `-x assembler` and `-x assembler-with-cpp` reach the bundled clang),
+and objects, archives and libraries, which go to the linker in order with
+`-l`, `-L`, `-Wl,`, `-Xlinker`, `-static`, `-rdynamic`, `-pthread` and
+`-nostdlib`; `-pthread` also defines `_REENTRANT`, as in GCC and Clang.
+`-Wa,` and `-Xassembler` options go to the assembly inputs; C
+sources, which bcc assembles itself, warn about any but `--noexecstack`. An
+output that is one of the input files, even through a symbolic or hard link,
+is refused before any job runs. `--sysroot` also selects the libraries the
+bundled clang links against. `-c` and `-S` name each output after its source
+in the working directory unless `-o` names the only one, and `-o -` writes
+`-S` or `-E` output to stdout. `-E` writes GCC's line markers (`# 3
+"a.c"`), unless `-P`, and keeps `#pragma pack` and `#pragma weak`; bcc reads
+such markers back, so a `.i` file compiles with its original locations.
+Preprocessed input is read as GCC's `-fpreprocessed` reads it: no trigraph
+is replaced and no line spliced again, no macro is replaced, `-D`, `-U` and
+`-include` do not apply, only line markers, `#pragma`, `#ident`, `#define`
+and `#undef` starting in the first column are read (any other directive is
+an error), and `-E` skips it with a warning.
+`-E -dM` lists the macros in effect at the end, sorted by name. `-M`, `-MM`,
+`-MD`, `-MMD`, `-MF`, `-MT`, `-MQ` and `-MP` write make rules as GCC does; the
+`-MM` forms leave out system headers. The `-MD` file and target follow the
+stage and `-o` as in GCC: `-c -o x.o` writes `x.d` for `x.o`, `-S -o x.s`
+`x.d` for `x.s`, `-E -o x.i` `x.d` for the source's `.o`, and linking one
+source with `-o app` `app.d` for `app`. Linking several sources writes one
+rule per source, named after it (`a.d` for `a.o`), where GCC would overwrite
+one `app.d`. `-MF -` and `-o -` write the rules to stdout.
+`--syntax-only` (`-fsyntax-only`) analyzes like the default view. Every
+mode exits with status 1 after an error, as GCC and Clang do.
 
 Every back end receives the module after ABI lowering, which fixes how the
 `--target` passes structures by value and `va_arg`; `--emit=ir` prints the
@@ -338,12 +379,18 @@ both forms then search, in order, each `-I` directory, `CPATH`, each
 `-isystem` directory, `C_INCLUDE_PATH`, the embedded `<built-in>` resource
 directory, the C library's directories, and each `-idirafter` directory. User
 headers therefore take precedence over resource headers, and a resource header
-can `#include_next` the C library's header of the same name. `--sysroot <dir>`
-names the C library's directories `<dir>/usr/local/include` and
-`<dir>/usr/include`; without it no library directory is searched, so a C
-library elsewhere (MinGW-w64, the MSVC UCRT, a multiarch
-`/usr/include/x86_64-linux-gnu`) is added with `-idirafter` or `-isystem`.
-Target-driven discovery of these directories is future work. `-nostdinc`
+can `#include_next` the C library's header of the same name. Compiling for
+the host on an x86-64 Linux host (the default target on a glibc system), the
+C library's directories are the host's, as Clang searches them:
+`/usr/local/include`, the multiarch `/usr/include/x86_64-linux-gnu` and
+`/usr/include`, so `#include <stdio.h>` needs no option, and the link finds
+the host's C library as before. `--sysroot <dir>` replaces them with
+`<dir>/usr/local/include`, `<dir>/usr/include/<multiarch>` (for a Linux
+target, when it exists) and `<dir>/usr/include`, and is also the root the
+bundled clang links against. Any other target is a cross target and searches
+no library directory without `--sysroot`, so a C library elsewhere
+(MinGW-w64, the MSVC UCRT, musl on a glibc host) is added with `--sysroot`,
+`-idirafter` or `-isystem`. `-nostdinc`
 removes the resource and library directories, `-nostdlibinc` only the library
 directories, and `-nobuiltininc` only the resource directory; `-idirafter`
 directories stay. The GCC single-dash spellings `-iquote`, `-isystem` and
@@ -604,8 +651,9 @@ unit includes all the standard headers together. Clang runs first with the
 configuration's target and include flags and `-fsyntax-only`, in `-std=gnu17`
 and, for the standard headers, also `-std=c17`. Clang's verdict decides which
 headers are valid: bcc does not run on headers that Clang rejects, and the
-results record why Clang rejected them. bcc exits 0 even after reporting
-errors, so the survey counts its rendered diagnostics instead. A crash or
+results record why Clang rejected them. bcc exits 1 when it reported an
+error, and the survey also counts its rendered diagnostics; any other exit,
+or exit 1 without an error, is a process failure. A crash or
 timeout makes the survey exit nonzero. `--config`, `--match` (a header glob),
 `--jobs`, and `--timeout` narrow or tune a run.
 

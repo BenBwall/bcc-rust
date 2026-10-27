@@ -92,15 +92,16 @@ pub(super) const TRAP_STATUS: i32 = 70;
 pub(super) const ABORT_STATUS: i32 = 134;
 
 /// Compiles the input for the back end `options` selects and returns the
-/// process's exit status: the program's status for `--interpret`, otherwise
-/// zero on success and [`FAILURE_STATUS`] after errors.
+/// process's exit status, the program's status for `--interpret`, otherwise
+/// zero on success and [`FAILURE_STATUS`] after errors, and whether an object
+/// it built needs the atomic runtime when it is linked.
 pub(super) fn generate_code<'tu>(
     context: &mut Context<'tu>,
     source_filename: &Path,
     input_string: &'tu str,
     search: HeaderSearch<'_>,
     options: &CodeGeneration,
-) -> i32 {
+) -> Generated {
     let unit = parse_translation_unit(context, source_filename, input_string, search);
     let sema = analyze_translation_unit(context, &unit);
     let reporter_arena = Bump::new();
@@ -113,7 +114,7 @@ pub(super) fn generate_code<'tu>(
     drop(reporter.report_pending(context, stderr));
     if !sema.lowerable(context) {
         drop(reporter.finish(context, stderr));
-        return FAILURE_STATUS;
+        return Generated::status(FAILURE_STATUS);
     }
     // The module lives in an arena created after semantic analysis; the
     // syntax tree and its context outlive it.
@@ -149,12 +150,12 @@ pub(super) fn generate_code<'tu>(
                 reporter.report_late(error, error.source, context);
             }
             drop(reporter.finish(context, stderr));
-            return FAILURE_STATUS;
+            return Generated::status(FAILURE_STATUS);
         },
         | Err(retention::Failure::MiddleEnd(MiddleEndError::Abi { error, source })) => {
             reporter.report_late(&error, source, context);
             drop(reporter.finish(context, stderr));
-            return FAILURE_STATUS;
+            return Generated::status(FAILURE_STATUS);
         },
         | Err(retention::Failure::Calls(diagnostics)) => {
             for diagnostic in diagnostics {
@@ -162,12 +163,12 @@ pub(super) fn generate_code<'tu>(
                 drop(reporter.report_pending(context, stderr));
             }
             drop(reporter.finish(context, stderr));
-            return FAILURE_STATUS;
+            return Generated::status(FAILURE_STATUS);
         },
         | Err(retention::Failure::Message { text, status }) => {
             drop(reporter.finish(context, stderr));
             report_stderr(format_args!("{text}"));
-            return status;
+            return Generated::status(status);
         },
     };
     for diagnostic in prepared.diagnostics {
@@ -176,10 +177,38 @@ pub(super) fn generate_code<'tu>(
     }
     drop(reporter.finish(context, stderr));
     match prepared.output {
-        | retention::Output::Text(text) => print_stdout(format_args!("{text}")),
-        | retention::Output::Built => 0,
-        | retention::Output::Interpret =>
-            interpret(&diagnosed.module, target, options.interpret_step_limit),
+        | retention::Output::Text(text) => Generated::status(match &options.emit_path {
+            | Some(path) if path.as_os_str() != "-" => write_file(path, text),
+            | _ => print_stdout(format_args!("{text}")),
+        }),
+        | retention::Output::Built => Generated {
+            status:         0,
+            atomic_runtime: prepared.atomic_runtime,
+        },
+        | retention::Output::Interpret => Generated::status(interpret(
+            &diagnosed.module,
+            target,
+            options.interpret_step_limit,
+        )),
+    }
+}
+
+/// What [`generate_code`] did.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) struct Generated {
+    /// The process's exit status.
+    pub(super) status:         i32,
+    /// Whether the object built needs the atomic runtime (`-latomic`) at
+    /// link time, as an executable built in one step links it.
+    pub(super) atomic_runtime: bool,
+}
+
+impl Generated {
+    const fn status(status: i32) -> Self {
+        Self {
+            status,
+            atomic_runtime: false,
+        }
     }
 }
 
@@ -201,8 +230,9 @@ pub(super) fn print_default_passes() -> i32 {
 }
 
 /// The code generation options. A back end runs only when `--emit`,
-/// `--interpret` or `-o` asks for one; the other options configure it.
-#[derive(Args)]
+/// `--interpret` or `-o` asks for one; the other options configure it. The
+/// driver (`driver.rs`) clones them for each job of a multi-file build.
+#[derive(Args, Clone)]
 #[expect(
     clippy::struct_excessive_bools,
     reason = "Clap owns independent command-line switches."
@@ -214,25 +244,36 @@ pub(super) fn print_default_passes() -> i32 {
 pub(super) struct CodeGeneration {
     /// Print the bcc IR (after the optimizer, if one runs; before ABI
     /// lowering for `ir`, after it for `ir-abi`) or the LLVM IR to stdout.
-    #[arg(long, value_enum, value_name = "IR", group = "back_end",
+    #[arg(long, value_enum, value_name = "IR", group = "back_end", group = "generation",
         conflicts_with_all = ["tokens", "semantic_types", "syntax_tree", "raw_syntax"])]
     pub(super) emit:                 Option<Emit>,
     /// Run `main` in the IR interpreter, print what it writes to stdout, and
     /// exit with its status (70 if the interpreter traps, 134 on `abort`).
-    #[arg(long, group = "back_end",
+    #[arg(long, group = "back_end", group = "generation",
         conflicts_with_all = ["tokens", "semantic_types", "syntax_tree", "raw_syntax"])]
     pub(super) interpret:            bool,
     /// Maximum interpreter instructions (default 100000000); 0 is unlimited.
     #[arg(long, value_name = "N", requires = "interpret")]
     pub(super) interpret_step_limit: Option<u64>,
     /// Build an executable at PATH through the bundled clang (an object with
-    /// -c).
-    #[arg(short = 'o', long = "output", value_name = "PATH", group = "back_end",
+    /// -c, assembly with -S, preprocessed source with -E).
+    #[arg(short = 'o', long = "output", value_name = "PATH", group = "back_end", group = "generation",
         conflicts_with_all = ["tokens", "semantic_types", "syntax_tree", "raw_syntax"])]
     pub(super) output_path:          Option<PathBuf>,
-    /// With -o, compile to an object file instead of linking an executable.
-    #[arg(short = 'c', requires = "output_path")]
+    /// Compile each source to an object file instead of linking an
+    /// executable: the -o PATH, or the source's name with `.o` in the
+    /// working directory.
+    #[arg(short = 'c', group = "generation", conflicts_with_all = ["emit", "interpret", "tokens", "semantic_types",
+        "syntax_tree", "raw_syntax"])]
     pub(super) object:               bool,
+    /// Compile each source to assembly: the -o PATH, or the source's name
+    /// with `.s` in the working directory.
+    #[arg(short = 'S', group = "generation", conflicts_with_all = ["emit", "interpret", "tokens", "semantic_types",
+        "syntax_tree", "raw_syntax"])]
+    pub(super) assembly:             bool,
+    /// Where `--emit` text goes instead of stdout, as `-S` and `-o` set it.
+    #[arg(skip)]
+    pub(super) emit_path:            Option<PathBuf>,
     /// With -o, link a shared library (also accepts GCC -shared); its code
     /// needs -fpic or -fPIC.
     #[arg(long, requires = "output_path", conflicts_with_all = ["object", "pie", "no_pie"])]
@@ -253,41 +294,41 @@ pub(super) struct CodeGeneration {
     pub(super) opt:                  Option<MiddleEnd>,
     /// Run these bcc passes once each, in order, instead of the default
     /// pipeline (implies --opt=bcc), such as fold,simplify-cfg,dce.
-    #[arg(long, value_name = "LIST", value_parser = pass_list, requires = "back_end")]
+    #[arg(long, value_name = "LIST", value_parser = pass_list, requires = "generation")]
     pub(super) passes:               Option<PassList>,
     /// Apply only the first N rewrites of the bcc optimizer, to bisect a
     /// miscompile (implies --opt=bcc).
-    #[arg(long, value_name = "N", requires = "back_end")]
+    #[arg(long, value_name = "N", requires = "generation")]
     pub(super) opt_bisect_limit:     Option<u64>,
     /// Print each function to stderr after every bcc pass (implies
     /// --opt=bcc).
-    #[arg(long, requires = "back_end")]
+    #[arg(long, requires = "generation")]
     pub(super) print_after_all:      bool,
     /// Print the bcc optimizer's per-pass runs, rewrites and times to
     /// stderr when it finishes (implies --opt=bcc).
-    #[arg(long, requires = "back_end")]
+    #[arg(long, requires = "generation")]
     pub(super) time_passes:          bool,
     /// Select the LLVM IR pipeline and code generation level; none means O0.
     #[arg(long, value_enum, overrides_with = "llvm_opt")]
     pub(super) llvm_opt:             Option<LlvmOpt>,
     /// Run no LLVM IR pass, only the code generator at the --llvm-opt
     /// level.
-    #[arg(long, requires = "back_end")]
+    #[arg(long, requires = "generation")]
     pub(super) llvm_codegen_only:    bool,
     /// Select the code generator for -o and --emit=asm: LLVM through its C
     /// API, or bcc's own x86-64 back end, which refuses what it does not
     /// support yet.
-    #[arg(long, value_enum, default_value = "llvm", requires = "back_end")]
+    #[arg(long, value_enum, default_value = "llvm", requires = "generation")]
     pub(super) backend:              BackEnd,
     /// Encode the native back end's ELF or COFF objects in process, the
     /// default for Windows targets, where a listing the encoder refuses is
     /// assembled unless this flag is given; a module with file-scope assembly
     /// is refused.
-    #[arg(long, requires = "back_end", overrides_with = "no_native_object")]
+    #[arg(long, requires = "generation", overrides_with = "no_native_object")]
     pub(super) native_object:        bool,
     /// Assemble the native back end's listing with the bundled clang, the
     /// default for Linux targets and for a module with file-scope assembly.
-    #[arg(long, requires = "back_end", overrides_with = "native_object")]
+    #[arg(long, requires = "generation", overrides_with = "native_object")]
     pub(super) no_native_object:     bool,
 }
 
@@ -300,7 +341,8 @@ pub(super) enum Emit {
     IrAbi,
     /// LLVM IR.
     Llvm,
-    /// The native back end's assembly (with --backend=native).
+    /// Assembly from the selected back end: LLVM's, or the native back
+    /// end's with --backend=native.
     Asm,
 }
 
@@ -363,14 +405,8 @@ impl CodeGeneration {
     /// do not.
     pub(super) fn back_end_conflict(&self) -> Option<&'static str> {
         let native = self.backend == BackEnd::Native;
-        match self.emit {
-            | Some(Emit::Asm) if !native =>
-                return Some(
-                    "--emit=asm prints the native back end's assembly; add --backend=native",
-                ),
-            | Some(Emit::Llvm) if native =>
-                return Some("--emit=llvm prints LLVM IR, which --backend=native does not use"),
-            | _ => {},
+        if self.emit == Some(Emit::Llvm) && native {
+            return Some("--emit=llvm prints LLVM IR, which --backend=native does not use");
         }
         if !native {
             if self.native_object {
@@ -381,8 +417,10 @@ impl CodeGeneration {
             }
             return None;
         }
-        if self.emit.is_none() && self.output_path.is_none() {
-            return Some("--backend=native needs -o or --emit=asm; --interpret runs the IR");
+        if self.emit.is_none() && self.output_path.is_none() && !self.object && !self.assembly {
+            return Some(
+                "--backend=native needs -o, -c, -S or --emit=asm; --interpret runs the IR",
+            );
         }
         if self.llvm_opt.is_some_and(|level| level != LlvmOpt::None) || self.llvm_codegen_only {
             return Some(
@@ -395,7 +433,11 @@ impl CodeGeneration {
 
     /// Whether a back end was requested.
     pub(super) fn requested(&self) -> bool {
-        self.emit.is_some() || self.interpret || self.output_path.is_some()
+        self.emit.is_some()
+            || self.interpret
+            || self.output_path.is_some()
+            || self.object
+            || self.assembly
     }
 
     /// The optimizer options, or `None` when no bcc pass runs. Any of the
@@ -481,7 +523,7 @@ impl CodeGeneration {
     }
 
     /// LLVM IR passes and code generation for `target`.
-    fn llvm_options(&self, target: Target, code: CodeOptions) -> LlvmOptions {
+    pub(super) fn llvm_options(&self, target: Target, code: CodeOptions) -> LlvmOptions {
         LlvmOptions {
             opt: match self.llvm_opt.or(self.optimization).unwrap_or(LlvmOpt::None) {
                 | LlvmOpt::None => None,
@@ -556,6 +598,20 @@ fn print_stdout(text: fmt::Arguments<'_>) -> i32 {
         return stdout_error(&error);
     }
     0
+}
+
+/// Writes `text` to the file at `path` and returns the exit status.
+fn write_file(path: &Path, text: &str) -> i32 {
+    match std::fs::write(path, text) {
+        | Ok(()) => 0,
+        | Err(error) => {
+            report_stderr(format_args!(
+                "error: cannot write `{}`: {error}",
+                path.display()
+            ));
+            FAILURE_STATUS
+        },
+    }
 }
 
 /// Closed consumers end forwarding quietly; other output errors are CLI

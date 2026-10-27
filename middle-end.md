@@ -1158,7 +1158,8 @@ integer, pointer, `i128`, `f32` and `f64` code, variadic definitions, dynamic
 stack allocation, computed `goto`, thread-local globals and the GNU symbol
 attributes, and refuses everything else (`f80`, `f128`, `i128` float
 conversions) before writing any output.
-`--backend=native` selects it for `-o`, and `--emit=asm` prints its assembly.
+`--backend=native` selects it for `-o`, `-c` and `-S`, and `--emit=asm` with
+it prints its assembly.
 For `-o` it encodes COFF objects directly on the Windows targets and has the
 bundled clang assemble its listing on Linux; `--native-object` and
 `--no-native-object` choose either path on any target, and the last of the
@@ -1206,9 +1207,28 @@ bcc-rust x.c -o x.exe [-c]          emit an object through LLVM-C; link with cla
     [-shared|-pie|-no-pie]          link a shared library (needs -fpic or -fPIC),
                                     a position-independent executable (the Linux
                                     default) or a fixed-address one
-bcc-rust x.c --backend=native --emit=asm   print the native back end's assembly
+bcc-rust x.c --emit=asm            print LLVM's assembly (the native back
+                                    end's with --backend=native)
+bcc-rust -c x.c y.c                 compile each source to an object: x.o, y.o
+bcc-rust -S x.c [-o x.s|-o -]       write the assembly to x.s, or stdout
+bcc-rust x.c y.o -lm -o app         compile x.c to a temporary object and link
+                                    it with y.o and -lm, in order
 bcc-rust --print-default-passes     print the default pass list and exit
 ```
+
+The driver runs one job per input in command-line order (`src/cli/driver.rs`):
+`-S` and `-c` stop each C source at assembly or an object, named after the
+source in the working directory unless `-o` names the only output; `-o`
+alone links, after the driver has checked that the output is none of the
+inputs. One C source alone links in one step as before; with several
+inputs, or with `--sysroot`, each C source becomes a temporary object beside
+the output and
+assembly inputs are assembled by the bundled clang, which then links every
+object, archive, library and `-l`, `-L`, `-Wl,`, `-Xlinker`, `-static`,
+`-rdynamic` or `-pthread` option in order, adding `-latomic` when an object
+needs it, against the `--sysroot` when one is given. No link runs after a
+failed job. README lists the preprocessing
+stages (`-E`, `-M`).
 
 `-O0` disables optimization; the other `-O` levels enable bcc's pass
 pipeline and select the corresponding LLVM pipeline (`-Og` uses `O1`).

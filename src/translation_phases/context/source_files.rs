@@ -64,6 +64,27 @@ impl<'tu> Context<'tu> {
         Ok(text)
     }
 
+    /// The files whose text was read for this translation unit, in the
+    /// order they were opened: the main file and every header an
+    /// `#include` reached. Presumed names, synthetic sources and the
+    /// embedded resource headers are left out. Dependency output (`-M`,
+    /// `-MD`) lists them.
+    /// C99: source file inclusion, §6.10.2, pp. 149-150; PDF pp. 161-162.
+    pub(crate) fn opened_source_files(&self) -> impl Iterator<Item = (u32, &'tu Path)> + '_ {
+        self.source_texts
+            .iter()
+            .enumerate()
+            .filter(|(_, text)| text.is_some())
+            .filter_map(|(index, _)| {
+                let index = u32::try_from(index).ok()?;
+                let path = self.source_files[index];
+                (!self.presumed_files.contains_key(&index)
+                    && !path.starts_with(crate::headers::DIRECTORY)
+                    && path.is_file())
+                .then_some((index, path))
+            })
+    }
+
     pub(crate) fn intern_source_file(&mut self, path: &Path) -> u32 {
         let tu = self.tu;
         self.source_files

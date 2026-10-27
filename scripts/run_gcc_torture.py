@@ -123,7 +123,9 @@ def bcc_status(result):
         status = "timeout"
     elif re.search(r"panicked at|stack overflow|fatal runtime error", output):
         status = "crash"
-    elif result["exit"] != 0:
+    # bcc exits 1 exactly when it reported an error; anything else failed
+    # outside the diagnostics.
+    elif result["exit"] not in {0, 1} or (result["exit"] == 1) != bool(errors):
         status = "process_failure"
     elif errors:
         status = "diagnostics"

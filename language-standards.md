@@ -264,7 +264,7 @@ In a hosted translation a header that Clang chains to the C library tests
 before supplying what remains; `-ffreestanding` skips the C library entirely.
 The headers are searched after the `-I`,
 `-isystem` and environment directories and before the C library's directories
-(`--sysroot`) and `-idirafter`; quoted lookup additionally gives local and
+(the host's when compiling for the host, or `--sysroot`) and `-idirafter`; quoted lookup additionally gives local and
 `-iquote` headers priority. `-nostdinc` and `-nobuiltininc` remove the resource
 directory. `__has_include` uses the same search.
 This follows Clang resource-header availability; use of newer language syntax
@@ -1009,7 +1009,15 @@ absolute path, and the primary source file are not. `#pragma GCC
 system_header` (also through `_Pragma`) makes the rest of the current header
 a system header; in the primary source file it is ignored with a warning, as
 in GCC and Clang. A `#line` directive gives the following lines a new file
-identity that is not a system header. `#pragma GCC warning` and `#pragma GCC
+identity that is not a system header. A GNU line marker (`# 12 "file.c" 1 3`),
+the form `-E` writes, is read as `#line 12 "file.c"`; its flags are ignored,
+so flag 3 does not make what follows a system header. Already
+preprocessed input (`.i`, `-x cpp-output`) is read as GCC's
+`-fpreprocessed` reads it: phases 1 and 2 replace no trigraph and delete no
+line splice (CR and CRLF still end lines), no macro, builtin or not, is
+replaced, and only line markers, `#pragma`, `#ident`, `#sccs`, `#define` and
+`#undef` whose `#` starts the line are directives; any other directive is an
+error. `#pragma GCC warning` and `#pragma GCC
 error` report their macro-replaced string operand (optionally parenthesized,
 adjacent literals concatenated) as a warning or an error, as GCC and Clang do;
 any other operand is an error. glibc's `__glibc_macro_warning`, which bcc
@@ -1788,9 +1796,10 @@ The `float *` to `char *` argument execution regression explicitly uses
 contradict the observed Clang behavior. Function/void pointer conversions
 and pointer/zero ordering use the existing GNU extension policy adapter.
 
-Existing inspection views keep their historical success status while printing
-diagnostics. Code-generation modes (`--emit=ir`, `--interpret`, `-c`, `-o`)
-return failure for error diagnostics; flag regressions verify that lowering gate.
+Every mode, the inspection views included, returns failure after an error
+diagnostic, as a compiler must; code-generation modes (`--emit=ir`,
+`--interpret`, `-c`, `-o`) also stop before lowering, and flag regressions
+verify that gate.
 
 These defaults satisfy the diagnostic requirement of C99 §5.1.1.3p1
 (printed p. 11; PDF p. 23). The constraints remain §6.5.16.1p1

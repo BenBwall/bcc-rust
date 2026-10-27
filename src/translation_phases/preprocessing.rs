@@ -366,6 +366,11 @@ impl Expander<'_, '_, '_, '_> {
                 // §6.10.3.1p1).
                 break 'base Some(token);
             }
+            // Preprocessed input is not replaced again, as GCC's
+            // `-fpreprocessed` reads it: its names are the program's.
+            if self.context.preprocessed_input {
+                break 'base Some(token);
+            }
 
             // C99 §6.10.3.4p2: a name met while its macro is being replaced
             // stays unreplaced, even when it is rescanned later.

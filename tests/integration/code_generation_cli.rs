@@ -1369,13 +1369,21 @@ printf(\"%f %f %F\\n\",1e100,-0.0,1.0/0.0); return 0; }",
     #[test]
     fn back_end_options_need_a_back_end() {
         for flags in [
-            &["-c"][..],
             &["--emit=ir", "--interpret"][..],
             &["--emit=ir", "--syntax-tree"][..],
+            &["-c", "--emit=ir"][..],
         ] {
             let output = bcc(SUM, flags);
             assert_eq!(output.status.code(), Some(2), "{flags:?}");
         }
+        // `-c` names its object after the input file, which `--input` lacks.
+        let output = bcc(SUM, &["-c"]);
+        assert_eq!(output.status.code(), Some(1));
+        assert!(
+            text(&output.stderr).contains("give -o for --input or stdin"),
+            "{}",
+            text(&output.stderr)
+        );
     }
 
     /// The target the tests run on, if the LLVM back end supports it.
@@ -1739,6 +1747,10 @@ int main(void) { printf("main\n"); return zero; }
             ],
         );
         assert!(text(&asm.stdout).contains(".seh_proc\tmain"));
+        // Without --backend=native, --emit=asm prints LLVM's assembly.
+        let asm = bcc(SUM, &["--target=x86_64-unknown-linux-gnu", "--emit=asm"]);
+        assert!(asm.status.success(), "{}", text(&asm.stderr));
+        assert!(text(&asm.stdout).contains("main:"), "{}", text(&asm.stdout));
         for (flags, message) in [
             (
                 &["--native-object", "--emit=ir"][..],
@@ -1753,16 +1765,12 @@ int main(void) { printf("main\n"); return zero; }
                 "error: --native-object requires --backend=native",
             ),
             (
-                &["--emit=asm"][..],
-                "error: --emit=asm prints the native back end's assembly; add --backend=native",
-            ),
-            (
                 &["--backend=native", "--emit=llvm"][..],
                 "error: --emit=llvm prints LLVM IR, which --backend=native does not use",
             ),
             (
                 &["--backend=native", "--interpret"][..],
-                "error: --backend=native needs -o or --emit=asm; --interpret runs the IR",
+                "error: --backend=native needs -o, -c, -S or --emit=asm; --interpret runs the IR",
             ),
             (
                 &["--backend=native", "--emit=asm", "--llvm-opt=O2"][..],

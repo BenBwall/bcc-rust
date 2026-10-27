@@ -33,8 +33,9 @@ pub(crate) struct HeaderSearch<'a> {
     /// Whether the embedded resource directory follows `system`; cleared by
     /// `-nostdinc` and `-nobuiltininc`.
     pub(crate) resource: bool,
-    /// The C library's directories (from `--sysroot`, unless `-nostdinc` or
-    /// `-nostdlibinc` removed them), then the `-idirafter` directories.
+    /// The C library's directories (from `--sysroot`, or the host's when
+    /// compiling for the host, unless `-nostdinc` or `-nostdlibinc` removed
+    /// them), then the `-idirafter` directories.
     pub(crate) after:    &'a [&'a Path],
 }
 
