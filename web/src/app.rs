@@ -8,7 +8,10 @@
 
 use std::rc::Rc;
 
-use gloo_timers::future::TimeoutFuture;
+use gloo_timers::{
+    callback::Timeout,
+    future::TimeoutFuture,
+};
 use leptos::{
     ev,
     prelude::*,
@@ -28,8 +31,12 @@ use crate::{
         CodeEditor,
         Decoration,
         Layer,
+        Marker,
     },
-    engine::Engine,
+    engine::{
+        self,
+        Engine,
+    },
     palette,
     panels::{
         LiveCompile,
@@ -40,6 +47,7 @@ use crate::{
     },
     pipeline::{
         Compilation,
+        CompileDiagnostic,
         Stage,
     },
     snapshot::{
@@ -66,6 +74,11 @@ pub fn App() -> impl IntoView {
             _ = root.set_attribute("data-theme", theme);
         }
     });
+    // Compile the other level as soon as the switch changes.
+    Effect::new(move || {
+        state.optimize.track();
+        state.compile_now();
+    });
     Effect::new(move || {
         // The page lives as long as the listener.
         let _handle = window_event_listener(ev::keydown, move |event| state.shortcut(&event));
@@ -88,13 +101,17 @@ pub fn App() -> impl IntoView {
                             fallback=move || view! {
                                 <PipelineView
                                     stage=state.stage
+                                    optimize=state.optimize
                                     compilation=state.compilation
+                                    shown=state.shown
+                                    other=state.other_level
                                     live=state.live_status.into()
                                     theme=state.theme_name
                                     hover_source=state.hover_source.read_only()
                                     hover_output=state.hover_output
                                     filename=state.filename.read_only()
                                     source=state.editor_text.into()
+                                    on_reveal=Callback::new(move |line| state.reveal.set(Some(line)))
                                 />
                             }
                         >
@@ -125,6 +142,16 @@ const RUN_YIELD_MS: u32 = 140;
 /// Steps a held key may queue while the engine answers.
 const MAX_QUEUED_STEPS: u32 = 4;
 const THEME_KEY: &str = "bcc-theme";
+/// How long typing must pause before the compiler runs.
+const COMPILE_DEBOUNCE_MS: u32 = 400;
+/// Compilations kept, so switching level or lesson back is instant.
+const COMPILED_LIMIT: usize = 8;
+
+/// A source and whether it is compiled at `-O2`.
+type CompileKey = (String, bool);
+
+/// Recent compilations, or why the Worker could not compile, oldest first.
+type Compiled = Vec<(CompileKey, Result<Compilation, String>)>;
 
 /// Which view of the program the workbench shows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -163,12 +190,17 @@ struct State {
     stage:           RwSignal<Stage>,
     theme:           RwSignal<&'static str>,
     theme_name:      Signal<&'static str>,
-    /// The compiler's output for the editor's text, when known.
-    live:            RwSignal<Option<(String, Compilation)>>,
-    /// The source the Worker is compiling.
-    compiling:       RwSignal<Option<String>>,
-    /// The Worker's error for a source it could not compile.
-    live_error:      RwSignal<Option<(String, String)>>,
+    /// bcc's compiler Worker, started on the first compilation.
+    compiler:        StoredValue<Option<Rc<Engine>>, LocalStorage>,
+    starting:        RwSignal<bool>,
+    /// Whether the pipeline view shows `-O2` rather than `-O0` output.
+    optimize:        RwSignal<bool>,
+    compiled:        RwSignal<Compiled>,
+    /// The compilation the Worker is running; one runs at a time.
+    in_flight:       RwSignal<Option<CompileKey>>,
+    /// The debounce timer while typing; dropping it cancels it.
+    debounce:        StoredValue<Option<Timeout>, LocalStorage>,
+    pending:         RwSignal<bool>,
     live_status:     Memo<LiveCompile>,
     hover_source:    RwSignal<usize>,
     hover_output:    RwSignal<usize>,
@@ -176,7 +208,16 @@ struct State {
     current:         Memo<Option<Snapshot>>,
     recent:          Memo<Vec<(usize, String, String)>>,
     edited:          Memo<bool>,
+    /// The editor's text compiled at the selected level, with the
+    /// precomputed LLVM IR for a lesson.
     compilation:     Memo<Option<Compilation>>,
+    /// What the pipeline view shows: `compilation`, or the last output while
+    /// the next one compiles.
+    shown:           Memo<Option<Compilation>>,
+    /// The same at the other level, for the optimizer comparison.
+    other_level:     Memo<Option<Compilation>>,
+    /// bcc's diagnostics as squiggles in the source editor.
+    markers:         Memo<Vec<Marker>>,
     placeholder:     Memo<&'static str>,
 }
 
@@ -188,10 +229,20 @@ impl State {
         let source = RwSignal::new(tour.source.to_owned());
         let editor_text = RwSignal::new(tour.source.to_owned());
         let error = RwSignal::new(None::<Diagnostic>);
-        let live = RwSignal::new(None::<(String, Compilation)>);
-        let compiling = RwSignal::new(None::<String>);
-        let live_error = RwSignal::new(None::<(String, String)>);
+        let optimize = RwSignal::new(false);
+        let compiled = RwSignal::new(Compiled::new());
+        let in_flight = RwSignal::new(None::<CompileKey>);
+        let starting = RwSignal::new(false);
+        let pending = RwSignal::new(false);
         let theme = RwSignal::new("dark");
+        let live = LiveViews::new(
+            editor_text,
+            optimize,
+            compiled,
+            in_flight,
+            pending,
+            starting,
+        );
         let current = Memo::new(move |_| {
             cursor
                 .get()
@@ -239,22 +290,14 @@ impl State {
             stage: RwSignal::new(Stage::Ir),
             theme,
             theme_name: Signal::derive(move || theme.get()),
-            live,
-            compiling,
-            live_error,
-            live_status: Memo::new(move |_| {
-                editor_text.with(|text| {
-                    if let Some((_, error)) =
-                        live_error.with(|error| error.clone().filter(|(source, _)| source == text))
-                    {
-                        LiveCompile::Failed(error)
-                    } else if compiling.with(|source| source.as_ref() == Some(text)) {
-                        LiveCompile::Compiling
-                    } else {
-                        LiveCompile::Idle
-                    }
-                })
-            }),
+            compiler: StoredValue::new_local(None),
+            starting,
+            optimize,
+            compiled,
+            in_flight,
+            debounce: StoredValue::new_local(None),
+            pending,
+            live_status: live.status,
             hover_source: RwSignal::new(0),
             hover_output: RwSignal::new(0),
             reveal: RwSignal::new(None),
@@ -263,18 +306,10 @@ impl State {
             edited: Memo::new(move |_| {
                 editor_text.with(|text| source.with(|source| text != source))
             }),
-            compilation: Memo::new(move |_| {
-                editor_text.with(|text| {
-                    if let Some(demo) = demos::matching(text) {
-                        return crate::pipeline::precomputed(demo.name.trim_end_matches(".c"));
-                    }
-                    live.with(|live| {
-                        live.as_ref()
-                            .filter(|(source, _)| source == text)
-                            .map(|(_, compilation)| compilation.clone())
-                    })
-                })
-            }),
+            compilation: live.compilation,
+            shown: live.shown,
+            other_level: live.other_level,
+            markers: live.markers,
             placeholder: Memo::new(move |_| {
                 editor_text.with(|text| demos::matching(text).map_or("", |demo| demo.summary))
             }),
@@ -286,13 +321,11 @@ impl State {
         spawn_local(async move {
             self.busy.set(true);
             self.drop_engine();
-            match Engine::connect().await {
+            match Engine::connect(&engine::MACHINE).await {
                 | Ok(engine) => {
                     self.engine.set_value(Some(Rc::new(engine)));
                     self.has_engine.set(true);
                     self.unavailable.set(None);
-                    // An error from the previous engine no longer applies.
-                    self.live_error.set(None);
                     let text = self.source.get_untracked();
                     if let Err(error) = self.load_program(text, self.filename.get_untracked()).await
                     {
@@ -337,7 +370,7 @@ impl State {
         self.clear_history();
         self.failed.set(false);
         self.error.set(None);
-        self.compile_if_shown();
+        self.compile_now();
         let snapshot = self.engine()?.load(&text).await?;
         self.history.set(vec![snapshot]);
         self.cursor.set(Some(0));
@@ -355,7 +388,7 @@ impl State {
             self.editor_text.set(text);
             self.filename.set(name);
             self.clear_history();
-            self.compile_if_shown();
+            self.compile_now();
             Ok(())
         } else {
             Ok(())
@@ -508,47 +541,112 @@ impl State {
 
     fn set_mode(self, mode: Mode) {
         self.mode.set(mode);
-        self.compile_if_shown();
+        self.compile_now();
     }
 
-    /// Ask the Worker to compile the editor's text when the pipeline view
-    /// shows it and it is not a bundled lesson, whose outputs are precomputed.
-    fn compile_if_shown(self) {
-        let text = self.editor_text.get_untracked();
-        if self.mode.get_untracked() != Mode::Pipeline
-            || demos::matching(&text).is_some()
-            || self
-                .live
-                .with_untracked(|live| live.as_ref().is_some_and(|(source, _)| *source == text))
-            || self
-                .live_error
-                .with_untracked(|error| error.as_ref().is_some_and(|(source, _)| *source == text))
-            || self
-                .compiling
-                .with_untracked(|source| source.as_ref() == Some(&text))
-        {
+    /// Compile the editor's text once typing pauses.
+    fn compile_after_typing(self) {
+        self.pending.set(true);
+        let timer = Timeout::new(COMPILE_DEBOUNCE_MS, move || {
+            self.pending.set(false);
+            self.pump();
+        });
+        // Replacing the previous timer cancels it.
+        self.debounce.set_value(Some(timer));
+    }
+
+    /// Compile the editor's text now, as after choosing a lesson or a view.
+    fn compile_now(self) {
+        self.debounce.set_value(None);
+        self.pending.set(false);
+        self.pump();
+    }
+
+    /// Start the next compilation the page needs, unless one is running:
+    /// the editor's text at the selected level, then at the other level for
+    /// the optimizer comparison. Text is compiled when the pipeline view
+    /// shows it or when it is not a bundled lesson, so its errors show as
+    /// squiggles; a lesson in the abstract machine view never loads the
+    /// compiler. A result for text the editor no longer holds is stale and
+    /// dropped.
+    fn pump(self) {
+        if self.in_flight.with_untracked(Option::is_some) || self.pending.get_untracked() {
             return;
         }
-        let engine = match self.engine() {
-            | Ok(engine) => engine,
-            | Err(error) => {
-                self.live_error.set(Some((text, error)));
-                return;
-            },
+        let Some(key) = self.next_compilation() else {
+            return;
         };
-        self.compiling.set(Some(text.clone()));
+        self.in_flight.set(Some(key.clone()));
         spawn_local(async move {
-            let result = engine.compile(&text).await;
-            self.compiling.update(|source| {
-                if source.as_ref() == Some(&text) {
-                    *source = None;
-                }
-            });
-            match result {
-                | Ok(compilation) => self.live.set(Some((text, compilation))),
-                | Err(error) => self.live_error.set(Some((text, error))),
+            let result = match self.compiler().await {
+                // The editor may have changed while the compiler loaded:
+                // drop the request and start whatever is needed now, once
+                // typing pauses.
+                | Ok(_)
+                    if self.pending.get_untracked()
+                        || self.next_compilation().as_ref() != Some(&key) =>
+                {
+                    self.in_flight.set(None);
+                    self.pump();
+                    return;
+                },
+                | Ok(compiler) => {
+                    let result = compiler.compile(&key.0, key.1).await;
+                    // A compiler that timed out or trapped is gone; the
+                    // next compilation starts a fresh one.
+                    if !compiler.connected() {
+                        self.compiler.set_value(None);
+                    }
+                    result.map_err(|error| {
+                        if error == engine::COMPILER.timed_out()
+                            || error == engine::COMPILER.stopped()
+                        {
+                            error
+                        } else {
+                            format!("bcc's in-browser compiler crashed ({error}).")
+                        }
+                    })
+                },
+                | Err(error) => Err(error),
+            };
+            self.in_flight.set(None);
+            if self.editor_text.with_untracked(|text| *text == key.0) {
+                self.compiled.update(|compiled| {
+                    compiled.retain(|(known, _)| *known != key);
+                    compiled.push((key, result));
+                    if compiled.len() > COMPILED_LIMIT {
+                        _ = compiled.remove(0);
+                    }
+                });
             }
+            self.pump();
         });
+    }
+
+    fn next_compilation(self) -> Option<CompileKey> {
+        let pipeline = self.mode.get_untracked() == Mode::Pipeline;
+        let level = self.optimize.get_untracked();
+        self.editor_text.with_untracked(|text| {
+            self.compiled
+                .with_untracked(|compiled| wanted(compiled, text, level, pipeline))
+        })
+    }
+
+    /// The compiler Worker, started on first use.
+    async fn compiler(self) -> Result<Rc<Engine>, String> {
+        if let Some(compiler) = self
+            .compiler
+            .with_value(Clone::clone)
+            .filter(|compiler| compiler.connected())
+        {
+            return Ok(compiler);
+        }
+        self.starting.set(true);
+        let connected = Engine::connect(&engine::COMPILER).await.map(Rc::new);
+        self.starting.set(false);
+        let compiler = connected?;
+        self.compiler.set_value(Some(Rc::clone(&compiler)));
+        Ok(compiler)
     }
 
     fn set_target(self, line: usize) {
@@ -850,10 +948,9 @@ impl State {
             self.compilation.with(|compilation| {
                 compilation
                     .as_ref()
-                    .and_then(|compilation| compilation.output(stage))
-                    .map(|output| {
+                    .map(|compilation| {
                         self.editor_text.with(|source| {
-                            crate::pipeline::links(stage, output, source)
+                            crate::pipeline::links(stage, compilation, source)
                                 .sources_for(hovered)
                                 .into_iter()
                                 .map(|line| Decoration::line(line, "link-line"))
@@ -871,6 +968,182 @@ impl State {
             ("target", target),
             ("links", links),
         ]
+    }
+}
+
+/// The page's views of live compilation, derived from the compilation cache.
+struct LiveViews {
+    status:      Memo<LiveCompile>,
+    compilation: Memo<Option<Compilation>>,
+    shown:       Memo<Option<Compilation>>,
+    other_level: Memo<Option<Compilation>>,
+    markers:     Memo<Vec<Marker>>,
+}
+
+impl LiveViews {
+    fn new(
+        editor_text: RwSignal<String>,
+        optimize: RwSignal<bool>,
+        compiled: RwSignal<Compiled>,
+        in_flight: RwSignal<Option<CompileKey>>,
+        pending: RwSignal<bool>,
+        starting: RwSignal<bool>,
+    ) -> Self {
+        let at_level = move |level: bool| {
+            editor_text.with(|text| compiled.with(|compiled| compilation_of(compiled, text, level)))
+        };
+        let compilation = Memo::new(move |_| at_level(optimize.get()));
+        let shown = Memo::new(move |previous: Option<&Option<Compilation>>| {
+            let waiting = pending.get()
+                || in_flight.with(|key| {
+                    key.as_ref()
+                        .is_some_and(|key| editor_text.with(|text| key.0 == *text))
+                });
+            compilation
+                .with(|current| shown(current.as_ref(), previous.and_then(Option::as_ref), waiting))
+        });
+        // Squiggles come only from the editor's own text: the previous
+        // output's diagnostics would mark the wrong places.
+        let markers = Memo::new(move |_| {
+            compilation.with(|compilation| {
+                compilation
+                    .iter()
+                    .flat_map(|compilation| &compilation.diagnostics)
+                    .filter_map(marker)
+                    .collect()
+            })
+        });
+        let status = Memo::new(move |_| {
+            let level = optimize.get();
+            let pending = pending.get();
+            let starting = starting.get();
+            editor_text.with(|text| {
+                in_flight.with(|in_flight| {
+                    compiled.with(|compiled| {
+                        live_status(compiled, text, level, in_flight.as_ref(), pending, starting)
+                    })
+                })
+            })
+        });
+        Self {
+            status,
+            compilation,
+            shown,
+            other_level: Memo::new(move |_| at_level(!optimize.get())),
+            markers,
+        }
+    }
+}
+
+/// The compilation of `text` at `level`, if it succeeded, with the
+/// precomputed LLVM IR for a lesson.
+fn compilation_of(compiled: &Compiled, text: &str, level: bool) -> Option<Compilation> {
+    let llvm = demos::matching(text).and_then(|demo| {
+        crate::pipeline::precomputed_llvm(demo.name.trim_end_matches(".c"), level)
+    });
+    let live = lookup(compiled, text, level).and_then(|result| result.as_ref().ok().cloned());
+    match (live, llvm) {
+        | (Some(live), llvm) => Some(Compilation {
+            llvm: llvm.map(str::to_owned),
+            ..live
+        }),
+        | (None, Some(llvm)) => Some(Compilation {
+            llvm: Some(llvm.to_owned()),
+            ..Compilation::default()
+        }),
+        | (None, None) => None,
+    }
+}
+
+/// What the pipeline view shows: the `current` compilation or, while the
+/// next one compiles (`waiting`), the `previous` output, so typing does not
+/// make the view flicker. Only `current` places markers and links and lists
+/// the diagnostics and the optimizer's changes: the previous output came
+/// from other text or another level.
+fn shown(
+    current: Option<&Compilation>,
+    previous: Option<&Compilation>,
+    waiting: bool,
+) -> Option<Compilation> {
+    let live = current.is_some_and(|current| current.tokens.is_some());
+    match previous {
+        | Some(previous) if waiting && !live => Some(Compilation {
+            // A lesson's precomputed LLVM IR is always current.
+            llvm: current.and_then(|current| current.llvm.clone()),
+            ..previous.clone()
+        }),
+        | _ => current.cloned(),
+    }
+}
+
+/// The newest result for `text` at `level`.
+fn lookup<'a>(
+    compiled: &'a Compiled,
+    text: &str,
+    level: bool,
+) -> Option<&'a Result<Compilation, String>> {
+    compiled
+        .iter()
+        .rev()
+        .find(|((source, optimized), _)| source == text && *optimized == level)
+        .map(|(_, result)| result)
+}
+
+/// Why the compiler Worker could not compile `text` at either level. Text
+/// that crashed or stalled the compiler is not tried again at the other
+/// level, so the failure stands for both.
+fn failure<'a>(compiled: &'a Compiled, text: &str) -> Option<&'a str> {
+    compiled
+        .iter()
+        .rev()
+        .find_map(|((source, _), result)| {
+            (source == text).then_some(result.as_ref().err()).flatten()
+        })
+        .map(String::as_str)
+}
+
+/// The next compilation the page needs for `text`: at the selected `level`,
+/// then at the other level when the `pipeline` view shows the optimizer
+/// comparison. Outside the pipeline view a bundled lesson needs none.
+fn wanted(compiled: &Compiled, text: &str, level: bool, pipeline: bool) -> Option<CompileKey> {
+    if (!pipeline && demos::matching(text).is_some()) || failure(compiled, text).is_some() {
+        return None;
+    }
+    [Some(level), pipeline.then_some(!level)]
+        .into_iter()
+        .flatten()
+        .find(|&level| lookup(compiled, text, level).is_none())
+        .map(|level| (text.to_owned(), level))
+}
+
+/// The compiler's progress on `text` at `level`, given what it is compiling
+/// (`in_flight`), whether typing is still being debounced (`pending`), and
+/// whether its Worker is `starting`.
+fn live_status(
+    compiled: &Compiled,
+    text: &str,
+    level: bool,
+    in_flight: Option<&CompileKey>,
+    pending: bool,
+    starting: bool,
+) -> LiveCompile {
+    let busy = if starting {
+        LiveCompile::Loading
+    } else {
+        LiveCompile::Compiling
+    };
+    if in_flight.is_some_and(|key| key.0 == text && key.1 == level) {
+        return busy;
+    }
+    match lookup(compiled, text, level) {
+        | Some(Ok(_)) => LiveCompile::Compiled,
+        | Some(Err(error)) => LiveCompile::Failed(error.clone()),
+        | None => match failure(compiled, text) {
+            | Some(error) => LiveCompile::Failed(error.to_owned()),
+            // Anything else in flight finishes (or is dropped) first.
+            | None if pending || in_flight.is_some() => busy,
+            | None => LiveCompile::Idle,
+        },
     }
 }
 
@@ -895,6 +1168,19 @@ fn initial_theme() -> &'static str {
             "light",
         | _ => "dark",
     }
+}
+
+/// A squiggle for `diagnostic`, if it is placed in the source.
+fn marker(diagnostic: &CompileDiagnostic) -> Option<Marker> {
+    let range = diagnostic.range?;
+    Some(Marker {
+        start_line:   range.line,
+        start_column: range.column,
+        end_line:     range.end_line,
+        end_column:   range.end_column,
+        severity:     diagnostic.severity.clone(),
+        message:      diagnostic.message.clone(),
+    })
 }
 
 /// One continuous box behind `range` (Monaco draws a range's `className` as
@@ -1189,6 +1475,7 @@ fn SourcePane(state: State) -> impl IntoView {
     let on_change = Callback::new(move |text: String| {
         if text != state.editor_text.get_untracked() {
             state.editor_text.set(text);
+            state.compile_after_typing();
         }
     });
     let on_hover = Callback::new(move |line| state.hover_source.set(line));
@@ -1235,6 +1522,7 @@ fn SourcePane(state: State) -> impl IntoView {
                 theme=state.theme_name
                 label="C source code. Edit it, then choose Run edited code."
                 decorations=layers
+                markers=state.markers.into()
                 on_change
                 on_hover_line=on_hover
                 on_gutter_click=on_gutter
@@ -1244,9 +1532,10 @@ fn SourcePane(state: State) -> impl IntoView {
                 <span><i class="swatch swatch-current"></i>"just evaluated"</span>
                 <span><i class="swatch swatch-next"></i>"next"</span>
                 <span><i class="swatch swatch-target"></i>"click a line number to set a run target"</span>
+                <span><i class="swatch swatch-squiggle"></i>"bcc error"</span>
             </footer>
             <p class="edit-hint" hidden=move || !state.edited.get()>
-                "You changed the program. The abstract machine and the compiler views still show the last version you ran: choose "<strong>"Run edited code"</strong>" to restart with your edits."
+                "You changed the program. The abstract machine still shows the last version you ran: choose "<strong>"Run edited code"</strong>" to restart it with your edits. bcc compiles your edits as you type, marks its errors with red squiggles, and the compiler pipeline view follows along."
             </p>
         </section>
     }
@@ -1296,8 +1585,9 @@ fn About() -> impl IntoView {
                          sequenced."
                     </p>
                     <p>
-                        "Compiler outputs for the lessons were produced by the native bcc build. LLVM IR cannot be \
-                         produced in the browser, so it is shown for the bundled lessons only. "
+                        "The compiler pipeline runs bcc itself, compiled to WebAssembly, in your browser. Only LLVM IR \
+                         comes from the native bcc build: the browser build has no LLVM, so it is shown for the \
+                         bundled lessons only. "
                         <a href=README_URL>"Read the full notes"</a>"."
                     </p>
                 </article>
@@ -1305,3 +1595,6 @@ fn About() -> impl IntoView {
         </section>
     }
 }
+
+#[cfg(test)]
+mod tests;

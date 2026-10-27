@@ -1,6 +1,0 @@
-<main>:
-     0  c7 44 24 f0 02 00 00 00  movl $0x2,-0x10(%rsp)
-     8  c7 44 24 f4 04 00 00 00  movl $0x4,-0xc(%rsp)
-    10  c7 44 24 f8 06 00 00 00  movl $0x6,-0x8(%rsp)
-    18  8b 44 24 fc              mov -0x4(%rsp),%eax
-    1c  c3                       ret

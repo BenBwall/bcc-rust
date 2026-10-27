@@ -14,9 +14,13 @@ them. Visitors pick a lesson (a small C program) and see it two ways:
 - **Compiler pipeline.** What bcc itself produces for the same program:
   tokens, syntax tree, bcc IR before and after ABI lowering, LLVM IR, native
   x86-64 assembly, and machine code with its encoded bytes, each with a short
-  explanation. Hovering a source line highlights what it became (line by line
-  for tokens and the syntax tree, per function for the IR and machine stages,
-  whose output keeps no source locations), and the reverse.
+  explanation. The real compiler runs in the browser and recompiles as you
+  type, at `-O0` or `-O2`, with a note on what the optimizer changed. Its
+  errors appear as squiggles in the source and in a diagnostics list, and the
+  view says which stage stopped and why. Hovering a source line highlights
+  what it became (line by line for tokens and the syntax tree, per function
+  for the IR and machine stages, whose output keeps no source locations), and
+  the reverse.
 
 Every variable keeps one colour across the source, the expression tree and the
 memory diagram. The page has light and dark themes and works down to tablet
@@ -26,7 +30,10 @@ The site is written in Rust with [Leptos](https://leptos.dev) and built by
 [Trunk](https://trunkrs.dev) into a static site in `web/dist/`. The page's
 initial HTML is rendered at build time (static SSR) and hydrated in the
 browser, so the lessons and their source are visible before any script runs.
-The engine is the bcc crate's `abstract-machine` module, run in a Web Worker.
+The abstract machine is the bcc crate's `abstract-machine` module, run in a
+Web Worker. The compiler is bcc's own, built for WebAssembly without LLVM (the
+crate's `explorer` feature), run in a second Worker that the page starts only
+when it first compiles.
 Code is shown in [Monaco](https://microsoft.github.io/monaco-editor/), the
 editor behind VS Code, with Monarch grammars for C, bcc IR, LLVM IR, AT&T
 assembly and the machine-code listing.
@@ -53,21 +60,24 @@ from the output. `web/` is its own Cargo workspace (`bcc-web`, with its own
 `Cargo.lock`), and one crate builds three ways, one per feature:
 
 - `hydrate`: the page (`src/main.rs`), which attaches to the prerendered HTML.
-- `worker`: the engine Worker (`src/bin/engine_worker.rs`). Only this build
-  links the engine crate in `../`, with default features off, so no native
-  compiler or LLVM is built.
+- `worker`: the abstract machine's Worker (`src/bin/engine_worker.rs`). It
+  links the crate in `../` with only its `abstract-machine` feature.
+- `compiler`: the compiler's Worker (`src/bin/compiler_worker.rs`). It links
+  the crate in `../` with only its `explorer` feature: the whole compiler
+  from preprocessor to machine code, without LLVM, the CLI or threads.
 - `ssr`: the native `prerender` binary (`src/bin/prerender.rs`).
 
-Trunk compiles the first two to Wasm, runs wasm-bindgen and wasm-opt
+Trunk compiles the first three to Wasm, runs wasm-bindgen and wasm-opt
 (downloading the versions matching `Cargo.lock` on first use), hashes the
 page's asset names, and copies `editor/dist/` (the Monaco bundle) to `editor/`
 and `editor/fonts/` (Inter and JetBrains Mono, both SIL OFL, named with their
 package version) to `fonts/`. Its `post_build` hook then runs `prerender` on
 the staged output. It renders the page's fixed initial state (the first
-lesson, no engine connected) into `index.html`; moves the Worker's script and
-Wasm into `engine-<hash>/` and the editor bundle into `editor-<hash>/`, each
-named after its contents; writes the Worker's loader; and records both URLs in
-`<meta>` tags the page reads. Nothing is fetched from a CDN at run time.
+lesson, no engine connected) into `index.html`; moves each Worker's script and
+Wasm into `engine-<hash>/` and `compiler-<hash>/`, and the editor bundle into
+`editor-<hash>/`, each named after its contents; writes each Worker's loader;
+and records the three URLs in `<meta>` tags the page reads. Nothing is fetched
+from a CDN at run time.
 
 ### JavaScript
 
@@ -115,32 +125,74 @@ new build never reuses a URL for different bytes. Suggested caching:
 - An announcement region narrates each step for screen readers.
 
 Programs stay in the page's memory and are not uploaded or persisted. Source
-files are limited to 32 KiB. A Worker call that takes over 10 seconds (20
-seconds for initial loading) terminates the Worker; **Retry engine** starts a
-new one.
+files are limited to 32 KiB. An abstract machine call that takes over 10
+seconds (20 seconds for initial loading) terminates its Worker; **Retry
+engine** starts a new one.
 
 ## The compiler pipeline view
 
-The bundled lessons carry outputs precomputed by the native bcc build in
-`web/pipeline/<lesson>/`. Regenerate them after changing a lesson or the
-compiler, from the repository root:
+Every stage except LLVM IR is compiled in the browser by bcc itself:
+`bcc_rust::explorer::compile`, the same front end, optimizer and x86-64 back
+end as the native build, minus LLVM. `src/explorer.rs` maps its output onto
+the page's `Compilation`: the text stages as they are (the syntax tree with
+`--syntax-locations`), each function's machine code as an offset/bytes/
+instruction listing, diagnostics in the editor's UTF-16 columns, and the
+compiler's per-function `line_map`, which links source lines to the IR,
+assembly and listing.
+
+The bundled lessons go through the same live path as edited source. Their
+outputs used to be precomputed by the native CLI; compiling them live means
+the lesson view is exactly what the in-browser compiler does, there is one
+code path to test, and the optimization switch, diagnostics and line map work
+the same for every program. The cost is loading the compiler Worker before a
+lesson's pipeline view first appears. Only LLVM IR, which the browser build
+cannot produce, is still precomputed for the lessons, at `-O0` and `-O2`, in
+`web/pipeline/<lesson>/`. Edited source shows a note instead. Regenerate the
+LLVM IR after changing a lesson or the compiler, from the repository root:
 
 ```sh
 BCC=path/to/bcc-rust sh web/pipeline/generate.sh           # rewrite
 BCC=path/to/bcc-rust sh web/pipeline/generate.sh --check   # compare only
 ```
 
-The script needs a native `bcc-rust` (built with LLVM) and GNU `objdump`. The
-site's tests check that every lesson's outputs were generated from its current
-source, and the main CI workflow's Tests job runs `generate.sh --check` with the
-compiler it just built, so a compiler change that alters an output fails CI
-until the outputs are regenerated.
+The script needs a native `bcc-rust` (built with LLVM). The site's tests check
+that each lesson's LLVM IR was generated from its current source, and the main
+CI workflow's Tests job runs `generate.sh --check` with the compiler it just
+built, so a compiler change that alters it fails CI until it is regenerated.
+The crate's `tests/integration/explorer.rs` checks that the explorer's other
+stages equal the CLI's for every lesson.
 
-Edited source is compiled live in the Worker through `explorer.rs` once bcc's
-compiler builds for wasm32 (`bcc_rust::explorer::compile`). Until the Worker
-links it, `Command::Compile` answers with an error and the view explains that
-compiler outputs are available for the bundled lessons. LLVM IR is only ever
-precomputed: the browser build of bcc has no LLVM.
+How live compilation runs:
+
+- **Off the UI thread, in its own Worker.** The compiler Worker's Wasm is many
+  times the abstract machine's, so the page starts it only when it first
+  compiles: when the pipeline view opens, or when the source is edited (so
+  errors show as squiggles in the abstract machine view too). A lesson in the
+  abstract machine view never loads it. Keeping the compiler apart also means
+  that stopping it never loses the abstract machine's session.
+- **Debounced.** Typing compiles 400 ms after the last keystroke. One
+  compilation runs at a time: the selected level first, then the other level
+  for the optimizer comparison. A result for text the editor no longer holds
+  is stale and dropped. While the next result is on its way, the view keeps
+  the previous one, so typing does not make it flicker. The last eight
+  compilations are kept, so switching level or going back to a lesson is
+  instant.
+- **Bounded.** The explorer refuses more than 1 MiB of source and stops at
+  500 levels of nesting with a diagnostic. A compilation that takes over 10
+  seconds terminates the compiler Worker, as does a trap (an exhausted
+  stack or memory region leaves the Wasm instance unusable). The view says the
+  compiler stopped, and the next edit starts a fresh one.
+- **Diagnostics.** Errors and warnings are Monaco markers in the source, with
+  the message on hover, and a list under the stage with each message's place
+  (click it to show the line), the part of the compiler that reported it, and
+  the full rendered message. When an error stops bcc, the stage strip marks
+  the stages that did not run, and the stage explains, in beginner's terms,
+  whether the front end found a mistake in the program, or the middle or back
+  end met a construct bcc does not translate yet.
+- **`-O0` / `-O2`.** The switch recompiles with bcc's optimizer. A note says
+  what the optimizer does at the selected stage and, by comparing both
+  levels, what changed in this program: instruction, block, memory-access and
+  stack-slot counts, code size, and calls that were inlined away.
 
 ## Model limitations
 
@@ -181,20 +233,24 @@ tree, memory diagram and pipeline view. `editor.rs` mounts Monaco, and
 `highlight.rs` colours the prerendered fallback. `palette.rs` assigns each
 variable its colour. `snapshot.rs` defines what the page presents, `demos.rs`
 the lessons, and `pipeline.rs` the compiler stages, their explanations, the
-bundled outputs and the source-to-output links. `engine.rs` proxies the
-Worker over the messages in `protocol.rs`; in the Worker, `machine.rs` drives
-an engine `Session` and turns each state into a snapshot (UTF-8 byte ranges
-become UTF-16 editor columns), and `explorer.rs` is the seam to the
-in-browser compiler.
+source-to-output links, why a compilation stopped, the optimizer comparison
+and the bundled LLVM IR. `engine.rs` proxies both Workers over the messages in
+`protocol.rs`. In the abstract machine's Worker, `machine.rs` drives an engine
+`Session` and turns each state into a snapshot (UTF-8 byte ranges become
+UTF-16 editor columns); in the compiler's, `explorer.rs` runs bcc and turns
+its output into a `Compilation`.
 
 ## Tests
 
-From `web/`, `RUSTFLAGS= cargo test --features ssr,worker` runs the site's
-tests natively (`RUSTFLAGS=` keeps the repository's LLVM linker flags away from
-this host build): every lesson runs to its documented outcome with a titled,
-cited event at each step; event ranges, expression trees and waiting frames;
-diagnostics and recovery; UTF-16 columns; colouring; the outputs' sync with
-the lessons and the source-to-output links; and prerendering. The engine's own
+From `web/`, `RUSTFLAGS= cargo test --features ssr,worker,compiler` runs the
+site's tests natively (`RUSTFLAGS=` keeps the repository's LLVM linker flags
+away from this host build): every lesson runs to its documented outcome with
+a titled, cited event at each step; event ranges, expression trees and
+waiting frames; diagnostics and recovery; UTF-16 columns; colouring; every
+lesson compiling live at both levels; placed compiler diagnostics and the
+stop explanation; the machine-code listing; the LLVM IR's sync with the
+lessons; the source-to-output links and the optimizer comparison; and
+prerendering. The engine's own
 tests run from the repository root with `cargo test --lib --no-default-features
 --features abstract-machine abstract_machine`. Generated artifacts belong in
 ignored `web/target/`, `web/dist/` and `web/editor/{node_modules,dist,fonts}/`.

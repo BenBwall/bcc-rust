@@ -3,9 +3,10 @@
 //!
 //! - writes [`bcc_web::App`]'s initial HTML into the `<body>` of `index.html`
 //!   (static SSR; the browser hydrates it), and
-//! - moves the engine Worker's files, which Trunk does not hash, into
-//!   `engine-<hash>/` named from their contents, adds the Worker's entry
-//!   script, and records its URL in a `<meta>` tag, and
+//! - moves each Worker's files (the abstract machine's and the compiler's),
+//!   which Trunk does not hash, into `engine-<hash>/` and `compiler-<hash>/`
+//!   named from their contents, adds each Worker's entry script, and records
+//!   its URL in a `<meta>` tag, and
 //! - renames the Monaco editor bundle Trunk copied to `editor/` into
 //!   `editor-<hash>/` and records its entry module's URL the same way,
 //!
@@ -46,21 +47,55 @@ fn main() -> ExitCode {
 fn finish(staging: &Path) -> Result<(), String> {
     let index = staging.join("index.html");
     let page = fs::read_to_string(&index).map_err(|error| format!("index.html: {error}"))?;
-    let files = worker_files(staging).map_err(|error| format!("engine Worker: {error}"))?;
+    let mut urls = Vec::new();
+    for worker in &WORKERS {
+        let url =
+            move_worker(staging, worker).map_err(|error| format!("{}: {error}", worker.stem))?;
+        urls.push((worker.meta, url));
+    }
+    let editor = hash_editor(staging).map_err(|error| format!("editor bundle: {error}"))?;
+    urls.push((bcc_web::EDITOR_META, format!("./{editor}/{EDITOR_ENTRY}")));
+    let page = render_into(&page, &urls)
+        .ok_or("index.html has no empty <body> slot, or was already rendered")?;
+    fs::write(&index, page).map_err(|error| format!("index.html: {error}"))
+}
+
+/// One of Trunk's Worker builds.
+struct Worker {
+    /// The name of its wasm-bindgen script and Wasm module.
+    stem:      &'static str,
+    /// The prefix of its content-hashed directory.
+    directory: &'static str,
+    /// The `<meta>` that records its entry script's URL.
+    meta:      &'static str,
+}
+
+/// The abstract machine, then the compiler.
+const WORKERS: [Worker; 2] = [
+    Worker {
+        stem:      "engine-worker",
+        directory: "engine",
+        meta:      bcc_web::ENGINE_META,
+    },
+    Worker {
+        stem:      "compiler-worker",
+        directory: "compiler",
+        meta:      bcc_web::COMPILER_META,
+    },
+];
+
+/// Move `worker`'s files into a directory named after their contents and add
+/// its entry script there; returns the entry script's URL.
+fn move_worker(staging: &Path, worker: &Worker) -> Result<String, String> {
+    let files = worker_files(staging, worker.stem).map_err(|error| error.to_string())?;
     if files.len() != 2 {
         return Err(format!(
-            "expected Trunk's engine-worker.js and engine-worker_bg.wasm, found {files:?}"
+            "expected Trunk's {0}.js and {0}_bg.wasm, found {files:?}",
+            worker.stem
         ));
     }
-    let hash = hash_files(&files).map_err(|error| format!("engine Worker: {error}"))?;
-    let directory = format!("engine-{hash:016x}");
-    let editor = hash_editor(staging).map_err(|error| format!("editor bundle: {error}"))?;
-    let page = render_into(
-        &page,
-        &format!("./{directory}/{WORKER_LOADER}"),
-        &format!("./{editor}/{EDITOR_ENTRY}"),
-    )
-    .ok_or("index.html has no empty <body> slot, or was already rendered")?;
+    let hash = hash_files(&files).map_err(|error| error.to_string())?;
+    let directory = format!("{}-{hash:016x}", worker.directory);
     // The loader refers to its siblings by relative URL.
     let target = staging.join(&directory);
     fs::create_dir(&target).map_err(|error| format!("{directory}/: {error}"))?;
@@ -69,9 +104,10 @@ fn finish(staging: &Path) -> Result<(), String> {
         fs::rename(file, target.join(name))
             .map_err(|error| format!("{}: {error}", file.display()))?;
     }
-    fs::write(target.join(WORKER_LOADER), LOADER)
-        .map_err(|error| format!("{WORKER_LOADER}: {error}"))?;
-    fs::write(&index, page).map_err(|error| format!("index.html: {error}"))
+    let loader = format!("{}_loader.js", worker.stem);
+    fs::write(target.join(&loader), self::loader(worker.stem))
+        .map_err(|error| format!("{loader}: {error}"))?;
+    Ok(format!("./{directory}/{loader}"))
 }
 
 /// The editor bundle's entry module, built by `web/editor/build.mjs`.
@@ -99,24 +135,27 @@ fn hash_editor(staging: &Path) -> io::Result<String> {
     Ok(directory)
 }
 
-/// The Worker's entry script. A Worker must start from a script, and
+/// A Worker's entry script. A Worker must start from a script, and
 /// wasm-bindgen's `no-modules` output only defines an initializer, so this
 /// loads the glue and starts the Wasm, whose `main` then runs. Trunk's own
 /// `data-loader-shim` uses an initializer form wasm-bindgen deprecates.
-const WORKER_LOADER: &str = "engine-worker_loader.js";
-const LOADER: &str = "importScripts(\"./engine-worker.js\");\nwasm_bindgen({ module_or_path: \
-                      \"./engine-worker_bg.wasm\" });\n";
+fn loader(stem: &str) -> String {
+    format!(
+        "importScripts(\"./{stem}.js\");\nwasm_bindgen({{ module_or_path: \"./{stem}_bg.wasm\" \
+         }});\n"
+    )
+}
 
-/// Trunk's output for the `engine-worker` binary: its wasm-bindgen script and
+/// Trunk's output for the Worker binary `stem`: its wasm-bindgen script and
 /// Wasm module, in sorted order.
-fn worker_files(staging: &Path) -> io::Result<Vec<PathBuf>> {
+fn worker_files(staging: &Path, stem: &str) -> io::Result<Vec<PathBuf>> {
     let mut files = Vec::new();
     for entry in fs::read_dir(staging)? {
         let path = entry?.path();
         if path.is_file()
             && path
                 .file_name()
-                .is_some_and(|name| name.to_string_lossy().starts_with("engine-worker"))
+                .is_some_and(|name| name.to_string_lossy().starts_with(stem))
         {
             files.push(path);
         }
@@ -128,10 +167,10 @@ fn worker_files(staging: &Path) -> io::Result<Vec<PathBuf>> {
 /// Marks a rendered page so a second run cannot nest two apps.
 const RENDERED: &str = "<!-- prerendered by bcc-web -->";
 
-/// `page` with the app's HTML at the start of its body and the engine Worker
-/// and editor bundle URLs at the end of its head; `None` if it was already
-/// rendered.
-fn render_into(page: &str, worker: &str, editor: &str) -> Option<String> {
+/// `page` with the app's HTML at the start of its body and a `<meta>` for
+/// each asset URL in `urls` (by `<meta>` name) at the end of its head; `None`
+/// if it was already rendered.
+fn render_into(page: &str, urls: &[(&str, String)]) -> Option<String> {
     const BODY: &str = "<body>";
     const HEAD_END: &str = "</head>";
     if page.contains(RENDERED) {
@@ -147,15 +186,17 @@ fn render_into(page: &str, worker: &str, editor: &str) -> Option<String> {
     let html = owner.with(|| view! { <bcc_web::App /> }.to_html());
     // Hydration walks the body from its first child, so the app markup must
     // come first; the <noscript> fallback stays after it.
+    let metas: Vec<String> = urls
+        .iter()
+        .map(|(name, url)| format!("<meta name=\"{name}\" content=\"{url}\">"))
+        .collect();
     Some(format!(
-            "{}<meta name=\"{}\" content=\"{worker}\">\n    <meta name=\"{}\" \
-             content=\"{editor}\">\n  {}{html}{RENDERED}{}",
-            &page[..head_end],
-            bcc_web::ENGINE_META,
-            bcc_web::EDITOR_META,
-            &page[head_end..body],
-            page[body..].trim_start()
-        ))
+        "{}{}\n  {}{html}{RENDERED}{}",
+        &page[..head_end],
+        metas.join("\n    "),
+        &page[head_end..body],
+        page[body..].trim_start()
+    ))
 }
 
 /// A stable 64-bit FNV-1a hash of each file's name and contents, in order. It
@@ -179,8 +220,14 @@ mod tests {
     fn renders_once_at_the_start_of_the_body() {
         let page =
             "<head><!-- the <body> --></head>\n  <body>\n    <noscript>x</noscript>\n  </body>";
-        let rendered = render_into(page, "./engine-1/engine-worker.js", "./editor-1/main.js")
-            .expect("an empty body renders");
+        let urls = [
+            (
+                bcc_web::ENGINE_META,
+                "./engine-1/engine-worker.js".to_owned(),
+            ),
+            (bcc_web::EDITOR_META, "./editor-1/main.js".to_owned()),
+        ];
+        let rendered = render_into(page, &urls).expect("an empty body renders");
         let body = rendered.rfind("<body>").expect("body kept") + "<body>".len();
         assert!(rendered[body..].starts_with("<a href=\"#workbench\" class=\"skip-link\">"));
         assert!(rendered.contains(&format!("{RENDERED}<noscript>")));
@@ -190,18 +237,14 @@ mod tests {
              content=\"./editor-1/main.js\">"
         ));
         assert_eq!(
-            render_into(
-                &rendered,
-                "./engine-1/engine-worker.js",
-                "./editor-1/main.js"
-            ),
+            render_into(&rendered, &urls),
             None,
             "a rendered page is not rendered again"
         );
     }
 
     #[test]
-    fn moves_the_worker_into_a_content_hashed_directory() {
+    fn moves_each_worker_into_a_content_hashed_directory() {
         let staging = env::temp_dir().join(format!("bcc-web-staging-{}", std::process::id()));
         fs::create_dir_all(&staging).unwrap();
         let page = "<html><head></head>\n<body>\n</body></html>";
@@ -209,6 +252,8 @@ mod tests {
             fs::write(staging.join("index.html"), page).unwrap();
             fs::write(staging.join("engine-worker.js"), "glue").unwrap();
             fs::write(staging.join("engine-worker_bg.wasm"), wasm).unwrap();
+            fs::write(staging.join("compiler-worker.js"), "compiler glue").unwrap();
+            fs::write(staging.join("compiler-worker_bg.wasm"), "compiler").unwrap();
             fs::write(staging.join("bcc-web-1.js"), "app").unwrap();
             fs::create_dir_all(staging.join("editor")).unwrap();
             fs::write(staging.join("editor/main.js"), "editor").unwrap();
@@ -229,26 +274,33 @@ mod tests {
                 }
             }
             let page = fs::read_to_string(staging.join("index.html")).unwrap();
-            let start = page.find("content=\"./").unwrap() + "content=\"./".len();
-            let url = &page[start..page[start..].find('"').unwrap() + start];
-            let directory = url
-                .strip_suffix(&format!("/{WORKER_LOADER}"))
-                .unwrap()
-                .to_owned();
-            assert_eq!(
-                fs::read_to_string(staging.join(&directory).join(WORKER_LOADER)).unwrap(),
-                LOADER
-            );
-            for name in ["engine-worker.js", "engine-worker_bg.wasm"] {
-                assert!(
-                    staging.join(&directory).join(name).is_file(),
-                    "{name} moved"
+            let mut directories = Vec::new();
+            for worker in &WORKERS {
+                let meta = format!("<meta name=\"{}\" content=\"./", worker.meta);
+                let start = page.find(&meta).unwrap() + meta.len();
+                let url = &page[start..page[start..].find('"').unwrap() + start];
+                let loader = format!("{}_loader.js", worker.stem);
+                let directory = url.strip_suffix(&format!("/{loader}")).unwrap().to_owned();
+                assert!(directory.starts_with(&format!("{}-", worker.directory)));
+                assert_eq!(
+                    fs::read_to_string(staging.join(&directory).join(&loader)).unwrap(),
+                    self::loader(worker.stem)
                 );
-                assert!(!staging.join(name).exists(), "{name} left the root");
+                for name in [
+                    format!("{}.js", worker.stem),
+                    format!("{}_bg.wasm", worker.stem),
+                ] {
+                    assert!(
+                        staging.join(&directory).join(&name).is_file(),
+                        "{name} moved"
+                    );
+                    assert!(!staging.join(&name).exists(), "{name} left the root");
+                }
+                fs::remove_dir_all(staging.join(&directory)).unwrap();
+                directories.push(directory);
             }
             assert!(staging.join("bcc-web-1.js").is_file(), "other assets stay");
-            fs::remove_dir_all(staging.join(&directory)).unwrap();
-            directory
+            directories.swap_remove(0)
         };
         let first = build("a");
         assert!(first.starts_with("engine-") && first.len() == "engine-".len() + 16);

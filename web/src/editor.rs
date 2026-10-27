@@ -51,6 +51,21 @@ impl Decoration {
     }
 }
 
+/// A diagnostic squiggle, drawn by Monaco's marker service with its message
+/// on hover. Lines are 1-based; columns are 1-based UTF-16 columns, the end
+/// just past the range.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Marker {
+    pub start_line:   usize,
+    pub start_column: usize,
+    pub end_line:     usize,
+    pub end_column:   usize,
+    /// `error`, `warning` or `note`.
+    pub severity:     String,
+    pub message:      String,
+}
+
 /// A named set of decorations, replaced as a unit.
 pub type Layer = (&'static str, Vec<Decoration>);
 
@@ -66,6 +81,7 @@ pub fn CodeEditor(
     label: &'static str,
     #[prop(optional)] read_only: bool,
     #[prop(optional)] decorations: Option<Signal<Vec<Layer>>>,
+    #[prop(optional)] markers: Option<Signal<Vec<Marker>>>,
     #[prop(optional)] on_change: Option<Callback<String>>,
     #[prop(optional)] on_hover_line: Option<Callback<usize>>,
     #[prop(optional)] on_gutter_click: Option<Callback<usize>>,
@@ -85,6 +101,7 @@ pub fn CodeEditor(
         label,
         read_only,
         decorations,
+        markers,
         on_change,
         on_hover_line,
         on_gutter_click,
@@ -95,6 +112,7 @@ pub fn CodeEditor(
         theme,
         read_only,
         decorations,
+        markers,
         on_change,
         on_hover_line,
         on_gutter_click,
@@ -132,6 +150,7 @@ mod monaco {
     use super::{
         EDITOR_META,
         Layer,
+        Marker,
     };
 
     #[wasm_bindgen(module = "/js/bridge.js")]
@@ -161,6 +180,8 @@ mod monaco {
         fn set_language(this: &Editor, language: &str);
         #[wasm_bindgen(method, js_name = setDecorations)]
         fn set_decorations(this: &Editor, layer: &str, items: &JsValue);
+        #[wasm_bindgen(method, js_name = setMarkers)]
+        fn set_markers(this: &Editor, items: &JsValue);
         #[wasm_bindgen(method, js_name = revealLine)]
         fn reveal_line(this: &Editor, line: usize);
         #[wasm_bindgen(method, js_name = onChange)]
@@ -219,6 +240,7 @@ mod monaco {
         pub label:           &'static str,
         pub read_only:       bool,
         pub decorations:     Option<Signal<Vec<Layer>>>,
+        pub markers:         Option<Signal<Vec<Marker>>>,
         pub on_change:       Option<Callback<String>>,
         pub on_hover_line:   Option<Callback<usize>>,
         pub on_gutter_click: Option<Callback<usize>>,
@@ -344,6 +366,7 @@ mod monaco {
             text,
             language,
             decorations,
+            markers,
             reveal,
             ..
         } = mount;
@@ -377,6 +400,16 @@ mod monaco {
                             }
                         }
                     });
+                }
+            });
+        }
+        if let Some(markers) = markers {
+            Effect::new(move || {
+                let markers = markers.get();
+                if ready.get()
+                    && let Ok(items) = serde_wasm_bindgen::to_value(&markers)
+                {
+                    with(&|editor| editor.set_markers(&items));
                 }
             });
         }

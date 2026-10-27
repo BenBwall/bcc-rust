@@ -1,5 +1,6 @@
-//! Messages between the page's engine proxy (`engine.rs`) and the engine
-//! Worker (`bin/engine_worker.rs`). Both ends are built from this crate, and
+//! Messages between the page's Worker proxy (`engine.rs`) and its two
+//! Workers, the abstract machine (`bin/engine_worker.rs`) and the compiler
+//! (`bin/compiler_worker.rs`). All ends are built from this crate, and
 //! messages cross as plain JavaScript values through `serde_wasm_bindgen`.
 
 use serde::{
@@ -26,10 +27,10 @@ pub enum Command {
     Load(String),
     /// Execute one operation of the current program.
     Step,
-    /// Run bcc's real compiler pipeline over `source`; answered with
-    /// [`Answer::Compiled`], or an error while the Worker has no in-browser
-    /// compiler (see `explorer.rs`).
-    Compile(String),
+    /// Run bcc's real compiler over `source`, at `-O2` when `optimize`;
+    /// answered by the compiler Worker with [`Answer::Compiled`] (see
+    /// `explorer.rs`).
+    Compile { source: String, optimize: bool },
 }
 
 /// A Worker's answer to one request.
