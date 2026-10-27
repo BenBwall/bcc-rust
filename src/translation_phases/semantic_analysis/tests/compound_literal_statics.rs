@@ -135,6 +135,52 @@ fn compound_literal_statics_require_constant_values_for_each_destination() {
     }
 }
 
+const SCALARS: &str = r"enum e { A, B };
+    static int g;
+    static int i = (int){3};
+    static double d = ((double){2.5});
+    static const int c = (int){4};
+    static int k = (const int){5};
+    static char ch = (char){300};
+    static int braces = (int){{6}};
+    static _Bool b = (_Bool){2};
+    static int *p = (int *){&g};
+    static enum e en = (enum e){B};
+    void f(void) { static long w = (long){7}; (void)w; }";
+
+/// GCC accepts a scalar compound literal of the object's own type as the
+/// whole initializer of a static scalar, with the same `-Wpedantic`
+/// "initializer element is not constant"; Clang rejects it.
+#[test]
+fn scalar_compound_literals_initialize_statics_of_their_type() {
+    assert_eq!(diagnostics(SCALARS, ExtensionPolicy::Allow), (vec![], 0));
+    assert_eq!(diagnostics(SCALARS, ExtensionPolicy::Warn), (vec![], 10));
+    assert_eq!(diagnostics(SCALARS, ExtensionPolicy::Deny), (vec![], 10));
+    for source in [
+        // GCC: "initializer element is not constant" for each.
+        "static double d = (int){3};",
+        "static long l = (int){3};",
+        "static int x = (int){3} + 1;",
+        "void f(int n) { static int x = (int){n}; (void)x; }",
+        "void f(void) { static int *p = (int *){&(int){1}}; (void)p; }",
+    ] {
+        assert_eq!(
+            diagnostics(source, ExtensionPolicy::Allow).0,
+            [SemanticErrorKind::NonConstantInitializer],
+            "{source}"
+        );
+    }
+    // An automatic scalar takes the literal's value as before, without a
+    // diagnostic.
+    assert_eq!(
+        diagnostics(
+            "void f(void) { int x = (int){3}; (void)x; }",
+            ExtensionPolicy::Deny
+        ),
+        (vec![], 0)
+    );
+}
+
 #[test]
 fn non_constant_compound_literal_values_are_reported_where_they_are() {
     // Clang: "initializer element is not a compile-time constant" at the

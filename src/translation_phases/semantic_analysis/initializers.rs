@@ -233,11 +233,16 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                             }
                             self.convert(e, target.unqualified(), ConversionKind::Assignment);
                             // C99 §6.7.8p13: a structure or union initialized
-                            // by an expression of its type is copied whole.
+                            // by an expression of its type is copied whole, as
+                            // is a static scalar's compound literal of its
+                            // type (GNU), whose bytes are the literal's own.
                             if matches!(
                                 self.types.nodes[self.types.non_atomic(target).index],
                                 TypeKind::Tag(id) if self.types.tags[id].kind != TagKind::Enum
-                            ) {
+                            ) || (static_storage
+                                && !bit_field
+                                && self.whole_compound_literal(target, e).is_some())
+                            {
                                 plan.copy(e, destination, self.enclosing_unions(&site));
                             } else {
                                 plan.store(
@@ -730,14 +735,15 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         }
     }
 
-    /// Checks `e` as the initializer of a static structure or union of type
-    /// `target` when it is a compound literal of that type, which GCC and
-    /// Clang accept as if its braced list were written in its place, and
-    /// returns whether it was. Each value the literal's plan stores is
-    /// checked against its destination as the static object's own would
-    /// be. A literal in a block is an automatic object (§6.5.2.5p6), so
-    /// neither it nor an array literal nested in it gives an address
-    /// constant (§6.6p9).
+    /// Checks `e` as the initializer of a static object of type `target`
+    /// when it is a compound literal of that type, which GCC accepts as if
+    /// its braced list were written in its place (Clang only for a
+    /// structure or union), and returns whether it was. A scalar literal
+    /// counts only as the whole initializer: GCC rejects `(int){3} + 1`. Each
+    /// value the literal's plan stores is checked against its destination as
+    /// the static object's own would be. A literal in a block is an automatic
+    /// object (§6.5.2.5p6), so neither it nor an array literal nested in it
+    /// gives an address constant (§6.6p9).
     /// GNU extension: GCC manual, "Compound Literals"; C99 §6.6 paragraph
     /// 10, p. 96; PDF p. 108 permits other forms of constant expression;
     /// §6.5.2.5 paragraph 6, p. 75; PDF p. 87.
@@ -755,25 +761,37 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
     }
 
     /// The initializer of `e` when it is a (parenthesized) compound literal
-    /// and `target` a structure or union, which the literal then copies.
+    /// that the object of type `target` copies: `target` is a structure or
+    /// union, or a scalar type compatible with the literal's, qualifiers
+    /// aside (GCC rejects `static double d = (int){3};`).
     fn whole_compound_literal(
-        &self,
+        &mut self,
         target: TypeId,
         mut e: &'tu Expression<'tu>,
     ) -> Option<&'tu Initializer<'tu>> {
-        if !matches!(
-            self.types.nodes[self.types.non_atomic(target).index],
+        let target = self.types.non_atomic(target);
+        let record = matches!(
+            self.types.nodes[target.index],
             TypeKind::Tag(id) if self.types.tags[id].kind != TagKind::Enum
-        ) {
+        );
+        let scalar = !record && self.scalar_type(target);
+        if !record && !scalar {
             return None;
         }
-        loop {
+        let initializer = loop {
             match e.kind {
                 | ExpressionType::Parenthesized { expression } => e = expression,
-                | ExpressionType::CompoundLiteral { initializer, .. } => return Some(initializer),
+                | ExpressionType::CompoundLiteral { initializer, .. } => break initializer,
                 | _ => return None,
             }
+        };
+        if scalar {
+            let literal = self.types.non_atomic(self.expression_info(e).ty);
+            _ = self
+                .types
+                .composite(target.unqualified(), literal.unqualified())?;
         }
+        Some(initializer)
     }
 
     /// Applies [`Self::check_static_initializer`] to every value the plan

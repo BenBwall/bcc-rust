@@ -627,6 +627,17 @@ The following vocabulary entries retain the established diagnostic contracts:
   which keeps the parser's `UnionCasts` report. A cast to another aggregate
   type stays invalid, the result is not an lvalue, and it is no constant
   initializer of a static object, as in GCC.
+- `ConstantCompoundLiteral` has GNU origin. A compound literal of a static
+  object's own type as its whole initializer, possibly parenthesized, is
+  accepted as if its braced list were written in its place, when every value
+  the literal stores is a constant its destination accepts: a structure or
+  union (GCC and Clang), or a scalar of a compatible type, qualifiers aside
+  (`static int x = (int){3};`, GCC only; `static double d = (int){3};` and
+  `(int){3} + 1` stay non-constant, as in GCC). Lowering copies the bytes of
+  the literal's own initializer. Warn/Deny report "'compound literal as a
+  constant initializer' is a GNU extension" where GCC says "initializer
+  element is not constant [-Wpedantic]". Source: [GCC compound
+  literals](https://gcc.gnu.org/onlinedocs/gcc/Compound-Literals.html).
 - `AlignofExpression` has GNU origin and accepts an expression operand in
   every mode, parenthesized or, as GCC accepts it, not (`_Alignof x`,
   `_Alignof (a)[1]`): every spelling takes `__alignof__`'s operand, a

@@ -1542,7 +1542,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     /// Classifies arithmetic and pointer types as scalar types.
     /// C99: §6.2.5 paragraph 21, p. 36; PDF p. 48.
-    fn scalar_type(&self, ty: TypeId) -> bool {
+    pub(in crate::translation_phases::semantic_analysis) fn scalar_type(&self, ty: TypeId) -> bool {
         self.arithmetic(ty) || self.pointer_target(ty).is_some() || self.nullptr_type(ty)
     }
 
