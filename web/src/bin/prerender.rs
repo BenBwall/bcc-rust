@@ -5,8 +5,13 @@
 //!   (static SSR; the browser hydrates it), and
 //! - moves the engine Worker's files, which Trunk does not hash, into
 //!   `engine-<hash>/` named from their contents, adds the Worker's entry
-//!   script, and records its URL in a `<meta>` tag, so every asset except
-//!   `index.html` has a content-addressed URL a CDN can cache indefinitely.
+//!   script, and records its URL in a `<meta>` tag, and
+//! - renames the Monaco editor bundle Trunk copied to `editor/` into
+//!   `editor-<hash>/` and records its entry module's URL the same way,
+//!
+//! so every asset except `index.html` has a content-addressed URL a CDN can
+//! cache indefinitely. (The web fonts in `fonts/` carry their package version
+//! in their names.)
 //!
 //! The initial state is fixed (the first demo, no engine), so the output is
 //! the same on every build. Nothing here serves requests.
@@ -49,8 +54,13 @@ fn finish(staging: &Path) -> Result<(), String> {
     }
     let hash = hash_files(&files).map_err(|error| format!("engine Worker: {error}"))?;
     let directory = format!("engine-{hash:016x}");
-    let page = render_into(&page, &format!("./{directory}/{WORKER_LOADER}"))
-        .ok_or("index.html has no empty <body> slot, or was already rendered")?;
+    let editor = hash_editor(staging).map_err(|error| format!("editor bundle: {error}"))?;
+    let page = render_into(
+        &page,
+        &format!("./{directory}/{WORKER_LOADER}"),
+        &format!("./{editor}/{EDITOR_ENTRY}"),
+    )
+    .ok_or("index.html has no empty <body> slot, or was already rendered")?;
     // The loader refers to its siblings by relative URL.
     let target = staging.join(&directory);
     fs::create_dir(&target).map_err(|error| format!("{directory}/: {error}"))?;
@@ -62,6 +72,31 @@ fn finish(staging: &Path) -> Result<(), String> {
     fs::write(target.join(WORKER_LOADER), LOADER)
         .map_err(|error| format!("{WORKER_LOADER}: {error}"))?;
     fs::write(&index, page).map_err(|error| format!("index.html: {error}"))
+}
+
+/// The editor bundle's entry module, built by `web/editor/build.mjs`.
+const EDITOR_ENTRY: &str = "main.js";
+
+/// Rename the copied `editor/` directory after its contents; returns the new
+/// name.
+fn hash_editor(staging: &Path) -> io::Result<String> {
+    let source = staging.join("editor");
+    let mut files = Vec::new();
+    for entry in fs::read_dir(&source)? {
+        let path = entry?.path();
+        if path.is_file() {
+            files.push(path);
+        }
+    }
+    files.sort();
+    if !files.iter().any(|file| file.ends_with(EDITOR_ENTRY)) {
+        return Err(io::Error::other(format!(
+            "editor/{EDITOR_ENTRY} is missing; run `npm run build` in web/editor"
+        )));
+    }
+    let directory = format!("editor-{:016x}", hash_files(&files)?);
+    fs::rename(&source, staging.join(&directory))?;
+    Ok(directory)
 }
 
 /// The Worker's entry script. A Worker must start from a script, and
@@ -94,8 +129,9 @@ fn worker_files(staging: &Path) -> io::Result<Vec<PathBuf>> {
 const RENDERED: &str = "<!-- prerendered by bcc-web -->";
 
 /// `page` with the app's HTML at the start of its body and the engine Worker
-/// URL at the end of its head; `None` if it was already rendered.
-fn render_into(page: &str, worker: &str) -> Option<String> {
+/// and editor bundle URLs at the end of its head; `None` if it was already
+/// rendered.
+fn render_into(page: &str, worker: &str, editor: &str) -> Option<String> {
     const BODY: &str = "<body>";
     const HEAD_END: &str = "</head>";
     if page.contains(RENDERED) {
@@ -112,12 +148,14 @@ fn render_into(page: &str, worker: &str) -> Option<String> {
     // Hydration walks the body from its first child, so the app markup must
     // come first; the <noscript> fallback stays after it.
     Some(format!(
-        "{}<meta name=\"{}\" content=\"{worker}\">\n  {}{html}{RENDERED}{}",
-        &page[..head_end],
-        bcc_web::ENGINE_META,
-        &page[head_end..body],
-        page[body..].trim_start()
-    ))
+            "{}<meta name=\"{}\" content=\"{worker}\">\n    <meta name=\"{}\" \
+             content=\"{editor}\">\n  {}{html}{RENDERED}{}",
+            &page[..head_end],
+            bcc_web::ENGINE_META,
+            bcc_web::EDITOR_META,
+            &page[head_end..body],
+            page[body..].trim_start()
+        ))
 }
 
 /// A stable 64-bit FNV-1a hash of each file's name and contents, in order. It
@@ -141,17 +179,22 @@ mod tests {
     fn renders_once_at_the_start_of_the_body() {
         let page =
             "<head><!-- the <body> --></head>\n  <body>\n    <noscript>x</noscript>\n  </body>";
-        let rendered =
-            render_into(page, "./engine-1/engine-worker.js").expect("an empty body renders");
+        let rendered = render_into(page, "./engine-1/engine-worker.js", "./editor-1/main.js")
+            .expect("an empty body renders");
         let body = rendered.rfind("<body>").expect("body kept") + "<body>".len();
-        assert!(rendered[body..].starts_with("<a href=\"#source-panel\" class=\"skip-link\">"));
+        assert!(rendered[body..].starts_with("<a href=\"#workbench\" class=\"skip-link\">"));
         assert!(rendered.contains(&format!("{RENDERED}<noscript>")));
         assert!(rendered.starts_with(
             "<head><!-- the <body> --><meta name=\"bcc-engine-worker\" \
-             content=\"./engine-1/engine-worker.js\">"
+             content=\"./engine-1/engine-worker.js\">\n    <meta name=\"bcc-editor\" \
+             content=\"./editor-1/main.js\">"
         ));
         assert_eq!(
-            render_into(&rendered, "./engine-1/engine-worker.js"),
+            render_into(
+                &rendered,
+                "./engine-1/engine-worker.js",
+                "./editor-1/main.js"
+            ),
             None,
             "a rendered page is not rendered again"
         );
@@ -167,7 +210,24 @@ mod tests {
             fs::write(staging.join("engine-worker.js"), "glue").unwrap();
             fs::write(staging.join("engine-worker_bg.wasm"), wasm).unwrap();
             fs::write(staging.join("bcc-web-1.js"), "app").unwrap();
+            fs::create_dir_all(staging.join("editor")).unwrap();
+            fs::write(staging.join("editor/main.js"), "editor").unwrap();
             finish(&staging).unwrap();
+            assert!(
+                !staging.join("editor").exists(),
+                "the editor bundle is renamed"
+            );
+            for entry in fs::read_dir(&staging).unwrap() {
+                let path = entry.unwrap().path();
+                if path
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with("editor-")
+                {
+                    fs::remove_dir_all(path).unwrap();
+                }
+            }
             let page = fs::read_to_string(staging.join("index.html")).unwrap();
             let start = page.find("content=\"./").unwrap() + "content=\"./".len();
             let url = &page[start..page[start..].find('"').unwrap() + start];

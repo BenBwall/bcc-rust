@@ -7,7 +7,10 @@ use serde::{
     Serialize,
 };
 
-use crate::snapshot::Snapshot;
+use crate::{
+    pipeline::Compilation,
+    snapshot::Snapshot,
+};
 
 /// A page-to-Worker request; the Worker answers each with [`Reply::Done`].
 #[derive(Debug, Deserialize, Serialize)]
@@ -18,10 +21,22 @@ pub struct Request {
 
 #[derive(Debug, Deserialize, Serialize)]
 pub enum Command {
-    /// Compile new source, replacing the current program.
+    /// Compile new source for the abstract machine, replacing the current
+    /// program; answered with a [`Answer::Snapshot`].
     Load(String),
     /// Execute one operation of the current program.
     Step,
+    /// Run bcc's real compiler pipeline over `source`; answered with
+    /// [`Answer::Compiled`], or an error while the Worker has no in-browser
+    /// compiler (see `explorer.rs`).
+    Compile(String),
+}
+
+/// A Worker's answer to one request.
+#[derive(Debug, Deserialize, Serialize)]
+pub enum Answer {
+    Snapshot(Box<Snapshot>),
+    Compiled(Box<Compilation>),
 }
 
 /// A Worker-to-page message.
@@ -32,6 +47,6 @@ pub enum Reply {
     Ready,
     Done {
         id:     u32,
-        result: Result<Box<Snapshot>, String>,
+        result: Result<Answer, String>,
     },
 }

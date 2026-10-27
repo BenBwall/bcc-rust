@@ -1,18 +1,40 @@
-# C abstract machine UI
+# How C runs: the bcc site
 
-An accessible static debugger for the bcc Rust abstract machine, written in
-Rust with [Leptos](https://leptos.dev) and built by [Trunk](https://trunkrs.dev)
-into a self-contained static site in `web/dist/`. The page's initial HTML is
-rendered at build time (static SSR) and hydrated in the browser, so the source,
-panels and help text are visible before the Wasm loads.
-The page renders engine snapshots; it does not evaluate C. The engine is the
-bcc crate's `abstract-machine` module, linked as a Rust dependency and run in a
-Web Worker. There is no hand-written JavaScript: the only scripts are the glue
-wasm-bindgen generates and a one-line Worker loader the build writes.
+An interactive introduction to how C programs run and how compilers translate
+them. Visitors pick a lesson (a small C program) and see it two ways:
 
-Run all commands from `/home/agent/workspace/bcc-rust/worktrees/abstract-machine-site`
-on branch `codex/abstract-machine-site`. Use the repository's pinned Rust 1.99.0
-toolchain. Install its Wasm standard library and Trunk once:
+- **Abstract machine.** Step through the program one evaluation at a time.
+  Each step is explained in plain language from what the engine actually did
+  (which subexpression it evaluated, which values it read, converted or
+  stored, which objects began or ended their lifetime) and cites the C99
+  paragraph that requires it. The exact source range is highlighted, the
+  current full expression is drawn as a tree whose values fill in as it is
+  evaluated, and memory is drawn as call frames holding objects, with
+  pointers as arrows.
+- **Compiler pipeline.** What bcc itself produces for the same program:
+  tokens, syntax tree, bcc IR before and after ABI lowering, LLVM IR, native
+  x86-64 assembly, and machine code with its encoded bytes, each with a short
+  explanation. Hovering a source line highlights what it became (line by line
+  for tokens and the syntax tree, per function for the IR and machine stages,
+  whose output keeps no source locations), and the reverse.
+
+Every variable keeps one colour across the source, the expression tree and the
+memory diagram. The page has light and dark themes and works down to tablet
+width.
+
+The site is written in Rust with [Leptos](https://leptos.dev) and built by
+[Trunk](https://trunkrs.dev) into a static site in `web/dist/`. The page's
+initial HTML is rendered at build time (static SSR) and hydrated in the
+browser, so the lessons and their source are visible before any script runs.
+The engine is the bcc crate's `abstract-machine` module, run in a Web Worker.
+Code is shown in [Monaco](https://microsoft.github.io/monaco-editor/), the
+editor behind VS Code, with Monarch grammars for C, bcc IR, LLVM IR, AT&T
+assembly and the machine-code listing.
+
+## Build
+
+Use the repository's pinned Rust 1.99.0 toolchain, plus Node.js 22 and npm.
+Install the Wasm standard library and Trunk once:
 
 ```sh
 rustup target add wasm32-unknown-unknown
@@ -21,16 +43,14 @@ sh web/build.sh
 python3 -m http.server 8080 --bind 127.0.0.1 --directory web/dist
 ```
 
-Open `http://127.0.0.1:8080`. Serve over HTTP; Workers and Wasm should not be
-opened with `file://`. For iterative UI work, run `trunk serve` in `web/`
-instead.
+Open `http://127.0.0.1:8080`. Serve over HTTP; Workers, Wasm and module
+scripts do not work from `file://`.
 
-## Build
-
-`web/build.sh` runs `trunk build --release` in `web/` (niced,
-`CARGO_BUILD_JOBS=3` unless set) and removes Trunk's lock file from the output.
-`web/` is its own Cargo workspace (`bcc-web`, with its own `Cargo.lock`), and
-one crate builds three ways, one per feature:
+`web/build.sh` first builds the editor bundle in `web/editor/` (`npm ci`, then
+`node build.mjs`, which runs esbuild), then runs `trunk build --release` in
+`web/` (niced, `CARGO_BUILD_JOBS=3` unless set) and removes Trunk's lock file
+from the output. `web/` is its own Cargo workspace (`bcc-web`, with its own
+`Cargo.lock`), and one crate builds three ways, one per feature:
 
 - `hydrate`: the page (`src/main.rs`), which attaches to the prerendered HTML.
 - `worker`: the engine Worker (`src/bin/engine_worker.rs`). Only this build
@@ -39,154 +59,142 @@ one crate builds three ways, one per feature:
 - `ssr`: the native `prerender` binary (`src/bin/prerender.rs`).
 
 Trunk compiles the first two to Wasm, runs wasm-bindgen and wasm-opt
-(downloading the versions matching `Cargo.lock` on first use), and hashes the
-page's asset names. Its `post_build` hook then runs
-`prerender` on the staged output. It renders the page's fixed initial state
-(the first demo, no engine connected) into `index.html`; moves the Worker's
-script and Wasm, which Trunk does not hash, into `engine-<hash>/` named after
-their contents; writes the Worker's loader there; and records the loader's URL
-in a `<meta name="bcc-engine-worker">` tag that the page reads. That binary is
-the only server-side code. It runs once per build and never serves requests.
-No npm packages, network assets, or service workers are used at run time.
+(downloading the versions matching `Cargo.lock` on first use), hashes the
+page's asset names, and copies `editor/dist/` (the Monaco bundle) to `editor/`
+and `editor/fonts/` (Inter and JetBrains Mono, both SIL OFL, named with their
+package version) to `fonts/`. Its `post_build` hook then runs `prerender` on
+the staged output. It renders the page's fixed initial state (the first
+lesson, no engine connected) into `index.html`; moves the Worker's script and
+Wasm into `engine-<hash>/` and the editor bundle into `editor-<hash>/`, each
+named after its contents; writes the Worker's loader; and records both URLs in
+`<meta>` tags the page reads. Nothing is fetched from a CDN at run time.
+
+### JavaScript
+
+The site's logic is Rust. Two pieces of hand-written JavaScript remain, both
+for the editor: `js/bridge.js`, a one-line dynamic `import()` that wasm-bindgen
+binds (Rust cannot express one), and the Monaco glue in `editor/src/` (editor
+creation, decorations and events behind a small plain-data API, the Monarch
+grammars and the themes). `src/editor.rs` holds the wasm-bindgen bindings and
+decides everything the editor shows. Monaco loads after hydration; until then,
+and without JavaScript, the code views show Rust-highlighted text.
 
 ## Deploy
 
-`web/dist/` is the whole site: upload it as-is to any static host or CDN. There
-is no server code or routing. Asset URLs are relative (`public_url = "./"`), so
-it works at the origin root or under any path prefix, provided the page is
-requested at a URL ending in `/` (or as `index.html`). All files must share an
-origin, because browsers only start Workers from the page's origin.
+`web/dist/` is the whole site: upload it as-is to any static host or CDN. The
+Pages workflow (`.github/workflows/pages.yml`) tests and builds it on pull
+requests and deploys it from `main`. There is no server code or routing. Asset
+URLs are relative (`public_url = "./"`), so it works at the origin root or
+under any path prefix, provided the page is requested at a URL ending in `/`
+(or as `index.html`). All files must share an origin, because browsers only
+start Workers from the page's origin.
 
-Every file except `index.html` has a content hash in its URL
-(`bcc-web-<hash>.js`, `style-<hash>.css`, `engine-<hash>/…`), so a new build
-never reuses a URL for different bytes. Suggested caching:
-
-- `index.html`: `Cache-Control: no-cache` (revalidate on every visit, so a
-  deploy is picked up immediately).
-- Everything else: `Cache-Control: public, max-age=31536000, immutable`.
-
-Upload the hashed files before `index.html`, so a visitor never gets a page
-whose assets are not there yet. Old hashed files can be kept for a while for
-visitors with the previous page open. A `.wasm` MIME type of
-`application/wasm` is preferred but not required: wasm-bindgen falls back to
-buffered instantiation.
+Every file except `index.html` has a content hash or version in its URL, so a
+new build never reuses a URL for different bytes. Suggested caching:
+`index.html` with `Cache-Control: no-cache`; everything else with
+`public, max-age=31536000, immutable`. Upload the hashed files before
+`index.html`.
 
 ## Interface
 
-- Choose a demo, open a local C source file, or edit and load your own source.
-- Step advances one engine evaluation. Run yields between evaluations; Pause
-  stops before the next one. Each Run pauses after 1,000 evaluations.
-- Back displays earlier real engine snapshots. Stepping forward through history
-  displays those snapshots before requesting a new Rust step. Up to 2,000 states
-  are retained. Reset reloads the current source in Rust.
-- Select a source line number and choose **Run to line**. Execution pauses at
-  the next source range intersecting the selected line, a terminal state, or the Run budget. A blank
-  or nonexecutable line may never be reached.
-- Highlighted text is the **next operation** supplied by the engine, or the
-  faulting operation on a diagnostic. The event describes the **last completed
-  operation**. UTF-8 byte offsets are converted to editor character columns. Object
-  cards show identity, storage duration, lifetime, and value. Pointer links jump
-  to their target object's card. Indeterminate values are labeled explicitly.
-- The engine supplies pending effects and undefined behavior explanations and
-  citations. Pending effects describe the next store; the UI explains the
-  prototype's atomic-store model. UB is a terminal state; no subsequent
-  evaluation is requested until reset.
+- Choose a lesson, open a local C file, or edit the source in place and choose
+  **Run edited code**.
+- **Step** (`→` or `j`) performs one evaluation; **Back** (`←` or `k`) shows
+  the previous state; **Run** (`r`) steps until the program ends and **Pause**
+  stops it; **Reset** (`Shift+R`) reloads the program. Shortcuts are ignored
+  while typing in the editor. Click a line number to set a run target, then
+  **Run to line**.
+- The narration card names the rule each step applied, colour coded by kind
+  (evaluate, convert, memory, lifetime, control flow, call, stopped), marks
+  sequence points, and lists the cited C99 paragraphs with a gloss. Earlier
+  steps are listed below it and can be revisited.
+- In the source, a solid box marks what the last step evaluated and a dashed
+  underline what runs next; undefined behavior is marked in red.
+- Back replays retained snapshots (up to 2,000); the engine stays at the newest
+  state, and stepping forward replays history before asking it for more.
+- An announcement region narrates each step for screen readers.
 
-Programs remain in this page's memory and are not uploaded or persisted. Source
-files are limited to 32 KiB. Compilation and execution run in a dedicated
-Worker. A call that takes over 10 seconds (20 seconds for initial loading)
-terminates that Worker; **Retry engine** creates a new instance. No browser
-cross-origin isolation, server execution API, or native trace replay is used.
+Programs stay in the page's memory and are not uploaded or persisted. Source
+files are limited to 32 KiB. A Worker call that takes over 10 seconds (20
+seconds for initial loading) terminates the Worker; **Retry engine** starts a
+new one.
+
+## The compiler pipeline view
+
+The bundled lessons carry outputs precomputed by the native bcc build in
+`web/pipeline/<lesson>/`. Regenerate them after changing a lesson or the
+compiler, from the repository root:
+
+```sh
+BCC=path/to/bcc-rust sh web/pipeline/generate.sh           # rewrite
+BCC=path/to/bcc-rust sh web/pipeline/generate.sh --check   # compare only
+```
+
+The script needs a native `bcc-rust` (built with LLVM) and GNU `objdump`. The
+site's tests check that every lesson's outputs were generated from its current
+source, and the main CI workflow's Tests job runs `generate.sh --check` with the
+compiler it just built, so a compiler change that alters an output fails CI
+until the outputs are regenerated.
+
+Edited source is compiled live in the Worker through `explorer.rs` once bcc's
+compiler builds for wasm32 (`bcc_rust::explorer::compile`). Until the Worker
+links it, `Command::Compile` answers with an error and the view explains that
+compiler outputs are available for the bundled lessons. LLVM IR is only ever
+precomputed: the browser build of bcc has no LLVM.
 
 ## Model limitations
 
-This is an **independent bounded C subset evaluator written in Rust**, not the
-full bcc syntax/semantic frontend, LLVM backend, or IR interpreter. It supports
-signed 32-bit `int`, `int *`, fixed int arrays, int-returning named functions,
-int/int-pointer parameters, block locals, `if`/`else`, `while`, `for`, `return`,
-assignments, arithmetic/comparisons, address/dereference/subscript, and standalone
-increments. Calls must be a whole initializer, assignment RHS, return expression,
-or expression statement. The demos obey this restriction.
+The engine is an **independent bounded C subset evaluator written in Rust**,
+not bcc's syntax/semantic frontend, LLVM backend or IR interpreter. It supports
+signed 32-bit `int` and signed 8-bit plain `char` locals (as on x86-64), `int
+*`, fixed int arrays, int-returning named functions, int and int-pointer
+parameters, block locals, `if`/`else`, `while`, `for`, `return`, assignments,
+arithmetic and comparisons, address-of, dereference, subscripts, and
+standalone increments. Calls must be a whole initializer, assignment right-hand
+side, return expression, or expression statement.
 
-Indeterminate reads trigger a clearly labeled conservative **policy stop**;
-the prototype does not claim every indeterminate read is necessarily UB. The
-array-bounds demo demonstrates a separate detected UB stop with a C99 citation.
+Indeterminate reads stop with a clearly labeled **policy stop**; the engine
+does not claim every indeterminate read is undefined. Signed overflow,
+division by zero, out-of-bounds access, null indirection and use after a
+lifetime ends stop as detected undefined behavior with a citation.
 
-No preprocessing, globals, library I/O, floating point, casts, structs, dynamic
-allocation, or function pointers are supported. Unsupported source is rejected
-explicitly. Left-to-right operand evaluation is a chosen execution policy.
-Stores commit atomically, and pending effects describe the next store. Deferred
-writes and full C99 sequencing/conflict checks are not implemented; nested side
-effects are rejected. A completed run does not certify freedom from UB.
+No preprocessing, globals, library I/O, floating point, casts, structs,
+pointers to char, dynamic allocation or function pointers. Unsupported source
+is rejected explicitly. Operands are evaluated left to right (a chosen
+policy); stores commit atomically; nested side effects are rejected, so
+unsequenced-modification checks are not needed. Automatic objects appear when
+their declaration is reached, though C99 begins their lifetime on entry to the
+block; the narration says so. A completed run does not certify freedom from
+undefined behavior.
 
-Engine limits are explicit terminal diagnostics: 2,048 steps, 32 frames,
-128 total objects, 512 integer cells, 1,024 operands, 64 parser nesting levels,
-8,192 compiled operations, and a conservative 8 MiB trace-retention budget.
-The UI distinguishes resource limits and unsupported syntax from detected UB.
-Pointer offsets count int elements, not bytes or host addresses. Automatic
-lifetimes begin when declarations execute; C99 fixed objects instead begin
-lifetime at block entry and initialize when the declaration is reached. Ended
-objects remain visible as lifetime tombstones. `main`'s return value appears at completion.
+Engine limits are explicit terminal diagnostics: 2,048 steps, 32 frames, 128
+objects, 512 integer cells, 1,024 operands, 64 nesting levels, 8,192 compiled
+operations and an 8 MiB trace-retention budget.
 
-## Files and integration boundary
+## Files
 
-The site is a Rust crate. `index.html` is Trunk's shell and `style.css` owns the
-responsive layout. In `src/`, `lib.rs` maps the modules. `app.rs` owns
-controls, page state and bounded snapshot history; the engine Worker starts
-from an effect, so prerendering never touches browser APIs. `source_view.rs`
-renders source lines, syntax colouring and the next-operation mark.
-`panels.rs` renders the stack, objects, sequencing and diagnostics. Program
-text and engine data are always rendered as text nodes, never as HTML.
-`snapshot.rs` defines the snapshot types the page presents. `demos.rs` embeds
-the C programs in `demos/`.
+`index.html` is Trunk's shell and `style.css` the design (tokens for both
+themes, layout, components, and the classes the editor decorations use). In
+`src/`, `lib.rs` maps the modules. `app.rs` owns the page state, controls,
+keyboard shortcuts and layout. `panels/` renders the narration, expression
+tree, memory diagram and pipeline view. `editor.rs` mounts Monaco, and
+`highlight.rs` colours the prerendered fallback. `palette.rs` assigns each
+variable its colour. `snapshot.rs` defines what the page presents, `demos.rs`
+the lessons, and `pipeline.rs` the compiler stages, their explanations, the
+bundled outputs and the source-to-output links. `engine.rs` proxies the
+Worker over the messages in `protocol.rs`; in the Worker, `machine.rs` drives
+an engine `Session` and turns each state into a snapshot (UTF-8 byte ranges
+become UTF-16 editor columns), and `explorer.rs` is the seam to the
+in-browser compiler.
 
-`engine.rs` is the page's Worker proxy. It waits for the Worker's ready
-message, sends `load(source)` and `step()` requests, and terminates the Worker
-on a timeout or a Worker error. `protocol.rs` defines those messages, which
-cross as plain JavaScript values through `serde_wasm_bindgen`. In the Worker,
-`machine.rs` drives an engine `Session` and converts each engine `State` to a
-`Snapshot`, mapping UTF-8 byte offsets to UTF-16 editor columns.
+## Tests
 
-The page's Back history is presentation-only; the engine session stays at the
-newest recorded state. Forward replay reaches that point before requesting a
-new step. No C semantics or computed program values live in the page.
-
-`cargo test --features ssr,worker` in `web/` runs the tests natively. The
-`machine.rs` tests run the real engine. They check the tour's result and
-changed-source result, calls, pointers, indeterminate values, pending effects,
-lifetimes, the diagnostic demos' citations and locations, rejected source and
-recovery, the step limit, and UTF-16 columns. The `prerender.rs` tests check
-rendering into the body and the hashed Worker directory, and `source_view.rs`
-tests syntax colouring. Run these with `RUSTFLAGS=`, because the repository's
-`.cargo/config.toml` points host builds at the bcc LLVM linker. Generated
-artifacts belong in ignored `web/target/` and `web/dist/`; binary output is
-not committed.
-
-## Verification
-
-On 2026-10-25 `sh web/build.sh` built the site (Leptos 0.8.22, Trunk 0.22.0,
-wasm-bindgen 0.2.129, Rust 1.99.0). `web/dist/` holds the prerendered
-`index.html` (about 15 KB, all 20 demo source lines with syntax colouring), the
-hashed page script and Wasm (46 KB and 403 KB), the stylesheet, and
-`engine-<hash>/` with the Worker's glue (31 KB), Wasm (147 KB) and loader.
-In `web/`, `cargo clippy -- -D warnings` passed for the `hydrate` and `worker`
-(wasm32) and `ssr,worker` (native, all targets) builds, `cargo +nightly fmt
---check` passed, and `cargo test --features ssr,worker` passed all 10 tests.
-The tour returns `15`; changing its input array to `{4, 6, 8}` returns `21`.
-
-A headless smoke test (outside the repository, using jsdom, with the built
-Worker run in a Node thread that emulates a classic Worker scope) loaded the
-built `dist/` page and its Leptos bundle. The bundle hydrated the prerendered
-markup in place, with one header and 20 source lines rather than a second
-copy, and started the Worker from the hashed `<meta>` URL. The test then drove
-Step, Back, Run to line, Run, the UB demo, edit-and-load, rejected source, and
-a hung engine. The hung engine timed out after 10 seconds, showed the
-unavailable notice, and Retry engine started a fresh Worker. A second script
-served `dist/` over HTTP under `/cdn/bcc-rust/` and fetched every URL the page
-and Worker reference (7, all found), and confirmed every file but `index.html` has a hashed
-name. T3 browser preview still fails because the
-host lacks the required browser shared libraries, so real browser rendering,
-mobile layout, screenshots and assistive-technology behavior remain
-unverified. The launch commands above provide a local manual check. Earlier
-engine-side Rust test, Clippy and Rustfmt results are recorded in the research
-document.
+From `web/`, `RUSTFLAGS= cargo test --features ssr,worker` runs the site's
+tests natively (`RUSTFLAGS=` keeps the repository's LLVM linker flags away from
+this host build): every lesson runs to its documented outcome with a titled,
+cited event at each step; event ranges, expression trees and waiting frames;
+diagnostics and recovery; UTF-16 columns; colouring; the outputs' sync with
+the lessons and the source-to-output links; and prerendering. The engine's own
+tests run from the repository root with `cargo test --lib --no-default-features
+--features abstract-machine abstract_machine`. Generated artifacts belong in
+ignored `web/target/`, `web/dist/` and `web/editor/{node_modules,dist,fonts}/`.

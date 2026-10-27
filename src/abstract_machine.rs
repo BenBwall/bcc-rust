@@ -1,18 +1,29 @@
 //! Bounded, source-driven C execution for the browser prototype.
 //!
-//! [`compile`] parses an explicit subset into source-located operations;
-//! [`Session::step`] executes one operation and retains the entire machine.
-//! For `int x = 1;`, declaration first exposes indeterminate storage, then
-//! expression operations compute `1`, and a store initializes the object.
-//! [`Session::back`] restores history; stepping forward replays it exactly.
+//! [`compile`] parses an explicit subset into source-located operations, each
+//! tied to a node of its statement's expression tree; [`Session::step`]
+//! executes one operation and retains the entire machine. Every state carries
+//! an [`Event`]: the rule the last operation applied ([`EventKind`]), the exact
+//! source it evaluated, its operand and result values, the [`Clause`]s of C99
+//! that define it, and a plain-language explanation. [`Evaluation`] records
+//! which nodes of the current full expression have produced values so far.
+//!
+//! For `int x = 1;`, declaration first exposes indeterminate storage (event
+//! `declare`), `x` designates the object (`designate`), the constant
+//! evaluates (`constant`), and a store initializes the object (`initialize`,
+//! ending the full expression). [`Session::back`] restores history; stepping
+//! forward replays it exactly.
 //!
 //! Read `parser.rs` and `expressions.rs` for compilation, `machine.rs` and
-//! `memory.rs` for execution, `model.rs` for the public observation types, and
-//! `json.rs` for the versioned wire format. `lexer.rs` retains byte ranges.
-//! `tests.rs` exercises actual execution, rejection, UB and replay.
+//! `memory.rs` for execution, `narration.rs` for the explanations and
+//! `clauses.rs` for the cited rules, `model.rs` for the public observation
+//! types, and `json.rs` for the versioned wire format. `lexer.rs` retains
+//! byte ranges. `tests.rs` exercises actual execution, events, rejection, UB
+//! and replay.
 //!
 //! This independent subset does not invoke bcc's syntax/semantic frontend.
-//! It uses a signed 32-bit int model and element-based pointer offsets.
+//! It uses a signed 32-bit int model, a signed 8-bit plain char, and
+//! element-based pointer offsets.
 //! Operand evaluation is left-to-right; nested side effects are rejected.
 //! It is an educational execution model, not a C conformance checker.
 //!
@@ -24,8 +35,10 @@
 // Standalone session storage, independent of the compiler's native arenas.
 #![expect(
     clippy::disallowed_types,
-    reason = "The bounded browser session owns reclaimable std buffers; compiler VM arenas are \
-              unavailable on wasm32. This exception applies only to the independent evaluator."
+    clippy::disallowed_macros,
+    reason = "The bounded browser session owns reclaimable std buffers and formats its \
+              explanations into them; compiler VM arenas are unavailable on wasm32. This \
+              exception applies only to the independent evaluator."
 )]
 
 // Compilation
@@ -39,11 +52,21 @@ mod machine;
 mod memory;
 mod model;
 
+// Explanations
+pub mod clauses;
+mod narration;
+
+pub use clauses::Clause;
 use machine::Machine;
 pub use model::{
     Diagnostic,
+    Evaluation,
+    Event,
+    EventKind,
+    ExpressionNode,
     Frame,
     Object,
+    Operand,
     Program,
     SourceRange,
     State,
@@ -114,7 +137,13 @@ impl Session {
         &self.history[self.cursor].state
     }
 
-    /// Encodes the current observation using schema version 1.
+    /// The program this session runs.
+    #[must_use]
+    pub fn program(&self) -> &Program {
+        &self.program
+    }
+
+    /// Encodes the current observation using schema version 2.
     #[must_use]
     pub fn state_json(&self) -> String {
         self.state().to_json()
@@ -146,6 +175,27 @@ impl Program {
     #[must_use]
     pub fn source(&self) -> &str {
         &self.source
+    }
+
+    /// The name of function `function`, in definition order.
+    #[must_use]
+    pub fn function_name(&self, function: usize) -> Option<&str> {
+        self.functions
+            .get(function)
+            .map(|function| function.name.as_str())
+    }
+
+    /// The expression-tree nodes of the full expression rooted at `root` in
+    /// `function`, in evaluation order (children before parents); the root is
+    /// last. Node indices are absolute, as [`Evaluation`] uses them.
+    #[must_use]
+    pub fn expression(&self, function: usize, root: usize) -> &[ExpressionNode] {
+        self.functions.get(function).map_or(&[], |function| {
+            function
+                .nodes
+                .get(root)
+                .map_or(&[], |node| &function.nodes[node.first..=root])
+        })
     }
 }
 

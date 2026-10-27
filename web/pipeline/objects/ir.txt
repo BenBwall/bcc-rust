@@ -1,0 +1,52 @@
+target triple = "x86_64-unknown-linux-gnu"
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+
+function @bump(ptr noundef) -> i32 external {
+block0(v0: ptr):
+    v1 = load.i32 v0, align 4
+    v2 = iconst.i32 1
+    v3 = iadd.i32 nsw v1, v2
+    store.i32 v3, v0, align 4
+    v4 = load.i32 v0, align 4
+    return v4
+}
+
+function @main() -> i32 external {
+    slot0 = stack_slot 12, align 4
+block0:
+    v0 = iconst.i32 0
+    v1 = iconst.i32 2
+    v2 = stack_addr slot0
+    store.i32 v1, v2, align 4
+    v3 = iconst.i32 4
+    v4 = stack_addr slot0
+    v5 = iconst.i64 4
+    v6 = ptr_add inbounds v4, v5
+    store.i32 v3, v6, align 4
+    v7 = iconst.i32 6
+    v8 = stack_addr slot0
+    v9 = iconst.i64 8
+    v10 = ptr_add inbounds v8, v9
+    store.i32 v7, v10, align 4
+    v11 = stack_addr slot0
+    v12 = iconst.i32 0
+    v13 = iconst.i32 0
+    jump block1(v13, v11, v0)
+block1(v14: i32, v15: ptr, v16: i32):
+    v17 = iconst.i32 3
+    v18 = icmp.i32 slt v14, v17
+    brif v18, block2, block4
+block2:
+    v19 = call @bump(v15)
+    v20 = iadd.i32 nsw v16, v19
+    v21 = iconst.i32 1
+    v22 = iconst.i64 4
+    v23 = ptr_add inbounds v15, v22
+    jump block3
+block3:
+    v24 = iconst.i32 1
+    v25 = iadd.i32 nsw v14, v24
+    jump block1(v25, v23, v20)
+block4:
+    return v16
+}

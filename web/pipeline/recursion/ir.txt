@@ -1,0 +1,25 @@
+target triple = "x86_64-unknown-linux-gnu"
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+
+function @factorial(i32 noundef) -> i32 external {
+block0(v0: i32):
+    v1 = iconst.i32 1
+    v2 = icmp.i32 sle v0, v1
+    brif v2, block1, block2
+block1:
+    v3 = iconst.i32 1
+    return v3
+block2:
+    v4 = iconst.i32 1
+    v5 = isub.i32 nsw v0, v4
+    v6 = call @factorial(v5)
+    v7 = imul.i32 nsw v0, v6
+    return v7
+}
+
+function @main() -> i32 external {
+block0:
+    v0 = iconst.i32 4
+    v1 = call @factorial(v0)
+    return v1
+}

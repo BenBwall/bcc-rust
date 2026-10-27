@@ -1,0 +1,35 @@
+function-definition main type=int storage=none qualifiers=none function-specifiers=none @2:1
+  declarator: declarator pointer-levels=0 @2:5
+    identifier main @2:5
+    function variadic=false
+      parameter type=void storage=none qualifiers=none function-specifiers=none @2:10
+  body: compound @2:16
+    block-item: declaration storage=none type=char qualifiers=none function-specifiers=none @3:5
+      declarator small @3:10
+        shape: declarator pointer-levels=0 @3:10
+          identifier small @3:10
+        initializer: assignment-expression @3:18
+          assignment-expression: constant 100 (int) @3:18
+    block-item: declaration storage=none type=int qualifiers=none function-specifiers=none @4:5
+      declarator wide @4:9
+        shape: declarator pointer-levels=0 @4:9
+          identifier wide @4:9
+        initializer: assignment-expression @4:16
+          assignment-expression: binary + @4:16
+            lhs: identifier small @4:16
+            rhs: identifier small @4:24
+    block-item: declaration storage=none type=char qualifiers=none function-specifiers=none @5:5
+      declarator narrow @5:10
+        shape: declarator pointer-levels=0 @5:10
+          identifier narrow @5:10
+        initializer: assignment-expression @5:19
+          assignment-expression: binary + @5:19
+            lhs: identifier small @5:19
+            rhs: identifier small @5:27
+    block-item: expression @6:5
+      expression: unary ++ (postfix) @6:5
+        operand: identifier narrow @6:5
+    block-item: return @7:5
+      return-value: binary - @7:12
+        lhs: identifier wide @7:12
+        rhs: identifier narrow @7:19

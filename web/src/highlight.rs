@@ -1,60 +1,44 @@
-//! Source panel lines: line numbers that set the run target, light syntax
-//! colouring, and the engine's next operation marked as `<mark>`.
+//! Rust-side syntax colouring for the prerendered code views. Monaco takes
+//! over in the browser; until then (and without JavaScript) these spans show
+//! C with the same token classes the editor themes use.
 //!
 //! Program text is always rendered as text nodes, never as HTML.
 
 use leptos::prelude::*;
 
-use crate::snapshot::Range;
-
-/// One source line, keyed by its whole content so edits rebuild only the
-/// lines that changed.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct Line {
-    pub number: usize,
-    text:       String,
-    /// Syntax tokens as byte ranges within `text`.
-    tokens:     Vec<(usize, usize, Kind)>,
+/// A code view's text as numbered lines, coloured when it is C.
+pub fn fallback(text: &str, language: &str) -> AnyView {
+    let lines = if language == "c" {
+        lines(text)
+    } else {
+        plain_lines(text)
+    };
+    lines
+        .into_iter()
+        .map(|line| {
+            let number = line.number;
+            view! {
+                <span class="fallback-line">
+                    <span class="fallback-number" aria-hidden="true">{number}</span>
+                    <span class="fallback-code">{segments(&line)}</span>
+                </span>
+            }
+        })
+        .collect_view()
+        .into_any()
 }
 
-#[component]
-pub fn SourceLine(
-    line: Line,
-    location: Memo<Option<Range>>,
-    target: ReadSignal<Option<usize>>,
-    on_select: Callback<usize>,
-) -> impl IntoView {
-    let number = line.number;
-    let active = move || {
-        location
-            .get()
-            .is_some_and(|range| range.contains_line(number))
-    };
-    view! {
-        <div
-            class="code-line"
-            class:is-current=active
-            class:is-target=move || target.get() == Some(number)
-            data-line=number.to_string()
-            aria-current=move || active().then_some("step")
-        >
-            <button
-                type="button"
-                class="line-number"
-                data-line=number.to_string()
-                aria-label=format!("Set run target to line {number}")
-                aria-pressed=move || (target.get() == Some(number)).to_string()
-                on:click=move |_| on_select.run(number)
-            >
-                {number}
-            </button>
-            <span class="line-code">{move || segments(&line, location.get())}</span>
-        </div>
-    }
+/// One source line with its syntax tokens.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct Line {
+    number: usize,
+    text:   String,
+    /// Syntax tokens as byte ranges within `text`.
+    tokens: Vec<(usize, usize, Kind)>,
 }
 
 /// Split `source` into lines carrying their syntax tokens.
-pub fn lines(source: &str) -> Vec<Line> {
+fn lines(source: &str) -> Vec<Line> {
     let tokens = syntax_tokens(source);
     let mut offset = 0;
     source
@@ -79,30 +63,23 @@ pub fn lines(source: &str) -> Vec<Line> {
         .collect()
 }
 
-fn segments(line: &Line, range: Option<Range>) -> AnyView {
+fn plain_lines(text: &str) -> Vec<Line> {
+    text.split('\n')
+        .enumerate()
+        .map(|(index, text)| Line {
+            number: index + 1,
+            text:   text.to_owned(),
+            tokens: Vec::new(),
+        })
+        .collect()
+}
+
+fn segments(line: &Line) -> AnyView {
     let text = line.text.as_str();
     if text.is_empty() {
         return " ".into_any();
     }
-    let marked = range
-        .filter(|range| range.contains_line(line.number))
-        .map(|range| {
-            let start = if line.number == range.start.line {
-                range.start.column.saturating_sub(1)
-            } else {
-                0
-            };
-            let end = if line.number == range.end.line {
-                range.end.column.saturating_sub(1)
-            } else {
-                usize::MAX
-            };
-            (utf16_to_byte(text, start), utf16_to_byte(text, end))
-        });
     let mut points = vec![0, text.len()];
-    if let Some((start, end)) = marked {
-        points.extend([start, end]);
-    }
     for &(start, end, _) in &line.tokens {
         points.extend([start, end]);
     }
@@ -118,26 +95,10 @@ fn segments(line: &Line, range: Option<Range>) -> AnyView {
                 .find(|token| token.0 <= from && token.1 > from)
                 .map_or("", |token| token.2.class());
             let piece = text[from..to].to_owned();
-            if marked.is_some_and(|(start, end)| from >= start && to <= end) {
-                view! { <mark class=class>{piece}</mark> }.into_any()
-            } else {
-                view! { <span class=class>{piece}</span> }.into_any()
-            }
+            view! { <span class=class>{piece}</span> }
         })
         .collect_view()
         .into_any()
-}
-
-/// The byte offset of a UTF-16 column, clamped to the line.
-fn utf16_to_byte(text: &str, column: usize) -> usize {
-    let mut units = 0;
-    for (index, character) in text.char_indices() {
-        if units >= column {
-            return index;
-        }
-        units += character.len_utf16();
-    }
-    text.len()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -145,6 +106,7 @@ enum Kind {
     Comment,
     String,
     Keyword,
+    Type,
     Number,
 }
 
@@ -154,15 +116,18 @@ impl Kind {
             | Self::Comment => "syntax-comment",
             | Self::String => "syntax-string",
             | Self::Keyword => "syntax-keyword",
+            | Self::Type => "syntax-type",
             | Self::Number => "syntax-number",
         }
     }
 }
 
-const KEYWORDS: [&str; 29] = [
-    "int", "void", "char", "short", "long", "unsigned", "signed", "const", "volatile", "static",
-    "extern", "auto", "register", "return", "for", "while", "do", "if", "else", "break",
-    "continue", "sizeof", "struct", "union", "enum", "typedef", "switch", "case", "default",
+const TYPES: [&str; 7] = ["int", "void", "char", "short", "long", "unsigned", "signed"];
+
+const KEYWORDS: [&str; 22] = [
+    "const", "volatile", "static", "extern", "auto", "register", "return", "for", "while", "do",
+    "if", "else", "break", "continue", "sizeof", "struct", "union", "enum", "typedef", "switch",
+    "case", "default",
 ];
 
 /// Colouring tokens as byte ranges: comments, string and character literals,
@@ -191,7 +156,10 @@ fn syntax_tokens(source: &str) -> Vec<(usize, usize, Kind)> {
                 .iter()
                 .position(|&byte| !is_word(byte))
                 .unwrap_or(rest.len());
-            if KEYWORDS.contains(&&source[index..index + word]) {
+            let text = &source[index..index + word];
+            if TYPES.contains(&text) {
+                Some((word, Kind::Type))
+            } else if KEYWORDS.contains(&text) {
                 Some((word, Kind::Keyword))
             } else if let Some(length) = rest[0]
                 .is_ascii_digit()
@@ -282,7 +250,7 @@ mod tests {
         assert_eq!(
             kinds("int x = 0x1Fu; /* a\nb */ return 'c' + \"s\\\"\" + 1.5; // end"),
             [
-                ("int", Kind::Keyword),
+                ("int", Kind::Type),
                 ("0x1Fu", Kind::Number),
                 ("/* a\nb */", Kind::Comment),
                 ("return", Kind::Keyword),
@@ -301,15 +269,6 @@ mod tests {
             [("1", Kind::Number)]
         );
         assert_eq!(kinds("\"a\\\nb\""), []);
-    }
-
-    #[test]
-    fn maps_utf16_columns_to_bytes() {
-        let text = "/* π 🧭 */ x";
-        assert_eq!(utf16_to_byte(text, 3), 3);
-        assert_eq!(utf16_to_byte(text, 4), 5);
-        assert_eq!(&text[utf16_to_byte(text, 11)..], "x");
-        assert_eq!(utf16_to_byte(text, 99), text.len());
     }
 
     #[test]

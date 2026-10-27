@@ -1,0 +1,22 @@
+<factorial>:
+     0  53                       push %rbx
+     1  48 89 fb                 mov %rdi,%rbx
+     4  83 fb 01                 cmp $0x1,%ebx
+     7  7f 09                    jg 12 <factorial+0x12>
+     9  48 c7 c0 01 00 00 00     mov $0x1,%rax
+    10  5b                       pop %rbx
+    11  c3                       ret
+    12  48 8d 43 ff              lea -0x1(%rbx),%rax
+    16  48 89 c7                 mov %rax,%rdi
+    19  e8 00 00 00 00           call 1e <factorial+0x1e>
+    1e  0f af d8                 imul %eax,%ebx
+    21  48 89 d8                 mov %rbx,%rax
+    24  5b                       pop %rbx
+    25  c3                       ret
+
+<main>:
+    30  48 83 ec 08              sub $0x8,%rsp
+    34  48 c7 c7 04 00 00 00     mov $0x4,%rdi
+    3b  e8 00 00 00 00           call 40 <main+0x10>
+    40  48 83 c4 08              add $0x8,%rsp
+    44  c3                       ret

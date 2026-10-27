@@ -1,0 +1,21 @@
+target triple = "x86_64-unknown-linux-gnu"
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+abi lowered
+
+function @main() -> i32 external {
+block0:
+    v0 = iconst.i32 100
+    v1 = iconst.i8 100
+    v2 = iconst.i32 100
+    v3 = iconst.i32 100
+    v4 = iadd.i32 nsw v2, v3
+    v5 = iconst.i32 100
+    v6 = iconst.i32 100
+    v7 = iadd.i32 nsw v5, v6
+    v8 = trunc.i8 v7
+    v9 = iconst.i8 1
+    v10 = iadd.i8 v8, v9
+    v11 = sext.i32 v10
+    v12 = isub.i32 nsw v4, v11
+    return v12
+}

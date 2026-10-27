@@ -28,7 +28,7 @@ fn main() {
     let on_message = Closure::<dyn FnMut(MessageEvent)>::new(move |event: MessageEvent| {
         // The proxy only sends valid requests; anything else times out there.
         if let Ok(Request { id, command }) = serde_wasm_bindgen::from_value(event.data()) {
-            let result = machine.borrow_mut().run(command).map(Box::new);
+            let result = machine.borrow_mut().run(command);
             post(&replies, &Reply::Done { id, result });
         }
     });

@@ -1,0 +1,16 @@
+{
+  "name": "bcc-web-editor",
+  "private": true,
+  "description": "Monaco editor bundle and web fonts for the bcc site: the source editor and read-only compiler output views, with Monarch grammars for C, bcc IR, LLVM IR and x86-64 assembly.",
+  "license": "SEE LICENSE IN ../../LICENSE",
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs"
+  },
+  "devDependencies": {
+    "@fontsource-variable/inter": "5.3.0",
+    "@fontsource-variable/jetbrains-mono": "5.3.0",
+    "esbuild": "0.28.2",
+    "monaco-editor": "0.57.0"
+  }
+}
