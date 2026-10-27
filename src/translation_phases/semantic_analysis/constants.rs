@@ -1,11 +1,20 @@
 //! Phase-7 arithmetic constant values, including complex components.
+//! Standard floating constants compute in the host `long double` carrier,
+//! rounded to their type's precision; binary128 constants compute with the
+//! software IEEE binary128 arithmetic of `crate::binary128`, so a folded
+//! value is the one libgcc's routines give at run time.
 //! C99: §6.6p4-8, pp. 95-96; PDF pp. 107-108; arithmetic conversions
 //! §6.3.1.8, pp. 44-45; PDF pp. 56-57. Integer arithmetic remains in
 //! integer.rs.
 
+use std::cmp::Ordering;
+
 use super::{
     Analyzer,
-    expressions::ExpressionInfo,
+    expressions::{
+        ConstantClass,
+        ExpressionInfo,
+    },
     integer::Integer,
     types::{
         Scalar,
@@ -14,11 +23,13 @@ use super::{
     },
 };
 use crate::{
+    binary128::Binary128,
     float_parsing::{
         LongDouble,
         string_to_long_double,
     },
     translation_phases::parsing::syntax::BinaryOperator,
+    x87::X87,
 };
 
 impl<'tu> Analyzer<'_, 'tu, '_> {
@@ -131,6 +142,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         info.integer
             .map(|v| v.value != 0)
             .or_else(|| info.floating.map(Floating::truth))
+            .or_else(|| info.binary128.map(|value| value.truth()))
     }
 
     /// C99: §6.3.1.5-§6.3.1.8, pp. 44-45; PDF pp. 56-57.
@@ -178,6 +190,244 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         Floating {
             real: value.real.negate(),
             imag: value.imag.negate(),
+        }
+    }
+}
+
+impl<'tu> Analyzer<'_, 'tu, '_> {
+    /// An arithmetic constant converted to binary128: its folded binary128
+    /// value, its standard floating value, which binary128 holds exactly,
+    /// or its integer value rounded to nearest.
+    /// C99: §6.3.1.4 paragraph 2, pp. 43-44; PDF pp. 55-56; §6.3.1.5
+    /// paragraph 1, p. 44; PDF p. 56.
+    pub(super) fn binary128_value(info: ExpressionInfo<'tu>) -> Option<Binary128Value> {
+        if let Some(&value) = info.binary128 {
+            return Some(value);
+        }
+        if let Some(value) = info.floating {
+            return Some(Binary128Value {
+                real: binary128_from_carrier(value.real)?,
+                imag: binary128_from_carrier(value.imag)?,
+            });
+        }
+        let integer = info.integer?;
+        let magnitude = if integer.signed {
+            integer.value.unsigned_abs()
+        } else {
+            integer.value.cast_unsigned()
+        };
+        Some(Binary128Value::real(Binary128::from_integer(
+            integer.signed && integer.value < 0,
+            magnitude,
+        )))
+    }
+
+    /// Records `operand`'s arithmetic constant converted to `ty` in `info`
+    /// when either type is binary128: as a binary128 value for a binary128
+    /// type, and from a binary128 value as a standard floating, integer or
+    /// `_Bool` value. A binary128 result that cannot be folded is marked
+    /// unfolded.
+    /// C99: §6.3.1.2, p. 43; PDF p. 55; §6.3.1.4-§6.3.1.5, pp. 43-44;
+    /// PDF pp. 55-56; §6.3.1.7, p. 44; PDF p. 56.
+    pub(super) fn convert_binary128(
+        &self,
+        operand: ExpressionInfo<'tu>,
+        ty: TypeId,
+        info: &mut ExpressionInfo<'tu>,
+    ) {
+        let ty = self.types.non_atomic(ty);
+        if self.binary128_type(ty) {
+            let complex = matches!(
+                self.types.nodes[ty.index],
+                TypeKind::Scalar(Scalar::ComplexFloat128)
+            );
+            info.binary128 = self.retain_binary128(Self::binary128_value(operand).map(|value| {
+                if complex {
+                    value
+                } else {
+                    Binary128Value::real(value.real)
+                }
+            }));
+        } else if let Some(&value) = operand.binary128 {
+            if matches!(self.types.nodes[ty.index], TypeKind::Scalar(Scalar::Bool)) {
+                info.integer = Some(Integer::int(i128::from(value.truth())).cast(1, false));
+            } else if let Some((bits, signed)) = self.integer_type(ty) {
+                info.integer = value
+                    .real
+                    .to_integer(signed, bits)
+                    .map(|bits_value| Integer::int(bits_value.cast_signed()).cast(bits, signed));
+            } else if self.arithmetic(ty) {
+                info.floating = self.floating_from_binary128(value, ty);
+            }
+        }
+        self.mark_unfolded_binary128(info);
+    }
+
+    /// Keeps a folded binary128 value in the translation unit's arena.
+    pub(super) fn retain_binary128(
+        &self,
+        value: Option<Binary128Value>,
+    ) -> Option<&'tu Binary128Value> {
+        value.map(|value| &*self.types.tu.alloc(value))
+    }
+
+    /// Marks a binary128 arithmetic constant whose value was not folded, so
+    /// it is not mistaken for a value that needs no evaluation.
+    pub(super) fn mark_unfolded_binary128(&self, info: &mut ExpressionInfo<'tu>) {
+        if self.binary128_type(info.ty)
+            && info.constant == ConstantClass::Arithmetic
+            && info.binary128.is_none()
+        {
+            info.unfolded_binary128 = true;
+        }
+    }
+
+    /// A binary128 constant converted to the standard real or complex
+    /// floating type `ty`, each component rounded once, as `__trunctfdf2`
+    /// and its relatives round it. `None` when the host carrier cannot hold
+    /// the x87 result.
+    /// C99: §6.3.1.5 paragraph 2, p. 44; PDF p. 56.
+    pub(super) fn floating_from_binary128(
+        &self,
+        value: Binary128Value,
+        ty: TypeId,
+    ) -> Option<Floating> {
+        let TypeKind::Scalar(scalar) = self.types.nodes[self.types.non_atomic(ty).index] else {
+            return None;
+        };
+        let precision = self.floating_precision(scalar)?;
+        let convert = |component: Binary128| match precision {
+            | 1 => Some(LongDouble::from_double(f64::from(component.to_f32()))),
+            | 2 => Some(LongDouble::from_double(component.to_f64())),
+            | _ => LongDouble::from_x87(component.to_x87()),
+        };
+        Some(Floating {
+            real: convert(value.real)?,
+            imag: if scalar.complex() {
+                convert(value.imag)?
+            } else {
+                LongDouble::ZERO
+            },
+        })
+    }
+
+    /// Folds binary128 `+`, `-`, `*` and `/`. `domains` has bit 0 set for a
+    /// complex left operand and bit 1 for a complex right one. A mixed real
+    /// and complex operation computes only the components the real operand
+    /// takes part in (C99 Annex G.5.1); the product and quotient of two
+    /// complex values, which libgcc's `__multc3` and `__divtc3` compute with
+    /// their own recovery of infinities, stay unfolded.
+    /// C99: §6.5.5-§6.5.6, pp. 82-84; PDF pp. 94-96; §G.5.1 paragraphs
+    /// 2-3, pp. 474-475; PDF pp. 486-487.
+    pub(super) fn binary128_binary(
+        op: BinaryOperator,
+        left: Binary128Value,
+        right: Binary128Value,
+        domains: u8,
+    ) -> Option<Binary128Value> {
+        use BinaryOperator as B;
+        let operation = match op {
+            | B::Addition => Binary128::add,
+            | B::Subtraction => Binary128::sub,
+            | B::Multiplication => Binary128::mul,
+            | B::Division => Binary128::div,
+            | _ => return None,
+        };
+        let real = operation(left.real, right.real);
+        Some(match (domains, op) {
+            | (0, _) => Binary128Value::real(real),
+            | (3, B::Addition | B::Subtraction) => Binary128Value {
+                real,
+                imag: operation(left.imag, right.imag),
+            },
+            | (1, B::Addition | B::Subtraction) => Binary128Value {
+                real,
+                imag: left.imag,
+            },
+            | (2, B::Addition) => Binary128Value {
+                real,
+                imag: right.imag,
+            },
+            | (2, B::Subtraction) => Binary128Value {
+                real,
+                imag: right.imag.negate(),
+            },
+            | (1, B::Multiplication | B::Division) => Binary128Value {
+                real,
+                imag: operation(left.imag, right.real),
+            },
+            | (2, B::Multiplication) => Binary128Value {
+                real,
+                imag: operation(left.real, right.imag),
+            },
+            | _ => return None,
+        })
+    }
+
+    /// Folds binary128 equality and ordering; a NaN operand is unordered,
+    /// so only inequality holds.
+    /// C99: §F.3 paragraph 1, pp. 445-447; PDF pp. 457-459; §6.5.8
+    /// paragraph 6, p. 86; PDF p. 98; §6.5.9 paragraph 3, p. 86; PDF p. 98.
+    pub(super) fn binary128_comparison(
+        op: BinaryOperator,
+        left: Binary128Value,
+        right: Binary128Value,
+    ) -> Option<Integer> {
+        use BinaryOperator as B;
+        let comparison = left.real.compare(right.real);
+        let imaginary = left.imag.compare(right.imag);
+        let equal =
+            comparison.is_some_and(Ordering::is_eq) && imaginary.is_some_and(Ordering::is_eq);
+        let result = match op {
+            | B::Equal => equal,
+            | B::NotEqual => !equal,
+            | B::LessThan => comparison.is_some_and(Ordering::is_lt),
+            | B::LessThanOrEqual => comparison.is_some_and(Ordering::is_le),
+            | B::GreaterThan => comparison.is_some_and(Ordering::is_gt),
+            | B::GreaterThanOrEqual => comparison.is_some_and(Ordering::is_ge),
+            | _ => return None,
+        };
+        Some(Integer::int(i128::from(result)))
+    }
+}
+
+/// The exact binary128 value of a standard floating constant's carrier.
+fn binary128_from_carrier(value: LongDouble) -> Option<Binary128> {
+    let (negative, exponent, significand) = value.x87_parts()?;
+    let bits =
+        u128::from(significand) | u128::from(exponent | if negative { 0x8000 } else { 0 }) << 64;
+    Some(Binary128::from_x87(X87::from_bits(bits)))
+}
+
+/// A folded binary128 real or complex constant (GNU extension: GCC manual,
+/// "Additional Floating Types"). A real value has a zero imaginary part.
+/// C99: §6.2.5 paragraph 13, p. 34; PDF p. 46.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Binary128Value {
+    pub(crate) real: Binary128,
+    pub(crate) imag: Binary128,
+}
+
+impl Binary128Value {
+    pub(crate) const fn real(value: Binary128) -> Self {
+        Self {
+            real: value,
+            imag: Binary128::zero(false),
+        }
+    }
+
+    /// Tests whether a value differs from zero; a NaN does.
+    /// C99: §6.3.1.2 paragraph 1, p. 43; PDF p. 55.
+    pub(super) const fn truth(self) -> bool {
+        !self.real.is_zero() || !self.imag.is_zero()
+    }
+
+    /// The additive inverse of both components.
+    /// C99: §6.5.3.3 paragraph 3, p. 79; PDF p. 91.
+    pub(super) const fn negate(self) -> Self {
+        Self {
+            real: self.real.negate(),
+            imag: self.imag.negate(),
         }
     }
 }

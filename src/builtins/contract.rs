@@ -182,6 +182,9 @@ pub(crate) struct Math128 {
     pub(crate) arguments:  usize,
     pub(crate) tag:        bool,
     pub(crate) arithmetic: bool,
+    /// The tag names the payload of a quiet NaN (`__builtin_nanf128`)
+    /// rather than of a signaling one.
+    pub(crate) quiet:      bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

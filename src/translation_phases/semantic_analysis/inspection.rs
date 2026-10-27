@@ -140,6 +140,9 @@ impl<'tu> SemanticTranslationUnit<'tu> {
             if let Some(value) = info.floating {
                 let _ = write!(out, " real={} imag={}", value.real, value.imag);
             }
+            if let Some(value) = info.binary128 {
+                let _ = write!(out, " real={} imag={}", value.real, value.imag);
+            }
             if let Some(value) = info.integer {
                 let _ = write!(out, " value={value}");
             }

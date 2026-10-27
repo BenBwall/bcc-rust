@@ -339,6 +339,8 @@ fn scalar<'tu>(
                     i128::from(value.value != 0)
                 } else if let Some(value) = info.floating {
                     i128::from(!value.real.is_zero() || !value.imag.is_zero())
+                } else if let Some(value) = info.binary128 {
+                    i128::from(!value.real.is_zero() || !value.imag.is_zero())
                 } else if address {
                     1
                 } else {
@@ -348,6 +350,8 @@ fn scalar<'tu>(
                 value.value
             } else if let Some(value) = info.floating {
                 bits::to_integer(&value.real)?
+            } else if let Some(value) = info.binary128 {
+                bits::binary128_to_integer(value.real)?
             } else if address || info.constant == ConstantClass::LabelDifference {
                 return fixup(image, start, width);
             } else {
@@ -366,9 +370,13 @@ fn scalar<'tu>(
             | Scalar::ComplexFloat => (Type::F32, true),
             | Scalar::ComplexDouble => (Type::F64, true),
             | Scalar::ComplexLongDouble => (if size == 16 { Type::F64 } else { Type::F80 }, true),
+            | Scalar::Float128 => (Type::F128, false),
+            | Scalar::ComplexFloat128 => (Type::F128, true),
             | _ => return None,
         };
-        let real = if let Some(value) = info.floating {
+        let real = if let Some(value) = info.binary128 {
+            bits::binary128_bits(value.real, float)?
+        } else if let Some(value) = info.floating {
             bits::constant_bits(&value.real, float)?
         } else {
             let value = integer?;
@@ -381,9 +389,12 @@ fn scalar<'tu>(
         let component = if complex { width / 2 } else { width };
         image.bits(start, component, real)?;
         if complex {
-            let imag = info
-                .floating
-                .map_or(Some(0), |value| bits::constant_bits(&value.imag, float))?;
+            let imag = if let Some(value) = info.binary128 {
+                bits::binary128_bits(value.imag, float)?
+            } else {
+                info.floating
+                    .map_or(Some(0), |value| bits::constant_bits(&value.imag, float))?
+            };
             image.bits(start + component, component, imag)?;
         }
         return Some(());

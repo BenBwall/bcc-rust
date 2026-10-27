@@ -23,7 +23,10 @@ use crate::{
             SemanticErrorKind,
             TypeId,
             TypeKind,
-            constants::Floating,
+            constants::{
+                Binary128Value,
+                Floating,
+            },
         },
     },
 };
@@ -202,8 +205,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     .and_then(|value| self.round_floating(value, operand))
             };
             if self.binary128_type(operand) {
-                result.unfolded_binary128 = true;
+                result.binary128 = self.retain_binary128(
+                    Self::binary128_value(real)
+                        .zip(Self::binary128_value(imaginary))
+                        .map(|(re, im)| Binary128Value {
+                            real: re.real,
+                            imag: im.real,
+                        }),
+                );
                 result.constant = ConstantClass::Arithmetic;
+                self.mark_unfolded_binary128(&mut result);
             } else if let Some((re, im)) = value(real).zip(value(imaginary)) {
                 result.floating = Some(Floating {
                     real: re.real,

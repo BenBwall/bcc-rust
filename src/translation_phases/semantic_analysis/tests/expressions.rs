@@ -650,10 +650,12 @@ fn sizeof_matches_shared_linux_clang_assertions() {
 }
 
 /// A retained record per typed expression; lowering's facts must not grow it
-/// carelessly. Pinned for the 64-bit hosts the arenas require.
+/// carelessly. Pinned for the 64-bit hosts the arenas require. The folded
+/// binary128 value is a reference into the arena (eight bytes, sixteen with
+/// alignment), not the 32-byte value.
 #[test]
 fn expression_record_size_is_pinned() {
-    assert_eq!(size_of::<ExpressionInfo<'_>>(), 160);
+    assert_eq!(size_of::<ExpressionInfo<'_>>(), 176);
 }
 
 #[test]

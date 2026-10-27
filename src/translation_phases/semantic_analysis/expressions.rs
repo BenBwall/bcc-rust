@@ -56,7 +56,10 @@ use super::{
     BindingKind,
     Duration,
     SemanticErrorKind,
-    constants::Floating,
+    constants::{
+        Binary128Value,
+        Floating,
+    },
     integer::Integer,
     scopes::Namespace,
     types::{
@@ -205,20 +208,17 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 info.ice = true;
                 info.constant = ConstantClass::Arithmetic;
             },
-            | E::Constant(Constant::Float(
-                FloatTokenType::Float128(_) | FloatTokenType::ImaginaryFloat128(_),
-            )) => {
-                info.ty = self.types.scalar(
-                    if matches!(
-                        e.kind,
-                        E::Constant(Constant::Float(FloatTokenType::ImaginaryFloat128(_)))
-                    ) {
-                        Scalar::ComplexFloat128
-                    } else {
-                        Scalar::Float128
-                    },
-                );
-                info.unfolded_binary128 = true;
+            | E::Constant(Constant::Float(FloatTokenType::Float128(value))) => {
+                info.ty = self.types.scalar(Scalar::Float128);
+                info.binary128 = self.retain_binary128(Some(Binary128Value::real(value)));
+                info.constant = ConstantClass::Arithmetic;
+            },
+            | E::Constant(Constant::Float(FloatTokenType::ImaginaryFloat128(value))) => {
+                info.ty = self.types.scalar(Scalar::ComplexFloat128);
+                info.binary128 = self.retain_binary128(Some(Binary128Value {
+                    real: crate::binary128::Binary128::zero(false),
+                    imag: value,
+                }));
                 info.constant = ConstantClass::Arithmetic;
             },
             | E::Constant(Constant::Float(value)) => {
@@ -475,6 +475,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if info.unfolded_binary128 {
             info.integer = None;
             info.floating = None;
+            info.binary128 = None;
             info.ice = false;
         }
         if e.recovered {
@@ -482,6 +483,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             info.ty = self.types.unknown();
             info.integer = None;
             info.floating = None;
+            info.binary128 = None;
             info.ice = false;
             info.constant = ConstantClass::None;
         }
@@ -608,10 +610,16 @@ pub(crate) struct ExpressionInfo<'tu> {
     /// Whether designation can form an address constant without reading an
     /// object.
     pub(crate) static_address: bool,
-    /// An arithmetic constant containing binary128, retained without
-    /// approximate folding.
+    /// An arithmetic constant containing a binary128 operation that is not
+    /// folded (the product or quotient of two complex values), retained
+    /// without approximate folding.
     pub(crate) unfolded_binary128: bool,
     pub(crate) floating: Option<Floating>,
+    /// The folded value of a binary128 arithmetic constant, computed with
+    /// IEEE binary128 arithmetic; `floating` and `integer` hold the values
+    /// of other floating and integer types. It lives in the translation
+    /// unit's arena, which keeps this record small.
+    pub(crate) binary128: Option<&'tu Binary128Value>,
     pub(crate) integer: Option<Integer>,
     pub(crate) ice: bool,
     pub(crate) constant: ConstantClass,
