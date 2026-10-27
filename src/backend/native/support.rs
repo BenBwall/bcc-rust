@@ -10,13 +10,15 @@
 //! reference, structure results in register combinations other than the
 //! ones System V and Win64 define, stack arguments aligned above 16 bytes,
 //! stack argument areas whose offsets would leave a 32-bit displacement,
-//! and thread-local globals in named sections.
+//! thread-local globals in named sections, floating and `i128` atomic
+//! minimum and maximum, and atomic accesses aligned below their size.
 
 use std::fmt;
 
 use super::RUNTIME_SYMBOLS;
 use crate::{
     ir::{
+        AtomicOp,
         Body,
         Function,
         GlobalId,
@@ -211,7 +213,7 @@ impl Checker<'_, '_> {
             } if opcode.is_bit_unary() => Err(Construct::Opcode(opcode)),
             | InstData::Switch { value, .. } if wide(value) => Err(Construct::WideSwitch),
             | InstData::Unary { .. } if opcode == Opcode::VaArg => Err(Construct::Opcode(opcode)),
-            | InstData::Atomic { .. }
+            | InstData::Atomic { op, ty, align, .. } => atomic(op, ty, align.bytes()),
             | InstData::VaArgAggregate { .. }
             | InstData::Nullary {
                 opcode: Opcode::ReadTimestamp,
@@ -307,6 +309,30 @@ impl Checker<'_, '_> {
     }
 }
 
+/// Checks an atomic operation: the selector covers every one but floating
+/// minimum and maximum, which need IEEE `minNum`/`maxNum` NaN handling, and
+/// `i128` minimum and maximum, which libatomic has no routine for; and only
+/// objects aligned to their size, since a locked access that straddles a
+/// cache line is slow or traps (Intel SDM Volume 3A, "Software Controlled
+/// Bus Locking") and a plain one is not atomic. C11: §7.17.7, pp. 282-285;
+/// PDF pp. 300-303. Minimum and maximum are GNU extensions.
+fn atomic(op: AtomicOp, ty: Type, align: u64) -> Result<(), Construct> {
+    let unsupported = matches!(op, AtomicOp::Fmin | AtomicOp::Fmax)
+        || (ty == Type::I128
+            && matches!(
+                op,
+                AtomicOp::Min | AtomicOp::Max | AtomicOp::Umin | AtomicOp::Umax
+            ));
+    if unsupported {
+        return Err(Construct::Atomic(op, ty));
+    }
+    let size = u64::from(ty.bits() / 8);
+    if !op.is_fence() && !op.is_bytes() && align < size {
+        return Err(Construct::UnderAlignedAtomic { size, align });
+    }
+    Ok(())
+}
+
 /// The runtime symbol spelled `name`, if it is one.
 fn runtime_symbol(name: &str) -> Option<&'static str> {
     RUNTIME_SYMBOLS
@@ -361,6 +387,13 @@ pub(crate) enum Construct {
     /// Inline assembly the back end cannot place, named by the reason.
     /// GNU extension: GCC manual, "Extended Asm".
     InlineAsm(&'static str),
+    /// An atomic operation the back end has no sequence for.
+    Atomic(AtomicOp, Type),
+    /// An atomic access of `size` bytes aligned to fewer.
+    UnderAlignedAtomic {
+        size:  u64,
+        align: u64,
+    },
 }
 
 impl fmt::Display for Unsupported<'_> {
@@ -386,6 +419,11 @@ impl fmt::Display for Unsupported<'_> {
             | Construct::NotAbiLowered => write!(f, "a module not lowered for the ABI")?,
             | Construct::ThreadLocalSection =>
                 write!(f, "a thread-local global in a named section")?,
+            | Construct::Atomic(op, ty) => write!(f, "an atomic `{op}` of {ty} values")?,
+            | Construct::UnderAlignedAtomic { size, align } => write!(
+                f,
+                "an atomic access of {size} bytes aligned to only {align}"
+            )?,
         }
         if let Some(function) = self.function {
             write!(f, " (in @{function})")?;

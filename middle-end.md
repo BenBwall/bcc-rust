@@ -780,7 +780,23 @@ Windows data model does not verify that runtime. The interpreter executes each
 operation as one indivisible step in its single-threaded model. Existing
 extended-float interpreter limits still apply; LLVM supports the x87 object
 representation through padded memory.
-The native backend explicitly refuses atomic instructions before emission.
+The native back end selects the standard C11-to-x86-64 mapping: `mov` for
+loads and relaxed or release stores, `xchg` for sequentially consistent
+stores and exchanges, `lock xadd`, `lock cmpxchg` and `lock` arithmetic, a
+`lock cmpxchg` loop for the other read-modify-writes, and `mfence` only for
+sequentially consistent thread fences. Like LLVM without `cmpxchg16b`, it
+calls libatomic for `i128` and byte-buffer operations, and its driver then
+links `-latomic`. It refuses floating minimum and maximum, `i128` minimum and
+maximum, and accesses aligned below their size (`isel/atomic.rs`;
+`docs/design/native-backend.md`, "Atomic operations").
+Evidence (2026-10-26): GCC 15.2.0's `gcc.dg/atomic` run tests, through
+`scripts/run_gcc_torture_execute.py` for Linux, pass 34 of 48 on both
+native arms, up from 3, as many as LLVM at O0; the rest fail on every arm
+(front end, compile-only tests without `main`, atomic complex values). The
+native end-to-end program `atomics` matches the interpreter and LLVM, and
+`tests/fixtures/programs/atomic_threads.c` keeps its counters exact with 1,
+4 and 8 threads under both back ends. The counters drift once the `lock`
+prefixes are removed from the listing.
 
 ### Algorithm
 
@@ -1163,8 +1179,9 @@ and AT&T assembly, which the bundled clang assembles, or ELF and COFF
 objects it encodes itself; the bundled clang links executables. It compiles
 integer, pointer, `i128`, `f32` and `f64` code, variadic definitions, dynamic
 stack allocation, computed `goto`, thread-local globals, calls that may
-return twice and the GNU symbol attributes, and refuses everything else
-(`f80`, `f128`, `i128` float conversions) before writing any output.
+return twice, C11 atomics and the GNU symbol attributes, and refuses
+everything else (`f80`, `f128`, `i128` float conversions) before writing any
+output.
 `--backend=native` selects it for `-o`, `-c` and `-S`, and `--emit=asm` with
 it prints its assembly.
 For `-o` it encodes COFF objects directly on the Windows targets and has the

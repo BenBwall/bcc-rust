@@ -1617,3 +1617,153 @@ block3:
         "straight-line code is not aligned:\n{text}"
     );
 }
+
+/// Every atomic operation on 1 to 8 bytes, through a register address and a
+/// RIP-relative global, maps onto x86 as the C11 mapping says (see
+/// `isel/atomic.rs`): `mov` loads and weaker stores, `xchg` for
+/// sequentially consistent stores and exchanges, `lock xadd` and `lock
+/// cmpxchg`, plain `lock` arithmetic where the old value is unused, a
+/// `lock cmpxchg` loop for the rest, and `mfence` for the one
+/// sequentially consistent thread fence. `assembly` also checks the
+/// encoder's bytes against the assembler's.
+#[test]
+fn atomics_follow_the_x86_mapping() {
+    let ir = "abi lowered
+global @counter external size 8, align 8 = zero
+function @f(ptr, i32, i8, i64, i16, f64) -> i64 external {
+block0(v0: ptr, v1: i32, v2: i8, v3: i64, v4: i16, v5: f64):
+    v6 = global_addr @counter
+    v7 = atomic.i32 load seq_cst relaxed align 4 (v0)
+    v8 = atomic.i64 load acquire relaxed align 8 (v6)
+    atomic.i32 store relaxed relaxed align 4 (v0, v1)
+    atomic.i32 store release relaxed align 4 (v0, v1)
+    atomic.i64 store seq_cst relaxed align 8 (v6, v3)
+    v9 = atomic.i8 exchange acq_rel relaxed align 1 (v0, v2)
+    v10 = atomic.i64 compare_exchange seq_cst seq_cst align 8 (v0, v3, v8)
+    v11 = atomic.i32 add seq_cst relaxed align 4 (v0, v1)
+    v12 = atomic.i16 sub seq_cst relaxed align 2 (v0, v4)
+    v13 = atomic.i64 add relaxed relaxed align 8 (v6, v3)
+    v14 = atomic.i32 xor seq_cst relaxed align 4 (v0, v1)
+    v15 = atomic.i64 or seq_cst relaxed align 8 (v6, v3)
+    v16 = atomic.i8 nand seq_cst relaxed align 1 (v0, v2)
+    v17 = atomic.i16 min seq_cst relaxed align 2 (v0, v4)
+    v18 = atomic.i8 umax seq_cst relaxed align 1 (v0, v2)
+    v19 = atomic.f64 fadd seq_cst relaxed align 8 (v6, v5)
+    atomic.i8 thread_fence seq_cst relaxed align 1 ()
+    atomic.i8 thread_fence acquire relaxed align 1 ()
+    atomic.i8 thread_fence release relaxed align 1 ()
+    atomic.i8 signal_fence seq_cst relaxed align 1 ()
+    v20 = zext.i64 v7
+    v21 = iadd.i64 v20, v10
+    v22 = zext.i64 v9
+    v23 = iadd.i64 v21, v22
+    v24 = zext.i64 v11
+    v25 = iadd.i64 v23, v24
+    v26 = zext.i64 v12
+    v27 = iadd.i64 v25, v26
+    v28 = iadd.i64 v27, v15
+    v29 = zext.i64 v16
+    v30 = iadd.i64 v28, v29
+    v31 = zext.i64 v17
+    v32 = iadd.i64 v30, v31
+    v33 = zext.i64 v18
+    v34 = iadd.i64 v32, v33
+    v35 = zext.i64 v14
+    v36 = iadd.i64 v34, v35
+    v37 = fptosi.i64 v19
+    v38 = iadd.i64 v36, v37
+    return v38
+}
+";
+    for target in [Target::LinuxGnu, Target::WindowsGnu] {
+        let text = assembly(ir, target);
+        let count = |needle: &str| text.matches(needle).count();
+        assert_eq!(count("\tmfence"), 1, "{text}");
+        assert_eq!(count("\txchgq\t"), 1, "{text}");
+        assert_eq!(count("\txchgb\t"), 1, "{text}");
+        assert_eq!(count("\tlock xaddl\t"), 1, "{text}");
+        assert_eq!(count("\tlock xaddw\t"), 1, "{text}");
+        assert_eq!(count("\tnegw\t"), 1, "{text}");
+        assert_eq!(count("\tlock addq\t"), 1, "{text}");
+        // compare_exchange, then one loop each for xor, or, nand, min,
+        // umax and fadd.
+        assert_eq!(count("\tlock cmpxchgq\t"), 3, "{text}");
+        assert_eq!(count("\tlock cmpxchgl\t"), 1, "{text}");
+        assert_eq!(count("\tlock cmpxchgb\t"), 2, "{text}");
+        assert_eq!(count("\tlock cmpxchgw\t"), 1, "{text}");
+        assert_eq!(count("\tlock "), 10, "{text}");
+        assert!(text.contains("counter(%rip)"), "{text}");
+        assert!(text.contains("\tcmovl"), "{text}");
+        assert!(text.contains("\tcmova"), "{text}");
+        assert!(text.contains("\taddsd\t"), "{text}");
+        // No call: everything above is inline.
+        assert!(!text.contains("callq"), "{text}");
+    }
+}
+
+/// `i128` and byte-buffer operations call libatomic, with C's order
+/// constants; the driver then links `-latomic`.
+#[test]
+fn wide_and_buffer_atomics_call_libatomic() {
+    let ir = "abi lowered
+function @f(ptr, ptr) external {
+block0(v0: ptr, v1: ptr):
+    v2 = load.i128 v1, align 16
+    v3 = atomic.i128 load acquire relaxed align 16 (v0)
+    atomic.i128 store seq_cst relaxed align 16 (v0, v2)
+    v4 = atomic.i128 add relaxed relaxed align 16 (v0, v3)
+    v5 = atomic.i128 compare_exchange acq_rel acquire align 16 (v0, v4, v2)
+    v6 = iconst.i64 24
+    atomic.i8 load_bytes seq_cst relaxed align 1 (v0, v1, v6)
+    v7 = atomic.i8 compare_exchange_bytes release relaxed align 1 (v0, v1, v1, v6)
+    store.i128 v5, v1, align 16
+    store.i8 v7, v0, align 1
+    return
+}
+";
+    for target in [Target::LinuxGnu, Target::WindowsGnu] {
+        let text = assembly(ir, target);
+        for routine in [
+            "__atomic_load_16",
+            "__atomic_store_16",
+            "__atomic_fetch_add_16",
+            "__atomic_compare_exchange_16",
+            "__atomic_load",
+            "__atomic_compare_exchange",
+        ] {
+            assert!(
+                text.contains(&format!("callq\t{routine}")),
+                "{routine}:\n{text}"
+            );
+        }
+        assert!(!text.contains("cmpxchg16b"), "{text}");
+    }
+}
+
+#[test]
+fn unsupported_atomics_are_refused() {
+    for (operation, message) in [
+        (
+            "v4 = atomic.f64 fmin seq_cst relaxed align 8 (v0, v1)",
+            "an atomic `fmin` of f64 values",
+        ),
+        (
+            "v4 = atomic.i64 add seq_cst relaxed align 4 (v0, v2)",
+            "an atomic access of 8 bytes aligned to only 4",
+        ),
+        (
+            "v4 = atomic.i128 umin seq_cst relaxed align 16 (v0, v3)",
+            "an atomic `umin` of i128 values",
+        ),
+    ] {
+        let ir = format!(
+            "abi lowered\nfunction @f(ptr, f64, i64, i128) external {{\nblock0(v0: ptr, v1: f64, \
+             v2: i64, v3: i128):\n    {operation}\n    return\n}}\n"
+        );
+        let refused = refusal(&ir, Target::LinuxGnu);
+        assert_eq!(
+            refused,
+            format!("not yet supported by the native back end: {message} (in @f)")
+        );
+    }
+}

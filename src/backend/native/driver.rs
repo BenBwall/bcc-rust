@@ -127,7 +127,7 @@ fn assemble_refused(
     toolchain
         .assemble(assembly.path(), object.path(), target, OutputKind::Object)
         .map_err(|assembler| FallbackError::io(refusal, assembler))?;
-    toolchain.assemble(object.path(), out_path, target, kind)
+    toolchain.assemble_linking(object.path(), out_path, target, kind, libraries(text))
 }
 
 /// Writes `text` to a temporary `.s` file beside `out_path` and assembles
@@ -158,7 +158,7 @@ pub(crate) fn assemble(
     let (assembly, mut file) = TemporaryObject::create(out_path, "s", &arena)?;
     file.write_all(text.as_bytes())?;
     drop(file);
-    toolchain.assemble(assembly.path(), out_path, target, kind)
+    toolchain.assemble_linking(assembly.path(), out_path, target, kind, libraries(text))
 }
 
 /// Builds direct ELF or COFF bytes from the private emitter listing.
@@ -202,7 +202,26 @@ fn encode_object(
     let (object, mut file) = TemporaryObject::create(out_path, "o", &arena)?;
     file.write_all(&bytes)?;
     drop(file);
-    Toolchain::bundled(target)?.assemble(object.path(), out_path, target, kind)
+    Toolchain::bundled(target)?.assemble_linking(
+        object.path(),
+        out_path,
+        target,
+        kind,
+        libraries(text),
+    )
+}
+
+/// The libraries an executable of the listing `text` links besides the C
+/// library: libatomic when it calls one of its routines, which the selector
+/// does for `i128` and byte-buffer atomic operations (`isel/atomic.rs`), as
+/// the LLVM back end's driver does for the same operations. The tests'
+/// WSL runner, which links with WSL's own clang, appends the same list.
+pub(super) fn libraries(text: &str) -> &'static [&'static str] {
+    if text.contains("\tcallq\t__atomic_") {
+        &["-latomic"]
+    } else {
+        &[]
+    }
 }
 
 /// A listing the encoder refused that the assembler then failed to build. A

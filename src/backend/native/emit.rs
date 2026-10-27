@@ -819,6 +819,49 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
             },
             | MInst::RepMovsb => writeln!(out, "\trep movsb"),
             | MInst::RepStosb => writeln!(out, "\trep stosb"),
+            | MInst::Mfence => writeln!(out, "\tmfence"),
+            | MInst::Xchg {
+                width,
+                reg: src,
+                mem,
+            } => writeln!(
+                out,
+                "\txchg{}\t{}, {}",
+                width.suffix(),
+                reg(src, width),
+                at(Operand::Mem(mem), width)
+            ),
+            | MInst::LockXadd {
+                width,
+                reg: src,
+                mem,
+            } => writeln!(
+                out,
+                "\tlock xadd{}\t{}, {}",
+                width.suffix(),
+                reg(src, width),
+                at(Operand::Mem(mem), width)
+            ),
+            | MInst::LockAlu {
+                op,
+                width,
+                mem,
+                src,
+            } => writeln!(
+                out,
+                "\tlock {}{}\t{}, {}",
+                op.name(),
+                width.suffix(),
+                at(src, width),
+                at(Operand::Mem(mem), width)
+            ),
+            | MInst::LockCmpxchg { width, mem, src } => writeln!(
+                out,
+                "\tlock cmpxchg{}\t{}, {}",
+                width.suffix(),
+                reg(src, width),
+                at(Operand::Mem(mem), width)
+            ),
             | MInst::Jmp { target } =>
                 if Some(target) == next {
                     Ok(())

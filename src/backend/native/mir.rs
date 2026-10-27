@@ -1087,6 +1087,36 @@ pub(crate) enum MInst {
     RepMovsb,
     /// `rep stosb`: stores `%al` into `%rcx` bytes from `(%rdi)`.
     RepStosb,
+    /// `mfence`: every load and store before it is globally visible before
+    /// any after it (a sequentially consistent fence).
+    Mfence,
+    /// `xchg reg, mem`, locked without a prefix: `reg` and `mem` swap.
+    Xchg {
+        width: Width,
+        reg:   Reg,
+        mem:   Mem,
+    },
+    /// `lock xadd reg, mem`: `mem ← mem + reg` and `reg ←` the old `mem`.
+    LockXadd {
+        width: Width,
+        reg:   Reg,
+        mem:   Mem,
+    },
+    /// `lock op src, mem` of `add`, `sub`, `and`, `or` or `xor`, whose
+    /// old value nothing reads; `src` is a register or an immediate.
+    LockAlu {
+        op:    AluOp,
+        width: Width,
+        mem:   Mem,
+        src:   Operand,
+    },
+    /// `lock cmpxchg src, mem`: stores `src` if `mem` equals `%rax` (ZF
+    /// set), or else loads `mem` into `%rax` (ZF clear).
+    LockCmpxchg {
+        width: Width,
+        mem:   Mem,
+        src:   Reg,
+    },
     /// Pushes a value from memory onto the x87 stack (`fld`, `fild`).
     /// The x87 stack is not allocated: every sequence that pushes pops
     /// everything again before anything else runs, except the `%st(0)`
@@ -1253,6 +1283,19 @@ impl MInst {
                 phys(PReg::Rcx, Role::UseDef, &mut visit);
                 phys(PReg::Rax, Role::Use, &mut visit);
             },
+            | Self::Xchg { reg, mem, .. } | Self::LockXadd { reg, mem, .. } => {
+                memory(mem, &mut visit);
+                visit(reg, Role::UseDef);
+            },
+            | Self::LockAlu { mem, src, .. } => {
+                memory(mem, &mut visit);
+                operand(src, &mut visit);
+            },
+            | Self::LockCmpxchg { mem, src, .. } => {
+                memory(mem, &mut visit);
+                visit(src, Role::Use);
+                phys(PReg::Rax, Role::UseDef, &mut visit);
+            },
             | Self::X87Load { mem, .. }
             | Self::X87Store { mem, .. }
             | Self::X87ControlWord { mem, .. } => memory(mem, &mut visit),
@@ -1271,6 +1314,7 @@ impl MInst {
             | Self::X87Arith { .. }
             | Self::X87Pop
             | Self::X87Compare
+            | Self::Mfence
             | Self::Jmp { .. }
             | Self::Jcc { .. }
             | Self::Ud2
@@ -1359,6 +1403,10 @@ impl MInst {
             }
             | Self::Store { dst: mem, .. }
             | Self::XStore { dst: mem, .. }
+            | Self::Xchg { mem, .. }
+            | Self::LockXadd { mem, .. }
+            | Self::LockAlu { mem, .. }
+            | Self::LockCmpxchg { mem, .. }
             | Self::Lea { addr: mem, .. }
             | Self::Move128 { mem, .. }
             | Self::X87Load { mem, .. }
@@ -1418,6 +1466,9 @@ impl MInst {
             | Self::Call { .. }
             | Self::InlineAsm { .. }
             | Self::X87Compare
+            | Self::LockXadd { .. }
+            | Self::LockAlu { .. }
+            | Self::LockCmpxchg { .. }
             | Self::Unary {
                 op: UnaryOp::Neg, ..
             } => (false, true),
