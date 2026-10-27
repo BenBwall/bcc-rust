@@ -221,6 +221,14 @@ impl Machine<'_, '_, '_> {
                         self.release_dynamic(position);
                         return Ok(None);
                     },
+                    | Opcode::SjljSetjmp => {
+                        self.save_builtin_environment(value)?;
+                        RuntimeValue::int(ty, 0)
+                    },
+                    | Opcode::SjljLongjmp => {
+                        self.restore_builtin_environment(value)?;
+                        return Ok(None);
+                    },
                     | Opcode::Fneg => float_negate(ty, value),
                     | Opcode::Freeze if value.is_poison() => RuntimeValue::zero(ty),
                     | Opcode::Freeze => value,

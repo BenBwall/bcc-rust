@@ -1152,6 +1152,23 @@ pub(crate) enum MInst {
     Ud2,
     /// A breakpoint trap (`__debugbreak`).
     Int3,
+    /// GCC's `__builtin_setjmp` (`sjlj_setjmp`): stores the address of a
+    /// resume label in word 1 of the buffer `%rdi` addresses and sets
+    /// `%eax` to 0. `__builtin_longjmp` arrives at the label with `%rbp`
+    /// and `%rsp` from words 0 and 2 and every other register changed; a
+    /// function whose `%rbp` addresses its frame derives it from the frame
+    /// address there, and `%eax` becomes 1. `clobbers` are all those
+    /// registers, so nothing stays in a register across the instruction and
+    /// the prologue saves every callee-saved register it changes, as LLVM's
+    /// `EH_SjLj_SetJmp` does. GNU extension: GCC manual, "Nonlocal Gotos".
+    SjljSetjmp {
+        clobbers: PRegSet,
+    },
+    /// GCC's `__builtin_longjmp` (`sjlj_longjmp`): loads `%rbp`, the
+    /// resume address and `%rsp` from words 0, 1 and 2 of the buffer `%rdi`
+    /// addresses and jumps to the resume address, as LLVM's
+    /// `EH_SjLj_LongJmp` does.
+    SjljLongjmp,
     /// Inline assembly: [`MFunction::asm`] entry `index`, reading the
     /// registers `uses` and writing `defs`, its outputs and clobbers. Every
     /// register operand is physical, set and read by moves around it.
@@ -1311,6 +1328,13 @@ impl MInst {
                     phys(register, Role::Def, &mut visit);
                 }
             },
+            | Self::SjljSetjmp { clobbers } => {
+                phys(PReg::Rdi, Role::Use, &mut visit);
+                for register in clobbers.iter() {
+                    phys(register, Role::Def, &mut visit);
+                }
+            },
+            | Self::SjljLongjmp => phys(PReg::Rdi, Role::Use, &mut visit),
             | Self::X87Arith { .. }
             | Self::X87Pop
             | Self::X87Compare
@@ -1464,6 +1488,7 @@ impl MInst {
             | Self::Div { .. }
             | Self::MulWide { .. }
             | Self::Call { .. }
+            | Self::SjljSetjmp { .. }
             | Self::InlineAsm { .. }
             | Self::X87Compare
             | Self::LockXadd { .. }

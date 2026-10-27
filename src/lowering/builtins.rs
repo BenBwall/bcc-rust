@@ -32,6 +32,7 @@ use crate::{
         VaOperation,
     },
     ir::{
+        Align,
         InstData,
         InstFlags,
         IntCC,
@@ -416,6 +417,26 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     .terminate_and_continue_dead(Terminator::Unreachable);
                 Operand::Void
             },
+            | CommonBuiltin::Setjmp => {
+                let buffer = self.value(items[0], source)?;
+                Operand::Value(self.builtin_setjmp(buffer))
+            },
+            // The value operand is the constant 1, which the resumed
+            // `__builtin_setjmp` returns.
+            | CommonBuiltin::Longjmp => {
+                let buffer = self.value(items[0], source)?;
+                _ = self.draft.push(
+                    Op::Inst(InstData::Unary {
+                        opcode: Opcode::SjljLongjmp,
+                        ty:     Type::Ptr,
+                        arg:    buffer,
+                    }),
+                    None,
+                );
+                self.draft
+                    .terminate_and_continue_dead(Terminator::Unreachable);
+                Operand::Void
+            },
             | CommonBuiltin::Alloca => {
                 let size = self.value(items[0], source)?;
                 let size = self.extend(size, false, Type::I64);
@@ -618,6 +639,43 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             },
             Type::I1,
         )
+    }
+
+    /// GCC's `__builtin_setjmp` as Clang emits it: the frame address in
+    /// word 0 of the buffer and the stack position in word 2, then
+    /// `sjlj_setjmp`, which saves the resume address in word 1 and returns
+    /// 0, or 1 when `__builtin_longjmp` resumes it. GNU extension: GCC
+    /// manual, "Nonlocal Gotos".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Nonlocal-Gotos.html>
+    fn builtin_setjmp(&mut self, buffer: Value) -> Value {
+        let frame = self.nullary(Opcode::FrameAddress);
+        self.store_word(frame, buffer);
+        let stack = self.nullary(Opcode::StackSave);
+        let offset = self.iconst(Type::I64, 16);
+        let stack_word = self.ptr_add(buffer, offset);
+        self.store_word(stack, stack_word);
+        self.inst(
+            InstData::Unary {
+                opcode: Opcode::SjljSetjmp,
+                ty:     Type::I32,
+                arg:    buffer,
+            },
+            Type::I32,
+        )
+    }
+
+    /// Stores the pointer `value` in a buffer word at `address`.
+    fn store_word(&mut self, value: Value, address: Value) {
+        _ = self.draft.push(
+            self.memory_op(InstData::Store {
+                ty:    Type::Ptr,
+                flags: InstFlags::empty(),
+                align: Align::from_bytes(8).expect("a word's alignment"),
+                tag:   None,
+                args:  [value, address],
+            }),
+            None,
+        );
     }
 
     fn plain(&mut self, opcode: Opcode, a: Value, b: Value) -> Value {

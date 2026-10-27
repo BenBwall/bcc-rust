@@ -111,6 +111,7 @@ pub(super) fn diagnostic(identity: ConstraintDiagnostic) -> SemanticErrorKind {
         | ConstraintDiagnostic::VaList => SemanticErrorKind::InvalidVaList,
         | ConstraintDiagnostic::VaArgType => SemanticErrorKind::InvalidVaArgType,
         | ConstraintDiagnostic::Immediate => SemanticErrorKind::InvalidImmediate,
+        | ConstraintDiagnostic::LongjmpValue => SemanticErrorKind::InvalidLongjmpValue,
     }
 }
 

@@ -2,6 +2,7 @@
 //! only to link. MinGW discovery matches the native build helper.
 
 use std::{
+    borrow::Cow,
     ffi::OsStr,
     fmt,
     io::{
@@ -126,7 +127,7 @@ impl TemporaryObject {
                 NEXT.fetch_add(1, Ordering::Relaxed)
             )
             .map_err(io::Error::other)?;
-            let mut name = out_path.as_os_str().to_os_string();
+            let mut name = operand(out_path).into_owned().into_os_string();
             name.push(suffix.as_str());
             let path = PathBuf::from(name);
             match std::fs::OpenOptions::new()
@@ -334,7 +335,10 @@ impl Toolchain {
             _ = command.arg("-fuse-ld=lld");
         }
         _ = command.args(kind.link_flag());
-        _ = command.arg(assembly).arg("-o").arg(out_path);
+        _ = command
+            .arg(operand(assembly).as_os_str())
+            .arg("-o")
+            .arg(out_path);
         if kind != OutputKind::Object && matches!(target, Target::LinuxGnu | Target::LinuxMusl) {
             _ = command.arg("-lm");
         }
@@ -406,7 +410,7 @@ impl Toolchain {
         let output = command
             .args(options)
             .arg("-c")
-            .arg(input)
+            .arg(operand(input).as_os_str())
             .arg("-o")
             .arg(out_path)
             .output()?;
@@ -452,7 +456,7 @@ impl Toolchain {
         _ = command
             .arg("-fuse-ld=lld")
             .args(options.kind.link_flag())
-            .arg(object)
+            .arg(operand(object).as_os_str())
             .arg("-o")
             .arg(out_path);
         // C99 §7.12 real math is provided by a separate library on Linux.
@@ -465,6 +469,17 @@ impl Toolchain {
             }
         }
         command
+    }
+}
+
+/// `path` as a file operand of a command line: a relative path that starts
+/// with `-`, such as an object named after `-o -app`, gets `./` before it,
+/// so clang does not read it as an option.
+pub(crate) fn operand(path: &Path) -> Cow<'_, Path> {
+    if path.is_relative() && path.as_os_str().to_string_lossy().starts_with('-') {
+        Cow::Owned(Path::new(".").join(path))
+    } else {
+        Cow::Borrowed(path)
     }
 }
 

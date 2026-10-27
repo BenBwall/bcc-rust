@@ -438,6 +438,9 @@ impl<'id, 'm> BodyBuilder<'_, 'id, 'm, '_> {
                     | Opcode::Bswap => self.intrinsic("llvm.bswap", &[arg], &[api.ty(ty)]),
                     | Opcode::StackRestore =>
                         self.intrinsic("llvm.stackrestore", &[arg], &[api.ty(Type::Ptr)]),
+                    // GCC's builtin non-local jumps, as Clang emits them.
+                    | Opcode::SjljSetjmp => self.intrinsic("llvm.eh.sjlj.setjmp", &[arg], &[]),
+                    | Opcode::SjljLongjmp => self.intrinsic("llvm.eh.sjlj.longjmp", &[arg], &[]),
                     | Opcode::Fneg => api.fneg(arg),
                     | Opcode::Freeze => api.freeze(arg),
                     | Opcode::VaArg => api.va_arg(arg, api.ty(ty)),

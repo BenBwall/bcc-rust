@@ -13,6 +13,13 @@
 //! never down into the outgoing arguments a callee may write.
 //! `stack_save` reads `%rsp`; `stack_restore` writes it back, releasing
 //! every later allocation (C99 §6.2.4p6, p. 32; PDF p. 44).
+//!
+//! GCC's `__builtin_setjmp` and `__builtin_longjmp` (`sjlj_setjmp`,
+//! `sjlj_longjmp`) pass the buffer in `%rdi` to [`MInst::SjljSetjmp`] and
+//! [`MInst::SjljLongjmp`], whose sequences use LLVM's buffer layout: the
+//! frame address, the resume address and `%rsp`, which lowering's
+//! `frame_address` and `stack_save` store in words 0 and 2 (GCC manual,
+//! "Nonlocal Gotos"). The `setjmp` result comes back in `%eax`.
 
 use super::{
     Selector,
@@ -136,5 +143,33 @@ impl Selector<'_, '_, '_> {
             dst:   Reg::Phys(PReg::Rsp),
             src:   Operand::Reg(src),
         });
+    }
+
+    /// `dst = sjlj_setjmp buffer`.
+    pub(super) fn builtin_setjmp(&mut self, dst: Reg, buffer: Value) {
+        let buffer = self.reg(buffer);
+        self.copy(Reg::Phys(PReg::Rdi), buffer);
+        // Every register but `%rsp` changes on a second return, and `%rbp`
+        // too unless it addresses the frame, which the sequence restores.
+        let mut clobbers = PReg::ALL
+            .into_iter()
+            .fold(PRegSet::EMPTY, PRegSet::with)
+            .without(PReg::Rsp);
+        if self.func.dynamic {
+            clobbers = clobbers.without(PReg::Rbp);
+        }
+        self.emit(MInst::SjljSetjmp { clobbers });
+        self.emit(MInst::Mov {
+            width: Width::B32,
+            dst,
+            src: Operand::Reg(Reg::Phys(PReg::Rax)),
+        });
+    }
+
+    /// `sjlj_longjmp buffer`.
+    pub(super) fn builtin_longjmp(&mut self, buffer: Value) {
+        let buffer = self.reg(buffer);
+        self.copy(Reg::Phys(PReg::Rdi), buffer);
+        self.emit(MInst::SjljLongjmp);
     }
 }

@@ -202,6 +202,8 @@ fill  dst, byte, size, align               (memset)
 dyn_alloca.i64 size             → ptr     (until restore or return, align 16)
 stack_save                     → ptr     (opaque current stack position)
 stack_restore position                   (releases later dynamic objects)
+sjlj_setjmp buf                → i32     (GCC __builtin_setjmp's resume point)
+sjlj_longjmp buf                         (__builtin_longjmp; then unreachable)
 object_size.i64 [dynamic] ptr, mode → i64 (GCC object size, mode 0-3)
 subobject   ptr, size_i64        → ptr     (ptr, naming a subobject)
 ```
@@ -910,8 +912,8 @@ Lowering walks each function body with an explicit work stack, like semantic
 analysis, and builds IR with a function builder:
 
 - **Locals.** A pre-pass marks locals whose address is taken (`&x`, array decay,
-  aggregates, `volatile`). Those get stack slots. A `setjmp` in the function
-  changes nothing here: C99 §7.13.2.1p3 makes a non-volatile local changed
+  aggregates, `volatile`). Those get stack slots. A `setjmp` (or GCC's
+  `__builtin_setjmp`) in the function changes nothing here: C99 §7.13.2.1p3 makes a non-volatile local changed
   between `setjmp` and `longjmp` indeterminate, so it may stay an SSA value.
   Every other scalar local is an SSA *variable* handled with Braun et al.'s
   algorithm: `def_var` on assignment, `use_var` on read, and `seal_block` once
@@ -2138,3 +2140,81 @@ and through the native back end with and without the bcc optimizer;
 `backend/native/tests/inline_asm.rs` checks register choice, template
 substitution, saved registers, flag outputs, fully spilled functions and
 the native refusals.
+
+## GCC's builtin setjmp and longjmp (2026-10-27)
+
+GCC's `__builtin_setjmp (buf)` and `__builtin_longjmp (buf, 1)` ([Nonlocal
+Gotos](https://gcc.gnu.org/onlinedocs/gcc/Nonlocal-Gotos.html)) are the
+lightweight pair: a five-word buffer, no signal mask and no saved
+registers, so the compiler keeps every value live across the setjmp where
+the second return finds it. The buffer layout is LLVM's, which GCC shares on
+x86-64: word 0 the frame address, word 1 the resume address, word 2 the
+stack pointer.
+
+- **Semantic analysis.** Both are GNU builtins (`builtins/scalar.rs`).
+  GCC's prototypes type the buffer `void *`, so any object pointer converts
+  (Clang's `void **` rejects `int[5]` and GCC's `pr60003.c`). The value must
+  be an integer constant that is 1 after conversion to `int`
+  (`ConstantConstraint::ConvertedIntegerValue`, diagnosed as
+  `InvalidLongjmpValue`), as GCC and Clang require; one the conversion
+  changes, such as `4294967297LL`, gets Clang's default-on
+  `-Wconstant-conversion` warning (a new group, also controlled by
+  `-W[no-]conversion`), as GCC warns with `-Woverflow`. Clang rejects the
+  floating `1.0` that GCC converts, and so does bcc.
+  `__builtin_longjmp` does not return, like Clang's builtin. Neither GCC 15
+  nor Clang diagnoses a `__builtin_longjmp` in the function that called
+  `__builtin_setjmp`, which the GCC manual forbids; it works on every bcc
+  arm as with Clang (GCC -O2 crashes on it).
+- **Lowering** emits what Clang emits: `frame_address` stored in word 0,
+  `stack_save` stored in word 2, then `sjlj_setjmp buf`, an `i32`;
+  `__builtin_longjmp` becomes `sjlj_longjmp buf` and `unreachable`.
+- **Optimizer.** Both opcodes have side effects (`dce`) and are full memory
+  barriers (`memory_write`). A function containing `sjlj_setjmp` has an
+  unsafe frame, so `inline` refuses it and its direct wrappers; GCC never
+  copies a function that receives a non-local goto and rejects
+  `always_inline` on one, which LLVM inlines (the bcc pipeline then keeps
+  the call, and a jump back into its returned frame is undefined). As for
+  `setjmp`, promotion stays legal: a non-volatile local changed between the
+  setjmp and the jump is indeterminate (C99 §7.13.2.1p3).
+- **LLVM** gets `llvm.eh.sjlj.setjmp` and `llvm.eh.sjlj.longjmp`, which need
+  no function attribute: the frame address keeps a frame pointer, and the
+  X86 back end saves every callee-saved register of a function using them.
+- **Native back end** (`isel/stack.rs`). The buffer goes in `%rdi`.
+  `MInst::SjljSetjmp` stores a resume label in word 1 and sets `%eax` to 0;
+  at the label `%eax` becomes 1, and a frame addressed from `%rbp` first
+  derives `%rbp` from the frame address it arrives with. Its clobber set is
+  every register but `%rsp` (and a frame pointer), so nothing stays in a
+  register across it, the prologue saves every callee-saved register, and
+  `Liveness::live_across_returns_twice` keeps the values live across it out
+  of coalescing, as for a returns-twice call. `MInst::SjljLongjmp` is LLVM's
+  `movq (%rdi), %rbp; movq 8(%rdi), %rax; movq 16(%rdi), %rsp; jmpq *%rax`.
+- **Interpreter.** `sjlj_setjmp` keeps the record `setjmp` keeps in the
+  three words the frame address and stack position leave free: word 1 the
+  block and position after it, word 3 the activation, word 4 the depth and
+  the dynamic-allocation mark. `sjlj_longjmp` checks it like `longjmp` (the
+  position must follow an `sjlj_setjmp`), so a jump to a returned frame, an
+  unfilled buffer or a library `setjmp` record traps.
+
+Evidence: `tests/fixtures/programs/builtin_setjmp.c` (a jump three frames
+down, integer, pointer and double values live across, the caller's
+callee-saved registers, 1,000 repeated jumps, a setjmp in a loop body, VLAs
+and `alloca` before and after the setjmp, a jump through a copied buffer,
+nested handlers) prints what GCC 15 and Clang print at -O0 and -O2 in the
+interpreter (with and without `--opt=bcc`), through LLVM at O0 and O2 and
+through the native back end with and without the bcc optimizer
+(`code_generation_cli.rs`), and matches the interpreter in the native
+end-to-end programs with ordinary allocation and with every value spilled;
+with the callee-saved registers left out of the clobber set the native run
+prints wrong values and crashes. Unit tests: `ir/tests/stack.rs`,
+`lowering/tests/extensions.rs`, `semantic_analysis/tests/scalar_builtins.rs`,
+the `sema-builtin-setjmp` diagnostic golden, `optimizer/tests/{dce,inline}.rs`,
+`backend/interpreter/tests/nonlocal.rs`, `backend/native/tests/selection.rs`
+and `operands.rs`. GCC torture (Linux, six arms): `built-in-setjmp.c` and
+`pr84521.c` pass on every arm, up from none; `pr64242.c` passes on the four
+compiled arms and stops the interpreter at its subtraction of pointers to
+distinct `alloca` blocks; `pr60003.c` reads a non-volatile local changed
+after the setjmp, which C leaves indeterminate and bcc's SSA locals do not
+keep, failing as Clang -O1 and -O2 do. The `builtins/*-chk.c` tests compile
+and link on every compiled arm; at O0 their checks do not run, and at
+`--opt=bcc` they stop before their first `__builtin_setjmp` on fortify
+folding, as GCC -O2 does outside the DejaGnu harness.

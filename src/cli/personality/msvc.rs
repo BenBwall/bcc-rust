@@ -37,6 +37,7 @@ use super::{
     host_target,
     version,
 };
+use crate::backend::llvm::operand;
 
 /// Clang options that clang-cl takes only after `/clang:`; given bare, it
 /// ignores them with a warning, as for an unknown `/` option.
@@ -64,7 +65,12 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
             state.sources.push(Source::new(argument, false));
             continue;
         };
-        let Some(option) = text.strip_prefix('/').or_else(|| text.strip_prefix('-')) else {
+        // clang-cl reads `-` as standard input.
+        let Some(option) = text
+            .strip_prefix('/')
+            .or_else(|| text.strip_prefix('-'))
+            .filter(|_| !(clang_cl && text == "-"))
+        else {
             state.sources.push(Source::new(argument, false));
             continue;
         };
@@ -110,10 +116,11 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
             }
         }
     }
+    state.check_inputs(invocation);
     let c_count = state.sources.iter().filter(|source| source.is_c()).count();
     state.check_output_names(invocation, c_count);
     if state.errors != 0 {
-        return Err(MainError::Reported(2));
+        return Err(MainError::Reported(error_status(invocation.personality)));
     }
     let target = invocation
         .target
@@ -167,7 +174,12 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
     }
     common.append(&mut state.bcc);
     common.append(&mut clang_options);
-    let mut plan = Plan::default();
+    // `cl` compiles every source even after one fails, then skips the link;
+    // clang-cl stops at the first failure.
+    let mut plan = Plan {
+        keep_going: !clang_cl,
+        ..Plan::default()
+    };
     if !state.nologo && !clang_cl {
         plan.steps.push(Step::Print {
             text:   version::banner(invocation.personality, &invocation.name, target),
@@ -196,7 +208,7 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
             "'{}': bcc compiles C only; C++ sources are not supported",
             Path::new(&source.path).display()
         ));
-        return Err(MainError::Reported(2));
+        return Err(MainError::Reported(error_status(invocation.personality)));
     }
     // Preprocessing: `/E` and `/EP` write every source to stdout, `/P` each
     // to its `.i` file.
@@ -311,8 +323,21 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
     link.append(&mut state.link);
     link.push("-o".into());
     link.push(executable.into());
-    plan.steps.push(Step::Bcc(link));
+    plan.steps.push(Step::Link(link));
     Ok(plan)
+}
+
+/// The status `cl` exits with after any error, its own or a compiler's;
+/// clang-cl exits with 1, as Clang does.
+pub(super) const ERROR_STATUS: i32 = 2;
+
+/// The status the personality exits with after an error it reports itself.
+fn error_status(personality: Personality) -> i32 {
+    if personality == Personality::ClangCl {
+        1
+    } else {
+        ERROR_STATUS
+    }
 }
 
 /// Refuses an output of any step that is one of the command line's input
@@ -357,7 +382,7 @@ fn check_outputs(
                         true,
                     );
                 }
-                return Err(MainError::Reported(2));
+                return Err(MainError::Reported(error_status(invocation.personality)));
             }
         }
     }
@@ -789,6 +814,88 @@ impl State {
         true
     }
 
+    /// Diagnoses the inputs as the compiler does before it compiles any.
+    /// clang-cl's driver refuses a missing source and compiles none, while
+    /// `cl` reports it when it reaches it (fatal error C1083, in bcc's job),
+    /// and compiles the others. `cl` warns that a file whose extension it
+    /// does not know is assumed to be an object (warning D9024), and both
+    /// say that `/c` leaves the linker's inputs unused (`cl`'s warning
+    /// D9027). clang-cl preprocesses standard input (`-`) as C, but
+    /// compiles it only as `/Tc` or `/Tp` names its language.
+    fn check_inputs(&mut self, invocation: &Invocation) {
+        let clang_cl = invocation.personality == Personality::ClangCl;
+        let links = !self.compile_only && self.preprocess.is_none() && !self.syntax_only;
+        let preprocess = self.preprocess.is_some();
+        let mut missing = 0;
+        let mut errors = 0;
+        self.sources.retain_mut(|source| {
+            let path = Path::new(&source.path).display();
+            if clang_cl && source.path == "-" && !source.is_c() && !source.cpp {
+                if preprocess {
+                    source.c = true;
+                    return true;
+                }
+                invocation.error(format_args!(
+                    "use /Tc or /Tp to set input type for standard input"
+                ));
+                errors += 1;
+                return false;
+            }
+            let compiled = source.is_c() || source.cpp;
+            if clang_cl
+                && compiled
+                && source.path != "-"
+                && std::fs::metadata(&source.path).is_err()
+            {
+                invocation.error(format_args!("no such file or directory: '{path}'"));
+                missing += 1;
+                return false;
+            }
+            if compiled {
+                return true;
+            }
+            let extension = Path::new(&source.path)
+                .extension()
+                .and_then(OsStr::to_str)
+                .map(str::to_ascii_lowercase);
+            // The extensions Microsoft documents for D9024, and `.res`,
+            // which `cl` passes to the linker too.
+            if !clang_cl
+                && !matches!(
+                    extension.as_deref(),
+                    Some("obj" | "lib" | "def" | "exp" | "res")
+                )
+            {
+                super::print(
+                    &format!(
+                        "{} : Command line warning D9024 : unrecognized source file type \
+                         '{path}', object file assumed\n",
+                        invocation.name
+                    ),
+                    true,
+                );
+            }
+            if clang_cl && !links {
+                invocation.warning(format_args!(
+                    "{path}: 'linker' input unused [-Wunused-command-line-argument]"
+                ));
+            } else if !clang_cl && self.compile_only {
+                super::print(
+                    &format!(
+                        "{} : Command line warning D9027 : source file '{path}' ignored\n",
+                        invocation.name
+                    ),
+                    true,
+                );
+            }
+            true
+        });
+        self.errors += errors + missing;
+        if missing != 0 && self.sources.is_empty() {
+            invocation.error(format_args!("no input files"));
+        }
+    }
+
     /// Refuses `/Fo`, `/Fa` or `/Fi` naming a file for several sources, as
     /// `cl` does (error D8036): only a directory, ending in a separator,
     /// names several outputs.
@@ -883,12 +990,15 @@ fn ignored(invocation: &Invocation, option: &str, why: &str) {
 /// sources, as `cl` does.
 fn named(option: Option<&Path>, source: &OsStr, extension: &str) -> PathBuf {
     let stem = Path::new(Path::new(source).file_name().unwrap_or(source)).with_extension(extension);
-    match option {
+    let name = match option {
         | Some(option) if is_directory(option) => option.join(stem),
         | Some(option) if option.extension().is_none() => option.with_extension(extension),
         | Some(option) => option.into(),
         | None => stem,
-    }
+    };
+    // Standard input's `-.obj`, or `/Fo-x.obj`, which bcc's command line
+    // must not read as an option.
+    operand(&name).into_owned()
 }
 
 /// Whether an output option names a directory: it ends in a separator.

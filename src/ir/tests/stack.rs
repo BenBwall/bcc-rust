@@ -1,4 +1,5 @@
-//! Text and verifier coverage of dynamic stack positions and aggregate fetches.
+//! Text and verifier coverage of dynamic stack positions, GCC's builtin
+//! non-local jumps, and aggregate fetches.
 use super::*;
 
 #[test]
@@ -25,6 +26,55 @@ block0(v0: i64):
         .unwrap();
     assert!(llvm.contains("llvm.stacksave.p0"), "{llvm}");
     assert!(llvm.contains("llvm.stackrestore.p0"), "{llvm}");
+}
+
+/// GCC's `__builtin_setjmp` and `__builtin_longjmp` as Clang emits them:
+/// the frame address and stack position in words 0 and 2, then
+/// `llvm.eh.sjlj.setjmp`; `llvm.eh.sjlj.longjmp` before `unreachable`.
+#[test]
+fn builtin_non_local_jumps_round_trip_verify_and_reach_llvm() {
+    let text = "function @f(ptr) -> i32 external {
+block0(v0: ptr):
+    v1 = frame_address
+    store.ptr v1, v0, align 8
+    v2 = stack_save
+    v3 = iconst.i64 16
+    v4 = ptr_add inbounds v0, v3
+    store.ptr v2, v4, align 8
+    v5 = sjlj_setjmp v0
+    return v5
+}
+
+function @g(ptr) external {
+block0(v0: ptr):
+    sjlj_longjmp v0
+    unreachable
+}
+";
+    assert_round_trip(text);
+    assert_eq!(verify_text(text), Vec::<String>::new());
+    for bad in [
+        text.replace("sjlj_setjmp v0", "sjlj_setjmp v3"),
+        text.replace(
+            "function @g(ptr) external {\nblock0(v0: ptr):",
+            "function @g(i64) external {\nblock0(v0: i64):",
+        ),
+    ] {
+        assert!(verify_text(&bad).iter().any(|e| e.contains("ptr")), "{bad}");
+    }
+    let arena = Bump::new();
+    let module = parse(&arena, text);
+    let mut llvm = String::new();
+    crate::backend::llvm::emit_module(&module, crate::target::Target::LinuxGnu, &mut llvm).unwrap();
+    for expected in [
+        "call ptr @llvm.frameaddress.p0(i32 0)",
+        "call ptr @llvm.stacksave.p0()",
+        "call i32 @llvm.eh.sjlj.setjmp(ptr %v0)",
+        "call void @llvm.eh.sjlj.longjmp(ptr %v0)\n  unreachable",
+        "declare void @llvm.eh.sjlj.longjmp(ptr) #",
+    ] {
+        assert!(llvm.contains(expected), "{expected}: {llvm}");
+    }
 }
 
 #[test]

@@ -1823,6 +1823,53 @@ printf(\"%f %f %F\\n\",1e100,-0.0,1.0/0.0); return 0; }",
         std::fs::remove_file(&executable).unwrap();
     }
 
+    /// GCC's `__builtin_setjmp` and `__builtin_longjmp` from
+    /// `tests/fixtures/programs/builtin_setjmp.c` print what GCC 15 and
+    /// Clang print at -O0 and -O2, in the interpreter and in executables
+    /// built through LLVM and through the native back end.
+    #[test]
+    fn builtin_setjmp_and_longjmp_match_gcc_on_every_back_end() {
+        const TRANSCRIPT: &str = "many: 268935754\ncaller: 808336096\nrepeated: 1000\nloop body: \
+                                  10045\narrays: 1649\ncopied: 42\nnested: 40\nvalue: \
+                                  7\nfailures: 0\n";
+        let source =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/programs/builtin_setjmp.c");
+        let compile = |flags: &[&str]| {
+            let mut command = Command::new(env!("CARGO_BIN_EXE_bcc-rust"));
+            _ = command.arg(&source).args(flags).env("NO_COLOR", "1");
+            run_native(&mut command).unwrap()
+        };
+        for opt in ["--opt=none", "--opt=bcc"] {
+            let output = compile(&["--interpret", opt]);
+            assert_eq!(
+                output.status.code(),
+                Some(0),
+                "{opt}: {}",
+                text(&output.stderr)
+            );
+            assert_eq!(text(&output.stdout), TRANSCRIPT, "{opt}");
+        }
+        let Some(target) = host() else {
+            return;
+        };
+        let target = format!("--target={target}");
+        let executable = temporary("builtin-setjmp.exe");
+        let path = executable.to_str().unwrap();
+        for opt in [
+            &["--llvm-opt=O0"][..],
+            &["--opt=bcc", "--llvm-opt=O2"][..],
+            &["--backend=native", "--opt=none"][..],
+            &["--backend=native", "--opt=bcc"][..],
+        ] {
+            let built = compile(&[&[target.as_str(), "-o", path][..], opt].concat());
+            assert!(built.status.success(), "{opt:?}: {}", text(&built.stderr));
+            let output = run_native(&mut Command::new(&executable)).unwrap();
+            assert_eq!(output.status.code(), Some(0), "{opt:?}");
+            assert_eq!(text(&output.stdout), TRANSCRIPT, "{opt:?}");
+        }
+        std::fs::remove_file(&executable).unwrap();
+    }
+
     #[test]
     fn inline_modes_emit_bodies_and_run_in_both_back_ends() {
         let Some(target) = host() else {
@@ -2645,7 +2692,7 @@ printf(\"%f %f %F\\n\",1e100,-0.0,1.0/0.0); return 0; }",
         let output = bcc(SUM, &["-c"]);
         assert_eq!(output.status.code(), Some(1));
         assert!(
-            text(&output.stderr).contains("give -o for --input or stdin"),
+            text(&output.stderr).contains("give -o for --input"),
             "{}",
             text(&output.stderr)
         );

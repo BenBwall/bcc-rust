@@ -303,6 +303,34 @@ block0(v0: ptr):
     assert_eq!(report.stats(Pass::Inline).changes, 0);
 }
 
+/// A function with GCC's `__builtin_setjmp` saves its own frame address and
+/// resume point, as a returns-twice call does, so neither it nor a direct
+/// wrapper is inlined.
+#[test]
+fn builtin_setjmp_frames_and_their_wrappers_are_refused() {
+    let text = "\
+function @save(ptr) -> i32 internal {
+block0(v0: ptr):
+    v1 = sjlj_setjmp v0
+    return v1
+}
+
+function @wrapper(ptr) -> i32 internal {
+block0(v0: ptr):
+    v1 = call @save(v0)
+    return v1
+}
+
+function @main(ptr) -> i32 external {
+block0(v0: ptr):
+    v1 = call @wrapper(v0)
+    return v1
+}
+";
+    let (output, report) = optimize_text(text, &only(&[Pass::Inline]));
+    assert_eq!(report.stats(Pass::Inline).changes, 0, "{output}");
+}
+
 #[test]
 fn attributed_returns_twice_wrappers_are_refused() {
     // GNU `returns_twice` on a name the external catalog does not list.

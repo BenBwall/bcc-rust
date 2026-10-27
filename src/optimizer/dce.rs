@@ -178,7 +178,13 @@ fn has_side_effects(data: &InstData) -> bool {
         | InstData::CallIndirect { .. }
         | InstData::InlineAsm { .. }
         | InstData::Unary {
-            opcode: Opcode::VaStart | Opcode::VaArg | Opcode::VaEnd | Opcode::StackRestore,
+            opcode:
+                Opcode::VaStart
+                | Opcode::VaArg
+                | Opcode::VaEnd
+                | Opcode::StackRestore
+                | Opcode::SjljSetjmp
+                | Opcode::SjljLongjmp,
             ..
         }
         | InstData::Binary {
