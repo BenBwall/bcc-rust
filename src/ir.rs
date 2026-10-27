@@ -214,7 +214,8 @@ pub(crate) struct Function<'ir> {
     /// environment it saved (`setjmp`, `vfork`, GNU `returns_twice`). The
     /// optimizer does not inline across such frames, the LLVM back end
     /// marks the declaration and its calls `returns_twice`, and the native
-    /// back end refuses them. C99: §7.13.2.1 paragraph 4, p. 244; PDF p.
+    /// back end marks its calls and gives every value live across one a
+    /// spill slot of its own. C99: §7.13.2.1 paragraph 4, p. 244; PDF p.
     /// 256.
     pub(crate) returns_twice:  bool,
     /// Whether calls may, must or must not be expanded inline.

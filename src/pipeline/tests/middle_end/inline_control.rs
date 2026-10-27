@@ -105,7 +105,8 @@ fn redirected_symbols_keep_their_external_definition() {
 }
 
 /// Inline-only definitions keep their entity's returns-twice contract, so
-/// `always_inline` cannot bypass the optimizer's frame safeguards.
+/// `always_inline` cannot bypass the optimizer's frame safeguards, and the
+/// native back end still calls the private body as one that returns twice.
 #[test]
 fn private_inline_bodies_keep_returns_twice_contracts() {
     let source = "extern inline __attribute__((gnu_inline, always_inline, returns_twice)) int \
@@ -120,10 +121,12 @@ fn private_inline_bodies_keep_returns_twice_contracts() {
                 };
                 assert!(module.returns_twice(private), "{module}");
                 assert!(calls(module, "save.always_inline"), "{module}");
-                let mut assembly = String::new();
-                assert!(
-                    crate::backend::native::emit_assembly(module, target, &mut assembly).is_err()
-                );
+                if profile == Profile::PostAbi {
+                    let mut assembly = String::new();
+                    crate::backend::native::emit_assembly(module, target, &mut assembly)
+                        .unwrap_or_else(|error| panic!("{error}\n{module}"));
+                    assert!(assembly.contains("callq\tsave.always_inline"), "{assembly}");
+                }
             });
         }
     }

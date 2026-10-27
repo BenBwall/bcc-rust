@@ -10,8 +10,7 @@
 //! reference, structure results in register combinations other than the
 //! ones System V and Win64 define, stack arguments aligned above 16 bytes,
 //! stack argument areas whose offsets would leave a 32-bit displacement,
-//! thread-local globals in named sections, and calls to functions that may
-//! return twice.
+//! and thread-local globals in named sections.
 
 use std::fmt;
 
@@ -73,19 +72,6 @@ pub(super) fn check_module<'m>(
         }
         if let Some(name) = runtime_symbol(global.name) {
             return Err(refuse(Some(global.name), Construct::RuntimeName(name)));
-        }
-        // A returns-twice function's address stored in a global reaches
-        // indirect calls the back end would compile as ordinary ones.
-        if let Some(GlobalInit::Bytes { relocations, .. }) = global.init
-            && relocations.iter().any(|relocation| {
-                matches!(
-                    relocation.target,
-                    RelocationTarget::Symbol(Symbol::Function(func)) if module.returns_twice(func)
-                )
-            })
-            && !references.unused_internal_global(module, id)
-        {
-            return Err(refuse(Some(global.name), Construct::ReturnsTwice));
         }
         // A thread-local definition belongs in the thread-local data that
         // the TLS offsets count from, not in a named section.
@@ -233,9 +219,6 @@ impl Checker<'_, '_> {
             } => Err(Construct::Opcode(opcode)),
             | InstData::Load { ty: Type::I1, .. } | InstData::Store { ty: Type::I1, .. } =>
                 Err(Construct::Type(Type::I1)),
-            | InstData::Call { func, .. } | InstData::FuncAddr { func }
-                if self.module.returns_twice(func) =>
-                Err(Construct::ReturnsTwice),
             | InstData::Call { func, args } => {
                 let signature = self.module.function_signature(func);
                 self.signature(signature)?;
@@ -375,11 +358,6 @@ pub(crate) enum Construct {
     NotAbiLowered,
     /// A thread-local global placed in a named section.
     ThreadLocalSection,
-    /// A call to, or the address of, a function that may return twice:
-    /// register allocation and frame layout do not yet keep the caller's
-    /// values where a second return finds them.
-    /// C99: §7.13.2.1 paragraph 3, p. 244; PDF p. 256.
-    ReturnsTwice,
     /// Inline assembly the back end cannot place, named by the reason.
     /// GNU extension: GCC manual, "Extended Asm".
     InlineAsm(&'static str),
@@ -408,10 +386,6 @@ impl fmt::Display for Unsupported<'_> {
             | Construct::NotAbiLowered => write!(f, "a module not lowered for the ABI")?,
             | Construct::ThreadLocalSection =>
                 write!(f, "a thread-local global in a named section")?,
-            | Construct::ReturnsTwice => write!(
-                f,
-                "a call to, or the address of, a function that may return twice, such as `setjmp`"
-            )?,
         }
         if let Some(function) = self.function {
             write!(f, " (in @{function})")?;

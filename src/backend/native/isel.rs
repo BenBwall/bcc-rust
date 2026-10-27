@@ -104,17 +104,21 @@ use crate::{
 };
 
 /// Selects `function`'s body into machine IR in `arena`.
+/// `indirect_returns_twice` is the module's
+/// [`Module::returns_twice_escapes`], computed once for all its functions.
 pub(crate) fn select<'a>(
     module: &Module<'_>,
     function: &Function<'_>,
     body: &Body<'_>,
     target: Target,
     tls_model: TlsModel,
+    indirect_returns_twice: bool,
     arena: &'a Bump,
 ) -> Result<MFunction<'a>, Construct> {
     let cfg = ControlFlowGraph::compute(body, arena);
     let tree = DominatorTree::compute(body, &cfg, arena);
     let mut selector = Selector::new(module, function, body, target, tls_model, arena);
+    selector.indirect_returns_twice = indirect_returns_twice;
     for (_, slot) in body.stack_slots() {
         // An object aligned above the stack's 16 bytes gets room to round
         // its address up at run time (see `over_aligned_address`).
@@ -201,47 +205,49 @@ pub(super) enum AddrBase {
 
 /// The selection state of one function.
 pub(super) struct Selector<'a, 'm, 'ir> {
-    pub(super) module:     &'m Module<'ir>,
-    pub(super) function:   &'m Function<'ir>,
-    pub(super) body:       &'m Body<'ir>,
-    pub(super) signature:  Signature<'ir>,
-    pub(super) conv:       CallConv,
-    pub(super) target:     Target,
+    pub(super) module:                 &'m Module<'ir>,
+    pub(super) function:               &'m Function<'ir>,
+    pub(super) body:                   &'m Body<'ir>,
+    pub(super) signature:              Signature<'ir>,
+    pub(super) conv:                   CallConv,
+    pub(super) target:                 Target,
     /// The `-ftls-model`: local-exec also reaches declared thread-locals
     /// at a link-time offset.
-    pub(super) tls_model:  TlsModel,
-    pub(super) arena:      &'a Bump,
-    pub(super) func:       MFunction<'a>,
+    pub(super) tls_model:              TlsModel,
+    /// Whether an indirect call may reach a function that returns twice.
+    pub(super) indirect_returns_twice: bool,
+    pub(super) arena:                  &'a Bump,
+    pub(super) func:                   MFunction<'a>,
     /// Each value's representation.
-    pub(super) values:     ArenaVec<'a, ValueKind>,
+    pub(super) values:                 ArenaVec<'a, ValueKind>,
     /// Each value's number of uses in reachable code.
-    pub(super) uses:       ArenaVec<'a, u32>,
+    pub(super) uses:                   ArenaVec<'a, u32>,
     /// How many of those are the condition of a `brif` or `select`.
-    pub(super) conditions: ArenaVec<'a, u32>,
+    pub(super) conditions:             ArenaVec<'a, u32>,
     /// Instructions with nothing to emit at their position: leaves,
     /// aliases, and compares fused into their user.
-    pub(super) skipped:    ArenaVec<'a, bool>,
+    pub(super) skipped:                ArenaVec<'a, bool>,
     /// Compares fused into their user.
-    pub(super) fused:      ArenaVec<'a, bool>,
+    pub(super) fused:                  ArenaVec<'a, bool>,
     /// Each reachable IR block's machine block.
-    pub(super) block_map:  ArenaVec<'a, Option<MBlock>>,
+    pub(super) block_map:              ArenaVec<'a, Option<MBlock>>,
     /// The block instructions are appended to.
-    pub(super) current:    MBlock,
+    pub(super) current:                MBlock,
     /// How `return` hands back a structure result.
-    pub(super) result:     calls::ResultArea,
+    pub(super) result:                 calls::ResultArea,
     /// What `va_start` stores, prepared by the entry sequence.
-    pub(super) va_start:   calls::VaStart,
+    pub(super) va_start:               calls::VaStart,
     /// For each labeled IR block, the block its address names and where
     /// its incoming registers start in [`Self::incoming`].
-    pub(super) labeled:    ArenaVec<'a, Option<edges::LabelTarget>>,
+    pub(super) labeled:                ArenaVec<'a, Option<edges::LabelTarget>>,
     /// The registers an `indirect_br` assigns a labeled block's parameters
     /// through, one per parameter, in block order.
-    pub(super) incoming:   ArenaVec<'a, ValueKind>,
+    pub(super) incoming:               ArenaVec<'a, ValueKind>,
     /// The frame slot of [`Self::scratch`], once a sequence needs it.
-    pub(super) scratch:    Option<u32>,
+    pub(super) scratch:                Option<u32>,
     /// The symbols indexed operands use as a base, with the register the
     /// entry block loads each address into.
-    pub(super) bases:      ArenaVec<'a, (Symbol, Reg)>,
+    pub(super) bases:                  ArenaVec<'a, (Symbol, Reg)>,
 }
 
 impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
@@ -261,6 +267,7 @@ impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
             conv: CallConv::of(target),
             target,
             tls_model,
+            indirect_returns_twice: false,
             arena,
             func: MFunction::new_in(arena),
             values: filled(arena, body.value_count(), ValueKind::Unknown),

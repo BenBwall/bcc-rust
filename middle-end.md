@@ -418,7 +418,8 @@ none. Function parameters declared `restrict` become `noalias` parameter
 attributes. Functions that may return twice (`setjmp`, `vfork` and attributed
 functions) carry the IR flag `returns_twice`; the LLVM back end marks their
 declarations and direct calls, the inliner keeps their callers' frames, and the
-native back end refuses them (see "Returns-twice calls" below).
+native back end keeps values live across their calls out of coalescing (see
+"Returns-twice calls" below).
 
 The optimizer's current alias check uses object identity and byte ranges, not
 access tags: distinct stack slots and distinct globals are disjoint, as are
@@ -1161,9 +1162,9 @@ ranges, frame layout with CFI and SEH unwind directives for System V and Win64,
 and AT&T assembly, which the bundled clang assembles, or ELF and COFF
 objects it encodes itself; the bundled clang links executables. It compiles
 integer, pointer, `i128`, `f32` and `f64` code, variadic definitions, dynamic
-stack allocation, computed `goto`, thread-local globals and the GNU symbol
-attributes, and refuses everything else (`f80`, `f128`, `i128` float
-conversions) before writing any output.
+stack allocation, computed `goto`, thread-local globals, calls that may
+return twice and the GNU symbol attributes, and refuses everything else
+(`f80`, `f128`, `i128` float conversions) before writing any output.
 `--backend=native` selects it for `-o`, `-c` and `-S`, and `--emit=asm` with
 it prints its assembly.
 For `-o` it encodes COFF objects directly on the Windows targets and has the
@@ -1736,11 +1737,13 @@ other phase matches these spellings.
   does every indirect call in a module where such an address escapes; LLVM
   then treats the caller as exposing a second return (no stack-slot
   coloring, for example), as for Clang's output.
-- **Native back end.** A call to, or the address of, a flagged function or
-  alias, and a global relocation naming one, are refused (`a call to, or the
-  address of, a function that may return twice`): its linear-scan
-  allocator and frame layout do not account for the second return, which
-  could read a register or spill slot reused after the first.
+- **Native back end.** Direct calls to a flagged function or alias, and
+  every indirect call where such an address escapes, are marked in machine
+  IR. A second return finds the callee-saved registers as they were at the
+  first, but memory as the program left it, so the allocator does not
+  coalesce a register live across such a call: its spill slot then holds
+  only its own value (`docs/design/native-backend.md`, "Calls"). Until
+  2026-10-26 the back end refused these calls and addresses.
 - **Interpreter.** `setjmp`-family calls store the frame's activation, depth,
   block, position and dynamic-allocation mark in the first 40 bytes of the
   `jmp_buf` (glibc's has 200, MinGW-w64's 256) and return 0. `longjmp`
@@ -1773,6 +1776,16 @@ build prints. Lua as one translation unit stops in the interpreter at the
 missing `realloc` host function, an unrelated host gap. Windows native
 execution (MSVCRT's `_setjmp` with a frame address and SEH unwinding) was
 not run for this change.
+
+Native back end (2026-10-26): `setjmp.c` builds with `--backend=native` at
+`--opt=none` and `--opt=bcc` and exits 0 (`code_generation_cli.rs`). The
+native end-to-end program `setjmp_and_longjmp` (`backend/native/tests/
+programs.rs`: a `longjmp` three calls down, a jump back into a loop, ten
+non-volatile locals live across the call, volatile ones changed in between,
+and an unchanged local copied into a variable the first pass changes)
+matches the interpreter with ordinary allocation and with every value in a
+spill slot; without the coalescing rule the spilled runs print the changed
+copy's value after the second return.
 
 ## GNU inline assembly (2026-10-26)
 

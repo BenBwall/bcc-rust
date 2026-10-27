@@ -724,6 +724,27 @@ into a 176-byte register save area, and `va_start` initializes `gp_offset`,
 all arguments are contiguous 8-byte slots, and `va_start` stores the address
 of the first variadic slot ("x64 calling convention", "Varargs").
 
+**Calls that may return twice.** A direct call to a function the module
+flags `returns_twice` (`Module::returns_twice`: `setjmp`, `_setjmp`,
+`sigsetjmp`, `vfork` and attributed functions, or an alias of one) is an
+ordinary call whose `MInst::Call` carries `returns_twice`, as is every
+indirect call in a module where such an address escapes
+(`Module::returns_twice_escapes`, computed once per module). The second
+return resumes after the call with `%rsp` and the callee-saved registers as
+they were at the first (`longjmp` restores them; on Win64 the unwinder
+does), and nothing lives in a caller-saved register across any call. Memory,
+however, is as the program left it, so a value live across the call must not
+share its spill slot: coalescing would join it with a copy defined later
+(the copy of an unchanged local into a variable the loop after `setjmp`
+changes) whose definitions then overwrite the slot the second return reads.
+The allocator therefore leaves every register live across such a call out
+of coalescing (`Liveness::live_across_returns_twice`), and since every
+representative has its own spill slot, its slot holds only its own value.
+Values defined again after the call, block parameters of a loop around
+`setjmp` that C variables changed between `setjmp` and `longjmp` become,
+are indeterminate after the second return (C99 §7.13.2.1p3), as with
+LLVM's `returns_twice`.
+
 ### Poison and undefined behaviour at the machine level
 
 The machine is a refinement of the IR's semantics. The rules:

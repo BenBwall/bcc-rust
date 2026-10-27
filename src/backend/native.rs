@@ -259,15 +259,24 @@ fn emit<'m>(
     let mut emitter = Emitter::new(module, target, out, &stubs);
     emitter.header()?;
     let mut scratch = Bump::new();
+    let indirect_returns_twice = module.returns_twice_escapes();
     for (id, function) in module.functions() {
         let Some(body) = &function.body else { continue };
         {
             let arena = &scratch;
-            let mut func = isel::select(module, function, body, target, code.tls_model, arena)
-                .map_err(|construct| Unsupported {
-                    function: Some(function.name),
-                    construct,
-                })?;
+            let mut func = isel::select(
+                module,
+                function,
+                body,
+                target,
+                code.tls_model,
+                indirect_returns_twice,
+                arena,
+            )
+            .map_err(|construct| Unsupported {
+                function: Some(function.name),
+                construct,
+            })?;
             let mut allocation = regalloc::allocate(&mut func, conv, arena);
             adjust(&func, &mut allocation);
             regalloc::rewrite(&mut func, &allocation, arena);

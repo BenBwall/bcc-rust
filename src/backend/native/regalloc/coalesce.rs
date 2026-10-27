@@ -10,7 +10,10 @@
 //! ever live at once (Chaitin's aggressive coalescing over live ranges,
 //! without value-based interference).
 
-use super::intervals::Interval;
+use super::{
+    intervals::Interval,
+    liveness::contains,
+};
 use crate::{
     backend::native::mir::{
         MFunction,
@@ -29,11 +32,13 @@ use crate::{
 
 /// Joins copy-related registers of `func` whose intervals do not overlap;
 /// returns each register's representative. A joined register's interval
-/// is left empty.
+/// is left empty. The registers in the set `pinned`, which are live across
+/// a call that may return twice, join nothing.
 pub(super) fn coalesce<'a>(
     func: &MFunction<'_>,
     intervals: &mut [Interval<'a>],
     depth: &[u32],
+    pinned: &[u64],
     arena: &'a Bump,
 ) -> ArenaVec<'a, VReg> {
     let mut candidates = ArenaVec::new_in(arena);
@@ -49,6 +54,8 @@ pub(super) fn coalesce<'a>(
                 dst: Reg::Virt(dst),
                 src: Operand::Reg(Reg::Virt(src)),
             } = *inst
+                && !contains(pinned, dst)
+                && !contains(pinned, src)
             {
                 candidates.push((depth[block], dst, src));
             }
