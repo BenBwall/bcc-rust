@@ -145,10 +145,16 @@ measurement; contiguous order is simpler and suits a fixed pipeline of rebuilds.
 
 ### Types
 
-`i1`, `i8`, `i16`, `i32`, `i64`, `i128`, `f16`, `f32`, `f64`, `f80`, `f128`,
-`ptr`. `f16` is IEEE binary16 and only moves and converts: the verifier
-rejects floating arithmetic, `fneg` and `fcmp` on it, since `_Float16`
-computes in `f32` (below). Integers are signless: signedness is part of the operation (`sdiv`/`udiv`,
+`i1`, `i8`, `i16`, `i32`, `i64`, `i128`, `f16`, `bf16`, `f32`, `f64`, `f80`,
+`f128`, `ptr`. `f16` is IEEE binary16 and `bf16` bfloat16 (the top half of a
+binary32 encoding); they only move and convert: the verifier rejects
+floating arithmetic, `fneg` and `fcmp` on them, since `_Float16` and
+`__bf16` compute in `f32` (below). A conversion to either rounds once, from
+any type: `sitofp.bf16` of an `i64` is not rounded to `f32` first, so the
+LLVM back end calls libgcc's `__floattibf` and `__trunc{df,xf,tf}bf2` where
+LLVM would round twice or fold `fptrunc (sitofp x)` into one conversion.
+`fpext` of a `bf16` is exact and keeps a signaling NaN signaling, as the
+shift GCC and Clang widen it with does. Integers are signless: signedness is part of the operation (`sdiv`/`udiv`,
 `slt`/`ult`, `sext`/`zext`). Pointers are opaque. Aggregates are never values;
 they live in stack slots or globals and are copied with `copy`. `i1` is the
 result of comparisons and the type of branch conditions; C's `_Bool` is an `i8`
@@ -979,7 +985,18 @@ Under the GCC identity conversions to other types, comparisons, `?:` (an
 `f32` merge parameter), the comma operator and a folded constant keep the
 excess too, and an integer operand converts straight to `f32`; Clang's rule
 rounds at all of those. An integer converts to or from `f16` through `f32`,
-which is exact wherever binary16 is finite.
+which is exact wherever binary16 is finite. `__bf16` is `bf16` and follows
+the same rules; a `__bf16` excess converted to `_Float16`, which outranks it,
+stays unrounded for GCC and is rounded to `bf16` first for Clang. An integer
+becomes a `__bf16` as the claimed compiler converts it: through `f32` for
+Clang, rounding twice as LLVM does, and once for GCC, through `f64` (32 bits
+or fewer), `f80` (64 bits) or `sitofp.bf16` (`i128`). Other `bf16`
+conversions go through `f32`. `_Complex _Float16` is a pair of `f16` parts
+computed in `float _Complex`: an excess is a complex pair of `f32` parts
+typed as the complex half, which `settle` rounds; products and quotients
+call `__mulsc3` and `__divsc3`, as both compilers do, and the excess ends
+where a real `_Float16`'s does. Clang's `__fp16` is `f16` storage; semantic
+analysis promotes its values to `float`.
 
 Complex scalars use two immutable SSA component values retained in a sparse
 arena table; taking an lvalue's value immediately loads both components.
@@ -1311,9 +1328,9 @@ results and NaN constructors. Native libm evaluates float and double in their
 own precision; guest pointers stay in interpreter memory. Long double follows
 the target representation: binary64 on MSVC, and x87 `f80` on the GNU targets.
 
-`f16` values are their bits, converted by `src/half_precision.rs`, which
-rounds once from each format bit for bit as libgcc's `__trunc*hf2` routines
-do. `f128` values compute in `src/binary128.rs`, IEEE binary128 arithmetic in
+`f16` and `bf16` values are their bits, converted by
+`src/half_precision.rs`, which rounds once from each format bit for bit as
+libgcc's `__trunc*hf2` and `__trunc*bf2` routines do. `f128` values compute in `src/binary128.rs`, IEEE binary128 arithmetic in
 software that rounds once to nearest even and propagates NaNs as libgcc's
 soft-float routines do on x86-64, so interpreted programs print what
 programs linked with libgcc print. The host provides glibc's `strtof128`
@@ -1518,9 +1535,11 @@ ranges, frame layout with CFI and SEH unwind directives for System V and Win64,
 and AT&T assembly, which the bundled clang assembles, or ELF and COFF
 objects it encodes itself; the bundled clang links executables. It compiles
 integer, pointer, `i128`, `f32` and `f64` code, `f80` on the x87 unit,
-`f128` through libgcc's soft-float routines (`isel/quad.rs`), `f16` in SSE
-registers with libgcc's `__extendhfsf2` and `__trunc{sf,df,xf,tf}hf2`
-conversions, as GCC calls them without `-mf16c` (`isel/half.rs`), variadic
+`f128` through libgcc's soft-float routines (`isel/quad.rs`), `f16` and
+`bf16` in SSE registers with libgcc's `__extendhfsf2`,
+`__trunc{sf,df,xf,tf}hf2`, `__trunc{sf,df,xf,tf}bf2` and `__floattibf`
+conversions, as GCC calls them without `-mf16c`, and a `bf16` widened by a
+shift (`isel/half.rs`), variadic
 definitions, dynamic stack allocation, computed `goto`, thread-local globals,
 calls that may return twice, C11 atomics and the GNU symbol attributes, and
 refuses everything else before writing any output.

@@ -544,6 +544,8 @@ mode gate and policy diagnostics (`Imaginary` reports an unsupported type); a
 | UnnamedDefinitionParameters | - | - | - | - | - | Y | Y | extension (warning fallback) | parser/semantic analysis |
 | InterchangeFloatTypes | - | - | - | - | - | Y | Y | `gcc` identity or `-ffloatn-types` | lexer/parser/semantic analysis |
 | Float16 | - | - | - | - | - | Y | Y | `gcc` and `clang` identities | lexer/parser/semantic analysis |
+| BFloat16 | - | - | - | - | - | - | - | `gcc` and `clang` identities (GNU native) | lexer/parser/semantic analysis |
+| Fp16 | - | - | - | - | - | - | - | `clang` identities (GNU native) | parser/semantic analysis |
 | EmptyMacroArguments | - | - | Y | Y | Y | Y | Y | extension | lexer/preprocessor |
 | Inline | - | - | Y | Y | Y | Y | Y | GNU earlier | parser |
 | Restrict | - | - | Y | Y | Y | Y | Y | native | parser |
@@ -1514,9 +1516,9 @@ nonzero value). The resource `<float.h>` defines GCC's TS 18661-3 names
 resource `<tgmath.h>` takes the types with the standard type's functions and
 result types (above), and refuses `_Float128`; GNU vector element types,
 imaginary `_FloatN` constants such as `1.0f32i`, and `__builtin_*f128` math
-beyond the existing primitives remain unsupported. `_Float16` follows in
-[Half-precision floating types](#half-precision-floating-types-2026-10-27);
-`__fp16` and `__bf16` are not implemented.
+beyond the existing primitives remain unsupported. `_Float16`, `__bf16`
+and `__fp16` follow in
+[Half-precision floating types](#half-precision-floating-types-2026-10-27).
 
 ## Half-precision floating types (2026-10-27)
 
@@ -1554,9 +1556,46 @@ Default argument promotions do not apply (a `_Float16` travels through `...`
 as itself), and the System V ABI passes it in the low 16 bits of an SSE
 register; structures and unions of halves are classified as usual. Native
 code converts with libgcc's `__extendhfsf2` and `__trunc{sf,df,xf,tf}hf2`,
-as GCC does without `-mf16c`. Limits: `_Complex _Float16` is refused,
-GCC's `__builtin_*f16` constant builtins and `FLT16_SNAN` are absent, and
-`__fp16` (Clang's storage-only type) and `__bf16` remain unsupported.
+as GCC does without `-mf16c`.
+
+`_Complex _Float16` (4 bytes, alignment 2) computes in `float _Complex`
+in both compilers, multiplying and dividing with libgcc's `__mulsc3` and
+`__divsc3` (not `__mulhc3`/`__divhc3`), and keeps the excess where a real
+`_Float16` does. Both pass it in the low 32 bits of one SSE register, real
+part first, as a structure of two halves.
+
+`__bf16` (bfloat16: 8 exponent and 7 fraction bits) is an arithmetic type
+in GCC 13 and later and in Clang on x86-64 with SSE2 (`Feature::BFloat16`),
+in every mode and without a pedantic diagnostic, since the name is
+reserved. It ranks below `_Float16` (`b + h` is a `_Float16`) and follows
+the table above in each identity, the conversion of a `__bf16` operand to
+`_Float16` included (GCC keeps its excess, Clang rounds it to bfloat16
+first). The ABI passes it as `_Float16`; it is never promoted through `...`.
+GCC has `bf16`/`BF16` constants, which `-pedantic` calls a non-standard
+suffix, and predefines `__BFLT16_MANT_DIG__` and its relatives (with
+`__BFLT16_IS_IEC_60559__` 0); the GCC identity provides both, and the Clang
+identity neither, as Clang has neither. Conversions from integers differ:
+Clang converts to `float` and rounds that (LLVM's lowering), so a wide
+integer rounds twice, while GCC rounds once (through `double`, the x87
+format or `__floattibf`); bcc follows the identity. Narrowing calls
+libgcc's `__trunc{sf,df,xf,tf}bf2`, and widening shifts the encoding into a
+`float`, as both compilers do inline, so a signaling NaN stays signaling
+(GCC's `__extendbfsf2`, which it calls before arithmetic, quiets one; that
+case alone can differ from GCC). Neither compiler has `_Complex __bf16`.
+
+`__fp16` is Clang's binary16 storage type, which Clang accepts on x86-64
+(`Feature::Fp16`, the Clang identities): every operation promotes its
+value to `float`, a variadic argument to `double`, and assignment rounds
+once; parameters and results of the type, and `_Complex __fp16`, are
+refused with Clang's errors. GCC provides `__fp16` only on ARM, so the GCC,
+MSVC and TCC identities keep the name an identifier, and GCC's "unknown
+type name" follows from that.
+
+Verified against GCC 15 and the pinned Clang on every back end
+(`tests/integration/half_precision.rs`: `bfloat16.c`, `complex_half.c`,
+`storage_half.c` and the ABI link tests). Limits: GCC's `__builtin_*f16`
+constant builtins, `FLT16_SNAN`, and imaginary `f16i` constants are
+absent.
 
 ## GNU vectors and x86 SIMD resources (2026-10-09)
 

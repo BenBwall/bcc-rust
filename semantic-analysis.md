@@ -2695,7 +2695,9 @@ sign of such a statically folded NaN differs from Clang's.
 `Scalar::Float16` is `_Float16`, IEEE binary16 (2 bytes, alignment 2), a
 distinct type ranked below `float`, so `h + 1` is a `_Float16` and `h + f`
 a `float`; default argument promotions leave it alone, as GCC and Clang do.
-`_Complex _Float16` is refused (`UnsupportedComplexHalf`). `crate::half_precision`
+`Scalar::ComplexFloat16` is `_Complex _Float16` (4 bytes, alignment 2), and
+`Scalar::BFloat16` is `__bf16`, bfloat16 (2 bytes, alignment 2), which
+ranks below `_Float16`, so `b + h` is a `_Float16`. `crate::half_precision`
 converts every format to binary16 rounding once, and an `f16` constant reads
 its spelling rounded to odd at binary128's precision, so both its binary16
 value and its value rounded once to `float` are exact (`HalfConstant`).
@@ -2721,3 +2723,21 @@ Neither compiler computes in binary16 on x86-64, and they keep the excess
 `half_operand` gives the value an operand contributes to an operator, and
 `half_result` the operator's folded value. Lowering's `half.rs` applies the
 same rules to the values it computes.
+
+`__bf16` and `_Complex _Float16` follow both rules too (`half_format`;
+verified against GCC 15 and the pinned Clang). With Clang a `__bf16` operand
+of a `_Float16` operation reads its value rounded to bfloat16 and then to
+binary16, and GCC its excess; the complex type's folded parts round
+together. GCC's `bf16`/`BF16` constants (`FloatTokenType::BFloat16`) are
+read like `f16` ones and have GCC's "non-standard suffix" extension
+diagnostic; Clang has no such suffix. `_Complex __bf16` is refused for both
+identities (`ComplexBFloat16`), as both compilers refuse it.
+
+`Scalar::Fp16` is Clang's `__fp16` (Clang identities only): binary16
+storage whose values `promote` to `float` before any operation, as integers
+promote to `int`, and to `double` as a variadic or unprototyped argument.
+Assignment, `++` and compound assignment keep the type and round once. A
+parameter or result of type `__fp16` is refused (`Fp16Parameter`,
+`Fp16Return`, Clang's "did you forget * ?" errors), as is `_Complex __fp16`
+(`ComplexFp16`). GCC provides the type only on ARM, so the other identities
+keep the name an identifier.
