@@ -84,6 +84,14 @@ static void contexts(void) {
     printf("half %a %a %d %04x\n", (double)(va * vb + vh), (double)(vh * vh + va),
            _Generic(va + vh, _Float16: 1, B: 2, default: 3), hbits((_Float16)X));
     printf("from half %04x %04x\n", bits((B)vh), bits((B)(vh * vh)));
+    /* GCC evaluates __bf16 + _Float16 in float, so a __bf16 beyond
+       binary16's range stays finite; Clang converts it to _Float16 first. */
+    {
+        volatile B big = 0x1p20f;
+        volatile _Float16 h1 = 1;
+        printf("range %a %a %d %a\n", (double)(big + h1), (double)(h1 - big), big > h1,
+               (double)(one ? big : h1));
+    }
 #ifdef __BFLT16_MANT_DIG__
     {
         float f = 0.1bf16, g = 1.0bf16 / 3.0BF16, h = 0x1.01p0bf16;

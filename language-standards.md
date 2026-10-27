@@ -1569,8 +1569,9 @@ in GCC 13 and later and in Clang on x86-64 with SSE2 (`Feature::BFloat16`),
 in every mode and without a pedantic diagnostic, since the name is
 reserved. It ranks below `_Float16` (`b + h` is a `_Float16`) and follows
 the table above in each identity, the conversion of a `__bf16` operand to
-`_Float16` included (GCC keeps its excess, Clang rounds it to bfloat16
-first). The ABI passes it as `_Float16`; it is never promoted through `...`.
+`_Float16` included: GCC evaluates `__bf16 + _Float16` in `float`, so
+`0x1p20` plus 1 is 1048577 there, while Clang converts the `__bf16` to
+`_Float16` first, giving infinity. The ABI passes it as `_Float16`; it is never promoted through `...`.
 GCC has `bf16`/`BF16` constants, which `-pedantic` calls a non-standard
 suffix, and predefines `__BFLT16_MANT_DIG__` and its relatives (with
 `__BFLT16_IS_IEC_60559__` 0); the GCC identity provides both, and the Clang

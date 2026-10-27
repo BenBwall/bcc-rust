@@ -668,7 +668,21 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     }
                 },
                 // GCC converts an integer operand of a `_Float16` operation
-                // straight to `float`.
+                // straight to `float`, and the other half type's operand too:
+                // `__bf16 + _Float16` is evaluated in `float`, so a `__bf16`
+                // beyond binary16's range stays finite.
+                | ConversionKind::Arithmetic
+                    if self.half_in_float()
+                        && self.half(conversion.ty).is_some()
+                        && self.half(item.ty).is_some()
+                        && self.half(item.ty) != self.half(conversion.ty) =>
+                {
+                    let value = self.excess(item, source)?;
+                    Item {
+                        operand: Operand::Excess(value),
+                        ty:      conversion.ty,
+                    }
+                },
                 | ConversionKind::Arithmetic
                     if self.half_in_float()
                         && self.half(conversion.ty).is_some()

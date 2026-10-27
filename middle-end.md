@@ -986,8 +986,10 @@ Under the GCC identity conversions to other types, comparisons, `?:` (an
 excess too, and an integer operand converts straight to `f32`; Clang's rule
 rounds at all of those. An integer converts to or from `f16` through `f32`,
 which is exact wherever binary16 is finite. `__bf16` is `bf16` and follows
-the same rules; a `__bf16` excess converted to `_Float16`, which outranks it,
-stays unrounded for GCC and is rounded to `bf16` first for Clang. An integer
+the same rules; a `__bf16` operand of a `_Float16` operation, which
+outranks it, converts straight to `f32` for GCC, as an integer operand
+does, so one beyond binary16's range stays finite, and is rounded to `bf16`
+and then to `f16` for Clang. An integer
 becomes a `__bf16` as the claimed compiler converts it: through `f32` for
 Clang, rounding twice as LLVM does, and once for GCC, through `f64` (32 bits
 or fewer), `f80` (64 bits) or `sitofp.bf16` (`i128`). Other `bf16`

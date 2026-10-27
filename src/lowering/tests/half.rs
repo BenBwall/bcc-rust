@@ -105,6 +105,17 @@ fn bfloat16_rounds_integers_as_the_claimed_compiler_does() {
     assert_eq!(clang.matches("sitofp.f32").count(), 3, "{clang}");
 }
 
+/// GCC evaluates `__bf16 + _Float16` in `float`, widening both operands;
+/// Clang rounds the `__bf16` to `_Float16` through `float` first.
+#[test]
+fn mixed_halves_meet_in_float_for_gcc() {
+    let source = "float f(__bf16 b, _Float16 h) { return b + h; }";
+    let gcc = lowered_as(source, CompilerIdentity::Gcc);
+    let clang = lowered_as(source, CompilerIdentity::Clang);
+    assert!(!gcc.contains("fptrunc"), "{gcc}");
+    assert_eq!(clang.matches("fptrunc.f16").count(), 2, "{clang}");
+}
+
 /// `_Complex _Float16` multiplies in `float _Complex` through `__mulsc3`
 /// and rounds both parts once, at the return.
 #[test]
