@@ -4,8 +4,9 @@
 //! follows glibc 2.43; on an older host glibc the test skips the `powl` cases
 //! glibc 2.43 changed (commit 1b657c53c21a, "Simplify powl computation for
 //! small integral y", BZ #33411: an invalid-encoding exponent, and a
-//! pseudo-denormal or invalid base to an integral power from -3 to 3), and
-//! reports per function how many it compared and skipped. Results that come
+//! pseudo-denormal or invalid base to an integral power from -3 to 3, and
+//! `tgammal` of an unnormal, which reaches `powl` with one), and reports per
+//! function how many it compared and skipped. Results that come
 //! from the processor's microcode (`f2xm1`, `fyl2x`, `fyl2xp1`, `fpatan`)
 //! are the same on both sides, since the interpreter runs those
 //! instructions on the same processor. The test binary links glibc statically,
@@ -377,12 +378,28 @@ fn wrapped_tgamma(x: X87, result: X87) -> X87 {
     }
 }
 
+/// Whether glibc 2.43 computes `tgammal` of `x` differently from earlier
+/// releases: an unnormal (a nonzero exponent without the integer bit)
+/// reaches `gammal_positive`'s `powl (x_adj_mant, x_adj)` with an
+/// invalid-encoding exponent, which commit 1b657c53c21a (BZ #33411) made
+/// give 1 rather than the positive NaN, so `tgammal` ends with the real
+/// indefinite (negative NaN) instead of a positive NaN. Pseudo-infinities
+/// and pseudo-NaNs give the same in both.
+fn tgamma_changed_in_glibc_2_43(x: X87) -> bool {
+    let (biased, significand) = x.magnitude_parts();
+    biased != 0 && biased != 0x7FFF && significand >> 63 == 0
+}
+
 /// `lgammal` (with the sign it leaves in `signgam`) and `tgammal` match
 /// glibc on random encodings and on arguments around the negative
 /// integers, the zeros of lgamma between -33 and -2, and the points where
-/// the functions change method.
+/// the functions change method. The interpreter follows glibc 2.43; on an
+/// older host glibc the test skips the `tgammal` cases glibc 2.43 changed
+/// (`tgamma_changed_in_glibc_2_43`), and it reports per function how many
+/// it compared and skipped.
 #[test]
 fn gamma_functions_match_glibc_bit_for_bit() {
+    let older_glibc = host_glibc() < (2, 43);
     let mut encodings = Encodings(0x2545_F491_4F6C_DD1D);
     let mut arguments = |case: u32| {
         let random = encodings.next_u64();
@@ -400,31 +417,47 @@ fn gamma_functions_match_glibc_bit_for_bit() {
             | _ => fraction.scale(-i64::try_from((random >> 8) % 80).expect("small")),
         }
     };
-    let mut failures = 0;
+    // Compared, skipped and differing cases of `lgammal` and `tgammal`.
+    let (mut lgamma_counts, mut tgamma_counts) = ([0_u32; 3], [0_u32; 3]);
     for case in 0..200_000 {
         let x = arguments(case);
         let (actual, actual_sign) = lgamma(x).expect("an x87 host");
         let expected = glibc(lgammal, [x, x, x]);
         // SAFETY: glibc's `lgammal` has just set `signgam` on this thread.
         let expected_sign = unsafe { (&raw const signgam).read_volatile() };
+        lgamma_counts[0] += 1;
         if (actual, actual_sign) != (expected, expected_sign) {
-            failures += 1;
-            if failures <= 8 {
+            lgamma_counts[2] += 1;
+            if lgamma_counts[2] <= 4 {
                 eprintln!(
                     "lgammal({x:?}): {actual:?} {actual_sign}, glibc {expected:?} {expected_sign}"
                 );
             }
         }
+        if older_glibc && tgamma_changed_in_glibc_2_43(x) {
+            tgamma_counts[1] += 1;
+            continue;
+        }
+        tgamma_counts[0] += 1;
         let actual = interpreted(Operation::Tgamma, &[x]);
         let expected = wrapped_tgamma(x, glibc(tgammal, [x, x, x]));
         if actual != expected {
-            failures += 1;
-            if failures <= 8 {
+            tgamma_counts[2] += 1;
+            if tgamma_counts[2] <= 4 {
                 eprintln!("tgammal({x:?}): {actual:?}, glibc {expected:?}");
             }
         }
     }
-    assert_eq!(failures, 0, "results that differ from glibc");
+    for (name, [compared, skipped, differ]) in
+        [("lgammal", lgamma_counts), ("tgammal", tgamma_counts)]
+    {
+        eprintln!("{name}: {compared} compared, {skipped} skipped, {differ} differ");
+    }
+    assert_eq!(
+        lgamma_counts[2] + tgamma_counts[2],
+        0,
+        "results that differ from glibc"
+    );
 }
 
 /// The cases glibc 2.43's `powl` rewrite changed, as an older glibc reported

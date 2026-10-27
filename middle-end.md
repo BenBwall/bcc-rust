@@ -1354,7 +1354,8 @@ standard streams are), or through `lgamma_r`'s pointer, with glibc's
 `lgamma` left in the host's `signgam`.
 `src/backend/interpreter/host/math/extended/tests.rs` compares every
 function with the test binary's glibc on random encodings (skipping, on a
-glibc before 2.43, the `powl` cases its commit 1b657c53c21a changed), and
+glibc before 2.43, the `powl` cases its commit 1b657c53c21a changed, and
+`tgammal` of an unnormal, which reaches them), and
 `tests/fixtures/programs/long_double_math.c` and `gamma_functions.c` with
 programs built against glibc; `long_double_modern_glibc.c` pins the `powl` cases (non-canonical
 bases to small integer powers) on which glibc 2.39 and 2.43 differ. `printf` formats every
