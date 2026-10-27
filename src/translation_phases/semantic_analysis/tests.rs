@@ -17,6 +17,7 @@ mod bit_field_alignment;
 mod bit_field_results;
 mod builtin_names;
 mod checked_builtins;
+mod compound_literal_statics;
 mod control_facts;
 mod correspondence;
 mod diagnostic_parity;

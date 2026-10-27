@@ -100,6 +100,18 @@ pub(crate) enum Feature {
     LabelsAsValues,
     LocalLabels,
     OmittedConditionalOperand,
+    /// A conditional expression whose alternatives are one void expression
+    /// and one of another type, giving the whole expression void type.
+    /// GNU extension to C99 §6.5.15 paragraph 3, p. 90; PDF p. 102; GCC
+    /// c/c-typeck.cc, `build_conditional_expr`.
+    OneVoidConditional,
+    /// A compound literal of a static structure or union's own type, with
+    /// only constant elements, as its initializer: its braced list
+    /// initializes the object as if written in its place.
+    /// GNU extension: GCC manual, "Compound Literals",
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Compound-Literals.html>; extends
+    /// C99 §6.7.8 paragraph 4, p. 125; PDF p. 137.
+    ConstantCompoundLiteral,
     ZeroLengthArrays,
     Int128,
     AutoType,
@@ -119,6 +131,11 @@ pub(crate) enum Feature {
     ExtraSemicolons,
     NestedFunctions,
     ImaginaryConstants,
+    /// The `\e` and `\E` escape sequences for ESC (U+001B).
+    /// GNU extension: GCC manual, "The Character ESC in Constants",
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Character-Escapes.html>; extends
+    /// C99 §6.4.4.4 paragraph 1, p. 59; PDF p. 71.
+    EscapeCharacter,
     DollarIdentifiers,
     NamedVariadicMacros,
     GnuVaArgs,
@@ -276,6 +293,8 @@ impl Feature {
             | Self::LabelsAsValues
             | Self::LocalLabels
             | Self::OmittedConditionalOperand
+            | Self::OneVoidConditional
+            | Self::ConstantCompoundLiteral
             | Self::ZeroLengthArrays
             | Self::Int128
             | Self::AutoType
@@ -289,6 +308,7 @@ impl Feature {
             | Self::ExtraSemicolons
             | Self::NestedFunctions
             | Self::ImaginaryConstants
+            | Self::EscapeCharacter
             | Self::DollarIdentifiers
             | Self::NamedVariadicMacros
             | Self::GnuVaArgs
@@ -405,6 +425,8 @@ impl Feature {
         Self::LabelsAsValues,
         Self::LocalLabels,
         Self::OmittedConditionalOperand,
+        Self::OneVoidConditional,
+        Self::ConstantCompoundLiteral,
         Self::ZeroLengthArrays,
         Self::Int128,
         Self::AutoType,
@@ -418,6 +440,7 @@ impl Feature {
         Self::ExtraSemicolons,
         Self::NestedFunctions,
         Self::ImaginaryConstants,
+        Self::EscapeCharacter,
         Self::DollarIdentifiers,
         Self::NamedVariadicMacros,
         Self::GnuVaArgs,

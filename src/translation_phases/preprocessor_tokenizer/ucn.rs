@@ -10,6 +10,7 @@ use crate::{
             ArenaString,
             Bump,
         },
+        byte_scan,
         string_cache::StringCacheId,
     },
 };
@@ -39,6 +40,54 @@ pub(crate) fn identifier(
     let id = context.string_cache.intern(&*canonical);
     let _ = context.canonical_identifiers.insert(raw, id);
     (PreprocessorTokenType::UniversalIdentifier, raw)
+}
+
+/// The identifier `text` names when it is spelled as exactly one
+/// identifier, by the lexer's rules: ASCII letters, digits and `_`, `$`
+/// where accepted, universal character names, and alphabetic (first) or
+/// alphanumeric characters beyond ASCII. Its identity is the canonical
+/// spelling [`identifier`] records, so `caf\u00e9` and `café` agree.
+/// For identifiers written outside phase 3, as in a pragma's string operand.
+/// C99: §6.4.2.1p1-3, p. 51; PDF p. 63; §6.4.3p4, p. 53; PDF p. 65.
+pub(crate) fn identifier_name(
+    context: &mut Context<'_>,
+    scratch: &Bump,
+    text: &str,
+) -> Option<StringCacheId> {
+    let dollar = context
+        .configuration
+        .accepts(crate::configuration::Feature::DollarIdentifiers);
+    let mut canonical = ArenaString::with_capacity_in(text.len(), scratch);
+    let mut index = 0;
+    while index < text.len() {
+        let first = index == 0;
+        let rest = &text[index..];
+        let run = byte_scan::identifier_run(rest.as_bytes());
+        if run != 0 && !(first && rest.as_bytes()[0].is_ascii_digit()) {
+            canonical.push_str(&rest[..run]);
+            index += run;
+            continue;
+        }
+        let (c, length) = match decode(rest, first) {
+            | Some(decoded) => decoded,
+            | None => {
+                let c = rest.chars().next()?;
+                let valid = match c {
+                    | '$' => dollar,
+                    | c if c.is_ascii() => false,
+                    | c if first => c.is_alphabetic(),
+                    | c => c.is_alphanumeric(),
+                };
+                if !valid {
+                    return None;
+                }
+                (c, c.len_utf8())
+            },
+        };
+        canonical.push(c);
+        index += length;
+    }
+    (!canonical.is_empty()).then(|| context.string_cache.intern(&*canonical))
 }
 
 /// Decodes a `universal-character-name` valid in an identifier.
