@@ -1170,6 +1170,38 @@ int main(void) {{ FILE *first = fopen(\"{path_text}\", \"r+\");
         interpreter_matches_glibc("gamma_functions.c", &[]);
     }
 
+    /// `tests/fixtures/programs/wide_stream_positions.c` runs every sequence
+    /// of four reads, pushbacks, flushes and seeks on wide streams in the
+    /// "C" locale and UTF-8 through several buffer sizes, with `ftell` after
+    /// each: the interpreter must follow glibc's wide get and backup areas
+    /// and print what glibc prints.
+    #[test]
+    fn wide_stream_positions_match_glibc() {
+        interpreter_matches_glibc("wide_stream_positions.c", &["--interpret-allow-fs"]);
+    }
+
+    /// glibc aborts a `SEEK_CUR` seek while a wide stream reads its backup
+    /// area (`_IO_seekoff_unlocked`), after what it wrote out; so does the
+    /// interpreter.
+    #[test]
+    fn wide_seek_from_the_backup_area_aborts_as_glibc_does() {
+        if host() != Some("x86_64-unknown-linux-gnu") {
+            return;
+        }
+        let source = "typedef struct _IO_FILE FILE; extern FILE *stdout; typedef unsigned wint_t;
+FILE *fopen(const char *, const char *); int fputs(const char *, FILE *); int fclose(FILE *);
+wint_t fgetwc(FILE *); wint_t ungetwc(wint_t, FILE *); int fseek(FILE *, long, int);
+int printf(const char *, ...); int fflush(FILE *); char *tmpnam(char *); int remove(const char *);
+int main(void) { char name[20]; tmpnam(name); FILE *w = fopen(name, \"w\"); fputs(\"abc\", w);
+  fclose(w); FILE *f = fopen(name, \"r\"); fgetwc(f); ungetwc('Z', f); remove(name);
+  printf(\"before\\n\"); fflush(stdout); fseek(f, 0, 0); ungetwc('Z', f); printf(\"set\\n\");
+  fflush(stdout); fseek(f, 0, 1); printf(\"after\\n\"); return 0; }
+";
+        let output = bcc(source, &["--interpret", "--interpret-allow-fs"]);
+        assert_eq!(output.status.code(), Some(134), "{}", text(&output.stderr));
+        assert_eq!(text(&output.stdout), "before\nset\n");
+    }
+
     /// `tests/fixtures/programs/exit_handlers.c` ends in each way glibc
     /// offers: the `atexit` and `on_exit` handlers in reverse order around
     /// the destructors, then the streams written out, for a return from

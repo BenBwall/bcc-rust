@@ -504,6 +504,11 @@ impl DefaultHost<'_> {
                 };
                 let entry = &mut self.streams.entries[stream];
                 let moved = entry.seek(offset, whence);
+                // glibc aborts a `SEEK_CUR` while a wide stream reads its
+                // backup area (`_IO_seekoff_unlocked`).
+                if entry.aborted {
+                    return Ok(HostReturn::Abort);
+                }
                 if call.name == "rewind" {
                     // glibc's `rewind` clears both indicators even when the
                     // seek fails.

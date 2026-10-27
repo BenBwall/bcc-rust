@@ -1474,14 +1474,17 @@ ASCII and reads such a byte as `EILSEQ`, and in "C.UTF-8" both are UTF-8; a
 stream keeps the conversion of the locale it was oriented in. A wide
 stream has glibc's wide put area, as many wide characters as the byte
 buffer holds bytes (a quarter as many in a `setvbuf` buffer), whose
-write-outs convert and write all it holds, and glibc's wide get area:
+write-outs convert and write all it holds, and glibc's wide get areas
+with their pointers (`host/stdio/stream/wide_get.rs`):
 `_IO_wfile_underflow` converts the byte buffer into a wide buffer of that
-size, carrying an incomplete character's bytes over refills; `ungetwc` of
-the character just read steps back within it, and any other character
-goes into a backup area where `ftell` fails with `EINVAL`; and `ftell`,
-`fflush`, seeks and `fclose` count the wide buffer as `do_ftell_wide` and
-`_IO_wfile_sync` do, by the fixed width of the "C" locale's conversion or
-by reconverting UTF-8 from where the last conversion started. The `wscanf` family reads
+size, carrying an incomplete character's bytes over refills; `ungetwc`
+steps back over the character just read and otherwise switches to a
+backup buffer (`_IO_sputbackwc`, `_IO_wdefault_pbackfail`); and `ftell`,
+`fflush`, `fseek` and `fclose` compute from those pointers as
+`do_ftell_wide`, `_IO_wfile_sync` and `_IO_wfile_seekoff` do, by the
+fixed width of the "C" locale's conversion or by reconverting UTF-8 from
+the byte buffer's base, including glibc's abort of a `SEEK_CUR` seek
+while the backup area is read. The `wscanf` family reads
 whole characters, matches scansets by character and converts what `%c`,
 `%s` and `%[` store with the current locale (`EILSEQ` when it cannot); a
 `printf` or `wprintf` that meets a character it cannot convert keeps what
