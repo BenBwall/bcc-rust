@@ -432,7 +432,8 @@ fn static_storage_arithmetic_and_address_constants() {
     rejects("int n=1/0;", SemanticErrorKind::ConstantOverflow);
     // Annex F: a floating division by zero is an infinite constant.
     accepts("double n=1.0/0.0;");
-    rejects("int i=(int)(1.0/0.0);", SemanticErrorKind::ConstantOverflow);
+    // GCC and Clang store the saturated value of an out-of-range conversion.
+    accepts("int i=(int)(1.0/0.0);");
 }
 
 #[test]

@@ -25,6 +25,7 @@ use super::{
     super::parsing::declaration_syntax::BracedInitializerList,
     Analyzer,
     BindingKind,
+    BitRange,
     Duration,
     FlexibleArray,
     InitOperation,
@@ -162,6 +163,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         let mut flexible: Option<FlexibleExtent> = None;
         let mut count = 0;
         let before = self.semantic_errors;
+        self.initializer_checks += 1;
         let mut unmodeled = false;
         work.push(InitWork::Value(
             ty,
@@ -217,6 +219,14 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                             } else {
                                 e.source_vectors
                             };
+                            if let Some(length) =
+                                self.copy_array_literal(plan, target, e, &site, static_storage)
+                            {
+                                if std::ptr::eq(init, initializer) {
+                                    count = count.max(length);
+                                }
+                                continue;
+                            }
                             let errors_before_conversion = self.semantic_errors;
                             if matches!(self.types.nodes[target.index], TypeKind::Array(..))
                                 || !self.assignment_conversion_at(target, info, diagnostic_site)
@@ -270,7 +280,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                             if let Some(literal) = literal.or(converted) {
                                 self.check_static_compound_literal(e, literal);
                             } else if static_storage {
-                                self.check_static_initializer(target, info, e, bit_field);
+                                self.check_static_initializer(target, info, e, site.bits);
                             }
                         },
                         | InitializerType::InitializerList(list) => {
@@ -701,8 +711,39 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         target: TypeId,
         info: super::ExpressionInfo<'tu>,
         e: &'tu Expression<'tu>,
-        bit_field: bool,
+        bits: Option<BitRange>,
     ) {
+        let bit_width = bits.map(|bits| bits.width);
+        let bit_field = bits.is_some();
+        let overflow = self.static_float_conversion(target, info, e, bit_width)
+            || info.folding == ConstantFolding::Overflow;
+        if overflow
+            && self.context.configuration.float_conversion_rules()
+                == crate::configuration::RuleSet::Gcc
+        {
+            self.group_diagnostic(
+                crate::configuration::DiagnosticGroup::PedanticOverflow,
+                SemanticErrorKind::PedanticOverflow,
+                e.source_vectors,
+                None,
+                None,
+            );
+        } else if overflow && bit_field {
+            // Clang's evaluator gives up on the undefined conversion, once
+            // per initializer, and its code generation emits no bit-field
+            // without a value.
+            if std::mem::replace(&mut self.bit_field_overflowed, self.initializer_checks)
+                != self.initializer_checks
+            {
+                self.error(
+                    SemanticErrorKind::NonConstantInitializer,
+                    e.source_vectors,
+                    None,
+                    None,
+                );
+            }
+            return;
+        }
         let address = info.constant == ConstantClass::Address
             || (info.static_address
                 && matches!(
@@ -751,6 +792,63 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 None,
             );
         }
+    }
+
+    /// Folds the conversion of the floating constant `e` to the integer
+    /// type `target` of a static object, out of the integer's range, to the
+    /// value its identity's compiler stores, which lowering then writes:
+    /// GCC (`convert_and_check`) saturates to the bit-field's own width
+    /// (`100.0` stores 7 in a 4-bit `int`) and warns under `-Woverflow`;
+    /// Clang saturates to the declared type, whose low bits a bit-field
+    /// keeps, and warns only for a literal (`-Wliteral-conversion`, in
+    /// [`Self::literal_conversion_warning`]). Returns whether the value was
+    /// out of range. The behavior is undefined in C.
+    /// C99: §6.3.1.4 paragraph 1, p. 43; PDF p. 55; §6.7.8 paragraph 4,
+    /// p. 125; PDF p. 137.
+    fn static_float_conversion(
+        &mut self,
+        target: TypeId,
+        info: super::ExpressionInfo<'tu>,
+        e: &'tu Expression<'tu>,
+        bit_width: Option<u32>,
+    ) -> bool {
+        use super::super::preprocessing::FloatTokenType;
+        let value = match (info.floating(), info.binary128()) {
+            | (Some(value), _) => FloatTokenType::LongDouble(value.real),
+            | (_, Some(value)) => FloatTokenType::Float128(value.real),
+            | _ => return false,
+        };
+        if info.integer.is_some() || self.integer_type(info.ty).is_some() {
+            return false;
+        }
+        let gcc = self.context.configuration.float_conversion_rules()
+            == crate::configuration::RuleSet::Gcc;
+        let Some((stored, true)) =
+            self.saturated_float_cast(target, value, bit_width.filter(|_| gcc))
+        else {
+            return false;
+        };
+        if let Some(&index) = self.expression_indices.get(&std::ptr::from_ref(e).addr()) {
+            self.expressions[index].integer = Some(stored);
+        }
+        if gcc {
+            let text = crate::diagnostics::format_in!(
+                self.scratch,
+                "overflow in conversion from `{}` to `{}` changes value to {}",
+                self.conversion_spelling(info.ty),
+                self.conversion_spelling(target),
+                stored
+            );
+            let text = self.context.string_cache.intern(text);
+            self.group_diagnostic(
+                crate::configuration::DiagnosticGroup::Overflow,
+                SemanticErrorKind::FloatOverflow(text),
+                e.source_vectors,
+                None,
+                None,
+            );
+        }
+        true
     }
 
     /// The compound literal whose bytes `e` gives a static object or
@@ -808,6 +906,119 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         if let ExpressionType::CompoundLiteral { initializer, .. } = literal.kind {
             self.check_static_plan(initializer);
         }
+    }
+
+    /// Copies the compound literal of array type, possibly parenthesized,
+    /// that initializes the array `target` at `site` as if its braced list
+    /// were written in its place, and returns the number of elements it
+    /// has, which completes an array of unknown size. GCC requires static
+    /// storage, and rejects an automatic array ("array initialized from
+    /// non-constant array expression", or "invalid initializer" for a
+    /// literal with side effects); Clang accepts any storage, but only a
+    /// literal without side effects, and reports the extension under
+    /// `-Wgnu-compound-literal-initializer`. Any other array expression is
+    /// no initializer of an array, which the caller reports.
+    /// GNU extension: GCC manual, "Compound Literals"; C99 §6.7.8
+    /// paragraph 16, p. 126; PDF p. 138.
+    fn copy_array_literal(
+        &mut self,
+        plan: &mut PlanBuilder<'tu, 's>,
+        target: TypeId,
+        e: &'tu Expression<'tu>,
+        site: &Site<'s>,
+        static_storage: bool,
+    ) -> Option<u64> {
+        let (literal, length) = self.matching_array_literal(target, e, true)?;
+        let gcc =
+            self.context.configuration.array_literal_rules() == crate::configuration::RuleSet::Gcc;
+        let side_effects = self.has_side_effects(literal);
+        if gcc && !static_storage || !gcc && side_effects {
+            // GCC wraps a literal with side effects, which is then no
+            // literal ("invalid initializer").
+            let kind = if gcc && side_effects {
+                SemanticErrorKind::InvalidInitializer
+            } else {
+                SemanticErrorKind::NonConstantArrayInitializer
+            };
+            self.error(kind, e.source_vectors, None, None);
+        } else if !gcc {
+            self.context.report_extension(
+                crate::configuration::Feature::ArrayCompoundLiteral,
+                "array initialized from a compound literal",
+                e.source_vectors,
+            );
+        }
+        if static_storage {
+            self.check_static_compound_literal(e, literal);
+        }
+        let ty = match self.types.nodes[target.index] {
+            | TypeKind::Array(element, ArrayBound::Incomplete) => self
+                .types
+                .intern(TypeKind::Array(element, ArrayBound::Constant(length))),
+            | _ => target,
+        };
+        plan.copy(literal, site.destination(ty), self.enclosing_unions(site));
+        Some(length)
+    }
+
+    /// The compound literal, possibly parenthesized, of an array type that
+    /// may initialize the array `target`, and its number of elements. GCC
+    /// requires array types compatible once each element type's qualifiers
+    /// are dropped (`digest_init` compares main variants). Clang requires
+    /// the same element type, and the same bound unless `target`'s is
+    /// unknown (`hasCompatibleArrayTypes`). Only the `whole` object's
+    /// unknown bound completes from the literal: a flexible array member
+    /// inside braces is no array a literal initializes, and neither
+    /// compiler accepts one there.
+    /// GNU extension: GCC manual, "Compound Literals".
+    fn matching_array_literal(
+        &mut self,
+        target: TypeId,
+        e: &'tu Expression<'tu>,
+        whole: bool,
+    ) -> Option<(&'tu Expression<'tu>, u64)> {
+        let TypeKind::Array(target_element, target_bound) = self.types.nodes[target.index] else {
+            return None;
+        };
+        let literal = unparenthesized(e);
+        if !matches!(literal.kind, ExpressionType::CompoundLiteral { .. }) {
+            return None;
+        }
+        let ty = self.expression_info(literal).ty;
+        let TypeKind::Array(element, ArrayBound::Constant(length)) = self.types.nodes[ty.index]
+        else {
+            return None;
+        };
+        let bounds = match target_bound {
+            | ArrayBound::Incomplete => whole,
+            | ArrayBound::Constant(target_length) => target_length == length,
+            | _ => false,
+        };
+        let compatible = bounds
+            && if self.context.configuration.array_literal_rules()
+                == crate::configuration::RuleSet::Gcc
+            {
+                let [a, b] = [target_element, element].map(|ty| self.element_main_variant(ty));
+                self.types.composite(a, b).is_some()
+            } else {
+                target_element == element
+            };
+        compatible.then_some((literal, length))
+    }
+
+    /// `ty` without the qualifiers, `_Atomic` included, of its innermost
+    /// element type, which GCC's main variant of an array type drops.
+    fn element_main_variant(&mut self, mut ty: TypeId) -> TypeId {
+        let mut bounds = ArenaVec::new_in(self.scratch);
+        while let TypeKind::Array(element, bound) = self.types.nodes[ty.index] {
+            bounds.push(bound);
+            ty = element;
+        }
+        let mut ty = self.types.non_atomic(ty).unqualified();
+        while let Some(bound) = bounds.pop() {
+            ty = self.types.intern(TypeKind::Array(ty, bound));
+        }
+        ty
     }
 
     /// The compound literal whose bytes `e` gives an object of type
@@ -1145,7 +1356,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 } => {
                     let e = plan.values[value.0 as usize].expression;
                     let info = self.expression_info(e);
-                    self.check_static_initializer(destination.ty, info, e, bit_field.is_some());
+                    self.check_static_initializer(destination.ty, info, e, bit_field);
                 },
                 | InitOperation::Copy {
                     value, destination, ..
@@ -1160,7 +1371,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                         self.check_static_plan(initializer);
                     } else {
                         let info = self.expression_info(e);
-                        self.check_static_initializer(destination.ty, info, e, false);
+                        self.check_static_initializer(destination.ty, info, e, None);
                     }
                 },
                 | InitOperation::Zero { .. }
@@ -1683,6 +1894,13 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         if self.vector_assignment(target, self.expression_info(e).ty) {
             return true;
         }
+        // GCC: an array compound literal initializes an array element or
+        // member whole, as it does the object (Clang only the object).
+        if self.context.configuration.array_literal_rules() == crate::configuration::RuleSet::Gcc
+            && self.matching_array_literal(target, e, false).is_some()
+        {
+            return true;
+        }
         matches!(self.types.nodes[target.index], TypeKind::Tag(_))
             && self
                 .types
@@ -1760,8 +1978,10 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         if let ArrayBound::Constant(extent) = bound
             && extent < count - 1
         {
-            self.error(
-                SemanticErrorKind::ExcessInitializer,
+            // Only the characters that fit are stored.
+            self.group_diagnostic(
+                crate::configuration::DiagnosticGroup::ExcessInitializers,
+                SemanticErrorKind::ExcessString,
                 e.source_vectors,
                 None,
                 None,

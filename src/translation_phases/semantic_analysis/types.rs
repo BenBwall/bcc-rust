@@ -395,7 +395,7 @@ impl<'tu, 's> TypeInterner<'tu, 's> {
     /// C99: §5.1.1.3p1, p. 11; PDF p. 23 (diagnostic identification).
     pub(crate) fn recovery_type(&mut self, operands: &[TypeId]) -> TypeId {
         match operands.iter().find_map(|&ty| self.unmodeled_type(ty)) {
-            | Some(reason) => self.unmodeled(reason),
+            | Some(reason) => self.unmodeled(reason.anonymous()),
             | None => self.unknown(),
         }
     }
@@ -486,7 +486,11 @@ pub(crate) struct TypeInterner<'tu, 's> {
 /// C99: §4p6, p. 7; PDF p. 19 (extensions must be identified accurately).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum UnmodeledType {
-    BitInt,
+    /// A `_BitInt(N)`, with its width once checked (0 before), which casts
+    /// to and from pointers read (`Analyzer::pointer_integer_cast_warning`).
+    BitInt {
+        width: u32,
+    },
     Constexpr,
     Decimal32,
     Decimal64,
@@ -498,9 +502,18 @@ pub(crate) enum UnmodeledType {
 }
 
 impl UnmodeledType {
+    /// The reason without a `_BitInt`'s width, which a record or an
+    /// expression built on one does not have.
+    pub(crate) const fn anonymous(self) -> Self {
+        match self {
+            | Self::BitInt { .. } => Self::BitInt { width: 0 },
+            | reason => reason,
+        }
+    }
+
     pub(crate) const fn description(self) -> &'static str {
         match self {
-            | Self::BitInt => "_BitInt types",
+            | Self::BitInt { .. } => "_BitInt types",
             | Self::Constexpr => "constexpr objects",
             | Self::Decimal32 => "_Decimal32 types",
             | Self::Decimal64 => "_Decimal64 types",

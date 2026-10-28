@@ -67,6 +67,8 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
             function_name: None,
             old_parameter_mode: false,
             runtime_bound: false,
+            initializer_checks: 0,
+            bit_field_overflowed: 0,
             semantic_errors: 0,
             error_diagnostics: 0,
             member_indices: ArenaMap::with_hasher_in(FxBuildHasher, scratch),

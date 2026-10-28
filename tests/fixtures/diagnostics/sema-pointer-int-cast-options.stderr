@@ -1,0 +1,41 @@
+error: cast to 'void *' from smaller integer type [-Wint-to-void-pointer-cast]
+ --> sema-pointer-int-cast-options.c:3:11
+  |
+3 |     (void)(void *)i;
+  |           ^^^^^^^^^ the integer and pointer widths differ
+  |
+  = note: C99 §6.3.2.3p5-6: the result of converting between a pointer and an integer is implementation-defined and may not be representable
+
+error: cast to pointer from integer of different size [-Wint-to-pointer-cast]
+ --> sema-pointer-int-cast-options.c:4:11
+  |
+4 |     (void)(char *)i;
+  |           ^^^^^^^^^ the integer and pointer widths differ
+  |
+  = note: C99 §6.3.2.3p5-6: the result of converting between a pointer and an integer is implementation-defined and may not be representable
+
+error: cast from 'void *' to smaller integer type [-Wvoid-pointer-to-int-cast]
+ --> sema-pointer-int-cast-options.c:5:11
+  |
+5 |     (void)(int)p;
+  |           ^^^^^^ the integer and pointer widths differ
+  |
+  = note: C99 §6.3.2.3p5-6: the result of converting between a pointer and an integer is implementation-defined and may not be representable
+
+warning: cast from pointer to integer of different size [-Wpointer-to-int-cast]
+ --> sema-pointer-int-cast-options.c:6:11
+  |
+6 |     (void)(int)cp;
+  |           ^^^^^^^ the integer and pointer widths differ
+  |
+  = note: C99 §6.3.2.3p5-6: the result of converting between a pointer and an integer is implementation-defined and may not be representable
+
+error: cast from 'void *' to smaller enumeration type [-Wvoid-pointer-to-enum-cast]
+ --> sema-pointer-int-cast-options.c:7:11
+  |
+7 |     (void)(enum E)p;
+  |           ^^^^^^^^^ the integer and pointer widths differ
+  |
+  = note: C99 §6.3.2.3p5-6: the result of converting between a pointer and an integer is implementation-defined and may not be representable
+
+4 errors and 1 warning generated.

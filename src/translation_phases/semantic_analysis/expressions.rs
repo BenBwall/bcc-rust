@@ -77,6 +77,7 @@ use crate::{
         Constant,
         Expression,
         ExpressionType,
+        UnaryOperator,
     },
 };
 
@@ -249,6 +250,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     | FloatTokenType::Float64x(_) => Scalar::Float64x,
                     | FloatTokenType::Float16(_) => Scalar::Float16,
                     | FloatTokenType::BFloat16(_) => Scalar::BFloat16,
+                    | FloatTokenType::ImaginaryFloat16(_) => Scalar::Float16.complex_type(),
+                    | FloatTokenType::ImaginaryFloat32(_) => Scalar::ComplexFloat32,
+                    | FloatTokenType::ImaginaryFloat64(_) => Scalar::ComplexFloat64,
+                    | FloatTokenType::ImaginaryFloat32x(_) => Scalar::ComplexFloat32x,
+                    | FloatTokenType::ImaginaryFloat64x(_) => Scalar::ComplexFloat64x,
                     | _ => {
                         self.retain_expression(info);
                         return;
@@ -270,17 +276,29 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     | _ => LongDouble::ZERO,
                 })));
                 info.set_floating(match value {
-                    | FloatTokenType::ImaginaryFloat(value) => Some(Floating {
+                    | FloatTokenType::ImaginaryFloat(value)
+                    | FloatTokenType::ImaginaryFloat32(value) => Some(Floating {
                         real: LongDouble::ZERO,
                         imag: LongDouble::from_double(f64::from(value)),
                     }),
-                    | FloatTokenType::ImaginaryDouble(value) => Some(Floating {
+                    | FloatTokenType::ImaginaryDouble(value)
+                    | FloatTokenType::ImaginaryFloat64(value)
+                    | FloatTokenType::ImaginaryFloat32x(value) => Some(Floating {
                         real: LongDouble::ZERO,
                         imag: LongDouble::from_double(value.get()),
                     }),
-                    | FloatTokenType::ImaginaryLongDouble(value) => Some(Floating {
+                    | FloatTokenType::ImaginaryLongDouble(value)
+                    | FloatTokenType::ImaginaryFloat64x(value) => Some(Floating {
                         real: LongDouble::ZERO,
                         imag: value,
+                    }),
+                    // The imaginary part has the value a real `f16`
+                    // constant has, excess precision included.
+                    | FloatTokenType::ImaginaryFloat16(value) => Some(Floating {
+                        real: LongDouble::ZERO,
+                        imag: LongDouble::from_double(f64::from(
+                            self.half_constant(value, HalfFormat::Binary16),
+                        )),
                     }),
                     | _ => info.floating(),
                 });
@@ -550,42 +568,103 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             info.folding = ConstantFolding::AtomicCast;
             info.ice = false;
         } else {
-            // C99 §6.6p10 permits additional constant forms. Preserve the
-            // GNU-folded address difference and compound literal value
-            // through enclosing arithmetic, a literal's read over an
-            // address's; evaluate reports them through the existing
-            // extension policy.
-            let operands = match e.kind {
-                | E::Cast {
-                    operand_expression, ..
-                }
-                | E::Unary {
-                    operand_expression, ..
-                } => [Some(operand_expression), None, None],
-                | E::Binary {
-                    left_expression,
-                    right_expression,
-                    ..
-                } => [Some(left_expression), Some(right_expression), None],
-                | E::Conditional(c) | E::OmittedConditional(c) => [
-                    Some(c.condition_expression),
-                    Some(c.then_expression),
-                    Some(c.else_expression),
-                ],
-                | _ => [None; 3],
-            };
-            let operands = operands.map(|operand| operand.map(|o| self.expression_info(o)));
-            if operands.iter().flatten().any(|o| o.folded_literal()) {
-                info.folding = ConstantFolding::CompoundLiteral;
-            } else if operands.iter().flatten().any(|o| o.folded_address()) {
-                info.folding = ConstantFolding::Address;
-            }
+            self.operand_folding(e, &mut info);
         }
         if let E::StatementExpression(block) = e.kind {
             self.close_block_effects();
             self.retain_statement_expression(e, block, info.ty);
         }
         self.retain_expression(info);
+    }
+}
+
+impl<'tu> Analyzer<'_, 'tu, '_> {
+    /// Carries into `info`, the result of `e`, the folding its operands
+    /// had.
+    /// C99: §6.6 paragraph 10, p. 96; PDF p. 108.
+    fn operand_folding(&self, e: &'tu Expression<'tu>, info: &mut ExpressionInfo<'tu>) {
+        use ExpressionType as E;
+        // C99 §6.6p10 permits additional constant forms. Preserve the
+        // GNU-folded address difference and compound literal value
+        // through enclosing arithmetic, a literal's read over an
+        // address's; evaluate reports them through the existing
+        // extension policy.
+        let operands = match e.kind {
+            | E::Cast {
+                operand_expression, ..
+            }
+            | E::Unary {
+                operand_expression, ..
+            } => [Some(operand_expression), None, None],
+            | E::Binary {
+                left_expression,
+                right_expression,
+                ..
+            } => [Some(left_expression), Some(right_expression), None],
+            | E::Conditional(c) | E::OmittedConditional(c) => [
+                Some(c.condition_expression),
+                Some(c.then_expression),
+                Some(c.else_expression),
+            ],
+            | _ => [None; 3],
+        };
+        let operands = operands.map(|operand| operand.map(|o| self.expression_info(o)));
+        // GCC's overflow mark follows arithmetic and the operand `?:`
+        // selects, not a comparison, a logical operator or a conversion to
+        // `_Bool`, whose result is a fresh constant, though still no integer
+        // constant expression.
+        let marked = |operand: Option<ExpressionInfo<'tu>>| {
+            operand.is_some_and(|o| o.folding == ConstantFolding::Overflow && o.integer.is_some())
+        };
+        let carried = match e.kind {
+            | E::Binary { operator, .. } =>
+                matches!(
+                    operator,
+                    BinaryOperator::Multiplication
+                        | BinaryOperator::Division
+                        | BinaryOperator::Modulo
+                        | BinaryOperator::Addition
+                        | BinaryOperator::Subtraction
+                        | BinaryOperator::LeftShift
+                        | BinaryOperator::RightShift
+                        | BinaryOperator::BitwiseAnd
+                        | BinaryOperator::BitwiseXor
+                        | BinaryOperator::BitwiseOr
+                ) && (marked(operands[0]) || marked(operands[1])),
+            | E::Unary { operator, .. } =>
+                operator != UnaryOperator::LogicalNot && marked(operands[0]),
+            | E::Cast { .. } =>
+                !matches!(
+                    self.types.nodes[self.types.non_atomic(info.ty).index],
+                    TypeKind::Scalar(Scalar::Bool)
+                ) && marked(operands[0]),
+            | E::Conditional(_) | E::OmittedConditional(_) => {
+                let truth = operands[0].and_then(|o| o.integer).map(|v| v.value != 0);
+                match (truth, e.kind) {
+                    | (Some(true), E::OmittedConditional(_)) => marked(operands[0]),
+                    | (Some(true), _) => marked(operands[1]),
+                    | (Some(false), _) => marked(operands[2]),
+                    | (None, _) => false,
+                }
+            },
+            | _ => false,
+        };
+        if info.integer.is_some()
+            && operands
+                .iter()
+                .flatten()
+                .any(|o| o.folding.overflowed() && o.integer.is_some())
+        {
+            info.folding = if carried {
+                ConstantFolding::Overflow
+            } else {
+                ConstantFolding::OverflowOperand
+            };
+        } else if operands.iter().flatten().any(|o| o.folded_literal()) {
+            info.folding = ConstantFolding::CompoundLiteral;
+        } else if operands.iter().flatten().any(|o| o.folded_address()) {
+            info.folding = ConstantFolding::Address;
+        }
     }
 }
 

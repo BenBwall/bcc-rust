@@ -53,6 +53,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     ) -> bool {
         let source = self.resolve_function_value(source, Some(target));
         if self.assignment_compatible(target, source) {
+            self.literal_conversion_warning(target, source);
             if self.pointer_target(target).is_some() && self.null_pointer_constant(source) {
                 self.null_conversion_warning(source, false, diagnostic_site);
             }
@@ -86,6 +87,268 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             return true;
         }
         false
+    }
+
+    /// Warns about a cast between a pointer and an integer of another width,
+    /// whose result C leaves implementation-defined and possibly
+    /// unrepresentable. GCC (`build_c_cast`) warns when a plain integer type
+    /// (neither `_Bool` nor an enumeration) and the pointer differ in width
+    /// either way, toward a pointer only when the operand is not constant
+    /// (an address constant is one). Clang (`SemaCast.cpp`) warns only when
+    /// the integer is narrower, toward a pointer only when the operand is no
+    /// integer constant expression, and splits its groups by a `void *` and
+    /// by an enumeration destination; neither compiler warns for `_Bool`. A
+    /// `_BitInt` counts with its width. GCC also withholds a cast spelled in
+    /// a system header's macro. TCC follows GCC; MSVC (whose C4311 and
+    /// C4312 warn for narrower integers) and clang-cl follow Clang
+    /// ([`crate::configuration::CompilerConfiguration::pointer_cast_rules`]).
+    /// C99: §6.3.2.3 paragraphs 5-6, p. 47; PDF p. 59.
+    pub(in crate::translation_phases::semantic_analysis) fn pointer_integer_cast_warning(
+        &mut self,
+        target: TypeId,
+        from: TypeId,
+        operand: ExpressionInfo<'tu>,
+        site: SourceVectors,
+    ) {
+        let pointer_bits = self.types.target.pointer.size * 8;
+        let gcc =
+            self.context.configuration.pointer_cast_rules() == crate::configuration::RuleSet::Gcc;
+        // The width of an integer type, and whether it is an enumeration. A
+        // `_BitInt`'s checked width counts, though the type is unmodeled.
+        let integer = |ty: TypeId| -> Option<(u64, bool)> {
+            // Clang's integral types exclude an atomic one, which a cast's
+            // value keeps (`(char *)(_Atomic int)i`); GCC drops it.
+            if !gcc && matches!(self.types.nodes[ty.index], TypeKind::Atomic(_)) {
+                return None;
+            }
+            let ty = self.types.non_atomic(ty);
+            let enumeration = match self.types.nodes[ty.index] {
+                | TypeKind::Unmodeled(super::super::types::UnmodeledType::BitInt { width })
+                    if width > 0 =>
+                    return Some((u64::from(width), false)),
+                | TypeKind::Scalar(Scalar::Bool) => return None,
+                | TypeKind::Tag(id) => self.types.tags[id].kind == TagKind::Enum,
+                | _ => false,
+            };
+            self.integer_type(ty)
+                .map(|(bits, _)| (u64::from(bits), enumeration))
+        };
+        let group = if let Some(to) = self.pointer_target(target)
+            && let Some((bits, enumeration)) = integer(from)
+        {
+            // Even an unevaluated operand that is no constant (`1 ? 2 : i`)
+            // keeps the cast from being an integer constant expression.
+            let ice = operand.ice && self.valid_ice_operands(operand.expression)
+                || self.bit_int_constant(operand.expression);
+            if gcc {
+                let constant = ice || self.casts_address_constant(operand.expression);
+                (bits != pointer_bits && !enumeration && !constant)
+                    .then_some(DiagnosticGroup::IntToPointerCast)
+            } else if bits < pointer_bits && !enumeration && !ice {
+                Some(if self.void_target(to) {
+                    DiagnosticGroup::IntToVoidPointerCast
+                } else {
+                    DiagnosticGroup::IntToPointerCast
+                })
+            } else {
+                None
+            }
+        } else if let Some(pointee) = self.pointer_target(from)
+            && let Some((bits, enumeration)) = integer(target)
+        {
+            if gcc {
+                (bits != pointer_bits && !enumeration).then_some(DiagnosticGroup::PointerToIntCast)
+            } else if bits < pointer_bits {
+                Some(match (self.void_target(pointee), enumeration) {
+                    | (true, true) => DiagnosticGroup::VoidPointerToEnumCast,
+                    | (true, false) => DiagnosticGroup::VoidPointerToIntCast,
+                    | (false, true) => DiagnosticGroup::PointerToEnumCast,
+                    | (false, false) => DiagnosticGroup::PointerToIntCast,
+                })
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        // GCC also withholds a cast written in a system header's macro
+        // expanded in user code, which Clang reports at the expansion.
+        if let Some(group) = group
+            && !(gcc
+                && site.length() != 0
+                && self
+                    .context
+                    .in_system_header(self.context.first_source_vector(site)))
+        {
+            self.pointer_diagnostic(group, site);
+        }
+    }
+
+    /// Whether `expression` casts an integer constant expression to a
+    /// `_BitInt` (`(_BitInt(32))3`), possibly through further such casts:
+    /// an integer constant expression to both compilers, though the type is
+    /// unmodeled.
+    /// C99: §6.6 paragraph 6, p. 95; PDF p. 107.
+    fn bit_int_constant(&mut self, mut expression: &'tu super::Expression<'tu>) -> bool {
+        use crate::translation_phases::parsing::syntax::ExpressionType as E;
+        let mut cast = false;
+        loop {
+            match expression.kind {
+                | E::Parenthesized { expression: inner } => expression = inner,
+                | E::Cast {
+                    operand_expression, ..
+                } if matches!(
+                    self.types.nodes[self.expression_info(expression).ty.index],
+                    TypeKind::Unmodeled(super::super::types::UnmodeledType::BitInt { .. })
+                ) =>
+                {
+                    cast = true;
+                    expression = operand_expression;
+                },
+                | _ => break,
+            }
+        }
+        cast && self.expression_info(expression).ice && self.valid_ice_operands(expression)
+    }
+
+    /// Whether `expression` is an address constant, possibly inside casts,
+    /// as GCC's `TREE_CONSTANT` finds `(int)(long)&x`.
+    /// C99: §6.6 paragraph 9, p. 96; PDF p. 108.
+    fn casts_address_constant(&self, mut expression: &'tu super::Expression<'tu>) -> bool {
+        use crate::translation_phases::parsing::syntax::ExpressionType as E;
+        loop {
+            let info = self.expression_info(expression);
+            if info.constant == super::ConstantClass::Address || info.folded_address() {
+                return true;
+            }
+            match expression.kind {
+                | E::Parenthesized { expression: inner }
+                | E::Cast {
+                    operand_expression: inner,
+                    ..
+                } => expression = inner,
+                | _ => return false,
+            }
+        }
+    }
+
+    /// Clang's `-Wliteral-conversion` (`DiagnoseFloatingImpCast`): a
+    /// floating literal, possibly signed and parenthesized, whose implicit
+    /// conversion to an integer type is out of its range ("is undefined") or
+    /// drops a fraction, or that converts to `_Bool` from a value other
+    /// than 0 or 1. GCC reports only an out-of-range conversion, and only in
+    /// a static initializer (`-Woverflow`, beside the static value it
+    /// folds). Clang checks only a builtin integer type, not an enumeration
+    /// or an atomic type. clang-cl follows Clang, TCC and MSVC GCC
+    /// ([`crate::configuration::CompilerConfiguration::float_conversion_rules`]).
+    /// C99: §6.3.1.4 paragraph 1, p. 43; PDF p. 55; §6.3.1.2 paragraph 1,
+    /// p. 43; PDF p. 55.
+    fn literal_conversion_warning(&mut self, target: TypeId, source: ExpressionInfo<'tu>) {
+        use crate::translation_phases::{
+            parsing::syntax::{
+                Constant,
+                ExpressionType as E,
+                UnaryOperator,
+            },
+            preprocessing::FloatTokenType,
+        };
+        // Clang checks builtin integer targets only, not an enumeration or
+        // an atomic type.
+        if self.context.configuration.float_conversion_rules() == crate::configuration::RuleSet::Gcc
+            || !matches!(self.types.nodes[target.index], TypeKind::Scalar(_))
+            || self.integer_type(target).is_none()
+        {
+            return;
+        }
+        let mut literal = source.expression;
+        let mut signed = false;
+        loop {
+            match literal.kind {
+                | E::Parenthesized { expression } => literal = expression,
+                | E::Unary {
+                    operator: UnaryOperator::Plus | UnaryOperator::Minus,
+                    operand_expression,
+                } if !signed => {
+                    signed = true;
+                    literal = operand_expression;
+                },
+                | _ => break,
+            }
+        }
+        if !matches!(literal.kind, E::Constant(Constant::Float(_))) {
+            return;
+        }
+        let (value, integral) = match (source.floating(), source.binary128()) {
+            | (Some(value), _) => (
+                FloatTokenType::LongDouble(value.real),
+                integral_x87(value.real),
+            ),
+            | (_, Some(value)) => (
+                FloatTokenType::Float128(value.real),
+                match value.real.class() {
+                    | crate::binary128::Class::Zero => !value.real.is_negative(),
+                    | crate::binary128::Class::Finite {
+                        exponent,
+                        significand,
+                    } =>
+                        exponent >= 0
+                            || exponent > -128
+                                && significand & ((1_u128 << exponent.unsigned_abs()) - 1) == 0,
+                    | _ => false,
+                },
+            ),
+            | _ => return,
+        };
+        let Some((stored, out_of_range)) = self.saturated_float_cast(target, value, None) else {
+            return;
+        };
+        let bool_target = matches!(
+            self.types.nodes[self.types.non_atomic(target).index],
+            TypeKind::Scalar(Scalar::Bool)
+        );
+        // `_Bool` keeps a 0 or a 1 exactly.
+        let exact = if bool_target {
+            let int = self.types.scalar(Scalar::Int);
+            integral
+                && self
+                    .float_cast(int, value)
+                    .is_some_and(|v| v.value == stored.value)
+        } else {
+            integral
+        };
+        let (from, to) = (
+            self.conversion_spelling(source.ty),
+            self.conversion_spelling(target),
+        );
+        let text = if out_of_range {
+            crate::diagnostics::format_in!(
+                self.scratch,
+                "implicit conversion of out of range value from `{from}` to `{to}` is undefined"
+            )
+        } else if exact {
+            return;
+        } else if bool_target {
+            crate::diagnostics::format_in!(
+                self.scratch,
+                "implicit conversion from `{from}` to `{to}` changes value to {}",
+                if stored.value == 0 { "false" } else { "true" }
+            )
+        } else {
+            crate::diagnostics::format_in!(
+                self.scratch,
+                "implicit conversion from `{from}` to `{to}` changes value to {stored}"
+            )
+        };
+        let text = self.context.string_cache.intern(text);
+        self.group_diagnostic(
+            DiagnosticGroup::LiteralConversion,
+            crate::translation_phases::semantic_analysis::SemanticErrorKind::LiteralConversion(
+                text,
+            ),
+            source.expression.source_vectors,
+            None,
+            None,
+        );
     }
 
     /// Diagnoses suspicious but valid C null pointer constants. Parentheses
@@ -401,4 +664,21 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     fn function_target(&self, ty: TypeId) -> bool {
         matches!(self.types.nodes[ty.index], TypeKind::Function { .. })
     }
+}
+
+/// Whether a host `long double` converts to an integer exactly: it has no
+/// fraction and is not -0. C99: §6.3.1.4 paragraph 1, p. 43; PDF p. 55.
+fn integral_x87(value: crate::float_parsing::LongDouble) -> bool {
+    let Some((negative, exponent, significand)) = value.x87_parts() else {
+        return false;
+    };
+    // Clang's `APFloat::convertToInteger` finds -0 inexact: the integer
+    // loses its sign.
+    if significand == 0 {
+        return !negative;
+    }
+    let Some(shift) = (16383 + 63_u16).checked_sub(exponent) else {
+        return true;
+    };
+    shift < 64 && significand & ((1_u64 << shift) - 1) == 0
 }

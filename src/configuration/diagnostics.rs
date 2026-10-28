@@ -53,6 +53,24 @@ impl CompilerConfiguration {
         if group == DiagnosticGroup::UnknownPragmas {
             self.warning_options[DiagnosticGroup::UnknownStdcPragma as usize].apply(option);
         }
+        let children: &[DiagnosticGroup] = match group {
+            | DiagnosticGroup::PointerToIntCast => &[
+                DiagnosticGroup::PointerToEnumCast,
+                DiagnosticGroup::VoidPointerToIntCast,
+                DiagnosticGroup::VoidPointerToEnumCast,
+            ],
+            | DiagnosticGroup::PointerToEnumCast | DiagnosticGroup::VoidPointerToIntCast =>
+                &[DiagnosticGroup::VoidPointerToEnumCast],
+            | DiagnosticGroup::IntToPointerCast => &[DiagnosticGroup::IntToVoidPointerCast],
+            | _ => &[],
+        };
+        for &child in children {
+            self.warning_options[child as usize].apply(option);
+        }
+        if group == DiagnosticGroup::Overflow {
+            self.warning_options[DiagnosticGroup::PedanticOverflow as usize]
+                .apply_to_pedantic(option);
+        }
         if group == DiagnosticGroup::IncompatiblePointerTypes {
             self.warning_options[DiagnosticGroup::PointerQualifiers as usize].apply(option);
             self.warning_options[DiagnosticGroup::IncompatibleFunctionPointerTypes as usize]
@@ -101,7 +119,16 @@ impl CompilerConfiguration {
     /// default errors, just as Clang does.
     /// C99: §5.1.1.3p1, p. 11; PDF p. 23 permits warning diagnostics.
     pub(crate) fn diagnostic_severity(self, group: DiagnosticGroup) -> Option<ErrorSeverity> {
-        let option = self.warning_options[group as usize];
+        let mut option = self.warning_options[group as usize];
+        // Clang's `-Wconversion` holds these groups; a child without an
+        // option of its own takes the parent's. GCC's `-Wconversion` holds
+        // none of Clang's groups, so its options leave them alone.
+        if option == WarningSettings::DEFAULT
+            && group.converts()
+            && self.float_conversion_rules() == super::RuleSet::Clang
+        {
+            option = self.warning_options[DiagnosticGroup::Conversion as usize];
+        }
         if !option.enabled.unwrap_or(
             group.enabled_by_default()
                 || (group.default() == GroupDefault::Extension
@@ -186,7 +213,21 @@ diagnostic_groups! {
     PointerCompare => Some("pointer-compare"), Warning, false;
     NullConversion => Some("null-conversion"), Warning, false;
     PointerBoolConversion => Some("pointer-bool-conversion"), Warning, false;
+    /// A cast from a pointer to a narrower integer (GCC: an integer of any
+    /// other width); the parent of Clang's enumeration and `void *` groups.
     PointerToIntCast => Some("pointer-to-int-cast"), Warning, false;
+    /// Clang: a cast from a pointer to a narrower enumeration.
+    PointerToEnumCast => Some("pointer-to-enum-cast"), Warning, false;
+    /// Clang: a cast from a `void *` to a narrower integer.
+    VoidPointerToIntCast => Some("void-pointer-to-int-cast"), Warning, false;
+    /// Clang: a cast from a `void *` to a narrower enumeration.
+    VoidPointerToEnumCast => Some("void-pointer-to-enum-cast"), Warning, false;
+    /// A cast to a pointer from a narrower integer that is no constant
+    /// (GCC: an integer of any other width); the parent of Clang's
+    /// `void *` group.
+    IntToPointerCast => Some("int-to-pointer-cast"), Warning, false;
+    /// Clang: a cast to a `void *` from a narrower integer.
+    IntToVoidPointerCast => Some("int-to-void-pointer-cast"), Warning, false;
     VoidPtrDereference => Some("void-ptr-dereference"), Warning, false;
     Nonnull => Some("nonnull"), Warning, false;
     PredefinedOutsideFunction => Some("predefined-identifier-outside-function"), Warning, false;
@@ -238,6 +279,26 @@ diagnostic_groups! {
     ConstantPromotion => Some("constant-promotion"), Ignored, false;
     /// An integer constant whose implicit conversion changes its value.
     ConstantConversion => Some("constant-conversion"), Warning, false;
+    /// A string literal longer than the array it initializes, null
+    /// character aside: a warning by default that `-pedantic-errors` makes
+    /// an error, as in GCC (a pedantic warning without an option) and Clang.
+    ExcessInitializers => Some("excess-initializers"), Warning, true;
+    /// GCC: a floating constant converted out of an integer type's range in
+    /// a static initializer.
+    Overflow => Some("overflow"), Warning, false;
+    /// GCC's pedantic "overflow in constant expression" for a static
+    /// initializer: reported under `-pedantic`, an error under
+    /// `-pedantic-errors`, and controlled by `-Woverflow`'s options, which
+    /// disable it or set its severity but never enable it alone.
+    PedanticOverflow => Some("overflow"), Extension, true;
+    /// Clang: a floating literal whose implicit conversion to an integer
+    /// type is out of range or changes its value; `-Wconversion` holds it.
+    LiteralConversion => Some("literal-conversion"), Warning, false;
+    /// Clang's `-Wconversion`, which reports nothing itself: under Clang's
+    /// rules the parent of the conversion groups bcc models
+    /// (`DiagnosticGroup::converts`), which take its `-W`, `-Wno-` and
+    /// `-Werror=` options unless they have their own.
+    Conversion => Some("conversion"), Ignored, false;
 }
 
 /// A group's severity when no option names it.
@@ -250,6 +311,18 @@ enum GroupDefault {
 }
 
 impl DiagnosticGroup {
+    /// Whether Clang's `-Wconversion` holds this group.
+    const fn converts(self) -> bool {
+        matches!(
+            self,
+            Self::NullConversion
+                | Self::NonLiteralNullConversion
+                | Self::PointerBoolConversion
+                | Self::ConstantConversion
+                | Self::LiteralConversion
+        )
+    }
+
     pub(crate) fn parse(name: &str) -> Option<Self> {
         Self::ALL
             .iter()
@@ -291,6 +364,17 @@ impl WarningSettings {
         error:             None,
         reenabled_warning: false,
     };
+
+    /// Applies a parent group's option to a child that only `-pedantic`
+    /// enables: disabling it, or setting its severity, but leaving whether
+    /// it reports to the extension policy otherwise.
+    fn apply_to_pedantic(&mut self, option: WarningOption) {
+        match option {
+            | WarningOption::Enable(false) => self.apply(option),
+            | WarningOption::Enable(true) => self.enabled = None,
+            | WarningOption::Error(error) => self.error = Some(error),
+        }
+    }
 
     fn apply(&mut self, option: WarningOption) {
         match option {

@@ -55,6 +55,7 @@ pub(crate) use language::{
     MsvcFeature,
     PreprocessingOption,
     RelaxedFloatingPoint,
+    RuleSet,
 };
 
 impl CompilerConfiguration {

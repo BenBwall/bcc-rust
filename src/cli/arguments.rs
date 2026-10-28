@@ -547,7 +547,6 @@ enum LanguageFlag {
     WarningsAsErrors(bool),
     WarningGroup(DiagnosticGroup, WarningOption),
     AllWarnings(bool),
-    ConversionWarnings(bool),
     ExtraWarnings,
     UnknownWarning,
     /// `-pedantic` or `-Wpedantic` (warn), or `-pedantic-errors` (deny).
@@ -604,8 +603,6 @@ impl LanguageFlag {
             | "-Wall" => return Some(Self::AllWarnings(true)),
             | "-Wno-all" => return Some(Self::AllWarnings(false)),
             | "-Wextra" | "-Wno-extra" => return Some(Self::ExtraWarnings),
-            | "-Wconversion" => return Some(Self::ConversionWarnings(true)),
-            | "-Wno-conversion" => return Some(Self::ConversionWarnings(false)),
             | "-Wno-pedantic" => return Some(Self::Pedantic(ExtensionPolicy::Allow)),
             | "-fhosted" => return Some(Self::Hosted(true)),
             | "-ffreestanding" => return Some(Self::Hosted(false)),
@@ -732,23 +729,6 @@ impl LanguageFlag {
                 DiagnosticGroup::UnusedFunction,
                 WarningOption::Enable(enabled),
             ),
-            | Self::ConversionWarnings(enabled) => configuration
-                .with_warning_option(
-                    DiagnosticGroup::NullConversion,
-                    WarningOption::Enable(enabled),
-                )
-                .with_warning_option(
-                    DiagnosticGroup::NonLiteralNullConversion,
-                    WarningOption::Enable(enabled),
-                )
-                .with_warning_option(
-                    DiagnosticGroup::PointerBoolConversion,
-                    WarningOption::Enable(enabled),
-                )
-                .with_warning_option(
-                    DiagnosticGroup::ConstantConversion,
-                    WarningOption::Enable(enabled),
-                ),
             | Self::WarningsAsErrors(enabled) => configuration.with_warnings_as_errors(enabled),
             | Self::WarningGroup(group, option) => configuration.with_warning_option(group, option),
             | Self::Pedantic(policy) => configuration.with_extension_policy(policy),

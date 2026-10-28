@@ -31,6 +31,7 @@ mod file_scope_asm;
 mod freestanding_cli;
 mod half_precision;
 mod hosted_cli;
+mod identity_programs;
 mod inline_asm;
 mod language_cli;
 mod late_builtins;

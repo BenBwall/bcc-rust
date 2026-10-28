@@ -149,19 +149,27 @@ impl<'tu> Context<'tu> {
         });
     }
 
-    /// Withdraws the pending preprocessing diagnostic at `index`. An already
-    /// suppressed placeholder takes its place, so every other pending
-    /// diagnostic keeps its queue position, which the parser records while
-    /// it runs.
+    /// Withdraws the pending preprocessing or extension diagnostic at
+    /// `index`. An already suppressed placeholder takes its place, so every
+    /// other pending diagnostic keeps its queue position, which the parser
+    /// records while it runs.
     pub(crate) fn withdraw_pending_error(&mut self, index: usize) {
         let suppressed = self.tu_arena().alloc(Cell::new(false));
         let Some(slot) = self.pending_errors.iter_mut().nth(index) else {
             return;
         };
         debug_assert!(
-            matches!(slot, TranslationError::Preprocessing(_)),
-            "only preprocessing diagnostics are withdrawn"
+            matches!(
+                slot,
+                TranslationError::Preprocessing(_) | TranslationError::Extension(_)
+            ),
+            "only preprocessing and extension diagnostics are withdrawn"
         );
+        if let TranslationError::Extension(extension) = slot
+            && extension.suppressed.get()
+        {
+            return;
+        }
         *slot = TranslationError::Extension(ExtensionDiagnostic {
             suppressed,
             spelling: "",

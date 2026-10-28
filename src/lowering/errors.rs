@@ -37,10 +37,6 @@ pub(crate) struct LoweringError {
 
 /// What went wrong.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-#[expect(
-    variant_size_differences,
-    reason = "Errors are rare; naming the missing fact is worth the bytes."
-)]
 pub(crate) enum LoweringErrorKind {
     /// An earlier phase reported an error, so no code is generated.
     /// C99: §5.1.1.3 paragraph 1, p. 11; PDF p. 23.

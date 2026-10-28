@@ -30,7 +30,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     pub(super) fn evaluate(&mut self, expression: &'tu Expression<'tu>) {
         use ExpressionType as E;
         let info = self.expression_info(expression);
-        if self.types.unanalyzed(info.ty) || info.atomic_cast() {
+        // An out-of-range conversion has a value only as an initializer.
+        if self.types.unanalyzed(info.ty) || info.atomic_cast() || info.folding.overflowed() {
             self.integers.push(None);
             return;
         }
@@ -227,7 +228,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// C99: §6.6p6, p. 95; PDF p. 107.
     /// Modeled constant builtin calls are an extension under §6.6p10,
     /// p. 96; PDF p. 108.
-    fn valid_ice_operands(&mut self, expression: &'tu Expression<'tu>) -> bool {
+    pub(super) fn valid_ice_operands(&mut self, expression: &'tu Expression<'tu>) -> bool {
         let mut work = super::ArenaVec::new_in(self.scratch);
         let mut values = super::ArenaVec::new_in(self.scratch);
         work.push((expression, false, None));
@@ -604,6 +605,102 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         Some(model.cast_value(raw as i128))
     }
 
+    /// The value GCC and Clang store for a floating constant converted to
+    /// the integer type `ty`, and whether it was out of range: the value
+    /// truncated toward zero when it fits, else 0 for a NaN and the
+    /// nearest bound of the range of `width` bits (of `ty` when `None`),
+    /// as both compilers fold the conversion (GCC
+    /// `fold_convert_const_int_from_real`, Clang's evaluator through
+    /// `APFloat::convertToInteger`). The behavior is undefined in C; this is
+    /// the value both choose. `_Bool` takes 1 for any nonzero value.
+    /// C99: §6.3.1.4 paragraph 1, p. 43; PDF p. 55; §6.3.1.2 paragraph 1,
+    /// p. 43; PDF p. 55.
+    pub(super) fn saturated_float_cast(
+        &self,
+        ty: TypeId,
+        value: super::super::preprocessing::FloatTokenType,
+        width: Option<u32>,
+    ) -> Option<(Integer, bool)> {
+        use super::super::preprocessing::FloatTokenType as F;
+        let (bits, signed) = self.integer_type(ty)?;
+        let bits = width.unwrap_or(bits).min(bits);
+        let (negative, nan) = match value {
+            | F::Float(value) | F::Float32(value) => (value.is_sign_negative(), value.is_nan()),
+            | F::Float16(value) => {
+                let value = self.half_constant(value, crate::half_precision::HalfFormat::Binary16);
+                (value.is_sign_negative(), value.is_nan())
+            },
+            | F::BFloat16(value) => {
+                let value = self.half_constant(value, crate::half_precision::HalfFormat::BFloat16);
+                (value.is_sign_negative(), value.is_nan())
+            },
+            | F::Double(value) | F::Float64(value) | F::Float32x(value) =>
+                (value.get().is_sign_negative(), value.get().is_nan()),
+            | F::LongDouble(value) | F::Float64x(value) => {
+                let (negative, exponent, significand) = value.x87_parts()?;
+                (negative, exponent == 0x7FFF && significand != 1 << 63)
+            },
+            | F::Float128(value) | F::LongDouble128(value) => (
+                value.is_negative(),
+                matches!(value.class(), crate::binary128::Class::Nan { .. }),
+            ),
+            | _ => return None,
+        };
+        let model = Integer {
+            value: 0,
+            bits,
+            signed,
+        };
+        if matches!(
+            self.types.nodes[self.types.non_atomic(ty).index],
+            TypeKind::Scalar(Scalar::Bool)
+        ) {
+            // Only a NaN or an infinity is no finite value float_cast reads.
+            return Some((
+                self.float_cast(ty, value).unwrap_or(Integer {
+                    value:  1,
+                    bits:   1,
+                    signed: false,
+                }),
+                false,
+            ));
+        }
+        if let Some(converted) = self.float_cast(ty, value)
+            && (width.is_none() || model.cast_value(converted.value).value == converted.value)
+        {
+            return Some((converted, false));
+        }
+        let bound = if nan {
+            0
+        } else if negative {
+            if signed { i128::MIN >> (128 - bits) } else { 0 }
+        } else if signed {
+            i128::MAX >> (128 - bits)
+        } else {
+            (u128::MAX >> (128 - bits)).cast_signed()
+        };
+        let (full, signed) = self.integer_type(ty)?;
+        Some((
+            Integer {
+                value: 0,
+                bits: full,
+                signed,
+            }
+            .cast_value(bound),
+            true,
+        ))
+    }
+
+    /// The spelling of an arithmetic type in a conversion diagnostic: its
+    /// keywords, or `enum` for an enumeration.
+    pub(super) fn conversion_spelling(&self, ty: TypeId) -> &'static str {
+        match self.types.nodes[self.types.non_atomic(ty).index] {
+            | TypeKind::Scalar(scalar) => scalar.spelling(),
+            | TypeKind::Tag(_) => "enum",
+            | _ => "integer",
+        }
+    }
+
     /// C99: §6.2.5p2-9, pp. 33-34; PDF pp. 45-46.
     pub(super) fn integer_type(&self, ty: TypeId) -> Option<(u32, bool)> {
         let ty = self.types.non_atomic(ty);
@@ -644,7 +741,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         super::super::preprocessing::FloatTokenType::ImaginaryFloat(_)
                         | super::super::preprocessing::FloatTokenType::ImaginaryDouble(_)
                         | super::super::preprocessing::FloatTokenType::ImaginaryLongDouble(_)
-                        | super::super::preprocessing::FloatTokenType::ImaginaryLongDouble128(_),
+                        | super::super::preprocessing::FloatTokenType::ImaginaryLongDouble128(_)
+                        | super::super::preprocessing::FloatTokenType::ImaginaryFloat16(_)
+                        | super::super::preprocessing::FloatTokenType::ImaginaryFloat32(_)
+                        | super::super::preprocessing::FloatTokenType::ImaginaryFloat64(_)
+                        | super::super::preprocessing::FloatTokenType::ImaginaryFloat32x(_)
+                        | super::super::preprocessing::FloatTokenType::ImaginaryFloat64x(_),
                     ),
                 )
                 | ExpressionType::Countof(_)

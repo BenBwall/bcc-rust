@@ -1,0 +1,9 @@
+warning: cast to pointer from integer of different size [-Wint-to-pointer-cast]
+ --> sema-pointer-int-cast-system-gcc.c:5:11
+  |
+5 |     (void)(void *)i;
+  |           ^^^^^^^^^ the integer and pointer widths differ
+  |
+  = note: C99 §6.3.2.3p5-6: the result of converting between a pointer and an integer is implementation-defined and may not be representable
+
+1 warning generated.

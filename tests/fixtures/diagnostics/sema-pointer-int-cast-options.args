@@ -1,0 +1,1 @@
+-std=gnu17 -Wno-int-to-void-pointer-cast -Werror=int-to-pointer-cast -Wno-pointer-to-enum-cast -Werror=void-pointer-to-int-cast

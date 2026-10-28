@@ -63,5 +63,10 @@
 #define LLONG_MIN (-LLONG_MAX - 1LL)
 #define ULLONG_MAX (LLONG_MAX * 2ULL + 1ULL)
 #endif
+/* C23: the widest _BitInt, which follows the compiler identity. */
+#if __STDC_VERSION__ > 201710L && defined(__BITINT_MAXWIDTH__)
+#undef BITINT_MAXWIDTH
+#define BITINT_MAXWIDTH __BITINT_MAXWIDTH__
+#endif
 #endif
 #endif

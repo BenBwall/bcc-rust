@@ -1,0 +1,113 @@
+warning: implicit conversion of out of range value from `double` to `int` is undefined [-Wliteral-conversion]
+ --> sema-float-integer-clang.c:1:21
+  |
+1 | static int scaled = 1e10;
+  |                     ^^^^ the value is not the integer's
+  |
+  = note: C99 §6.3.1.4p1: a floating value converts to an integer by truncation toward zero; an integral part out of range is undefined, and GCC and Clang store the nearest bound, or 0 for a NaN
+
+warning: implicit conversion of out of range value from `double` to `int` is undefined [-Wliteral-conversion]
+ --> sema-float-integer-clang.c:2:16
+  |
+2 | int negative = -1e10;
+  |                ^^^^^ the value is not the integer's
+  |
+  = note: C99 §6.3.1.4p1: a floating value converts to an integer by truncation toward zero; an integral part out of range is undefined, and GCC and Clang store the nearest bound, or 0 for a NaN
+
+warning: implicit conversion of out of range value from `double` to `unsigned int` is undefined [-Wliteral-conversion]
+ --> sema-float-integer-clang.c:3:24
+  |
+3 | unsigned to_unsigned = -1.0;
+  |                        ^^^^ the value is not the integer's
+  |
+  = note: C99 §6.3.1.4p1: a floating value converts to an integer by truncation toward zero; an integral part out of range is undefined, and GCC and Clang store the nearest bound, or 0 for a NaN
+
+warning: implicit conversion from `double` to `unsigned int` changes value to 0 [-Wliteral-conversion]
+ --> sema-float-integer-clang.c:4:22
+  |
+4 | unsigned truncated = -0.5;
+  |                      ^^^^ the value is not the integer's
+  |
+  = note: C99 §6.3.1.4p1: a floating value converts to an integer by truncation toward zero; an integral part out of range is undefined, and GCC and Clang store the nearest bound, or 0 for a NaN
+
+warning: implicit conversion of out of range value from `double` to `signed char` is undefined [-Wliteral-conversion]
+ --> sema-float-integer-clang.c:5:25
+  |
+5 | signed char narrow[] = {300.0, -300.0};
+  |                         ^^^^^ the value is not the integer's
+  |
+  = note: C99 §6.3.1.4p1: a floating value converts to an integer by truncation toward zero; an integral part out of range is undefined, and GCC and Clang store the nearest bound, or 0 for a NaN
+
+warning: implicit conversion of out of range value from `double` to `signed char` is undefined [-Wliteral-conversion]
+ --> sema-float-integer-clang.c:5:32
+  |
+5 | signed char narrow[] = {300.0, -300.0};
+  |                                ^^^^^^ the value is not the integer's
+  |
+  = note: C99 §6.3.1.4p1: a floating value converts to an integer by truncation toward zero; an integral part out of range is undefined, and GCC and Clang store the nearest bound, or 0 for a NaN
+
+warning: implicit conversion of out of range value from `float` to `int` is undefined [-Wliteral-conversion]
+ --> sema-float-integer-clang.c:7:18
+  |
+7 | int from_float = 3e9f;
+  |                  ^^^^ the value is not the integer's
+  |
+  = note: C99 §6.3.1.4p1: a floating value converts to an integer by truncation toward zero; an integral part out of range is undefined, and GCC and Clang store the nearest bound, or 0 for a NaN
+
+warning: implicit conversion of out of range value from `long double` to `int` is undefined [-Wliteral-conversion]
+ --> sema-float-integer-clang.c:8:24
+  |
+8 | int from_long_double = 1e10L;
+  |                        ^^^^^ the value is not the integer's
+  |
+  = note: C99 §6.3.1.4p1: a floating value converts to an integer by truncation toward zero; an integral part out of range is undefined, and GCC and Clang store the nearest bound, or 0 for a NaN
+
+warning: implicit conversion from `double` to `int` changes value to 2147483647 [-Wliteral-conversion]
+  --> sema-float-integer-clang.c:9:15
+   |
+ 9 | int inexact = 2147483647.5;
+   |               ^^^^^^^^^^^^ the value is not the integer's
+   |
+   = note: C99 §6.3.1.4p1: a floating value converts to an integer by truncation toward zero; an integral part out of range is undefined, and GCC and Clang store the nearest bound, or 0 for a NaN
+
+warning: implicit conversion from `double` to `_Bool` changes value to true [-Wliteral-conversion]
+  --> sema-float-integer-clang.c:10:15
+   |
+10 | _Bool truth = 1e300;
+   |               ^^^^^ the value is not the integer's
+   |
+   = note: C99 §6.3.1.4p1: a floating value converts to an integer by truncation toward zero; an integral part out of range is undefined, and GCC and Clang store the nearest bound, or 0 for a NaN
+
+error: static-storage initializer requires a constant expression
+  --> sema-float-integer-clang.c:14:43
+   |
+14 | struct casts { unsigned a : 4; } casts = {(unsigned)1e10};
+   |                                           ^^^^^^^^^^^^^^ not a constant expression
+   |
+   = note: C99 §6.7.8p4: every expression in an initializer for an object of static storage duration is constant or a string literal
+
+warning: implicit conversion of out of range value from `double` to `int` is undefined [-Wliteral-conversion]
+  --> sema-float-integer-clang.c:16:24
+   |
+16 |     static int local = 1e10;
+   |                        ^^^^ the value is not the integer's
+   |
+   = note: C99 §6.3.1.4p1: a floating value converts to an integer by truncation toward zero; an integral part out of range is undefined, and GCC and Clang store the nearest bound, or 0 for a NaN
+
+warning: implicit conversion of out of range value from `double` to `int` is undefined [-Wliteral-conversion]
+  --> sema-float-integer-clang.c:17:21
+   |
+17 |     int automatic = 1e10;
+   |                     ^^^^ the value is not the integer's
+   |
+   = note: C99 §6.3.1.4p1: a floating value converts to an integer by truncation toward zero; an integral part out of range is undefined, and GCC and Clang store the nearest bound, or 0 for a NaN
+
+warning: implicit conversion from `double` to `int` changes value to 1 [-Wliteral-conversion]
+  --> sema-float-integer-clang.c:18:17
+   |
+18 |     automatic = 1.5;
+   |                 ^^^ the value is not the integer's
+   |
+   = note: C99 §6.3.1.4p1: a floating value converts to an integer by truncation toward zero; an integral part out of range is undefined, and GCC and Clang store the nearest bound, or 0 for a NaN
+
+1 error and 13 warnings generated.
