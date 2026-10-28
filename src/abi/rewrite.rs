@@ -291,6 +291,7 @@ impl<'a> Rewriter<'a, '_, '_, '_> {
     /// Copies one instruction, rewriting calls and `va_arg`.
     fn inst(&mut self, inst: crate::ir::Inst) {
         let old = self.old;
+        self.builder.set_line(old.inst_line(inst));
         let data = *old.inst(inst);
         let result = old.inst_result(inst);
         match data {

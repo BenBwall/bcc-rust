@@ -380,6 +380,9 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
 
     /// Performs one task, pushing any that follow from it.
     fn step(&mut self, task: Task<'tu>) -> Result<(), LoweringError> {
+        if self.unit.context.configuration.target().is_wasm() {
+            self.track_line(task);
+        }
         match task {
             | Task::Statement(statement) => self.statement(statement, StatementMode::Discard),
             | Task::StatementValue(statement) => self.statement(statement, StatementMode::Value),
@@ -609,6 +612,35 @@ impl LoweringOptions {
             sample_stack: false,
             #[cfg(feature = "recursive-lowering-study")]
             stats: recursive::Stats::default(),
+        }
+    }
+}
+
+impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
+    /// Gives the instructions `task` emits the physical source line of the
+    /// statement or expression it lowers, for the WebAssembly back end's
+    /// source map. A task without syntax keeps the line before it.
+    fn track_line(&mut self, task: Task<'tu>) {
+        let source = match task {
+            | Task::Statement(statement)
+            | Task::StatementValue(statement)
+            | Task::StatementEffects(statement)
+            | Task::Return(statement) => statement.source_vectors,
+            | Task::Evaluate(expression)
+            | Task::EvaluateRaw(expression)
+            | Task::Finish(expression) => expression.source_vectors,
+            | _ => return,
+        };
+        let context = self.unit.context;
+        let line = context
+            .get_source_vectors(source)
+            .first()
+            .and_then(|vector| {
+                context.physical_position(vector.source_file_index, vector.index as usize)
+            })
+            .map_or(0, |(line, _)| line);
+        if line != 0 {
+            self.draft.line = line;
         }
     }
 }

@@ -24,6 +24,7 @@ use super::{
     native,
 };
 use crate::{
+    backend::wasm,
     lowering::CallDiagnostic,
     pipeline::DiagnosedModule,
     util::bump::ArenaVec,
@@ -41,6 +42,13 @@ pub(super) fn prepare<'ir>(
     options: &CodeGeneration,
 ) -> Result<Prepared<'ir>, Failure<'ir>> {
     let module = &diagnosed.module;
+    if (target.is_wasm()
+        || options.backend == BackEnd::Wasm
+        || matches!(options.emit, Some(Emit::Wasm | Emit::Wat)))
+        && let Some(prepared) = wasm(diagnosed, context, arena, target, options)?
+    {
+        return Ok(prepared);
+    }
     let llvm_output =
         options.emit.is_none() && options.output_path.is_some() && options.backend == BackEnd::Llvm;
     let reports_calls =
@@ -80,6 +88,8 @@ pub(super) fn prepare<'ir>(
             _ = fmt::write(&mut text, format_args!("{module}"));
             Output::Text(text.into_str())
         },
+        | (Some(Emit::Wasm | Emit::Wat), _) =>
+            unreachable!("the WebAssembly back end handles these first"),
         | (Some(Emit::Llvm), _) => {
             let mut text = ArenaString::new_in(arena);
             llvm::emit_module_with(module, target, code, &mut text)
@@ -192,6 +202,8 @@ pub(super) enum Failure<'ir> {
 
 pub(super) enum Output<'ir> {
     Text(&'ir str),
+    /// A binary module for stdout or the `--emit` path.
+    Binary(&'ir [u8]),
     Built,
     Interpret,
 }
@@ -201,6 +213,100 @@ pub(super) struct Prepared<'ir> {
     pub(super) diagnostics:    &'ir [CallDiagnostic],
     /// Whether the object written needs the atomic runtime when linked.
     pub(super) atomic_runtime: bool,
+}
+
+/// The WebAssembly back end's outputs: `--emit=wasm`, `--emit=wat` (and
+/// `--emit=asm`, `-S`), and `-o`, which writes the binary module. `None`
+/// for the IR views, which the common path prints.
+fn wasm<'ir>(
+    diagnosed: &DiagnosedModule<'ir>,
+    context: &Context<'_>,
+    arena: &'ir Bump,
+    target: Target,
+    options: &CodeGeneration,
+) -> Result<Option<Prepared<'ir>>, Failure<'ir>> {
+    let module = &diagnosed.module;
+    let refuse = |text: &str| {
+        Err(message(
+            arena,
+            format_args!("error: {text}"),
+            FAILURE_STATUS,
+        ))
+    };
+    match (options.emit, &options.output_path) {
+        | (Some(Emit::Ir | Emit::IrAbi), _) => return Ok(None),
+        | (Some(Emit::Llvm), _) =>
+            return refuse("--emit=llvm needs the LLVM back end, which has no wasm32 target here"),
+        | (None, None) =>
+            return refuse(
+                "--interpret runs modules of the 64-bit targets; compile wasm32 code with -o or                  --emit=wasm and run it in a WebAssembly engine",
+            ),
+        | _ => {},
+    }
+    if !target.is_wasm() {
+        return refuse(
+            "the WebAssembly back end needs --target=wasm32-wasip1 or wasm32-unknown-unknown",
+        );
+    }
+    let diagnostics = diagnosed.retained_diagnostics;
+    if diagnostics.iter().any(|d| d.is_error(context)) {
+        return Err(Failure::Calls(diagnostics));
+    }
+    let scratch = Bump::new();
+    let errors = crate::ir::verify_module(module, module.profile(), &scratch);
+    if !errors.is_empty() {
+        let mut text = ArenaString::new_in(arena);
+        for error in &errors {
+            _ = fmt::write(
+                &mut text,
+                format_args!("error: internal error: invalid bcc IR: {error}\n"),
+            );
+        }
+        return Err(Failure::Message {
+            text:   text.into_str(),
+            status: FAILURE_STATUS,
+        });
+    }
+    let runtime = if target == Target::Wasm32Wasi {
+        wasm::runtime::compile(target, arena).map_err(|text| {
+            message(
+                arena,
+                format_args!("error: internal error: {text}"),
+                FAILURE_STATUS,
+            )
+        })?
+    } else {
+        ArenaVec::new_in(arena)
+    };
+    let mut units = ArenaVec::with_capacity_in(1 + runtime.len(), arena);
+    units.push(module);
+    units.extend(runtime.iter());
+    let compiled = wasm::compile(&units, 1, target, arena)
+        .map_err(|e| message(arena, format_args!("error: {e}"), FAILURE_STATUS))?;
+    let output = match (options.emit, &options.output_path) {
+        | (Some(Emit::Wasm), _) => Output::Binary(arena.alloc_slice_copy(&compiled.bytes)),
+        | (Some(_), _) => {
+            let mut text = ArenaString::new_in(arena);
+            _ = compiled.write_text(&mut text);
+            Output::Text(text.into_str())
+        },
+        | (None, Some(path)) => {
+            std::fs::write(path, &compiled.bytes).map_err(|e| {
+                message(
+                    arena,
+                    format_args!("error: cannot write `{}`: {e}", path.display()),
+                    FAILURE_STATUS,
+                )
+            })?;
+            Output::Built
+        },
+        | (None, None) => unreachable!("refused above"),
+    };
+    Ok(Some(Prepared {
+        output,
+        diagnostics,
+        atomic_runtime: false,
+    }))
 }
 
 fn message<'ir>(arena: &'ir Bump, args: fmt::Arguments<'_>, status: i32) -> Failure<'ir> {

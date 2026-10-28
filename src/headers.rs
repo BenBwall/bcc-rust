@@ -6,11 +6,17 @@
 //! handling finds these headers and a resource header such as `<limits.h>` can
 //! `#include_next` the library's header of the same name.
 //!
+//! The WebAssembly WASI target also gets bcc's bundled C library headers,
+//! embedded in a second directory, [`WASI_DIRECTORY`], which takes the C
+//! library's place in the search; their implementation is the WebAssembly
+//! back end's runtime (`backend/wasm/runtime.rs`).
+//!
 //! Read [`text`], [`HeaderSearch`], and [`DIRECTORY`].
 //!
 //! Files by role:
 //! - Search configuration: `headers/search.rs`.
-//! - Embedded resource text: the C headers under `headers/`.
+//! - Embedded resource text: the C headers under `headers/`; the WASI C
+//!   library's under `headers/wasi/`.
 //!
 //! C99: §4 paragraph 6, p. 7; PDF p. 19. Implementation-defined include
 //! lookup: §6.10.2 paragraphs 2-3, pp. 149-150; PDF pp. 161-162.
@@ -23,7 +29,58 @@ use std::path::Path;
 pub(crate) use search::{
     DIRECTORY,
     HeaderSearch,
+    WASI_DIRECTORY,
 };
+
+/// Whether `directory` is one of the embedded header directories.
+pub(crate) fn is_embedded(directory: &Path) -> bool {
+    directory == Path::new(DIRECTORY) || directory == Path::new(WASI_DIRECTORY)
+}
+
+/// The text of the header `name` in the embedded `directory`, if it has
+/// one.
+pub(crate) fn embedded(directory: &Path, name: &Path) -> Option<&'static str> {
+    if directory == Path::new(DIRECTORY) {
+        text(name)
+    } else if directory == Path::new(WASI_DIRECTORY) {
+        wasi_text(name)
+    } else {
+        None
+    }
+}
+
+/// The text of an embedded header's path, `DIRECTORY/name` or
+/// `WASI_DIRECTORY/name`.
+pub(crate) fn embedded_path(path: &Path) -> Option<&'static str> {
+    if let Ok(name) = path.strip_prefix(DIRECTORY) {
+        text(name)
+    } else if let Ok(name) = path.strip_prefix(WASI_DIRECTORY) {
+        wasi_text(name)
+    } else {
+        None
+    }
+}
+
+/// The bundled C library headers of the WASI target. Each names its own
+/// implementation in the WebAssembly back end's runtime.
+/// C99: §7.1.2, pp. 165-166; PDF pp. 177-178 (standard headers).
+pub(crate) fn wasi_text(name: &Path) -> Option<&'static str> {
+    Some(match name.to_str()? {
+        | "assert.h" => include_str!("headers/wasi/assert.h"),
+        | "ctype.h" => include_str!("headers/wasi/ctype.h"),
+        | "errno.h" => include_str!("headers/wasi/errno.h"),
+        | "inttypes.h" => include_str!("headers/wasi/inttypes.h"),
+        | "math.h" => include_str!("headers/wasi/math.h"),
+        | "setjmp.h" => include_str!("headers/wasi/setjmp.h"),
+        | "stdio.h" => include_str!("headers/wasi/stdio.h"),
+        | "stdlib.h" => include_str!("headers/wasi/stdlib.h"),
+        | "string.h" => include_str!("headers/wasi/string.h"),
+        | "strings.h" => include_str!("headers/wasi/strings.h"),
+        | "time.h" => include_str!("headers/wasi/time.h"),
+        | "unistd.h" => include_str!("headers/wasi/unistd.h"),
+        | _ => return None,
+    })
+}
 
 /// Header names are exact, independent of host filesystem case folding.
 pub(crate) fn text(name: &Path) -> Option<&'static str> {

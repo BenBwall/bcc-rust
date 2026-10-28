@@ -694,7 +694,7 @@ impl<'tu, 'pp: 'x, 'x> Expander<'_, 'tu, 'pp, 'x> {
         places.into_iter().find_map(|(_, directory)| {
             // Built-in headers supply source text, not filesystem resources.
             // C23 §6.10.2p7: the query must use the matching #embed search.
-            if embed && directory == Path::new(crate::headers::DIRECTORY) {
+            if embed && crate::headers::is_embedded(directory) {
                 None
             } else {
                 self.probe_header(directory, path)

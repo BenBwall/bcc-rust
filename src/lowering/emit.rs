@@ -158,7 +158,8 @@ pub(super) fn emit<'s>(
             values[draft.resolve(value).index()].ok_or_else(missing)
         };
         let mut call_diagnostic = None;
-        for &(op, result) in &data.insts {
+        for (&(op, result), &line) in data.insts.iter().zip(&data.lines) {
+            builder.set_line(line);
             let emitted = match op {
                 | Op::Inst(inst) => {
                     let inst = map_operands(inst, |value| map(value, &values))?;

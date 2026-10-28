@@ -41,11 +41,7 @@ use crate::{
 impl<'tu> Context<'tu> {
     /// Reads and retains an included file without a temporary heap string.
     pub(crate) fn read_source_file(&mut self, index: u32) -> std::io::Result<&'tu str> {
-        if let Ok(name) = self
-            .get_source_file(index)
-            .strip_prefix(crate::headers::DIRECTORY)
-            && let Some(text) = crate::headers::text(name)
-        {
+        if let Some(text) = crate::headers::embedded_path(self.get_source_file(index)) {
             let text = if let Some((before, after)) = text.split_once("@MB_LEN_MAX@") {
                 use std::fmt::Write as _;
                 let mut rendered = ArenaString::new_in(self.tu);
@@ -87,6 +83,7 @@ impl<'tu> Context<'tu> {
                 let path = self.source_files[index];
                 (!self.presumed_files.contains_key(&index)
                     && !path.starts_with(crate::headers::DIRECTORY)
+                    && !path.starts_with(crate::headers::WASI_DIRECTORY)
                     && path.is_file())
                 .then_some((index, path))
             })
@@ -211,10 +208,10 @@ impl<'tu> Context<'tu> {
     /// Stable virtual paths do not depend on the host's path separator.
     /// C99: implementation-defined headers §6.10.2p2-3, pp. 149-150;
     /// PDF pp. 161-162.
-    pub(crate) fn intern_builtin_header(&mut self, name: &Path) -> u32 {
+    pub(crate) fn intern_builtin_header(&mut self, directory: &Path, name: &Path) -> u32 {
         use std::fmt::Write as _;
         let mut path = ArenaString::new_in(self.tu);
-        write!(path, "{}/{}", crate::headers::DIRECTORY, name.display()).unwrap();
+        write!(path, "{}/{}", directory.display(), name.display()).unwrap();
         self.intern_source_file(Path::new(&*path))
     }
 
