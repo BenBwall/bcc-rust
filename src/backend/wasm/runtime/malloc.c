@@ -26,6 +26,10 @@ static int grow(size_t bytes) {
     if (bytes > (size_t)-1 - 65535u)
         return 0;
     size_t pages = (bytes + 65535u) / 65536u;
+    /* The heap never takes memory's last page: with all 65536 pages, its
+       end, 2^32, would wrap to 0 in a pointer. */
+    if (pages >= 65536u - __bcc_wasm_memory_size())
+        return 0;
     if (__bcc_wasm_memory_grow(pages) == (size_t)-1)
         return 0;
     size_t end = __bcc_wasm_memory_size() * 65536u;
