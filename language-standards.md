@@ -1571,7 +1571,18 @@ reserved. It ranks below `_Float16` (`b + h` is a `_Float16`) and follows
 the table above in each identity, the conversion of a `__bf16` operand to
 `_Float16` included: GCC evaluates `__bf16 + _Float16` in `float`, so
 `0x1p20` plus 1 is 1048577 there, while Clang converts the `__bf16` to
-`_Float16` first, giving infinity. The ABI passes it as `_Float16`; it is never promoted through `...`.
+`_Float16` first, giving infinity. GCC carries a plain (not excess) value
+of one half type converted to the other, by cast or implicitly, as its
+exact `float` value: `(_Float16)b` keeps a `__bf16` beyond binary16's range
+and `(__bf16)h` keeps binary16's precision. It rounds such a value only to
+store, pass or return it, and as an arm of a `?:` whose type is
+`_Complex _Float16` when neither arm is an excess-precision expression
+(an arithmetic operation or an `f16` constant). Its constant folder rounds
+these conversions where its code does not: a folded plain constant
+converted in a `?:` arm, and a folded cast, round. bcc follows each case;
+`scripts/generate_half_matrix.py` writes a program converting every pair
+of integer, real and complex types through `+`, `?:` and casts, with each
+compiler's output as the expectation (`tests/integration/half_precision.rs`). The ABI passes it as `_Float16`; it is never promoted through `...`.
 GCC has `bf16`/`BF16` constants, which `-pedantic` calls a non-standard
 suffix, and predefines `__BFLT16_MANT_DIG__` and its relatives (with
 `__BFLT16_IS_IEC_60559__` 0); the GCC identity provides both, and the Clang
