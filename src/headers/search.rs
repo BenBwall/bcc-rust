@@ -41,6 +41,9 @@ pub(crate) struct HeaderSearch<'a> {
 
 pub(crate) const DIRECTORY: &str = "<built-in>";
 
+/// The embedded directory of bcc's C library headers for WASI.
+pub(crate) const WASI_DIRECTORY: &str = "<wasi-libc>";
+
 impl Default for HeaderSearch<'_> {
     /// No configured directories: a lookup searches only the including
     /// file's directory and the resource directory.

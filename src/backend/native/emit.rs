@@ -351,7 +351,8 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
         name: Name<'_>,
     ) -> fmt::Result {
         let suffix = match self.target {
-            | Target::LinuxGnu | Target::LinuxMusl => ".",
+            | Target::LinuxGnu | Target::LinuxMusl | Target::Wasm32Unknown | Target::Wasm32Wasi =>
+                ".",
             | Target::WindowsGnu => "$",
             | Target::WindowsMsvc => "",
         };
@@ -1090,7 +1091,7 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
                         relocations.next_if(|relocation| relocation.offset == offset as u64)
                     {
                         self.relocation(relocation)?;
-                        offset += usize::try_from(relocation.size()).map_err(|_| fmt::Error)?;
+                        offset += usize::try_from(relocation.size(8)).map_err(|_| fmt::Error)?;
                         continue;
                     }
                     let end = relocations
@@ -1262,7 +1263,10 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
             let priority = init.priority;
             let default = priority == DEFAULT_PRIORITY;
             match self.target {
-                | Target::LinuxGnu | Target::LinuxMusl => {
+                | Target::LinuxGnu
+                | Target::LinuxMusl
+                | Target::Wasm32Unknown
+                | Target::Wasm32Wasi => {
                     let (section, kind) = if constructor {
                         (".init_array", "@init_array")
                     } else {

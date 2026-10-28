@@ -28,10 +28,63 @@ use crate::{
         FunctionBuilder,
         InstData,
         Module,
+        Opcode,
+        Type,
         Value,
     },
     util::bump::ArenaVec,
 };
+
+/// Inserts `inst` into an ILP32 module, where a pointer object is four
+/// bytes: a load or store of a `ptr` accesses an `i32` and converts it, so
+/// that every memory access the optimizer and the back end see has the
+/// size of the object in memory. Atomic pointer operations go through the
+/// atomic lowering's integer bits already. Returns the instruction's
+/// result.
+/// C99: §6.2.5 paragraph 20, pp. 35-36; PDF pp. 47-48 (a pointer type's
+/// representation is the implementation's).
+fn narrow_pointer_access(builder: &mut FunctionBuilder<'_, '_>, inst: InstData) -> Option<Value> {
+    match inst {
+        | InstData::Load {
+            ty: Type::Ptr,
+            flags,
+            align,
+            tag,
+            addr,
+        } => {
+            let load = builder.insert(InstData::Load {
+                ty: Type::I32,
+                flags,
+                align,
+                tag,
+                addr,
+            });
+            let bits = builder.inst_result(load).expect("a load has a result");
+            Some(builder.convert(Opcode::Inttoptr, Type::Ptr, bits))
+        },
+        | InstData::Store {
+            ty: Type::Ptr,
+            flags,
+            align,
+            tag,
+            args: [value, addr],
+        } => {
+            let bits = builder.convert(Opcode::Ptrtoint, Type::I32, value);
+            _ = builder.insert(InstData::Store {
+                ty: Type::I32,
+                flags,
+                align,
+                tag,
+                args: [bits, addr],
+            });
+            None
+        },
+        | _ => {
+            let inst = builder.insert(inst);
+            builder.inst_result(inst)
+        },
+    }
+}
 
 /// Installs `draft` as the body of `func`.
 pub(super) fn emit<'s>(
@@ -49,6 +102,7 @@ pub(super) fn emit<'s>(
     }
     remove_redundant_params(&mut draft, &order, &reachable);
 
+    let narrow_pointers = module.pointer_bytes() == 4;
     let mut builder = FunctionBuilder::new(module, func);
     for &slot in &draft.slots {
         _ = builder.create_stack_slot(slot.size, slot.align);
@@ -104,12 +158,17 @@ pub(super) fn emit<'s>(
             values[draft.resolve(value).index()].ok_or_else(missing)
         };
         let mut call_diagnostic = None;
-        for &(op, result) in &data.insts {
+        for (&(op, result), &line) in data.insts.iter().zip(&data.lines) {
+            builder.set_line(line);
             let emitted = match op {
                 | Op::Inst(inst) => {
                     let inst = map_operands(inst, |value| map(value, &values))?;
-                    let inst = builder.insert(inst);
-                    builder.inst_result(inst)
+                    if narrow_pointers {
+                        narrow_pointer_access(&mut builder, inst)
+                    } else {
+                        let inst = builder.insert(inst);
+                        builder.inst_result(inst)
+                    }
                 },
                 | Op::Iconst(ty, constant) => Some(builder.iconst(ty, constant)),
                 | Op::Fconst(ty, bits) => Some(builder.fconst(ty, bits)),

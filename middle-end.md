@@ -53,8 +53,10 @@ The research behind the decisions lives in `docs/research/`:
    │
    ├──► LLVM back end (src/backend/llvm)        textual .ll → bundled clang
    ├──► interpreter (src/backend/interpreter)   reference semantics, test oracle
-   └──► native back end (src/backend/native)    x86-64 assembly → bundled clang,
-                                                or objects encoded in process
+   ├──► native back end (src/backend/native)    x86-64 assembly → bundled clang,
+   │                                            or objects encoded in process
+   └──► WebAssembly back end (src/backend/wasm) wasm32 modules, linked with a
+                                                bundled C runtime for WASI
 ```
 
 One IR serves every stage. The analyzed syntax tree is already the C-aware high
@@ -146,7 +148,9 @@ measurement; contiguous order is simpler and suits a fixed pipeline of rebuilds.
 ### Types
 
 `i1`, `i8`, `i16`, `i32`, `i64`, `i128`, `f16`, `bf16`, `f32`, `f64`, `f80`,
-`f128`, `ptr`. `f16` is IEEE binary16 and `bf16` bfloat16 (the top half of a
+`f128`, `ptr`. A `ptr` is 64 bits on the x86-64 targets and 32 on wasm32,
+whose pointer objects lowering accesses as `i32` (see "WebAssembly back
+end"). `f16` is IEEE binary16 and `bf16` bfloat16 (the top half of a
 binary32 encoding); they only move and convert: the verifier rejects
 floating arithmetic, `fneg` and `fcmp` on them, since `_Float16` and
 `__bf16` compute in `f32` (below). A conversion to either rounds once, from
@@ -1571,7 +1575,7 @@ New code follows the repository's [source layout](CONTRIBUTING.md#source-layout)
 | `src/lowering.rs`, `src/lowering/` | the per-function lowering loop over the work stack |
 | `src/optimizer.rs`, `src/optimizer/` | the pass pipeline; one file per pass |
 | `src/abi.rs`, `src/abi/` | the ABI lowering pass; one file per target family |
-| `src/backend.rs`, `src/backend/` | the back-end interface; `llvm.rs`, `interpreter.rs` |
+| `src/backend.rs`, `src/backend/` | the back-end interface; `llvm.rs`, `interpreter.rs`, `native.rs`, `wasm.rs` |
 
 Arenas: the module lives in an `'ir` arena created after semantic analysis; the
 syntax tree (`'tu`) outlives it. Per-function scratch (lowering state, pass
@@ -1606,6 +1610,10 @@ bcc-rust x.c -o x.exe [-c]          emit an object through LLVM-C; link with cla
                                     default) or a fixed-address one
 bcc-rust x.c --emit=asm            print LLVM's assembly (the native back
                                     end's with --backend=native)
+bcc-rust x.c --target=wasm32-wasip1 -o x.wasm   a WASI command module
+    [--emit=wasm|--emit=wat]        the binary module or its text, to stdout
+                                    (also --target=wasm32-unknown-unknown;
+                                    see "WebAssembly back end" below)
 bcc-rust -c x.c y.c                 compile each source to an object: x.o, y.o
 bcc-rust -S x.c [-o x.s|-o -]       write the assembly to x.s, or stdout
 bcc-rust x.c y.o -lm -o app         compile x.c to a temporary object and link
@@ -2406,3 +2414,144 @@ keep, failing as Clang -O1 and -O2 do. The `builtins/*-chk.c` tests compile
 and link on every compiled arm; at O0 their checks do not run, and at
 `--opt=bcc` they stop before their first `__builtin_setjmp` on fortify
 folding, as GCC -O2 does outside the DejaGnu harness.
+
+## WebAssembly back end (2026-10-27)
+
+`--target=wasm32-wasip1` (also spelled `wasm32-wasi`) and
+`--target=wasm32-unknown-unknown` select bcc's own WebAssembly code
+generator (`src/backend/wasm`), which needs no LLVM, so the explorer's
+in-browser compiler has it too.
+
+**Target.** The data model is Clang's `WebAssembly32TargetInfo`
+(`TargetLayout::ILP32_WASM`): ILP32 with 64-bit `long long`, 16-byte
+aligned `__int128`, `long double` as IEEE binary128 (16 bytes, 16-aligned),
+a `char *` `va_list`, signed `char`, and `int` for `wchar_t` and `wint_t`.
+The predefined macros are frozen from the bundled Clang like the other
+targets' (`scripts/update_target_macros.py`), including the
+`__wasm_*__` feature macros Clang's default CPU claims. `_Float16` and
+`__bf16` are refused as Clang refuses them there ("not supported on this
+target"), with their `f16` and `bf16` constant suffixes and GCC's
+`__FLT16_*`/`__BFLT16_*` macros, so complex halves do not arise either;
+`_Float64x` does not exist. `__fp16` stays the storage type it is on
+every Clang target: two bytes whose values compute in `float`, loaded
+and stored as `i16`, and converted by compiler-rt's routines as LLVM's
+code for Clang calls them (`__extendhfsf2`, then `f64.promote_f32` for a
+`double`; `__extendhftf2`; and `__truncsfhf2`, `__truncdfhf2` and
+`__trunctfhf2`, each one call that rounds once; integers convert through
+`float`, as Clang's lowering does), which the bundled runtime defines and a
+freestanding module imports; a single-element record of one travels as
+its bits in an `i32`, as Clang passes it. A
+`long double` constant is parsed and folded in binary128
+(`FloatTokenType::LongDouble128`, `binary128_type`), so `1.0L / 3.0L`
+and `LDBL_MAX` are exact; lowering gives `long double` the IR type `f128`.
+
+**Pointers in memory.** The IR's `ptr` stays opaque and its SSA width is
+the back end's business, but a pointer object is four bytes on wasm32.
+Lowering (`lowering/emit.rs`, `narrow_pointer_access`) therefore accesses
+pointer objects of an ILP32 module as `i32` with `ptrtoint`/`inttoptr`, so
+every load and store the optimizer and the back end see has the object's
+size, and records pointer members of small aggregates as `i32` scalars.
+`Module::pointer_bytes` (4 for a `wasm32` triple) sizes address
+relocations (`Relocation::size`). `ptr_add` offsets stay `i64`; the back
+end wraps them to 32 bits. The interpreter and the LLVM back end refuse
+wasm32 modules.
+
+**ABI** (`abi/wasm.rs`): Clang's basic C ABI. Narrow integers are widened
+with their signedness; a structure or union whose one scalar covers it
+travels as that scalar both ways, an empty one not at all, any other
+argument as a pointer to the caller's copy and any other result through
+`sret`. Complex values are aggregates. Variadic arguments go to a buffer in
+the caller's frame, each at its alignment in slots of at least four bytes
+(aggregates other than single-element ones by address), whose address is
+passed after the fixed parameters; `va_arg` walks a `char *` cursor. An
+`i128` or `f128` result is returned through an address passed first, as
+LLVM demotes it. Lowering decides single elements as Clang's
+`isSingleElementStruct` does, from the C types, and records the verdict as
+the aggregate flag `single_element` for this target only
+(`TargetLayout::record_passing`): unnamed and zero-width bit-fields, empty
+records and zero-length arrays are skipped, one-element arrays and nested
+records are looked through, a lone named bit-field counts as its declared
+type (`struct { int x : 3; }` travels as an `i32`), and two members, a
+complex value or padding make the record indirect, so `union { int a; int
+b; }` is passed by reference. `src/backend/wasm/tests/abi.rs` compares 27
+shapes with the bundled Clang.
+
+**Code generation.** Each SSA value gets a local (`i128` and `f128` two
+`i64` locals); constants and addresses of globals, functions, slots and
+labels are recomputed at each use. Values narrower than 32 bits live in
+`i32` locals zero-extended. The stackifier (`stackify.rs`) is Ramsey's
+"Beyond Relooper" translation along the dominator tree with an explicit
+work stack; an irreducible graph (and nothing else) gets a dispatch loop
+over all blocks with a label local. `switch` becomes `br_table` when its
+cases are dense and a comparison chain otherwise; `indirect_br` compares
+the label values (`block_addr` of label *n* is *n* + 1 in its function).
+Stack slots, call temporaries and the variadic buffer live in a frame on
+the shadow stack below global 0, `__stack_pointer`, which is restored on
+every return; `dyn_alloca` and `stack_save`/`stack_restore` move it.
+Atomics are plain accesses (one thread). `i128` multiplication, division
+and shifts, `f128` arithmetic, comparisons and conversions, and `frem`
+call the compiler-rt routines Clang calls (`codegen/calls.rs`,
+`Routine`); `sqrt`, `fabs`, `floor`, `ceil`, `trunc`, `rint`,
+`nearbyint`, `copysign` and `memcpy`, `memmove`, `memset` become
+instructions when library builtins are allowed. Features used beyond
+WebAssembly 1.0: mutable globals, sign-extension operators, non-trapping
+float-to-int conversions and bulk memory, all in WebAssembly 2.0. Refused
+with a diagnostic: functions that return twice (`setjmp`), GCC's builtin
+setjmp, inline and file-scope assembly, `__builtin_return_address`, the
+time-stamp counter, `f16` conversions and an atomic compare-exchange of an
+object without a lock-free size.
+
+**Linking** (`link.rs`). The program's module and, for WASI, the bundled
+runtime's modules are linked by name, keeping only what `_start` (WASI) or
+the program's external functions (freestanding) reach. Linear memory is a
+1 KiB guard, a 1 MiB shadow stack growing down (an overflow wraps out of
+bounds), the data, and the heap from `__heap_base`. Table entry 0 is null.
+A freestanding module imports every function it calls but does not define
+from `env` and exports `memory` and its external functions; its
+constructors run from the start section. Linker-provided names:
+`__bcc_wasi_NAME` (the WASI import `NAME`), `__bcc_wasm_memory_size` and
+`__bcc_wasm_memory_grow`, `__heap_base`/`__data_end`,
+`__wasm_call_ctors`/`__wasm_call_dtors`, and `__bcc_main`, the adapter that
+calls `main` with as many of `argc` and `argv` as it takes.
+
+**Runtime** (`backend/wasm/runtime.rs`, `runtime/*.c`, headers in
+`src/headers/wasi/`, found through the embedded `<wasi-libc>` directory in
+the C library's place in the search). It is C compiled by bcc itself, once
+per thread, and kept for the rest of the process in an arena that is never
+freed (`runtime::modules`; its build takes none of the program's flags, so
+the target is the whole key): startup and exit, `atexit`, `abort` (status 134),
+`malloc`/`calloc`/`realloc`/`free`/`aligned_alloc`, `<string.h>`,
+`<ctype.h>`, `<stdlib.h>` conversions, `qsort`, `bsearch`, `rand`,
+buffered `<stdio.h>` on descriptors 0-2 (stdout line-buffered, stderr
+unbuffered) with the whole `printf` family, whose floating conversions are
+exact (big-integer expansion, ties to even, as glibc; precisions beyond its
+digit buffer are padded, never copied), a small `scanf` that honours every
+length modifier (`L` as `ll` for integers, as glibc), reads only the
+longest valid prefix of a number and fails when that prefix is not a whole
+number (`0x`, `1e+`), `<math.h>` (`sin`, `cos` and `tan` are FreeBSD's
+fdlibm with Payne-Hanek argument reduction, translated from rust-lang/libm
+under its MIT and Sun notices, so they give musl's results, which can
+differ from glibc's by a few ulps; the float variants round the double
+result; the other transcendental functions are accurate to about an ulp,
+not correctly rounded; `nan`, `nanl`, `strtod` and `strtold` keep NaN
+payloads, and `nextafter` and `nextafterl` set `ERANGE`, as glibc),
+`<time.h>`, and compiler-rt's `i128` and binary128 routines (the
+floating-to-integer conversions with compiler-rt's exact saturation rules).
+Allocation sizes that would wrap fail with `ENOMEM`, and the heap never
+takes memory's last page, whose end would wrap to 0. `strtod` is exact only
+for up to 19 digits and exponents within ±22, and `strtold` and `%Lf` read
+binary128 `long double` at double precision. Files cannot be opened.
+
+**Output.** `--emit=wasm` writes the binary module, `--emit=wat` (and
+`--emit=asm`, `-S`) its text, and `-o x.wasm` the binary; `-c` and linking
+several sources are refused. The binary has a `name` section and a
+`bcc.sourcemap` custom section (`encode.rs` documents the format: entries
+of code offset, function index, IR block, IR instruction, source line;
+every function's code starts with an entry, line 0 for a prologue or a
+function the linker made).
+Lowering records each instruction's physical source line for wasm targets
+(`Body::inst_line`, kept by ABI lowering, dropped by optimizer rebuilds), so
+at `-O0` every IR instruction's entry has a line. The explorer returns the
+binary, the text and the same table (`ExplorerOutput::wasm`). `scripts/wasm/run.mjs` runs a
+WASI module under Node; `scripts/wasm/survey_torture.py` surveys GCC's
+c-torture execute tests.

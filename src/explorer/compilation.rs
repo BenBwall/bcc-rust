@@ -33,11 +33,21 @@ use super::{
     ExplorerInstruction,
     ExplorerOptions,
     ExplorerOutput,
+    ExplorerWasm,
+    ExplorerWasmFunction,
+    ExplorerWasmInstruction,
+    ExplorerWasmPosition,
     front_end,
     line_map,
 };
 use crate::{
-    backend::native,
+    backend::{
+        native,
+        wasm::{
+            self,
+            u32_of,
+        },
+    },
     configuration::{
         CompilerConfiguration,
         DEFAULT_MAX_NESTING_DEPTH,
@@ -209,8 +219,15 @@ pub(super) fn header_search<'a>(tu: &'a Bump, options: &ExplorerOptions) -> Head
     } else {
         tu.alloc_slice_fill_iter([Path::new("")])
     };
+    // The WASI target's C library is bcc's own, embedded.
+    let after: &[&Path] = if Target::parse(&options.target) == Some(Target::Wasm32Wasi) {
+        tu.alloc_slice_fill_iter([Path::new(crate::headers::WASI_DIRECTORY)])
+    } else {
+        &[]
+    };
     HeaderSearch {
         angled: beside,
+        after,
         ..HeaderSearch::default()
     }
 }
@@ -272,17 +289,41 @@ impl<'tu> Stages<'_, '_, 'tu> {
             self.output.ir = Some(ir);
             return;
         };
-        let asm = self.assembly(&unit, &sema, &arena, optimizer);
+        let wasm_target = self.context.configuration.target().is_wasm();
+        let asm = if wasm_target {
+            None
+        } else {
+            self.assembly(&unit, &sema, &arena, optimizer)
+        };
         if let Some(asm) = &asm {
             self.output.machine_code = self.machine_code(asm);
         }
+        if wasm_target {
+            self.output.wasm = self.wasm(&unit, &sema, &arena, optimizer);
+        }
+        let wat = self.output.wasm.as_ref().map(|wasm| wasm.text.as_str());
         self.output.line_map = line_map::map(
             &unit,
             &sema,
             self.context,
             INPUT,
-            [Some(ir.as_str()), Some(ir_abi.as_str()), asm.as_deref()],
+            [
+                Some(ir.as_str()),
+                Some(ir_abi.as_str()),
+                asm.as_deref(),
+                wat,
+            ],
         );
+        if let Some(wasm) = &mut self.output.wasm {
+            for function in &mut wasm.functions {
+                function.source = self
+                    .output
+                    .line_map
+                    .iter()
+                    .find(|mapping| mapping.function == function.name)
+                    .map(|mapping| mapping.source);
+            }
+        }
         self.output.ir = Some(ir);
         self.output.ir_abi = Some(ir_abi);
         self.output.asm = asm;
@@ -354,6 +395,90 @@ impl<'tu> Stages<'_, '_, 'tu> {
             self.flush();
         }
         Some(text)
+    }
+
+    /// The WebAssembly back end's module, as `--emit=wasm` and
+    /// `--emit=wat` write it, with the bundled runtime for WASI.
+    fn wasm(
+        &mut self,
+        unit: &ParsedTranslationUnit<'tu>,
+        sema: &SemanticTranslationUnit<'tu>,
+        arena: &Bump,
+        optimizer: Option<&OptimizerOptions<'_>>,
+    ) -> Option<ExplorerWasm> {
+        let context = &*self.context;
+        let target = context.configuration.target();
+        let built = crate::pipeline::with_optional_retention(true, |retain_locals| {
+            let diagnosed = lower(
+                context,
+                unit,
+                sema,
+                arena,
+                optimizer,
+                Profile::PostAbi,
+                retain_locals,
+            )?;
+            let calls = diagnosed.retained_diagnostics;
+            if calls.iter().any(|call| call.is_error(context)) {
+                return Err(Failure::Calls(calls));
+            }
+            verify(&diagnosed.module)?;
+            let runtime: &[Module<'_>] = if target == Target::Wasm32Wasi {
+                wasm::runtime::modules(target).map_err(|text| Failure::Message(text.to_owned()))?
+            } else {
+                &[]
+            };
+            let mut units = vec![&diagnosed.module];
+            units.extend(runtime.iter());
+            let compiled = wasm::compile(&units, 1, target, arena)
+                .map_err(|error| Failure::Message(error.to_string()))?;
+            let mut text = String::new();
+            let mut lines = Vec::new();
+            _ = compiled.write_text_with_lines(&mut text, &mut lines);
+            let imports = u32_of(compiled.module.imports.len());
+            let output = ExplorerWasm {
+                binary: compiled.bytes.to_vec(),
+                text,
+                functions: compiled
+                    .bodies
+                    .iter()
+                    .enumerate()
+                    .map(|(position, &(name, start, end))| ExplorerWasmFunction {
+                        index: imports + u32_of(position),
+                        name: name.to_owned(),
+                        start,
+                        end,
+                        source: None,
+                    })
+                    .collect(),
+                positions: compiled
+                    .entries
+                    .iter()
+                    .map(|entry| ExplorerWasmPosition {
+                        offset:   entry.offset,
+                        function: entry.function,
+                        block:    (entry.block != u32::MAX).then_some(entry.block),
+                        inst:     (entry.inst != u32::MAX).then_some(entry.inst),
+                        line:     (entry.line != 0).then_some(entry.line),
+                    })
+                    .collect(),
+                instructions: compiled
+                    .offsets
+                    .iter()
+                    .zip(&lines)
+                    .map(|(&offset, &text_line)| ExplorerWasmInstruction { offset, text_line })
+                    .collect(),
+            };
+            Ok((output, calls))
+        });
+        self.stage.set("back-end");
+        let (output, calls) = self.accept(built)?;
+        self.stage.set("middle-end");
+        for call in calls {
+            call.report(self.context);
+            self.flush();
+        }
+        Some(output)
     }
 
     /// The machine code of `asm`, which only an ELF target's encoder lays

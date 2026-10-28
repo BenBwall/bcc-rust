@@ -142,6 +142,7 @@ impl Machine<'_, '_, '_> {
             let size = match self.convention()? {
                 | Convention::SystemV => va_list::SIZE,
                 | Convention::Win64 => 8,
+                | Convention::Wasm32 => return Err(Fault::Unsupported(Unsupported::VaListTarget)),
             };
             let size = RuntimeValue::int(Type::I64, u128::from(size));
             return self
@@ -256,6 +257,7 @@ impl Machine<'_, '_, '_> {
         let start = frame.varargs;
         let end = start + frame.varargs_len;
         match self.convention()? {
+            | Convention::Wasm32 => Err(Fault::Unsupported(Unsupported::VaListTarget)),
             | Convention::SystemV => {
                 // System V psABI §3.5.7: the fixed arguments decide which
                 // registers remain for the variadic ones.
@@ -363,6 +365,7 @@ impl Machine<'_, '_, '_> {
         let pointer = match convention {
             | Convention::SystemV => self.memory.load(Type::Ptr, list, Align::BYTE)?,
             | Convention::Win64 => list,
+            | Convention::Wasm32 => return Err(Fault::Unsupported(Unsupported::VaListTarget)),
         };
         let (_, cursor) = self.cursor_at(pointer)?;
         let frame = self.frames[cursor.depth as usize];

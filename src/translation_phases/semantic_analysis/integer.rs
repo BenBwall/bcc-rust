@@ -552,7 +552,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 }
                 (negative, mantissa, exponent - fractional)
             },
-            | F::Float128(value) => match value.class() {
+            | F::Float128(value) | F::LongDouble128(value) => match value.class() {
                 | crate::binary128::Class::Zero => (value.is_negative(), 0, 0),
                 | crate::binary128::Class::Finite {
                     exponent,
@@ -643,7 +643,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     | Constant::Float(
                         super::super::preprocessing::FloatTokenType::ImaginaryFloat(_)
                         | super::super::preprocessing::FloatTokenType::ImaginaryDouble(_)
-                        | super::super::preprocessing::FloatTokenType::ImaginaryLongDouble(_),
+                        | super::super::preprocessing::FloatTokenType::ImaginaryLongDouble(_)
+                        | super::super::preprocessing::FloatTokenType::ImaginaryLongDouble128(_),
                     ),
                 )
                 | ExpressionType::Countof(_)

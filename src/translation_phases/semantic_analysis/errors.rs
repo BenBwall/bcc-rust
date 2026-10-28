@@ -404,6 +404,15 @@ pub(crate) enum SemanticErrorKind {
     /// C23: implementation-defined extended types, §H.2.4 paragraph 2,
     /// p. 554; PDF p. 567.
     UnsupportedInterchangeFloat,
+    /// `_Float16` on a target whose ABI has no binary16 type: the pinned
+    /// Clang rejects it on WebAssembly.
+    /// C23: implementation-defined interchange types, §H.2.2 paragraph 1,
+    /// p. 553; PDF p. 566.
+    UnsupportedFloat16,
+    /// `__bf16` on a target whose ABI has no bfloat16 type: the pinned Clang
+    /// rejects it on WebAssembly.
+    /// Clang Language Extensions, "Half-Precision Floating Point".
+    UnsupportedBFloat16,
     /// `_Complex __bf16`: neither GCC nor Clang has the complex type.
     /// Extension to C99 §6.7.2 paragraph 2, pp. 99-100; PDF pp. 111-112.
     ComplexBFloat16,
@@ -633,8 +642,10 @@ impl SemanticErrorKind {
             | Self::PragmaPackUnterminated
             | Self::PragmaPackShow(_)
             | Self::PragmaPackIgnored => "packing directive",
-            | Self::UnsupportedFloat128 | Self::UnsupportedInterchangeFloat =>
-                "unsupported floating type",
+            | Self::UnsupportedFloat128
+            | Self::UnsupportedInterchangeFloat
+            | Self::UnsupportedFloat16
+            | Self::UnsupportedBFloat16 => "unsupported floating type",
             | Self::ComplexBFloat16 | Self::ComplexFp16 => "invalid complex type",
             | Self::Fp16Parameter | Self::Fp16Return => "storage-only floating type",
             | Self::InvalidVectorAttribute => "invalid vector size or element type",
@@ -1008,6 +1019,16 @@ impl SemanticErrorKind {
                 "this floating type is not supported on this target",
                 "C23 Annex H: _Float128 needs binary128 and _Float64x a format wider than \
                  binary64; this target's long double is binary64 and it has no binary128 type",
+            ),
+            | Self::UnsupportedFloat16 => (
+                "_Float16 is not supported on this target",
+                "Clang provides _Float16 only where the target's ABI defines it; WebAssembly's \
+                 does not (Clang Language Extensions, \"Half-Precision Floating Point\")",
+            ),
+            | Self::UnsupportedBFloat16 => (
+                "__bf16 is not supported on this target",
+                "Clang provides __bf16 only where the target's ABI defines it; WebAssembly's \
+                 does not; __fp16, a storage-only type, is available",
             ),
             | Self::ComplexBFloat16 => (
                 "'_Complex __bf16' is invalid",

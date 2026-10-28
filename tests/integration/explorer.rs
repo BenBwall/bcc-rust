@@ -945,6 +945,33 @@ mod tests {
                 "{name}"
             );
         }
+        // For wasm32-wasip1 too, whose module, binary, text and source-map
+        // positions, is the same either way.
+        let lesson = std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("web/demos/macros.c"),
+        )
+        .unwrap();
+        let for_wasm = |trace| {
+            compile(
+                &lesson,
+                &ExplorerOptions {
+                    target: "wasm32-wasip1".into(),
+                    trace,
+                    ..options(false)
+                },
+            )
+        };
+        let (traced, untraced) = (for_wasm(true), for_wasm(false));
+        let wasm = traced.wasm.as_ref().expect("a module");
+        assert!(!wasm.binary.is_empty() && wasm.positions.iter().any(|p| p.line.is_some()));
+        assert!(traced.preprocessing.is_some());
+        assert_eq!(
+            ExplorerOutput {
+                preprocessing: None,
+                ..traced
+            },
+            untraced
+        );
         let output = compile(&late_include, &options(false));
         assert!(output.preprocessing.unwrap().truncated);
         let tokens = output.pp_tokens.unwrap();

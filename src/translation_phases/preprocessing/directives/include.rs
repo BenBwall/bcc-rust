@@ -296,10 +296,10 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
         directory: &Path,
         path: &Path,
     ) -> Option<u32> {
-        if directory == Path::new(crate::headers::DIRECTORY) {
-            return crate::headers::text(path)
+        if crate::headers::is_embedded(directory) {
+            return crate::headers::embedded(directory, path)
                 .is_some()
-                .then(|| self.context.intern_builtin_header(path));
+                .then(|| self.context.intern_builtin_header(directory, path));
         }
         // Each candidate is spelled in the expansion arena and taken back
         // before the next one, so a lookup leaves nothing there.

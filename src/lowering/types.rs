@@ -18,6 +18,7 @@ use crate::{
     },
     target::{
         Layout,
+        RecordPassing,
         Scalar,
         Target,
     },
@@ -113,6 +114,19 @@ pub(super) fn repr(types: &Types<'_>, mut ty: TypeId) -> Result<Repr, LoweringEr
 /// C99: §6.2.5 paragraphs 2-11, pp. 33-34; PDF pp. 45-46.
 /// An interchange or extended floating type lowers as the type whose
 /// representation it shares (C23 §H.2.2 paragraph 3, p. 553; PDF p. 566).
+/// The IR type of `long double`: `f64` on MSVC, `f128` on WebAssembly and
+/// the x87 `f80` elsewhere.
+/// C99: §6.2.5 paragraph 10, p. 34; PDF p. 46.
+fn long_double_type(types: &Types<'_>) -> Type {
+    if types.target.long_double_is_double() {
+        Type::F64
+    } else if types.target.long_double_is_binary128() {
+        Type::F128
+    } else {
+        Type::F80
+    }
+}
+
 fn scalar_repr(types: &Types<'_>, scalar: Scalar) -> Result<Repr, LoweringErrorKind> {
     match scalar.representation() {
         | Scalar::Void => Ok(Repr::Void),
@@ -125,11 +139,7 @@ fn scalar_repr(types: &Types<'_>, scalar: Scalar) -> Result<Repr, LoweringErrorK
         | Scalar::Float => Ok(Repr::Float { ty: Type::F32 }),
         | Scalar::Double => Ok(Repr::Float { ty: Type::F64 }),
         | Scalar::LongDouble => Ok(Repr::Float {
-            ty: if types.target.long_double_is_double() {
-                Type::F64
-            } else {
-                Type::F80
-            },
+            ty: long_double_type(types),
         }),
         | Scalar::Float128 => Ok(Repr::Float { ty: Type::F128 }),
         | Scalar::ComplexFloat128 => Ok(Repr::Complex {
@@ -142,11 +152,7 @@ fn scalar_repr(types: &Types<'_>, scalar: Scalar) -> Result<Repr, LoweringErrorK
             component: Type::F64,
         }),
         | Scalar::ComplexLongDouble => Ok(Repr::Complex {
-            component: if types.target.long_double_is_double() {
-                Type::F64
-            } else {
-                Type::F80
-            },
+            component: long_double_type(types),
         }),
         | _ => {
             let (bits, signed) =
@@ -365,8 +371,16 @@ fn flattened_layout<'s>(
                 | TypeKind::Unmodeled(reason) =>
                     return Err(LoweringErrorKind::UnmodeledType(reason)),
                 | TypeKind::Scalar(scalar) => scalar_leaves(types, scalar, offset, &mut scalars)?,
-                | TypeKind::Pointer(_) | TypeKind::Nullptr =>
-                    push_scalar(&mut scalars, offset, Type::Ptr)?,
+                // An ILP32 pointer object is accessed as `i32` (`emit.rs`).
+                | TypeKind::Pointer(_) | TypeKind::Nullptr => push_scalar(
+                    &mut scalars,
+                    offset,
+                    if types.target.pointer.size == 4 {
+                        Type::I32
+                    } else {
+                        Type::Ptr
+                    },
+                )?,
                 | TypeKind::Array(element, bound) => {
                     let count = match bound {
                         | ArrayBound::Constant(count) => count,
@@ -426,6 +440,11 @@ fn flattened_layout<'s>(
             }
         }
     }
+    if types.target.record_passing == RecordPassing::SingleElement
+        && single_element(types, ty, scratch)?
+    {
+        flags |= AggregateFlags::SINGLE_ELEMENT;
+    }
     Ok(AggregateLayout {
         size: whole.size,
         align: align(whole),
@@ -433,6 +452,95 @@ fn flattened_layout<'s>(
         scalars: scratch.alloc_slice_copy(&scalars),
         first: None,
     })
+}
+
+/// Whether `ty` is a structure or union whose one non-empty member, looking
+/// through one-element arrays and nested records, is a scalar (a pointer,
+/// an enumeration, a real arithmetic type or a bit-field's declared type)
+/// with the size of every record on the way, as Clang's
+/// `isSingleElementStruct` decides. A member is empty if it is an unnamed
+/// bit-field, an array with a zero bound, or a record of empty members;
+/// a complex value, a longer array or a flexible array member ends the
+/// search.
+/// Clang `isSingleElementStruct` and `isEmptyField` in
+/// `clang/lib/CodeGen/ABIInfoImpl.cpp`; C99 §6.7.2.1 paragraphs 9-16,
+/// pp. 102-103; PDF pp. 114-115.
+fn single_element(
+    types: &Types<'_>,
+    ty: TypeId,
+    scratch: &Bump,
+) -> Result<bool, LoweringErrorKind> {
+    let mut record = ty;
+    let mut sizes = ArenaVec::new_in(scratch);
+    loop {
+        let Some(tag) = types.tag(record).filter(|tag| tag.kind != TagKind::Enum) else {
+            return Ok(false);
+        };
+        if tag.contains_flexible.get() {
+            return Ok(false);
+        }
+        sizes.push(layout(types, record)?.size);
+        let mut found = None;
+        for member in tag.members.get() {
+            if member.invalid || (member.width.is_some() && member.name.is_none()) {
+                continue;
+            }
+            let mut element = types.non_atomic(member.ty);
+            if empty_member(types, element, scratch) {
+                continue;
+            }
+            if found.is_some() {
+                return Ok(false);
+            }
+            while let TypeKind::Array(inner, ArrayBound::Constant(1)) = types.kind(element) {
+                element = types.non_atomic(inner);
+            }
+            found = Some(element);
+        }
+        let Some(element) = found else {
+            return Ok(false);
+        };
+        match types.kind(element) {
+            | TypeKind::Tag(_)
+                if types
+                    .tag(element)
+                    .is_some_and(|tag| tag.kind != TagKind::Enum) =>
+                record = element,
+            | TypeKind::Scalar(scalar) if scalar.complex() => return Ok(false),
+            | TypeKind::Scalar(_) | TypeKind::Pointer(_) | TypeKind::Nullptr | TypeKind::Tag(_) => {
+                let size = layout(types, element)?.size;
+                return Ok(sizes.iter().all(|&record| record == size));
+            },
+            | _ => return Ok(false),
+        }
+    }
+}
+
+/// Whether a member of type `ty` is empty for Clang's single-element rule:
+/// an array with a zero bound at any level, or a record whose members are
+/// all empty.
+fn empty_member(types: &Types<'_>, ty: TypeId, scratch: &Bump) -> bool {
+    let mut pending = ArenaVec::new_in(scratch);
+    pending.push(ty);
+    'members: while let Some(mut ty) = pending.pop() {
+        while let TypeKind::Array(element, bound) = types.kind(ty) {
+            if matches!(bound, ArrayBound::Constant(0)) {
+                // This member is empty; the others still decide.
+                continue 'members;
+            }
+            ty = types.non_atomic(element);
+        }
+        let Some(tag) = types.tag(ty).filter(|tag| tag.kind != TagKind::Enum) else {
+            return false;
+        };
+        for member in tag.members.get() {
+            if member.invalid || (member.width.is_some() && member.name.is_none()) {
+                continue;
+            }
+            pending.push(types.non_atomic(member.ty));
+        }
+    }
+    true
 }
 
 /// A complex scalar's two components, retaining its scalar ABI identity.
@@ -499,10 +607,7 @@ fn scalar_leaves(
     offset: u64,
     scalars: &mut ArenaVec<'_, AggregateScalar>,
 ) -> Result<(), LoweringErrorKind> {
-    let long_double = || match types.target.scalar(Scalar::LongDouble) {
-        | Some(Layout { size: 8, .. }) => Type::F64,
-        | _ => Type::F80,
-    };
+    let long_double = || long_double_type(types);
     let (ty, parts) = match scalar.representation() {
         | Scalar::Void =>
             return Err(LoweringErrorKind::MissingFact(
@@ -583,5 +688,7 @@ pub(super) fn data_layout(target: Target) -> &'static str {
             "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128",
         | Target::WindowsGnu | Target::WindowsMsvc =>
             "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128",
+        | Target::Wasm32Unknown | Target::Wasm32Wasi =>
+            "e-m:e-p:32:32-p10:8:8-p20:8:8-i64:64-i128:128-n32:64-S128-ni:1:10:20",
     }
 }

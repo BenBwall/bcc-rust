@@ -129,8 +129,12 @@ pub(super) fn generate_code<'tu>(
     } else {
         Profile::PostAbi
     };
-    let copies = options.inline_copies();
     let target = context.configuration.target();
+    let copies = if target.is_wasm() {
+        InlineCopies::Resolve
+    } else {
+        options.inline_copies()
+    };
     let code = context.configuration.code_options();
     let prepared = with_optional_retention(true, |retain_locals| {
         let diagnosed = lower_translation_unit_with_locals(
@@ -183,6 +187,16 @@ pub(super) fn generate_code<'tu>(
         | retention::Output::Text(text) => Generated::status(match &options.emit_path {
             | Some(path) if path.as_os_str() != "-" => write_file(path, text),
             | _ => print_stdout(format_args!("{text}")),
+        }),
+        | retention::Output::Binary(bytes) => Generated::status(match &options.emit_path {
+            | Some(path) if path.as_os_str() != "-" => write_bytes(path, bytes),
+            | _ => {
+                let mut stdout = io::stdout().lock();
+                match stdout.write_all(bytes).and_then(|()| stdout.flush()) {
+                    | Ok(()) => 0,
+                    | Err(error) => stdout_error(&error),
+                }
+            },
         }),
         | retention::Output::Built => Generated {
             status:         0,
@@ -361,8 +375,12 @@ pub(super) enum Emit {
     /// LLVM IR.
     Llvm,
     /// Assembly from the selected back end: LLVM's, or the native back
-    /// end's with --backend=native.
+    /// end's with --backend=native (WebAssembly text for wasm32 targets).
     Asm,
+    /// The WebAssembly module, in the binary format (wasm32 targets).
+    Wasm,
+    /// The WebAssembly module as text (wasm32 targets).
+    Wat,
 }
 
 /// The code generator `--backend` selects.
@@ -372,6 +390,9 @@ pub(super) enum BackEnd {
     Llvm,
     /// bcc's own x86-64 code generator.
     Native,
+    /// bcc's own WebAssembly code generator, which the wasm32 targets
+    /// always use.
+    Wasm,
 }
 
 /// The middle-end optimizer `--opt` selects.
@@ -423,6 +444,12 @@ impl CodeGeneration {
     /// Why the selected options do not fit the selected back end, if they
     /// do not.
     pub(super) fn back_end_conflict(&self) -> Option<&'static str> {
+        if matches!(self.emit, Some(Emit::Wasm | Emit::Wat)) && self.backend == BackEnd::Native {
+            return Some("--emit=wasm and --emit=wat use the WebAssembly back end");
+        }
+        if self.backend == BackEnd::Wasm {
+            return None;
+        }
         let native = self.backend == BackEnd::Native;
         if self.emit == Some(Emit::Llvm) && native {
             return Some("--emit=llvm prints LLVM IR, which --backend=native does not use");
@@ -669,6 +696,20 @@ fn print_stdout(text: fmt::Arguments<'_>) -> i32 {
 /// Writes `text` to the file at `path` and returns the exit status.
 fn write_file(path: &Path, text: &str) -> i32 {
     match std::fs::write(path, text) {
+        | Ok(()) => 0,
+        | Err(error) => {
+            report_stderr(format_args!(
+                "error: cannot write `{}`: {error}",
+                path.display()
+            ));
+            FAILURE_STATUS
+        },
+    }
+}
+
+/// Writes `bytes` to the file at `path` and returns the exit status.
+fn write_bytes(path: &Path, bytes: &[u8]) -> i32 {
+    match std::fs::write(path, bytes) {
         | Ok(()) => 0,
         | Err(error) => {
             report_stderr(format_args!(

@@ -322,6 +322,11 @@ pub(crate) enum FloatTokenType {
     ImaginaryLongDouble(LongDouble),
     Float128(crate::binary128::Binary128),
     ImaginaryFloat128(crate::binary128::Binary128),
+    /// A `long double` constant of a target whose `long double` is IEEE
+    /// binary128 (WebAssembly), with its exact binary128 value.
+    /// C99: §6.4.4.2 paragraph 4, p. 58; PDF p. 70.
+    LongDouble128(crate::binary128::Binary128),
+    ImaginaryLongDouble128(crate::binary128::Binary128),
     /// `_Float32`, `_Float64`, `_Float32x` and `_Float64x` constants, with
     /// the values of the standard types whose representation they share;
     /// an `f128` constant is [`Self::Float128`].
@@ -491,12 +496,13 @@ impl FloatTokenType {
         match self {
             | Self::Float(_) => "float",
             | Self::Double(_) => "double",
-            | Self::LongDouble(_) => "long double",
+            | Self::LongDouble(_) | Self::LongDouble128(_) => "long double",
             | Self::Float128(_) => "__float128",
             | Self::ImaginaryFloat128(_) => "__float128 _Complex",
             | Self::ImaginaryFloat(_) => "float _Complex",
             | Self::ImaginaryDouble(_) => "double _Complex",
-            | Self::ImaginaryLongDouble(_) => "long double _Complex",
+            | Self::ImaginaryLongDouble(_) | Self::ImaginaryLongDouble128(_) =>
+                "long double _Complex",
             | Self::Float32(_) => "_Float32",
             | Self::Float64(_) => "_Float64",
             | Self::Float32x(_) => "_Float32x",
@@ -1295,8 +1301,8 @@ impl Display for FloatTokenType {
             | Self::ImaginaryDouble(v) => write!(f, "{v}i"),
             | Self::LongDouble(v) | Self::Float64x(v) => write!(f, "{v}"),
             | Self::ImaginaryLongDouble(v) => write!(f, "{v}i"),
-            | Self::Float128(v) => write!(f, "{v}"),
-            | Self::ImaginaryFloat128(v) => write!(f, "{v}i"),
+            | Self::Float128(v) | Self::LongDouble128(v) => write!(f, "{v}"),
+            | Self::ImaginaryFloat128(v) | Self::ImaginaryLongDouble128(v) => write!(f, "{v}i"),
             | Self::Float16(v) => write!(
                 f,
                 "{}",

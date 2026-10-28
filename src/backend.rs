@@ -13,6 +13,9 @@
 //!   assembly for the bundled clang to assemble, or encodes ELF and COFF
 //!   objects itself (the default for Windows targets), and links with the
 //!   bundled clang (`docs/design/native-backend.md`).
+//! - `wasm.rs` and `wasm/`: bcc's own WebAssembly code generator for the
+//!   `wasm32` targets, with a linker and a C runtime for WASI, which the
+//!   explorer's in-browser compiler shares.
 //! - `interpreter.rs` and `interpreter/`: execute a module directly with exact
 //!   poison and undefined-behaviour tracking. It is the reference semantics of
 //!   the IR and the oracle for differential tests. It also accepts pre-ABI
@@ -29,6 +32,7 @@
 #[cfg(feature = "native")]
 pub(crate) mod llvm;
 pub(crate) mod native;
+pub(crate) mod wasm;
 
 // Reference execution
 #[cfg(feature = "native")]

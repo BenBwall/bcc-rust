@@ -116,24 +116,26 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 use super::InterchangeFloat as F;
                 let target = self.context.configuration.target();
                 let real = match format {
-                    | F::Float16 => Some(Scalar::Float16),
-                    | F::BFloat16 => Some(Scalar::BFloat16),
+                    | F::Float16 => target.float16_type().then_some(Scalar::Float16),
+                    | F::BFloat16 => target.bfloat16_type().then_some(Scalar::BFloat16),
                     | F::Fp16 => Some(Scalar::Fp16),
                     | F::Float32 => Some(Scalar::Float32),
                     | F::Float64 => Some(Scalar::Float64),
                     | F::Float32x => Some(Scalar::Float32x),
                     // GCC's `_Float128` and `__float128` are one type.
                     | F::Float128 => target.float128_type().then_some(Scalar::Float128),
-                    | F::Float64x =>
-                        (!target.layout().long_double_is_double()).then_some(Scalar::Float64x),
+                    | F::Float64x => target
+                        .layout()
+                        .long_double_is_x87()
+                        .then_some(Scalar::Float64x),
                 };
                 if real.is_none() {
-                    self.error(
-                        SemanticErrorKind::UnsupportedInterchangeFloat,
-                        source,
-                        None,
-                        None,
-                    );
+                    let kind = match format {
+                        | F::Float16 => SemanticErrorKind::UnsupportedFloat16,
+                        | F::BFloat16 => SemanticErrorKind::UnsupportedBFloat16,
+                        | _ => SemanticErrorKind::UnsupportedInterchangeFloat,
+                    };
+                    self.error(kind, source, None, None);
                 }
                 real.map(|real| if *complex { real.complex_type() } else { real })
             },

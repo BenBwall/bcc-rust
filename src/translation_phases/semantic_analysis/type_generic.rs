@@ -241,11 +241,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             })
     }
 
+    /// Whether `ty` computes in IEEE binary128: `__float128`, and `long
+    /// double` where the target makes it binary128 (WebAssembly).
+    /// C99: §6.2.5 paragraph 10, p. 34; PDF p. 46.
     pub(super) fn binary128_type(&self, ty: TypeId) -> bool {
-        matches!(
-            self.types.nodes[ty.index],
-            TypeKind::Scalar(Scalar::Float128 | Scalar::ComplexFloat128)
-        )
+        match self.types.nodes[ty.index] {
+            | TypeKind::Scalar(Scalar::Float128 | Scalar::ComplexFloat128) => true,
+            | TypeKind::Scalar(Scalar::LongDouble | Scalar::ComplexLongDouble) =>
+                self.types.target.long_double_is_binary128(),
+            | _ => false,
+        }
     }
 
     /// GNU real/imag preserves a complex component's lvalue and qualifiers;

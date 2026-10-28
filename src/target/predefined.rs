@@ -20,6 +20,10 @@ impl Target {
             | (Self::WindowsGnu, true) => include_str!("x86_64-w64-windows-gnu-gnu17.h"),
             | (Self::WindowsMsvc, false) => include_str!("x86_64-pc-windows-msvc-c11.h"),
             | (Self::WindowsMsvc, true) => include_str!("x86_64-pc-windows-msvc-gnu17.h"),
+            | (Self::Wasm32Unknown, false) => include_str!("wasm32-unknown-unknown-c11.h"),
+            | (Self::Wasm32Unknown, true) => include_str!("wasm32-unknown-unknown-gnu17.h"),
+            | (Self::Wasm32Wasi, false) => include_str!("wasm32-wasip1-c11.h"),
+            | (Self::Wasm32Wasi, true) => include_str!("wasm32-wasip1-gnu17.h"),
         };
         arena.alloc_str(source)
     }
@@ -33,6 +37,8 @@ impl Target {
             | Self::LinuxMusl => include_str!("x86_64-unknown-linux-musl-atomic-c23.h"),
             | Self::WindowsGnu => include_str!("x86_64-w64-windows-gnu-atomic-c23.h"),
             | Self::WindowsMsvc => include_str!("x86_64-pc-windows-msvc-atomic-c23.h"),
+            | Self::Wasm32Unknown => include_str!("wasm32-unknown-unknown-atomic-c23.h"),
+            | Self::Wasm32Wasi => include_str!("wasm32-wasip1-atomic-c23.h"),
         }
     }
 }
@@ -79,6 +85,8 @@ mod tests {
             Target::LinuxMusl,
             Target::WindowsGnu,
             Target::WindowsMsvc,
+            Target::Wasm32Unknown,
+            Target::Wasm32Wasi,
         ] {
             for mode in ["c17", "gnu17", "c23", "gnu23"] {
                 let output = Command::new(&clang)
@@ -145,6 +153,8 @@ mod tests {
             Target::LinuxMusl,
             Target::WindowsGnu,
             Target::WindowsMsvc,
+            Target::Wasm32Unknown,
+            Target::Wasm32Wasi,
         ] {
             for gnu in [false, true] {
                 let mode = if gnu { "gnu17" } else { "c11" };

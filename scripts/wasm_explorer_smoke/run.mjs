@@ -1,21 +1,25 @@
 // Runs the explorer compiled to WebAssembly (src/lib.rs) in Node and checks
 // that it shows the front end phase by phase (logical lines, preprocessing
-// tokens, the preprocessed text and its macro expansions) and compiles C to
-// tokens, a syntax tree, IR, assembly and machine code,
+// tokens, the preprocessed text and its macro expansions, which tracing
+// leaves unchanged) and compiles C to tokens, a syntax tree, IR, assembly
+// and machine code, or for WASI to a module that runs under Node's WASI,
 // and that the deepest nesting the default limit admits fits the stack while
 // deeper nesting ends with a diagnostic.
 //
 // Usage, from this directory:
 //   cargo build --release --target wasm32-unknown-unknown
 //   node run.mjs target/wasm32-unknown-unknown/release/wasm_explorer_smoke.wasm
-import { readFileSync } from "node:fs";
+import { closeSync, mkdtempSync, openSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { WASI } from "node:wasi";
 import assert from "node:assert/strict";
 
 const module = await WebAssembly.compile(readFileSync(process.argv[2]));
 
-/// A fresh instance's compile function and its linear memory.
+/// A fresh instance's compile functions and its linear memory.
 async function instantiate() {
-  const { memory, smoke_alloc, smoke_compile, smoke_compile_json } =
+  const { memory, smoke_alloc, smoke_compile, smoke_compile_json, smoke_compile_wasm } =
     (await WebAssembly.instantiate(module)).exports;
   const call = (source, run) => {
     const bytes = new TextEncoder().encode(source);
@@ -28,12 +32,35 @@ async function instantiate() {
   const compile = (source, { optimize = false, depth = 0, trace = true } = {}) =>
     call(source, (pointer, length) =>
       smoke_compile(pointer, length, optimize ? 1 : 0, depth, trace ? 1 : 0));
-  // Every output but the trace, as JSON.
-  const outputs = (source, { trace = true } = {}) =>
-    call(source, (pointer, length) => smoke_compile_json(pointer, length, trace ? 1 : 0));
-  return { compile, outputs, memory };
+  // Every output but the trace, as JSON, for x86-64 or with `wasm` for
+  // wasm32-wasip1.
+  const outputs = (source, { trace = true, wasm = false } = {}) =>
+    call(source, (pointer, length) =>
+      smoke_compile_json(pointer, length, trace ? 1 : 0, wasm ? 1 : 0));
+  const compileWasm = (source, optimize) =>
+    call(source, (pointer, length) => smoke_compile_wasm(pointer, length, optimize ? 1 : 0));
+  return { compile, outputs, compileWasm, memory };
 }
-const { compile, outputs } = await instantiate();
+const { compile, outputs, compileWasm } = await instantiate();
+
+// The explorer's WebAssembly back end, run in the browser's own engine: the
+// module it compiles for WASI runs under Node's WASI, its stdout captured.
+async function compileAndRunWasm(source, optimize) {
+  const report = compileWasm(source, optimize);
+  assert.doesNotMatch(report, /== diagnostic error/, report.slice(0, 2000));
+  const hex = report.slice(report.indexOf("== binary\n") + 10).trim();
+  const binary = Uint8Array.from(hex.match(/../g), (pair) => parseInt(pair, 16));
+  assert.ok(WebAssembly.validate(binary), "the module validates");
+  const directory = mkdtempSync(join(tmpdir(), "bcc-wasm-smoke-"));
+  const stdout = openSync(join(directory, "stdout"), "w");
+  const wasi = new WASI({ version: "preview1", args: ["program"], env: {}, stdout, returnOnExit: true });
+  const { instance: program } = await WebAssembly.instantiate(binary, {
+    wasi_snapshot_preview1: wasi.wasiImport,
+  });
+  const status = wasi.start(program);
+  closeSync(stdout);
+  return { report, status, stdout: readFileSync(join(directory, "stdout"), "utf8") };
+}
 
 const program = `#include <stdint.h>
 static int32_t square(int32_t x) { return x * x; }
@@ -128,19 +155,19 @@ for (const depth of [400, 410]) {
 // trace, never the compilation: each shape below, which spends a different
 // part of that budget, compiles with the trace on exactly as with it off:
 // every output but the trace is the same, header names included.
-const join = (count, text, separator = "+") => Array(count).fill(text).join(separator);
+const repeat = (count, text, separator = "+") => Array(count).fill(text).join(separator);
 const parameters = (count) => Array.from({ length: count }, (_, i) => `a${i}`).join(",");
 // F replaced fan³ times inside one invocation in the source, each time
 // spelling `argument` for each of its parameters.
 const tower = (argument, fan, arity = 1) => {
-  const call = join(arity, "y", ",");
-  return `#define F(${parameters(arity)}) 0\n#define H(y) ${join(fan, `F(${call})`)}\n` +
-    `#define H2(y) ${join(fan, "H(y)")}\n#define H3(y) ${join(fan, "H2(y)")}\n` +
+  const call = repeat(arity, "y", ",");
+  return `#define F(${parameters(arity)}) 0\n#define H(y) ${repeat(fan, `F(${call})`)}\n` +
+    `#define H2(y) ${repeat(fan, "H(y)")}\n#define H3(y) ${repeat(fan, "H2(y)")}\n` +
     `int x = H3(${argument});\n`;
 };
 // E0 is `unit`, and each E(n+1) is ten E(n).
 const tens = (unit) =>
-  `#define E0 ${unit}\n` + [1, 2, 3, 4].map((n) => `#define E${n} ${join(10, `E${n - 1}`, " ")}\n`).join("");
+  `#define E0 ${unit}\n` + [1, 2, 3, 4].map((n) => `#define E${n} ${repeat(10, `E${n - 1}`, " ")}\n`).join("");
 const lines = (head, line) => {
   let text = head;
   for (let i = 0; text.length < LIMIT - 1024; i++) text += line(i);
@@ -153,9 +180,9 @@ for (const [name, source, truncated, expansions] of [
   ["one token longer than every cut", tower(`"${"a".repeat(50000)}"`, 10), false],
   ["empty arguments", lines(
     `#define F(${parameters(1000)}) 1\n#define E ${",".repeat(999)}\n#define APPLY(m, x) m(x)\n` +
-      `#define G ${join(10, "APPLY(F,E)")}\n#define G2 ${join(10, "G")}\n`,
+      `#define G ${repeat(10, "APPLY(F,E)")}\n#define G2 ${repeat(10, "G")}\n`,
     (i) => `int v${i} = G2;\n`).slice(0, 6500), true],
-  ["many arguments", `#define F(${parameters(2000)}) a0+a1999\nint x = F(${join(2000, "1", ",")});\n`, false],
+  ["many arguments", `#define F(${parameters(2000)}) a0+a1999\nint x = F(${repeat(2000, "1", ",")});\n`, false],
   ["arguments around the cut", lines("#define F(x) sizeof x\n",
     (i) => `int n${i} = F("${"a".repeat(150 + (i % 20))}");\n`), false],
   // An empty replacement is one event, so after 30,000 events from one
@@ -185,6 +212,18 @@ for (const [name, source, truncated, expansions] of [
   assert.ok(Date.now() - started < 20000, `${name} took ${Date.now() - started} ms`);
 }
 
+// For wasm32-wasip1 too: the preprocessor lesson's module, binary, text
+// and source-map positions, is the same with the trace on and off.
+{
+  const lesson = readFileSync(new URL("../../web/demos/macros.c", import.meta.url), "utf8");
+  const traced = outputs(lesson, { wasm: true });
+  assert.equal(traced, outputs(lesson, { wasm: true, trace: false }));
+  const { wasm, pp_tokens: tokens } = JSON.parse(traced);
+  assert.ok(wasm.binary.length > 0 && wasm.text.includes("(func $main"), "wasm module");
+  assert.ok(wasm.positions.some((position) => position.line !== null), "source map");
+  assert.ok(tokens.some((token) => token.header_name), "header names");
+}
+
 // Tracing a trivial program costs the explorer no more linear memory than
 // one region: released regions are kept whole for the next stage rather
 // than split by small allocations.
@@ -195,6 +234,27 @@ const footprint = async (trace) => {
 };
 const [plainBytes, tracedBytes] = [await footprint(false), await footprint(true)];
 assert.ok(tracedBytes - plainBytes < 32 * 2 ** 20, `${plainBytes} -> ${tracedBytes}`);
+
+const wasmProgram = `#include <stdio.h>
+#include <stdlib.h>
+struct point { int x, y; };
+static struct point add(struct point a, struct point b) { return (struct point){a.x + b.x, a.y + b.y}; }
+int main(void) {
+    struct point p = add((struct point){1, 2}, (struct point){30, 40});
+    char *text = malloc(32);
+    snprintf(text, 32, "%d,%d %.3f", p.x, p.y, 2.0 / 3);
+    puts(text);
+    free(text);
+    return p.x + p.y;
+}
+`;
+for (const optimize of [false, true]) {
+  const { report, status, stdout } = await compileAndRunWasm(wasmProgram, optimize);
+  assert.equal(stdout, "31,42 0.667\n");
+  assert.equal(status, 73);
+  assert.match(report, /^  \(func \$main /m);
+  if (!optimize) assert.doesNotMatch(report, /^== positions 0$/m);
+}
 
 const errors = compile("int main(void) { return 1 +; }\n");
 assert.match(errors, /== diagnostic error\nerror: expected an expression/);
