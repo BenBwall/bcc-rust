@@ -511,6 +511,10 @@ fn scalar_code(scalar: Scalar) -> &'static str {
         // Itanium C++ ABI, "Builtin types": `DF <number> _` and
         // `DF <number> x`.
         | Scalar::Float16 => "DF16_",
+        | Scalar::ComplexFloat16 => "CDF16_",
+        // `DF16b` and `Dh`, as Clang mangles `__bf16` and `__fp16`.
+        | Scalar::BFloat16 => "DF16b",
+        | Scalar::Fp16 => "Dh",
         | Scalar::Float32 => "DF32_",
         | Scalar::Float64 => "DF64_",
         | Scalar::Float32x => "DF32x",

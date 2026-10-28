@@ -89,12 +89,13 @@ pub(crate) fn rewrite<'a>(func: &mut MFunction<'a>, allocation: &Allocation<'_>,
 }
 
 /// Rewrites `func` as [`rewrite`] does, before deleting identity copies,
-/// and checks the result against the virtual-register program.
+/// and checks the result against the virtual-register program; on success,
+/// the size of the checker's largest state.
 pub(crate) fn rewrite_checked<'a>(
     func: &mut MFunction<'_>,
     allocation: &Allocation<'_>,
     arena: &'a Bump,
-) -> Result<(), &'a CheckError> {
+) -> Result<usize, &'a CheckError> {
     let mut original = ArenaVec::with_capacity_in(func.blocks.len(), arena);
     for block in &func.blocks {
         original.push(&*arena.alloc_slice_copy(&block.insts));

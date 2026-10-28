@@ -109,7 +109,7 @@ fn narrowing_matches_libgcc_bit_for_bit() {
 }
 
 #[test]
-fn widening_is_exact_and_quiets_signaling_nans() {
+fn widening_is_exact_and_quiets_binary16_signaling_nans() {
     use HalfFormat::{
         BFloat16,
         Binary16,
@@ -130,7 +130,7 @@ fn widening_is_exact_and_quiets_signaling_nans() {
         (0x3F80, 0x3F80_0000),
         (0x0001, 0x0001_0000),
         (0x7F7F, 0x7F7F_0000),
-        (0x7F81, 0x7FC1_0000),
+        (0x7F81, 0x7F81_0000),
         (0xFFC0, 0xFFC0_0000),
     ] {
         assert_eq!(BFloat16.widen(bits).to_bits(), single, "{bits:#x}");

@@ -366,7 +366,9 @@ fn scalar<'tu>(
             return Some(());
         }
         let (float, complex) = match s.representation() {
-            | Scalar::Float16 => (Type::F16, false),
+            | Scalar::Float16 | Scalar::Fp16 => (Type::F16, false),
+            | Scalar::BFloat16 => (Type::BF16, false),
+            | Scalar::ComplexFloat16 => (Type::F16, true),
             | Scalar::Float => (Type::F32, false),
             | Scalar::Double => (Type::F64, false),
             | Scalar::LongDouble => (if size == 8 { Type::F64 } else { Type::F80 }, false),

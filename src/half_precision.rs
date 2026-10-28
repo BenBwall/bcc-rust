@@ -10,8 +10,9 @@
 //! hands it to the x87 module's rounding core with the format's precision
 //! and exponent range, so a subnormal result is rounded once at its own
 //! precision and an overflow becomes an infinity. A NaN keeps its sign and
-//! the top of its payload and is quieted; widening quiets a signaling NaN
-//! too, as libgcc's soft-float routines do.
+//! the top of its payload and is quieted; widening a binary16 signaling
+//! NaN quiets it too, as libgcc's soft-float routines do, while a bfloat16
+//! widens to binary32 by a shift, as GCC and Clang widen it inline.
 //!
 //! For `0.1` as a `double`, the magnitude `0x1999999999999A × 2^-56` keeps
 //! its top 11 bits, `0x666`, and the discarded bits are just over half an
@@ -43,20 +44,22 @@ pub(crate) enum HalfFormat {
     /// IEEE binary16: 5 exponent bits and 10 fraction bits.
     Binary16,
     /// bfloat16, the top half of a binary32 encoding: 8 exponent bits and 7
-    /// fraction bits. No C type uses it yet (`__bf16` is not implemented);
-    /// the conversions are tested against libgcc's.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "`__bf16` is not implemented yet.")
-    )]
+    /// fraction bits, the format of GCC's and Clang's `__bf16`.
     BFloat16,
 }
 
 impl HalfFormat {
-    /// The exact binary32 value of an encoding; a signaling NaN is quieted.
+    /// The exact binary32 value of an encoding. A binary16 signaling NaN is
+    /// quieted, as `__extendhfsf2` quiets it; a bfloat16 encoding becomes
+    /// the top half of the binary32 one, signaling NaNs included, as GCC
+    /// and Clang widen it inline (only libgcc's `__extendbfsf2`, which GCC
+    /// calls before arithmetic, quiets one, and arithmetic quiets it anyway).
     /// C99: §6.3.1.5 paragraph 1, p. 44; PDF p. 56.
     pub(crate) fn widen(self, bits: u16) -> f32 {
-        self.to_x87(bits).to_f32()
+        match self {
+            | Self::Binary16 => self.to_x87(bits).to_f32(),
+            | Self::BFloat16 => f32::from_bits(u32::from(bits) << 16),
+        }
     }
 
     /// The exact x87 value of an encoding; a signaling NaN is quieted.

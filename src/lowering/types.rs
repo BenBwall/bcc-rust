@@ -74,7 +74,10 @@ pub(super) fn repr(types: &Types<'_>, mut ty: TypeId) -> Result<Repr, LoweringEr
             types.kind(inner),
             TypeKind::Scalar(s) if matches!(
                 s.representation(),
-                Scalar::ComplexFloat | Scalar::ComplexDouble | Scalar::ComplexLongDouble
+                Scalar::ComplexFloat16
+                    | Scalar::ComplexFloat
+                    | Scalar::ComplexDouble
+                    | Scalar::ComplexLongDouble
             )
         ) {
             return unsupported(Construct::ComplexAtomic);
@@ -128,7 +131,11 @@ fn scalar_repr(types: &Types<'_>, scalar: Scalar) -> Result<Repr, LoweringErrorK
     match scalar.representation() {
         | Scalar::Void => Ok(Repr::Void),
         | Scalar::Bool => Ok(Repr::Bool),
-        | Scalar::Float16 => Ok(Repr::Float { ty: Type::F16 }),
+        | Scalar::Float16 | Scalar::Fp16 => Ok(Repr::Float { ty: Type::F16 }),
+        | Scalar::BFloat16 => Ok(Repr::Float { ty: Type::BF16 }),
+        | Scalar::ComplexFloat16 => Ok(Repr::Complex {
+            component: Type::F16,
+        }),
         | Scalar::Float => Ok(Repr::Float { ty: Type::F32 }),
         | Scalar::Double => Ok(Repr::Float { ty: Type::F64 }),
         | Scalar::LongDouble => Ok(Repr::Float {
@@ -548,6 +555,15 @@ pub(super) fn complex_layout<'s>(
             "a complex type has no scalar",
         ));
     };
+    complex_scalar_layout(types, scalar, scratch)
+}
+
+/// The ABI layout of the complex scalar type `scalar`.
+pub(super) fn complex_scalar_layout<'s>(
+    types: &Types<'_>,
+    scalar: Scalar,
+    scratch: &'s Bump,
+) -> Result<AggregateLayout<'s>, LoweringErrorKind> {
     // Calling conventions classify the nominal scalar, not a typedef's storage
     // override.
     let whole = types
@@ -598,7 +614,9 @@ fn scalar_leaves(
                 "an aggregate has a void member",
             )),
         | Scalar::Bool => (Type::I8, 1),
-        | Scalar::Float16 => (Type::F16, 1),
+        | Scalar::Float16 | Scalar::Fp16 => (Type::F16, 1),
+        | Scalar::BFloat16 => (Type::BF16, 1),
+        | Scalar::ComplexFloat16 => (Type::F16, 2),
         | Scalar::Float => (Type::F32, 1),
         | Scalar::Double => (Type::F64, 1),
         | Scalar::LongDouble => (long_double(), 1),

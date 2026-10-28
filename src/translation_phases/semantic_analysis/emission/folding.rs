@@ -60,10 +60,7 @@ use crate::{
         BuiltinId,
         BuiltinOperation,
     },
-    float_parsing::{
-        LongDouble,
-        string_to_long_double,
-    },
+    float_parsing::LongDouble,
     translation_phases::{
         parsing::{
             declaration_syntax::{
@@ -628,11 +625,9 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             | TypeKind::Scalar(s) if s.floating() => match value {
                 | Value::Floating(floating) =>
                     self.round_floating(floating, ty).map(Value::Floating),
-                | Value::Integer(integer) => {
-                    let text = crate::diagnostics::format_in!(self.scratch, "{}L\0", integer);
-                    let floating = Floating::real(string_to_long_double(text).ok()?);
-                    self.round_floating(floating, ty).map(Value::Floating)
-                },
+                // An integer rounds once from its exact value.
+                | Value::Integer(integer) =>
+                    self.integer_floating(integer, ty).map(Value::Floating),
                 | Value::Other => Some(Value::Other),
                 | Value::Address(..) | Value::String(..) | Value::CastString(..) => None,
             },

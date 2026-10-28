@@ -380,19 +380,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 .is_some_and(u64::is_power_of_two),
             | ConstantConstraint::ConvertedProbability =>
                 info.constant == ConstantClass::Arithmetic
-                    && self
-                        .floating_value(info)
-                        .and_then(|value| self.round_floating(value, ty))
-                        .is_some_and(|v| {
-                            matches!(
-                                v.real.compare(crate::float_parsing::LongDouble::ZERO),
-                                0 | 1
-                            ) && matches!(
-                                v.real
-                                    .compare(crate::float_parsing::LongDouble::from_double(1.0)),
-                                -1 | 0
-                            )
-                        }),
+                    && self.converted_floating(info, ty).is_some_and(|v| {
+                        matches!(
+                            v.real.compare(crate::float_parsing::LongDouble::ZERO),
+                            0 | 1
+                        ) && matches!(
+                            v.real
+                                .compare(crate::float_parsing::LongDouble::from_double(1.0)),
+                            -1 | 0
+                        )
+                    }),
         };
         if !valid {
             self.error(

@@ -45,7 +45,8 @@ impl Repr {
     /// `None` for the x87 format, which WebAssembly has no use for.
     pub(crate) const fn of(ty: Type) -> Option<Self> {
         Some(match ty {
-            | Type::I1 | Type::I8 | Type::I16 | Type::I32 | Type::Ptr | Type::F16 => Self::I32,
+            | Type::I1 | Type::I8 | Type::I16 | Type::I32 | Type::Ptr | Type::F16 | Type::BF16 =>
+                Self::I32,
             | Type::I64 => Self::I64,
             | Type::F32 => Self::F32,
             | Type::F64 => Self::F64,

@@ -101,15 +101,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 }
             },
             | S::Extended(super::ExtendedType::InterchangeFloat {
-                format: super::InterchangeFloat::Float16,
+                format: format @ (super::InterchangeFloat::BFloat16 | super::InterchangeFloat::Fp16),
                 complex: true,
             }) => {
-                self.error(
-                    SemanticErrorKind::UnsupportedComplexHalf,
-                    source,
-                    None,
-                    None,
-                );
+                let kind = if *format == super::InterchangeFloat::BFloat16 {
+                    SemanticErrorKind::ComplexBFloat16
+                } else {
+                    SemanticErrorKind::ComplexFp16
+                };
+                self.error(kind, source, None, None);
                 None
             },
             | S::Extended(super::ExtendedType::InterchangeFloat { format, complex }) => {
@@ -117,6 +117,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 let target = self.context.configuration.target();
                 let real = match format {
                     | F::Float16 => target.float16_type().then_some(Scalar::Float16),
+                    | F::BFloat16 => Some(Scalar::BFloat16),
+                    | F::Fp16 => Some(Scalar::Fp16),
                     | F::Float32 => Some(Scalar::Float32),
                     | F::Float64 => Some(Scalar::Float64),
                     | F::Float32x => Some(Scalar::Float32x),
@@ -427,6 +429,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 ) {
                     self.error(SemanticErrorKind::InvalidDerivedType, source, None, None);
                 }
+                // Clang refuses a storage-only `__fp16` result.
+                if self.storage_half(base) {
+                    self.error(SemanticErrorKind::Fp16Return, source, None, None);
+                }
                 self.enter(ScopeKind::Prototype);
                 let parameters = self.scratch.alloc(Collection::new());
                 self.work.push(Work::FunctionParameters(
@@ -440,6 +446,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 ));
             },
             | DirectDeclarator::KAndRStyleFunction { parameters } => {
+                if self.storage_half(base) {
+                    self.error(SemanticErrorKind::Fp16Return, source, None, None);
+                }
                 let ty = self.types.intern(TypeKind::Function {
                     result:     base,
                     parameters: &[],

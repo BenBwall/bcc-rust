@@ -77,7 +77,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         } else {
             let result = self.convert_value(item, ty, source)?;
             // GCC's `_Float16` result keeps its excess in an `f32` parameter.
-            let value = if self.half(ty) && self.half_in_float() {
+            let value = if self.half(ty).is_some() && self.half_in_float() {
                 self.excess(result, source)?
             } else {
                 let result = self.settle(result);
@@ -148,7 +148,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 self.tasks.push(Task::SnapshotArgument(expression));
             }
             // GCC and Clang both round a `_Float16` tail to its type.
-            if mode == StatementMode::Value && self.half(ty) {
+            if mode == StatementMode::Value && self.excess_type(ty) {
                 self.tasks.push(Task::Settle);
             }
             self.tasks.push(if mode == StatementMode::Effects {

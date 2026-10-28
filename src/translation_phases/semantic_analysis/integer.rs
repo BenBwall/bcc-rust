@@ -521,7 +521,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let (bits, signed) = self.integer_type(ty)?;
         let (negative, mantissa, shift) = match value {
             | F::Float(value) | F::Float32(value) => float_parts(f64::from(value)),
-            | F::Float16(value) => float_parts(f64::from(self.half_constant(value))),
+            | F::Float16(value) => float_parts(f64::from(
+                self.half_constant(value, crate::half_precision::HalfFormat::Binary16),
+            )),
+            | F::BFloat16(value) => float_parts(f64::from(
+                self.half_constant(value, crate::half_precision::HalfFormat::BFloat16),
+            )),
             | F::Double(value) | F::Float64(value) | F::Float32x(value) => float_parts(value.get()),
             | F::LongDouble(value) | F::Float64x(value) => {
                 let text = crate::diagnostics::format_in!(self.scratch, "{value}");

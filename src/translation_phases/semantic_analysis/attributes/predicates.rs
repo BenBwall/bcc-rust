@@ -434,20 +434,24 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 | PredicateConstant::NonNullAddress(_) => None,
             };
         }
-        self.predicate_float(value)
+        // An integer rounds once from its exact value.
+        if let PredicateConstant::Integer(integer) = value {
+            return self
+                .integer_floating(integer, ty)
+                .map(PredicateConstant::Floating);
+        }
+        Self::predicate_float(value)
             .and_then(|value| self.round_floating(value, ty))
             .map(PredicateConstant::Floating)
     }
 
-    fn predicate_float(&self, value: PredicateConstant) -> Option<Floating> {
+    /// An operand's value in the x87 carrier, an integer rounded once.
+    fn predicate_float(value: PredicateConstant) -> Option<Floating> {
         match value {
             | PredicateConstant::Floating(value) => Some(value),
-            | PredicateConstant::Integer(value) => {
-                let text = crate::diagnostics::format_in!(self.scratch, "{}L\0", value);
-                crate::float_parsing::string_to_long_double(text)
-                    .ok()
-                    .map(Floating::real)
-            },
+            | PredicateConstant::Integer(value) =>
+                super::super::constants::integer_value(value, crate::ir::Type::F80)
+                    .map(Floating::real),
             | PredicateConstant::NonNullAddress(_) => None,
         }
     }
@@ -491,8 +495,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 .or_else(|| left.sign_bit_shift(operator, right))
                 .map(PredicateConstant::Integer);
         }
-        let left = self.predicate_float(left)?;
-        let right = self.predicate_float(right)?;
+        let left = Self::predicate_float(left)?;
+        let right = Self::predicate_float(right)?;
         Self::floating_comparison(operator, left, right)
             .map(PredicateConstant::Integer)
             .or_else(|| {
