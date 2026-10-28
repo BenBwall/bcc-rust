@@ -198,6 +198,8 @@ _Static_assert((long double)T(100, 36) == 0x1.0000000000000002p100L, "x87");
 _Static_assert((float)-(__int128)T(100, 76) == -0x1.000002p100f, "signed");
 _Static_assert((double)(__int128)T(100, 47) + 0.0 == 0x1.0000000000001p100, "arithmetic");
 _Static_assert((float)(__bf16)((__int128)T(100, 92) + 0) == 0x1.02p100f, "cast of a sum");
+_Static_assert(__builtin_copysignf(T(100, 76), 1) == 0x1.000002p100f, "builtin operands");
+_Static_assert(__builtin_copysign(T(100, 47), -1) == -0x1.0000000000001p100, "too");
 "#;
     for id in [CompilerIdentity::Gcc, CompilerIdentity::Clang] {
         let configuration = identity(id, ExtensionPolicy::Allow).with_gnu_extensions(true);

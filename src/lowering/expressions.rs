@@ -875,11 +875,16 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             | Repr::Int { .. } | Repr::Bool => {
                 let signed = from.signed();
                 let ty = self.draft.value_type(value);
-                if let Some(constant) = self.draft.constant(value)
-                    && (signed || ty != Type::I128)
-                {
+                // A constant rounds once from its exact value, as GCC and
+                // Clang fold it; an unsigned `i128` from its magnitude.
+                if let Some(constant) = self.draft.constant(value) {
                     let exact = self.cast_constant(constant, ty, signed, Type::I128);
-                    if let Some(bits) = floats::from_integer(exact, to) {
+                    let bits = if signed || ty != Type::I128 {
+                        floats::from_integer(exact, to)
+                    } else {
+                        floats::from_unsigned(exact.cast_unsigned(), to)
+                    };
+                    if let Some(bits) = bits {
                         return Ok(self.fconst(to, bits));
                     }
                 }

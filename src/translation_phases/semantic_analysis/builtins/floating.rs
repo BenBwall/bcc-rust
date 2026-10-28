@@ -120,16 +120,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             .chain(args)
             .all(|arg| self.expression_info(arg).constant == ConstantClass::Arithmetic)
             && !self.binary128_type(operand)
-            && let Some(value) = self
-                .floating_value(first)
-                .and_then(|value| self.round_floating(value, operand))
+            && let Some(value) = self.converted_floating(first, operand)
             && let Some((sign, exponent, significand)) = value.real.x87_parts()
         {
             if operation == FloatOperation::Copysign {
                 let second = self.expression_info(args[1]);
                 if let Some(sign) = self
-                    .floating_value(second)
-                    .and_then(|value| self.round_floating(value, operand))
+                    .converted_floating(second, operand)
                     .and_then(|value| value.real.x87_parts())
                     .map(|parts| parts.0)
                 {
@@ -200,10 +197,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if real.constant == ConstantClass::Arithmetic
             && imaginary.constant == ConstantClass::Arithmetic
         {
-            let value = |info| {
-                self.floating_value(info)
-                    .and_then(|value| self.round_floating(value, operand))
-            };
+            let value = |info| self.converted_floating(info, operand);
             if self.binary128_type(operand) {
                 result.set_binary128(
                     Self::binary128_value(real)

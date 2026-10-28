@@ -24,10 +24,7 @@ use super::{
 };
 use crate::{
     binary128::Binary128,
-    float_parsing::{
-        LongDouble,
-        string_to_long_double,
-    },
+    float_parsing::LongDouble,
     half_precision::HalfFormat,
     translation_phases::{
         parsing::syntax::BinaryOperator,
@@ -141,9 +138,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             }
             return Some(value);
         }
-        let value = info.integer?;
-        let text = crate::diagnostics::format_in!(self.scratch, "{}L\0", value);
-        Some(Floating::real(string_to_long_double(text).ok()?))
+        // The x87 carrier's 64 bits, rounded once; a conversion to a
+        // narrower type reads the integer itself (`converted_floating`).
+        integer_value(info.integer?, crate::ir::Type::F80).map(Floating::real)
     }
 
     /// `info`'s value converted to the arithmetic type `ty`. An integer
