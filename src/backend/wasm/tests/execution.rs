@@ -4,11 +4,15 @@
 //! the output. Without `node` on the path the tests print a note and pass.
 
 use std::{
+    io::Write,
     path::{
         Path,
         PathBuf,
     },
-    process::Command,
+    process::{
+        Command,
+        Stdio,
+    },
 };
 
 use crate::{
@@ -137,14 +141,25 @@ pub(crate) fn validate(name: &str, bytes: &[u8]) -> Result<(), String> {
 
 /// Runs a WASI module under Node.
 pub(crate) fn run(name: &str, bytes: &[u8]) -> Run {
+    run_with_input(name, bytes, b"")
+}
+
+/// Runs a WASI module under Node with `input` on its standard input.
+pub(crate) fn run_with_input(name: &str, bytes: &[u8], input: &[u8]) -> Run {
     let path = scratch_path(name);
     std::fs::write(&path, bytes).unwrap();
-    let output = Command::new("node")
+    let mut child = Command::new("node")
         .arg("--no-warnings")
         .arg(runner())
         .arg(&path)
-        .output()
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
         .unwrap();
+    // Dropping the handle closes the pipe, so the program sees the end.
+    child.stdin.take().unwrap().write_all(input).unwrap();
+    let output = child.wait_with_output().unwrap();
     Run {
         status: output.status.code().unwrap_or(-1),
         stdout: String::from_utf8_lossy(&output.stdout).into_owned(),

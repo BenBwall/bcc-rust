@@ -1,29 +1,35 @@
-//! The bundled runtime against glibc: the cases of review rounds 1 and 2
-//! of the WebAssembly back end (scanf length modifiers, numeric prefixes
-//! and incomplete numbers, printf precisions past its buffers and
-//! hexadecimal precision, floating to 128-bit conversions at their limits,
-//! allocation size overflow and memory's last page, trigonometric argument
-//! reduction, NaN payloads and nextafter), each compiled for
-//! `wasm32-wasip1` at `-O0` and `-O2` and run under Node. Expected outputs are
-//! glibc's, except where the 32-bit data model or binary128 `long double`
-//! decides otherwise (marked).
+//! The bundled runtime against glibc: the cases of review rounds 1 to 3
+//! of the WebAssembly back end (scanf length modifiers, numeric prefixes,
+//! incomplete numbers, input failures and `(nil)`, printf precisions past
+//! its buffers and hexadecimal precision, floating to 128-bit conversions
+//! at their limits, allocation size overflow and memory's last page,
+//! trigonometric argument reduction, NaN payloads and nextafter), each
+//! compiled for `wasm32-wasip1` at `-O0` and `-O2` and run under Node.
+//! Expected outputs are glibc's, except where the 32-bit data model or
+//! binary128 `long double` decides otherwise (marked).
 
 use super::execution::{
     compile,
     node_available,
-    run,
+    run_with_input,
 };
 use crate::target::Target;
 
 /// Runs `source` at both optimization levels and returns its stdout.
 fn outputs(name: &str, source: &str) -> Option<[String; 2]> {
+    outputs_with_input(name, source, "")
+}
+
+/// Runs `source` at both optimization levels with `input` on its standard
+/// input and returns its stdout.
+fn outputs_with_input(name: &str, source: &str, input: &str) -> Option<[String; 2]> {
     if !node_available() {
         eprintln!("note: node is not on the path; skipping {name}");
         return None;
     }
     Some([false, true].map(|optimize| {
         let bytes = compile(source, Target::Wasm32Wasi, optimize).unwrap();
-        let run = run(name, &bytes);
+        let run = run_with_input(name, &bytes, input.as_bytes());
         assert_eq!(
             run.status, 0,
             "{name} (optimize {optimize}): {}",
@@ -170,6 +176,112 @@ int main(void) {
         "1 0x1234abcd 10",
     ];
     for output in outputs("scanf-review-2", source).into_iter().flatten() {
+        assert_eq!(output, expected.join("\n") + "\n");
+    }
+}
+
+/// The end of input before a literal or `%%` is an input failure, so
+/// scanf returns EOF (C99 7.19.6.2p16) and a loop over `"(%d)"` ends; `%p`
+/// reads printf's `(nil)` as a null pointer; `%f` keeps a NaN's payload;
+/// and `nan` keeps `errno` and agrees with `strtod` for long tags.
+#[test]
+fn scanf_input_failures_nil_pointers_and_nan_tags() {
+    let source = r#"#include <errno.h>
+#include <math.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+static unsigned long long dbits(double d) { unsigned long long u; memcpy(&u, &d, 8); return u; }
+static unsigned fbits(float f) { unsigned u; memcpy(&u, &f, 4); return u; }
+int main(void) {
+    int a = -7, n = 0, r;
+    printf("%d %d %d %d %d\n", sscanf("", "x%d", &a), sscanf("", "%%"), sscanf("  ", "%%"), sscanf("ab", "abc"), sscanf("abd", "abc"));
+    r = sscanf(" %5", "%%%d", &a);
+    printf("%d %d %d\n", r, a, sscanf("(5", "(%d)", &a));
+    const char *s = "(1)(2)(3)";
+    int total = 0, rounds = 0;
+    while ((r = sscanf(s, "(%d)%n", &a, &n)) == 1 && rounds < 10) {
+        total += a;
+        s += n;
+        rounds++;
+    }
+    printf("%d %d %d\n", r, total, rounds);
+    void *p = &a;
+    r = sscanf("(nil)", "%p", &p);
+    printf("%d %d\n", r, p == 0);
+    char text[32];
+    snprintf(text, sizeof text, "%p", (void *)0);
+    p = &a;
+    r = sscanf(text, "%p", &p);
+    printf("%s %d %d\n", text, r, p == 0);
+    p = &a;
+    r = sscanf("(nix)", "%p", &p);
+    printf("%d %d\n", r, p == (void *)&a);
+    float f = 0;
+    r = sscanf("nan(123)", "%f", &f);
+    printf("%d %08x", r, fbits(f));
+    r = sscanf("-nan(0x7fffffff)", "%f", &f);
+    printf(" %d %08x\n", r, fbits(f));
+    char tag[81];
+    memset(tag, '9', 80);
+    tag[80] = 0;
+    char digits[32];
+    strcpy(digits, "999999999999999999999");
+    errno = 0;
+    double d = nan(digits);
+    printf("%016llx %d", dbits(d), errno);
+    errno = 0;
+    d = strtod("nan(999999999999999999999)", 0);
+    printf(" %016llx %d\n", dbits(d), errno);
+    printf("%016llx %08x", dbits(nan(tag)), fbits(nanf(tag)));
+    memset(tag, 'z', 80);
+    printf(" %016llx %016llx\n", dbits(nan(tag)), dbits(nan("1)")));
+    return 0;
+}
+"#;
+    let expected = [
+        "-1 -1 -1 -1 0",
+        "1 5 1",
+        "-1 6 3",
+        "1 1",
+        "(nil) 1 1",
+        "0 1",
+        "1 7fc0007b 1 ffffffff",
+        "7fffffffffffffff 0 7fffffffffffffff 0",
+        "7fffffffffffffff 7fffffff 7ff8000000000000 7ff8000000000000",
+    ];
+    for output in outputs("scanf-review-3", source).into_iter().flatten() {
+        assert_eq!(output, expected.join("\n") + "\n");
+    }
+}
+
+/// On a stream, a hexadecimal float without a significand digit stops
+/// after the `0x` or `0x.` it read (the prefix's `0` is no digit), and a
+/// scanf loop over parenthesized numbers ends with EOF.
+#[test]
+fn scanf_on_a_stream_stops_where_glibc_does() {
+    let source = r#"#include <stdio.h>
+int main(void) {
+    double d = -1;
+    char rest[16];
+    for (int i = 0; i < 3; i++) {
+        int r = scanf("%lf", &d);
+        int s = scanf("%15s", rest);
+        printf("%d %g %d %s\n", r, d, s, s == 1 ? rest : "-");
+    }
+    int v, total = 0, r;
+    while ((r = scanf(" (%d)", &v)) == 1)
+        total += v;
+    printf("%d %d\n", r, total);
+    return 0;
+}
+"#;
+    let expected = ["0 -1 1 p1", "0 -1 1 p1z", "1 1.5 1 x", "-1 6"];
+    let input = "0xp1 0x.p1z 1.5 x (1)(2) (3)";
+    for output in outputs_with_input("scanf-stream-review-3", source, input)
+        .into_iter()
+        .flatten()
+    {
         assert_eq!(output, expected.join("\n") + "\n");
     }
 }
