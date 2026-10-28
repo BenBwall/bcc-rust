@@ -21,7 +21,10 @@ use super::{
         MAX_PAGES,
         Memory,
     },
-    tables::Table,
+    tables::{
+        MAX_ENTRIES,
+        Table,
+    },
 };
 use crate::{
     instr::Instr,
@@ -31,6 +34,7 @@ use crate::{
         ImportKind,
         Module,
         SegmentMode,
+        TableType,
     },
     value::Value,
     wasi::{
@@ -76,10 +80,7 @@ impl Machine {
                     );
                 },
                 | ImportKind::Memory(limits) => memory = Some(new_memory(limits.min, limits.max)?),
-                | ImportKind::Table(ty) => tables.push(Table {
-                    elements: vec![Value::default_of(ty.element); ty.limits.min as usize],
-                    max:      ty.limits.max,
-                }),
+                | ImportKind::Table(ty) => tables.push(new_table(ty)?),
                 | ImportKind::Global(_) => {
                     return Err(InstantiateError(format!(
                         "the module imports the global `{}.{}`, which the stepper cannot provide",
@@ -94,15 +95,7 @@ impl Machine {
             memory = Some(new_memory(limits.min, limits.max)?);
         }
         for table in &module.tables {
-            if table.limits.min > 1 << 20 {
-                return Err(InstantiateError(
-                    "a table is larger than the stepper allows".into(),
-                ));
-            }
-            tables.push(Table {
-                elements: vec![Value::default_of(table.element); table.limits.min as usize],
-                max:      table.limits.max,
-            });
+            tables.push(new_table(*table)?);
         }
         for global in &module.globals {
             let value = evaluate(&global.init, &globals)?;
@@ -205,6 +198,21 @@ fn new_memory(min: u32, max: Option<u32>) -> Result<Memory, InstantiateError> {
         )));
     }
     Ok(Memory::new(min, max))
+}
+
+/// A table of `ty`'s initial size, imported or defined, within the
+/// stepper's limit.
+fn new_table(ty: TableType) -> Result<Table, InstantiateError> {
+    if ty.limits.min > MAX_ENTRIES {
+        return Err(InstantiateError(format!(
+            "the module asks for a table of {} entries; the stepper allows at most {MAX_ENTRIES}",
+            ty.limits.min
+        )));
+    }
+    Ok(Table {
+        elements: vec![Value::default_of(ty.element); ty.limits.min as usize],
+        max:      ty.limits.max,
+    })
 }
 
 /// Evaluate a constant expression (§4.4.11) over the globals so far.

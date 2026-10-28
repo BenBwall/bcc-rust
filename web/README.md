@@ -219,7 +219,9 @@ host provides a WASI preview 1 subset (`fd_write` to standard output and
 error, `proc_exit`, arguments, environment, a simulated clock, seeded
 randomness) and leaves other imports unresolved: calling one traps. It is
 deterministic, so Back re-executes from the nearest checkpoint (one every
-1,024 instructions, thinned as a run grows). One session runs at most 50
+1,024 instructions, thinned as a run grows). Linear memory is copied on
+write, so a checkpoint shares unchanged memory, and the checkpoints
+together keep at most 64 MiB. One session runs at most 50
 million instructions, one request at most 2 million, and memory may grow to
 16 MiB.
 

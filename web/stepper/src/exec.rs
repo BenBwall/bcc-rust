@@ -869,6 +869,42 @@ impl Machine {
             .ok_or_else(|| Trap::internal("no memory"))
     }
 
+    /// What keeping a copy of this machine costs, in bytes, beside
+    /// `previous` (whose unchanged linear memory it shares).
+    pub fn retained_bytes(&self, previous: Option<&Self>) -> usize {
+        let value = size_of::<Value>();
+        let memory = match (
+            &self.memory,
+            previous.and_then(|previous| previous.memory.as_ref()),
+        ) {
+            | (Some(memory), Some(shared)) if memory.shares(shared) => 0,
+            | (Some(memory), _) => memory.bytes.len(),
+            | (None, _) => 0,
+        };
+        let tables: usize = self
+            .tables
+            .iter()
+            .map(|table| table.elements.len() * value)
+            .sum();
+        let elements: usize = self
+            .elements
+            .iter()
+            .map(|segment| segment.len() * value)
+            .sum();
+        let frames: usize = self
+            .frames
+            .iter()
+            .map(|frame| size_of::<Frame>() + frame.locals.len() * value)
+            .sum();
+        memory
+            + tables
+            + elements
+            + frames
+            + (self.stack.len() + self.globals.len()) * value
+            + self.labels.len() * size_of::<Label>()
+            + self.host.retained_bytes()
+    }
+
     /// The shadow stack pointer's current value.
     pub fn stack_pointer_value(&self) -> Option<u32> {
         match self.globals.get(self.stack_pointer? as usize)? {

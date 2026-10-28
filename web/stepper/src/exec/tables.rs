@@ -14,7 +14,7 @@ use crate::{
 };
 
 /// The most entries the stepper lets a table grow to.
-const MAX_ENTRIES: u32 = 1 << 20;
+pub const MAX_ENTRIES: u32 = 1 << 20;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Table {

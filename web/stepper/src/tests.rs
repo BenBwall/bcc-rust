@@ -9,6 +9,7 @@ mod builder;
 mod clang;
 mod control;
 mod format;
+mod hardening;
 mod memory;
 mod numeric;
 mod stepping;
@@ -26,6 +27,15 @@ use crate::{
     Trap,
     Value,
 };
+
+/// A module from raw sections, in the order given.
+fn raw(sections: &[(u8, &[u8])]) -> Vec<u8> {
+    let mut bytes = b"\0asm\x01\0\0\0".to_vec();
+    for (id, contents) in sections {
+        builder::section(&mut bytes, *id, contents);
+    }
+    bytes
+}
 
 /// Load `module`, panicking with the loader's message if it is rejected.
 fn program(module: &Builder) -> Rc<Program> {

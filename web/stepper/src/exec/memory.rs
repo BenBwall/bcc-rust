@@ -1,5 +1,10 @@
 //! Linear memory (WebAssembly 2.0 §4.2.8): a byte array in 64 KiB pages,
 //! little endian, every access bounds checked (§4.4.7).
+//!
+//! The bytes are shared until written: copying a machine for a checkpoint
+//! shares its memory, and the first store afterwards copies it.
+
+use std::rc::Rc;
 
 use super::{
     Trap,
@@ -22,7 +27,8 @@ pub const MAX_PAGES: u32 = 256;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Memory {
-    pub bytes: Vec<u8>,
+    /// Read through `Deref`; written only through [`Memory::bytes_mut`].
+    pub bytes: Rc<Vec<u8>>,
     /// The declared maximum, in pages.
     pub max:   Option<u32>,
 }
@@ -30,7 +36,7 @@ pub struct Memory {
 impl Memory {
     pub fn new(pages: u32, max: Option<u32>) -> Self {
         Self {
-            bytes: vec![0; pages as usize * PAGE],
+            bytes: Rc::new(vec![0; pages as usize * PAGE]),
             max,
         }
     }
@@ -46,7 +52,7 @@ impl Memory {
         let limit = self.max.unwrap_or(65_536).min(MAX_PAGES);
         match previous.checked_add(delta) {
             | Some(pages) if pages <= limit => {
-                self.bytes.resize(pages as usize * PAGE, 0);
+                self.bytes_mut().resize(pages as usize * PAGE, 0);
                 previous as i32
             },
             | _ => -1,
@@ -119,7 +125,7 @@ impl Memory {
                     "stepper error: stored a reference",
                 )),
         };
-        self.bytes[start..start + size].copy_from_slice(&bits.to_le_bytes()[..size]);
+        self.bytes_mut()[start..start + size].copy_from_slice(&bits.to_le_bytes()[..size]);
         Ok(address)
     }
 
@@ -128,7 +134,7 @@ impl Memory {
         self.check(u64::from(source), u64::from(length))?;
         self.check(u64::from(destination), u64::from(length))?;
         let source = source as usize;
-        self.bytes
+        self.bytes_mut()
             .copy_within(source..source + length as usize, destination as usize);
         Ok(())
     }
@@ -136,14 +142,14 @@ impl Memory {
     pub(crate) fn fill(&mut self, destination: u32, value: u8, length: u32) -> Result<(), Trap> {
         self.check(u64::from(destination), u64::from(length))?;
         let start = destination as usize;
-        self.bytes[start..start + length as usize].fill(value);
+        self.bytes_mut()[start..start + length as usize].fill(value);
         Ok(())
     }
 
     pub(crate) fn write(&mut self, destination: u32, bytes: &[u8]) -> Result<(), Trap> {
         self.check(u64::from(destination), bytes.len() as u64)?;
         let start = destination as usize;
-        self.bytes[start..start + bytes.len()].copy_from_slice(bytes);
+        self.bytes_mut()[start..start + bytes.len()].copy_from_slice(bytes);
         Ok(())
     }
 
@@ -151,6 +157,23 @@ impl Memory {
         self.check(u64::from(address), u64::from(length))?;
         let start = address as usize;
         Ok(&self.bytes[start..start + length as usize])
+    }
+
+    /// `length` writable bytes at `address`, if they are in bounds.
+    pub(crate) fn slice_mut(&mut self, address: u32, length: u32) -> Result<&mut [u8], Trap> {
+        self.check(u64::from(address), u64::from(length))?;
+        let start = address as usize;
+        Ok(&mut self.bytes_mut()[start..start + length as usize])
+    }
+
+    /// The bytes, unshared from any checkpoint first.
+    fn bytes_mut(&mut self) -> &mut Vec<u8> {
+        Rc::make_mut(&mut self.bytes)
+    }
+
+    /// Whether this memory still shares its bytes with `other`.
+    pub fn shares(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.bytes, &other.bytes)
     }
 
     pub(crate) fn u32_at(&self, address: u32) -> Result<u32, Trap> {

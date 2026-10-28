@@ -11,7 +11,12 @@
 //!
 //! Execution is deterministic, so going back re-executes from the nearest
 //! checkpoint: the session keeps a copy of the machine every few thousand
-//! steps (fewer, further apart, as a run grows).
+//! steps, fewer and further apart as a run grows, within
+//! [`CHECKPOINT_BYTES`]. Copies share linear memory until it is written.
+//!
+//! Every input is bounded: decoding, validation and the DWARF reader never
+//! allocate more than their input implies, the host checks a buffer before
+//! touching it, and memory, tables, output and checkpoints have fixed caps.
 //!
 //! Example: `(func (result i32) i32.const 2 i32.const 3 i32.add)` takes four
 //! steps: two pushes, the add (popping 2 and 3, pushing 5), and the `end`
@@ -151,6 +156,23 @@ pub struct Session {
 
 /// Checkpoints kept before they are thinned.
 const CHECKPOINTS: usize = 48;
+/// The most memory the checkpoints may hold between them (64 MiB). Linear
+/// memory is copied on write, so a checkpoint whose memory has not changed
+/// since the one before costs almost nothing; one after a store costs a
+/// whole copy.
+pub const CHECKPOINT_BYTES: usize = 64 << 20;
+
+/// The memory `checkpoints` hold: each one's own state, plus its linear
+/// memory unless it shares the previous checkpoint's.
+fn retained_bytes(checkpoints: &[Machine]) -> usize {
+    let mut previous: Option<&Machine> = None;
+    let mut total = 0;
+    for checkpoint in checkpoints {
+        total += checkpoint.retained_bytes(previous);
+        previous = Some(checkpoint);
+    }
+    total
+}
 
 impl Session {
     /// Run `command`, executing at most `budget` instructions. After its
@@ -219,8 +241,11 @@ impl Session {
                 .is_none_or(|last| last.steps < self.machine.steps)
         {
             self.checkpoints.push(self.machine.clone());
-            if self.checkpoints.len() > CHECKPOINTS {
-                // Keep every other one, at twice the spacing.
+            // Keep every other one, at twice the spacing, until they fit.
+            while self.checkpoints.len() > 1
+                && (self.checkpoints.len() > CHECKPOINTS
+                    || retained_bytes(&self.checkpoints) > CHECKPOINT_BYTES)
+            {
                 self.interval *= 2;
                 let interval = self.interval;
                 self.checkpoints

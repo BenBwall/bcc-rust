@@ -260,8 +260,11 @@ impl Host {
             },
             | WasiFunction::RandomGet => {
                 let (at, length) = (int(0), int(1));
-                let bytes: Vec<u8> = (0..length).map(|_| self.next_random()).collect();
-                memory.write(at, &bytes)?;
+                // Bounds first, then fill in place: the length is the
+                // program's to choose.
+                for byte in memory.slice_mut(at, length)? {
+                    *byte = self.next_random();
+                }
                 (
                     SUCCESS,
                     format!("filled {length} bytes from a fixed-seed generator"),
@@ -292,15 +295,29 @@ impl Host {
                 "refused an fd_write with too many buffers".to_owned(),
             ));
         }
-        let mut bytes = Vec::new();
+        // Check every buffer before writing any, and copy only what the
+        // output limit keeps, so a large write costs no more than that.
+        let mut buffers = Vec::with_capacity(count as usize);
+        let mut total = 0_u64;
         for index in 0..count {
-            let at = iovs + index * 8;
-            let (base, length) = (memory.u32_at(at)?, memory.u32_at(at + 4)?);
-            bytes.extend_from_slice(memory.read(base, length)?);
+            let at = iovs.checked_add(index * 8).ok_or_else(|| {
+                Trap::new(
+                    TrapKind::MemoryOutOfBounds,
+                    "out of bounds memory access: fd_write's buffer list runs past 4 GiB",
+                )
+            })?;
+            let (base, length) = (memory.u32_at(at)?, memory.u32_at(at.saturating_add(4))?);
+            memory.read(base, length)?;
+            buffers.push((base, length));
+            total += u64::from(length);
         }
-        let total = bytes.len();
-        memory.set_u32(written_at, total as u32)?;
-        self.append(stream, bytes);
+        let Ok(total) = u32::try_from(total) else {
+            return Ok((EINVAL, "refused an fd_write of more than 4 GiB".to_owned()));
+        };
+        memory.set_u32(written_at, total)?;
+        for (base, length) in buffers {
+            self.append(stream, memory.read(base, length)?);
+        }
         let name = if stream == Stream::Stdout {
             "standard output"
         } else {
@@ -315,18 +332,24 @@ impl Host {
         ))
     }
 
-    fn append(&mut self, stream: Stream, mut bytes: Vec<u8>) {
+    /// Keep `bytes` as output, up to the limit; count the rest as dropped.
+    fn append(&mut self, stream: Stream, bytes: &[u8]) {
         let kept: usize = self.output.iter().map(|(_, bytes)| bytes.len()).sum();
         let room = OUTPUT_LIMIT.saturating_sub(kept);
-        if bytes.len() > room {
-            self.dropped += (bytes.len() - room) as u64;
-            bytes.truncate(room);
+        let (kept, dropped) = bytes.split_at(bytes.len().min(room));
+        self.dropped += dropped.len() as u64;
+        if kept.is_empty() {
+            return;
         }
         match self.output.last_mut() {
-            | Some((last, previous)) if *last == stream => previous.extend(bytes),
-            | _ if bytes.is_empty() => {},
-            | _ => self.output.push((stream, bytes)),
+            | Some((last, previous)) if *last == stream => previous.extend_from_slice(kept),
+            | _ => self.output.push((stream, kept.to_vec())),
         }
+    }
+
+    /// What a copy of the host's state costs, for checkpoints.
+    pub fn retained_bytes(&self) -> usize {
+        self.output.iter().map(|(_, bytes)| bytes.len()).sum()
     }
 
     /// xorshift64*: deterministic, not secure, and only for `random_get`.
