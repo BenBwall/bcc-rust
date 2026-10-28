@@ -187,6 +187,7 @@ impl Parser<'_> {
         };
         while self.take("[") {
             let index = self.expression(0)?;
+            let closing = self.current().range;
             self.expect("]")?;
             let base = &self.expressions[value];
             let subscript = &self.expressions[index];
@@ -202,7 +203,7 @@ impl Parser<'_> {
                 ExprKind::Index(value, index),
                 Type::Int,
                 false,
-                combined(base.range, subscript.range),
+                combined(base.range, closing),
                 base.height.max(subscript.height) + 1,
             )?;
         }
