@@ -3097,4 +3097,52 @@ mod tests {
             }
         }
     }
+
+    /// Where `long double` is binary128 (WebAssembly), its NaN and infinity
+    /// builtins fold to binary128 encodings, as Clang folds them, so C23's
+    /// `LDBL_SNAN` initializes a static object.
+    #[test]
+    fn long_double_constants_follow_the_format() {
+        let directory = Directory::new();
+        directory.write(
+            "l.c",
+            "long double s = __builtin_nansl(\"\");\nlong double p = \
+             __builtin_nansl(\"0x7\");\nlong double q = __builtin_nanl(\"\");\nlong double i = \
+             __builtin_infl();\nlong double h = __builtin_huge_vall();\n",
+        );
+        for (target, expected) in [
+            (
+                "wasm32-unknown-unknown",
+                [
+                    "0000000000000000000000000040ff7f",
+                    "0700000000000000000000000000ff7f",
+                    "0000000000000000000000000080ff7f",
+                    "0000000000000000000000000000ff7f",
+                    "0000000000000000000000000000ff7f",
+                ],
+            ),
+            (
+                "x86_64-unknown-linux-gnu",
+                [
+                    "00000000000000a0ff7f000000000000",
+                    "0700000000000080ff7f000000000000",
+                    "00000000000000c0ff7f000000000000",
+                    "0000000000000080ff7f000000000000",
+                    "0000000000000080ff7f000000000000",
+                ],
+            ),
+        ] {
+            let output = directory.bcc("", &[&format!("--target={target}"), "--emit=ir", "l.c"]);
+            succeeds(&output);
+            let ir = stdout(&output);
+            for (name, bytes) in ["s", "p", "q", "i", "h"].into_iter().zip(expected) {
+                assert!(
+                    ir.contains(&format!(
+                        "global @{name} external size 16, align 16 = bytes \"{bytes}\""
+                    )),
+                    "{target} {name}: {ir}"
+                );
+            }
+        }
+    }
 }
