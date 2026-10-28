@@ -467,8 +467,16 @@ static int scan(struct source *in, const char *fmt, va_list ap) {
             continue;
         }
         if (*fmt != '%' || fmt[1] == '%') {
-            if (*fmt == '%')
+            if (*fmt == '%') {
+                /* %% skips white space first, as a conversion does. */
                 fmt++;
+                while (peek(in) != EOF && isspace(peek(in)))
+                    take(in);
+            }
+            /* The end of input before a literal is an input failure
+               (7.19.6.2p16), so scanf("(%d)") ends with EOF. */
+            if (peek(in) == EOF)
+                return assigned ? assigned : EOF;
             if (peek(in) != (unsigned char)*fmt)
                 break;
             take(in);
@@ -505,7 +513,8 @@ static int scan(struct source *in, const char *fmt, va_list ap) {
             fmt++;
         }
         char c = *fmt;
-        if (c == 'p') {
+        int pointer = c == 'p';
+        if (pointer) {
             /* A pointer reads as %lx: void * and long are both 32 bits. */
             c = 'x';
             length = 1;
@@ -525,6 +534,22 @@ static int scan(struct source *in, const char *fmt, va_list ap) {
             width = c == 'c' ? 1 : INT_MAX;
         char buffer[512];
         int n = 0;
+        if (pointer && peek(in) == '(') {
+            /* "(nil)", which printf writes for a null pointer, as glibc. */
+            const char *nil = "(nil)";
+            while (*nil && n < width && peek(in) == (unsigned char)*nil) {
+                take(in);
+                nil++;
+                n++;
+            }
+            if (*nil)
+                break;
+            if (!skip) {
+                *va_arg(ap, void **) = 0;
+                assigned++;
+            }
+            continue;
+        }
         if (c == 'c') {
             char *out = skip ? 0 : va_arg(ap, char *);
             for (; n < width && peek(in) != EOF; n++) {
@@ -613,8 +638,10 @@ static int scan(struct source *in, const char *fmt, va_list ap) {
                     TAKE();
                     digits = 1;
                     if (NEXT_IS((peek(in) | 32) == 'x')) {
+                        /* The prefix's 0 is no digit: "0xp1" stops at p. */
                         TAKE();
                         hex = 1;
+                        digits = 0;
                     }
                 }
                 while (NEXT_IS(base_digit(peek(in), hex ? 16 : 10))) {
@@ -665,7 +692,13 @@ static int scan(struct source *in, const char *fmt, va_list ap) {
         buffer[n] = 0;
         char *end;
         if (floating) {
-            double v = strtod(buffer, &end);
+            /* strtof for a float keeps a NaN's payload. */
+            double v = 0;
+            float narrow = 0;
+            if (length == 0)
+                narrow = strtof(buffer, &end);
+            else
+                v = strtod(buffer, &end);
             if (n == 0 || end != buffer + n)
                 break;
             if (!skip) {
@@ -674,7 +707,7 @@ static int scan(struct source *in, const char *fmt, va_list ap) {
                 else if (length == 3)
                     *va_arg(ap, long double *) = v;
                 else
-                    *va_arg(ap, float *) = (float)v;
+                    *va_arg(ap, float *) = narrow;
                 assigned++;
             }
             continue;
