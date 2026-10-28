@@ -53,6 +53,10 @@ fn unsupported_constructs_name_themselves() {
             "atomic complex values",
         ),
         (
+            "void f(_Atomic(float _Complex) *z) { *z += 1.0; }",
+            "atomic complex values",
+        ),
+        (
             "void f(void) { __asm__(\"\" :: \"t\"(1.0L)); }",
             "inline assembly operands of this register class or type",
         ),
