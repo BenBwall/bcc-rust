@@ -258,8 +258,8 @@ for (const optimize of [false, true]) {
 }
 
 // The site's lessons, compiled as its WebAssembly view compiles them
-// (wasm32-wasip1, -O0) and run in V8, exit with what main returns, modulo
-// 256 as WASI hosts report it. The two with undefined behavior read
+// (wasm32-wasip1, -O0) and run in V8, pass what main returns to proc_exit
+// (Node's WASI returns all 32 bits). The two with undefined behavior read
 // never-written shadow stack memory, which is still zero. Their text names
 // functions plainly, as the view shows them.
 const lessons = {
@@ -267,7 +267,7 @@ const lessons = {
   "indeterminate.c": 1,
   "macros.c": 11,
   "objects.c": 15,
-  "overflow.c": 1,
+  "overflow.c": -2147483647,
   "pointers.c": 17,
   "promotion.c": 255,
   "recursion.c": 24,
