@@ -1,11 +1,12 @@
-//! The bundled runtime against glibc: the cases of review round 1 of the
-//! WebAssembly back end (scanf length modifiers and numeric prefixes,
-//! printf precisions past its buffers and hexadecimal precision, floating
-//! to 128-bit conversions at their limits, allocation size overflow, and
-//! trigonometric argument reduction), each compiled for `wasm32-wasip1` at
-//! `-O0` and `-O2` and run under Node. Expected outputs are glibc's, except
-//! where the 32-bit data model or binary128 `long double` decides otherwise
-//! (marked).
+//! The bundled runtime against glibc: the cases of review rounds 1 and 2
+//! of the WebAssembly back end (scanf length modifiers, numeric prefixes
+//! and incomplete numbers, printf precisions past its buffers and
+//! hexadecimal precision, floating to 128-bit conversions at their limits,
+//! allocation size overflow and memory's last page, trigonometric argument
+//! reduction, NaN payloads and nextafter), each compiled for
+//! `wasm32-wasip1` at `-O0` and `-O2` and run under Node. Expected outputs are
+//! glibc's, except where the 32-bit data model or binary128 `long double`
+//! decides otherwise (marked).
 
 use super::execution::{
     compile,
@@ -83,6 +84,92 @@ int main(void) {
         "2 123 45",
     ];
     for output in outputs("scanf-review", source).into_iter().flatten() {
+        assert_eq!(output, expected.join("\n") + "\n");
+    }
+}
+
+/// A numeric conversion whose longest matching prefix is not a whole
+/// number is a matching failure (C99 7.19.6.2p10); `%i` reads hexadecimal
+/// after `0x`; `%p` reads a pointer; `L` means `long long` for `%n` and
+/// `%d`, as in glibc.
+#[test]
+fn scanf_rejects_incomplete_numbers_and_reads_hexadecimal() {
+    let source = r#"#include <stdio.h>
+#include <string.h>
+static void ints(const char *in, const char *fmt) {
+    int a = -77, n = -1; char rest[16] = "";
+    int r = sscanf(in, fmt, &a, &n, rest);
+    printf("%s|%s: %d %d %d %s\n", in, fmt, r, a, n, rest);
+}
+static void flts(const char *in, const char *fmt) {
+    double a = -77; int n = -1; char rest[16] = "";
+    int r = sscanf(in, fmt, &a, &n, rest);
+    printf("%s|%s: %d %g %d %s\n", in, fmt, r, a, n, rest);
+}
+int main(void) {
+    ints("0x1A rest", "%i%n%15s");
+    ints("0XfF", "%i%n%15s");
+    ints("0xff", "%x%n%15s");
+    ints("-0x10 z", "%i%n%15s");
+    ints("0xg", "%x%n%15s");
+    ints("0xg", "%i%n%15s");
+    ints("0x", "%x%n%15s");
+    ints("0x123", "%2i%n%15s");
+    ints("09", "%i%n%15s");
+    ints("-", "%d%n%15s");
+    flts("1e", "%lf%n%15s");
+    flts("1e+", "%lf%n%15s");
+    flts("1ex", "%lf%n%15s");
+    flts("1e+x", "%lf%n%15s");
+    flts("infin", "%lf%n%15s");
+    flts("0x1p", "%lf%n%15s");
+    flts("0xz", "%lf%n%15s");
+    flts("1e5", "%2lf%n%15s");
+    flts("nan(123)x", "%lf%n%15s");
+    flts("nan(12x", "%lf%n%15s");
+    flts("0x1.8p1z", "%lf%n%15s");
+    flts(".5x", "%lf%n%15s");
+    flts(".x", "%lf%n%15s");
+    long long buf[2] = {-1, -1};
+    int r = sscanf("abcde", "abc%Ln", &buf[0]);
+    printf("%d %lld %lld\n", r, buf[0], buf[1]);
+    r = sscanf("-77", "%Ld", &buf[1]);
+    printf("%d %lld\n", r, buf[1]);
+    void *p = 0; int n = -1;
+    r = sscanf("0x1234abcd", "%p%n", &p, &n);
+    printf("%d %p %d\n", r, p, n);
+    return 0;
+}
+"#;
+    let expected = [
+        "0x1A rest|%i%n%15s: 2 26 4 rest",
+        "0XfF|%i%n%15s: 1 255 4 ",
+        "0xff|%x%n%15s: 1 255 4 ",
+        "-0x10 z|%i%n%15s: 2 -16 5 z",
+        "0xg|%x%n%15s: 0 -77 -1 ",
+        "0xg|%i%n%15s: 0 -77 -1 ",
+        "0x|%x%n%15s: 0 -77 -1 ",
+        "0x123|%2i%n%15s: 0 -77 -1 ",
+        "09|%i%n%15s: 2 0 1 9",
+        "-|%d%n%15s: 0 -77 -1 ",
+        "1e|%lf%n%15s: 0 -77 -1 ",
+        "1e+|%lf%n%15s: 0 -77 -1 ",
+        "1ex|%lf%n%15s: 0 -77 -1 ",
+        "1e+x|%lf%n%15s: 0 -77 -1 ",
+        "infin|%lf%n%15s: 0 -77 -1 ",
+        "0x1p|%lf%n%15s: 0 -77 -1 ",
+        "0xz|%lf%n%15s: 0 -77 -1 ",
+        "1e5|%2lf%n%15s: 0 -77 -1 ",
+        "nan(123)x|%lf%n%15s: 2 nan 8 x",
+        "nan(12x|%lf%n%15s: 0 -77 -1 ",
+        "0x1.8p1z|%lf%n%15s: 2 3 7 z",
+        ".5x|%lf%n%15s: 2 0.5 2 x",
+        ".x|%lf%n%15s: 0 -77 -1 ",
+        "0 3 -1",
+        "1 -77",
+        "1 0x1234abcd 10",
+    ];
+    for output in outputs("scanf-review-2", source).into_iter().flatten() {
         assert_eq!(output, expected.join("\n") + "\n");
     }
 }
@@ -196,6 +283,96 @@ int main(void) {
     }
 }
 
+/// The heap never grows memory to all 65536 pages, whose end would wrap to
+/// 0 as a pointer: a request that needs the last page fails, and later
+/// requests still succeed.
+#[test]
+fn the_heap_leaves_memorys_last_page() {
+    let source = r#"#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+size_t __bcc_wasm_memory_size(void);
+int main(void) {
+    size_t big = 0x70000000u;
+    char *a = malloc(big), *b = malloc(big);
+    size_t pages = __bcc_wasm_memory_size();
+    uintptr_t end = (uintptr_t)b - 16 + ((big + 31) & ~(size_t)15);
+    size_t rest = (size_t)(pages * 65536ull - end);
+    /* Exactly what all of memory up to its last page would hold. */
+    char *c = malloc(rest + (65536u - pages - 1) * 65536u - 16);
+    char *d = malloc(100), *e = malloc(100);
+    printf("%d %d %d %d %d\n", a != 0, b != 0, c == 0, d != 0 && e != 0 && d != e,
+           __bcc_wasm_memory_size() < 65536);
+    free(c);
+    free(a);
+    char *f = malloc(1u << 20);
+    printf("%d\n", f != 0);
+    return 0;
+}
+"#;
+    for output in outputs("alloc-last-page", source).into_iter().flatten() {
+        assert_eq!(output, "1 1 1 1 1\n1\n");
+    }
+}
+
+/// NaN payloads from `nan`, `nanf`, `strtod` and `strtof`, and `nextafter`
+/// with its `ERANGE` cases, as glibc gives them.
+#[test]
+fn nan_payloads_and_nextafter_match_glibc() {
+    let source = r#"#include <errno.h>
+#include <float.h>
+#include <math.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+static unsigned long long dbits(double d) { unsigned long long u; memcpy(&u, &d, 8); return u; }
+static unsigned fbits(float f) { unsigned u; memcpy(&u, &f, 4); return u; }
+#define NEXT(f, x, y) do { volatile double vx = (x), vy = (y); errno = 0; double v = f(vx, vy); printf("%a %d\n", v, errno == ERANGE); } while (0)
+int main(void) {
+    printf("%016llx %016llx %016llx %016llx\n", dbits(nan("123")), dbits(nan("0x7b")), dbits(nan("")), dbits(nan("abc")));
+    printf("%08x %08x\n", fbits(nanf("123")), fbits(nanf("")));
+    printf("%016llx %016llx %08x\n", dbits(strtod("nan(42)", 0)), dbits(strtod("-nan(0x10)", 0)), fbits(strtof("nan(42)", 0)));
+    NEXT(nextafter, 1.0, 2.0);
+    NEXT(nextafter, 1.0, 0.0);
+    NEXT(nextafter, -1.0, 0.0);
+    NEXT(nextafter, 0.0, -1.0);
+    NEXT(nextafter, DBL_MAX, INFINITY);
+    NEXT(nextafter, INFINITY, 0.0);
+    NEXT(nextafter, DBL_MIN, 0.0);
+    NEXT(nextafter, 0x1p-1074, 0.0);
+    NEXT(nextafter, -0.0, 0.0);
+    NEXT(nextafterf, 1.0f, 2.0f);
+    NEXT(nextafterf, 0.0f, -1.0f);
+    NEXT(nextafterf, FLT_MAX, INFINITY);
+    NEXT(nextafterf, -FLT_MIN, -INFINITY);
+    printf("%d %d\n", isnan(nextafter(NAN, 1.0)), isnan(nextafterf(1.0f, NAN)));
+    return 0;
+}
+"#;
+    let expected = [
+        "7ff800000000007b 7ff800000000007b 7ff8000000000000 7ff8000000000000",
+        "7fc0007b 7fc00000",
+        "7ff800000000002a fff8000000000010 7fc0002a",
+        "0x1.0000000000001p+0 0",
+        "0x1.fffffffffffffp-1 0",
+        "-0x1.fffffffffffffp-1 0",
+        "-0x0.0000000000001p-1022 0",
+        "inf 1",
+        "0x1.fffffffffffffp+1023 0",
+        "0x0.fffffffffffffp-1022 1",
+        "0x0p+0 1",
+        "0x0p+0 0",
+        "0x1.000002p+0 0",
+        "-0x1p-149 0",
+        "inf 1",
+        "-0x1.000002p-126 0",
+        "1 1",
+    ];
+    for output in outputs("math-review-2", source).into_iter().flatten() {
+        assert_eq!(output, expected.join("\n") + "\n");
+    }
+}
+
 #[test]
 fn trigonometry_reduces_every_finite_argument() {
     let source = r#"#include <stdio.h>
@@ -210,8 +387,8 @@ int main(void) {
     return 0;
 }
 "#;
-    // glibc's results; fdlibm's must agree within an ulp (of float for the
-    // last line).
+    // glibc's results; fdlibm's agree within an ulp on these inputs (of
+    // float for the last line), though not on every input.
     let expected = [
         "0.47942553860420301 0.87758256189037276 0.54630248984379048",
         "-0.14112000805986721 -0.98999249660044542 0.1425465430742778",

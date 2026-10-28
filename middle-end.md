@@ -2485,24 +2485,31 @@ buffered `<stdio.h>` on descriptors 0-2 (stdout line-buffered, stderr
 unbuffered) with the whole `printf` family, whose floating conversions are
 exact (big-integer expansion, ties to even, as glibc; precisions beyond its
 digit buffer are padded, never copied), a small `scanf` that honours every
-length modifier and reads only the longest valid prefix of a number,
-`<math.h>` (`sin`, `cos` and `tan` from FreeBSD's fdlibm with Payne-Hanek
-argument reduction, translated from rust-lang/libm under its MIT and Sun
-notices; the other transcendental functions accurate to about an ulp, not
-correctly rounded), `<time.h>`, and compiler-rt's `i128` and binary128
-routines (the floating-to-integer conversions with compiler-rt's exact
-saturation rules). Allocation sizes that would wrap fail with `ENOMEM`.
-`strtod` is exact only for up to 19 digits and exponents within ±22. Files
-cannot be opened.
+length modifier (`L` as `ll` for integers, as glibc), reads only the
+longest valid prefix of a number and fails when that prefix is not a whole
+number (`0x`, `1e+`), `<math.h>` (`sin`, `cos` and `tan` are FreeBSD's
+fdlibm with Payne-Hanek argument reduction, translated from rust-lang/libm
+under its MIT and Sun notices, so they give musl's results, which can
+differ from glibc's by a few ulps; the float variants round the double
+result; the other transcendental functions are accurate to about an ulp,
+not correctly rounded; `nan` and `strtod` keep NaN payloads as glibc),
+`<time.h>`, and compiler-rt's `i128` and binary128 routines (the
+floating-to-integer conversions with compiler-rt's exact saturation rules).
+Allocation sizes that would wrap fail with `ENOMEM`, and the heap never
+takes memory's last page, whose end would wrap to 0. `strtod` is exact only
+for up to 19 digits and exponents within ±22, and `strtold` and `%Lf` read
+binary128 `long double` at double precision. Files cannot be opened.
 
 **Output.** `--emit=wasm` writes the binary module, `--emit=wat` (and
 `--emit=asm`, `-S`) its text, and `-o x.wasm` the binary; `-c` and linking
 several sources are refused. The binary has a `name` section and a
 `bcc.sourcemap` custom section (`encode.rs` documents the format: entries
-of code offset, function index, IR block, IR instruction, source line).
+of code offset, function index, IR block, IR instruction, source line;
+every function's code starts with an entry, line 0 for a prologue or a
+function the linker made).
 Lowering records each instruction's physical source line for wasm targets
 (`Body::inst_line`, kept by ABI lowering, dropped by optimizer rebuilds), so
-at `-O0` every entry has a line. The explorer returns the binary, the text
-and the same table (`ExplorerOutput::wasm`). `scripts/wasm/run.mjs` runs a
+at `-O0` every IR instruction's entry has a line. The explorer returns the
+binary, the text and the same table (`ExplorerOutput::wasm`). `scripts/wasm/run.mjs` runs a
 WASI module under Node; `scripts/wasm/survey_torture.py` surveys GCC's
 c-torture execute tests.
