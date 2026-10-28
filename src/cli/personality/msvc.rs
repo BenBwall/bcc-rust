@@ -194,6 +194,7 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         .into(),
         format!("--diagnostic-format={}", state.diagnostics).into(),
         format!("--target={}", target.triple()).into(),
+        format!("--driver-name={}", invocation.name).into(),
         "-fms-extensions".into(),
         // MSVC's default C mode is close to C17 without its version macro;
         // clang-cl claims C17, and so does bcc.

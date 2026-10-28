@@ -361,6 +361,21 @@ impl Drop for TemporaryDirectory {
     }
 }
 
+/// A bcc step as GCC's and Clang's `-v` and `-###` print a subprocess, in
+/// `style`, starting with the path of the running bcc, which runs the step
+/// in process.
+fn command_line(step: &[OsString], style: crate::backend::llvm::CommandStyle) -> String {
+    let program = std::env::current_exe().map_or_else(|_| step[0].clone(), PathBuf::into_os_string);
+    let mut line = Vec::new();
+    drop(crate::backend::llvm::write_command(
+        &mut line,
+        style,
+        &program,
+        step[1..].iter().map(OsString::as_os_str),
+    ));
+    String::from_utf8_lossy(&line).into_owned()
+}
+
 /// The target a personality compiles for by default: the host's, with GCC
 /// and TCC preferring MinGW on Windows and Clang following the host's ABI.
 fn host_target(personality: Personality) -> Target {

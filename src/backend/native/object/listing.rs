@@ -157,6 +157,26 @@ pub(super) fn parse<'a>(text: &'a str, arena: &'a Bump) -> Result<Object<'a>> {
                     }
                     continue;
                 },
+                // ELF gABI "Symbol Table": `SHN_COMMON` holds the
+                // alignment as the value.
+                | ".comm" => {
+                    symbol_name(first)?;
+                    let size = unsigned(parts.next().ok_or(Error("missing common size"))?)?;
+                    let align = unsigned(parts.next().ok_or(Error("missing common alignment"))?)?;
+                    let id = object.symbol(first);
+                    let symbol = &mut object.symbols[id];
+                    if symbol.section.is_some() || symbol.alias.is_some() || symbol.common {
+                        return Err(Error("duplicate common symbol definition"));
+                    }
+                    if symbol.binding == 0 {
+                        symbol.binding = 1;
+                    }
+                    symbol.common = true;
+                    symbol.kind = 1;
+                    symbol.value = align;
+                    symbol.size = size;
+                    continue;
+                },
                 | ".size" => {
                     symbol_name(first)?;
                     let id = object.symbol(first);
@@ -450,6 +470,7 @@ fn directive_operands(name: &str, args: &str) -> Result<()> {
         | ".cfi_def_cfa_offset"
         | ".cfi_def_cfa_register" => count == 1,
         | ".size" | ".type" | ".cfi_offset" | ".cfi_def_cfa" => count == 2,
+        | ".comm" => count == 3,
         | ".p2align" => (1..=3).contains(&count),
         | ".section" => (1..=5).contains(&count),
         | ".byte" | ".short" | ".long" | ".quad" => count > 0,

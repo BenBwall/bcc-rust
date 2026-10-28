@@ -34,6 +34,7 @@ use api::{
 #[cfg(test)]
 pub(crate) use driver::ClangError;
 pub(crate) use driver::{
+    CommandStyle,
     LlvmOptions,
     OptLevel,
     OutputKind,
@@ -43,6 +44,8 @@ pub(crate) use driver::{
     compile_module_checked,
     needs_atomic_runtime,
     operand,
+    print_commands,
+    write_command,
 };
 #[cfg(test)]
 use target::data_layout;

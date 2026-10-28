@@ -310,6 +310,17 @@ impl<'ir> Module<'ir> {
         self.library_builtins
     }
 
+    /// Lets an object live at address 0, so a back end must not take a
+    /// dereference to prove a pointer non-null.
+    pub(crate) const fn set_null_pointer_is_valid(&mut self, valid: bool) {
+        self.null_pointer_is_valid = valid;
+    }
+
+    /// Whether an object may live at address 0.
+    pub(crate) const fn null_pointer_is_valid(&self) -> bool {
+        self.null_pointer_is_valid
+    }
+
     /// Gives a global its initializer, copying the bytes and relocations
     /// into the module's arena.
     pub(crate) fn define_global(&mut self, global: GlobalId, init: GlobalInit<'_>) {
@@ -358,6 +369,7 @@ impl<'ir> Module<'ir> {
             init_functions: ArenaVec::new_in(arena),
             asm_blocks: ArenaVec::new_in(arena),
             library_builtins: LibraryBuiltins::All,
+            null_pointer_is_valid: false,
             inline_asm: Table::new_in(arena),
         }
     }
@@ -955,6 +967,14 @@ pub(crate) enum Linkage {
     /// in a COMDAT of the symbol's own name, as Clang emits them. Only a
     /// definition has it.
     LinkOnce,
+    /// A zero-filled object the linker merges with the other units'
+    /// definitions of its name, keeping an initialized one if there is one
+    /// and else the largest: a tentative definition under `-fcommon`, an
+    /// ELF `SHN_COMMON` or COFF communal symbol, LLVM `common`. Only a
+    /// global definition without a section or alias has it.
+    /// Extension: C99 §J.5.11, p. 514; PDF p. 526 (multiple external
+    /// definitions).
+    Common,
 }
 
 impl Linkage {
@@ -965,6 +985,7 @@ impl Linkage {
             | Self::Weak => "weak",
             | Self::SelectAny => "selectany",
             | Self::LinkOnce => "linkonce",
+            | Self::Common => "common",
         }
     }
 
@@ -975,6 +996,7 @@ impl Linkage {
             Self::Weak,
             Self::SelectAny,
             Self::LinkOnce,
+            Self::Common,
         ]
         .into_iter()
         .find(|linkage| linkage.name() == name)

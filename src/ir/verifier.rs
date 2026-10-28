@@ -106,6 +106,30 @@ fn verify_symbol_attributes(
             "a selectany or linkonce symbol is a function or global definition",
         ));
     }
+    // A common symbol is a zero-filled block the linker places, so it has
+    // no contents, section, alias or per-thread copies, may take another
+    // unit's definition, so it is not constant, and is defined here, so it
+    // is not imported.
+    if linkage == Linkage::Common {
+        let zero = match symbol {
+            | Symbol::Function(_) => false,
+            | Symbol::Global(global) => {
+                let global = module.global(global);
+                global.init == Some(GlobalInit::Zero) && !global.constant
+            },
+        };
+        if !zero
+            || thread_local
+            || attributes.section.is_some()
+            || attributes.alias.is_some()
+            || attributes.dll == DllStorage::Import
+        {
+            error(VerifierErrorKind::SymbolAttribute(
+                "a common symbol is a mutable zero-filled global without a section, alias, import \
+                 or thread-local storage",
+            ));
+        }
+    }
     // Microsoft Learn, "dllexport, dllimport": an image exports what it
     // defines and imports what another image defines; neither crosses the
     // boundary for thread-local data.

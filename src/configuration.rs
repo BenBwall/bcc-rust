@@ -13,7 +13,8 @@
 //! [`Feature::origin`], and [`CompilerConfiguration::new`].
 //!
 //! Files by role:
-//! - Language choices: `language.rs`.
+//! - Language choices: `language.rs`; which modelled compiler's rules each
+//!   compiler identity follows: `identity.rs`.
 //! - Feature vocabulary and origin: `features.rs`.
 //! - Warning groups and severity overrides: `diagnostics.rs`.
 //! - Construction, option changes, and accessors: `options.rs`.
@@ -25,6 +26,7 @@
 //! is recorded in language-standards.md.
 
 // Language choices
+mod identity;
 mod language;
 
 // Feature policy
@@ -43,6 +45,7 @@ pub(crate) use features::{
     Feature,
     FeatureOrigin,
 };
+pub(crate) use identity::RuleSet;
 pub(crate) use language::{
     CStandard,
     CompilerIdentity,
@@ -53,7 +56,6 @@ pub(crate) use language::{
     MsvcFeature,
     PreprocessingOption,
     RelaxedFloatingPoint,
-    RuleSet,
 };
 
 impl CompilerConfiguration {

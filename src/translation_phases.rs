@@ -56,6 +56,7 @@ mod interface;
 pub(crate) use context::{
     Context,
     FileSystem,
+    IncludeEntry,
 };
 pub(crate) use errors::{
     ErrorSeverity,

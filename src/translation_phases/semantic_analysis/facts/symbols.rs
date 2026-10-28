@@ -94,6 +94,11 @@ pub(crate) struct EntityAttributes<'tu> {
     /// Microsoft `selectany` on an external object: its definitions in
     /// different translation units are one, and the linker keeps any.
     pub(crate) select_any:         bool,
+    /// GNU `common` (true) or `nocommon` (false) on an object: whether a
+    /// tentative definition is a common symbol whatever `-f[no-]common`
+    /// says. `common` on any declaration wins over `nocommon`, as in Clang.
+    /// GNU extension: GCC manual, "Common Variable Attributes".
+    pub(crate) common:             Option<bool>,
     /// Windows DLL storage after every declaration: `Export` when the
     /// entity's declarations export it, which applies to a definition this
     /// unit emits; `Import` when this unit's last reference named an

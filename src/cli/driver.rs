@@ -18,7 +18,8 @@
 //! - One translation unit's job: `driver/job.rs`.
 //! - Dependency output (`-M`, `-MD`): `driver/dependencies.rs`.
 //! - Linking and assembling: `driver/link.rs`.
-//! - Options: `driver/options.rs`.
+//! - Options: `driver/options.rs`; the driver's own messages:
+//!   `driver/messages.rs`.
 //!
 //! The driver is a host CLI policy, not a C constraint; each job translates
 //! one translation unit, C99: §5.1.1.1 paragraph 1, p. 9; PDF p. 21.
@@ -31,7 +32,8 @@ mod job;
 mod dependencies;
 mod link;
 
-// Options
+// Options and messages
+mod messages;
 mod options;
 
 use clap::ArgMatches;
@@ -56,6 +58,11 @@ use link::{
     assemble,
     link,
 };
+pub(super) use messages::{
+    Severity,
+    report,
+    report_error,
+};
 pub(super) use options::DriverOptions;
 
 use super::{
@@ -64,13 +71,20 @@ use super::{
     code_generation::{
         Emit,
         FAILURE_STATUS,
-        report_stderr,
     },
 };
 use crate::util::bump::Bump;
 
 /// Runs the jobs the arguments ask for and returns the exit status.
 pub(super) fn run(args: &Cli, matches: &ArgMatches) -> Result<i32, MainError> {
+    // GCC's driver prints the commands it runs bare, Clang's quoted.
+    crate::backend::llvm::print_commands(args.driver.verbose.then(|| {
+        if args.compiler_identity == super::arguments::Identity::Gcc {
+            crate::backend::llvm::CommandStyle::GccVerbose
+        } else {
+            crate::backend::llvm::CommandStyle::Clang
+        }
+    }));
     let inputs = ordered_inputs(args, matches)?;
     let generation = &args.code_generation;
     let output = generation.output_path.as_deref();
@@ -116,18 +130,26 @@ pub(super) fn run(args: &Cli, matches: &ArgMatches) -> Result<i32, MainError> {
             if let Input::Link(name) = input
                 && !name.to_string_lossy().starts_with('-')
             {
-                report_stderr(format_args!(
-                    "warning: {}: linker input file unused because linking not done",
-                    name.to_string_lossy()
-                ));
+                report(
+                    args,
+                    Severity::Warning,
+                    format_args!(
+                        "{}: linker input file unused because linking not done",
+                        name.to_string_lossy()
+                    ),
+                );
                 // GCC also fails when the unused file does not exist.
                 if let Err(error) = std::fs::metadata(name) {
                     let arena = Bump::new();
-                    report_stderr(format_args!(
-                        "error: {}: linker input file not found: {}",
-                        name.to_string_lossy(),
-                        job::os_reason(&error, &arena)
-                    ));
+                    report(
+                        args,
+                        Severity::Error,
+                        format_args!(
+                            "{}: linker input file not found: {}",
+                            name.to_string_lossy(),
+                            job::os_reason(&error, &arena)
+                        ),
+                    );
                     status = combine(status, FAILURE_STATUS);
                 }
             }
@@ -157,10 +179,14 @@ pub(super) fn run(args: &Cli, matches: &ArgMatches) -> Result<i32, MainError> {
                 match input.c_source() {
                     // GCC skips preprocessed input before its preprocessor;
                     // Clang also warns.
-                    | Some(Source::Preprocessed(path)) => report_stderr(format_args!(
-                        "warning: {}: previously preprocessed input, not preprocessed again",
-                        path.display()
-                    )),
+                    | Some(Source::Preprocessed(path)) => report(
+                        args,
+                        Severity::Warning,
+                        format_args!(
+                            "{}: previously preprocessed input, not preprocessed again",
+                            path.display()
+                        ),
+                    ),
                     | Some(source) if args.driver.dependencies.is_some() => {
                         let dependencies =
                             dependencies::request(args, source, true, DependencyNames::default())?;

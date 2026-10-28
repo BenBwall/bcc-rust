@@ -89,6 +89,9 @@ struct Symbol<'a> {
     kind:       u8,
     visibility: u8,
     alias:      Option<usize>,
+    /// A common symbol (`.comm`): `value` is its alignment on ELF and
+    /// `size` its size; COFF records the size as its value.
+    common:     bool,
 }
 
 struct Item<'a> {

@@ -374,6 +374,43 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
         }
     }
 
+    /// A common symbol (`-fcommon`): `.comm` with its size and alignment,
+    /// in bytes on ELF and as a power of two on COFF, as Clang writes it,
+    /// after its type and visibility on ELF.
+    fn common(&mut self, name: Name<'_>, global: &crate::ir::Global<'_>) -> fmt::Result {
+        if self.elf {
+            self.binding(name, Linkage::Internal, global.attributes.visibility)?;
+            writeln!(self.out, "\t.type\t{name},@object")?;
+            writeln!(
+                self.out,
+                "\t.comm\t{name},{},{}",
+                global.size,
+                global.align.bytes()
+            )
+        } else {
+            // Microsoft's linker aligns a communal symbol by its size, so
+            // LLVM rounds the size up to the alignment on the MSVC target.
+            let size = if self.target == Target::WindowsMsvc {
+                global.size.max(global.align.bytes())
+            } else {
+                global.size
+            };
+            writeln!(self.out, "\t.comm\t{name},{size},{}", global.align.log2())?;
+            // A COFF common symbol carries no alignment; MinGW's linker
+            // reads it from an `-aligncomm` directive, as LLVM writes one
+            // for any alignment above a byte.
+            if self.target == Target::WindowsGnu && global.align.log2() != 0 {
+                writeln!(
+                    self.out,
+                    "\t.section\t.drectve,\"yni\"\n\t.ascii\t\" -aligncomm:{},{}\"",
+                    name.0,
+                    global.align.log2()
+                )?;
+            }
+            Ok(())
+        }
+    }
+
     /// A symbol's binding and, on ELF, its visibility: `.globl` for an
     /// external one, `.weak` for a weak one, nothing for an internal one.
     /// A COMDAT definition is global on COFF, where its section selects one
@@ -383,7 +420,7 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
             | Linkage::Weak => writeln!(self.out, "\t.weak\t{name}")?,
             | Linkage::SelectAny | Linkage::LinkOnce if self.elf =>
                 writeln!(self.out, "\t.weak\t{name}")?,
-            | Linkage::External | Linkage::SelectAny | Linkage::LinkOnce =>
+            | Linkage::External | Linkage::SelectAny | Linkage::LinkOnce | Linkage::Common =>
                 writeln!(self.out, "\t.globl\t{name}")?,
             | Linkage::Internal => {},
         }
@@ -1014,6 +1051,10 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
             }
             let Some(init) = global.init else { continue };
             let name = Name(global.name);
+            if global.linkage == Linkage::Common {
+                self.common(name, global)?;
+                continue;
+            }
             let relocated =
                 matches!(init, GlobalInit::Bytes { relocations, .. } if !relocations.is_empty());
             if global.linkage.comdat() {

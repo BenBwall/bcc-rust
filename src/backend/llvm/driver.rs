@@ -18,6 +18,7 @@ use std::{
         Output,
     },
     sync::atomic::{
+        AtomicU8,
         AtomicU64,
         Ordering,
     },
@@ -76,12 +77,91 @@ pub(crate) fn compile_module_checked(
     }
     let mut command = toolchain.command(&object.0, out_path, options);
     _ = command.arg("-latomic");
-    let output = command.output()?;
+    let output = run(&mut command)?;
     if output.status.success() {
         Ok(true)
     } else {
         Err(io::Error::other(ClangError(output)))
     }
+}
+
+/// How the toolchain prints each command it runs to stderr first, for the
+/// driver's `-v`: [`CommandStyle`] as a number, or 0 for not at all.
+static PRINT_COMMANDS: AtomicU8 = AtomicU8::new(0);
+
+/// How a compiler driver spells the commands it runs.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(u8)]
+pub(crate) enum CommandStyle {
+    /// Clang's `-v` and `-###`: every word quoted, with `"`, `\` and `$`
+    /// escaped by a backslash.
+    Clang = 1,
+    /// GCC's `-###`: a word with a character other than a letter, digit,
+    /// `_`, `/`, `-` or `.` quoted as Clang quotes it, the others bare.
+    GccDryRun = 2,
+    /// GCC's `-v`: every word bare.
+    GccVerbose = 3,
+}
+
+/// Makes the toolchain print each command it runs, in `style`, before
+/// running it, for the driver's `-v`; `None` prints nothing.
+pub(crate) fn print_commands(style: Option<CommandStyle>) {
+    PRINT_COMMANDS.store(style.map_or(0, |style| style as u8), Ordering::Relaxed);
+}
+
+/// Runs `command` to completion, first printing it when
+/// [`print_commands`] asked for that.
+fn run(command: &mut Command) -> io::Result<Output> {
+    let style = match PRINT_COMMANDS.load(Ordering::Relaxed) {
+        | 1 => Some(CommandStyle::Clang),
+        | 2 => Some(CommandStyle::GccDryRun),
+        | 3 => Some(CommandStyle::GccVerbose),
+        | _ => None,
+    };
+    if let Some(style) = style {
+        drop(write_command(
+            &mut io::stderr().lock(),
+            style,
+            command.get_program(),
+            command.get_args(),
+        ));
+    }
+    command.output()
+}
+
+/// Writes a command as a compiler driver's `-v` or `-###` prints one, in
+/// `style`: a space before each word, then a newline. GCC's rule is
+/// `gcc.cc`'s `execute`.
+pub(crate) fn write_command<'a>(
+    out: &mut impl io::Write,
+    style: CommandStyle,
+    program: &'a OsStr,
+    arguments: impl IntoIterator<Item = &'a OsStr>,
+) -> io::Result<()> {
+    for word in std::iter::once(program).chain(arguments) {
+        let bytes = word.as_encoded_bytes();
+        let quoted = match style {
+            | CommandStyle::Clang => true,
+            | CommandStyle::GccDryRun => !bytes.iter().all(|byte| {
+                byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'/' | b'-' | b'.')
+            }),
+            | CommandStyle::GccVerbose => false,
+        };
+        if !quoted {
+            out.write_all(b" ")?;
+            out.write_all(bytes)?;
+            continue;
+        }
+        out.write_all(b" \"")?;
+        for byte in bytes {
+            if matches!(byte, b'"' | b'\\' | b'$') {
+                out.write_all(b"\\")?;
+            }
+            out.write_all(std::slice::from_ref(byte))?;
+        }
+        out.write_all(b"\"")?;
+    }
+    out.write_all(b"\n")
 }
 
 /// Whether LLVM lowers some atomic operation of `module` to a libatomic
@@ -296,7 +376,7 @@ impl Toolchain {
         out_path: &Path,
         options: LlvmOptions,
     ) -> io::Result<()> {
-        let output = self.command(object, out_path, options).output()?;
+        let output = run(&mut self.command(object, out_path, options))?;
         if output.status.success() {
             Ok(())
         } else {
@@ -345,7 +425,7 @@ impl Toolchain {
         if kind != OutputKind::Object {
             _ = command.args(libraries);
         }
-        let output = command.output()?;
+        let output = run(&mut command)?;
         if output.status.success() {
             Ok(())
         } else {
@@ -384,7 +464,7 @@ impl Toolchain {
         if atomic_runtime {
             _ = command.arg("-latomic");
         }
-        let output = command.output()?;
+        let output = run(&mut command)?;
         if output.status.success() {
             Ok(())
         } else {
@@ -407,13 +487,13 @@ impl Toolchain {
         if let Some(sysroot) = &self.sysroot {
             _ = command.arg(concat_os("--sysroot=", sysroot.as_os_str()));
         }
-        let output = command
+        _ = command
             .args(options)
             .arg("-c")
             .arg(operand(input).as_os_str())
             .arg("-o")
-            .arg(out_path)
-            .output()?;
+            .arg(out_path);
+        let output = run(&mut command)?;
         if output.status.success() {
             Ok(())
         } else {

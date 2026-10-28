@@ -16,7 +16,10 @@
 //! not change code for the Windows targets.
 //!
 //! These options are not part of C, which only gives a thread-local object
-//! one instance per thread.
+//! one instance per thread. [`CodeAssumptions`] beside them defines what C
+//! leaves undefined about pointers (`-fno-delete-null-pointer-checks`,
+//! `-fwrapv-pointer`) and about repeated tentative definitions
+//! (`-fcommon`).
 //! C11: §6.2.4 paragraph 4, p. 38; PDF p. 56.
 
 use super::Target;
@@ -29,6 +32,32 @@ pub(crate) struct CodeOptions {
     pub(crate) relocation: Option<Relocation>,
     /// The `-ftls-model`, general-dynamic by default as in Clang.
     pub(crate) tls_model:  TlsModel,
+}
+
+/// What code generation may assume where C leaves the behaviour
+/// undefined, as GCC's and Clang's options define it: none of these by
+/// default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) struct CodeAssumptions {
+    /// An object may live at address 0, so dereferencing a pointer does
+    /// not prove it non-null and null checks after it stay: GCC's and
+    /// Clang's `-fno-delete-null-pointer-checks`, LLVM's
+    /// `null_pointer_is_valid`. Extension: C99 §6.5.3.2 paragraph 4, p. 79;
+    /// PDF p. 91 leaves dereferencing a null pointer undefined.
+    pub(crate) null_pointer_is_valid: bool,
+    /// Pointer arithmetic wraps in two's complement rather than staying
+    /// within the object it points into: `-fwrapv-pointer`, and
+    /// `-fno-strict-overflow`, which also implies `-fwrapv`. Extension:
+    /// C99 §6.5.6 paragraph 8, p. 83; PDF p. 95 leaves the overflow
+    /// undefined.
+    pub(crate) wrapv_pointer:         bool,
+    /// A tentative definition with external linkage that the unit leaves
+    /// tentative is a common symbol, which the linker merges with the
+    /// other units' definitions of its name: `-fcommon`, which GCC 10 and
+    /// Clang 11 stopped defaulting to. Extension: C99 §J.5.11, p. 514;
+    /// PDF p. 526 (multiple external definitions); §6.9.2 paragraph 2,
+    /// p. 143; PDF p. 155 (tentative definitions).
+    pub(crate) common_symbols:        bool,
 }
 
 impl CodeOptions {

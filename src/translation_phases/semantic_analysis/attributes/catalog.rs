@@ -52,6 +52,9 @@ pub(in crate::translation_phases::semantic_analysis) enum Rule {
     /// Microsoft `selectany`: a data definition that may be repeated in
     /// several translation units, of which the linker keeps one.
     SelectAny,
+    /// GNU `common` (true) and `nocommon` (false): whether an object's
+    /// tentative definition is a common symbol.
+    Common(bool),
     /// Windows `dllimport`: the entity is defined in another image and
     /// reached through its import address table entry.
     DllImport,
@@ -252,6 +255,8 @@ fn gnu(name: &str) -> Option<Rule> {
         | "address_space" => Rule::Unsupported(U::AddressSpace),
         | "noinline" | "noipa" => Rule::NoInline,
         | "selectany" => Rule::SelectAny,
+        | "common" => Rule::Common(true),
+        | "nocommon" => Rule::Common(false),
         // Known only on the Windows targets; elsewhere the catalog leaves
         // the GNU spellings unknown and ignores the `__declspec` ones.
         | "dllimport" => Rule::DllImport,
@@ -265,7 +270,7 @@ fn gnu(name: &str) -> Option<Rule> {
         | "transparent_union" => Rule::TransparentUnion,
         // Dropped with a warning: link-time or multi-version effects that a
         // single executable's behavior does not depend on.
-        | "common" | "target" | "target_clones" | "weak_import" | "copy" => Rule::Ignored,
+        | "target" | "target_clones" | "weak_import" | "copy" => Rule::Ignored,
         | "overloadable"
         | "pass_object_size"
         | "pass_dynamic_object_size"
@@ -363,7 +368,6 @@ fn gnu(name: &str) -> Option<Rule> {
         | "no_stack_protector"
         | "no_speculative_load_hardening"
         | "noclone"
-        | "nocommon"
         | "nocf_check"
         | "nodebug"
         | "nodiscard"

@@ -84,6 +84,7 @@ pub(super) fn declare<'id, 'a, 'm>(
         }
         if function.body.is_some() {
             library_builtins(api, value, module.library_builtins(), arena);
+            null_pointer_validity(api, value, module);
         }
         sections(api, value, function.attributes);
         functions.push(value);
@@ -97,6 +98,7 @@ pub(super) fn declare<'id, 'a, 'm>(
             // The copy's body becomes the external function's, which was
             // declared without one, so it takes the builtin controls here.
             library_builtins(api, value, module.library_builtins(), arena);
+            null_pointer_validity(api, value, module);
             if let Some(keyword) = function.inlining.keyword() {
                 api.attribute(value, FUNCTION_INDEX, keyword, 0, None, false);
             }
@@ -194,7 +196,11 @@ pub(super) fn declare<'id, 'a, 'm>(
 fn linkage(linkage: IrLinkage, defined: bool) -> Option<Linkage> {
     match (linkage, defined) {
         | (IrLinkage::External, _)
-        | (IrLinkage::Internal | IrLinkage::SelectAny | IrLinkage::LinkOnce, false) => None,
+        | (
+            IrLinkage::Internal | IrLinkage::SelectAny | IrLinkage::LinkOnce | IrLinkage::Common,
+            false,
+        ) => None,
+        | (IrLinkage::Common, true) => Some(Linkage::Common),
         | (IrLinkage::Internal, true) => Some(Linkage::Internal),
         | (IrLinkage::Weak, true) => Some(Linkage::Weak),
         | (IrLinkage::Weak, false) => Some(Linkage::ExternWeak),
@@ -246,7 +252,8 @@ fn alias<'id>(
 /// An alias is a definition, so `weak` gives it weak linkage.
 fn alias_linkage<'id>(api: &Session<'id>, value: Val<'id>, linkage: IrLinkage) {
     match linkage {
-        | IrLinkage::External => {},
+        // Only a global without an alias is common.
+        | IrLinkage::External | IrLinkage::Common => {},
         | IrLinkage::Internal => api.linkage(value, Linkage::Internal),
         | IrLinkage::Weak => api.linkage(value, Linkage::Weak),
         | IrLinkage::SelectAny => api.linkage(value, Linkage::WeakOdr),
@@ -312,6 +319,22 @@ pub(super) fn special_arrays<'id>(
         api.linkage(array, Linkage::Appending);
         api.initializer(array, api.const_array(ptr, &used));
         api.section(array, "llvm.metadata");
+    }
+}
+
+/// Marks a function in which LLVM must not assume that a dereferenced
+/// pointer is non-null, as Clang marks every function under
+/// `-fno-delete-null-pointer-checks`.
+fn null_pointer_validity<'id>(api: &Session<'id>, function: Val<'id>, module: &Module<'_>) {
+    if module.null_pointer_is_valid() {
+        api.attribute(
+            function,
+            FUNCTION_INDEX,
+            "null_pointer_is_valid",
+            0,
+            None,
+            false,
+        );
     }
 }
 

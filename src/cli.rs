@@ -123,6 +123,11 @@ fn run_arguments(arguments: Vec<std::ffi::OsString>) -> Result<i32, MainError> {
     }
     let matches = Cli::command().try_get_matches_from(arguments)?;
     let args = Cli::from_arg_matches(&matches)?;
+    run_driver(&args, &matches).map_err(|error| driver::report_error(&args, error))
+}
+
+/// Runs bcc's driver on the parsed command line.
+fn run_driver(args: &Cli, matches: &clap::ArgMatches) -> Result<i32, MainError> {
     if args.report_unknown_warning_options() {
         return Ok(1);
     }
@@ -137,10 +142,10 @@ fn run_arguments(arguments: Vec<std::ffi::OsString>) -> Result<i32, MainError> {
         });
     }
     if let Some(conflict) = args.code_generation.back_end_conflict() {
-        code_generation::report_stderr(format_args!("error: {conflict}"));
+        driver::report(args, driver::Severity::Error, format_args!("{conflict}"));
         return Ok(1);
     }
-    driver::run(&args, &matches)
+    driver::run(args, matches)
 }
 
 #[derive(Parser)]

@@ -5,6 +5,7 @@
 //! C99 §6.6p10, p. 96; PDF p. 108 (additional constant expressions).
 
 use crate::{
+    binary128::Binary128,
     builtins::FloatOperation,
     float_parsing::LongDouble,
     translation_phases::{
@@ -46,7 +47,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     ) -> ExpressionInfo<'tu> {
         let ty = self.types.scalar(scalar);
         let mut result = Self::expression_result(expression, ty);
-        let value = if nan {
+        let tag = if nan {
             let mut literal = args[0];
             while let ExpressionType::Parenthesized { expression } = literal.kind {
                 literal = expression;
@@ -54,17 +55,34 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             let ExpressionType::StringLiteral(StringTokenType::String(tag)) = literal.kind else {
                 return result;
             };
-            let tag = self
-                .context
-                .literal_text_in(self.scratch, tag, false)
-                .unwrap_or("");
-            let payload = nan_payload(tag.as_bytes());
-            LongDouble::quiet_nan(payload, self.floating_precision(scalar).unwrap_or(3))
+            Some(
+                self.context
+                    .literal_text_in(self.scratch, tag, false)
+                    .unwrap_or(""),
+            )
         } else {
-            LongDouble::from_double(f64::INFINITY)
+            None
+        };
+        result.constant = ConstantClass::Arithmetic;
+        // `long double` is binary128 on WebAssembly, so its constants are
+        // binary128 values there, as Clang folds them.
+        if self.binary128_type(ty) {
+            let value = match tag {
+                | Some(tag) => Binary128::nan(true, nan_payload_wide(tag.as_bytes())),
+                | None => Binary128::infinity(false),
+            };
+            result.set_binary128(Some(Binary128Value::real(value)));
+            self.mark_unfolded_binary128(&mut result);
+            return result;
+        }
+        let value = match tag {
+            | Some(tag) => LongDouble::quiet_nan(
+                nan_payload(tag.as_bytes()),
+                self.floating_precision(scalar).unwrap_or(3),
+            ),
+            | None => LongDouble::from_double(f64::INFINITY),
         };
         result.set_floating(Some(Floating::real(value)));
-        result.constant = ConstantClass::Arithmetic;
         result
     }
 

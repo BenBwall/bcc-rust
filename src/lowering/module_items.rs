@@ -121,6 +121,10 @@ pub(super) struct Unit<'a, 'tu, 'ir> {
     /// C99: §6.2.7 paragraph 4, p. 40; PDF p. 52; §6.9.2 paragraph 2,
     /// p. 143; PDF p. 155.
     defined_objects: ArenaMap<'a, &'a str, usize>,
+    /// The symbol names of the linked objects this unit defines only
+    /// tentatively, which `-fcommon` may make common symbols.
+    /// C99: §6.9.2 paragraph 2, p. 143; PDF p. 155.
+    tentative_objects: ArenaSet<'a, &'a str>,
     /// Bindings whose address is taken, which therefore live in memory.
     pub(super) address_taken: ArenaSet<'a, usize>,
     /// Globals of static locals and `__func__`, which have no linkage.
@@ -217,6 +221,11 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
                 DefinitionKind::Object | DefinitionKind::Tentative
             ) && binding.linkage != Linkage::None
             {
+                if definition.kind == DefinitionKind::Tentative {
+                    _ = self
+                        .tentative_objects
+                        .insert(self.symbol_name(definition.binding));
+                }
                 let previous = self
                     .defined_objects
                     .insert(self.symbol_name(definition.binding), definition.binding);
@@ -387,6 +396,12 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
     /// included. C99: §6.9.2p2, p. 143; PDF p. 155.
     pub(super) fn defines_object(&self, binding: usize) -> bool {
         self.defined_objects.contains_key(self.symbol_name(binding))
+    }
+
+    /// Whether this unit defines the linked object `binding` only
+    /// tentatively. C99: §6.9.2p2, p. 143; PDF p. 155.
+    pub(super) fn defines_tentatively(&self, binding: usize) -> bool {
+        self.tentative_objects.contains(self.symbol_name(binding))
     }
 
     /// Projects the module plan's body decision for declaration modifier gates.
@@ -1048,7 +1063,9 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             linkage,
             size: self.sema.flexible_object_size(binding).unwrap_or(size),
             align,
-            constant: types.readonly_object(data.ty),
+            // A common symbol may take another unit's definition, as
+            // Clang's is never constant.
+            constant: types.readonly_object(data.ty) && linkage != IrLinkage::Common,
             thread_local: data.duration
                 == crate::translation_phases::semantic_analysis::Duration::Thread,
         })
@@ -2170,6 +2187,7 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             tables,
             target,
             defined_objects,
+            tentative_objects: ArenaSet::with_hasher_in(rustc_hash::FxBuildHasher, tables),
             address_taken,
             statics: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, tables),
             strings: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, tables),

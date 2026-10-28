@@ -235,14 +235,3 @@ pub(crate) enum CompilerIdentity {
     ClangCl,
     Tcc,
 }
-
-/// Whose semantic rules a surveyed behavior follows where GCC and Clang
-/// differ. Each [`CompilerConfiguration`](super::CompilerConfiguration)
-/// helper that returns one documents which identities take which side:
-/// clang-cl takes Clang's; TCC and MSVC, neither of which was surveyed,
-/// take GCC's stricter ones unless a helper says otherwise.
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
-pub(crate) enum RuleSet {
-    Gcc,
-    Clang,
-}

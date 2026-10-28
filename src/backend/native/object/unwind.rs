@@ -79,6 +79,7 @@ pub(super) fn generate(object: &mut Object<'_>) -> Result<()> {
                     kind:       3,
                     visibility: 0,
                     alias:      None,
+                    common:     false,
                 });
                 object.sections[section].relocs.push(Reloc {
                     offset: data.len() as u64,

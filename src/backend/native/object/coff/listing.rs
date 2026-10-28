@@ -112,6 +112,23 @@ pub(super) fn parse<'a>(text: &'a str, gnu: bool, arena: &'a Bump) -> Result<Cof
                         }
                         continue;
                     },
+                    // A communal symbol: undefined, with its size as the
+                    // value (Microsoft PE format, "Storage Class").
+                    | ".comm" => {
+                        arity(args, 3, 3)?;
+                        symbol_name(first)?;
+                        let size =
+                            unsigned(parts.next().ok_or(Error("missing COFF common size"))?)?;
+                        let id = object.symbol(first);
+                        let symbol = &mut object.symbols[id];
+                        if symbol.section.is_some() || symbol.alias.is_some() || symbol.common {
+                            return Err(Error("duplicate COFF common symbol"));
+                        }
+                        symbol.binding = 1;
+                        symbol.common = true;
+                        symbol.value = size;
+                        continue;
+                    },
                     | ".def" => {
                         arity(args, 1, 1)?;
                         symbol_name(args)?;
