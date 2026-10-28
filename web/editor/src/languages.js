@@ -1,6 +1,8 @@
-// Monarch grammars for the languages the site shows: C source, bcc's own IR
-// (before and after ABI lowering), LLVM IR, AT&T-syntax x86-64 assembly, and
-// the objdump-style machine-code listing. Token names map to the colours in
+// Monarch grammars for the languages the site shows: C source (also the
+// logical lines and the preprocessed text, with its line markers), the
+// preprocessing-token listing, bcc's own IR (before and after ABI lowering),
+// LLVM IR, AT&T-syntax x86-64 assembly, and the objdump-style machine-code
+// listing. Token names map to the colours in
 // themes.js, so the same kind of thing (a type, a value, a label) has the
 // same colour in every view.
 
@@ -30,6 +32,8 @@ const c = {
   operators: /[=><!~?:&|+\-*/^%]+/,
   tokenizer: {
     root: [
+      // A line marker in preprocessed text: `# 12 "file.c" 2`.
+      [/^# \d+ "[^"]*"( \d)*$/, 'comment.address'],
       [/^\s*#\s*\w+/, 'keyword.directive'],
       [/[a-zA-Z_]\w*(?=\s*\()/, { cases: { '@keywords': 'keyword', '@types': 'type', '@default': 'function' } }],
       [/[a-zA-Z_]\w*/, { cases: { '@keywords': 'keyword', '@types': 'type', '@default': 'identifier' } }],
@@ -183,6 +187,28 @@ const tokens = {
   },
 };
 
+// Phase 3's listing: `6:5     identifier          long_name   notes`. The
+// spelling is coloured by its kind; white space and new-lines are muted.
+const ppEntry = (kind, token, spelling = /\S+/) => [
+  new RegExp(`^(\\d+:\\d+\\s+)(${kind})(\\s+)(${spelling.source})`),
+  ['comment.address', 'type', '', token],
+];
+const ppTokens = {
+  defaultToken: 'comment',
+  tokenizer: {
+    root: [
+      ppEntry('identifier', 'identifier'),
+      ppEntry('pp-number', 'number'),
+      ppEntry('string-literal', 'string', /(?:u8|[uUL])?"(?:[^"\\]|\\.)*"/),
+      ppEntry('character-constant', 'string', /[uUL]?'(?:[^'\\]|\\.)*'/),
+      ppEntry('punctuator', 'keyword'),
+      ppEntry('other', 'register'),
+      ppEntry('whitespace|newline', 'comment.address', /'[^']*'/),
+      [/.+$/, 'comment'],
+    ],
+  },
+};
+
 // bcc's syntax tree: `  block-item: declaration type=int @2:5`.
 const syntaxTree = {
   defaultToken: '',
@@ -241,6 +267,7 @@ export function registerLanguages(monaco) {
     asm,
     objdump,
     tokens,
+    'pp-tokens': ppTokens,
     'syntax-tree': syntaxTree,
     wat,
   };

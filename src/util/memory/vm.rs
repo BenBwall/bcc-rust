@@ -329,7 +329,7 @@ pub(crate) const REGION_BYTES: usize = 1024 * 1024 * 1024;
 pub(crate) const REGION_BYTES: usize = 16 * 1024 * 1024;
 
 /// WebAssembly's reservation, a real allocation from linear memory. A
-/// compilation the explorer accepts (`explorer::MAX_SOURCE_BYTES`) holds
+/// compilation the explorer accepts (`explorer::WASM_MAX_SOURCE_BYTES`) holds
 /// at most a few dozen regions at once, so they fit in linear memory with
 /// room to spare, and each fits the explorer's largest inputs many times.
 #[cfg(all(not(miri), target_family = "wasm"))]
@@ -568,6 +568,12 @@ fn page_size() -> io::Result<usize> {
 
 #[cfg(any(miri, target_family = "wasm"))]
 fn os_reserve(bytes: usize) -> io::Result<NonNull<u8>> {
+    // A kept region holds what it last held, which is no more initialized
+    // than a fresh allocation.
+    #[cfg(target_family = "wasm")]
+    if let Some(base) = pool::take(bytes) {
+        return Ok(base);
+    }
     let layout = std::alloc::Layout::from_size_align(bytes, page_size()?)
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "invalid mock region layout"))?;
     // SAFETY: layout is nonzero and valid. The whole mock reservation is one
@@ -874,7 +880,13 @@ impl Drop for Region {
         unsafe {
             #[cfg(not(any(miri, target_family = "wasm")))]
             os_release(self.base, self.reserved);
-            #[cfg(any(miri, target_family = "wasm"))]
+            // A kept region is no longer used here; the next reservation
+            // takes it whole.
+            #[cfg(target_family = "wasm")]
+            if !pool::keep(self.base, self.reserved) {
+                std::alloc::dealloc(self.base.as_ptr(), self.layout);
+            }
+            #[cfg(all(miri, not(target_family = "wasm")))]
             std::alloc::dealloc(self.base.as_ptr(), self.layout);
         }
     }
@@ -884,6 +896,51 @@ impl Drop for Region {
 impl Drop for GrowingRegion {
     fn drop(&mut self) {
         accounting::update(|usage| usage.committed -= self.committed);
+    }
+}
+
+/// Released WebAssembly regions, kept for the next reservation rather than
+/// returned to the allocator. Linear memory never shrinks, so keeping them
+/// costs nothing; returning one lets small allocations split it, and the
+/// next region then needs fresh memory beside it. Without the pool, the
+/// explorer's own small allocations between compilation stages left most
+/// freed regions split, so tracing a trivial program grew linear memory by
+/// seven regions.
+#[cfg(target_family = "wasm")]
+mod pool {
+    use std::{
+        ptr::NonNull,
+        sync::atomic::{
+            AtomicPtr,
+            Ordering,
+        },
+    };
+
+    /// More regions than a compilation holds at once.
+    static FREE: [AtomicPtr<u8>; 32] = [const { AtomicPtr::new(std::ptr::null_mut()) }; 32];
+
+    /// A released region of `bytes`, if one is kept.
+    pub(super) fn take(bytes: usize) -> Option<NonNull<u8>> {
+        if bytes != super::REGION_BYTES {
+            return None;
+        }
+        FREE.iter()
+            .find_map(|slot| NonNull::new(slot.swap(std::ptr::null_mut(), Ordering::Relaxed)))
+    }
+
+    /// Keeps the released region at `base` for [`take`], unless it is not
+    /// a whole region or the pool is full.
+    pub(super) fn keep(base: NonNull<u8>, bytes: usize) -> bool {
+        bytes == super::REGION_BYTES
+            && FREE.iter().any(|slot| {
+                slot.compare_exchange(
+                    std::ptr::null_mut(),
+                    base.as_ptr(),
+                    Ordering::Relaxed,
+                    Ordering::Relaxed,
+                )
+                .is_ok()
+            })
     }
 }
 

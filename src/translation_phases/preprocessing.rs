@@ -80,6 +80,11 @@ use runtime::{
     TokenizerFrame,
     TokenizerFrameType,
 };
+pub(crate) use runtime::{
+    ReadAt,
+    TraceEvent,
+    Truncated,
+};
 pub(crate) use token::{
     CharacterTokenType,
     FloatTokenType,
@@ -408,6 +413,9 @@ impl Expander<'_, '_, '_, '_> {
                             },
                             tokenizer,
                         };
+                        if self.tracing() {
+                            self.trace_invocation(&frame);
+                        }
                         self.push_tokenizer_frame(frame);
                         continue;
                     },
@@ -432,7 +440,7 @@ impl Expander<'_, '_, '_, '_> {
                         } else {
                             (tokenizer, arguments)
                         };
-                        self.push_tokenizer_frame(TokenizerFrame {
+                        let frame = TokenizerFrame {
                             frame_type: TokenizerFrameType::FunctionLikeMacroInvocation {
                                 invocation_end,
                                 invocation: self.invocation_location(token),
@@ -443,11 +451,19 @@ impl Expander<'_, '_, '_, '_> {
                                 released: false,
                             },
                             tokenizer,
-                        });
+                        };
+                        if self.tracing() {
+                            self.trace_invocation(&frame);
+                        }
+                        self.push_tokenizer_frame(frame);
                         continue;
                     },
                     | MacroDefinition::BuiltIn => {
-                        if let Some(result) = self.expand_builtin(token) {
+                        let result = self.expand_builtin(token);
+                        if self.tracing() {
+                            self.trace_builtin(token, result);
+                        }
+                        if let Some(result) = result {
                             break 'base Some(result);
                         }
                         continue 'base;

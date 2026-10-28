@@ -27,10 +27,7 @@ use super::{
             print_preprocessor_output,
         },
         output_file,
-        preprocessed::{
-            TextOptions,
-            print_preprocessed,
-        },
+        preprocessed::print_preprocessed,
     },
     Source,
     dependencies::{
@@ -40,6 +37,7 @@ use super::{
 };
 use crate::{
     headers::HeaderSearch,
+    pipeline::TextOptions,
     translation_phases::Context,
     util::bump::{
         ArenaString,
@@ -181,6 +179,7 @@ fn run_job<'tu>(
             let text = TextOptions {
                 no_line_markers: args.driver.no_line_markers,
                 macros:          args.driver.dump_macros,
+                as_written:      false,
             };
             let failed = match output.filter(|path| *path != Path::new("-")) {
                 | Some(path) => std::fs::File::create(path)

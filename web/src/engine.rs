@@ -115,6 +115,35 @@ impl Kind {
 /// How long one compilation may run before its Worker is terminated.
 pub const COMPILE_TIMEOUT_MS: u32 = 10_000;
 
+/// Why a Worker's module trapped, from the trap's message and the panic it
+/// reported first, if any. A Rust panic reports its message. A trap
+/// without one is an `unreachable` that Rust reached when an allocation
+/// failed (each of the compiler's arenas is one fixed region of linear
+/// memory, and a full region is an allocation failure), or an overflow of
+/// the engine's call stack.
+pub fn trap_reason(trap: &str, panic: Option<&str>) -> String {
+    match panic {
+        | Some(panic) => format!("{INTERNAL_ERROR}{panic}"),
+        | None if trap.contains("unreachable") => OUT_OF_MEMORY.to_owned(),
+        | None if trap.contains("call stack") || trap.contains("too much recursion") =>
+            TOO_DEEP.to_owned(),
+        | None => trap.to_owned(),
+    }
+}
+
+/// How a trap that followed a panic is reported, before the panic's message.
+pub const INTERNAL_ERROR: &str = "bcc hit an internal error and stopped: ";
+
+/// How a trap from a failed allocation is reported.
+pub const OUT_OF_MEMORY: &str =
+    "bcc ran out of memory compiling this program in your browser. There each of its arenas is \
+     one fixed 32 MiB region, and this program filled one: a macro that expands enormously can, \
+     even below the size limit. Make the program smaller, or compile it with the native bcc.";
+
+/// How an overflow of the engine's call stack is reported.
+pub const TOO_DEEP: &str = "This program nests too deeply for bcc's in-browser compiler, whose \
+                            stack is much smaller than a native one.";
+
 /// One connected Worker.
 pub struct Engine {
     inner: Rc<Inner>,
@@ -137,6 +166,7 @@ impl Engine {
             pending: RefCell::default(),
             sequence: Cell::new(0),
             connected: Cell::new(true),
+            panicked: RefCell::default(),
             on_message: RefCell::default(),
             on_failure: RefCell::default(),
         });
@@ -255,6 +285,8 @@ struct Inner {
     pending:    RefCell<HashMap<u32, Pending>>,
     sequence:   Cell<u32>,
     connected:  Cell<bool>,
+    /// The message of a panic the Worker reported before it trapped.
+    panicked:   RefCell<Option<String>>,
     // Keep the Worker's event listeners alive for the engine's lifetime.
     on_message: RefCell<Option<MessageHandler>>,
     on_failure: RefCell<Vec<FailureHandler>>,
@@ -318,16 +350,19 @@ impl Inner {
         });
         self.worker
             .set_onmessage(Some(on_message.as_ref().unchecked_ref()));
-        let on_error = self.listener(|kind, event| {
+        let on_error = self.listener(|inner, event| {
             event.prevent_default();
             let message = event
                 .dyn_ref::<ErrorEvent>()
                 .map(ErrorEvent::message)
                 .unwrap_or_default();
             if message.is_empty() {
-                format!("{}. Serve the built site over HTTP.", kind.unstartable)
+                format!(
+                    "{}. Serve the built site over HTTP.",
+                    inner.kind.unstartable
+                )
             } else {
-                message
+                trap_reason(&message, inner.panicked.borrow_mut().take().as_deref())
             }
         });
         self.worker
@@ -341,11 +376,11 @@ impl Inner {
     }
 
     /// A Worker event that disposes the engine with the returned reason.
-    fn listener(self: &Rc<Self>, reason: fn(&Kind, &web_sys::Event) -> String) -> FailureHandler {
+    fn listener(self: &Rc<Self>, reason: fn(&Self, &web_sys::Event) -> String) -> FailureHandler {
         let weak: Weak<Self> = Rc::downgrade(self);
         Closure::new(move |event: JsValue| {
             if let Some(inner) = weak.upgrade() {
-                inner.dispose(&reason(inner.kind, event.unchecked_ref()));
+                inner.dispose(&reason(&inner, event.unchecked_ref()));
             }
         })
     }
@@ -354,6 +389,10 @@ impl Inner {
         let (id, answer) = match serde_wasm_bindgen::from_value(data) {
             | Ok(Reply::Ready) => (READY, Ok(None)),
             | Ok(Reply::Done { id, result }) => (id, result.map(Some)),
+            | Ok(Reply::Panicked(message)) => {
+                *self.panicked.borrow_mut() = Some(message);
+                return;
+            },
             | Err(error) => {
                 self.dispose(&format!(
                     "The Rust Worker sent an unreadable reply ({error}). Reload the page."

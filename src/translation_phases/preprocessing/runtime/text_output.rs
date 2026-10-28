@@ -30,6 +30,7 @@ use crate::{
         GetPosition,
         GetSourceFileIndex,
         SourcePosition,
+        SourceVector,
         TranslationPhase,
         preprocessor_tokenizer::PreprocessorTokenType,
     },
@@ -40,23 +41,54 @@ use crate::{
     },
 };
 
+/// Where the reader was when it read a phase-6 token.
+#[derive(Clone, Debug)]
+pub(crate) struct ReadAt {
+    /// The innermost source file being read.
+    pub(crate) file:      u32,
+    /// The reader's position in it.
+    pub(crate) position:  SourcePosition,
+    /// For a token a macro expansion produced, where the outermost
+    /// invocation's name is.
+    pub(crate) expansion: Option<SourceVector>,
+    /// The outermost source file being read and the reader's position in
+    /// it: for a header's tokens, at the end of the main file's `#include`
+    /// line that brought the header in.
+    pub(crate) root:      Option<(u32, SourcePosition)>,
+}
+
 impl<'tu> Preprocessor<'tu, '_> {
+    /// Leaves adjacent string literals apart, so the tokens read are phase
+    /// 4's, not concatenated as phase 6 does; call it before reading.
+    /// C99: §5.1.1.2 paragraph 1 items 4 and 6, p. 10; PDF p. 22.
+    pub(crate) fn keep_strings_apart(&mut self) {
+        self.resting_mut().state.strings_apart = true;
+    }
+
     /// Calls `visit` with each phase-6 token, as
-    /// [`Preprocessor::for_each_iterator_item`] does, and with the source
-    /// file the reader is in and its position there once the token was
-    /// read. A token a macro expands to is spelled in the macro's
-    /// definition, but it belongs on the line of the invocation; the
-    /// reader's position gives that line.
+    /// [`Preprocessor::for_each_iterator_item`] does, and with where the
+    /// reader was once the token was read. A token a macro expands to is
+    /// spelled in the macro's definition or an argument, but it belongs
+    /// where the outermost invocation is, which [`ReadAt::expansion`] gives.
     pub(crate) fn for_each_iterator_item_read_at(
         &mut self,
         context: &mut Context<'tu>,
-        mut visit: impl FnMut(&mut Context<'tu>, Token, Option<(u32, SourcePosition)>),
+        mut visit: impl FnMut(&mut Context<'tu>, Token, Option<ReadAt>),
     ) {
         self.run(context, |preprocessor| {
             match preprocessor.next_iterator_item() {
                 | Some(token) => {
-                    let position = preprocessor.reading_position();
-                    visit(preprocessor.context, token, position);
+                    let expansion = preprocessor.outermost_invocation().cloned();
+                    let root = preprocessor.root_position();
+                    let at = preprocessor
+                        .reading_position()
+                        .map(|(file, position)| ReadAt {
+                            file,
+                            position,
+                            expansion,
+                            root,
+                        });
+                    visit(preprocessor.context, token, at);
                     ControlFlow::Continue(())
                 },
                 | None => ControlFlow::Break(()),
@@ -190,6 +222,39 @@ impl Expander<'_, '_, '_, '_> {
                     &frame.tokenizer
                 };
                 (cursor.source_file_index(), cursor.position(self.context))
+            })
+    }
+
+    /// The outermost source file being read, and the reader's position in
+    /// it: the cursor its frame saved when a header or macro was pushed.
+    fn root_position(&self) -> Option<(u32, SourcePosition)> {
+        let last = self.tokenizer_stack.len().checked_sub(1)?;
+        self.tokenizer_stack
+            .iter()
+            .enumerate()
+            .find(|(_, frame)| matches!(frame.frame_type, TokenizerFrameType::SourceFile { .. }))
+            .map(|(index, frame)| {
+                let cursor = if index == last {
+                    &self.tokenizer
+                } else {
+                    &frame.tokenizer
+                };
+                (cursor.source_file_index(), cursor.position(self.context))
+            })
+    }
+
+    /// Where the outermost macro invocation being read is, while one is,
+    /// including its last token before its frame is popped.
+    pub(in crate::translation_phases::preprocessing) fn outermost_invocation(
+        &self,
+    ) -> Option<&SourceVector> {
+        self.tokenizer_stack
+            .iter()
+            .find_map(|frame| match &frame.frame_type {
+                | TokenizerFrameType::ObjectLikeMacroInvocation { invocation, .. }
+                | TokenizerFrameType::FunctionLikeMacroInvocation { invocation, .. } =>
+                    Some(invocation),
+                | _ => None,
             })
     }
 }

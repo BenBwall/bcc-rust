@@ -71,6 +71,26 @@ pub(crate) fn with_preprocessor<'tu, R>(
     run(preprocessor, context, &pp)
 }
 
+/// As [`with_preprocessor`], recording a trace of phase 4 in `trace`, an
+/// arena that holds nothing else, if there is one.
+#[cfg(feature = "explorer")]
+pub(crate) fn with_traced_preprocessor<'tu, R>(
+    context: &mut Context<'tu>,
+    source_filename: &Path,
+    source: &'tu str,
+    search: HeaderSearch<'_>,
+    trace: Option<&Bump>,
+    run: impl for<'pp> FnOnce(Preprocessor<'tu, 'pp>, &mut Context<'tu>, &'pp Bump) -> R,
+) -> R {
+    let pp = Bump::new();
+    let mut preprocessor =
+        Preprocessor::new_with_arena_source(&pp, context, source_filename, source, search);
+    if let Some(trace) = trace {
+        preprocessor.record_trace(trace);
+    }
+    run(preprocessor, context, &pp)
+}
+
 /// Keeps phase-7 working storage scoped to parsing: the parser's scratch
 /// pools, its scopes, and its recovery state come from `parse`, which
 /// the caller frees when parsing ends. The syntax tree goes into the

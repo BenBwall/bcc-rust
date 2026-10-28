@@ -2,6 +2,8 @@
 //! execution traces: the Rust engine produces every state, and
 //! `web/pipeline/` holds what the real compiler makes of each.
 
+use crate::pipeline::Stage;
+
 pub struct Demo {
     pub key:     &'static str,
     pub title:   &'static str,
@@ -10,11 +12,14 @@ pub struct Demo {
     pub topics:  &'static [&'static str],
     /// Whether the program ends in a detected fault.
     pub faults:  bool,
+    /// The compiler stage a lesson about the compiler opens at. The abstract
+    /// machine has no preprocessor, so it does not run such a lesson.
+    pub stage:   Option<Stage>,
     pub name:    &'static str,
     pub source:  &'static str,
 }
 
-pub static DEMOS: [Demo; 7] = [
+pub static DEMOS: [Demo; 8] = [
     Demo {
         key:     "tour",
         title:   "Objects, loops and calls",
@@ -22,6 +27,7 @@ pub static DEMOS: [Demo; 7] = [
                   through a pointer.",
         topics:  &["objects", "lifetimes", "calls"],
         faults:  false,
+        stage:   None,
         name:    "objects.c",
         source:  include_str!("../demos/objects.c"),
     },
@@ -32,6 +38,7 @@ pub static DEMOS: [Demo; 7] = [
                   the end is a valid place to stop.",
         topics:  &["decay", "pointer arithmetic", "one past the end"],
         faults:  false,
+        stage:   None,
         name:    "pointers.c",
         source:  include_str!("../demos/pointers.c"),
     },
@@ -42,6 +49,7 @@ pub static DEMOS: [Demo; 7] = [
                   one by one.",
         topics:  &["call stack", "parameters", "return values"],
         faults:  false,
+        stage:   None,
         name:    "recursion.c",
         source:  include_str!("../demos/recursion.c"),
     },
@@ -52,6 +60,7 @@ pub static DEMOS: [Demo; 7] = [
                   has an implementation-defined result.",
         topics:  &["char", "promotions", "conversions"],
         faults:  false,
+        stage:   None,
         name:    "promotion.c",
         source:  include_str!("../demos/promotion.c"),
     },
@@ -62,6 +71,7 @@ pub static DEMOS: [Demo; 7] = [
                   addition.",
         topics:  &["undefined behavior", "int range"],
         faults:  true,
+        stage:   None,
         name:    "overflow.c",
         source:  include_str!("../demos/overflow.c"),
     },
@@ -72,6 +82,7 @@ pub static DEMOS: [Demo; 7] = [
                   behavior.",
         topics:  &["undefined behavior", "bounds"],
         faults:  true,
+        stage:   None,
         name:    "bounds.c",
         source:  include_str!("../demos/bounds.c"),
     },
@@ -81,8 +92,20 @@ pub static DEMOS: [Demo; 7] = [
         summary: "A local without an initializer holds an indeterminate value, not zero.",
         topics:  &["indeterminate values", "initialization"],
         faults:  true,
+        stage:   None,
         name:    "indeterminate.c",
         source:  include_str!("../demos/indeterminate.c"),
+    },
+    Demo {
+        key:     "macros",
+        title:   "Before the compiler: the preprocessor",
+        summary: "Follow the source through the first translation phases: lines spliced, comments \
+                  become spaces, macros expand with # and ##, and #if drops lines.",
+        topics:  &["line splicing", "macros", "conditionals"],
+        faults:  false,
+        stage:   Some(Stage::Preprocessor),
+        name:    "macros.c",
+        source:  include_str!("../demos/macros.c"),
     },
 ];
 

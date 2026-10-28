@@ -129,6 +129,9 @@ impl Expander<'_, '_, '_, '_> {
                 return;
             },
         }
+        if self.tracing() {
+            self.trace_directive(directive);
+        }
         let name = self.context.string_cache.at(directive.contents);
         if self.context.preprocessed_input
             && !matches!(name, "pragma" | "ident" | "sccs" | "define" | "undef")

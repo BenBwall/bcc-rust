@@ -3,7 +3,10 @@
 //! page's source and present its output as a [`Compilation`].
 //!
 //! The text stages carry over unchanged, with the syntax tree's locations on
-//! so it links to the source line by line. Each function's machine code
+//! so it links to the source line by line. The front end's phases become
+//! views of their own: the logical lines of phases 1-2, one line each; phase
+//! 3's preprocessing tokens as an aligned listing; and the preprocessed
+//! text with what phase 4 did in the source. Each function's machine code
 //! becomes one listing in the format `web/pipeline/generate.sh` used to write
 //! from `objdump`. Diagnostics move from the compiler's character columns to
 //! the editor's UTF-16 columns, and the compiler's per-function line map
@@ -17,14 +20,27 @@ use bcc_rust::explorer::{
     ExplorerDiagnostic,
     ExplorerFunctionBytes,
     ExplorerLineRange,
+    ExplorerLogicalLine,
     ExplorerOptions,
+    ExplorerPpToken,
+    ExplorerPreprocessing,
 };
 
 use crate::{
     pipeline::{
         Compilation,
         CompileDiagnostic,
+        Conditional,
+        Definition,
+        Directive,
+        Expansion,
+        ExpansionStep,
         FunctionLines,
+        Include,
+        LogicalLine,
+        OutputLine,
+        Preprocessing,
+        SourceChange,
         SourceSpan,
     },
     protocol::{
@@ -64,7 +80,52 @@ pub fn compile(source: &str, optimize: bool) -> Compilation {
     let (machine_code, listed) = output.machine_code.as_deref().map(listing).unzip();
     let listed = listed.unwrap_or_default();
     let lines = |range: Option<ExplorerLineRange>| range.map(span);
+    let columns = Columns::new(source);
+    let logical = output.logical_lines.as_deref().unwrap_or_default();
+    let all_tokens = output.pp_tokens.as_deref().unwrap_or_default();
+    let (pp_tokens, pp_ranges, pp_counts) = match output.pp_tokens.as_deref() {
+        | Some(tokens) => {
+            let (listing, ranges, counts) = pp_listing(tokens, &columns);
+            (Some(listing), ranges, counts)
+        },
+        | None => (None, Vec::new(), Vec::new()),
+    };
     Compilation {
+        logical: output.logical_lines.as_ref().map(|lines| {
+            lines
+                .iter()
+                .flat_map(|line| [line.text.as_str(), "\n"])
+                .collect()
+        }),
+        logical_lines: logical
+            .iter()
+            .map(|line| logical_line(line, &columns))
+            .collect(),
+        pp_tokens,
+        pp_comments: all_tokens
+            .iter()
+            .zip(&pp_ranges)
+            .filter(|(token, _)| token.comment)
+            .map(|(_, range)| *range)
+            .collect(),
+        pp_ranges,
+        pp_counts,
+        preprocessed_lines: output
+            .preprocessed_lines
+            .iter()
+            .flatten()
+            .map(|line| OutputLine {
+                input:   line.file == crate::INPUT_NAME,
+                line:    line.line.map(|line| line as usize),
+                include: line.include.map(|line| line as usize),
+            })
+            .collect(),
+        preprocessed: output.preprocessed,
+        preprocessing: output
+            .preprocessing
+            .as_ref()
+            .map(|trace| preprocessing(trace, &columns))
+            .unwrap_or_default(),
         code_bytes: output
             .machine_code
             .iter()
@@ -81,7 +142,7 @@ pub fn compile(source: &str, optimize: bool) -> Compilation {
         diagnostics: output
             .diagnostics
             .iter()
-            .map(|diagnostic| self::diagnostic(diagnostic, source))
+            .map(|diagnostic| self::diagnostic(diagnostic, &columns))
             .collect(),
         functions: output
             .line_map
@@ -103,6 +164,267 @@ pub fn compile(source: &str, optimize: bool) -> Compilation {
 
 fn span(range: ExplorerLineRange) -> (usize, usize) {
     (range.start as usize, range.end as usize)
+}
+
+/// A logical line's physical lines and changes, in UTF-16 columns.
+fn logical_line(line: &ExplorerLogicalLine, columns: &Columns) -> LogicalLine {
+    let in_line = Columns::new(&line.text);
+    LogicalLine {
+        source:  span(line.source),
+        changes: line
+            .changes
+            .iter()
+            .map(|change| {
+                let at = |column: u32| columns.utf16(change.line as usize, column as usize);
+                let length = change.spelling.chars().count().max(1) as u32;
+                // A splice ends its line; mark its backslash alone.
+                let length = if change.kind == "splice" { 1 } else { length };
+                SourceChange {
+                    kind:        change.kind.clone(),
+                    column:      in_line.utf16(1, change.column as usize),
+                    source:      SourceSpan {
+                        line:       change.line as usize,
+                        column:     at(change.source_column),
+                        end_line:   change.line as usize,
+                        end_column: at(change.source_column + length),
+                    },
+                    spelling:    change.spelling.clone(),
+                    replacement: change.replacement.clone(),
+                }
+            })
+            .collect(),
+    }
+}
+
+/// The kinds of phase-3 entries, in the order the listing's counts give
+/// them.
+const PP_KINDS: [&str; 8] = [
+    "identifier",
+    "pp-number",
+    "character-constant",
+    "string-literal",
+    "punctuator",
+    "other",
+    "whitespace",
+    "newline",
+];
+
+/// The most phase-3 entries the listing shows. The page receives the
+/// listing and a range for each entry, so a large source would otherwise
+/// send megabytes for a view nobody scrolls through.
+pub const MAX_PP_ENTRIES: usize = 20_000;
+
+/// The most expansions the page receives, for the same reason.
+pub const MAX_EXPANSIONS: usize = 2_000;
+
+/// The most steps the page receives for one expansion; a macro that
+/// expands enormously can take tens of thousands.
+pub const MAX_STEPS: usize = 500;
+
+/// Phase 3's entries as a listing, one per line: where each starts, its
+/// kind, its spelling, and what is notable about it, up to
+/// [`MAX_PP_ENTRIES`] of them and then a line saying how many more there
+/// are. Also each listed entry's range in the source and how many entries
+/// of each kind there are, with the comments among the white space counted
+/// apart.
+fn pp_listing(
+    tokens: &[ExplorerPpToken],
+    columns: &Columns,
+) -> (String, Vec<SourceSpan>, Vec<(String, usize)>) {
+    let mut text = String::new();
+    let shown = tokens.len().min(MAX_PP_ENTRIES);
+    let mut ranges = Vec::with_capacity(shown);
+    for token in &tokens[..shown] {
+        let place = format!("{}:{}", token.line, token.column);
+        let spelling = match token.kind.as_str() {
+            | "whitespace" => "' '".to_owned(),
+            | "newline" => "'\\n'".to_owned(),
+            | _ => token.spelling.clone(),
+        };
+        let mut notes = Vec::new();
+        if token.line_start {
+            notes.push(if token.spelling == "#" {
+                "starts a directive".to_owned()
+            } else {
+                "line start".to_owned()
+            });
+        }
+        if token.leading_space {
+            notes.push("after space".to_owned());
+        }
+        if token.comment {
+            notes.push("comment: one space".to_owned());
+        }
+        if token.header_name {
+            notes.push("header name".to_owned());
+        }
+        if token.end_line > token.line && token.kind != "newline" {
+            notes.push(format!("spliced, lines {}–{}", token.line, token.end_line));
+        }
+        if let Some(name) = &token.canonical {
+            notes.push(format!("names {name}"));
+        }
+        if token.kind == "other" {
+            notes.push("fits no other kind".to_owned());
+        }
+        let line = format!(
+            "{place:<8}{:<19}{spelling:<12}{}",
+            token.kind,
+            notes.join(" · ")
+        );
+        text.push_str(line.trim_end());
+        text.push('\n');
+        let (line, column) = (token.line as usize, token.column as usize);
+        let (end_line, end_column) = if token.kind == "newline" {
+            (line, column + 1)
+        } else {
+            (token.end_line as usize, token.end_column as usize)
+        };
+        ranges.push(SourceSpan {
+            line,
+            column: columns.utf16(line, column),
+            end_line,
+            end_column: columns.utf16(end_line, end_column),
+        });
+    }
+    if tokens.len() > shown {
+        text.push_str(&format!(
+            "… and {} more entries, not listed here\n",
+            tokens.len() - shown
+        ));
+    }
+    let mut counts: Vec<(String, usize)> = PP_KINDS
+        .iter()
+        .map(|kind| {
+            let count = tokens.iter().filter(|token| token.kind == *kind).count();
+            ((*kind).to_owned(), count)
+        })
+        .filter(|(_, count)| *count > 0)
+        .collect();
+    let comments = tokens.iter().filter(|token| token.comment).count();
+    if comments > 0 {
+        counts.push(("comment".to_owned(), comments));
+    }
+    (text, ranges, counts)
+}
+
+/// What phase 4 did in the source, placed in the editor's coordinates, with
+/// at most [`MAX_EXPANSIONS`] expansions, always including the one the
+/// trace stopped in. Headers' own expansions, conditionals and directives
+/// are left out: the view is about the program, and a header's are many.
+fn preprocessing(trace: &ExplorerPreprocessing, columns: &Columns) -> Preprocessing {
+    let input = |file: &str| file == crate::INPUT_NAME;
+    let in_source: Vec<_> = trace
+        .expansions
+        .iter()
+        .filter(|expansion| input(&expansion.file))
+        .collect();
+    let total = in_source.len();
+    let mut shown = in_source;
+    if shown.len() > MAX_EXPANSIONS {
+        let partial = shown[MAX_EXPANSIONS..]
+            .iter()
+            .copied()
+            .find(|expansion| expansion.partial);
+        shown.truncate(MAX_EXPANSIONS);
+        if let Some(partial) = partial {
+            shown[MAX_EXPANSIONS - 1] = partial;
+        }
+    }
+    Preprocessing {
+        omitted_expansions: total - shown.len(),
+        truncated:          trace.truncated,
+        expansions:         shown
+            .into_iter()
+            .map(|expansion| Expansion {
+                range:         SourceSpan {
+                    line:       expansion.line as usize,
+                    column:     columns.utf16(expansion.line as usize, expansion.column as usize),
+                    end_line:   expansion.end_line as usize,
+                    end_column: columns
+                        .utf16(expansion.end_line as usize, expansion.end_column as usize),
+                },
+                presumed:      expansion.presumed.clone(),
+                invocation:    expansion.invocation.clone(),
+                directive:     expansion.directive,
+                result:        expansion.result.clone(),
+                partial:       expansion.partial,
+                omitted_steps: expansion.steps.len().saturating_sub(MAX_STEPS),
+                steps:         expansion
+                    .steps
+                    .iter()
+                    .take(MAX_STEPS)
+                    .map(|step| ExpansionStep {
+                        parent:     step.parent.map(|parent| parent as usize),
+                        kind:       step.kind.clone(),
+                        prescan:    step.prescan,
+                        macro_name: step.macro_name.clone(),
+                        depth:      step.depth as usize,
+                        arguments:  step
+                            .arguments
+                            .iter()
+                            .map(|argument| (argument.parameter.clone(), argument.argument.clone()))
+                            .collect(),
+                        operands:   step.operands.clone(),
+                        result:     step.result.clone(),
+                    })
+                    .collect(),
+            })
+            .collect(),
+        conditionals:       trace
+            .conditionals
+            .iter()
+            .filter(|conditional| input(&conditional.file))
+            .map(|conditional| Conditional {
+                line:      conditional.line as usize,
+                presumed:  conditional.presumed.clone(),
+                directive: conditional.directive.clone(),
+                taken:     conditional.taken,
+                evaluated: conditional.evaluated,
+            })
+            .collect(),
+        skipped:            trace
+            .skipped
+            .iter()
+            .filter(|skipped| input(&skipped.file))
+            .map(|skipped| span(skipped.lines))
+            .collect(),
+        includes:           trace
+            .includes
+            .iter()
+            .filter(|include| input(&include.file))
+            .map(|include| Include {
+                line:   include.line as usize,
+                header: include.header.clone(),
+                angled: include.angled,
+                found:  include.found.is_some(),
+                system: include.system,
+                lines:  include.lines as usize,
+            })
+            .collect(),
+        definitions:        trace
+            .definitions
+            .iter()
+            .filter(|definition| input(&definition.file))
+            .map(|definition| Definition {
+                line:      definition.line as usize,
+                name:      definition.name.clone(),
+                kind:      definition.kind.clone(),
+                directive: definition.directive.clone(),
+            })
+            .collect(),
+        directives:         trace
+            .directives
+            .iter()
+            .filter(|directive| input(&directive.file))
+            .map(|directive| Directive {
+                line:      directive.line as usize,
+                presumed:  directive.presumed.clone(),
+                name:      directive.name.clone(),
+                directive: directive.directive.clone(),
+            })
+            .collect(),
+    }
 }
 
 /// Each function's name and first and last line in a listing.
@@ -149,16 +471,16 @@ fn listing(functions: &[ExplorerFunctionBytes]) -> (String, Listed) {
 
 /// `diagnostic` with its range in the editor's coordinates, when it is in
 /// `source` rather than a header.
-fn diagnostic(diagnostic: &ExplorerDiagnostic, source: &str) -> CompileDiagnostic {
+fn diagnostic(diagnostic: &ExplorerDiagnostic, columns: &Columns) -> CompileDiagnostic {
     let in_source = diagnostic.file.as_deref() == Some(crate::INPUT_NAME);
     let range = match (in_source, diagnostic.line, diagnostic.column) {
         | (true, Some(line), Some(column)) => {
             let line = line as usize;
-            let column = utf16_column(source, line, column as usize);
+            let column = columns.utf16(line, column as usize);
             let end_line = diagnostic.end_line.map_or(line, |end| end as usize);
             let end_column = diagnostic
                 .end_column
-                .map(|end| utf16_column(source, end_line, end as usize));
+                .map(|end| columns.utf16(end_line, end as usize));
             // A range that ends where it starts would draw no squiggle.
             let end_column = end_column
                 .filter(|&end| end_line > line || end > column)
@@ -181,20 +503,48 @@ fn diagnostic(diagnostic: &ExplorerDiagnostic, source: &str) -> CompileDiagnosti
     }
 }
 
-/// The 1-based UTF-16 column of 1-based character `column` on 1-based
-/// `line` of `source`. A column past the line's end keeps counting past it.
-fn utf16_column(source: &str, line: usize, column: usize) -> usize {
-    let text = source.split('\n').nth(line.saturating_sub(1)).unwrap_or("");
-    let mut characters = text.chars();
-    let prefix: usize = characters
-        .by_ref()
-        .take(column.saturating_sub(1))
-        .map(char::len_utf16)
-        .sum();
-    let past_end = column
-        .saturating_sub(1)
-        .saturating_sub(text.chars().count());
-    prefix + past_end + 1
+/// The source's lines, to turn the compiler's 1-based character columns
+/// into the editor's 1-based UTF-16 columns in time proportional to the
+/// line, not the source: a listing of every token of a large source asks
+/// for two columns per token.
+struct Columns {
+    /// For each line with a character outside ASCII, the UTF-16 units
+    /// before each of its characters; an ASCII line counts the same in
+    /// both.
+    tables: Vec<Option<Vec<usize>>>,
+}
+
+impl Columns {
+    fn new(source: &str) -> Self {
+        let tables = source
+            .split('\n')
+            .map(|line| {
+                (!line.is_ascii()).then(|| {
+                    std::iter::once(0)
+                        .chain(line.chars().scan(0, |units, character| {
+                            *units += character.len_utf16();
+                            Some(*units)
+                        }))
+                        .collect()
+                })
+            })
+            .collect();
+        Self { tables }
+    }
+
+    /// The 1-based UTF-16 column of 1-based character `column` on 1-based
+    /// `line`. A column past the line's end keeps counting past it.
+    fn utf16(&self, line: usize, column: usize) -> usize {
+        let index = line.saturating_sub(1);
+        let before = column.saturating_sub(1);
+        match self.tables.get(index) {
+            | Some(Some(table)) => {
+                let characters = table.len() - 1;
+                table[before.min(characters)] + before.saturating_sub(characters) + 1
+            },
+            | _ => before + 1,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -205,10 +555,116 @@ mod tests {
     #[test]
     fn columns_count_utf16_units() {
         let source = "int x;\n/* é𝔸 */ int y\n";
-        assert_eq!(utf16_column(source, 1, 5), 5);
+        let columns = Columns::new(source);
+        assert_eq!(columns.utf16(1, 5), 5);
         // `é` is one unit and `𝔸` two, so character 9 is unit 10.
-        assert_eq!(utf16_column(source, 2, 9), 10);
-        assert_eq!(utf16_column(source, 2, 30), 31);
+        assert_eq!(columns.utf16(2, 9), 10);
+        assert_eq!(columns.utf16(2, 30), 31);
+        assert_eq!(columns.utf16(9, 4), 4);
+        assert_eq!(Columns::new("é𝔸x").utf16(1, 3), 4);
+    }
+
+    #[test]
+    fn bundled_headers_fold_and_link_to_their_include() {
+        use crate::pipeline::{
+            displayed,
+            is_folded,
+            links,
+        };
+        let source = "int a;\n#include <stdint.h>\nint32_t x;\n";
+        let compilation = compile(source, false);
+        let (full, _) = displayed(Stage::Preprocessor, &compilation, true).unwrap();
+        let (folded, lines) = displayed(Stage::Preprocessor, &compilation, false).unwrap();
+        assert!(full.contains("typedef"), "{full}");
+        assert!(!folded.contains("typedef"), "{folded}");
+        let summary = folded
+            .lines()
+            .position(is_folded)
+            .unwrap_or_else(|| panic!("{folded}"));
+        assert!(folded.contains("<stdint.h>: "), "{folded}");
+        assert_eq!(lines.unwrap()[summary + 1], Some((2, 2)));
+        let links = links(Stage::Preprocessor, &compilation, source, false);
+        assert_eq!(links.outputs_for(2), [summary + 1]);
+        assert!(links.outputs_for(3).iter().all(|&line| line > summary + 1));
+        // With the headers shown, each of their lines links to the include.
+        let shown = crate::pipeline::links(Stage::Preprocessor, &compilation, source, true);
+        let typedef = full
+            .lines()
+            .position(|line| line.starts_with("typedef"))
+            .unwrap();
+        assert_eq!(shown.sources_for(typedef + 1), [2]);
+    }
+
+    #[test]
+    fn predefined_macros_and_other_directives_reach_the_page() {
+        let compilation = compile("#pragma once\nint line = __LINE__;\n", false);
+        let trace = &compilation.preprocessing;
+        assert_eq!(trace.expansions[0].invocation, "__LINE__");
+        assert_eq!(trace.expansions[0].result, "2");
+        assert_eq!(trace.directives[0].name, "pragma");
+    }
+
+    #[test]
+    fn an_enormous_expansion_sends_its_first_steps() {
+        // 11,111 replacements in one expansion, of 30,000 elements.
+        let source = "#define A 0,0,0,\n#define B A A A A A A A A A A\n#define C B B B B B B B B \
+                      B B\n#define D C C C C C C C C C C\n#define E D D D D D D D D D D\nint a[] \
+                      = {E 0};\n";
+        let compilation = compile(source, false);
+        let trace = &compilation.preprocessing;
+        assert!(trace.truncated);
+        let expansion = &trace.expansions[0];
+        assert_eq!(expansion.steps.len(), MAX_STEPS);
+        assert!(expansion.omitted_steps > 0);
+    }
+
+    #[test]
+    fn the_expansion_the_trace_stopped_in_is_always_listed() {
+        // Each empty replacement is one event, so the trace stops as the
+        // invocation on about line 49,000 begins, far past the cap.
+        let source = format!("#define E\n{}", "E\n".repeat(60_000));
+        let trace = &compile(&source, false).preprocessing;
+        assert!(trace.truncated);
+        assert_eq!(trace.expansions.len(), MAX_EXPANSIONS);
+        let last = trace.expansions.last().unwrap();
+        assert!(last.partial && last.range.line > 40_000, "{}", last.range.line);
+        assert!(trace.expansions[..MAX_EXPANSIONS - 1].iter().all(|e| !e.partial));
+        assert!(trace.omitted_expansions > 40_000);
+    }
+
+    #[test]
+    fn a_long_line_maps_in_linear_time() {
+        // One line of 288 KB, which took 6 s in the browser when each
+        // entry recounted the line.
+        let source = "int x;".repeat(48_000) + "\n";
+        let started = std::time::Instant::now();
+        let compilation = compile(&source, false);
+        let elapsed = started.elapsed();
+        let last = compilation.pp_ranges.last().unwrap();
+        assert_eq!(last.line, 1);
+        assert!(compilation.preprocessed.is_some());
+        assert!(elapsed.as_secs() < 30, "{elapsed:?}");
+    }
+
+    #[test]
+    fn a_large_source_maps_in_linear_time_and_its_listing_is_capped() {
+        // Phase 3 makes three entries per line: a comment, a new-line and,
+        // at the end, the declaration's tokens.
+        let source = "/* hi */\n".repeat(40_000) + "int x;\n";
+        let started = std::time::Instant::now();
+        let compilation = compile(&source, false);
+        let elapsed = started.elapsed();
+        let listing = compilation.pp_tokens.as_deref().unwrap();
+        assert_eq!(listing.lines().count(), MAX_PP_ENTRIES + 1);
+        assert!(
+            listing
+                .trim_end()
+                .ends_with("more entries, not listed here")
+        );
+        assert_eq!(compilation.pp_ranges.len(), MAX_PP_ENTRIES);
+        // The whole compilation, not only the mapping; quadratic mapping
+        // took minutes here.
+        assert!(elapsed.as_secs() < 60, "{elapsed:?}");
     }
 
     #[test]

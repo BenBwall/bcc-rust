@@ -27,7 +27,7 @@ use crate::util::{
 /// advancing together. A buffer that needs changes is copied into `scratch`.
 /// C99: §5.1.1.2p1-2, pp. 9-10; PDF pp. 21-22; trigraph mapping §5.2.1.1p1,
 /// p. 18; PDF p. 30.
-pub(super) fn splice<'a>(
+pub(crate) fn splice<'a>(
     source: &'a str,
     scratch: &'a Bump,
     trigraphs: bool,
@@ -112,7 +112,7 @@ pub(super) fn splice<'a>(
 /// How one byte of spliced text, or the gap before it, maps to the original
 /// source when the mapping is not one byte to one byte.
 #[derive(Clone, Copy, Debug)]
-pub(super) enum RemapKind {
+pub(crate) enum RemapKind {
     /// A line splice of this many original bytes was deleted before the byte.
     Deleted(usize),
     /// The byte replaced a three-character trigraph.
@@ -122,10 +122,10 @@ pub(super) enum RemapKind {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub(super) struct Remap {
+pub(crate) struct Remap {
     /// Offset in the spliced text.
-    pub(super) clean: usize,
-    pub(super) kind:  RemapKind,
+    pub(crate) clean: usize,
+    pub(crate) kind:  RemapKind,
 }
 
 /// The characters that `source[range]` spells once trigraphs are replaced
