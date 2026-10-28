@@ -348,7 +348,7 @@ const OPERAND_OPTIONS: [&str; 15] = [
 ];
 
 /// Options bcc reads in GCC's spelling and that take no operand.
-const PLAIN_OPTIONS: [&str; 27] = [
+const PLAIN_OPTIONS: [&str; 29] = [
     "-w",
     "-pedantic",
     "-pedantic-errors",
@@ -369,6 +369,8 @@ const PLAIN_OPTIONS: [&str; 27] = [
     "-MD",
     "-MMD",
     "-MP",
+    "-MG",
+    "-H",
     "-nostdlibinc",
     "-nobuiltininc",
     "-ffreestanding",
@@ -395,7 +397,7 @@ const LINK_ONLY_OPTIONS: [&str; 7] = [
 /// builds: driver conveniences and reports.
 /// `-g*` (debug information, which bcc does not emit) and the `-f` and `-m`
 /// options in `unimplemented.rs` are ignored too.
-const IGNORED_OPTIONS: [&str; 5] = ["-pipe", "-save-temps", "-Q", "-H", "-time"];
+const IGNORED_OPTIONS: [&str; 4] = ["-pipe", "-save-temps", "-Q", "-time"];
 
 impl State<'_> {
     /// Translates one argument, reading its operand from `rest`. Returns
@@ -540,6 +542,20 @@ impl State<'_> {
     /// which reports it and goes on with the others, as bcc's driver does.
     fn check_inputs(&mut self) {
         let clang = self.compiler == Compiler::Clang;
+        // `-MG` lists missing headers only in the rules `-M` and `-MM`
+        // write instead of the output.
+        if self.out.iter().any(|option| option == "-MG")
+            && !self
+                .stages
+                .iter()
+                .any(|stage| matches!(*stage, "-M" | "-MM"))
+        {
+            if clang {
+                self.error(format_args!("option '-MG' requires '-M' or '-MM'"));
+            } else {
+                self.error(format_args!("'-MG' may only be used with '-M' or '-MM'"));
+            }
+        }
         if clang {
             for input in &mut self.inputs {
                 if input.path != "-" && std::fs::metadata(&input.path).is_err() {

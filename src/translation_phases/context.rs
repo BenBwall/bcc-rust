@@ -90,6 +90,20 @@ pub(crate) struct Context<'tu> {
     /// `#sccs` take effect; `#define` and `#undef` are read but, with
     /// replacement off, change nothing.
     pub(crate) preprocessed_input: bool,
+    /// Each `#include` that entered a header, in order, with its nesting
+    /// depth (1 for a header the main file includes), when recorded for
+    /// GCC's `-H` or `cl /showIncludes`. An inclusion whose include guard
+    /// is already defined, which GCC and Clang do not read again, is left
+    /// out.
+    pub(crate) include_entries: Option<ArenaVec<'tu, IncludeEntry>>,
+    /// Whether a header that cannot be found is taken to be generated
+    /// later, as GCC's `-MG` takes it: it is no error, and the dependency
+    /// rules list it as written.
+    pub(crate) missing_headers_generated: bool,
+    /// The headers [`Self::missing_headers_generated`] took to be
+    /// generated, each interned as written, with whether its name was a
+    /// `<...>` one.
+    pub(crate) generated_headers: ArenaVec<'tu, (u32, bool)>,
     /// Where included files and `#embed` resources are found and read:
     /// the host's file system for the command line, only in-memory files
     /// for the explorer.
@@ -142,6 +156,14 @@ pub(crate) struct Context<'tu> {
     /// Original text of each source file, indexed like `source_files`, kept
     /// so diagnostics can quote the lines they point at.
     source_texts: ArenaVec<'tu, Option<SourceText<'tu>>>,
+}
+
+/// One `#include` that entered a header: the header's source file index
+/// and its nesting depth.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct IncludeEntry {
+    pub(crate) file:  u32,
+    pub(crate) depth: u32,
 }
 
 /// Bytes `start..end` of physical file `physical` that a line marker with

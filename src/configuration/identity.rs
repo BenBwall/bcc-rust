@@ -20,10 +20,6 @@ impl CompilerIdentity {
     /// rules, which reject or report more, are the closer model. A rule
     /// where `cl` is known to match Clang uses
     /// [`Self::ms_compatible_rules`] instead.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the driver's -MG and -H rules call it next")
-    )]
     pub(crate) const fn rules(self) -> RuleFamily {
         match self {
             | Self::Clang | Self::ClangCl => RuleFamily::Clang,

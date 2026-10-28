@@ -2620,4 +2620,79 @@ mod tests {
             assert!(clang.contains("\"-o\" \"ab\""), "{clang}");
         }
     }
+
+    /// `-H` prints each header an `#include` enters, after a dot per level
+    /// of nesting, and leaves out an inclusion whose include guard is
+    /// already defined, as GCC and Clang do; Clang names a header beside
+    /// the main file `./a.h`. `cl /showIncludes` indents by the nesting.
+    #[test]
+    fn header_tree_follows_each_compiler() {
+        let directory = Directory::new();
+        directory.write("guarded.h", "/* c */\n#ifndef G\n#define G\n#include \"b.h\"\n#endif\n");
+        directory.write("defined.h", "#if !defined(D)\n#define D\n#endif\n\n");
+        directory.write("open.h", "#ifndef O\n#define O\n#endif\nint o;\n");
+        directory.write("b.h", "");
+        directory.write(
+            "h.c",
+            "#include \"guarded.h\"\n#include \"guarded.h\"\n#include \"defined.h\"\n#include \
+             \"defined.h\"\n#include \"open.h\"\n#include \"open.h\"\n#include \"b.h\"\n",
+        );
+        let output = directory.bcc("--gcc-mode", &["-H", "-fsyntax-only", "h.c"]);
+        succeeds(&output);
+        assert_eq!(
+            stderr(&output),
+            ". guarded.h\n.. b.h\n. defined.h\n. open.h\n. open.h\n. b.h\n"
+        );
+        let output = directory.bcc("--clang-mode", &["-H", "-fsyntax-only", "h.c"]);
+        succeeds(&output);
+        assert_eq!(
+            stderr(&output),
+            ". ./guarded.h\n.. ./b.h\n. ./defined.h\n. ./open.h\n. ./open.h\n. ./b.h\n"
+        );
+        let output = directory.bcc("--msvc-mode", &["/nologo", "/Zs", "/showIncludes", "h.c"]);
+        succeeds(&output);
+        assert_eq!(
+            stderr(&output),
+            "Note: including file: guarded.h\nNote: including file:  b.h\nNote: including file: \
+             defined.h\nNote: including file: open.h\nNote: including file: open.h\nNote: \
+             including file: b.h\n"
+        );
+    }
+
+    /// `-MG` takes a header that cannot be found to be generated: the
+    /// `-M` and `-MM` rules list it as written, in order, without an error.
+    /// GCC's `-MM` leaves out a `<...>` one; Clang lists it. Without `-M`
+    /// or `-MM` each compiler refuses it.
+    #[test]
+    fn missing_headers_are_generated_under_mg() {
+        let directory = Directory::new();
+        directory.write("a.h", "#include \"b.h\"\n");
+        directory.write("b.h", "int b;\n");
+        directory.write(
+            "g.c",
+            "#include \"gen.h\"\n#include <missing/sys.h>\n#include \"a.h\"\nint y;\n",
+        );
+        for (mode, option, expected) in [
+            ("--gcc-mode", "-M", "g.o: g.c gen.h missing/sys.h a.h b.h\n"),
+            ("--gcc-mode", "-MM", "g.o: g.c gen.h a.h b.h\n"),
+            ("--clang-mode", "-M", "g.o: g.c gen.h missing/sys.h a.h b.h\n"),
+            ("--clang-mode", "-MM", "g.o: g.c gen.h missing/sys.h a.h b.h\n"),
+        ] {
+            let output = directory.bcc(mode, &[option, "-MG", "g.c"]);
+            succeeds(&output);
+            assert_eq!(stdout(&output), expected, "{mode} {option}");
+            assert_eq!(stderr(&output), "", "{mode} {option}");
+        }
+        for (mode, expected) in [
+            ("--gcc-mode", "gcc: error: '-MG' may only be used with '-M' or '-MM'\n"),
+            ("--clang-mode", "clang: error: option '-MG' requires '-M' or '-MM'\n"),
+        ] {
+            let output = directory.bcc(mode, &["-MD", "-MG", "-c", "g.c"]);
+            assert_eq!(output.status.code(), Some(1));
+            assert_eq!(stderr(&output), expected, "{mode}");
+        }
+        // Without `-MG` the missing header is an error.
+        let output = directory.bcc("--gcc-mode", &["-M", "g.c"]);
+        assert_eq!(output.status.code(), Some(1));
+    }
 }

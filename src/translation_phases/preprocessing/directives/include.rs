@@ -23,6 +23,7 @@ use crate::{
     translation_phases::{
         Context,
         ErrorSeverity,
+        IncludeEntry,
         SourcePosition,
         SourceVectors,
         TranslationError,
@@ -42,14 +43,18 @@ use crate::{
             LogicalCharacter,
             PreprocessorToken,
             PreprocessorTokenType,
+            TokenSource,
             logical_characters,
             position_after,
         },
     },
-    util::bump::{
-        ArenaString,
-        ArenaVec,
-        Bump,
+    util::{
+        bump::{
+            ArenaString,
+            ArenaVec,
+            Bump,
+        },
+        string_cache::StringCacheId,
     },
 };
 
@@ -198,6 +203,9 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
             self.state
                 .lexed_files
                 .open(self.context, header_source_index, header_string);
+        if self.context.include_entries.is_some() {
+            self.record_include_entry(header_source_index, source_depth, &tokenizer);
+        }
         self.push_tokenizer_frame(TokenizerFrame {
             frame_type: TokenizerFrameType::SourceFile {
                 conditional_base: self.state.open_conditionals.len(),
@@ -207,6 +215,38 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
             tokenizer,
         });
         self.resume_at_line_start();
+    }
+
+    /// Records an `#include` of `file` at nesting `depth` for `-H`, unless
+    /// the header's include guard is defined: GCC and Clang do not read
+    /// such a header again, so they do not list it either.
+    #[inline(never)]
+    fn record_include_entry(&mut self, file: u32, depth: usize, header: &TokenSource<'_>) {
+        let guarded = include_guard(header, self.context)
+            .is_some_and(|guard| self.state.macro_definitions.contains_key(&guard));
+        if guarded {
+            return;
+        }
+        let depth = u32::try_from(depth).expect("the include nesting limit is small");
+        if let Some(entries) = &mut self.context.include_entries {
+            entries.push(IncludeEntry { file, depth });
+        }
+    }
+
+    /// Records a header that cannot be found as one to be generated, under
+    /// `-MG`: interned as written, so the dependency rules list it in the
+    /// order it was included.
+    #[inline(never)]
+    fn record_generated_header(&mut self, path: &Path, angled: bool) {
+        let index = self.context.intern_source_file(path);
+        if !self
+            .context
+            .generated_headers
+            .iter()
+            .any(|&(generated, _)| generated == index)
+        {
+            self.context.generated_headers.push((index, angled));
+        }
     }
 
     /// The places a lookup of a header named in `including_file` visits, in
@@ -372,6 +412,10 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
                 }
             }
             if found.is_none() {
+                if self.context.missing_headers_generated {
+                    self.record_generated_header(path, is_system_header);
+                    return None;
+                }
                 let searched = self
                     .context
                     .tu_arena()
@@ -389,6 +433,10 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
             found
         };
         let Some((source_file_index, search_index)) = found else {
+            if self.context.missing_headers_generated {
+                self.record_generated_header(path, is_system_header);
+                return None;
+            }
             self.context.preprocessor_error(PreprocessorError {
                 error_type:     PreprocessorErrorType::HeaderNotFound {
                     name: self.context.diagnostic_text(&path.to_string_lossy()),
@@ -1084,3 +1132,83 @@ fn join_path<'b>(buffer: &'b mut ArenaVec<'_, u8>, directory: &Path, path: &Path
 /// p. 150; PDF p. 162; the minimum is in §5.2.4.1 paragraph 1, p. 21; PDF
 /// p. 33.
 const MAX_INCLUDE_NESTING: usize = 200;
+
+/// The include guard of `header`: NAME when, past whitespace and comments,
+/// the header is one `#ifndef NAME` group (or `#if !defined NAME`, also
+/// with parentheses) closed by its last directive, with nothing after it,
+/// as GCC's and Clang's multiple-include optimization recognizes one. Once
+/// NAME is defined, including the header again yields nothing.
+/// C99: conditional inclusion, §6.10.1 paragraphs 5-6, pp. 148-149;
+/// PDF pp. 160-161.
+fn include_guard(header: &TokenSource<'_>, context: &Context<'_>) -> Option<StringCacheId> {
+    use PreprocessorTokenType as T;
+    let mut tokens = header
+        .spellings()
+        .filter(|(kind, _)| *kind != T::Whitespace)
+        .skip_while(|(kind, _)| *kind == T::Newline)
+        .peekable();
+    let name = |tokens: &mut std::iter::Peekable<_>| -> Option<StringCacheId> {
+        match tokens.next()? {
+            | (T::Identifier, name) => Some(name),
+            | _ => None,
+        }
+    };
+    let (T::Hash, _) = tokens.next()? else {
+        return None;
+    };
+    let (T::Identifier, directive) = tokens.next()? else {
+        return None;
+    };
+    let guard = match context.string_cache.at(directive) {
+        | "ifndef" => name(&mut tokens)?,
+        | "if" => {
+            let (T::ExclamationMark, _) = tokens.next()? else {
+                return None;
+            };
+            let (T::Defined, _) = tokens.next()? else {
+                return None;
+            };
+            if tokens
+                .next_if(|(kind, _)| *kind == T::OpeningParenthesis)
+                .is_some()
+            {
+                let guard = name(&mut tokens)?;
+                let (T::ClosingParenthesis, _) = tokens.next()? else {
+                    return None;
+                };
+                guard
+            } else {
+                name(&mut tokens)?
+            }
+        },
+        | _ => return None,
+    };
+    let (T::Newline, _) = tokens.next()? else {
+        return None;
+    };
+    // The nesting of conditional groups at each line's start, from 1
+    // inside the guard's group.
+    let mut depth = 1_u32;
+    let mut line_start = true;
+    while let Some((kind, _)) = tokens.next() {
+        if depth == 0 {
+            if kind != T::Newline {
+                return None;
+            }
+            continue;
+        }
+        if line_start
+            && kind == T::Hash
+            && let Some((_, directive)) = tokens.next_if(|(kind, _)| *kind == T::Identifier)
+        {
+            match context.string_cache.at(directive) {
+                | "if" | "ifdef" | "ifndef" => depth += 1,
+                | "elif" | "else" | "elifdef" | "elifndef" if depth == 1 => return None,
+                | "endif" => depth -= 1,
+                | _ => {},
+            }
+        }
+        line_start = kind == T::Newline;
+    }
+    (depth == 0).then_some(guard)
+}

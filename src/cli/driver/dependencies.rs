@@ -31,10 +31,12 @@ use super::{
     output_or_stem,
 };
 use crate::{
+    configuration::identity::RuleFamily,
     headers::HeaderSearch,
     translation_phases::Context,
     util::bump::{
         ArenaString,
+        ArenaVec,
         Bump,
     },
 };
@@ -134,11 +136,24 @@ pub(super) fn write(
     }
     text.push(':');
     column += 1;
-    let headers = context
-        .opened_source_files()
-        .filter(|&(index, _)| {
-            request.files == DependencyFiles::All || !context.has_system_header_part(index)
-        })
+    // A header `-MG` took to be generated is listed as written, in the
+    // order it was included; GCC's `-MM` leaves out a `<...>` one, which
+    // Clang's lists.
+    let gcc = context.configuration.compiler_identity().rules() == RuleFamily::Gcc;
+    let mut files = ArenaVec::new_in(&arena);
+    files.extend(context.opened_source_files().filter(|&(index, _)| {
+        request.files == DependencyFiles::All || !context.has_system_header_part(index)
+    }));
+    files.extend(
+        context
+            .generated_headers
+            .iter()
+            .filter(|&&(_, angled)| request.files == DependencyFiles::All || !angled || !gcc)
+            .map(|&(index, _)| (index, context.get_source_file(index))),
+    );
+    files.sort_by_key(|&(index, _)| index);
+    let headers = files
+        .iter()
         .map(|(_, path)| escape(&arena, &path.to_string_lossy()));
     let mut first = true;
     let mut phony = ArenaString::new_in(&arena);
@@ -170,15 +185,39 @@ pub(super) fn write(
     }
 }
 
-/// Prints `Note: including file: PATH` to stderr for each header the
-/// translation unit read, as `cl /showIncludes` does. `cl` indents a header
-/// by its nesting depth, which bcc does not keep; Ninja reads the path
-/// after the prefix and any spaces.
+/// Prints `Note: including file:` and the header to stderr for each
+/// `#include` that entered one, as `cl /showIncludes` does, with a space
+/// more before the path for each level of nesting; Ninja reads the path
+/// after the prefix and the spaces.
 pub(super) fn show_includes(context: &Context<'_>) {
     let arena = Bump::new();
     let mut text = ArenaString::new_in(&arena);
-    for (_, path) in context.opened_source_files().skip(1) {
-        _ = writeln!(text, "Note: including file: {}", path.display());
+    for entry in context.include_entries.iter().flatten() {
+        _ = writeln!(
+            text,
+            "Note: including file:{:width$}{}",
+            "",
+            context.get_source_file(entry.file).display(),
+            width = entry.depth as usize,
+        );
+    }
+    drop(io::stderr().lock().write_all(text.as_bytes()));
+}
+
+/// Prints the header each `#include` entered to stderr for `-H`, after a
+/// dot per level of nesting, as GCC and Clang do. Clang names a header
+/// found beside a main file in the working directory `./a.h`, GCC `a.h`.
+pub(super) fn header_tree(context: &Context<'_>) {
+    let arena = Bump::new();
+    let mut text = ArenaString::new_in(&arena);
+    let clang = context.configuration.compiler_identity().rules() == RuleFamily::Clang;
+    for entry in context.include_entries.iter().flatten() {
+        for _ in 0..entry.depth {
+            text.push('.');
+        }
+        let path = context.get_source_file(entry.file);
+        let here = clang && path.is_relative() && path.parent() == Some(Path::new(""));
+        _ = writeln!(text, " {}{}", if here { "./" } else { "" }, path.display());
     }
     drop(io::stderr().lock().write_all(text.as_bytes()));
 }
@@ -187,8 +226,8 @@ pub(super) fn show_includes(context: &Context<'_>) {
 /// Clang list them: the `-iquote` directories after `#include "..." search
 /// starts here:`, the others, in search order, after `#include <...>
 /// search starts here:`, and `End of search list.` Build systems such as
-/// `cmake` read the list for the implicit include directories. bcc's embedded resource
-/// headers are no directory on disk and are not listed.
+/// `cmake` read the list for the implicit include directories. bcc's embedded
+/// resource headers are no directory on disk and are not listed.
 pub(super) fn print_search(search: &HeaderSearch<'_>) {
     let arena = Bump::new();
     let mut text = ArenaString::new_in(&arena);
@@ -198,7 +237,11 @@ pub(super) fn print_search(search: &HeaderSearch<'_>) {
         _ = writeln!(text, " {}", directory.display());
     }
     text.push_str("#include <...> search starts here:\n");
-    let angled = search.angled.iter().chain(search.system).chain(search.after);
+    let angled = search
+        .angled
+        .iter()
+        .chain(search.system)
+        .chain(search.after);
     for directory in angled.filter(on_disk) {
         _ = writeln!(text, " {}", directory.display());
     }

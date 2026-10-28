@@ -214,7 +214,8 @@ pub(super) fn normalize_language_arguments(
 }
 
 /// GCC's dependency options as the driver's: `-M`, `-MM`, `-MD`, `-MMD`,
-/// `-MP`, and `-MF`, `-MT` and `-MQ` with their operand joined or next.
+/// `-MP`, `-MG`, and `-MF`, `-MT` and `-MQ` with their operand joined or
+/// next.
 /// `-MQ` quotes its target for make as GCC does.
 #[expect(
     clippy::disallowed_types,
@@ -231,6 +232,7 @@ fn dependency_option(
         | "-MD" => Some("--write-dependencies=all"),
         | "-MMD" => Some("--write-dependencies=user"),
         | "-MP" => Some("--phony-dependencies"),
+        | "-MG" => Some("--generated-dependencies"),
         | _ => None,
     };
     if let Some(fixed) = fixed {

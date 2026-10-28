@@ -41,6 +41,7 @@ use crate::{
     translation_phases::Context,
     util::bump::{
         ArenaString,
+        ArenaVec,
         Bump,
     },
 };
@@ -129,6 +130,11 @@ pub(super) fn compile(
     }
     let mut context = Context::with_configuration(&tu, args.configuration());
     context.library_builtins = args.library_builtins(&tu);
+    if args.driver.header_tree || args.driver.show_includes {
+        context.include_entries = Some(ArenaVec::new_in(&tu));
+    }
+    context.missing_headers_generated =
+        args.driver.generated_dependencies && matches!(job, Job::Scan);
     // GCC passes no preprocessing options to `-fpreprocessed` input.
     if matches!(source, Source::Preprocessed(_)) {
         context.preprocessed_input = true;
@@ -147,6 +153,9 @@ pub(super) fn compile(
     )?;
     if let Some(dependencies) = dependencies {
         dependencies::write(&context, args, &dependencies)?;
+    }
+    if args.driver.header_tree {
+        dependencies::header_tree(&context);
     }
     if args.driver.show_includes {
         dependencies::show_includes(&context);
