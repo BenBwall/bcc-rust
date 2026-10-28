@@ -214,3 +214,45 @@ fn checkpoints_stay_within_their_byte_budget() {
     );
     assert!(retained_bytes(&session.checkpoints) < 2 * (16 << 20));
 }
+
+/// A program with big static arrays fits up to 64 MiB of memory; going
+/// back in it still replays exactly, though its checkpoints thin to the
+/// first. Past the cap it is refused, in words a beginner can act on.
+#[test]
+fn memory_up_to_64_mib_runs_and_more_is_refused_plainly() {
+    let mut module = Builder::new();
+    module.memory(1024, None);
+    // Write a word into every 64 KiB page, over and over.
+    module.func(
+        "_start",
+        &[],
+        &[],
+        &[I32],
+        "loop local.get 0 i32.const 65536 i32.add i32.const 67108863 i32.and local.tee 0 \
+         local.get 0 i32.store br 0 end",
+    );
+    let mut session = Session::new(program(&module)).unwrap();
+    session.run(Command::Continue, 50_000);
+    assert_eq!(session.machine().status, Status::Running);
+    assert_eq!(session.machine().memory.as_ref().unwrap().pages(), 1024);
+    let mut forward = Session::new(Rc::clone(session.program())).unwrap();
+    forward.run(Command::Continue, 31_234);
+    session.go_to(31_234);
+    assert_eq!(
+        session.machine().memory.as_ref().unwrap().bytes,
+        forward.machine().memory.as_ref().unwrap().bytes
+    );
+
+    let mut module = Builder::new();
+    module.memory(1025, None);
+    module.func("_start", &[], &[], &[], "");
+    let error = Session::new(program(&module))
+        .err()
+        .expect("1025 pages are refused");
+    assert!(
+        error.0.contains("needs 65 MiB of memory")
+            && error.0.contains("at most 64 MiB")
+            && error.0.contains("Make its largest arrays smaller"),
+        "{error}"
+    );
+}

@@ -426,7 +426,7 @@ impl Context<'_> {
                         )
                     } else {
                         "`memory.grow` pushes -1: the request would pass the memory's maximum (the \
-                         stepper allows 16 MiB). Nothing changed, and the program decides what to \
+                         stepper allows 64 MiB). Nothing changed, and the program decides what to \
                          do, as `malloc` returning NULL does."
                             .to_owned()
                     },

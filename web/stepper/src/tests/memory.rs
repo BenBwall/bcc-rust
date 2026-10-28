@@ -139,10 +139,17 @@ fn memory_grows_by_pages_up_to_its_maximum() {
         "i32.const 1 memory.grow drop i32.const 70000 i32.load",
     );
     assert_eq!(call(&module, "g", &[]).unwrap(), [Value::I32(0)]);
-    // The stepper caps memory at 16 MiB.
+    // The stepper caps memory at 64 MiB: growing to the cap works, past it
+    // fails.
     let mut module = Builder::new();
     module.memory(1, None);
-    module.func("h", &[], &[I32], &[], "i32.const 1000 memory.grow");
+    module.func(
+        "h",
+        &[],
+        &[I32],
+        &[],
+        "i32.const 1023 memory.grow drop i32.const 1 memory.grow",
+    );
     assert_eq!(call(&module, "h", &[]).unwrap(), [Value::I32(-1)]);
 }
 
