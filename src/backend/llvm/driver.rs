@@ -18,6 +18,7 @@ use std::{
         Output,
     },
     sync::atomic::{
+        AtomicBool,
         AtomicU64,
         Ordering,
     },
@@ -76,12 +77,56 @@ pub(crate) fn compile_module_checked(
     }
     let mut command = toolchain.command(&object.0, out_path, options);
     _ = command.arg("-latomic");
-    let output = command.output()?;
+    let output = run(&mut command)?;
     if output.status.success() {
         Ok(true)
     } else {
         Err(io::Error::other(ClangError(output)))
     }
+}
+
+/// Whether the toolchain prints each command it runs to stderr first, as
+/// Clang's `-v` does.
+static PRINT_COMMANDS: AtomicBool = AtomicBool::new(false);
+
+/// Makes the toolchain print each command it runs before running it, for
+/// the driver's `-v`.
+pub(crate) fn print_commands(enabled: bool) {
+    PRINT_COMMANDS.store(enabled, Ordering::Relaxed);
+}
+
+/// Runs `command` to completion, first printing it when
+/// [`print_commands`] asked for that.
+fn run(command: &mut Command) -> io::Result<Output> {
+    if PRINT_COMMANDS.load(Ordering::Relaxed) {
+        drop(write_command(
+            &mut io::stderr().lock(),
+            command.get_program(),
+            command.get_args(),
+        ));
+    }
+    command.output()
+}
+
+/// Writes a command as Clang's `-v` and `-###` print one: a space before
+/// each word, each word quoted, and `"`, `\` and `$` within it escaped
+/// with a backslash; then a newline.
+pub(crate) fn write_command<'a>(
+    out: &mut impl io::Write,
+    program: &'a OsStr,
+    arguments: impl IntoIterator<Item = &'a OsStr>,
+) -> io::Result<()> {
+    for word in std::iter::once(program).chain(arguments) {
+        out.write_all(b" \"")?;
+        for byte in word.as_encoded_bytes() {
+            if matches!(byte, b'"' | b'\\' | b'$') {
+                out.write_all(b"\\")?;
+            }
+            out.write_all(std::slice::from_ref(byte))?;
+        }
+        out.write_all(b"\"")?;
+    }
+    out.write_all(b"\n")
 }
 
 /// Whether LLVM lowers some atomic operation of `module` to a libatomic
@@ -296,7 +341,7 @@ impl Toolchain {
         out_path: &Path,
         options: LlvmOptions,
     ) -> io::Result<()> {
-        let output = self.command(object, out_path, options).output()?;
+        let output = run(&mut self.command(object, out_path, options))?;
         if output.status.success() {
             Ok(())
         } else {
@@ -345,7 +390,7 @@ impl Toolchain {
         if kind != OutputKind::Object {
             _ = command.args(libraries);
         }
-        let output = command.output()?;
+        let output = run(&mut command)?;
         if output.status.success() {
             Ok(())
         } else {
@@ -384,7 +429,7 @@ impl Toolchain {
         if atomic_runtime {
             _ = command.arg("-latomic");
         }
-        let output = command.output()?;
+        let output = run(&mut command)?;
         if output.status.success() {
             Ok(())
         } else {
@@ -407,13 +452,13 @@ impl Toolchain {
         if let Some(sysroot) = &self.sysroot {
             _ = command.arg(concat_os("--sysroot=", sysroot.as_os_str()));
         }
-        let output = command
+        _ = command
             .args(options)
             .arg("-c")
             .arg(operand(input).as_os_str())
             .arg("-o")
-            .arg(out_path)
-            .output()?;
+            .arg(out_path);
+        let output = run(&mut command)?;
         if output.status.success() {
             Ok(())
         } else {

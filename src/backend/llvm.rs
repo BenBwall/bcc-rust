@@ -43,6 +43,8 @@ pub(crate) use driver::{
     compile_module_checked,
     needs_atomic_runtime,
     operand,
+    print_commands,
+    write_command,
 };
 #[cfg(test)]
 use target::data_layout;

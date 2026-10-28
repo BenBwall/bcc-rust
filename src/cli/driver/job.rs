@@ -124,6 +124,9 @@ pub(super) fn compile(
         resource: directories.resource,
         after:    tu.alloc_slice_fill_iter(directories.after.iter().map(AsRef::as_ref)),
     };
+    if args.driver.verbose {
+        dependencies::print_search(&search);
+    }
     let mut context = Context::with_configuration(&tu, args.configuration());
     context.library_builtins = args.library_builtins(&tu);
     // GCC passes no preprocessing options to `-fpreprocessed` input.

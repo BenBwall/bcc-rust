@@ -2565,4 +2565,59 @@ mod tests {
             stderr(&output)
         );
     }
+
+    /// `-###` prints each step as GCC and Clang print a subprocess, naming
+    /// the running bcc, which runs it in process; `-v` prints each step
+    /// before running it, and bcc's driver then prints its header search
+    /// and the commands it runs, the bundled clang's link among them.
+    #[test]
+    fn verbose_and_dry_run_print_the_commands() {
+        let directory = Directory::new();
+        directory.write("a.c", "int main(void) { return 0; }\n");
+        directory.write("b.c", "int b;\n");
+        let exe = std::fs::canonicalize(env!("CARGO_BIN_EXE_bcc-rust")).unwrap();
+        let line = |options: &str| format!(" \"{}\" {options}\n", exe.display());
+        let output = directory.bcc("--clang-mode", &["-###", "-c", "a.c"]);
+        succeeds(&output);
+        assert!(
+            stderr(&output).ends_with(&line(
+                "\"--compiler-identity=clang\" \"--diagnostic-format=clang\" \
+                 \"--target=x86_64-unknown-linux-gnu\" \"--driver-name=clang\" \"a.c\" \"-c\""
+            )),
+            "{}",
+            stderr(&output)
+        );
+        assert!(!directory.path("a.o").exists());
+        let output = directory.bcc("--gcc-mode", &["-v", "-c", "a.c"]);
+        succeeds(&output);
+        let text = stderr(&output);
+        assert!(text.starts_with("Target: x86_64-linux-gnu\n"), "{text}");
+        assert!(
+            text.contains(&line(
+                "\"-v\" \"--compiler-identity=gcc\" \"--diagnostic-format=gcc\" \
+                 \"--target=x86_64-unknown-linux-gnu\" \"--driver-name=gcc\" \"a.c\" \"-c\""
+            )),
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                "#include \"...\" search starts here:\n#include <...> search starts here:\n"
+            ),
+            "{text}"
+        );
+        assert!(text.ends_with("End of search list.\n"), "{text}");
+        assert!(directory.path("a.o").exists());
+        // bcc's own `-v` prints the commands it runs.
+        if cfg!(all(target_os = "linux", target_env = "gnu")) {
+            let output = directory.bcc("", &["-v", "a.c", "b.c", "-o", "ab"]);
+            succeeds(&output);
+            let text = stderr(&output);
+            let clang = text
+                .lines()
+                .find(|printed| printed.contains("\"-fuse-ld=lld\""))
+                .unwrap_or_else(|| panic!("{text}"));
+            assert!(clang.starts_with(" \""), "{clang}");
+            assert!(clang.contains("\"-o\" \"ab\""), "{clang}");
+        }
+    }
 }

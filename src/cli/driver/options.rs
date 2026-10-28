@@ -80,6 +80,11 @@ pub(in crate::cli) struct DriverOptions {
     /// deleted (also accepts GCC -MP).
     #[arg(long)]
     pub(in crate::cli) phony_dependencies: bool,
+    /// Print each command the driver runs (the bundled clang, which
+    /// assembles and links) and the directories it searches for headers
+    /// to stderr, as GCC and Clang print theirs.
+    #[arg(short = 'v', long)]
+    pub(in crate::cli) verbose:            bool,
     /// Name the driver NAME in its own warnings and errors (`NAME: warning:
     /// ...`), as the driver personalities do for the compiler they mimic.
     #[arg(long, hide = true, value_name = "NAME")]

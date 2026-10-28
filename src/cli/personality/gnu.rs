@@ -11,7 +11,6 @@ use std::{
         OsStr,
         OsString,
     },
-    fmt::Write as _,
     path::Path,
 };
 
@@ -183,15 +182,14 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         temporary,
         ..Plan::default()
     };
+    // `-v` prints each step before running it, and bcc's driver then
+    // prints the commands it runs and its header search, as GCC's and
+    // Clang's subprocesses do; `-###` prints the steps alone.
     if state.verbose || state.dry_run {
         let mut text = version::verbose(personality, target);
         if state.dry_run {
             for bcc in &steps {
-                text.push_str(" \"bcc\"");
-                for argument in &bcc[1..] {
-                    _ = write!(text, " \"{}\"", argument.to_string_lossy());
-                }
-                text.push('\n');
+                text.push_str(&super::command_line(bcc));
             }
         }
         plan.steps.push(Step::Print { text, stderr: true });
@@ -207,7 +205,16 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         }
         return Err(MainError::Reported(1));
     }
-    plan.steps.extend(steps.into_iter().map(Step::Bcc));
+    for mut bcc in steps {
+        if state.verbose {
+            bcc.insert(1, "-v".into());
+            plan.steps.push(Step::Print {
+                text:   super::command_line(&bcc),
+                stderr: true,
+            });
+        }
+        plan.steps.push(Step::Bcc(bcc));
+    }
     Ok(plan)
 }
 

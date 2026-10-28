@@ -77,6 +77,7 @@ use crate::util::bump::Bump;
 
 /// Runs the jobs the arguments ask for and returns the exit status.
 pub(super) fn run(args: &Cli, matches: &ArgMatches) -> Result<i32, MainError> {
+    crate::backend::llvm::print_commands(args.driver.verbose);
     let inputs = ordered_inputs(args, matches)?;
     let generation = &args.code_generation;
     let output = generation.output_path.as_deref();

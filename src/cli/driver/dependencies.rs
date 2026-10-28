@@ -31,6 +31,7 @@ use super::{
     output_or_stem,
 };
 use crate::{
+    headers::HeaderSearch,
     translation_phases::Context,
     util::bump::{
         ArenaString,
@@ -179,6 +180,29 @@ pub(super) fn show_includes(context: &Context<'_>) {
     for (_, path) in context.opened_source_files().skip(1) {
         _ = writeln!(text, "Note: including file: {}", path.display());
     }
+    drop(io::stderr().lock().write_all(text.as_bytes()));
+}
+
+/// Prints the header search directories to stderr for `-v`, as GCC and
+/// Clang list them: the `-iquote` directories after `#include "..." search
+/// starts here:`, the others, in search order, after `#include <...>
+/// search starts here:`, and `End of search list.` Build systems such as
+/// `cmake` read the list for the implicit include directories. bcc's embedded resource
+/// headers are no directory on disk and are not listed.
+pub(super) fn print_search(search: &HeaderSearch<'_>) {
+    let arena = Bump::new();
+    let mut text = ArenaString::new_in(&arena);
+    text.push_str("#include \"...\" search starts here:\n");
+    let on_disk = |directory: &&&Path| !directory.to_string_lossy().starts_with('<');
+    for directory in search.quote.iter().filter(on_disk) {
+        _ = writeln!(text, " {}", directory.display());
+    }
+    text.push_str("#include <...> search starts here:\n");
+    let angled = search.angled.iter().chain(search.system).chain(search.after);
+    for directory in angled.filter(on_disk) {
+        _ = writeln!(text, " {}", directory.display());
+    }
+    text.push_str("End of search list.\n");
     drop(io::stderr().lock().write_all(text.as_bytes()));
 }
 
