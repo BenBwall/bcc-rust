@@ -2382,24 +2382,37 @@ Semantics follow C23:
   `unsigned _BitInt(1)`; §6.4.4.2p6); the lexer reads at most 64 bits of
   magnitude. Folding computes at the type's width: an unsigned result wraps
   modulo 2^N and a signed one outside the type's range overflowed and is no
-  constant. Values of widths above 128 bits, beyond the 128-bit constant
-  model (`Integer`), fold only through conversions: a constant converts to
-  a wider type when its two's-complement pattern is the sign extension of
-  128 bits, and arithmetic on such values is left to run time.
+  constant, except that a left shift of a nonnegative value into (not
+  past) the sign bit folds to its two's-complement result, as for `int`
+  (`(_BitInt(8))1 << 7` is -128 in both compilers). Values of widths above
+  128 bits, beyond the 128-bit constant model (`Integer`), fold only
+  through conversions: a constant converts to a wider type when its
+  two's-complement pattern is the sign extension of 128 bits. Arithmetic on
+  them is left to run time, and where a constant is required (an
+  enumerator, a case label, a static assertion or initializer) it is
+  refused with "not yet supported: folding arithmetic on _BitInt types of
+  more than 128 bits" (`UnsupportedWideConstant`), which both compilers
+  fold.
 - **Bit-fields** take a `_BitInt` of at most its width; the record lays the
   field out in storage units of the declared type, as both compilers do.
 - **Overflow builtins** accept bit-precise operands and results and check
   the result's width N.
 - **Atomics.** Clang rejects `_Atomic _BitInt(N)` ("_Atomic cannot be
-  applied to integer type"), and so does the Clang identity; GCC accepts it.
+  applied to integer type") and the `__atomic` and `__sync` builtins on a
+  `_BitInt` object ("argument to atomic builtin of type '_BitInt' is not
+  supported"), and so does the Clang identity; GCC accepts both, and its
+  results wrap at the width. GCC also accepts an `_Atomic` object in the
+  `__atomic` builtins, which bcc refuses under every identity, for every
+  type, as Clang does.
 - **`_Generic` of a bit-field.** GCC types the bit-field `_BitInt(40) a : 10`
   as `_BitInt(10)` for `_Generic`; bcc, like Clang, keeps `_BitInt(40)`.
 
 Lowering holds a `_BitInt` of up to 128 bits in the IR integer of its
 storage (`i8` to `i128`), extended from N bits by its signedness after
-every operation that can reach the bits above N (`Repr::narrow`,
-`FunctionLowerer::normalize`), so every IR operation reads its value and
-the back ends need nothing new. The padding bits are implementation-defined
+every operation that can reach the bits above N, atomic ones included
+(`Repr::narrow`, `FunctionLowerer::normalize`), so every IR operation reads
+its value and the back ends need nothing new. Static initializers store the
+value extended from N bits too. The padding bits are implementation-defined
 (§6.2.6.2p1-2) and the psABI leaves them unspecified. Both compilers store
 them extended in memory; in registers GCC extends a result to its type
 (a `_BitInt(7)` only within its byte) and Clang returns a signed
