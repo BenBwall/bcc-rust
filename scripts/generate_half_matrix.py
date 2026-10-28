@@ -76,10 +76,13 @@ PRECISIONS = (8, 11, 24, 53, 64, 113)
 
 
 def integer_values(ty):
-    """Ties at each narrower precision, decided by the last bit."""
+    """Ties at each narrower precision, decided by the last bit, and for a
+    signed type their negations."""
     top = ty.bits - 2 if ty.signed else ty.bits - 1
     values = [2 ** top + 2 ** (top - p) + 1 for p in PRECISIONS if p < top - 1]
     values.append(65520)
+    if ty.signed:
+        values += [-value for value in values[:2]] + [-65520]
     return values
 
 
@@ -93,31 +96,48 @@ def real_values(ty):
         "f80": [one + Fraction(1, 2 ** 53) + Fraction(1, 2 ** 63)],
         "f128": [one + Fraction(1, 2 ** 64) + Fraction(1, 2 ** 112), one + Fraction(1, 2 ** 8) + Fraction(1, 2 ** 112)],
     }
-    return candidates[ty.tag if ty.kind == "real" else ty.tag[1:]]
+    values = candidates[ty.tag if ty.kind == "real" else ty.tag[1:]]
+    # The negations of the first two, and negative zero.
+    return values + [-value for value in values[:2]] + [NEGATIVE_ZERO]
+
+
+class NegativeZero(Fraction):
+    """-0.0, which a Fraction cannot tell from 0."""
+
+
+NEGATIVE_ZERO = NegativeZero(0)
 
 
 def hexfloat(value, suffix):
     """An exact hexadecimal spelling of a dyadic rational."""
+    if isinstance(value, NegativeZero):
+        return f"-0x0p0{suffix}"
+    sign = "-" if value < 0 else ""
+    value = abs(value)
     numerator, denominator = value.numerator, value.denominator
     exponent = 0
     while denominator > 1:
         denominator //= 2
         exponent -= 1
-    return f"0x{numerator:x}p{exponent}{suffix}"
+    return f"{sign}0x{numerator:x}p{exponent}{suffix}"
 
 
 def constant(ty, value, imag=None):
     """A folded constant of type `ty`: a cast of an exact literal."""
     if ty.kind == "int":
+        if value < 0:
+            return f"(-{constant(ty, -value)})"
         if value >= 2 ** 63:
             high, low = divmod(value, 2 ** 64)
             return f"(({ty.spelling})((((unsigned __int128){high:#x}ull) << 64) | {low:#x}ull))"
         return f"(({ty.spelling}){value:#x}ull)"
     literal = hexfloat(value, "Q")
-    if ty.kind == "complex":
+    if ty.kind == "complex" and imag is not None:
         part = TYPE_BY_TAG[{"cf16": "f16", "cf32": "f32", "cf64": "f64"}[ty.tag]].spelling
         imag_literal = hexfloat(imag, "Q")
         return f"__builtin_complex(({part}){literal}, ({part}){imag_literal})"
+    # A folded complex constant is a cast of a real literal, which GCC
+    # folds as it parses it unless the literal is negated.
     return f"(({ty.spelling}){literal})"
 
 
@@ -130,18 +150,20 @@ def operands(ty):
     values = integer_values(ty) if ty.kind == "int" else real_values(ty)
     for index, value in enumerate(values):
         imag = Fraction(1, 2) if ty.kind == "complex" else None
-        literal = constant(ty, value, imag)
         name = f"v_{ty.tag}_{index}"
-        result.append((f"{ty.tag}#{index}.var", f"volatile {ty.spelling} {name} = {literal};", name, value))
-        result.append((f"{ty.tag}#{index}.const", None, literal, value))
-        if ty.half:
+        result.append((f"{ty.tag}#{index}.var", f"volatile {ty.spelling} {name} = {constant(ty, value, imag)};", name, value))
+        result.append((f"{ty.tag}#{index}.const", None, constant(ty, value), value))
+        if ty.half and value > 0:
             result.append((f"{ty.tag}#{index}.excess", None, f"({name} + zero_{ty.tag})", value))
     return result
 
 
 def representable(ty, value):
-    """Whether converting `value` to the integer type `ty` is defined."""
-    return value >= 0 and int(value) <= ty.maximum() and (ty.signed or value >= 0)
+    """Whether converting `value` to the integer type `ty` is defined: its
+    truncation is in range (C99 6.3.1.4 paragraph 1)."""
+    truncated = int(value)
+    minimum = -(2 ** (ty.bits - 1)) if ty.signed else 0
+    return minimum <= truncated <= ty.maximum()
 
 
 def program():
