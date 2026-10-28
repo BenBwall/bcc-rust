@@ -11,6 +11,12 @@
 //! turns into machine code. A stage that fails yields `None` and
 //! diagnostics; the stages after it do not run.
 //!
+//! For the `wasm32` targets the back end is the WebAssembly one: `wasm`
+//! holds the module's binary and text and the code offset of every IR
+//! instruction, so a page can run the module and step through it (a
+//! `wasm32-wasip1` module needs a WASI preview 1 host such as
+//! `@bjorn3/browser_wasi_shim`), and `asm` and `machine_code` stay empty.
+//!
 //! For `int main(void) { return 1 + 2; }`, `tokens` lists the eleven
 //! tokens, `ir` holds `main`'s blocks (`ret i32 3` once the optimizer
 //! folds the sum), `asm` its x86-64 assembly, `machine_code` the bytes
@@ -54,6 +60,10 @@ pub use model::{
     ExplorerLineRange,
     ExplorerOptions,
     ExplorerOutput,
+    ExplorerWasm,
+    ExplorerWasmFunction,
+    ExplorerWasmInstruction,
+    ExplorerWasmPosition,
 };
 
 /// Compiles `source` through every stage the explorer shows. Malformed input
