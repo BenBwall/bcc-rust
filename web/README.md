@@ -1,7 +1,7 @@
 # How C runs: the bcc site
 
 An interactive introduction to how C programs run and how compilers translate
-them. Visitors pick a lesson (a small C program) and see it two ways:
+them. Visitors pick a lesson (a small C program) and see it three ways:
 
 - **Abstract machine.** Step through the program one evaluation at a time.
   Each step is explained in plain language from what the engine actually did
@@ -22,6 +22,15 @@ them. Visitors pick a lesson (a small C program) and see it two ways:
   for the IR and machine stages, whose output keeps no source locations), and
   the reverse.
 
+- **WebAssembly.** The program compiled to WebAssembly, executed one
+  instruction at a time by a WebAssembly interpreter written in Rust. The
+  C source and the module's text format sit one above the other, with the C
+  line running, the instruction just executed and the next one marked; the
+  operand stack, locals, call stack, the blocks a branch can reach, globals
+  and linear memory (the C shadow stack with each call's frame, the static
+  data, the bytes just read or written) show the machine's state, and a
+  narration explains each instruction for programmers new to WebAssembly.
+
 Every variable keeps one colour across the source, the expression tree and the
 memory diagram. The page has light and dark themes and works down to tablet
 width.
@@ -31,12 +40,12 @@ The site is written in Rust with [Leptos](https://leptos.dev) and built by
 initial HTML is rendered at build time (static SSR) and hydrated in the
 browser, so the lessons and their source are visible before any script runs.
 The abstract machine is the bcc crate's `abstract-machine` module, run in a
-Web Worker. The compiler is bcc's own, built for WebAssembly without LLVM (the
+Web Worker, beside the WebAssembly stepper (`web/stepper/`). The compiler is bcc's own, built for WebAssembly without LLVM (the
 crate's `explorer` feature), run in a second Worker that the page starts only
 when it first compiles.
 Code is shown in [Monaco](https://microsoft.github.io/monaco-editor/), the
 editor behind VS Code, with Monarch grammars for C, bcc IR, LLVM IR, AT&T
-assembly and the machine-code listing.
+assembly, the machine-code listing and the WebAssembly text format.
 
 ## Build
 
@@ -61,7 +70,9 @@ from the output. `web/` is its own Cargo workspace (`bcc-web`, with its own
 
 - `hydrate`: the page (`src/main.rs`), which attaches to the prerendered HTML.
 - `worker`: the abstract machine's Worker (`src/bin/engine_worker.rs`). It
-  links the crate in `../` with only its `abstract-machine` feature.
+  links the crate in `../` with only its `abstract-machine` feature, and the
+  WebAssembly stepper in `stepper/`, a dependency-free crate of the same
+  workspace.
 - `compiler`: the compiler's Worker (`src/bin/compiler_worker.rs`). It links
   the crate in `../` with only its `explorer` feature: the whole compiler
   from preprocessor to machine code, without LLVM, the CLI or threads.
@@ -194,6 +205,65 @@ How live compilation runs:
   levels, what changed in this program: instruction, block, memory-access and
   stack-slot counts, code size, and calls that were inlined away.
 
+## The WebAssembly view
+
+The view steps a WebAssembly module with `stepper/` (crate
+`bcc-wasm-stepper`), an interpreter written for teaching rather than speed.
+It decodes and validates a module (the 2.0 core specification: MVP plus
+mutable globals, sign extension, non-trapping float-to-int conversion, bulk
+memory, multiple values and reference types; no SIMD, threads, tail calls or
+exceptions), prints it in the text format one instruction per line, and runs
+it one instruction per step, recording what each step popped, pushed, read,
+wrote, branched to or called. Traps stop the program with their reason. Its
+host provides a WASI preview 1 subset (`fd_write` to standard output and
+error, `proc_exit`, arguments, environment, a simulated clock, seeded
+randomness) and leaves other imports unresolved: calling one traps. It is
+deterministic, so Back re-executes from the nearest checkpoint (one every
+1,024 instructions, thinned as a run grows). One session runs at most 50
+million instructions, one request at most 2 million, and memory may grow to
+16 MiB.
+
+Controls: **Step** (`→` or `j`) executes one instruction; **Over** (`o`)
+runs a call to its return; **Out** (`u`) runs until the current function
+returns; **Next line** (`n`) runs to the next C line, through calls; **Run**
+(`r`) goes line by line until the program ends or reaches a breakpoint;
+**Back** (`←` or `k`) and **Reset** (`Shift+R`) go back. Click a line
+number in the listing to set a breakpoint, or in the C source to set a run
+target. Hover either side to find the lines the other made.
+
+Where modules come from is behind the `WasmBackEnd` trait in `src/wasm/`:
+C source in, a `WasmModule` (the binary and, optionally, the C line of each
+instruction) out. Until bcc has a WebAssembly back end, the only
+implementation is `Precompiled`: the lessons, compiled by clang at `-O0 -g`
+into `web/wasm/`, whose DWARF line tables the stepper reads. The
+repository's pinned LLVM targets x86-64 only, so regenerate them with a
+clang that targets wasm32, such as wasi-sdk's:
+
+```sh
+CLANG=path/to/wasi-sdk/bin/clang sh web/wasm/generate.sh           # rewrite
+CLANG=path/to/wasi-sdk/bin/clang sh web/wasm/generate.sh --check   # compare only
+```
+
+The site's tests check that each module still matches its lesson (its
+functions and the lines its code comes from). Edited source has no module
+yet, and the view says so.
+
+bcc's back end plugs in as a second `WasmBackEnd` that compiles in the
+compiler Worker: `bcc_rust::explorer::compile` for a `wasm32` target, then
+the module's binary as `WasmModule::bytes` and, for each instruction
+position the back end records, its module offset and C line as a `WasmLine
+{ offset, line, column }`. A row covers its instruction and those after it
+up to the next row's offset; line 0 is code with no C line. The stepper
+prints its own listing from the binary, so it needs neither the back end's
+text nor a text-to-offset map.
+
+`stepper/examples/listing.rs` prints a module's listing with each
+instruction's offset and C line:
+
+```sh
+cargo run --manifest-path web/Cargo.toml -p bcc-wasm-stepper --example listing -- web/wasm/recursion.wasm
+```
+
 ## Model limitations
 
 The engine is an **independent bounded C subset evaluator written in Rust**,
@@ -230,7 +300,12 @@ themes, layout, components, and the classes the editor decorations use). In
 `src/`, `lib.rs` maps the modules. `app.rs` owns the page state, controls,
 keyboard shortcuts and layout. `panels/` renders the narration, expression
 tree, memory diagram and pipeline view. `editor.rs` mounts Monaco, and
-`highlight.rs` colours the prerendered fallback. `palette.rs` assigns each
+`highlight.rs` colours the prerendered fallback. `app/wasm.rs` holds the
+WebAssembly view's page state and controls, `panels/wasm.rs` (with
+`panels/wasm/`) draws it, and `wasm.rs` (with `wasm/`) defines its data, the
+`WasmBackEnd` seam, and, in the engine Worker, the stepper session
+(`wasm/worker.rs`) and the narration (`wasm/narration.rs`). The interpreter
+itself is `stepper/`, mapped in its `src/lib.rs`. `palette.rs` assigns each
 variable its colour. `snapshot.rs` defines what the page presents, `demos.rs`
 the lessons, and `pipeline.rs` the compiler stages, their explanations, the
 source-to-output links, why a compilation stopped, the optimizer comparison
@@ -250,7 +325,12 @@ waiting frames; diagnostics and recovery; UTF-16 columns; colouring; every
 lesson compiling live at both levels; placed compiler diagnostics and the
 stop explanation; the machine-code listing; the LLVM IR's sync with the
 lessons; the source-to-output links and the optimizer comparison; and
-prerendering. The engine's own
+prerendering; and every lesson stepped through its WebAssembly with a placed,
+narrated state at each instruction. `RUSTFLAGS= cargo test -p
+bcc-wasm-stepper` runs the interpreter's tests: each instruction family
+against the specification's values, control flow, traps, memory bounds,
+decoding and validation, the stepping commands, the WASI host, and the
+lesson modules. The engine's own
 tests run from the repository root with `cargo test --lib --no-default-features
 --features abstract-machine abstract_machine`. Generated artifacts belong in
 ignored `web/target/`, `web/dist/` and `web/editor/{node_modules,dist,fonts}/`.

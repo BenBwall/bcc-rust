@@ -1,5 +1,7 @@
-//! The page: lesson picker, source editor, and the two views of a program,
-//! the abstract machine stepping it and the compiler pipeline translating it.
+//! The page: lesson picker, source editor, and the three views of a
+//! program: the abstract machine stepping it, the compiler pipeline
+//! translating it, and its WebAssembly translation stepped instruction by
+//! instruction (`app/wasm.rs`).
 //!
 //! Every program state comes from the Rust engine in its Worker. Back replays
 //! retained snapshots for presentation only; the engine stays at the newest
@@ -44,6 +46,8 @@ use crate::{
         Narration,
         PipelineView,
         TreeView,
+        WasmListing,
+        WasmView,
     },
     pipeline::{
         Compilation,
@@ -79,6 +83,13 @@ pub fn App() -> impl IntoView {
         state.optimize.track();
         state.compile_now();
     });
+    // The WebAssembly view follows the program the page runs.
+    Effect::new(move || {
+        state.source.track();
+        if state.mode.get() == Mode::Wasm && state.has_engine.get() {
+            state.wasm.ensure_loaded(state);
+        }
+    });
     Effect::new(move || {
         // The page lives as long as the listener.
         let _handle = window_event_listener(ev::keydown, move |event| state.shortcut(&event));
@@ -99,20 +110,31 @@ pub fn App() -> impl IntoView {
                         <Show
                             when=move || state.mode.get() == Mode::Machine
                             fallback=move || view! {
-                                <PipelineView
-                                    stage=state.stage
-                                    optimize=state.optimize
-                                    compilation=state.compilation
-                                    shown=state.shown
-                                    other=state.other_level
-                                    live=state.live_status.into()
-                                    theme=state.theme_name
-                                    hover_source=state.hover_source.read_only()
-                                    hover_output=state.hover_output
-                                    filename=state.filename.read_only()
-                                    source=state.editor_text.into()
-                                    on_reveal=Callback::new(move |line| state.reveal.set(Some(line)))
-                                />
+                                <Show
+                                    when=move || state.mode.get() == Mode::Wasm
+                                    fallback=move || view! {
+                                        <PipelineView
+                                            stage=state.stage
+                                            optimize=state.optimize
+                                            compilation=state.compilation
+                                            shown=state.shown
+                                            other=state.other_level
+                                            live=state.live_status.into()
+                                            theme=state.theme_name
+                                            hover_source=state.hover_source.read_only()
+                                            hover_output=state.hover_output
+                                            filename=state.filename.read_only()
+                                            source=state.editor_text.into()
+                                            on_reveal=Callback::new(move |line| state.reveal.set(Some(line)))
+                                        />
+                                    }
+                                >
+                                    <WasmView
+                                        wasm=state.wasm
+                                        stale=Signal::derive(move || state.editor_text.with(|text| state.wasm.stale(text)))
+                                        on_jump=Callback::new(move |step| state.wasm.jump(state, step))
+                                    />
+                                </Show>
                             }
                         >
                             <Narration snapshot=state.current recent=state.recent on_jump=Callback::new(move |index| state.jump(index)) placeholder=state.placeholder />
@@ -158,11 +180,12 @@ type Compiled = Vec<(CompileKey, Result<Compilation, String>)>;
 pub enum Mode {
     Machine,
     Pipeline,
+    Wasm,
 }
 
 /// Page state. Every field is a `Copy` handle, so closures capture it freely.
 #[derive(Clone, Copy)]
-struct State {
+pub(crate) struct State {
     engine:          StoredValue<Option<Rc<Engine>>, LocalStorage>,
     has_engine:      RwSignal<bool>,
     /// The program the engine runs.
@@ -219,6 +242,8 @@ struct State {
     /// bcc's diagnostics as squiggles in the source editor.
     markers:         Memo<Vec<Marker>>,
     placeholder:     Memo<&'static str>,
+    /// The WebAssembly view.
+    wasm:            wasm::WasmState,
 }
 
 impl State {
@@ -313,6 +338,7 @@ impl State {
             placeholder: Memo::new(move |_| {
                 editor_text.with(|text| demos::matching(text).map_or("", |demo| demo.summary))
             }),
+            wasm: wasm::WasmState::new(),
         }
     }
 
@@ -524,7 +550,11 @@ impl State {
     }
 
     fn select_demo(self, demo: &'static Demo) {
-        self.mode.set(Mode::Machine);
+        // The WebAssembly view steps lessons too; the pipeline view gives
+        // way to the abstract machine.
+        if self.mode.get_untracked() != Mode::Wasm {
+            self.mode.set(Mode::Machine);
+        }
         self.action(move || self.stage_program(demo.source.into(), demo.name.into()));
     }
 
@@ -542,6 +572,9 @@ impl State {
     fn set_mode(self, mode: Mode) {
         self.mode.set(mode);
         self.compile_now();
+        if mode == Mode::Wasm {
+            self.wasm.ensure_loaded(self);
+        }
     }
 
     /// Compile the editor's text once typing pauses.
@@ -700,7 +733,22 @@ impl State {
                     .flatten()
                     .is_some()
             });
-        if typing || self.mode.get_untracked() != Mode::Machine {
+        if typing || self.mode.get_untracked() == Mode::Pipeline {
+            return;
+        }
+        if self.mode.get_untracked() == Mode::Wasm {
+            let wasm = self.wasm;
+            match event.key().as_str() {
+                | "ArrowRight" | "j" => wasm.run_command(self, crate::wasm::WasmRun::Step),
+                | "ArrowLeft" | "k" => wasm.back(self),
+                | "o" => wasm.run_command(self, crate::wasm::WasmRun::StepOver),
+                | "u" => wasm.run_command(self, crate::wasm::WasmRun::StepOut),
+                | "n" => wasm.run_command(self, crate::wasm::WasmRun::NextLine),
+                | "r" => wasm.toggle_run(self),
+                | "R" => wasm.reset(self),
+                | _ => return,
+            }
+            event.prevent_default();
             return;
         }
         match event.key().as_str() {
@@ -879,6 +927,19 @@ impl State {
     /// The source editor's decorations: execution marks, run target, object
     /// colours, and pipeline line links.
     fn source_layers(self) -> Vec<Layer> {
+        if self.mode.get() == Mode::Wasm {
+            let (execution, links) = if self.wasm.stale(&self.editor_text.get()) {
+                (Vec::new(), Vec::new())
+            } else {
+                self.wasm.source_marks()
+            };
+            return vec![
+                ("execution", execution),
+                ("objects", Vec::new()),
+                ("target", self.target_layer()),
+                ("links", links),
+            ];
+        }
         let snapshot = self.current.get();
         let edited = self.edited.get();
         let mut execution = Vec::new();
@@ -933,15 +994,7 @@ impl State {
                 }
             });
         }
-        let target = self
-            .target_line
-            .get()
-            .map(|line| Decoration {
-                glyph_class: Some("target-glyph".into()),
-                ..Decoration::line(line, "target-line")
-            })
-            .into_iter()
-            .collect();
+        let target = self.target_layer();
         let hovered = self.hover_output.get();
         let links = if self.mode.get() == Mode::Pipeline && hovered > 0 {
             let stage = self.stage.get();
@@ -968,6 +1021,18 @@ impl State {
             ("target", target),
             ("links", links),
         ]
+    }
+
+    /// The run target's mark, set by clicking a line number.
+    fn target_layer(self) -> Vec<Decoration> {
+        self.target_line
+            .get()
+            .map(|line| Decoration {
+                glyph_class: Some("target-glyph".into()),
+                ..Decoration::line(line, "target-line")
+            })
+            .into_iter()
+            .collect()
     }
 }
 
@@ -1402,6 +1467,7 @@ fn Toolbar(state: State) -> impl IntoView {
             <div class="mode-tabs" role="tablist" aria-label="View">
                 {tab(Mode::Machine, "Abstract machine", "◈")}
                 {tab(Mode::Pipeline, "Compiler pipeline", "⇢")}
+                {tab(Mode::Wasm, "WebAssembly", "▤")}
             </div>
             <div class="transport" role="group" aria-label="Execution controls" hidden=move || state.mode.get() != Mode::Machine>
                 <button
@@ -1465,6 +1531,11 @@ fn Toolbar(state: State) -> impl IntoView {
                 <span class="status-pill" data-status=status_kind>{status}</span>
                 <span class="step-counter">"Step "<strong>{move || state.current.with(|s| s.as_ref().map_or_else(|| "–".into(), |s| s.step.to_string()))}</strong></span>
             </div>
+            <wasm::WasmTransport state hidden=Signal::derive(move || state.mode.get() != Mode::Wasm) />
+            <div class="run-status" hidden=move || state.mode.get() != Mode::Wasm>
+                <span class="status-pill" data-status=move || wasm::status(state.wasm).1>{move || wasm::status(state.wasm).0}</span>
+                <span class="step-counter">"Instruction "<strong>{move || state.wasm.current.with(|s| s.as_ref().map_or_else(|| "–".into(), |s| s.step.to_string()))}</strong></span>
+            </div>
         </div>
     }
 }
@@ -1481,7 +1552,12 @@ fn SourcePane(state: State) -> impl IntoView {
     let on_hover = Callback::new(move |line| state.hover_source.set(line));
     let on_gutter = Callback::new(move |line| state.set_target(line));
     view! {
-        <section class="pane source-pane" aria-labelledby="source-title">
+        <section
+            class="pane source-pane"
+            class:is-wasm=move || state.mode.get() == Mode::Wasm
+            style:--source-lines=move || state.editor_text.with(|text| text.lines().count().max(4).to_string())
+            aria-labelledby="source-title"
+        >
             <header class="pane-header">
                 <div class="pane-title">
                     <h2 id="source-title" class="sr-only">"Source"</h2>
@@ -1528,13 +1604,21 @@ fn SourcePane(state: State) -> impl IntoView {
                 on_gutter_click=on_gutter
                 reveal=state.reveal.into()
             />
-            <footer class="source-legend">
+            <footer class="source-legend" hidden=move || state.mode.get() == Mode::Wasm>
                 <span><i class="swatch swatch-current"></i>"just evaluated"</span>
                 <span><i class="swatch swatch-next"></i>"next"</span>
                 <span><i class="swatch swatch-target"></i>"click a line number to set a run target"</span>
                 <span><i class="swatch swatch-squiggle"></i>"bcc error"</span>
             </footer>
-            <p class="edit-hint" hidden=move || !state.edited.get()>
+            <Show when=move || state.mode.get() == Mode::Wasm>
+                <WasmListing
+                    wasm=state.wasm
+                    theme=state.theme_name
+                    hover_source=state.hover_source.read_only()
+                    on_breakpoint=Callback::new(move |line| state.wasm.toggle_breakpoint(state, line))
+                />
+            </Show>
+            <p class="edit-hint" hidden=move || !state.edited.get() || state.mode.get() == Mode::Wasm>
                 "You changed the program. The abstract machine still shows the last version you ran: choose "<strong>"Run edited code"</strong>" to restart it with your edits. bcc compiles your edits as you type, marks its errors with red squiggles, and the compiler pipeline view follows along."
             </p>
         </section>
@@ -1547,7 +1631,7 @@ fn About() -> impl IntoView {
         <section class="about" id="about" aria-labelledby="about-title">
             <div class="section-heading">
                 <h2 id="about-title">"How it works"</h2>
-                <p>"Two very different ways of giving a C program meaning, side by side."</p>
+                <p>"Different ways of giving a C program meaning, side by side."</p>
             </div>
             <div class="about-grid">
                 <article>
@@ -1575,6 +1659,11 @@ fn About() -> impl IntoView {
                         "It is allowed to produce any code that behaves like the abstract machine would. That freedom is \
                          why undefined behavior matters: the compiler may assume it never happens."
                     </p>
+                    <p>
+                        "The WebAssembly view runs a compiled program for real: a small WebAssembly interpreter written in \
+                         Rust executes it one instruction at a time, with its operand stack, locals, calls and linear \
+                         memory in view, and each instruction linked back to its line of C."
+                    </p>
                 </article>
                 <article>
                     <h3>"Limits of this model"</h3>
@@ -1587,7 +1676,8 @@ fn About() -> impl IntoView {
                     <p>
                         "The compiler pipeline runs bcc itself, compiled to WebAssembly, in your browser. Only LLVM IR \
                          comes from the native bcc build: the browser build has no LLVM, so it is shown for the \
-                         bundled lessons only. "
+                         bundled lessons only. Until bcc's own WebAssembly back end lands, the WebAssembly view steps \
+                         the lessons as clang compiled them. "
                         <a href=README_URL>"Read the full notes"</a>"."
                     </p>
                 </article>
@@ -1598,3 +1688,4 @@ fn About() -> impl IntoView {
 
 #[cfg(test)]
 mod tests;
+pub mod wasm;

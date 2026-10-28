@@ -41,7 +41,7 @@ pub fn run(command: Command) -> Result<Answer, String> {
     match command {
         | Command::Compile { source, optimize } =>
             Ok(Answer::Compiled(Box::new(compile(&source, optimize)))),
-        | Command::Load(_) | Command::Step =>
+        | Command::Load(_) | Command::Step | Command::WasmLoad(_) | Command::Wasm(_) =>
             Err("The compiler Worker does not run the abstract machine.".into()),
     }
 }
