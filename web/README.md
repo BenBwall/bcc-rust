@@ -110,12 +110,12 @@ and without JavaScript, the code views show Rust-highlighted text.
 ## Deploy
 
 `web/dist/` is the whole site: upload it as-is to any static host or CDN. The
-Pages workflow (`.github/workflows/pages.yml`) tests and builds it on pull
-requests and deploys it from `main`. There is no server code or routing. Asset
-URLs are relative (`public_url = "./"`), so it works at the origin root or
-under any path prefix, provided the page is requested at a URL ending in `/`
-(or as `index.html`). All files must share an origin, because browsers only
-start Workers from the page's origin.
+Pages workflow (`.github/workflows/pages.yml`) lints, tests and builds it on
+pull requests and deploys it from `main`. There is no server code or routing.
+Asset URLs are relative (`public_url = "./"`), so it works at the origin root
+or under any path prefix, provided the page is requested at a URL ending in
+`/` (or as `index.html`). All files must share an origin, because browsers
+only start Workers from the page's origin.
 
 Every file except `index.html` has a content hash or version in its URL, so a
 new build never reuses a URL for different bytes. Suggested caching:
@@ -403,5 +403,15 @@ specification's values, control flow, traps, memory bounds, decoding and
 validation, the stepping commands, the WASI host, and the lesson modules. The
 engine's own
 tests run from the repository root with `cargo test --lib --no-default-features
---features abstract-machine abstract_machine`. Generated artifacts belong in
-ignored `web/target/`, `web/dist/` and `web/editor/{node_modules,dist,fonts}/`.
+--features abstract-machine abstract_machine`.
+
+The crate enables clippy's pedantic group (`web/Cargo.toml`), and the Pages
+workflow's lint job fails on any warning, natively and for each wasm32 build:
+
+```sh
+RUSTFLAGS= cargo clippy --workspace --all-targets --features ssr,worker,compiler -- -D warnings
+cargo clippy --target wasm32-unknown-unknown --features hydrate -- -D warnings   # and worker, compiler
+```
+
+Generated artifacts belong in ignored `web/target/`, `web/dist/` and
+`web/editor/{node_modules,dist,fonts}/`.
