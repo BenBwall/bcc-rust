@@ -554,6 +554,16 @@ struct FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
     tasks:              ArenaVec<'s, Task<'tu>>,
     operands:           ArenaVec<'s, Item>,
     complex_values:     ArenaVec<'s, [crate::ir::Value; 2]>,
+    /// The `f32` values GCC carries for a plain half converted to the
+    /// other half type, which a cast leaves unrounded (`half.rs`).
+    widened:            ArenaVec<'s, crate::ir::Value>,
+    /// The constants among them, which GCC rounds as `?:` arms.
+    widened_constants:  ArenaVec<'s, crate::ir::Value>,
+    /// The arms of GCC's conditionals, by address, and whether either arm
+    /// of each is evaluated with excess precision (`half.rs`).
+    conditional_arms:   ArenaVec<'s, (usize, bool)>,
+    /// Whether the conversions being applied belong to such an arm.
+    excess_arm:         bool,
     initializer_values: ArenaVec<'s, Item>,
     /// The guaranteed alignment of each known backing address.
     alignments:         ArenaMap<'s, crate::ir::Value, crate::ir::Align>,

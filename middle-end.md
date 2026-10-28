@@ -998,7 +998,13 @@ computed in `float _Complex`: an excess is a complex pair of `f32` parts
 typed as the complex half, which `settle` rounds; products and quotients
 call `__mulsc3` and `__divsc3`, as both compilers do, and the excess ends
 where a real `_Float16`'s does (GCC's `?:` merges it in two `f32`
-parameters). Clang's `__fp16` is `f16` storage; semantic
+parameters). Under GCC, a plain half converted to the other half type is
+widened to `f32` without rounding (`widen_plain`); a cast leaves such a
+value, a store rounds it, and so does the conversion of a `?:` arm to
+`_Complex _Float16` unless either arm is an excess-precision expression
+(`excess_expression`, recorded per arm in `conditional_arms`). A folded
+plain half constant is a `Value` in its own format, so it converts as
+GCC's constant folder converts it. Clang's `__fp16` is `f16` storage; semantic
 analysis promotes its values to `float`.
 
 Complex scalars use two immutable SSA component values retained in a sparse

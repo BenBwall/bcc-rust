@@ -183,10 +183,19 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             return Ok(());
         }
         // A folded `_Float16` keeps the excess its consumer may read.
+        // GCC keeps a plain one (a cast's, say) in its own format, since it
+        // rounds such a constant where it rounds no run-time value.
         if let Some(folded) = info.floating().filter(|_| !info.runtime_query)
-            && self.half(info.ty).is_some()
+            && let Some(half) = self.half(info.ty)
         {
-            let operand = self.excess_constant(&folded.real, source)?;
+            let operand = if self.half_in_float() && !Self::excess_expression(expression) {
+                let bits = floats::constant_bits(&folded.real, half).ok_or_else(|| {
+                    LoweringError::missing("a floating constant has no bits", source)
+                })?;
+                Operand::Value(self.fconst(half, bits))
+            } else {
+                self.excess_constant(&folded.real, source)?
+            };
             self.push_item(operand, info.ty);
             return Ok(());
         }
@@ -581,7 +590,13 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 }
             },
             | E::Cast { .. } => {
-                let item = self.pop();
+                // A cast rounds an excess, but not GCC's widened value.
+                let item = self.pop_excess();
+                let item = if self.widened(item) {
+                    item
+                } else {
+                    self.settle(item)
+                };
                 if let Some(member) = info.operation_type {
                     let layout = types::layout(&self.unit.sema.types, info.ty)
                         .map_err(|kind| at(kind, source))?;
@@ -633,6 +648,13 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
     ) -> Result<(), LoweringError> {
         let source = expression.source_vectors;
         let mut item = self.pop_excess();
+        let address = std::ptr::from_ref(expression).addr();
+        let arm = self
+            .conditional_arms
+            .iter()
+            .find(|(arm, _)| *arm == address)
+            .map(|&(_, excess)| excess);
+        self.excess_arm = arm == Some(true);
         for conversion in self.conversions(expression).iter().skip(skip) {
             if self.unit.sema.types.unanalyzed(conversion.ty) {
                 return Err(LoweringError::unanalyzed(
@@ -677,10 +699,12 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                         && self.half(item.ty).is_some()
                         && self.half(item.ty) != self.half(conversion.ty) =>
                 {
-                    let value = self.excess(item, source)?;
-                    Item {
-                        operand: Operand::Excess(value),
-                        ty:      conversion.ty,
+                    match self.widen_plain(item, conversion.ty) {
+                        | Some(widened) => widened,
+                        | None => Item {
+                            operand: Operand::Excess(self.excess(item, source)?),
+                            ty:      conversion.ty,
+                        },
                     }
                 },
                 | ConversionKind::Arithmetic
@@ -703,6 +727,12 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 | ConversionKind::TransparentUnion =>
                     self.transparent_union(item, conversion.ty, source)?,
             };
+        }
+        self.excess_arm = false;
+        // A plain constant arm of a conditional without an excess arm is
+        // rounded, as GCC folds its conversion to the result type.
+        if arm == Some(false) && self.widened_constant(item) {
+            item = self.settle(item);
         }
         self.operands.push(item);
         Ok(())
@@ -747,6 +777,16 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         source: SourceVectors,
     ) -> Result<Item, LoweringError> {
         let target = self.repr(to, source)?;
+        if let Some(widened) = self.widen_plain(item, to) {
+            return Ok(widened);
+        }
+        // GCC rounds a widened value converted to `_Complex _Float16`, which
+        // only a `?:` arm undergoes, unless an arm keeps excess precision.
+        let item = if self.complex_half(to) && self.widened(item) && !self.excess_arm {
+            self.settle(item)
+        } else {
+            item
+        };
         // A `_Complex _Float16` excess converts to its own type unrounded,
         // and for GCC to any other type from its `float` value.
         if self.complex_excess(item).is_some() {
@@ -1305,6 +1345,16 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         merge: Block,
         ty: TypeId,
     ) {
+        // GCC converts both arms to the excess type when either arm is
+        // evaluated with excess precision, and otherwise to the result type.
+        if self.half_in_float() {
+            let excess = Self::excess_expression(conditional.then_expression)
+                || Self::excess_expression(conditional.else_expression);
+            for arm in [conditional.then_expression, conditional.else_expression] {
+                self.conditional_arms
+                    .push((std::ptr::from_ref(arm).addr(), excess));
+            }
+        }
         self.tasks.push(Task::Merge {
             merge,
             ty,

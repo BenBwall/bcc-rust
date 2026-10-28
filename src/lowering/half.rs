@@ -50,7 +50,11 @@ use crate::{
     },
     translation_phases::{
         SourceVectors,
-        parsing::syntax::BinaryOperator,
+        parsing::syntax::{
+            BinaryOperator,
+            Expression,
+        },
+        preprocessing::FloatTokenType,
         semantic_analysis::{
             Scalar,
             TypeId,
@@ -313,6 +317,109 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
             | TypeKind::Scalar(Scalar::Float16) => Some(Type::F16),
             | TypeKind::Scalar(Scalar::BFloat16) => Some(Type::BF16),
             | _ => None,
+        }
+    }
+
+    /// GCC's conversion of a plain (not excess) value of one half type to
+    /// the other, `_Float16` or `__bf16`, real or complex: the value
+    /// widened exactly to `float`, its evaluation format, and not rounded.
+    /// GCC rounds such a value only to store it, to pass or return it, or
+    /// as a plain arm of a `?:` whose type is `_Complex _Float16`; a cast,
+    /// which rounds an excess, leaves it, so `(_Float16)b` keeps a
+    /// `__bf16` beyond binary16's range. `None` when the rule does not
+    /// apply.
+    /// C99: §6.3.1.5 paragraph 2, p. 44; PDF p. 56; §5.2.4.2.2 paragraph 7,
+    /// p. 24; PDF p. 36 (evaluation formats).
+    pub(super) fn widen_plain(&mut self, item: Item, to: TypeId) -> Option<Item> {
+        // A plain `_Complex _Float16` gives its real part.
+        let (value, from) = match item.operand {
+            | Operand::Value(value) => (value, self.half(item.ty)?),
+            | Operand::Complex(id)
+                if self.complex_half(item.ty) && self.complex_excess(item).is_none() =>
+                (self.complex_values[id as usize][0], Type::F16),
+            | _ => return None,
+        };
+        let target = if self.complex_half(to) {
+            Type::F16
+        } else {
+            self.half(to)?
+        };
+        if !self.half_in_float() || from == target {
+            return None;
+        }
+        let constant = self.draft.float_constant(value).is_some();
+        let single = self.widen_half(value);
+        self.widened.push(single);
+        if constant {
+            self.widened_constants.push(single);
+        }
+        let operand = if self.complex_half(to) {
+            let imag = self.fconst(Type::F32, 0);
+            self.complex_pair([single, imag])
+        } else {
+            Operand::Excess(single)
+        };
+        Some(Item { operand, ty: to })
+    }
+
+    /// Whether `item` holds a value [`Self::widen_plain`] gave.
+    pub(super) fn widened(&self, item: Item) -> bool {
+        let value = match item.operand {
+            | Operand::Excess(value) => value,
+            | Operand::Complex(id) => self.complex_values[id as usize][0],
+            | _ => return false,
+        };
+        self.widened.contains(&value)
+    }
+
+    /// Whether `item` holds a constant [`Self::widen_plain`] widened, which
+    /// GCC rounds as a `?:` arm: it folds the conversion to the arm's type.
+    pub(super) fn widened_constant(&self, item: Item) -> bool {
+        matches!(item.operand, Operand::Excess(value) if self.widened_constants.contains(&value))
+    }
+
+    /// Whether GCC evaluates `expression` with excess precision: a `+`,
+    /// `-`, `*` or `/` operation, a unary `+` or `-`, or an `f16` or `bf16`
+    /// constant, through parentheses, `__extension__`, the comma operator's
+    /// right operand and either arm of `?:`. Any other half expression, a
+    /// cast or a variable's value, is plain.
+    /// GCC: `c_parser_expr_no_commas` and `EXCESS_PRECISION_EXPR`.
+    pub(super) fn excess_expression(expression: &Expression<'_>) -> bool {
+        use crate::translation_phases::parsing::syntax::{
+            Constant,
+            ExpressionType as E,
+            UnaryOperator as U,
+        };
+        let mut expression = expression;
+        loop {
+            match expression.kind {
+                | E::Parenthesized { expression: inner }
+                | E::Unary {
+                    operator: U::Extension,
+                    operand_expression: inner,
+                }
+                | E::Binary {
+                    operator: BinaryOperator::Comma,
+                    right_expression: inner,
+                    ..
+                } => expression = inner,
+                | E::Binary { operator, .. } =>
+                    return matches!(
+                        operator,
+                        BinaryOperator::Addition
+                            | BinaryOperator::Subtraction
+                            | BinaryOperator::Multiplication
+                            | BinaryOperator::Division
+                    ),
+                | E::Unary { operator, .. } => return matches!(operator, U::Plus | U::Minus),
+                | E::Constant(Constant::Float(
+                    FloatTokenType::Float16(_) | FloatTokenType::BFloat16(_),
+                )) => return true,
+                | E::Conditional(conditional) =>
+                    return Self::excess_expression(conditional.then_expression)
+                        || Self::excess_expression(conditional.else_expression),
+                | _ => return false,
+            }
         }
     }
 
