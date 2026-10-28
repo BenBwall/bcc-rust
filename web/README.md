@@ -337,10 +337,13 @@ The view steps bcc's module unless the learner switches to Clang's, which
 only the lessons have; the browser's local storage keeps that choice for
 later visits. A lesson falls back to Clang's module, saying why, when bcc
 has none to step: bcc refused the program (its diagnostics are shown), the
-browser stopped the compilation (a timeout or out of memory: **Compile
-again** retries), or the stepper cannot load bcc's module (one needing more
-than its 64 MiB of memory). Each is tried once, so a failure is shown, not
-retried in a loop. Edited source is compiled by bcc when it runs (**Run
+program is more than bcc can compile in the browser (it fills one of the
+compiler's fixed memory regions or nests too deeply), the browser stopped
+the compilation (a timeout or a stopped Worker: **Compile again** retries),
+or the stepper cannot load bcc's module (one needing more than its 64 MiB
+of memory). Each is tried once, so a failure is shown, not retried in a
+loop. After the engine Worker restarts, the module is loaded into the new
+one without compiling again. Edited source is compiled by bcc when it runs (**Run
 edited code**). The repository's pinned LLVM targets x86-64 only, so
 regenerate the Clang modules with a clang that targets wasm32, such as
 wasi-sdk's:
