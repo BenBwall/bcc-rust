@@ -156,13 +156,28 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     ) -> Option<Floating> {
         if info.floating().is_none()
             && let Some(integer) = info.integer
-            && let TypeKind::Scalar(scalar) = self.types.nodes[self.types.non_atomic(ty).index]
-            && let Some(format) = self.carrier_type(scalar.real_type())
         {
-            return integer_value(integer, format).map(Floating::real);
+            return self.integer_floating(integer, ty);
         }
         self.floating_value(info)
             .and_then(|value| self.round_floating(value, ty))
+    }
+
+    /// The integer constant `integer` converted to the floating type `ty`,
+    /// rounded once from its exact value. Every folded conversion of an
+    /// integer to a floating type goes through here.
+    /// C99: §6.3.1.4 paragraph 2, pp. 43-44; PDF pp. 55-56.
+    pub(super) fn integer_floating(&self, integer: Integer, ty: TypeId) -> Option<Floating> {
+        let TypeKind::Scalar(scalar) = self.types.nodes[self.types.non_atomic(ty).index] else {
+            return None;
+        };
+        match self.carrier_type(scalar.real_type()) {
+            | Some(format) => integer_value(integer, format).map(Floating::real),
+            // Binary128 constants fold apart; the carrier is the nearest.
+            | None => integer_value(integer, crate::ir::Type::F80)
+                .map(Floating::real)
+                .and_then(|value| self.round_floating(value, ty)),
+        }
     }
 
     /// The IR format a real floating scalar's value has, for those the x87
@@ -585,7 +600,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 /// The value of `integer` rounded once to the floating format `ty`, held
 /// exactly in the x87 carrier.
 /// C99: §6.3.1.4 paragraph 2, pp. 43-44; PDF pp. 55-56.
-fn integer_value(integer: Integer, ty: crate::ir::Type) -> Option<LongDouble> {
+pub(super) fn integer_value(integer: Integer, ty: crate::ir::Type) -> Option<LongDouble> {
     use crate::{
         float_parsing::bits,
         ir::Type,

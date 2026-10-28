@@ -213,3 +213,22 @@ _Static_assert(__builtin_copysign(T(100, 47), -1) == -0x1.0000000000001p100, "to
         });
     }
 }
+
+/// An attribute predicate converts an integer argument with one rounding
+/// too: the pinned Clang accepts each call, where rounding to the x87
+/// format first would trip every `diagnose_if`.
+#[test]
+fn predicates_round_integers_once() {
+    let source = r#"
+#define T(top, tie) (((unsigned __int128)1 << top) + ((unsigned __int128)1 << tie) + 1)
+void f(unsigned __int128 x) __attribute__((diagnose_if((float)x != 0x1.000002p100f, "float", "error")));
+void d(unsigned __int128 x) __attribute__((diagnose_if((double)x != 0x1.0000000000001p100, "double", "error")));
+void b(unsigned __int128 x) __attribute__((diagnose_if((__bf16)x != 0x1.02p100f, "bf16", "error")));
+void g(void) { f(T(100, 76)); d(T(100, 47)); b(T(100, 92)); }
+"#;
+    with_configuration(
+        source,
+        identity(CompilerIdentity::Clang, ExtensionPolicy::Allow).with_gnu_extensions(true),
+        |context, _| assert_eq!(context.pending_error_count(), 0, "{:?}", messages(context)),
+    );
+}
