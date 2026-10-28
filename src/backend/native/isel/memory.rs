@@ -376,10 +376,10 @@ impl Selector<'_, '_, '_> {
                 self.pair_store(ty, value, mem);
             },
             | InstData::Store {
-                ty: Type::F16,
+                ty,
                 args: [value, addr],
                 ..
-            } => {
+            } if ty.half_format().is_some() => {
                 let src = self.reg(value);
                 let dst = self.address(addr);
                 self.half_store(src, dst);
@@ -425,7 +425,7 @@ impl Selector<'_, '_, '_> {
     /// `dst ← [mem]` of type `ty`; narrow loads zero-extend to 32 bits.
     pub(super) fn load(&mut self, ty: Type, dst: Reg, mem: Mem) {
         let width = width(ty);
-        if ty == Type::F16 {
+        if ty.half_format().is_some() {
             self.half_load(dst, mem);
             return;
         }

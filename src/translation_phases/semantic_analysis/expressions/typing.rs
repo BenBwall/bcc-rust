@@ -211,7 +211,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 Self::constant_truth(operand).map(|truth| Integer::int(i128::from(!truth)));
         }
         if self.integer_type(ty).is_none() {
-            // Unary `+` and `-` keep a `_Float16` operand's excess.
+            // Unary `+` and `-` keep a `_Float16` or `__bf16` operand's
+            // excess.
             let half = self.half_type(ty) && matches!(op, U::Minus | U::Plus);
             let value = if half {
                 operand.floating()
@@ -594,16 +595,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 }
             }
             let floating = left.floating().is_some() || right.floating().is_some();
-            // A `_Float16` operation computes in `float`; Clang compares the
-            // rounded values.
+            // A `_Float16` or `__bf16` operation computes in `float`; Clang
+            // compares the rounded values.
             let half =
                 self.half_type(operand_type) && (self.half_in_float() || self.half_type(info.ty));
             let operand = |info| {
                 if half {
-                    self.half_operand(info)
+                    self.half_operand(info, operand_type)
                 } else {
-                    self.floating_value(info)
-                        .and_then(|v| self.round_floating(v, operand_type))
+                    self.converted_floating(info, operand_type)
                 }
             };
             if floating && let Some((left_value, right_value)) = operand(left).zip(operand(right)) {
@@ -777,12 +777,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             info.integer = selected.integer;
             if self.half_type(ty) && self.half_in_float() {
                 // GCC's `?:` keeps the selected operand's excess.
-                info.set_floating(self.half_operand(selected));
+                info.set_floating(self.half_operand(selected, ty));
             } else if self.arithmetic(ty) && self.integer_type(ty).is_none() {
-                info.set_floating(
-                    self.floating_value(selected)
-                        .and_then(|v| self.round_floating(v, ty)),
-                );
+                info.set_floating(self.converted_floating(selected, ty));
             }
             if let Some((bits, signed)) = self.integer_type(ty) {
                 info.integer = info.integer.map(|v| v.cast(bits, signed));
@@ -887,7 +884,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     _ = self.assignment_conversion(parameter, info);
                 }
                 let ty = self.converted(info);
-                let ty = if matches!(self.types.nodes[ty.index], TypeKind::Scalar(Scalar::Float)) {
+                let ty = if matches!(
+                    self.types.nodes[ty.index],
+                    TypeKind::Scalar(Scalar::Float | Scalar::Fp16)
+                ) {
                     self.types.scalar(Scalar::Double)
                 } else {
                     self.promote(info, ty)
@@ -1342,10 +1342,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             };
         }
         if self.arithmetic(target) && self.integer_type(target).is_none() {
-            info.set_floating(
-                self.floating_value(operand)
-                    .and_then(|value| self.round_floating(value, target)),
-            );
+            info.set_floating(if self.unrounded_half_cast(operand, target) {
+                // A complex operand gives its real part.
+                operand
+                    .floating()
+                    .map(|value| super::super::Floating::real(value.real))
+            } else {
+                self.converted_floating(operand, target)
+            });
         }
         if self.arithmetic(target) && operand.constant == ConstantClass::Arithmetic {
             info.constant = ConstantClass::Arithmetic;
@@ -1876,13 +1880,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     /// C99: §6.3.1.1p2, pp. 42-43; PDF pp. 54-55. Bit-field width can promote
-    /// an
-    /// unsigned int field to int when all its values fit.
+    /// an unsigned int field to int when all its values fit. Clang's
+    /// storage-only `__fp16` promotes to `float` the same way.
     pub(in crate::translation_phases::semantic_analysis) fn promote(
         &mut self,
         info: ExpressionInfo<'tu>,
         ty: TypeId,
     ) -> TypeId {
+        if self.storage_half(ty) {
+            return self.types.scalar(Scalar::Float);
+        }
         // An enumeration's compatible type has at least the rank of int, so
         // the enumeration promotes to that type unless it is a narrow
         // bit-field (§6.3.1.1p1-2).

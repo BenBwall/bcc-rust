@@ -193,6 +193,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                                                     | Scalar::ComplexDouble
                                                     | Scalar::ComplexLongDouble
                                                     | Scalar::ComplexFloat128
+                                                    | Scalar::ComplexFloat16
                                                     | Scalar::ComplexFloat32
                                                     | Scalar::ComplexFloat64
                                                     | Scalar::ComplexFloat32x
@@ -597,6 +598,8 @@ fn scalar_code(scalar: Scalar) -> &'static str {
         // Clang's artificial-tag form for builtin types without an MSVC
         // code, as it mangles `_Float16`.
         | Scalar::Float16 => "U_Float16@__clang@@",
+        | Scalar::BFloat16 => "U__bf16@__clang@@",
+        | Scalar::Fp16 => "U_Half@__clang@@",
         | Scalar::Float32 => "U_Float32@__clang@@",
         | Scalar::Float64 => "U_Float64@__clang@@",
         | Scalar::Float32x => "U_Float32x@__clang@@",
@@ -608,6 +611,7 @@ fn scalar_code(scalar: Scalar) -> &'static str {
         | Scalar::ComplexFloat
         | Scalar::ComplexDouble
         | Scalar::ComplexLongDouble
-        | Scalar::ComplexFloat128 => unreachable!("complex types use vendor templates"),
+        | Scalar::ComplexFloat128
+        | Scalar::ComplexFloat16 => unreachable!("complex types use vendor templates"),
     }
 }

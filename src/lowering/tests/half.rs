@@ -80,3 +80,65 @@ fn statement_expressions_round_their_value() {
         assert!(text.contains("fptrunc.f16"), "{identity:?}\n{text}");
     }
 }
+
+/// A `__bf16` computes in `f32` as a `_Float16` does. An integer becomes
+/// one through `float` for Clang, rounding twice as LLVM converts it, and
+/// once for GCC, through `double`, the x87 format, or `sitofp` for `i128`.
+#[test]
+fn bfloat16_rounds_integers_as_the_claimed_compiler_does() {
+    let source = "__bf16 f(__bf16 a, __bf16 b) { return a * b + a; }\n__bf16 i(int x) { return x; \
+                  }\n__bf16 l(long x) { return x; }\n__bf16 w(__int128 x) { return x; }";
+    let gcc = lowered_as(source, CompilerIdentity::Gcc);
+    let clang = lowered_as(source, CompilerIdentity::Clang);
+    for text in [&gcc, &clang] {
+        assert!(
+            text.contains("fmul.f32") && text.contains("fadd.f32"),
+            "{text}"
+        );
+    }
+    assert_eq!(gcc.matches("fptrunc.bf16").count(), 3, "{gcc}");
+    assert_eq!(clang.matches("fptrunc.bf16").count(), 4, "{clang}");
+    for conversion in ["sitofp.f64", "sitofp.f80", "sitofp.bf16"] {
+        assert!(gcc.contains(conversion), "{gcc}");
+        assert!(!clang.contains(conversion), "{clang}");
+    }
+    assert_eq!(clang.matches("sitofp.f32").count(), 3, "{clang}");
+}
+
+/// GCC evaluates `__bf16 + _Float16` in `float`, widening both operands;
+/// Clang rounds the `__bf16` to `_Float16` through `float` first.
+#[test]
+fn mixed_halves_meet_in_float_for_gcc() {
+    let source = "float f(__bf16 b, _Float16 h) { return b + h; }";
+    let gcc = lowered_as(source, CompilerIdentity::Gcc);
+    let clang = lowered_as(source, CompilerIdentity::Clang);
+    assert!(!gcc.contains("fptrunc"), "{gcc}");
+    assert_eq!(clang.matches("fptrunc.f16").count(), 2, "{clang}");
+}
+
+/// GCC's `?:` passes a `_Complex _Float16` arm's excess in `f32` parts.
+#[test]
+fn gcc_conditionals_keep_complex_half_excess() {
+    let source = "_Complex float f(int c, _Complex _Float16 a) { return c ? a * a : a; }";
+    let gcc = lowered_as(source, CompilerIdentity::Gcc);
+    let clang = lowered_as(source, CompilerIdentity::Clang);
+    assert!(!gcc.contains("fptrunc"), "{gcc}");
+    assert_eq!(clang.matches("fptrunc.f16").count(), 2, "{clang}");
+}
+
+/// `_Complex _Float16` multiplies in `float _Complex` through `__mulsc3`
+/// and rounds both parts once, at the return.
+#[test]
+fn complex_half_computes_in_complex_float() {
+    let source =
+        "_Complex _Float16 f(_Complex _Float16 a, _Complex _Float16 b) { return a * b * a; }";
+    for identity in [CompilerIdentity::Clang, CompilerIdentity::Gcc] {
+        let text = lowered_as(source, identity);
+        assert_eq!(text.matches("__mulsc3").count(), 3, "{identity:?}\n{text}");
+        assert_eq!(
+            text.matches("fptrunc.f16").count(),
+            2,
+            "{identity:?}\n{text}"
+        );
+    }
+}

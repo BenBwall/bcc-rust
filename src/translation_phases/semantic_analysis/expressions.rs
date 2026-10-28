@@ -71,6 +71,7 @@ use super::{
 };
 use crate::{
     float_parsing::LongDouble,
+    half_precision::HalfFormat,
     translation_phases::parsing::syntax::{
         BinaryOperator,
         Constant,
@@ -234,6 +235,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     | FloatTokenType::Float32x(_) => Scalar::Float32x,
                     | FloatTokenType::Float64x(_) => Scalar::Float64x,
                     | FloatTokenType::Float16(_) => Scalar::Float16,
+                    | FloatTokenType::BFloat16(_) => Scalar::BFloat16,
                     | _ => {
                         self.retain_expression(info);
                         return;
@@ -246,8 +248,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     | FloatTokenType::Float64(value)
                     | FloatTokenType::Float32x(value) => LongDouble::from_double(value.get()),
                     | FloatTokenType::LongDouble(value) | FloatTokenType::Float64x(value) => value,
-                    | FloatTokenType::Float16(value) =>
-                        LongDouble::from_double(f64::from(self.half_constant(value))),
+                    | FloatTokenType::Float16(value) => LongDouble::from_double(f64::from(
+                        self.half_constant(value, HalfFormat::Binary16),
+                    )),
+                    | FloatTokenType::BFloat16(value) => LongDouble::from_double(f64::from(
+                        self.half_constant(value, HalfFormat::BFloat16),
+                    )),
                     | _ => LongDouble::ZERO,
                 })));
                 info.set_floating(match value {

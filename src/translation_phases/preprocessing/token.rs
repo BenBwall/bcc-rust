@@ -177,16 +177,24 @@ pub(crate) enum KeywordTokenType {
     Float32x,
     Float64x,
     Float16,
+    /// `__bf16`.
+    BFloat16,
+    /// `__fp16`.
+    Fp16,
 }
 
 /// The `_FloatN` and `_FloatNx` keywords bcc provides: the binary
 /// interchange types `_Float16`, `_Float32`, `_Float64` and `_Float128`, and
-/// the extended types `_Float32x` and `_Float64x`.
+/// the extended types `_Float32x` and `_Float64x`; and the other 16-bit
+/// floating keywords, GCC's and Clang's `__bf16` and Clang's `__fp16`, which
+/// combine with `_Complex` as these do (and are refused with it).
 /// C23: §H.2.2 paragraph 3, p. 553; PDF p. 566; §H.2.4 paragraph 2, p. 554;
 /// PDF p. 567.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub(crate) enum InterchangeFloat {
     Float16,
+    BFloat16,
+    Fp16,
     Float32,
     Float64,
     Float128,
@@ -204,6 +212,8 @@ impl InterchangeFloat {
             | KeywordTokenType::Float32x => Self::Float32x,
             | KeywordTokenType::Float64x => Self::Float64x,
             | KeywordTokenType::Float16 => Self::Float16,
+            | KeywordTokenType::BFloat16 => Self::BFloat16,
+            | KeywordTokenType::Fp16 => Self::Fp16,
             | _ => return None,
         })
     }
@@ -217,6 +227,8 @@ impl InterchangeFloat {
             | Self::Float32x => "_Float32x",
             | Self::Float64x => "_Float64x",
             | Self::Float16 => "_Float16",
+            | Self::BFloat16 => "__bf16",
+            | Self::Fp16 => "__fp16",
         }
     }
 }
@@ -321,12 +333,16 @@ pub(crate) enum FloatTokenType {
     /// An `f16` constant.
     /// C23: §H.5.2 paragraph 2, p. 560; PDF p. 573.
     Float16(HalfConstant),
+    /// A `bf16` constant, a GCC extension (GCC manual, "Half-Precision
+    /// Floating Point").
+    BFloat16(HalfConstant),
 }
 
-/// A `_Float16` constant: its binary16 value, and its value rounded once to
-/// binary32. GCC evaluates `_Float16` constants and operations to the range
-/// and precision of `float` (C99 §5.2.4.2.2 paragraph 7, p. 24; PDF p. 36,
-/// `FLT_EVAL_METHOD`) and reads the second; Clang reads the first.
+/// A `_Float16` or `__bf16` constant: its 16-bit encoding, and its value
+/// rounded once to binary32. GCC evaluates these constants and operations
+/// to the range and precision of `float` (C99 §5.2.4.2.2 paragraph 7, p. 24;
+/// PDF p. 36, `FLT_EVAL_METHOD`) and reads the second; Clang reads the
+/// first.
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub(crate) struct HalfConstant {
     pub(crate) bits:   u16,
@@ -486,6 +502,7 @@ impl FloatTokenType {
             | Self::Float32x(_) => "_Float32x",
             | Self::Float64x(_) => "_Float64x",
             | Self::Float16(_) => "_Float16",
+            | Self::BFloat16(_) => "__bf16",
         }
     }
 }
@@ -755,6 +772,8 @@ impl KeywordTokenType {
         Self::Float32x,
         Self::Float64x,
         Self::Float16,
+        Self::BFloat16,
+        Self::Fp16,
     ];
 
     /// Classifies an identifier after preprocessing has finished. It is an
@@ -912,6 +931,9 @@ impl KeywordTokenType {
                     )
                     .then(|| Feature::Float16.origin()),
                 ),
+                // Reserved identifiers: neither compiler reports them.
+                | Self::BFloat16 => (configuration.accepts(Feature::BFloat16), None),
+                | Self::Fp16 => (configuration.accepts(Feature::Fp16), None),
                 | Self::Int128 => (
                     configuration.accepts(Feature::Int128),
                     Some(Feature::Int128.origin()),
@@ -1109,6 +1131,8 @@ impl KeywordTokenType {
             | Self::Float32x => "_Float32x",
             | Self::Float64x => "_Float64x",
             | Self::Float16 => "_Float16",
+            | Self::BFloat16 => "__bf16",
+            | Self::Fp16 => "__fp16",
         }
     }
 }
@@ -1277,6 +1301,11 @@ impl Display for FloatTokenType {
                 f,
                 "{}",
                 crate::half_precision::HalfFormat::Binary16.widen(v.bits)
+            ),
+            | Self::BFloat16(v) => write!(
+                f,
+                "{}",
+                crate::half_precision::HalfFormat::BFloat16.widen(v.bits)
             ),
         }
     }

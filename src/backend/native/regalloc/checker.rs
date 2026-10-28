@@ -35,9 +35,29 @@
 //! The design is `regalloc2`'s checker (Cranelift, `regalloc2/src/checker.rs`)
 //! applied to the final machine code rather than to the allocator's edit
 //! list, so the rewrite is checked as well.
+//!
+//! Facts about a virtual register the program no longer reads are dropped:
+//! at the start of each block those of values not live into it, and after
+//! each program instruction those of the values it mentions for the last
+//! time (the liveness of the program, not of the allocation). Every check
+//! reads a live value, so the answers, and with them the verdict, stay the
+//! same, and a wrong liveness could only make the checker reject more. The
+//! state then holds facts about the live values and the physical
+//! registers' own values alone, so an instruction costs time in proportion
+//! to the live set rather than to every value spilled before it, and
+//! straight-line code with a bounded live set checks in time linear in its
+//! length. The liveness itself is the allocator's bit-set dataflow, whose
+//! sets have a bit per virtual register of the function: like allocation,
+//! it costs blocks × virtual registers / 64 words per pass, which a long
+//! function of many blocks still pays.
 
 use std::fmt;
 
+use super::liveness::{
+    Liveness,
+    contains,
+    transfer,
+};
 use crate::{
     backend::native::mir::{
         Base,
@@ -68,13 +88,14 @@ pub(crate) const INSERTED: u32 = u32::MAX;
 /// Checks that `func`, allocated and rewritten, computes what `original`
 /// did: `original[b]` is block `b` of the virtual-register program and
 /// `origins[b][i]` the index in it of rewritten instruction `i` of block
-/// `b`, or [`INSERTED`].
+/// `b`, or [`INSERTED`]. On success, returns the number of facts in the
+/// largest state the walk held, which bounds its work per instruction.
 pub(crate) fn check<'a>(
     func: &MFunction<'_>,
     original: &[&[MInst]],
     origins: &[&[u32]],
     arena: &'a Bump,
-) -> Result<(), &'a CheckError> {
+) -> Result<usize, &'a CheckError> {
     if original.len() != func.blocks.len() || origins.len() != func.blocks.len() {
         return Err(arena.alloc(CheckError {
             block:     MBlock::new(0),
@@ -84,11 +105,16 @@ pub(crate) fn check<'a>(
             rewritten: None,
         }));
     }
+    let liveness = Liveness::of_program(func, original.iter().copied(), arena);
+    let deaths = last_mentions(&liveness, original, arena);
     let mut checker = Checker {
         arena,
         func,
         original,
         origins,
+        liveness,
+        deaths,
+        largest: 0,
         state: ArenaVec::new_in(arena),
         values: ArenaVec::new_in(arena),
         operands: ArenaVec::new_in(arena),
@@ -141,7 +167,48 @@ pub(crate) fn check<'a>(
         checker.state.extend_from_slice(facts);
         checker.block(MBlock::new(index), true)?;
     }
-    Ok(())
+    Ok(checker.largest)
+}
+
+/// For each block of the program, the virtual registers each of its
+/// instructions mentions while not live after it, as `(instruction,
+/// register)` in instruction order: there the checker forgets them.
+fn last_mentions<'a>(
+    liveness: &Liveness<'_>,
+    original: &[&[MInst]],
+    arena: &'a Bump,
+) -> ArenaVec<'a, &'a [(u32, VReg)]> {
+    let mut live = ArenaVec::new_in(arena);
+    let mut mentions = ArenaVec::new_in(arena);
+    let mut starts = ArenaVec::with_capacity_in(original.len() + 1, arena);
+    for (block, insts) in original.iter().enumerate() {
+        let start = mentions.len();
+        starts.push(start);
+        live.clear();
+        live.extend_from_slice(liveness.out(block));
+        for (index, inst) in insts.iter().enumerate().rev() {
+            let index = u32::try_from(index).expect("instruction numbers fit u32");
+            let mut inst = *inst;
+            inst.visit_registers(|reg, _| {
+                if let Reg::Virt(vreg) = *reg
+                    && !contains(&live, vreg)
+                {
+                    mentions.push((index, vreg));
+                }
+            });
+            transfer(&mut inst, &mut live);
+        }
+        mentions[start..].reverse();
+    }
+    starts.push(mentions.len());
+    let mentions: &'a [(u32, VReg)] = mentions.leak();
+    let mut blocks = ArenaVec::with_capacity_in(original.len(), arena);
+    blocks.extend(
+        starts
+            .windows(2)
+            .map(|bounds| &mentions[bounds[0]..bounds[1]]),
+    );
+    blocks
 }
 
 /// Why a rewritten function does not compute what its program did.
@@ -209,6 +276,12 @@ struct Checker<'f, 'a> {
     func:     &'f MFunction<'f>,
     original: &'f [&'f [MInst]],
     origins:  &'f [&'f [u32]],
+    /// The liveness of the program's virtual registers.
+    liveness: Liveness<'a>,
+    /// Each block's [`last_mentions`].
+    deaths:   ArenaVec<'a, &'a [(u32, VReg)]>,
+    /// The most facts the state has held.
+    largest:  usize,
     /// The facts before the current instruction, sorted.
     state:    ArenaVec<'a, Fact>,
     /// Values copied by a move.
@@ -239,8 +312,12 @@ impl<'a> Checker<'_, 'a> {
         if origins.len() != insts.len() {
             return Err(error(0, ErrorKind::Order, None));
         }
+        let live_in = self.liveness.live_in(block.index());
+        self.state.retain(|&(_, value)| is_live(value, live_in));
+        let mut deaths = self.deaths[block.index()];
         let mut next = 0;
         for (index, (&inst, &origin)) in insts.iter().zip(origins).enumerate() {
+            self.largest = self.largest.max(self.state.len());
             if origin == INSERTED {
                 if let Some((dst, base, index, scale)) = as_address(inst) {
                     self.address(dst, base, index, scale);
@@ -258,6 +335,16 @@ impl<'a> Checker<'_, 'a> {
             let program = original[origin as usize];
             self.instruction(program, inst, checking)
                 .map_err(|kind| error(index, kind, Some(program)))?;
+            let dying = deaths.partition_point(|&(at, _)| at <= origin);
+            if dying > 0 {
+                let dead = &deaths[..dying];
+                self.state.retain(|&(_, value)| {
+                    !dead
+                        .iter()
+                        .any(|&(_, vreg)| depends_on(value, Value::Virt(vreg)))
+                });
+                deaths = &deaths[dying..];
+            }
         }
         if next != original.len() {
             return Err(error(insts.len(), ErrorKind::Order, None));
@@ -481,6 +568,20 @@ const fn register(value: Value) -> Option<Reg> {
         | Value::Phys(register) => Some(Reg::Phys(register)),
         | Value::Virt(vreg) => Some(Reg::Virt(vreg)),
         | Value::Address { .. } => None,
+    }
+}
+
+/// Whether the program may still read `value`, or the registers an address
+/// is computed from, where the virtual registers in `live` are live.
+fn is_live(value: Value, live: &[u64]) -> bool {
+    let live_reg = |reg: Reg| match reg {
+        | Reg::Virt(vreg) => contains(live, vreg),
+        | Reg::Phys(_) => true,
+    };
+    match value {
+        | Value::Virt(vreg) => contains(live, vreg),
+        | Value::Phys(_) => true,
+        | Value::Address { base, index, .. } => live_reg(base) && live_reg(index),
     }
 }
 

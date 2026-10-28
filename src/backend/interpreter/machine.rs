@@ -108,6 +108,7 @@ impl<'m, 'ir> Machine<'m, 'ir, '_> {
                 | (ty, RuntimeValue::Int(bits)) if ty.is_int() => RuntimeValue::int(ty, bits),
                 | (_, RuntimeValue::Poison)
                 | (Type::F16, RuntimeValue::F16(_))
+                | (Type::BF16, RuntimeValue::BF16(_))
                 | (Type::F32, RuntimeValue::F32(_))
                 | (Type::F64, RuntimeValue::F64(_))
                 | (Type::F80, RuntimeValue::F80(_))

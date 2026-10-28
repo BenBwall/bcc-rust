@@ -3,7 +3,9 @@
 //! and later predefine them for its `<float.h>` and the C library. The
 //! values are those GCC 15 predefines for x86-64; the pinned Clang defines
 //! only the `_Float16` ones, spelled otherwise and without
-//! `__FLT16_IS_IEC_60559__`, which the frozen target tables keep.
+//! `__FLT16_IS_IEC_60559__`, which the frozen target tables keep. GCC also
+//! describes `__bf16` in `__BFLT16_MANT_DIG__` and its relatives; Clang
+//! does not.
 //!
 //! C23: the `<float.h>` characteristics of these types, §H.3 paragraph 7,
 //! pp. 556-558; PDF pp. 569-571, named after those of the standard types,
@@ -37,15 +39,17 @@ impl Target {
         _ = out.write_str("#define __FLT_EVAL_METHOD_TS_18661_3__ 0\n");
     }
 
-    /// Appends GCC's characteristics macros of `_Float16`, which it defines
-    /// whenever the type exists, apart from the other interchange types.
+    /// Appends GCC's characteristics macros of `_Float16` and `__bf16`,
+    /// which it defines whenever the types exist, apart from the other
+    /// interchange types.
     pub(crate) fn write_half_float_macros(out: &mut impl Write) {
         HALF.write(out);
+        BFLOAT.write(out);
     }
 }
 
 /// One type's `<float.h>` characteristics. Every type has subnormals,
-/// infinities and quiet NaNs, and IEC 60559 arithmetic.
+/// infinities and quiet NaNs, and all but bfloat16 are IEC 60559 formats.
 struct InterchangeCharacteristics {
     /// The macro prefix after `__`, as in `FLT32`.
     name:        &'static str,
@@ -62,6 +66,7 @@ struct InterchangeCharacteristics {
     min:         &'static str,
     epsilon:     &'static str,
     denorm_min:  &'static str,
+    iec_60559:   bool,
 }
 
 impl InterchangeCharacteristics {
@@ -80,7 +85,9 @@ impl InterchangeCharacteristics {
             min,
             epsilon,
             denorm_min,
+            iec_60559,
         } = self;
+        let iec_60559 = u8::from(*iec_60559);
         _ = write!(
             out,
             "#define __{name}_MANT_DIG__ {mant_dig}\n#define __{name}_DIG__ {dig}\n#define \
@@ -91,7 +98,7 @@ impl InterchangeCharacteristics {
              {min}{suffix}\n#define __{name}_EPSILON__ {epsilon}{suffix}\n#define \
              __{name}_DENORM_MIN__ {denorm_min}{suffix}\n#define __{name}_HAS_DENORM__ 1\n#define \
              __{name}_HAS_INFINITY__ 1\n#define __{name}_HAS_QUIET_NAN__ 1\n#define \
-             __{name}_IS_IEC_60559__ 1\n",
+             __{name}_IS_IEC_60559__ {iec_60559}\n",
         );
     }
 }
@@ -111,6 +118,26 @@ const HALF: InterchangeCharacteristics = InterchangeCharacteristics {
     min:         "6.10351562500000000000000000000000000e-5",
     epsilon:     "9.76562500000000000000000000000000000e-4",
     denorm_min:  "5.96046447753906250000000000000000000e-8",
+    iec_60559:   true,
+};
+
+/// GCC 15's x86-64 values of `__bf16`, bfloat16, which IEC 60559 does not
+/// define.
+const BFLOAT: InterchangeCharacteristics = InterchangeCharacteristics {
+    name:        "BFLT16",
+    suffix:      "BF16",
+    mant_dig:    8,
+    dig:         2,
+    min_exp:     -125,
+    min_10_exp:  -37,
+    max_exp:     128,
+    max_10_exp:  38,
+    decimal_dig: 4,
+    max:         "3.38953138925153547590470800371487867e+38",
+    min:         "1.17549435082228750796873653722224568e-38",
+    epsilon:     "7.81250000000000000000000000000000000e-3",
+    denorm_min:  "9.18354961579912115600575419704879436e-41",
+    iec_60559:   false,
 };
 
 /// GCC 15's x86-64 values: binary32, binary64, binary64, the x87 extended
@@ -130,6 +157,7 @@ const CHARACTERISTICS: [InterchangeCharacteristics; 5] = [
         min:         "1.17549435082228750796873653722224568e-38",
         epsilon:     "1.19209289550781250000000000000000000e-7",
         denorm_min:  "1.40129846432481707092372958328991613e-45",
+        iec_60559:   true,
     },
     InterchangeCharacteristics {
         name:        "FLT64",
@@ -145,6 +173,7 @@ const CHARACTERISTICS: [InterchangeCharacteristics; 5] = [
         min:         "2.22507385850720138309023271733240406e-308",
         epsilon:     "2.22044604925031308084726333618164062e-16",
         denorm_min:  "4.94065645841246544176568792868221372e-324",
+        iec_60559:   true,
     },
     InterchangeCharacteristics {
         name:        "FLT32X",
@@ -160,6 +189,7 @@ const CHARACTERISTICS: [InterchangeCharacteristics; 5] = [
         min:         "2.22507385850720138309023271733240406e-308",
         epsilon:     "2.22044604925031308084726333618164062e-16",
         denorm_min:  "4.94065645841246544176568792868221372e-324",
+        iec_60559:   true,
     },
     InterchangeCharacteristics {
         name:        "FLT64X",
@@ -175,6 +205,7 @@ const CHARACTERISTICS: [InterchangeCharacteristics; 5] = [
         min:         "3.36210314311209350626267781732175260e-4932",
         epsilon:     "1.08420217248550443400745280086994171e-19",
         denorm_min:  "3.64519953188247460252840593361941982e-4951",
+        iec_60559:   true,
     },
     InterchangeCharacteristics {
         name:        "FLT128",
@@ -190,5 +221,6 @@ const CHARACTERISTICS: [InterchangeCharacteristics; 5] = [
         min:         "3.36210314311209350626267781732175260e-4932",
         epsilon:     "1.92592994438723585305597794258492732e-34",
         denorm_min:  "6.47517511943802511092443895822764655e-4966",
+        iec_60559:   true,
     },
 ];
