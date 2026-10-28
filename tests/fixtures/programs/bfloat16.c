@@ -222,6 +222,13 @@ static void conversions(void) {
     printf("parse folding %a %a %a %a\n", (double)(long double)(_Float16)(B)0x1p20Q,
            (double)(long double)(_Float16)(B)-0x1p20Q, (double)(long double)(_Float16)(B)(0x1p20Q * 1),
            (double)(long double)(one ? (B)-0x1p20Q : vh));
+    /* Through the selections of _Generic and __builtin_choose_expr, and a
+       cast of such a cast, which GCC folds as well. */
+    printf("parse selections %a %a %a %a\n",
+           (double)(long double)(_Float16)_Generic(0, int: (B)0x1p20Q),
+           (double)(long double)(_Float16)__builtin_choose_expr(1, (B)0x1p20Q, (B)0),
+           (double)(long double)(_Float16)(B)(B)0x1p20Q,
+           (double)(long double)(_Float16)_Generic(0, int: (B)-0x1p20Q));
 }
 
 /* small * small is 2^-140: a float subnormal, but zero as a __bf16. */

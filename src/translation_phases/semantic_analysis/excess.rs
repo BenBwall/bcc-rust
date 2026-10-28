@@ -80,16 +80,17 @@ pub(crate) fn excess_expression<'tu>(
 }
 
 /// Whether GCC folds `expression`, a half value, to a constant as it parses
-/// it: a cast of a floating literal, of an integer constant expression, or
-/// of a `?:` between such operands, or `__builtin_complex` of such casts,
-/// through parentheses, unary `+` and `__extension__`. A cast of a negated or
+/// it: a cast of a floating literal, of an integer constant expression, of
+/// a `?:` between such operands or of such a cast, or `__builtin_complex`
+/// of such casts, through parentheses, unary `+`, `__extension__` and the
+/// selections of `_Generic` and `__builtin_choose_expr`. A cast of a negated or
 /// computed floating operand, such as `(__bf16)-0x1p20`, is folded only later,
 /// and GCC converts it as a plain run-time value.
 pub(crate) fn folded_constant<'tu>(
     expression: &'tu Expression<'tu>,
     info: &dyn Fn(&'tu Expression<'tu>) -> Option<ExpressionInfo<'tu>>,
 ) -> bool {
-    match strip(expression).kind {
+    match strip(expression, info).kind {
         | E::Cast {
             operand_expression, ..
         } => literal(operand_expression, info),
@@ -109,9 +110,11 @@ fn literal<'tu>(
     expression: &'tu Expression<'tu>,
     info: &dyn Fn(&'tu Expression<'tu>) -> Option<ExpressionInfo<'tu>>,
 ) -> bool {
-    let expression = strip(expression);
+    let expression = strip(expression, info);
     match expression.kind {
         | E::Constant(_) => true,
+        // A cast of a folded constant folds too.
+        | E::Cast { .. } => folded_constant(expression, info),
         | E::Conditional(conditional) =>
             literal(conditional.then_expression, info) && literal(conditional.else_expression, info),
         // An integer constant expression folds as GCC parses it.
@@ -119,7 +122,13 @@ fn literal<'tu>(
     }
 }
 
-fn strip<'tu>(expression: &'tu Expression<'tu>) -> &'tu Expression<'tu> {
+/// `expression` through parentheses, unary `+`, `__extension__` and the
+/// operands `_Generic` and `__builtin_choose_expr` select, which GCC's
+/// parser replaces by what they hold.
+fn strip<'tu>(
+    expression: &'tu Expression<'tu>,
+    info: &dyn Fn(&'tu Expression<'tu>) -> Option<ExpressionInfo<'tu>>,
+) -> &'tu Expression<'tu> {
     let mut expression = expression;
     loop {
         match expression.kind {
@@ -128,6 +137,15 @@ fn strip<'tu>(expression: &'tu Expression<'tu>) -> &'tu Expression<'tu> {
                 operator: U::Plus | U::Extension,
                 operand_expression: inner,
             } => expression = inner,
+            | E::Generic(_) => match info(expression).and_then(|info| info.selected_expression) {
+                | Some(selected) => expression = selected,
+                | None => return expression,
+            },
+            | E::Builtin(builtin) if builtin.keyword == KeywordTokenType::BuiltinChooseExpr =>
+                match info(expression).and_then(|info| info.selected_expression) {
+                    | Some(selected) => expression = selected,
+                    | None => return expression,
+                },
             | _ => return expression,
         }
     }
