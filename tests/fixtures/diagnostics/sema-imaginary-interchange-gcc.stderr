@@ -1,0 +1,111 @@
+warning: '_Float16' is a C23 extension [-Wpedantic]
+ --> sema-imaginary-interchange-gcc.c:1:10
+  |
+1 | _Complex _Float16 half = 1.0f16i;
+  |          ^^^^^^^^
+
+warning: 'imaginary constant' is a GNU extension [-Wpedantic]
+ --> sema-imaginary-interchange-gcc.c:1:26
+  |
+1 | _Complex _Float16 half = 1.0f16i;
+  |                          ^^^^^^^
+
+warning: '_Float16' is a C23 extension [-Wpedantic]
+ --> sema-imaginary-interchange-gcc.c:2:10
+  |
+2 | _Complex _Float16 half_reversed = 1.0if16;
+  |          ^^^^^^^^
+
+warning: 'imaginary constant' is a GNU extension [-Wpedantic]
+ --> sema-imaginary-interchange-gcc.c:2:35
+  |
+2 | _Complex _Float16 half_reversed = 1.0if16;
+  |                                   ^^^^^^^
+
+warning: '_Float32' is a C23 extension [-Wpedantic]
+ --> sema-imaginary-interchange-gcc.c:3:10
+  |
+3 | _Complex _Float32 single = 1.0f32i;
+  |          ^^^^^^^^
+
+warning: 'imaginary constant' is a GNU extension [-Wpedantic]
+ --> sema-imaginary-interchange-gcc.c:3:28
+  |
+3 | _Complex _Float32 single = 1.0f32i;
+  |                            ^^^^^^^
+
+warning: '_Float64x' is a C23 extension [-Wpedantic]
+ --> sema-imaginary-interchange-gcc.c:4:10
+  |
+4 | _Complex _Float64x extended = 1.0if64x;
+  |          ^^^^^^^^^
+
+warning: 'imaginary constant' is a GNU extension [-Wpedantic]
+ --> sema-imaginary-interchange-gcc.c:4:31
+  |
+4 | _Complex _Float64x extended = 1.0if64x;
+  |                               ^^^^^^^^
+
+warning: '_Float128' is a C23 extension [-Wpedantic]
+ --> sema-imaginary-interchange-gcc.c:5:10
+  |
+5 | _Complex _Float128 quad = 1.0f128i;
+  |          ^^^^^^^^^
+
+warning: 'imaginary constant' is a GNU extension [-Wpedantic]
+ --> sema-imaginary-interchange-gcc.c:5:27
+  |
+5 | _Complex _Float128 quad = 1.0f128i;
+  |                           ^^^^^^^^
+
+warning: '__typeof__' is a GNU extension [-Wpedantic]
+ --> sema-imaginary-interchange-gcc.c:6:1
+  |
+6 | __typeof__(1.0bf16i) brain;
+  | ^^^^^^^^^^
+
+error: invalid floating constant `1.0bf16i`
+ --> sema-imaginary-interchange-gcc.c:6:12
+  |
+6 | __typeof__(1.0bf16i) brain;
+  |            ^^^^^^^^ not a valid floating constant
+  |
+  = note: C99 §6.4.4.2: a floating constant is digits with a `.` or an exponent and an optional `f`, `F`, `l`, or `L` suffix, as in `1.5`, `2e10`, or `.5f`
+
+warning: '_Float16 floating constant suffix' is a C23 extension [-Wpedantic]
+ --> sema-imaginary-interchange-gcc.c:1:26
+  |
+1 | _Complex _Float16 half = 1.0f16i;
+  |                          ^^^^^^^
+
+warning: '_Float16 floating constant suffix' is a C23 extension [-Wpedantic]
+ --> sema-imaginary-interchange-gcc.c:2:35
+  |
+2 | _Complex _Float16 half_reversed = 1.0if16;
+  |                                   ^^^^^^^
+
+warning: '_FloatN floating constant suffix' is a C23 extension [-Wpedantic]
+ --> sema-imaginary-interchange-gcc.c:3:28
+  |
+3 | _Complex _Float32 single = 1.0f32i;
+  |                            ^^^^^^^
+
+warning: '_FloatN floating constant suffix' is a C23 extension [-Wpedantic]
+ --> sema-imaginary-interchange-gcc.c:4:31
+  |
+4 | _Complex _Float64x extended = 1.0if64x;
+  |                               ^^^^^^^^
+
+warning: 'binary128 floating constant' is a GNU extension [-Wpedantic]
+ --> sema-imaginary-interchange-gcc.c:5:27
+  |
+5 | _Complex _Float128 quad = 1.0f128i;
+  |                           ^^^^^^^^
+
+warning: '__bf16 floating constant suffix' is a GNU extension [-Wpedantic]
+ --> sema-imaginary-interchange-gcc.c:6:12
+  |
+6 | __typeof__(1.0bf16i) brain;
+  |            ^^^^^^^^
+
+1 error and 17 warnings generated.

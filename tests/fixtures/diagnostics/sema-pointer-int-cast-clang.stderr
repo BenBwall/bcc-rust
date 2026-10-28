@@ -1,0 +1,73 @@
+warning: cast to 'void *' from smaller integer type [-Wint-to-void-pointer-cast]
+ --> sema-pointer-int-cast-clang.c:4:11
+  |
+4 |     (void)(void *)i;
+  |           ^^^^^^^^^ the integer and pointer widths differ
+  |
+  = note: C99 §6.3.2.3p5-6: the result of converting between a pointer and an integer is implementation-defined and may not be representable
+
+warning: cast to pointer from integer of different size [-Wint-to-pointer-cast]
+ --> sema-pointer-int-cast-clang.c:5:11
+  |
+5 |     (void)(char *)c;
+  |           ^^^^^^^^^ the integer and pointer widths differ
+  |
+  = note: C99 §6.3.2.3p5-6: the result of converting between a pointer and an integer is implementation-defined and may not be representable
+
+warning: cast to 'void *' from smaller integer type [-Wint-to-void-pointer-cast]
+ --> sema-pointer-int-cast-clang.c:6:11
+  |
+6 |     (void)(void *)(int){0};
+  |           ^^^^^^^^^^^^^^^^ the integer and pointer widths differ
+  |
+  = note: C99 §6.3.2.3p5-6: the result of converting between a pointer and an integer is implementation-defined and may not be representable
+
+warning: cast to pointer from integer of different size [-Wint-to-pointer-cast]
+ --> sema-pointer-int-cast-clang.c:7:11
+  |
+7 |     (void)(char *)(1 ? 2 : i);
+  |           ^^^^^^^^^^^^^^^^^^^ the integer and pointer widths differ
+  |
+  = note: C99 §6.3.2.3p5-6: the result of converting between a pointer and an integer is implementation-defined and may not be representable
+
+warning: cast to pointer from integer of different size [-Wint-to-pointer-cast]
+  --> sema-pointer-int-cast-clang.c:12:11
+   |
+12 |     (void)(char *)(int)(long)&x;
+   |           ^^^^^^^^^^^^^^^^^^^^^ the integer and pointer widths differ
+   |
+   = note: C99 §6.3.2.3p5-6: the result of converting between a pointer and an integer is implementation-defined and may not be representable
+
+warning: cast from 'void *' to smaller integer type [-Wvoid-pointer-to-int-cast]
+  --> sema-pointer-int-cast-clang.c:13:11
+   |
+13 |     (void)(int)p;
+   |           ^^^^^^ the integer and pointer widths differ
+   |
+   = note: C99 §6.3.2.3p5-6: the result of converting between a pointer and an integer is implementation-defined and may not be representable
+
+warning: cast from pointer to integer of different size [-Wpointer-to-int-cast]
+  --> sema-pointer-int-cast-clang.c:14:11
+   |
+14 |     (void)(char)cp;
+   |           ^^^^^^^^ the integer and pointer widths differ
+   |
+   = note: C99 §6.3.2.3p5-6: the result of converting between a pointer and an integer is implementation-defined and may not be representable
+
+warning: cast from 'void *' to smaller enumeration type [-Wvoid-pointer-to-enum-cast]
+  --> sema-pointer-int-cast-clang.c:16:11
+   |
+16 |     (void)(enum E)p;
+   |           ^^^^^^^^^ the integer and pointer widths differ
+   |
+   = note: C99 §6.3.2.3p5-6: the result of converting between a pointer and an integer is implementation-defined and may not be representable
+
+warning: cast to pointer from integer of different size [-Wint-to-pointer-cast]
+  --> sema-pointer-int-cast-clang.c:22:11
+   |
+22 |     (void)(char *)bits.narrow;
+   |           ^^^^^^^^^^^^^^^^^^^ the integer and pointer widths differ
+   |
+   = note: C99 §6.3.2.3p5-6: the result of converting between a pointer and an integer is implementation-defined and may not be representable
+
+9 warnings generated.

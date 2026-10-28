@@ -92,6 +92,12 @@ impl TranslationError<'_> {
                     Some(G::InitializerOverrides),
                 | semantic_analysis::SemanticErrorKind::ConstantConversion(_) =>
                     Some(G::ConstantConversion),
+                | semantic_analysis::SemanticErrorKind::ExcessString => Some(G::ExcessInitializers),
+                | semantic_analysis::SemanticErrorKind::FloatOverflow(_) => Some(G::Overflow),
+                | semantic_analysis::SemanticErrorKind::PedanticOverflow =>
+                    Some(G::PedanticOverflow),
+                | semantic_analysis::SemanticErrorKind::LiteralConversion(_) =>
+                    Some(G::LiteralConversion),
                 | _ => None,
             },
             | _ => None,

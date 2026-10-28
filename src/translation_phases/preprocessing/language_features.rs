@@ -970,8 +970,9 @@ pub(super) const LANGUAGE_BUILTINS: &[(&str, Feature)] = &[
 /// `-fms-compatibility-version`. Clang's own identity (`__clang__`, its
 /// version and literal encodings) is frozen with the target's definitions
 /// (`Target::predefined_macros`). `__bcc__` and its version are defined in
-/// every mode, and `__PIC__`, `__pic__`, `__PIE__` and `__pie__` follow the
-/// relocation model. They are ordinary macros, so `#undef` works as in
+/// every mode, `__PIC__`, `__pic__`, `__PIE__` and `__pie__` follow the
+/// relocation model, and `__BITINT_MAXWIDTH__` the identity's widest
+/// `_BitInt`. They are ordinary macros, so `#undef` works as in
 /// Clang.
 ///
 /// C99: further predefined macro names begin with `__` or `_` and an
@@ -1085,6 +1086,13 @@ pub(super) fn with_identity_macros<'a>(
             _ = write!(out, "#define __PIE__ {level}\n#define __pie__ {level}\n");
         }
     }
+    // The widest `_BitInt` the identity's compiler accepts, which
+    // semantic analysis enforces (C23 §5.2.5.3.2p1, pp. 22-23; PDF pp. 35-36).
+    _ = writeln!(
+        out,
+        "#define __BITINT_MAXWIDTH__ {}",
+        configuration.bit_int_max_width()
+    );
     out.push_str(identity_claim(identity));
     // MinGW-w64 targets spell `__declspec(a)` as a GNU attribute, unless
     // Microsoft extensions make `__declspec` a keyword: Clang then defines

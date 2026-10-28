@@ -78,6 +78,26 @@ pub(crate) enum ConstantFolding {
     /// `llvm.is.constant` sees no constant.
     CompoundLiteral,
     AtomicCast,
+    /// A floating value converted to an integer type out of its range,
+    /// folded to the value GCC and Clang store for it (0 for a NaN, else
+    /// the nearest bound) as a static initializer, and the arithmetic on
+    /// it. It is no integer constant expression, and GCC reports "overflow
+    /// in constant expression" under `-pedantic`. C99 §6.3.1.4p1, p. 43;
+    /// PDF p. 55; §6.6p4, p. 95; PDF p. 107.
+    Overflow,
+    /// A value computed from an [`Self::Overflow`] one by an operator whose
+    /// result GCC's folder marks no overflow (a comparison, a logical
+    /// operator): still no integer constant expression, but no pedantic
+    /// report either.
+    OverflowOperand,
+}
+
+impl ConstantFolding {
+    /// Whether the value derives from an out-of-range floating conversion,
+    /// so that it is no integer constant expression.
+    pub(crate) fn overflowed(self) -> bool {
+        matches!(self, Self::Overflow | Self::OverflowOperand)
+    }
 }
 
 impl ExpressionInfo<'_> {

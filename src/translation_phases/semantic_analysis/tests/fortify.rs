@@ -128,7 +128,16 @@ void test(void) { char local[4]; boolean(2); casted(2); integer(4.5); floating(2
 "#,
         |context, sema| {
             let errors = context.take_pending_errors();
-            assert_eq!(errors.len(), 9, "{errors:?}");
+            // Nine predicates hold; `integer(4.5)` also drops a fraction
+            // (Clang's `-Wliteral-conversion`).
+            assert_eq!(errors.len(), 10, "{errors:?}");
+            assert_eq!(
+                errors
+                    .iter()
+                    .filter(|error| matches!(error, TranslationError::Semantic(error) if matches!(error.kind, SemanticErrorKind::LiteralConversion(_))))
+                    .count(),
+                1
+            );
             assert_eq!(sema.errors, 0);
         },
     );

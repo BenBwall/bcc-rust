@@ -6,7 +6,7 @@ _MSVC_CONSTEXPR_ATTRIBUTE	The advertised pragma/attribute semantics are not impl
 _MSVC_TRADITIONAL	Traditional Microsoft preprocessing is not implemented; bcc uses its conforming preprocessor.
 _M_FP_CONTRACT	MS floating code-generation modes are not implemented.
 _M_FP_PRECISE	MS floating code-generation modes are not implemented.
-__BITINT_MAXWIDTH__	Extended integer syntax exists but these widths lack semantic types.
+__BITINT_MAXWIDTH__	The widest _BitInt follows the compiler identity; defined beside the identity macros.
 __CONSTANT_CFSTRINGS__	Objective-C and CoreFoundation string intrinsics are not implemented.
 __FPCLASS_NEGINF	Floating classification intrinsics are not implemented.
 __FPCLASS_NEGNORMAL	Floating classification intrinsics are not implemented.

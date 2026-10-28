@@ -354,6 +354,8 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             | Work::DiscardType => {
                 _ = self.values.pop();
             },
+            | Work::BitIntWidth(width, signed, source, errors_before) =>
+                self.bit_int_width(width, signed, source, errors_before),
             | Work::UnknownType(reason) => {
                 _ = self.take_type();
                 let ty = self.types.unmodeled(reason);
@@ -1808,6 +1810,10 @@ enum Work<'tu, 's> {
     VectorAttributesDone(Option<&'tu SpecifierExtension<'tu>>, bool),
     VectorDeclaratorAttributes(ArenaList<'tu, DirectDeclarator<'tu>>),
     UnknownType(UnmodeledType),
+    /// Checks a `_BitInt` width once its expression is typed: the width,
+    /// whether the type is signed, the specifier's source and the error
+    /// count before the width was analyzed.
+    BitIntWidth(&'tu Expression<'tu>, bool, SourceVectors, usize),
     Spec(TypeSpecifiers<'tu>, TypeQualifiers, SourceVectors, bool),
     SpecDone(TypeSpecifiers<'tu>, TypeQualifiers, SourceVectors, bool),
     Qualify(TypeQualifiers, SourceVectors),
@@ -1942,6 +1948,12 @@ struct Analyzer<'a, 'tu, 's> {
     old_parameter_mode:      bool,
     /// Exceptional evaluation yields a variable array bound, not an error.
     runtime_bound:           bool,
+    /// Counts the initializers checked, and the count when one last
+    /// reported an out-of-range value for a static bit-field under Clang's
+    /// rules: Clang's evaluator stops at the first, so one initializer
+    /// reports it once.
+    initializer_checks:      u32,
+    bit_field_overflowed:    u32,
     /// Reported constraint diagnostics, warnings included: local checks
     /// compare it with an earlier value to learn whether a check failed.
     semantic_errors:         usize,

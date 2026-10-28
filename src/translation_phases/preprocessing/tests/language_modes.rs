@@ -851,6 +851,36 @@ fn binary128_imaginary_suffixes_accept_both_orders() {
 }
 
 #[test]
+fn imaginary_interchange_suffixes_accept_both_orders() {
+    // GCC and Clang take an imaginary `f16` constant in either order.
+    let (tokens, errors) = observe("1.0f16i 1.0if16 2.5F16j 0x1p0jf16\n", mode(CStandard::C23));
+    assert!(errors.is_empty(), "{errors:?}");
+    assert_eq!(spellings(&tokens).matches("_Float16 _Complex").count(), 4);
+    // GCC's `fN` and `fNx` constants have imaginary forms too.
+    let gcc =
+        mode(CStandard::C23).with_compiler_identity(crate::configuration::CompilerIdentity::Gcc);
+    let (tokens, errors) = observe("1.0f32i 1.0if64 1.0f32xi 1.0if64x 1.0f128i 1.0if128\n", gcc);
+    assert!(errors.is_empty(), "{errors:?}");
+    let tokens = spellings(&tokens);
+    for (component, count) in [
+        ("_Float32 _Complex", 1),
+        ("_Float64 _Complex", 1),
+        ("_Float32x _Complex", 1),
+        ("_Float64x _Complex", 1),
+        ("__float128 _Complex", 2),
+    ] {
+        assert_eq!(tokens.matches(component).count(), count, "{tokens}");
+    }
+    // bcc has no complex `__bf16`, and Clang no `fN` suffix.
+    assert_eq!(observe("1.0bf16i 1.0ibf16\n", gcc).1.len(), 2);
+    // An invalid constant reports its error alone, not the imaginary
+    // extension too.
+    let pedantic = CompilerConfiguration::new(CStandard::C23, ExtensionPolicy::Warn);
+    assert_eq!(observe("1.0f32i\n", pedantic).1.len(), 1);
+    assert_eq!(observe("1.0f16i\n", pedantic).1.len(), 1);
+}
+
+#[test]
 fn lexical_and_operator_truncations_recover_in_every_revision() {
     let source = "#define V(...) __VA_OPT__(__VA_ARGS__)\nV(1)\nu8\"hello\" 1'234 0o7 \
                   '\\x{41}'\n#if __has_include(\"missing.h\")\n#endif\n__pragma(STDC FP_CONTRACT \

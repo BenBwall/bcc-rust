@@ -209,6 +209,27 @@ pub(crate) enum SemanticErrorKind {
     /// integer constant's value; the payload is the interned message.
     /// C99: §6.3.1.3p3, p. 43; PDF p. 55.
     ConstantConversion(StringCacheId),
+    /// GCC's `-Woverflow`: a floating constant converted out of an integer
+    /// type's range in a static initializer, which stores the saturated
+    /// value; the payload is the interned message.
+    /// C99: §6.3.1.4 paragraph 1, p. 43; PDF p. 55.
+    FloatOverflow(StringCacheId),
+    /// GCC's pedantic "overflow in constant expression": a static
+    /// initializer's floating value converted out of an integer type's
+    /// range, by a cast too, or arithmetic on one.
+    /// C99: §6.6 paragraph 4, p. 95; PDF p. 107.
+    PedanticOverflow,
+    /// Clang's `-Wliteral-conversion`: a floating literal's implicit
+    /// conversion to an integer type is out of range or changes its value;
+    /// the payload is the interned message.
+    /// C99: §6.3.1.4 paragraph 1, p. 43; PDF p. 55.
+    LiteralConversion(StringCacheId),
+    /// A string literal initializes an array too short for its characters,
+    /// null character aside; the characters that fit are stored. GCC and
+    /// Clang accept it with a warning, as the constraint violation it is.
+    /// C99: §6.7.8 paragraph 2, p. 125; PDF p. 137; paragraph 14, p. 126;
+    /// PDF p. 138.
+    ExcessString,
     /// GNU extension: GCC "Other Builtins" probability constraint.
     /// <https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html>
     InvalidBuiltinProbability,
@@ -275,6 +296,10 @@ pub(crate) enum SemanticErrorKind {
     FailedAssertion,
     /// C99: §6.7.8p2-3, p. 125; PDF p. 137.
     InvalidInitializer,
+    /// GCC: an automatic array initialized by an array compound literal;
+    /// Clang: by one whose initializer has side effects.
+    /// GNU extension: GCC manual, "Compound Literals".
+    NonConstantArrayInitializer,
     /// C99: §6.7.8p2, p. 125; PDF p. 137.
     ExcessInitializer,
     /// A flexible array member given elements outside a static object's own
@@ -365,6 +390,16 @@ pub(crate) enum SemanticErrorKind {
     InvalidBitFieldWidth,
     /// C99: §6.7.2.1p3, p. 101; PDF p. 113.
     NamedZeroWidthBitField,
+    /// GCC: a `_BitInt` width that is zero or negative; Clang: an
+    /// `unsigned _BitInt` width below 1.
+    /// C23: §6.7.3.1 paragraph 4, p. 104; PDF p. 117.
+    NonPositiveBitIntWidth,
+    /// A signed `_BitInt` width below 2.
+    /// C23: §6.7.3.1 paragraph 4, p. 104; PDF p. 117.
+    SignedBitIntWidth,
+    /// A `_BitInt` width above `BITINT_MAXWIDTH`.
+    /// C23: §6.7.3.1 paragraph 4, p. 104; PDF p. 117.
+    BitIntWidthTooLarge,
     /// C99: §6.7.5.2p1; §6.7.5.3p2 and p10, pp. 116-119; PDF pp. 128-131.
     InvalidParameter,
     /// C99: §6.7p7, p. 98; PDF p. 110.
@@ -625,6 +660,10 @@ impl SemanticErrorKind {
                 Some(DiagnosticGroup::InconsistentDllimport),
             | Self::CallAttributeWarning => Some(DiagnosticGroup::AttributeWarning),
             | Self::ConstantConversion(_) => Some(DiagnosticGroup::ConstantConversion),
+            | Self::FloatOverflow(_) => Some(DiagnosticGroup::Overflow),
+            | Self::PedanticOverflow => Some(DiagnosticGroup::PedanticOverflow),
+            | Self::LiteralConversion(_) => Some(DiagnosticGroup::LiteralConversion),
+            | Self::ExcessString => Some(DiagnosticGroup::ExcessInitializers),
             | _ => None,
         }
     }
@@ -632,6 +671,14 @@ impl SemanticErrorKind {
     /// The primary label names what is wrong at the labeled source.
     const fn label(self) -> &'static str {
         match self {
+            | Self::PointerConstraint(
+                crate::configuration::DiagnosticGroup::PointerToIntCast
+                | crate::configuration::DiagnosticGroup::PointerToEnumCast
+                | crate::configuration::DiagnosticGroup::VoidPointerToIntCast
+                | crate::configuration::DiagnosticGroup::VoidPointerToEnumCast
+                | crate::configuration::DiagnosticGroup::IntToPointerCast
+                | crate::configuration::DiagnosticGroup::IntToVoidPointerCast,
+            ) => "the integer and pointer widths differ",
             | Self::PointerConstraint(_) => "pointer constraint violation",
             | Self::FoldedArrayBound => "folded array bound",
             | Self::FoldedIntegerConstant => "folded integer constant expression",
@@ -716,6 +763,9 @@ impl SemanticErrorKind {
             | Self::InvalidFrameLevel => "expected an integer constant frame level",
             | Self::InvalidLongjmpValue => "expected the constant 1",
             | Self::ConstantConversion(_) => "the converted value differs",
+            | Self::FloatOverflow(_) | Self::LiteralConversion(_) | Self::PedanticOverflow =>
+                "the value is not the integer's",
+            | Self::ExcessString => "characters past the array's end are dropped",
             | Self::InvalidBuiltinAlignment => "expected a constant power-of-two alignment",
             | Self::InvalidPrefetchReadWrite => "expected an integer constant of 0 or 1",
             | Self::InvalidUnaryOperand | Self::InvalidAdditiveOperands =>
@@ -742,6 +792,7 @@ impl SemanticErrorKind {
             | Self::InvalidSwitchExpression => "controlling expression is not an integer",
             | Self::FailedAssertion => "assertion is false",
             | Self::InvalidInitializer => "invalid initializer",
+            | Self::NonConstantArrayInitializer => "not a constant array",
             | Self::ExcessInitializer => "no subobject is left to initialize",
             | Self::FlexibleArrayInitializer => "initializes a flexible array member",
             | Self::FlexibleArrayBraces => "not a brace-enclosed list",
@@ -779,6 +830,9 @@ impl SemanticErrorKind {
             | Self::DuplicateMember => "member declared again here",
             | Self::InvalidBitFieldType => "not an integer type",
             | Self::InvalidBitFieldWidth => "invalid width",
+            | Self::NonPositiveBitIntWidth
+            | Self::SignedBitIntWidth
+            | Self::BitIntWidthTooLarge => "invalid _BitInt width",
             | Self::NamedZeroWidthBitField => "named zero-width bit-field",
             | Self::InvalidParameter => "invalid parameter declaration",
             | Self::IncompleteObject => "incomplete type",
@@ -897,6 +951,22 @@ impl SemanticErrorKind {
                 "arithmetic on a null pointer treated as a cast from integer to pointer is a GNU extension",
                 "C99 §6.6p10 permits additional constant forms",
             ),
+            | Self::PointerConstraint(group @ (crate::configuration::DiagnosticGroup::PointerToIntCast
+            | crate::configuration::DiagnosticGroup::PointerToEnumCast
+            | crate::configuration::DiagnosticGroup::VoidPointerToIntCast
+            | crate::configuration::DiagnosticGroup::VoidPointerToEnumCast
+            | crate::configuration::DiagnosticGroup::IntToPointerCast
+            | crate::configuration::DiagnosticGroup::IntToVoidPointerCast)) => (
+                match group {
+                    | crate::configuration::DiagnosticGroup::PointerToIntCast => "cast from pointer to integer of different size",
+                    | crate::configuration::DiagnosticGroup::PointerToEnumCast => "cast from pointer to smaller enumeration type",
+                    | crate::configuration::DiagnosticGroup::VoidPointerToIntCast => "cast from 'void *' to smaller integer type",
+                    | crate::configuration::DiagnosticGroup::VoidPointerToEnumCast => "cast from 'void *' to smaller enumeration type",
+                    | crate::configuration::DiagnosticGroup::IntToPointerCast => "cast to pointer from integer of different size",
+                    | _ => "cast to 'void *' from smaller integer type",
+                },
+                "C99 §6.3.2.3p5-6: the result of converting between a pointer and an integer is implementation-defined and may not be representable",
+            ),
             | Self::PointerConstraint(group) => (
                 match group {
                     | crate::configuration::DiagnosticGroup::CompareDistinctPointerTypes => "comparison of distinct pointer types",
@@ -905,7 +975,6 @@ impl SemanticErrorKind {
                     | crate::configuration::DiagnosticGroup::PointerCompare => "comparison between pointer and zero character constant",
                     | crate::configuration::DiagnosticGroup::NullConversion => "implicit conversion of nullptr constant to bool",
                     | crate::configuration::DiagnosticGroup::PointerBoolConversion => "address always evaluates to true in a boolean context",
-                    | crate::configuration::DiagnosticGroup::PointerToIntCast => "cast to smaller integer type from pointer",
                     | crate::configuration::DiagnosticGroup::VoidPtrDereference => "dereferencing void pointer",
                     | crate::configuration::DiagnosticGroup::Nonnull => "null passed to a callee that requires a non-null argument",
                     | crate::configuration::DiagnosticGroup::PointerSign => "conversion between pointers to integer types with different sign",
@@ -917,6 +986,12 @@ impl SemanticErrorKind {
                     | crate::configuration::DiagnosticGroup::OrderedPointerIntegerCompare => "ordered comparison between pointer and integer",
                     | crate::configuration::DiagnosticGroup::PointerTypeMismatch => "pointer type mismatch in conditional expression",
                     | crate::configuration::DiagnosticGroup::ConditionalTypeMismatch => "pointer/integer type mismatch in conditional expression",
+                    | crate::configuration::DiagnosticGroup::PointerToIntCast
+                    | crate::configuration::DiagnosticGroup::PointerToEnumCast
+                    | crate::configuration::DiagnosticGroup::VoidPointerToIntCast
+                    | crate::configuration::DiagnosticGroup::VoidPointerToEnumCast
+                    | crate::configuration::DiagnosticGroup::IntToPointerCast
+                    | crate::configuration::DiagnosticGroup::IntToVoidPointerCast
                     | crate::configuration::DiagnosticGroup::NewlineEof
                     | crate::configuration::DiagnosticGroup::Undef
                     | crate::configuration::DiagnosticGroup::PredefinedOutsideFunction
@@ -934,7 +1009,12 @@ impl SemanticErrorKind {
                     | crate::configuration::DiagnosticGroup::GnuFoldingConstant
                     | crate::configuration::DiagnosticGroup::GnuNullPointerArithmetic
                     | crate::configuration::DiagnosticGroup::ConstantPromotion
-                    | crate::configuration::DiagnosticGroup::ConstantConversion => "warning-group diagnostic",
+                    | crate::configuration::DiagnosticGroup::ConstantConversion
+                    | crate::configuration::DiagnosticGroup::Overflow
+                    | crate::configuration::DiagnosticGroup::PedanticOverflow
+                    | crate::configuration::DiagnosticGroup::Conversion
+                    | crate::configuration::DiagnosticGroup::LiteralConversion
+                    | crate::configuration::DiagnosticGroup::ExcessInitializers => "warning-group diagnostic",
                 },
                 "C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1",
             ),
@@ -959,6 +1039,22 @@ impl SemanticErrorKind {
             | Self::InvalidFrameLevel => (
                 "the frame level must be an integer constant",
                 "GNU extension: GCC requires the level of __builtin_frame_address and __builtin_return_address to be a constant unsigned integer",
+            ),
+            | Self::PedanticOverflow => (
+                "overflow in constant expression",
+                "C99 §6.6p4: a constant expression evaluates to a value its type represents; GCC \
+                 folds an out-of-range conversion to the nearest bound",
+            ),
+            | Self::FloatOverflow(_) | Self::LiteralConversion(_) => (
+                "floating value converted to an integer type changes",
+                "C99 §6.3.1.4p1: a floating value converts to an integer by truncation toward \
+                 zero; an integral part out of range is undefined, and GCC and Clang store the \
+                 nearest bound, or 0 for a NaN",
+            ),
+            | Self::ExcessString => (
+                "initializer-string is too long for its array",
+                "C99 §6.7.8p2 and p14: the string's characters initialize the array's elements; \
+                 none may lie outside the array",
             ),
             | Self::ConstantConversion(_) => (
                 "implicit conversion changes the value of an integer constant",
@@ -1432,6 +1528,11 @@ impl SemanticErrorKind {
                 "static assertion failed",
                 "C11 §6.7.10p2-3: the assertion requires a nonzero integer constant expression",
             ),
+            | Self::NonConstantArrayInitializer => (
+                "array initialized from non-constant array expression",
+                "C99 §6.7.8p16: an array is initialized by a braced list; GCC also accepts a \
+                 compound literal of its type for static storage, Clang one without side effects",
+            ),
             | Self::InvalidInitializer => (
                 "initializer cannot initialize this object",
                 "C99 §6.7.8p2-3: initialization requires an appropriate complete object or \
@@ -1637,6 +1738,20 @@ impl SemanticErrorKind {
                 "bit-field width is negative or exceeds its type",
                 "C99 §6.7.2.1p3: the width is a nonnegative integer constant expression no wider \
                  than the bit-field's type",
+            ),
+            | Self::NonPositiveBitIntWidth => (
+                "_BitInt width is not positive",
+                "C23 §6.7.3.1p4: the width N of a _BitInt is an integer constant expression of at \
+                 least 1 for unsigned _BitInt",
+            ),
+            | Self::SignedBitIntWidth => (
+                "signed _BitInt width is less than 2",
+                "C23 §6.7.3.1p4: the width N of a signed _BitInt is at least 2",
+            ),
+            | Self::BitIntWidthTooLarge => (
+                "_BitInt width exceeds BITINT_MAXWIDTH",
+                "C23 §6.7.3.1p4: N is at most BITINT_MAXWIDTH: 65535 for GCC and 8388608 for Clang \
+                 on x86-64, 128 on WebAssembly",
             ),
             | Self::NamedZeroWidthBitField => (
                 "named bit-field has zero width",
@@ -1908,7 +2023,10 @@ impl ToDiagnostic for SemanticError {
                     "non-zero bytes"
                 }
             )
-        } else if let SemanticErrorKind::ConstantConversion(text) = self.kind {
+        } else if let SemanticErrorKind::ConstantConversion(text)
+        | SemanticErrorKind::FloatOverflow(text)
+        | SemanticErrorKind::LiteralConversion(text) = self.kind
+        {
             arena.alloc_str(context.string_cache.at(text))
         } else if let SemanticErrorKind::PragmaPackShow(value) = self.kind {
             format_in!(arena, "value of #pragma pack(show) == {value}")
@@ -2022,6 +2140,10 @@ impl GetSeverity for SemanticError {
                 | SemanticErrorKind::InitializerOverride
                 | SemanticErrorKind::PartialInitializerOverride
                 | SemanticErrorKind::ConstantConversion(_)
+                | SemanticErrorKind::FloatOverflow(_)
+                | SemanticErrorKind::PedanticOverflow
+                | SemanticErrorKind::LiteralConversion(_)
+                | SemanticErrorKind::ExcessString
                 | SemanticErrorKind::AttributeAfterDefinition
                 | SemanticErrorKind::UnevaluatedStringPrefix
                 | SemanticErrorKind::UnsupportedDeclspec

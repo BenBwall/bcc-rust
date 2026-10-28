@@ -176,6 +176,21 @@ impl<'tu> Context<'tu> {
         self.pending_errors.len() - self.suppressed_errors
     }
 
+    /// The number of queued diagnostics, suppressed ones included: the
+    /// queue position the next one takes, which
+    /// [`Self::withdraw_pending_error`] accepts.
+    pub(crate) fn pending_queue_length(&self) -> usize {
+        self.pending_errors.len()
+    }
+
+    /// Whether a preprocessing error was queued at or after position
+    /// `start`.
+    pub(crate) fn preprocessing_error_since(&self, start: usize) -> bool {
+        self.pending_errors.iter().skip(start).any(|error| {
+            matches!(error, TranslationError::Preprocessing(error) if error.severity() == ErrorSeverity::Error)
+        })
+    }
+
     /// Marks one arena-stable occurrence without scanning the diagnostic FIFO.
     pub(crate) fn suppress_extension(&mut self, marker: &std::cell::Cell<bool>) {
         if !marker.replace(true) {

@@ -283,7 +283,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     return;
                 }
                 let reason = match *extended {
-                    | super::ExtendedType::BitInt { .. } => Some(UnmodeledType::BitInt),
+                    | super::ExtendedType::BitInt { .. } =>
+                        Some(UnmodeledType::BitInt { width: 0 }),
                     | super::ExtendedType::Decimal32 => Some(UnmodeledType::Decimal32),
                     | super::ExtendedType::Decimal64 => Some(UnmodeledType::Decimal64),
                     | super::ExtendedType::Decimal128 => Some(UnmodeledType::Decimal128),
@@ -294,13 +295,24 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     | Some(reason) => self.types.unmodeled(reason),
                     | None => self.types.unknown(),
                 };
-                self.values.push(ty);
+                // A `_BitInt`'s type, with its width, follows the width's
+                // check (`Analyzer::bit_int_width`).
+                if !matches!(*extended, super::ExtendedType::BitInt { .. }) {
+                    self.values.push(ty);
+                }
                 match *extended {
                     | super::ExtendedType::Atomic(name) =>
                         self.syntax_operand(super::SyntaxOperand::Type(name)),
                     | super::ExtendedType::Typeof { operand, .. } => self.syntax_operand(operand),
-                    | super::ExtendedType::BitInt { width, .. } =>
-                        self.work.push(Work::Expression(width)),
+                    | super::ExtendedType::BitInt { width, signedness } => {
+                        self.work.push(Work::BitIntWidth(
+                            width,
+                            signedness != Some(false),
+                            source,
+                            self.semantic_errors,
+                        ));
+                        self.work.push(Work::Expression(width));
+                    },
                     | _ => {},
                 }
             },
@@ -335,6 +347,133 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             }
             extension = item.next;
         }
+    }
+
+    /// Checks the width of `_BitInt(N)` once its expression is typed: an
+    /// integer constant expression, at least 2 for a signed type and 1 for
+    /// an unsigned one, and at most `BITINT_MAXWIDTH`. GCC compares the
+    /// value itself with its 65535 bits, so a width of 0 or less is not
+    /// positive, and folds nothing else. Clang reads the value's bits
+    /// zero-extended from its type and truncated to 64 bits
+    /// (`BuildBitIntType`), so it takes `(signed char)-1` as 255 bits and
+    /// `-1` as too large, against its 2^23 bits, and folds any arithmetic
+    /// constant. TCC and MSVC follow GCC, clang-cl Clang
+    /// ([`crate::configuration::CompilerConfiguration::bit_int_rules`]). A
+    /// width already diagnosed is not reported again. The specifier's type,
+    /// which records a valid width (0 for an invalid one), is pushed here.
+    /// C23: §6.7.3.1 paragraph 4, p. 104; PDF p. 117.
+    pub(super) fn bit_int_width(
+        &mut self,
+        width: &'tu super::Expression<'tu>,
+        signed: bool,
+        source: SourceVectors,
+        errors_before: usize,
+    ) {
+        let width = self.checked_bit_int_width(width, signed, source, errors_before);
+        let ty = self.types.unmodeled(UnmodeledType::BitInt { width });
+        self.values.push(ty);
+    }
+
+    /// The width [`Self::bit_int_width`] checks, or 0 if it is invalid.
+    fn checked_bit_int_width(
+        &mut self,
+        width: &'tu super::Expression<'tu>,
+        signed: bool,
+        source: SourceVectors,
+        errors_before: usize,
+    ) -> u32 {
+        let maximum = self.context.configuration.bit_int_max_width();
+        if self.semantic_errors != errors_before || self.unanalyzed_constant(width) {
+            return 0;
+        }
+        let gcc = self.context.configuration.bit_int_rules() == crate::configuration::RuleSet::Gcc;
+        let info = self.expression_info(width);
+        // Typing folds the width; it is an integer constant expression
+        // when no operand reads an object, even an unevaluated one.
+        let value = if info.ice && self.valid_ice_operands(width) {
+            info.integer
+        } else if !gcc
+            && info.constant == super::ConstantClass::Arithmetic
+            && !matches!(
+                info.folding,
+                super::expressions::ConstantFolding::Overflow
+                    | super::expressions::ConstantFolding::OverflowOperand
+                    | super::expressions::ConstantFolding::AtomicCast
+            )
+            && info.integer.is_some()
+            && self.integer_type(info.ty).is_some()
+        {
+            // Clang folds any other integer constant here, in every mode, as
+            // a GNU extension (`1 ? 8 : n`, `(int){8}`); GCC folds none.
+            if !self.tainted
+                && (self.context.configuration.extension_policy()
+                    != crate::configuration::ExtensionPolicy::Allow
+                    || self.context.configuration.diagnostic_requested(
+                        crate::configuration::DiagnosticGroup::GnuFoldingConstant,
+                    ))
+            {
+                self.error(
+                    SemanticErrorKind::FoldedIntegerConstant,
+                    width.source_vectors,
+                    None,
+                    None,
+                );
+            }
+            info.integer
+        } else {
+            None
+        };
+        let Some(value) = value else {
+            self.error(
+                SemanticErrorKind::InvalidConstant,
+                width.source_vectors,
+                None,
+                None,
+            );
+            return 0;
+        };
+        // The width as the identity's compiler reads it, if it is valid.
+        let width = if gcc {
+            match value.to_i128() {
+                | Some(..=0) => Err(SemanticErrorKind::NonPositiveBitIntWidth),
+                | Some(1) if signed => Err(SemanticErrorKind::SignedBitIntWidth),
+                | Some(width @ 1..) if width <= i128::from(maximum) =>
+                    u64::try_from(width).map_err(|_| SemanticErrorKind::BitIntWidthTooLarge),
+                | _ => Err(SemanticErrorKind::BitIntWidthTooLarge),
+            }
+        } else {
+            let pattern = value.value.cast_unsigned() & (u128::MAX >> (128 - value.bits));
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "Clang reads the low 64 bits of a wider width."
+            )]
+            let bits = pattern as u64;
+            if bits < 1 + u64::from(signed) {
+                Err(if signed {
+                    SemanticErrorKind::SignedBitIntWidth
+                } else {
+                    SemanticErrorKind::NonPositiveBitIntWidth
+                })
+            } else if bits > maximum {
+                Err(SemanticErrorKind::BitIntWidthTooLarge)
+            } else {
+                Ok(bits)
+            }
+        };
+        let width = match width {
+            | Ok(width) => width,
+            | Err(kind) => {
+                self.error(kind, source, None, None);
+                return 0;
+            },
+        };
+        if gcc {
+            // GCC reports the type before C23 once its width is valid, as
+            // `'_BitInt(8)'`; the keyword reports it for Clang.
+            self.context
+                .report_extension(crate::configuration::Feature::BitInt, "_BitInt", source);
+        }
+        u32::try_from(width).unwrap_or(0)
     }
 
     /// Declarator suffixes derive from the base inward, then grouped children.
@@ -974,8 +1113,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             // diagnosed; completion preserves it without dependent errors.
             if member.invalid {
                 tag.tainted.set(true);
-                tag.unmodeled
-                    .set(tag.unmodeled.get().or(self.types.unmodeled_type(member.ty)));
+                tag.unmodeled.set(
+                    tag.unmodeled.get().or(self
+                        .types
+                        .unmodeled_type(member.ty)
+                        .map(UnmodeledType::anonymous)),
+                );
                 output.push(member);
                 continue;
             }
@@ -1033,8 +1176,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     );
                 }
                 tag.tainted.set(true);
-                tag.unmodeled
-                    .set(tag.unmodeled.get().or(self.types.unmodeled_type(member.ty)));
+                tag.unmodeled.set(
+                    tag.unmodeled.get().or(self
+                        .types
+                        .unmodeled_type(member.ty)
+                        .map(UnmodeledType::anonymous)),
+                );
                 output.push(member);
                 continue;
             };

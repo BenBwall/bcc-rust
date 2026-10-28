@@ -980,6 +980,27 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     /// C99: §6.5.2.3p1-4, pp. 72-73; PDF pp. 84-85.
+    /// The type of `member` of the unanalyzed `record`: the recovery type,
+    /// unless the record names the member directly with a `_BitInt`, whose
+    /// width a pointer cast warning reads.
+    /// C99: §6.5.2.3 paragraph 3, p. 73; PDF p. 85.
+    fn unanalyzed_member_type(&mut self, record: TypeId, member: Identifier) -> TypeId {
+        if let TypeKind::Tag(id) = self.types.nodes[self.types.non_atomic(record).index]
+            && let Some(field) = self.types.tags[id]
+                .members
+                .get()
+                .iter()
+                .find(|field| field.name.is_some_and(|name| name.name == member.name))
+            && matches!(
+                self.types.nodes[field.ty.index],
+                TypeKind::Unmodeled(super::super::types::UnmodeledType::BitInt { .. })
+            )
+        {
+            return field.ty;
+        }
+        self.types.recovery_type(&[record])
+    }
+
     pub(super) fn type_member(
         &mut self,
         e: &'tu Expression<'tu>,
@@ -988,7 +1009,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         indirect: bool,
     ) -> ExpressionInfo<'tu> {
         if self.types.unanalyzed(base.ty) {
-            let ty = self.types.recovery_type(&[base.ty]);
+            let ty = self.unanalyzed_member_type(base.ty, member);
             return Self::expression_result(e, ty);
         }
         let mut ty = base.ty;
@@ -999,14 +1020,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             };
             // An unanalyzed pointee may be a record; its members are unknown.
             if self.types.unanalyzed(target) {
-                let ty = self.types.recovery_type(&[target]);
+                let ty = self.unanalyzed_member_type(target, member);
                 return Self::expression_result(e, ty);
             }
             ty = target;
         }
         // C99 §6.5.2.3p2: defer the record constraint for an unmodeled target.
         if self.types.unanalyzed(ty) {
-            let ty = self.types.recovery_type(&[ty]);
+            let ty = self.unanalyzed_member_type(ty, member);
             return Self::expression_result(e, ty);
         }
         let TypeKind::Tag(id) = self.types.nodes[ty.index] else {
@@ -1114,7 +1135,18 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let operand = self.resolve_function_value(operand, Some(target));
         let from = self.converted(operand);
         if self.types.unanalyzed(target) || self.types.unanalyzed(from) {
-            let ty = self.types.recovery_type(&[target, from]);
+            // A `_BitInt`, unmodeled otherwise, has the width a pointer
+            // cast warning compares.
+            self.pointer_integer_cast_warning(target, from, operand, e.source_vectors);
+            // A cast to a `_BitInt` has the width it names.
+            let ty = if matches!(
+                self.types.nodes[target.index],
+                TypeKind::Unmodeled(super::super::types::UnmodeledType::BitInt { .. })
+            ) {
+                target.unqualified()
+            } else {
+                self.types.recovery_type(&[target, from])
+            };
             return Self::expression_result(e, ty);
         }
         // GNU: a structure or union cast to its own type is its value, an
@@ -1224,20 +1256,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if !nullptr_cast {
             return self.invalid_expression(e, SemanticErrorKind::InvalidCast);
         }
-        if self.pointer_target(from).is_some()
-            && self
-                .integer_type(target)
-                .is_some_and(|(bits, _)| u64::from(bits) < self.types.target.pointer.size * 8)
-            && !matches!(
-                self.types.nodes[target.index],
-                TypeKind::Scalar(Scalar::Bool)
-            )
-        {
-            self.pointer_diagnostic(
-                crate::configuration::DiagnosticGroup::PointerToIntCast,
-                e.source_vectors,
-            );
-        }
+        self.pointer_integer_cast_warning(target, from, operand, e.source_vectors);
         self.convert(operand.expression, target, ConversionKind::Assignment);
         let mut info = Self::expression_result(e, target.unqualified());
         self.fold_conversion(&mut info, target, operand);
@@ -1309,10 +1328,17 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         while let ExpressionType::Parenthesized { expression } = immediate.kind {
             immediate = expression;
         }
+        // A floating value out of the integer's range folds to the value GCC
+        // and Clang store for it, which is no integer constant expression.
+        let mut overflow = false;
         if let Some((bits, signed)) = self.integer_type(target) {
             info.integer = if let ExpressionType::Constant(Constant::Float(value)) = immediate.kind
             {
-                self.float_cast(target, value)
+                self.saturated_float_cast(target, value, None)
+                    .map(|(value, out_of_range)| {
+                        overflow = out_of_range;
+                        value
+                    })
             } else {
                 operand.integer.map(|v| {
                     if matches!(
@@ -1338,8 +1364,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             ) {
                 Some(Integer::int(i128::from(value.truth())).cast(1, false))
             } else {
-                self.float_cast(target, FloatTokenType::LongDouble(value.real))
+                self.saturated_float_cast(target, FloatTokenType::LongDouble(value.real), None)
+                    .map(|(value, out_of_range)| {
+                        overflow = out_of_range;
+                        value
+                    })
             };
+        }
+        if overflow {
+            info.ice = false;
+            info.folding = ConstantFolding::Overflow;
         }
         if self.arithmetic(target) && self.integer_type(target).is_none() {
             info.set_floating(if self.unrounded_half_cast(operand, target) {

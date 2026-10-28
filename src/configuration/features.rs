@@ -113,6 +113,13 @@ pub(crate) enum Feature {
     /// <https://gcc.gnu.org/onlinedocs/gcc/Compound-Literals.html>; extends
     /// C99 §6.7.8 paragraph 4, p. 125; PDF p. 137.
     ConstantCompoundLiteral,
+    /// An array initialized by a compound literal of an array type it is
+    /// compatible with, as if by the literal's braced list. GCC accepts it
+    /// only for static storage; Clang also in a block and reports it under
+    /// `-Wgnu-compound-literal-initializer`.
+    /// GNU extension: GCC manual, "Compound Literals"; extends C99 §6.7.8
+    /// paragraph 16, p. 126; PDF p. 138.
+    ArrayCompoundLiteral,
     ZeroLengthArrays,
     Int128,
     AutoType,
@@ -318,6 +325,7 @@ impl Feature {
             | Self::OmittedConditionalOperand
             | Self::OneVoidConditional
             | Self::ConstantCompoundLiteral
+            | Self::ArrayCompoundLiteral
             | Self::ZeroLengthArrays
             | Self::Int128
             | Self::AutoType
@@ -452,6 +460,7 @@ impl Feature {
         Self::OmittedConditionalOperand,
         Self::OneVoidConditional,
         Self::ConstantCompoundLiteral,
+        Self::ArrayCompoundLiteral,
         Self::ZeroLengthArrays,
         Self::Int128,
         Self::AutoType,

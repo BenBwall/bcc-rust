@@ -1,0 +1,113 @@
+error: an integer constant expression is required
+ --> sema-bitint-width-clang.c:2:9
+  |
+2 | _BitInt(n) runtime;
+  |         ^ not an integer constant expression
+  |
+  = note: C99 §6.6p3 and p6: integer constant expressions restrict operators and operands
+
+warning: expression is not an integer constant expression; folding it to a constant is a GNU extension [-Wgnu-folding-constant]
+ --> sema-bitint-width-clang.c:3:9
+  |
+3 | _BitInt((int){8}) literal;
+  |         ^^^^^^^^ folded integer constant expression
+  |
+  = note: C99 §6.6p6: an integer constant expression reads no object and converts no pointer
+
+error: an integer constant expression is required
+ --> sema-bitint-width-clang.c:4:9
+  |
+4 | _BitInt(2.0) floating;
+  |         ^^^ not an integer constant expression
+  |
+  = note: C99 §6.6p3 and p6: integer constant expressions restrict operators and operands
+
+error: signed _BitInt width is less than 2
+ --> sema-bitint-width-clang.c:5:1
+  |
+5 | _BitInt(1) signed_one;
+  | ^^^^^^^^^^ invalid _BitInt width
+  |
+  = note: C23 §6.7.3.1p4: the width N of a signed _BitInt is at least 2
+
+error: _BitInt width is not positive
+ --> sema-bitint-width-clang.c:7:1
+  |
+7 | unsigned _BitInt(0) unsigned_zero;
+  | ^^^^^^^^^^^^^^^^^^^ invalid _BitInt width
+  |
+  = note: C23 §6.7.3.1p4: the width N of a _BitInt is an integer constant expression of at least 1 for unsigned _BitInt
+
+error: signed _BitInt width is less than 2
+ --> sema-bitint-width-clang.c:8:1
+  |
+8 | _BitInt(0) zero;
+  | ^^^^^^^^^^ invalid _BitInt width
+  |
+  = note: C23 §6.7.3.1p4: the width N of a signed _BitInt is at least 2
+
+error: _BitInt width exceeds BITINT_MAXWIDTH
+  --> sema-bitint-width-clang.c:9:1
+   |
+ 9 | _BitInt(-1) negative;
+   | ^^^^^^^^^^^ invalid _BitInt width
+   |
+   = note: C23 §6.7.3.1p4: N is at most BITINT_MAXWIDTH: 65535 for GCC and 8388608 for Clang on x86-64, 128 on WebAssembly
+
+error: _BitInt width exceeds BITINT_MAXWIDTH
+  --> sema-bitint-width-clang.c:13:1
+   |
+13 | _BitInt(4294967298LL) wide;
+   | ^^^^^^^^^^^^^^^^^^^^^ invalid _BitInt width
+   |
+   = note: C23 §6.7.3.1p4: N is at most BITINT_MAXWIDTH: 65535 for GCC and 8388608 for Clang on x86-64, 128 on WebAssembly
+
+error: signed _BitInt width is less than 2
+  --> sema-bitint-width-clang.c:14:1
+   |
+14 | typedef _BitInt(1) Narrow;
+   | ^^^^^^^^^^^^^^^^^^ invalid _BitInt width
+   |
+   = note: C23 §6.7.3.1p4: the width N of a signed _BitInt is at least 2
+
+error: signed _BitInt width is less than 2
+  --> sema-bitint-width-clang.c:15:19
+   |
+15 | int size = sizeof(_BitInt(0));
+   |                   ^^^^^^^^^^ invalid _BitInt width
+   |
+   = note: C23 §6.7.3.1p4: the width N of a signed _BitInt is at least 2
+
+error: signed _BitInt width is less than 2
+  --> sema-bitint-width-clang.c:16:28
+   |
+16 | int selected = _Generic(0, _BitInt(1): 1, default: 0);
+   |                            ^^^^^^^^^^ invalid _BitInt width
+   |
+   = note: C23 §6.7.3.1p4: the width N of a signed _BitInt is at least 2
+
+error: signed _BitInt width is less than 2
+  --> sema-bitint-width-clang.c:18:12
+   |
+18 |     (void)(_BitInt(0))3;
+   |            ^^^^^^^^^^ invalid _BitInt width
+   |
+   = note: C23 §6.7.3.1p4: the width N of a signed _BitInt is at least 2
+
+error: an integer constant expression is required
+  --> sema-bitint-width-clang.c:20:26
+   |
+20 |     (void)sizeof(_BitInt(m));
+   |                          ^ not an integer constant expression
+   |
+   = note: C99 §6.6p3 and p6: integer constant expressions restrict operators and operands
+
+warning: expression is not an integer constant expression; folding it to a constant is a GNU extension [-Wgnu-folding-constant]
+  --> sema-bitint-width-clang.c:26:9
+   |
+26 | _BitInt(1 ? 8 : n) folded_conditional;
+   |         ^^^^^^^^^ folded integer constant expression
+   |
+   = note: C99 §6.6p6: an integer constant expression reads no object and converts no pointer
+
+12 errors and 2 warnings generated.

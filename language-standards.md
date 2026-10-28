@@ -602,6 +602,7 @@ mode gate and policy diagnostics (`Imaginary` reports an unsupported type); a
 | OmittedConditionalOperand | - | - | - | - | - | - | - | extension (GNU native) | parser |
 | OneVoidConditional | - | - | - | - | - | - | - | extension (GNU native) | semantic analysis |
 | ConstantCompoundLiteral | - | - | - | - | - | - | - | extension (GNU native) | sema, lowering |
+| ArrayCompoundLiteral | - | - | - | - | - | - | - | extension (GNU native) | sema, lowering |
 | ZeroLengthArrays | - | - | - | - | - | - | - | extension (GNU native) | parser |
 | Float128 | - | - | - | - | - | - | - | extension (GNU native) | parser/sema |
 | Int128 | - | - | - | - | - | - | - | extension (GNU native) | parser/sema |
@@ -700,6 +701,10 @@ The following vocabulary entries retain the established diagnostic contracts:
   which keeps the parser's `UnionCasts` report. A cast to another aggregate
   type stays invalid, the result is not an lvalue, and it is no constant
   initializer of a static object, as in GCC.
+- `ArrayCompoundLiteral` has GNU origin: an array initialized by a compound
+  literal of its type, as "Arrays initialized by array compound literals"
+  below describes. Only the Clang identity reports it under `-pedantic`;
+  GCC reports the static object's `ConstantCompoundLiteral` instead.
 - `ConstantCompoundLiteral` has GNU origin. A compound literal of a static
   object's own type as its whole initializer is accepted as if its braced
   list were written in its place, when every value the literal stores is a
@@ -1534,9 +1539,10 @@ nonzero value). The resource `<float.h>` defines GCC's TS 18661-3 names
 `__FLTN_MANT_DIG__` is predefined, as GCC's header does; a test checks
 `FLT128_*` and `_Float128` arithmetic against GCC 15's output. Limits: the
 resource `<tgmath.h>` takes the types with the standard type's functions and
-result types (above), and refuses `_Float128`; GNU vector element types,
-imaginary `_FloatN` constants such as `1.0f32i`, and `__builtin_*f128` math
-beyond the existing primitives remain unsupported. `_Float16`, `__bf16`
+result types (above), and refuses `_Float128`; GNU vector element types and
+`__builtin_*f128` math beyond the existing primitives remain unsupported.
+Imaginary `_FloatN` constants such as `1.0f32i` are described under
+[Imaginary interchange constants](#imaginary-interchange-constants). `_Float16`, `__bf16`
 and `__fp16` follow in
 [Half-precision floating types](#half-precision-floating-types-2026-10-27).
 
@@ -1635,8 +1641,9 @@ type name" follows from that.
 Verified against GCC 15 and the pinned Clang on every back end
 (`tests/integration/half_precision.rs`: `bfloat16.c`, `complex_half.c`,
 `storage_half.c` and the ABI link tests). Limits: GCC's `__builtin_*f16`
-constant builtins, `FLT16_SNAN`, and imaginary `f16i` constants are
-absent.
+constant builtins and `FLT16_SNAN` are absent; imaginary `f16i`
+constants are described under
+[Imaginary interchange constants](#imaginary-interchange-constants).
 
 ### Known GCC-identity folding deviations
 
@@ -2264,13 +2271,8 @@ These cases remain different from the compiler each identity claims:
   initializer (`(unsigned char){300} + 0`, `(int){2147483647} + 1`) are not
   reproduced, as they are not for other initializers.
 
-Problems found while surveying that have nothing to do with literal reads
-remain open: `_BitInt` widths are not checked at all (`_BitInt((int){8})`
-and `int n; _BitInt(n) x;` are accepted, GCC rejects both), `static char
-c[3] = (char[3]){"ab"};` is rejected though GCC and Clang accept it, an
-out-of-range floating value converted to an integer in a static
-initializer is refused (`static unsigned char u = 300.7;`), and
-`-Wint-to-pointer-cast` is not reported (`(void *)(int){0}`).
+The problems found while surveying that have nothing to do with literal
+reads are fixed; see "Semantic analysis gaps" below.
 
 `tests/fixtures/programs/static_compound_literals.c` runs every accepted
 form, the half-precision ones and their excess precision included, on the
@@ -2281,3 +2283,212 @@ GCC and Clang builds (`tests/integration/static_compound_literals.rs`);
 `semantic_analysis/tests/compound_literal_statics.rs` and the
 `sema-static-compound-literal-{gcc,clang}` diagnostic goldens cover the
 rejections.
+
+## Semantic analysis gaps (2026-10-28)
+
+Each rule below was surveyed against GCC 15.2 and the bundled Clang 23 in
+C99, C17 and C23, GNU and ISO modes, with and without `-pedantic` and
+`-pedantic-errors`, and follows the selected `--compiler-identity`. One
+`CompilerConfiguration` helper per rule (`RuleSet`) says which identity
+takes which side; neither TCC nor MSVC 19.33 was surveyed:
+
+| Rule | GCC side | Clang side |
+| --- | --- | --- |
+| pointer/integer cast warnings (`pointer_cast_rules`) | GCC, TCC | Clang, clang-cl, MSVC (C4311/C4312 warn for narrower integers) |
+| `_BitInt` widths (`bit_int_rules`) | GCC, TCC, MSVC | Clang, clang-cl |
+| array compound literals (`array_literal_rules`) | GCC, TCC, MSVC | Clang, clang-cl |
+| floating values out of an integer's range (`float_conversion_rules`) | GCC, TCC, MSVC | Clang, clang-cl |
+
+Neither TCC nor MSVC 19.33 has `_BitInt` or arrays initialized by compound
+literals. bcc's identities do not gate language features, which follow
+`-std`; so `_BitInt` is a reported C23 extension before C23, and an array
+compound literal keeps GCC's static-only rule with its pedantic report.
+
+### `_BitInt` widths
+
+The width N of `_BitInt(N)` is an integer constant expression of at least 2
+(1 for `unsigned _BitInt`) and at most `BITINT_MAXWIDTH` (C23 §6.7.3.1p4).
+Both compilers check it wherever the type is named: declarations,
+typedefs, members, casts, compound literals, `sizeof` and `_Generic`. They
+read the value differently:
+
+| Width | GCC (`BITINT_MAXWIDTH` 65535) | Clang (`BITINT_MAXWIDTH` 2^23) |
+| --- | --- | --- |
+| not an integer constant expression (`int n; _BitInt(n)`, `_BitInt(2.0)`) | error | error |
+| `_BitInt((int){8})`, `_BitInt(1 ? 8 : n)`, `_BitInt(0 ? n : 8)` | error, in every mode | folded in every mode; `-Wgnu-folding-constant` under `-pedantic` |
+| `_BitInt(1)`, `signed _BitInt(1)` | error: at least 2 | error: at least 2 |
+| `_BitInt(0)` | error: not positive | error: at least 2 |
+| `unsigned _BitInt(0)` | error: not positive | error: at least 1 |
+| `_BitInt(-1)` | error: not positive | error: too large (the `int`'s 32 bits read unsigned) |
+| `_BitInt((signed char)-1)`, `_BitInt((short)-2)` | error: not positive | 255 and 65534 bits |
+| `_BitInt(65536)` | error: too large | accepted |
+| `_BitInt(8388609)`, `_BitInt(4294967298LL)` | error: too large | error: too large |
+
+Clang zero-extends the value from its type and keeps the low 64 bits
+(`BuildBitIntType`), which the identity reproduces. Clang also folds a read
+of a `static const int k` in `_BitInt(k)`, in every mode. bcc's typing
+reads such an object only in GNU modes, so the Clang identity folds
+`_BitInt(k)` there and rejects it in ISO modes; the GCC identity rejects it
+in every mode, as GCC does. Before C23, GCC reports the type under
+`-pedantic` only once its width is valid ("ISO C does not support
+'_BitInt(8)' before C23"), so the GCC identity reports it from semantic
+analysis; Clang reports the keyword (`-Wbit-int-extension`, bcc's
+`[-Wpedantic]`).
+
+`__BITINT_MAXWIDTH__` is predefined in every mode and `<limits.h>` defines
+`BITINT_MAXWIDTH` from C23, as 65535 under GCC's rules and 8388608 under
+Clang's on x86-64, and as Clang's 128 on WebAssembly, which GCC does not
+target (`CompilerConfiguration::bit_int_max_width`). The frozen Clang target tables keep excluding the macro, which is
+defined beside the identity macros instead.
+
+`_BitInt` types themselves stay unmodeled, so lowering still refuses them,
+but a checked type records its width, which a declaration, a member (each
+its own), a parameter, a cast to the type and, under GCC's rules, an
+`_Atomic` one keep. A cast between it and a pointer takes the pointer-cast
+warnings below (`(void *)(_BitInt(32))x`, `(_BitInt(32))p`), as both
+compilers report; a constant cast to a `_BitInt` (`(_BitInt(32))3`) is an
+integer constant expression there. `sizeof` of a `_BitInt` stays
+unanalyzed, so a width that contains one
+(`_BitInt(sizeof(_BitInt(16)) * 65536)`, which GCC rejects, or `* 0`, which
+Clang rejects) is not range-checked. The check
+is `Analyzer::bit_int_width`; the `sema-bitint-width-{gcc,clang}` goldens
+and `semantic_analysis/tests/bit_int_widths.rs` pin it.
+
+### Imaginary interchange constants
+
+An imaginary suffix (`i`, `I`, `j` or `J`) combines with an interchange
+suffix in either order (`1.0f16i`, `1.0if16`, `0x1p0jF16`), as with the
+standard suffixes (`ImaginaryConstants`). The constant has the complex type
+of its real component's, and its imaginary part has the value a real
+constant of that suffix has:
+
+| Suffix | GCC | Clang |
+| --- | --- | --- |
+| `f16` | `_Complex _Float16`, its part in `float`'s precision (`__imag__ 0.1f16i` is `0x1.99999ap-4`) | `_Complex _Float16`, its part rounded to `_Float16` (`0x1.998p-4`) outside chains of arithmetic operators |
+| `f32`, `f64`, `f32x`, `f64x`, `f128` | `_Complex _FloatN`/`_FloatNx` | invalid suffix, as for the real constants |
+| `bf16` | a complex `__bf16` without a name | invalid suffix |
+
+bcc has no complex `__bf16` type (#164 rejects `_Complex __bf16`), so it
+still rejects `1.0bf16i` under the GCC identity. An invalid constant
+(`1.0f32i` under Clang) reports only its error. Under `-pedantic` the
+constants report the imaginary extension (GCC: "imaginary constants are a
+C2Y feature or GCC extension", Clang: `-Wc2y-extensions`) and, under GCC
+before C23, the suffix. Arithmetic, conversions and storage use the
+existing complex `_Float16` lowering of #164, with each identity's excess
+precision. `tests/fixtures/programs/imaginary_interchange_constants.c`
+compares the values with each compiler on the interpreter, LLVM and the
+native back end; `preprocessing/tests/language_modes.rs`,
+`semantic_analysis/tests/imaginary_constants.rs` and the
+`sema-imaginary-interchange-{gcc,clang}` goldens cover the forms.
+
+### Floating values converted out of an integer's range
+
+Converting a floating value whose integral part an integer type cannot
+represent is undefined (C99 §6.3.1.4p1). bcc refused such a static
+initializer (`static int x = 1e10;`); both compilers fold the conversion to
+the nearest bound of the integer, or to 0 for a NaN, and store that:
+
+| | GCC | Clang |
+| --- | --- | --- |
+| stored value | the nearest bound; a bit-field saturates to its own width (`100.0` in an `int : 4` stores 7) | the nearest bound of the declared type, whose low bits a bit-field keeps (`100.0` stores 4) |
+| scalar static initializer | stored | refused by Clang's code generation ("cannot compile this static initializer yet"); bcc stores the value its evaluator computes, as Clang does inside braces |
+| bit-field of static storage | stored | error, "initializer element is not a compile-time constant", once per initializer |
+| warning | `-Woverflow`, default on, for an implicit conversion of any floating constant in a static initializer only ("overflow in conversion from 'double' to 'int' changes value ...") | `-Wliteral-conversion`, default on and under `-Wconversion`, for an implicit conversion of a floating literal (possibly signed and parenthesized) to a builtin integer type (not an enumeration, not `_Atomic`) anywhere: out of range ("... is undefined"), with a fraction dropped, -0 included (`int i = 2147483647.5;`, `int i = -0.0;`), or to `_Bool` from neither 0 nor 1 |
+| `-pedantic` | "overflow in constant expression" `[-Woverflow]` for every overflowing static element, explicit casts and arithmetic on them included (`(int)-1e10 / 2`) and the operand `?:` selects, but not a comparison's result (`(int)1e10 == 2147483647`), a `?:` condition or unselected operand, or a conversion to `_Bool`; an error under `-pedantic-errors` | nothing more |
+| `__builtin_constant_p((int)1e10)` | 0 | 1 |
+
+The stored values match each compiler's object file on the interpreter,
+LLVM and the native back end
+(`tests/fixtures/programs/float_integer_initializers.c`), from `float`,
+`double`, `long double` and NaN or infinite operands into every integer
+width up to `__int128`. Such a conversion is no integer constant
+expression in either identity: an enumerator, array bound, bit-field width
+or `_Static_assert` rejects it, as GCC does, where Clang folds the
+saturated value. A conversion in function code keeps its run-time
+evaluation. GCC's pedantic warning for signed integer overflow in a static
+initializer (`(int)1e10 + 1`) and Clang's `-Winteger-overflow` and
+`-Wbitfield-constant-conversion` are not reproduced; bcc still rejects the
+first, and its `__builtin_constant_p((int)1e10 + 1)` is 0 where Clang's is 1.
+
+GCC's pedantic report is a pedantic child of `-Woverflow` (as GCC's
+`pedwarn` with `OPT_Woverflow` is): only `-pedantic` reports it, and
+`-Wno-overflow`, `-Werror=overflow` and `-Wno-error=overflow` disable it or
+set its severity, so `-pedantic-errors -Wno-overflow` accepts
+`static int a = 1e10;`. bcc's reporter folds a second error at one
+location into the first, so under `-pedantic -Werror=overflow` only the
+conversion error is printed there, though both count. Under Clang's rules
+`-Wconversion`'s parent group takes `-Werror=conversion` and
+`-Wno-error=conversion` too, for the groups without options of their own;
+GCC's `-Wconversion` holds none of Clang's groups, so under GCC's rules it
+leaves them (`-Wpointer-bool-conversion` included) alone. `Analyzer::saturated_float_cast` computes the value,
+`Analyzer::static_float_conversion` stores it and warns for GCC, and
+`Analyzer::literal_conversion_warning` warns for Clang; the
+`sema-float-integer-{gcc,clang}` goldens and
+`semantic_analysis/tests/float_integer_conversions.rs` pin the rules.
+
+### Arrays initialized by array compound literals
+
+C requires a braced list or a string literal for an array (C99 §6.7.8p16);
+both compilers also accept a compound literal of the array's own type,
+possibly parenthesized, as if its braced list were written in its place
+(`ArrayCompoundLiteral`, GNU origin):
+
+| | GCC | Clang |
+| --- | --- | --- |
+| storage | static only; an automatic array is an error ("array initialized from non-constant array expression", or "invalid initializer" when the literal has side effects) | any; a literal with side effects (`(int[2]){i++, 2}`) is an error |
+| types | compatible once each element type's qualifiers, `_Atomic` included, are dropped | the same element type |
+| bounds | equal, or the object's unknown (`char a[] = (char[3]){"ab"}` completes it) | the same |
+| inside braces (`{ (char[3]){"ab"}, 1 }` for a member, a row of a 2-D array) | the element or member is initialized whole | the literal decays and converts to the first character (`-Wint-conversion`) |
+| `-pedantic` | "initializer element is not constant", bcc's `ConstantCompoundLiteral` report | `-Wgnu-compound-literal-initializer`, bcc's `ArrayCompoundLiteral` report |
+
+A size or element-type mismatch (`char a[4] = (char[3]){"ab"}`, `char a[3]
+= (unsigned char[3]){"ab"}`) is an error in both. GCC's additional
+pedantic "array initialized from parenthesized string constant" for a
+member initialized by a string compound literal is not reproduced. Only the
+object's own unknown bound completes from a literal: a flexible array
+member inside braces takes none (`struct F f = { 1, (int[2]){7, 8} }`),
+and both compilers reject it, as bcc does after `-Wint-conversion`. A
+static object takes the literal's bytes; an automatic one copies the
+literal's object.
+
+A string literal longer than its array, null character aside, stores the
+characters that fit and is a warning in both compilers that
+`-pedantic-errors` makes an error (GCC prints it without an option, Clang
+under `-Wexcess-initializers`); bcc rejected it before. This covers string
+literals inside a compound literal (`(char[3]){"abcd"}`) too.
+`Analyzer::copy_array_literal` holds the rules;
+`tests/fixtures/programs/array_compound_literals.c` runs the accepted forms
+on every back end against each compiler (`tests/integration/identity_programs.rs`),
+and the `sema-array-compound-literal-{gcc,clang}` goldens and
+`semantic_analysis/tests/array_compound_literals.rs` cover the rejections.
+
+### Casts between pointers and integers of another width
+
+A cast between a pointer and an integer whose width differs from the
+pointer's is implementation-defined and may not be representable (C99
+§6.3.2.3p5-6), and both compilers warn by default:
+
+| Cast | GCC | Clang |
+| --- | --- | --- |
+| integer to pointer | `-Wint-to-pointer-cast` when a plain integer type (not `_Bool`, not an enumeration) has any other width and the operand is not constant; an address constant (`(int)(long)&x`) counts as constant | `-Wint-to-pointer-cast` when the integer type (not `_Bool`, not an enumeration) is narrower and the operand is no integer constant expression; `-Wint-to-void-pointer-cast` for a `void *` destination |
+| pointer to integer | `-Wpointer-to-int-cast` for any other width of a plain integer type | `-Wpointer-to-int-cast` for a narrower integer other than `_Bool`; `-Wpointer-to-enum-cast` for an enumeration, and `-Wvoid-pointer-to-int-cast`/`-Wvoid-pointer-to-enum-cast` from a `void *` |
+
+So GCC warns for `(char *)q` with an `__int128 q` and for `(__int128)p`,
+Clang does not; Clang warns for `(enum E)p`, GCC does not. An operand that
+reads an object even in an unevaluated arm (`(char *)(1 ? 2 : i)`) or a
+compound literal (`(void *)(int){0}`) is not constant for either. Clang's
+groups nest: `int-to-pointer-cast` holds `int-to-void-pointer-cast`, and
+`pointer-to-int-cast` holds `pointer-to-enum-cast` and
+`void-pointer-to-int-cast`, which both hold `void-pointer-to-enum-cast`;
+a parent's `-W`, `-Wno-` or `-Werror=` applies to its children at its
+position on the command line, so `-Wno-int-to-void-pointer-cast
+-Werror=int-to-pointer-cast` makes both errors again. GCC has only the two
+parent groups, which control its warnings whatever the child options say.
+GCC also withholds the warning for a cast spelled in a macro defined in a
+system header (`-isystem`, `#pragma GCC system_header`), where Clang reports
+it at the user's expansion; each identity follows its compiler. The rules
+are in
+`Analyzer::pointer_integer_cast_warning`; the
+`sema-pointer-int-cast-{gcc,clang,options,system-gcc,system-clang}` goldens
+and
+`semantic_analysis/tests/pointer_integer_casts.rs` pin them.
