@@ -38,7 +38,7 @@ typedef struct { intmax_t quot, rem; } imaxdiv_t;
 intmax_t imaxabs(intmax_t j);
 /* C23 reads a 0b prefix in base 0 and 2 (see <stdlib.h>). */
 #if defined _GNU_SOURCE || defined _ISOC2X_SOURCE || defined _ISOC23_SOURCE || \
-    (defined __STDC_VERSION__ && __STDC_VERSION__ > 201710L)
+    defined _ISOC2Y_SOURCE || (defined __STDC_VERSION__ && __STDC_VERSION__ > 201710L)
 intmax_t strtoimax(const char *restrict nptr, char **restrict endptr, int base) __asm__("__isoc23_strtoimax");
 uintmax_t strtoumax(const char *restrict nptr, char **restrict endptr, int base) __asm__("__isoc23_strtoumax");
 #else

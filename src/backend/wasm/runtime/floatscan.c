@@ -267,7 +267,6 @@ static const char *decimal(const char *p, const struct format *f, struct number 
     static const int p10s[] = {10, 100, 1000, 10000, 100000, 1000000, 10000000, 100000000};
     int i, j = 0, k = 0, a, z;
     long long lrp = 0, dc = 0;
-    int lnz = 0;
     int gotdig = 0, gotrad = 0;
     int rp;
     int e2;
@@ -291,8 +290,6 @@ static const char *decimal(const char *p, const struct format *f, struct number 
             lrp = dc;
         } else if (k < KMAX - 3) {
             dc++;
-            if (c != '0')
-                lnz = dc;
             if (j)
                 x[k] = x[k] * 10 + c - '0';
             else
@@ -304,10 +301,8 @@ static const char *decimal(const char *p, const struct format *f, struct number 
             gotdig = 1;
         } else {
             dc++;
-            if (c != '0') {
-                lnz = (KMAX - 4) * 9;
+            if (c != '0')
                 x[KMAX - 4] |= 1;
-            }
         }
     }
     if (!gotrad)
@@ -375,14 +370,22 @@ static const char *decimal(const char *p, const struct format *f, struct number 
         rp += 9 - rpm9;
     }
 
-    /* Upscale until desired number of bits are left of radix point */
+    /* Upscale until desired number of bits are left of radix point.
+       Every word must stay a base-10^9 digit (below 10^9): a larger one
+       carries wrongly through a run of 999999999 words, so an input just
+       below a midpoint would round up. Two changes to musl keep it so:
+       the carry test is >= rather than >, since a word of 1 times 2^29
+       plus a carry of 463129088 is exactly 10^9, and a word dropped from
+       a full buffer leaves a sticky 1 rather than being ORed in whole
+       (999999488 | 512 is 10^9). ORing 1 into a digit gives at most
+       999999999. A midpoint has under 11600 significant digits, so the
+       buffer never drops a word of one; below one, the kept words end in
+       999999999, which the sticky 1 leaves alone. */
     while (rp < 9 * B1B_DIG || (rp == 9 * B1B_DIG && x[a] < th[0])) {
         uint32_t carry = 0;
         e2 -= 29;
         for (k = (z - 1 & MASK);; k = (k - 1 & MASK)) {
             uint64_t tmp = ((uint64_t)x[k] << 29) + carry;
-            /* musl compares with >, which can leave a word of exactly
-               10^9; >= keeps every word a base-10^9 digit. */
             if (tmp >= 1000000000) {
                 carry = tmp / 1000000000;
                 x[k] = tmp % 1000000000;
@@ -400,7 +403,7 @@ static const char *decimal(const char *p, const struct format *f, struct number 
             a = (a - 1 & MASK);
             if (a == z) {
                 z = (z - 1 & MASK);
-                x[z - 1 & MASK] |= x[z];
+                x[z - 1 & MASK] |= x[z] != 0;
             }
             x[a] = carry;
         }

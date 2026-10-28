@@ -423,7 +423,8 @@ static int scan(struct source *in, const char *fmt, va_list ap, int c23) {
            whole number ("0x", "1e+", "infin"), the directive fails
            (7.19.6.2p10), and the characters stay consumed. A field has no
            length limit, as in glibc: it moves to the heap when it outgrows
-           the stack buffer. */
+           the stack buffer. When memory runs out, scanf returns EOF with
+           errno ENOMEM, as glibc's does, whatever it has assigned. */
         int floating = c == 'f' || c == 'e' || c == 'g' || c == 'a' || c == 'E' || c == 'G' || c == 'F' ||
                        c == 'A';
         struct field field;
@@ -434,7 +435,7 @@ static int scan(struct source *in, const char *fmt, va_list ap, int c23) {
 #define TAKE()                                       \
     do {                                             \
         if (!append(&field, peek(in)))               \
-            return assigned ? assigned : EOF;        \
+            return EOF;                              \
         take(in);                                    \
     } while (0)
         if (NEXT_IS(peek(in) == '+' || peek(in) == '-'))
@@ -519,7 +520,7 @@ static int scan(struct source *in, const char *fmt, va_list ap, int c23) {
 #undef TAKE
 #undef NEXT_IS
         if (!append(&field, 0))
-            return assigned ? assigned : EOF;
+            return EOF;
         int converted = field.length > 1 && convert(field.text, field.length - 1, c, length, base, binary,
                                                     skip ? 0 : &ap);
         release(&field);
@@ -570,13 +571,14 @@ static int convert(const char *text, int n, int c, int length, int base, int bin
 }
 
 /* Appends c to a numeric field, moving it to the heap when it outgrows
-   its buffer. Fails only when memory runs out. */
+   its buffer. Fails, with errno ENOMEM, only when memory runs out. */
 static int append(struct field *field, int c) {
     if (field->length == field->capacity) {
         int grown = field->capacity * 2;
         char *text = field->text == field->local ? malloc(grown) : realloc(field->text, grown);
         if (!text) {
             release(field);
+            errno = ENOMEM;
             return 0;
         }
         if (field->text == field->local)

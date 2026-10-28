@@ -39,7 +39,7 @@ double atof(const char *nptr);
 /* C23 reads a 0b prefix in base 0 and 2. As glibc's headers do, C23 and
    _GNU_SOURCE call the C23 functions by their own names. */
 #if defined _GNU_SOURCE || defined _ISOC2X_SOURCE || defined _ISOC23_SOURCE || \
-    (defined __STDC_VERSION__ && __STDC_VERSION__ > 201710L)
+    defined _ISOC2Y_SOURCE || (defined __STDC_VERSION__ && __STDC_VERSION__ > 201710L)
 long strtol(const char *restrict nptr, char **restrict endptr, int base) __asm__("__isoc23_strtol");
 unsigned long strtoul(const char *restrict nptr, char **restrict endptr, int base) __asm__("__isoc23_strtoul");
 long long strtoll(const char *restrict nptr, char **restrict endptr, int base) __asm__("__isoc23_strtoll");

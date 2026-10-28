@@ -38,7 +38,7 @@ int vsnprintf(char *restrict s, size_t n, const char *restrict format, va_list a
 /* C23's %i reads a 0b prefix. As glibc's headers do, C23 and _GNU_SOURCE
    call the C23 functions by their own names. */
 #if defined _GNU_SOURCE || defined _ISOC2X_SOURCE || defined _ISOC23_SOURCE || \
-    (defined __STDC_VERSION__ && __STDC_VERSION__ > 201710L)
+    defined _ISOC2Y_SOURCE || (defined __STDC_VERSION__ && __STDC_VERSION__ > 201710L)
 int sscanf(const char *restrict s, const char *restrict format, ...) __asm__("__isoc23_sscanf");
 int vsscanf(const char *restrict s, const char *restrict format, va_list ap) __asm__("__isoc23_vsscanf");
 int scanf(const char *restrict format, ...) __asm__("__isoc23_scanf");

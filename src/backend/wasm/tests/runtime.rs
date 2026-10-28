@@ -1276,6 +1276,121 @@ int main(void) {
     }
 }
 
+/// Midpoints written with 17000 to 30000 significant digits, past the
+/// 2048 base-10^9 words decfloat keeps, and one unit in their last digit
+/// below and above them: the reproducer of review round 1, (1 + 3 *
+/// 2^-113) * 2^-5000 less one unit in its 18405th digit, and 40 random
+/// binary128 and double midpoints. Before the fix, a word dropped from the
+/// full buffer was merged whole into the last kept one, made a word of
+/// 10^9, and the inputs just below rounded up, as wasi-libc's still do.
+#[test]
+fn midpoints_past_the_digit_buffer_round_correctly() {
+    let source = r#"#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+static char a[13000], b[13000], text[32000];
+static unsigned long long state = 0x2545f4914f6cdd1dull;
+static unsigned long long next(void) {
+    state ^= state << 13;
+    state ^= state >> 7;
+    state ^= state << 17;
+    return state;
+}
+/* From exact %e spellings of adjacent values a < b with the same decimal
+   exponent, writes their midpoint with `total` significant digits, one
+   unit in the last of them below it (where < 0) or above it (where > 0).
+   Returns 0 when the exponents differ. */
+static int long_midpoint(int total, int where) {
+    char *ea = strchr(a, 'e'), *eb = strchr(b, 'e');
+    if (strcmp(ea, eb))
+        return 0;
+    int n = 0;
+    for (char *p = a; p < ea; p++)
+        if (*p != '.')
+            text[n++] = *p;
+    int carry = 0;
+    for (int i = n, j = (int)(eb - b); i-- > 0;) {
+        if (b[--j] == '.')
+            j--;
+        int d = text[i] - '0' + b[j] - '0' + carry;
+        text[i] = (char)('0' + d % 10);
+        carry = d / 10;
+    }
+    int rem = carry;
+    for (int i = 0; i < n; i++) {
+        int d = rem * 10 + text[i] - '0';
+        text[i] = (char)('0' + d / 2);
+        rem = d % 2;
+    }
+    if (rem)
+        text[n++] = '5';
+    while (n < total)
+        text[n++] = '0';
+    if (where < 0) {
+        int last = n;
+        while (text[--last] == '0')
+            text[last] = '9';
+        text[last]--;
+    } else if (where > 0) {
+        text[n - 1] = '1';
+    }
+    memmove(text + 2, text + 1, n - 1);
+    text[1] = '.';
+    strcpy(text + n + 1, ea);
+    return 1;
+}
+static int failures;
+static void quad(long double x, long double y, int total) {
+    union { long double q; unsigned long long w[2]; } lo = {x};
+    sprintf(a, "%.12000Le", x);
+    sprintf(b, "%.12000Le", y);
+    for (int where = -1; where <= 1; where++) {
+        if (!long_midpoint(total, where))
+            return;
+        long double want = where < 0 ? x : where > 0 ? y : (lo.w[0] & 1 ? y : x);
+        if (strtold(text, 0) != want && failures++ < 5)
+            printf("FAIL quad %d digits, %d: %016llx%016llx\n", total, where, lo.w[1], lo.w[0]);
+    }
+}
+static void dbl(double x, double y, int total) {
+    union { double d; unsigned long long u; } lo = {x};
+    sprintf(a, "%.1200e", x);
+    sprintf(b, "%.1200e", y);
+    for (int where = -1; where <= 1; where++) {
+        if (!long_midpoint(total, where))
+            return;
+        double want = where < 0 ? x : where > 0 ? y : (lo.u & 1 ? y : x);
+        if (strtod(text, 0) != want && failures++ < 5)
+            printf("FAIL double %d digits, %d: %016llx\n", total, where, lo.u);
+    }
+}
+int main(void) {
+    /* (1 + 3 * 2^-113) * 2^-5000 less one unit in its 18405th digit. */
+    quad(0x1.0000000000000000000000000001p-5000L, 0x1.0000000000000000000000000002p-5000L, 18405);
+    for (int i = 0; i < 40; i++) {
+        int total = 17000 + (int)(next() % 13000);
+        if (i % 4 == 3) {
+            union { unsigned long long u; double d; } x = {next() & 0x7fefffffffffffffull}, y = {x.u + 1};
+            dbl(x.d, y.d, total);
+        } else {
+            union { unsigned long long w[2]; long double q; } x, y;
+            x.w[0] = next();
+            x.w[1] = next() & 0x7ffeffffffffffffull;
+            y = x;
+            if (!++y.w[0])
+                y.w[1]++;
+            quad(x.q, y.q, total);
+        }
+    }
+    printf("%d failures\n", failures);
+    return 0;
+}
+"#;
+    for output in outputs("long-midpoints", source).into_iter().flatten() {
+        assert_eq!(output, "0 failures\n");
+    }
+}
+
 /// scanf reads numeric fields of any length, as glibc does (the runtime
 /// used to split them after 511 characters), `%Lf` reads binary128 whole,
 /// and `%f` rounds straight to float. Expected: glibc, with `strtof128`
