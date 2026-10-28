@@ -1024,6 +1024,19 @@ it, unless GCC's parser would not have folded it (`folded_constant`): then
 it converts as a run-time value. Clang's `__fp16` is `f16` storage; semantic
 analysis promotes its values to `float`.
 
+A `_BitInt(N)` of up to 128 bits is the IR integer of its storage size
+(`i8` to `i128`, `Repr::Int` with its `width`), kept extended from N bits by
+its signedness: `normalize` re-extends after `+`, `-`, `*`, `<<`, unary
+`-` and `~`, increments, conversions to the type, and every value read from
+outside (loads, parameters, call results, `va_arg`), whose padding bits are
+unspecified. The other operations keep extended operands extended. On the
+x86-64 targets a 65-128-bit argument or result is described to ABI lowering
+as the aggregate of its two 64-bit limbs (`lowering/bit_int.rs`), which
+System V passes in two general registers or 8-aligned on the stack and
+Win64 by reference and `sret`; WebAssembly passes the `i128`. Wider
+`_BitInt`s are refused (`Construct::WideBitInt`). `language-standards.md`
+("`_BitInt` types") records the semantics and the GCC and Clang ABI facts.
+
 Complex scalars use two immutable SSA component values retained in a sparse
 arena table; taking an lvalue's value immediately loads both components.
 GNU `__real__` and `__imag__` preserve component lvalues, packed alignment and
