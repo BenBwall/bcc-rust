@@ -610,6 +610,56 @@ routines! {
     Floatunditf = "__floatunditf" (I64) -> F128;
     Floattitf = "__floattitf" (I128) -> F128;
     Floatuntitf = "__floatuntitf" (I128) -> F128;
+    Extendhfsf2 = "__extendhfsf2" (F16) -> F32;
+    Extendhfdf2 = "__extendhfdf2" (F16) -> F64;
+    Extendhftf2 = "__extendhftf2" (F16) -> F128;
+    Truncsfhf2 = "__truncsfhf2" (F32) -> F16;
+    Truncdfhf2 = "__truncdfhf2" (F64) -> F16;
+    Trunctfhf2 = "__trunctfhf2" (F128) -> F16;
+    Floatsihf = "__floatsihf" (I32) -> F16;
+    Floatunsihf = "__floatunsihf" (I32) -> F16;
+    Floatdihf = "__floatdihf" (I64) -> F16;
+    Floatundihf = "__floatundihf" (I64) -> F16;
+    Floattihf = "__floattihf" (I128) -> F16;
+    Floatuntihf = "__floatuntihf" (I128) -> F16;
+    Fixhfsi = "__fixhfsi" (F16) -> I32;
+    Fixunshfsi = "__fixunshfsi" (F16) -> I32;
+    Fixhfdi = "__fixhfdi" (F16) -> I64;
+    Fixunshfdi = "__fixunshfdi" (F16) -> I64;
+    Fixhfti = "__fixhfti" (F16) -> I128;
+    Fixunshfti = "__fixunshfti" (F16) -> I128;
+}
+
+/// The routine converting from `from` to `to` with `opcode` when either is
+/// `f16` (`__fp16`), which WebAssembly has no instructions for: one call,
+/// so that every conversion to binary16 rounds once.
+pub(crate) const fn half_routine(
+    opcode: crate::ir::Opcode,
+    from: Type,
+    to: Type,
+) -> Option<Routine> {
+    use crate::ir::Opcode as O;
+    Some(match (opcode, from, to) {
+        | (O::Fpext, Type::F16, Type::F32) => Routine::Extendhfsf2,
+        | (O::Fpext, Type::F16, Type::F64) => Routine::Extendhfdf2,
+        | (O::Fpext, Type::F16, Type::F128) => Routine::Extendhftf2,
+        | (O::Fptrunc, Type::F32, Type::F16) => Routine::Truncsfhf2,
+        | (O::Fptrunc, Type::F64, Type::F16) => Routine::Truncdfhf2,
+        | (O::Fptrunc, Type::F128, Type::F16) => Routine::Trunctfhf2,
+        | (O::Sitofp, Type::I64, Type::F16) => Routine::Floatdihf,
+        | (O::Uitofp, Type::I64, Type::F16) => Routine::Floatundihf,
+        | (O::Sitofp, Type::I128, Type::F16) => Routine::Floattihf,
+        | (O::Uitofp, Type::I128, Type::F16) => Routine::Floatuntihf,
+        | (O::Sitofp, _, Type::F16) => Routine::Floatsihf,
+        | (O::Uitofp, _, Type::F16) => Routine::Floatunsihf,
+        | (O::Fptosi, Type::F16, Type::I64) => Routine::Fixhfdi,
+        | (O::Fptoui, Type::F16, Type::I64) => Routine::Fixunshfdi,
+        | (O::Fptosi, Type::F16, Type::I128) => Routine::Fixhfti,
+        | (O::Fptoui, Type::F16, Type::I128) => Routine::Fixunshfti,
+        | (O::Fptosi, Type::F16, _) => Routine::Fixhfsi,
+        | (O::Fptoui, Type::F16, _) => Routine::Fixunshfsi,
+        | _ => return None,
+    })
 }
 
 /// The routines an instruction calls, for the linker to include.
@@ -657,6 +707,10 @@ pub(crate) fn routines_of(
         | InstData::Unary { opcode, ty, arg } => {
             use crate::ir::Opcode as O;
             let from = operand(arg);
+            if let Some(routine) = half_routine(opcode, from, ty) {
+                visit(routine);
+                return;
+            }
             let routine = match (opcode, from, ty) {
                 | (O::Fpext, Type::F32, Type::F128) => Routine::Extendsftf2,
                 | (O::Fpext, Type::F64, Type::F128) => Routine::Extenddftf2,

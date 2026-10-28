@@ -527,7 +527,7 @@ fn eq_opcode(repr: Repr) -> u8 {
 pub(super) fn load_opcode(ty: Type) -> (u8, u64) {
     match ty {
         | Type::I1 | Type::I8 => (op::I32_LOAD8_U, 1),
-        | Type::I16 | Type::F16 => (op::I32_LOAD16_U, 2),
+        | Type::I16 | Type::F16 | Type::BF16 => (op::I32_LOAD16_U, 2),
         | Type::I64 => (op::I64_LOAD, 8),
         | Type::F32 => (op::F32_LOAD, 4),
         | Type::F64 => (op::F64_LOAD, 8),
@@ -539,7 +539,7 @@ pub(super) fn load_opcode(ty: Type) -> (u8, u64) {
 pub(super) fn store_opcode(ty: Type) -> (u8, u64) {
     match ty {
         | Type::I1 | Type::I8 => (op::I32_STORE8, 1),
-        | Type::I16 | Type::F16 => (op::I32_STORE16, 2),
+        | Type::I16 | Type::F16 | Type::BF16 => (op::I32_STORE16, 2),
         | Type::I64 => (op::I64_STORE, 8),
         | Type::F32 => (op::F32_STORE, 4),
         | Type::F64 => (op::F64_STORE, 8),

@@ -15,6 +15,7 @@ use super::{
     calls::{
         Arg,
         Routine,
+        half_routine,
     },
     values::{
         Repr,
@@ -585,6 +586,10 @@ impl Codegen<'_, '_, '_, '_, '_> {
             | _ => {},
         }
         let from = self.ty(arg);
+        if matches!(from, Type::F16 | Type::BF16) || matches!(ty, Type::F16 | Type::BF16) {
+            self.half_conversion(opcode, from, ty, arg, result);
+            return;
+        }
         if from == Type::F128 || ty == Type::F128 {
             self.quad_conversion(opcode, from, ty, arg, result);
             return;
@@ -596,15 +601,6 @@ impl Codegen<'_, '_, '_, '_, '_> {
             )
         {
             self.wide_float_conversion(opcode, from, ty, arg, result);
-            return;
-        }
-        if from == Type::F16 || ty == Type::F16 {
-            if opcode == Opcode::Bitcast {
-                self.push(arg);
-                self.store_result(result);
-            } else {
-                self.refuse("_Float16 conversions");
-            }
             return;
         }
         self.conversion(opcode, from, ty, arg);
@@ -773,6 +769,48 @@ impl Codegen<'_, '_, '_, '_, '_> {
             Arg::Value(arg)
         }];
         if to == Type::F128 || to == Type::I128 {
+            self.call_routine(routine, &args, result);
+        } else {
+            self.call_routine_scalar(routine, &args);
+            if matches!(opcode, Opcode::Fptosi | Opcode::Fptoui) {
+                self.mask(to);
+            }
+            self.store_result(result);
+        }
+    }
+
+    /// Conversions to and from `f16` (`__fp16`), which WebAssembly has no
+    /// instructions for, through compiler-rt's routines as Clang calls them
+    /// on wasm32; `bf16`, which semantic analysis refuses for WebAssembly
+    /// as Clang does, is refused here too.
+    fn half_conversion(
+        &mut self,
+        opcode: Opcode,
+        from: Type,
+        to: Type,
+        arg: Value,
+        result: Option<Value>,
+    ) {
+        if opcode == Opcode::Bitcast {
+            self.push(arg);
+            self.store_result(result);
+            return;
+        }
+        let routine = if from == Type::BF16 || to == Type::BF16 {
+            None
+        } else {
+            half_routine(opcode, from, to)
+        };
+        let Some(routine) = routine else {
+            self.refuse("__bf16 values");
+            return;
+        };
+        let args = [if opcode == Opcode::Sitofp {
+            Arg::Signed(arg)
+        } else {
+            Arg::Value(arg)
+        }];
+        if matches!(to, Type::F128 | Type::I128) {
             self.call_routine(routine, &args, result);
         } else {
             self.call_routine_scalar(routine, &args);

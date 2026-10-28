@@ -2428,8 +2428,19 @@ aligned `__int128`, `long double` as IEEE binary128 (16 bytes, 16-aligned),
 a `char *` `va_list`, signed `char`, and `int` for `wchar_t` and `wint_t`.
 The predefined macros are frozen from the bundled Clang like the other
 targets' (`scripts/update_target_macros.py`), including the
-`__wasm_*__` feature macros Clang's default CPU claims. `_Float16` is
-refused as Clang refuses it there, and `_Float64x` does not exist. A
+`__wasm_*__` feature macros Clang's default CPU claims. `_Float16` and
+`__bf16` are refused as Clang refuses them there ("not supported on this
+target"), with their `f16` and `bf16` constant suffixes and GCC's
+`__FLT16_*`/`__BFLT16_*` macros, so complex halves do not arise either;
+`_Float64x` does not exist. `__fp16` stays the storage type it is on
+every Clang target: two bytes whose values compute in `float`, loaded
+and stored as `i16`, and converted by compiler-rt's routines as Clang's
+code calls them (`__extendhfsf2`, `__truncsfhf2`, `__truncdfhf2`,
+`__trunctfhf2`, and integer conversions named in compiler-rt's style,
+`__floatsihf`, `__fixhfsi` and the like; each is one call that rounds
+once), which the bundled runtime defines and a
+freestanding module imports; a single-element record of one travels as
+its bits in an `i32`, as Clang passes it. A
 `long double` constant is parsed and folded in binary128
 (`FloatTokenType::LongDouble128`, `binary128_type`), so `1.0L / 3.0L`
 and `LDBL_MAX` are exact; lowering gives `long double` the IR type `f128`.

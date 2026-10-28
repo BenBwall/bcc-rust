@@ -25,9 +25,13 @@ struct ld { long double l; };
 struct p { int *p; };
 struct cplx { _Complex float c; };
 struct bfi64 { long long x : 3; };
+struct h1 { __fp16 h; };
+struct h2 { __fp16 a, b; };
+union uh { __fp16 h; };
 #define F(T) struct T f_##T(struct T a) { return a; }
 F(bf) F(bfu) F(bfz) F(zbf) F(bf2) F(bfc) F(bfs) F(bfll) F(bfb) F(bfcs) F(bfpad) F(bfun)
-F(a1) F(a2) F(ac1) F(as1) F(af1) F(a0) F(e) F(n1) F(ld) F(p) F(cplx) F(bfi64)
+F(a1) F(a2) F(ac1) F(as1) F(af1) F(a0) F(e) F(n1) F(ld) F(p) F(cplx) F(bfi64) F(h1) F(h2)
 union ubf f_ubf(union ubf a) { return a; }
 union u2 f_u2(union u2 a) { return a; }
 union u1 f_u1(union u1 a) { return a; }
+union uh f_uh(union uh a) { return a; }

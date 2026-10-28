@@ -116,6 +116,7 @@ fn clang_passing() -> Vec<(String, String, String)> {
             | "i16" => "i16",
             | "i32" | "ptr" => "i32",
             | "i64" => "i64",
+            | "half" => "f16",
             | "float" => "f32",
             | "fp128" => "f128",
             | other => panic!("unexpected Clang type {other}"),

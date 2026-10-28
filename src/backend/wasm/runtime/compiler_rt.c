@@ -1,9 +1,9 @@
 /* The compiler-rt routines the WebAssembly back end calls: 128-bit integer
-   multiplication, division and shifts, and conversions between __int128
-   and the floating types, written on 64-bit halves so that none of them
-   calls itself. Their names and signatures are compiler-rt's, as Clang
-   calls them on wasm32 (an __int128 result is returned through a pointer
-   passed first). */
+   multiplication, division and shifts, conversions between __int128 and
+   the floating types, binary128 arithmetic, and the __fp16 conversions,
+   written on 64-bit halves so that none of them calls itself. Their names
+   and signatures are compiler-rt's, as Clang calls them on wasm32 (an
+   __int128 result is returned through a pointer passed first). */
 #include <stdint.h>
 
 typedef __int128 ti_int;
@@ -709,3 +709,173 @@ long double fmodl(long double x, long double y) {
     }
     return q_value(sign | ((tu_int)ey << Q_SIGNIFICAND_BITS) | (mx & q_significand_mask()));
 }
+
+/* __fp16, IEEE binary16 stored in an unsigned short, as compiler-rt's
+   conversions take and return it where the target has no _Float16. Every
+   conversion to binary16 rounds once, to nearest with ties to even; a NaN
+   keeps the top of its payload and becomes quiet. */
+typedef unsigned short hf_bits;
+
+/* The binary16 nearest to a finite nonzero value, negative or not, of
+   significand * 2^(exponent - 63), significand having its top bit set and
+   sticky saying whether nonzero bits were dropped below it. */
+static hf_bits h_round(int negative, int exponent, uint64_t significand, int sticky) {
+    hf_bits sign = negative ? 0x8000u : 0;
+    /* The value is 1.f * 2^exponent; binary16 normals reach 2^-14 to
+       2^15, and its subnormals step by 2^-24. */
+    int shift = exponent >= -14 ? 53 : 39 - exponent;
+    if (shift > 64)
+        return sign;
+    uint64_t kept = shift == 64 ? 0 : significand >> shift;
+    uint64_t rest = shift == 64 ? significand : significand << (64 - shift);
+    /* Up past the halfway point, and from it to an even result. */
+    if (rest > 1ull << 63 || (rest == 1ull << 63 && (sticky || (kept & 1))))
+        kept++;
+    if (exponent < -14)
+        /* A subnormal, or the least normal when rounding carried into
+           bit 10: the encoding is the count of 2^-24 either way. */
+        return (hf_bits)(sign | kept);
+    if (kept == 1u << 11) {
+        kept >>= 1;
+        exponent++;
+    }
+    if (exponent > 15)
+        return (hf_bits)(sign | 0x7C00u);
+    return (hf_bits)(sign | (unsigned)(exponent + 15) << 10 | (kept & 0x3FFu));
+}
+
+/* A NaN of binary16 from the payload bits below a quiet bit, the top
+   payload bits first. */
+static hf_bits h_nan(int negative, uint64_t payload_top) {
+    return (hf_bits)((negative ? 0x8000u : 0) | 0x7E00u | (unsigned)(payload_top & 0x1FFu));
+}
+
+hf_bits __truncdfhf2(double x) {
+    union {
+        double f;
+        uint64_t u;
+    } v = {x};
+    int negative = (int)(v.u >> 63), field = (int)(v.u >> 52 & 0x7FF);
+    uint64_t fraction = v.u & ((1ull << 52) - 1);
+    if (field == 0x7FF)
+        return fraction ? h_nan(negative, fraction >> 42) : (hf_bits)((negative ? 0x8000u : 0) | 0x7C00u);
+    if (field == 0 && fraction == 0)
+        return negative ? 0x8000u : 0;
+    if (field == 0)
+        /* Below 2^-1022, far below binary16's least subnormal. */
+        return h_round(negative, -1023, 1ull << 63, 1);
+    return h_round(negative, field - 1023, (1ull << 63) | fraction << 11, 0);
+}
+
+hf_bits __truncsfhf2(float x) {
+    union {
+        float f;
+        uint32_t u;
+    } v = {x};
+    if ((v.u & 0x7F800000u) == 0x7F800000u && (v.u & 0x7FFFFFu))
+        return h_nan((int)(v.u >> 31), (v.u & 0x3FFFFFu) >> 13);
+    /* Every float is a double, so this rounds once. */
+    return __truncdfhf2(x);
+}
+
+hf_bits __trunctfhf2(long double x) {
+    tu_int bits = q_bits(x);
+    uint64_t high = high_of(bits), low = low_of(bits);
+    int negative = (int)(high >> 63), field = (int)(high >> 48 & 0x7FFF);
+    uint64_t fraction_high = high & ((1ull << 48) - 1);
+    if (field == 0x7FFF)
+        return fraction_high | low ? h_nan(negative, fraction_high >> 38)
+                                   : (hf_bits)((negative ? 0x8000u : 0) | 0x7C00u);
+    if (field == 0 && (fraction_high | low) == 0)
+        return negative ? 0x8000u : 0;
+    if (field == 0)
+        return h_round(negative, -Q_BIAS, 1ull << 63, 1);
+    uint64_t significand = (1ull << 63) | fraction_high << 15 | low >> 49;
+    return h_round(negative, field - Q_BIAS, significand, (low << 15) != 0);
+}
+
+/* A binary16's sign, unbiased exponent and 10-bit fraction, a subnormal
+   normalized so that the fraction has its implicit bit dropped. */
+static int h_parts(hf_bits h, int *exponent, unsigned *fraction) {
+    int field = h >> 10 & 0x1F;
+    unsigned f = h & 0x3FFu;
+    if (field == 0 && f != 0) {
+        field = 1;
+        while (!(f & 0x400u)) {
+            f <<= 1;
+            field--;
+        }
+        f &= 0x3FFu;
+    }
+    *exponent = field - 15;
+    *fraction = f;
+    return field;
+}
+
+double __extendhfdf2(hf_bits h) {
+    union {
+        uint64_t u;
+        double f;
+    } v;
+    uint64_t sign = (uint64_t)(h >> 15) << 63;
+    int exponent;
+    unsigned fraction;
+    if ((h & 0x7FFFu) == 0) {
+        v.u = sign;
+    } else if ((h & 0x7C00u) == 0x7C00u) {
+        v.u = sign | 0x7FF0000000000000ull | (uint64_t)(h & 0x3FFu) << 42;
+    } else {
+        h_parts(h, &exponent, &fraction);
+        v.u = sign | (uint64_t)(exponent + 1023) << 52 | (uint64_t)fraction << 42;
+    }
+    return v.f;
+}
+
+float __extendhfsf2(hf_bits h) {
+    union {
+        uint32_t u;
+        float f;
+    } v;
+    uint32_t sign = (uint32_t)(h >> 15) << 31;
+    int exponent;
+    unsigned fraction;
+    if ((h & 0x7FFFu) == 0) {
+        v.u = sign;
+    } else if ((h & 0x7C00u) == 0x7C00u) {
+        v.u = sign | 0x7F800000u | (uint32_t)(h & 0x3FFu) << 13;
+    } else {
+        h_parts(h, &exponent, &fraction);
+        v.u = sign | (uint32_t)(exponent + 127) << 23 | fraction << 13;
+    }
+    return v.f;
+}
+
+long double __extendhftf2(hf_bits h) {
+    uint64_t sign = (uint64_t)(h >> 15) << 63;
+    int exponent;
+    unsigned fraction;
+    if ((h & 0x7FFFu) == 0)
+        return q_value(make(sign, 0));
+    if ((h & 0x7C00u) == 0x7C00u)
+        return q_value(make(sign | 0x7FFFull << 48 | (uint64_t)(h & 0x3FFu) << 38, 0));
+    h_parts(h, &exponent, &fraction);
+    return q_value(make(sign | (uint64_t)(exponent + Q_BIAS) << 48 | (uint64_t)fraction << 38, 0));
+}
+
+/* Integers to binary16 through double: below 2^53 the integer is exact
+   there, and from 2^53 up both roundings give infinity, so the result is
+   rounded once. */
+hf_bits __floatsihf(int32_t a) { return __truncdfhf2((double)a); }
+hf_bits __floatunsihf(uint32_t a) { return __truncdfhf2((double)a); }
+hf_bits __floatdihf(int64_t a) { return __truncdfhf2((double)a); }
+hf_bits __floatundihf(uint64_t a) { return __truncdfhf2((double)a); }
+hf_bits __floattihf(ti_int a) { return __truncdfhf2(__floattidf(a)); }
+hf_bits __floatuntihf(tu_int a) { return __truncdfhf2(__floatuntidf(a)); }
+
+/* binary16 to integers through float, which holds every binary16. */
+int32_t __fixhfsi(hf_bits h) { return (int32_t)__extendhfsf2(h); }
+uint32_t __fixunshfsi(hf_bits h) { return (uint32_t)__extendhfsf2(h); }
+int64_t __fixhfdi(hf_bits h) { return (int64_t)__extendhfsf2(h); }
+uint64_t __fixunshfdi(hf_bits h) { return (uint64_t)__extendhfsf2(h); }
+ti_int __fixhfti(hf_bits h) { return __fixsfti(__extendhfsf2(h)); }
+tu_int __fixunshfti(hf_bits h) { return __fixunssfti(__extendhfsf2(h)); }

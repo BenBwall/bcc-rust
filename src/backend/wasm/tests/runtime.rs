@@ -3,7 +3,8 @@
 //! incomplete numbers, input failures and `(nil)`, printf precisions past
 //! its buffers and hexadecimal precision, floating to 128-bit conversions
 //! at their limits, allocation size overflow and memory's last page,
-//! trigonometric argument reduction, NaN payloads and nextafter), each
+//! trigonometric argument reduction, NaN payloads and nextafter, and
+//! `__fp16` conversions against Clang), each
 //! compiled for `wasm32-wasip1` at `-O0` and `-O2` and run under Node.
 //! Expected outputs are glibc's, except where the 32-bit data model or
 //! binary128 `long double` decides otherwise (marked).
@@ -428,6 +429,106 @@ int main(void) {
 "#;
     for output in outputs("alloc-last-page", source).into_iter().flatten() {
         assert_eq!(output, "1 1 1 1 1\n1 1\n1 1\n");
+    }
+}
+
+/// `__fp16` on WebAssembly, binary16 storage whose values compute in
+/// `float`, converts through the runtime's compiler-rt routines as Clang's
+/// code does: to binary16 from `float`, `double`, binary128 and integers of
+/// every width with one rounding (ties, subnormals, overflow and NaN
+/// payloads), back exactly, and in single-element records as the bits.
+/// The expected output is Clang's on x86-64, which wasi-sdk's Clang and
+/// compiler-rt give on wasm32 too.
+#[test]
+fn fp16_converts_as_clang_does() {
+    let source = r#"#include <stdio.h>
+#include <string.h>
+static unsigned load_bits(const __fp16 *h) { unsigned short u; memcpy(&u, h, 2); return u; }
+#define bits(x) ({ __fp16 t_ = (x); load_bits(&t_); })
+#define from(u) ({ unsigned short u_ = (u); __fp16 h_; memcpy(&h_, &u_, 2); h_; })
+struct one { __fp16 h; };
+struct two { __fp16 a, b; };
+__attribute__((noinline)) static float take(struct one s) { return s.h; }
+__attribute__((noinline)) static struct one make(float x) { struct one s = {x}; return s; }
+__attribute__((noinline)) static float sum(struct two t) { return t.a + t.b; }
+__fp16 table[4] = {1.5, -2.25, 65504, 0x1p-24};
+int main(void) {
+    printf("%zu %zu %zu\n", sizeof(__fp16), _Alignof(__fp16), sizeof table);
+    volatile double d[] = {1.0, 0.1, 65504.0, 65519.99, 65520.0, 1e10, -1e10, 0x1p-24, 0x1p-25, 0x1.000001p-25,
+                           0x1.8p-24, 0x1.ffcp-15, 0x1p-14, 1.0 + 0x1p-11, 1.0 + 0x1.8p-11, -0.0, 3.14159265358979};
+    for (int i = 0; i < (int)(sizeof d / sizeof d[0]); i++) {
+        __fp16 h = d[i];
+        float f = (float)d[i];
+        __fp16 g = f;
+        long double l = d[i];
+        __fp16 k = l;
+        printf("%04x %04x %04x %.9g %.17g\n", bits(h), bits(g), bits(k), (double)(float)h, (double)h);
+    }
+    volatile int iv[] = {0, 1, -1, 2049, 2051, 65504, 65519, 65520, 100000, -2147483647 - 1};
+    for (int i = 0; i < (int)(sizeof iv / sizeof iv[0]); i++) {
+        __fp16 h = iv[i];
+        __fp16 u = (unsigned)iv[i];
+        printf("%04x %04x %g\n", bits(h), bits(u), (double)h);
+    }
+    volatile long long big = 9007199254740993ll;
+    volatile unsigned long long ubig = 18446744073709551615ull;
+    volatile __int128 huge = (__int128)1 << 100;
+    __fp16 a = big, b = ubig, c = huge, e = (__int128)-65519;
+    printf("%04x %04x %04x %04x\n", bits(a), bits(b), bits(c), bits(e));
+    __fp16 x = from(0x3c01), y = from(0x8001), z = from(0x7bff);
+    printf("%lld %u %d %d\n", (long long)z, (unsigned)x, (int)(signed char)from(0xd250), (int)(__int128)z);
+    long double lx = x, ly = y;
+    printf("%.20Lg %.20Lg\n", lx, ly);
+    volatile float nf = __builtin_nanf("0x123456");
+    __fp16 n = nf, inf = 1e30f, ninf = -1e30;
+    printf("%04x %04x %04x %d\n", bits(n), bits(inf), bits(ninf), (double)from(0x7c00) > 1e300);
+    __fp16 p = 1.5, q = 2.25;
+    p = p * q + 1;
+    printf("%04x %g\n", bits(p), (double)(p / 3));
+    printf("%g %g %04x\n", take(make(2.5f)), sum((struct two){0.5, 0.25}), bits(table[3]));
+    printf("%f %.3f\n", table[0], table[1]);
+    return 0;
+}
+"#;
+    let expected = [
+        "2 2 8",
+        "3c00 3c00 3c00 1 1",
+        "2e66 2e66 2e66 0.0999755859 0.0999755859375",
+        "7bff 7bff 7bff 65504 65504",
+        "7bff 7bff 7bff 65504 65504",
+        "7c00 7c00 7c00 inf inf",
+        "7c00 7c00 7c00 inf inf",
+        "fc00 fc00 fc00 -inf -inf",
+        "0001 0001 0001 5.96046448e-08 5.9604644775390625e-08",
+        "0000 0000 0000 0 0",
+        "0001 0000 0001 5.96046448e-08 5.9604644775390625e-08",
+        "0002 0002 0002 1.1920929e-07 1.1920928955078125e-07",
+        "0400 0400 0400 6.10351562e-05 6.103515625e-05",
+        "0400 0400 0400 6.10351562e-05 6.103515625e-05",
+        "3c00 3c00 3c00 1 1",
+        "3c01 3c01 3c01 1.00097656 1.0009765625",
+        "8000 8000 8000 -0 -0",
+        "4248 4248 4248 3.140625 3.140625",
+        "0000 0000 0",
+        "3c00 3c00 1",
+        "bc00 7c00 -1",
+        "6800 6800 2048",
+        "6802 6802 2052",
+        "7bff 7bff 65504",
+        "7bff 7bff 65504",
+        "7c00 7c00 inf",
+        "7c00 7c00 inf",
+        "fc00 7c00 -inf",
+        "7c00 7c00 7c00 fbff",
+        "65504 1 -50 65504",
+        "1.0009765625 -5.9604644775390625e-08",
+        "7e91 7c00 fc00 1",
+        "4460 1.45833",
+        "2.5 0.75 0001",
+        "1.500000 -2.250",
+    ];
+    for output in outputs("fp16", source).into_iter().flatten() {
+        assert_eq!(output, expected.join("\n") + "\n");
     }
 }
 
