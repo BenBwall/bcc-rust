@@ -602,6 +602,7 @@ mode gate and policy diagnostics (`Imaginary` reports an unsupported type); a
 | OmittedConditionalOperand | - | - | - | - | - | - | - | extension (GNU native) | parser |
 | OneVoidConditional | - | - | - | - | - | - | - | extension (GNU native) | semantic analysis |
 | ConstantCompoundLiteral | - | - | - | - | - | - | - | extension (GNU native) | sema, lowering |
+| ArrayCompoundLiteral | - | - | - | - | - | - | - | extension (GNU native) | sema, lowering |
 | ZeroLengthArrays | - | - | - | - | - | - | - | extension (GNU native) | parser |
 | Float128 | - | - | - | - | - | - | - | extension (GNU native) | parser/sema |
 | Int128 | - | - | - | - | - | - | - | extension (GNU native) | parser/sema |
@@ -700,6 +701,10 @@ The following vocabulary entries retain the established diagnostic contracts:
   which keeps the parser's `UnionCasts` report. A cast to another aggregate
   type stays invalid, the result is not an lvalue, and it is no constant
   initializer of a static object, as in GCC.
+- `ArrayCompoundLiteral` has GNU origin: an array initialized by a compound
+  literal of its type, as "Arrays initialized by array compound literals"
+  below describes. Only the Clang identity reports it under `-pedantic`;
+  GCC reports the static object's `ConstantCompoundLiteral` instead.
 - `ConstantCompoundLiteral` has GNU origin. A compound literal of a static
   object's own type as its whole initializer is accepted as if its braced
   list were written in its place, when every value the literal stores is a
@@ -2266,9 +2271,8 @@ These cases remain different from the compiler each identity claims:
 
 Problems found while surveying that have nothing to do with literal reads
 (see "Semantic analysis gaps" below for those since fixed) remain open:
-`static char c[3] = (char[3]){"ab"};` is rejected though GCC and Clang
-accept it, and an out-of-range floating value converted to an integer in a
-static initializer is refused (`static unsigned char u = 300.7;`).
+an out-of-range floating value converted to an integer in a static
+initializer is refused (`static unsigned char u = 300.7;`).
 
 `tests/fixtures/programs/static_compound_literals.c` runs every accepted
 form, the half-precision ones and their excess precision included, on the
@@ -2315,6 +2319,39 @@ does for `_BitInt(k)` and enumerators and GCC does not; that predates this
 check and is shared with enumerators and array bounds. The check is
 `Analyzer::bit_int_width`; the `sema-bitint-width-{gcc,clang}` goldens and
 `semantic_analysis/tests/bit_int_widths.rs` pin it.
+
+### Arrays initialized by array compound literals
+
+C requires a braced list or a string literal for an array (C99 §6.7.8p16);
+both compilers also accept a compound literal of the array's own type,
+possibly parenthesized, as if its braced list were written in its place
+(`ArrayCompoundLiteral`, GNU origin):
+
+| | GCC | Clang |
+| --- | --- | --- |
+| storage | static only; an automatic array is an error ("array initialized from non-constant array expression", or "invalid initializer" when the literal has side effects) | any; a literal with side effects (`(int[2]){i++, 2}`) is an error |
+| types | compatible once each element type's qualifiers, `_Atomic` included, are dropped | the same element type |
+| bounds | equal, or the object's unknown (`char a[] = (char[3]){"ab"}` completes it) | the same |
+| inside braces (`{ (char[3]){"ab"}, 1 }` for a member, a row of a 2-D array) | the element or member is initialized whole | the literal decays and converts to the first character (`-Wint-conversion`) |
+| `-pedantic` | "initializer element is not constant", bcc's `ConstantCompoundLiteral` report | `-Wgnu-compound-literal-initializer`, bcc's `ArrayCompoundLiteral` report |
+
+A size or element-type mismatch (`char a[4] = (char[3]){"ab"}`, `char a[3]
+= (unsigned char[3]){"ab"}`) is an error in both. GCC's additional
+pedantic "array initialized from parenthesized string constant" for a
+member initialized by a string compound literal is not reproduced. A
+static object takes the literal's bytes; an automatic one copies the
+literal's object.
+
+A string literal longer than its array, null character aside, stores the
+characters that fit and is a warning in both compilers that
+`-pedantic-errors` makes an error (GCC prints it without an option, Clang
+under `-Wexcess-initializers`); bcc rejected it before. This covers string
+literals inside a compound literal (`(char[3]){"abcd"}`) too.
+`Analyzer::copy_array_literal` holds the rules;
+`tests/fixtures/programs/array_compound_literals.c` runs the accepted forms
+on every back end against each compiler (`tests/integration/identity_programs.rs`),
+and the `sema-array-compound-literal-{gcc,clang}` goldens and
+`semantic_analysis/tests/array_compound_literals.rs` cover the rejections.
 
 ### Casts between pointers and integers of another width
 

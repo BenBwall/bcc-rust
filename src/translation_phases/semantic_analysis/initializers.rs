@@ -217,6 +217,14 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                             } else {
                                 e.source_vectors
                             };
+                            if let Some(length) =
+                                self.copy_array_literal(plan, target, e, &site, static_storage)
+                            {
+                                if std::ptr::eq(init, initializer) {
+                                    count = count.max(length);
+                                }
+                                continue;
+                            }
                             let errors_before_conversion = self.semantic_errors;
                             if matches!(self.types.nodes[target.index], TypeKind::Array(..))
                                 || !self.assignment_conversion_at(target, info, diagnostic_site)
@@ -808,6 +816,118 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         if let ExpressionType::CompoundLiteral { initializer, .. } = literal.kind {
             self.check_static_plan(initializer);
         }
+    }
+
+    /// Copies the compound literal of array type, possibly parenthesized,
+    /// that initializes the array `target` at `site` as if its braced list
+    /// were written in its place, and returns the number of elements it
+    /// has, which completes an array of unknown size. GCC requires static
+    /// storage, and rejects an automatic array ("array initialized from
+    /// non-constant array expression", or "invalid initializer" for a
+    /// literal with side effects); Clang accepts any storage, but only a
+    /// literal without side effects, and reports the extension under
+    /// `-Wgnu-compound-literal-initializer`. Any other array expression is
+    /// no initializer of an array, which the caller reports.
+    /// GNU extension: GCC manual, "Compound Literals"; C99 §6.7.8
+    /// paragraph 16, p. 126; PDF p. 138.
+    fn copy_array_literal(
+        &mut self,
+        plan: &mut PlanBuilder<'tu, 's>,
+        target: TypeId,
+        e: &'tu Expression<'tu>,
+        site: &Site<'s>,
+        static_storage: bool,
+    ) -> Option<u64> {
+        let (literal, length) = self.matching_array_literal(target, e)?;
+        let gcc = matches!(
+            self.context.configuration.compiler_identity(),
+            crate::configuration::CompilerIdentity::Gcc
+        );
+        let side_effects = self.has_side_effects(literal);
+        if gcc && !static_storage || !gcc && side_effects {
+            // GCC wraps a literal with side effects, which is then no
+            // literal ("invalid initializer").
+            let kind = if gcc && side_effects {
+                SemanticErrorKind::InvalidInitializer
+            } else {
+                SemanticErrorKind::NonConstantArrayInitializer
+            };
+            self.error(kind, e.source_vectors, None, None);
+        } else if !gcc {
+            self.context.report_extension(
+                crate::configuration::Feature::ArrayCompoundLiteral,
+                "array initialized from a compound literal",
+                e.source_vectors,
+            );
+        }
+        if static_storage {
+            self.check_static_compound_literal(e, literal);
+        }
+        let ty = match self.types.nodes[target.index] {
+            | TypeKind::Array(element, ArrayBound::Incomplete) => self
+                .types
+                .intern(TypeKind::Array(element, ArrayBound::Constant(length))),
+            | _ => target,
+        };
+        plan.copy(literal, site.destination(ty), self.enclosing_unions(site));
+        Some(length)
+    }
+
+    /// The compound literal, possibly parenthesized, of an array type that
+    /// may initialize the array `target`, and its number of elements. GCC
+    /// requires array types compatible once each element type's qualifiers
+    /// are dropped (`digest_init` compares main variants). Clang requires
+    /// the same element type, and the same bound unless `target`'s is
+    /// unknown (`hasCompatibleArrayTypes`).
+    /// GNU extension: GCC manual, "Compound Literals".
+    fn matching_array_literal(
+        &mut self,
+        target: TypeId,
+        e: &'tu Expression<'tu>,
+    ) -> Option<(&'tu Expression<'tu>, u64)> {
+        let TypeKind::Array(target_element, target_bound) = self.types.nodes[target.index] else {
+            return None;
+        };
+        let literal = unparenthesized(e);
+        if !matches!(literal.kind, ExpressionType::CompoundLiteral { .. }) {
+            return None;
+        }
+        let ty = self.expression_info(literal).ty;
+        let TypeKind::Array(element, ArrayBound::Constant(length)) = self.types.nodes[ty.index]
+        else {
+            return None;
+        };
+        let bounds = match target_bound {
+            | ArrayBound::Incomplete => true,
+            | ArrayBound::Constant(target_length) => target_length == length,
+            | _ => false,
+        };
+        let compatible = bounds
+            && if matches!(
+                self.context.configuration.compiler_identity(),
+                crate::configuration::CompilerIdentity::Gcc
+            ) {
+                let [a, b] = [target_element, element].map(|ty| self.element_main_variant(ty));
+                self.types.composite(a, b).is_some()
+            } else {
+                target_element == element
+            };
+        compatible.then_some((literal, length))
+    }
+
+    /// `ty` without the qualifiers, `_Atomic` included, of its innermost
+    /// element type, which GCC's main variant of an array type drops.
+    fn element_main_variant(&mut self, mut ty: TypeId) -> TypeId {
+        let mut bounds = ArenaVec::new_in(self.scratch);
+        while let TypeKind::Array(element, bound) = self.types.nodes[ty.index] {
+            bounds.push(bound);
+            ty = element;
+        }
+        let mut ty = self.types.non_atomic(ty).unqualified();
+        while let Some(bound) = bounds.pop() {
+            ty = self.types.intern(TypeKind::Array(ty, bound));
+        }
+        ty
     }
 
     /// The compound literal whose bytes `e` gives an object of type
@@ -1683,6 +1803,15 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         if self.vector_assignment(target, self.expression_info(e).ty) {
             return true;
         }
+        // GCC: an array compound literal initializes an array element or
+        // member whole, as it does the object (Clang only the object).
+        if matches!(
+            self.context.configuration.compiler_identity(),
+            crate::configuration::CompilerIdentity::Gcc
+        ) && self.matching_array_literal(target, e).is_some()
+        {
+            return true;
+        }
         matches!(self.types.nodes[target.index], TypeKind::Tag(_))
             && self
                 .types
@@ -1760,8 +1889,10 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         if let ArrayBound::Constant(extent) = bound
             && extent < count - 1
         {
-            self.error(
-                SemanticErrorKind::ExcessInitializer,
+            // Only the characters that fit are stored.
+            self.group_diagnostic(
+                crate::configuration::DiagnosticGroup::ExcessInitializers,
+                SemanticErrorKind::ExcessString,
                 e.source_vectors,
                 None,
                 None,

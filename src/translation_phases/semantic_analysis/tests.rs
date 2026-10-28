@@ -11,6 +11,7 @@ use super::{
 };
 use crate::translation_phases::TranslationError;
 
+mod array_compound_literals;
 mod assembly;
 mod atomics;
 mod attributes;

@@ -1644,7 +1644,10 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
     /// operand of `&`, or a member's structure.
     /// C99: §6.3.2.1 paragraph 2, p. 46; PDF p. 58; §5.1.2.3 paragraph 2,
     /// p. 13; PDF p. 25.
-    fn has_side_effects(&self, expression: &'tu Expression<'tu>) -> bool {
+    pub(in crate::translation_phases::semantic_analysis) fn has_side_effects(
+        &self,
+        expression: &'tu Expression<'tu>,
+    ) -> bool {
         self.side_effects(expression, false)
     }
 

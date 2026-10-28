@@ -1,0 +1,137 @@
+warning: 'array initialized from a compound literal' is a GNU extension [-Wpedantic]
+ --> sema-array-compound-literal-clang.c:2:24
+  |
+2 | static char exact[3] = (char[3]){"ab"};
+  |                        ^^^^^^^^^^^^^^^
+
+warning: 'array initialized from a compound literal' is a GNU extension [-Wpedantic]
+ --> sema-array-compound-literal-clang.c:3:20
+  |
+3 | char completed[] = (char[3]){"ab"};
+  |                    ^^^^^^^^^^^^^^^
+
+error: initializer cannot initialize this object
+ --> sema-array-compound-literal-clang.c:4:6
+  |
+4 | char larger[4] = (char[3]){"ab"};
+  |      ^^^^^^ invalid initializer
+  |
+  = note: C99 §6.7.8p2-3: initialization requires an appropriate complete object or incomplete array and compatible scalar values
+
+error: initializer cannot initialize this object
+ --> sema-array-compound-literal-clang.c:5:6
+  |
+5 | char smaller[2] = (char[3]){"ab"};
+  |      ^^^^^^^ invalid initializer
+  |
+  = note: C99 §6.7.8p2-3: initialization requires an appropriate complete object or incomplete array and compatible scalar values
+
+warning: 'array initialized from a compound literal' is a GNU extension [-Wpedantic]
+ --> sema-array-compound-literal-clang.c:6:27
+  |
+6 | char unsized_literal[3] = (char[]){"ab"};
+  |                           ^^^^^^^^^^^^^^
+
+warning: 'array initialized from a compound literal' is a GNU extension [-Wpedantic]
+ --> sema-array-compound-literal-clang.c:7:20
+  |
+7 | char too_long[3] = (char[3]){"abcd"};
+  |                    ^^^^^^^^^^^^^^^^^
+
+warning: initializer-string for char array is too long [-Wexcess-initializers]
+ --> sema-array-compound-literal-clang.c:7:30
+  |
+7 | char too_long[3] = (char[3]){"abcd"};
+  |                              ^^^^^^ characters past the array's end are dropped
+  |
+  = note: C99 §6.7.8p2 and p14: the string's characters initialize the array's elements; none may lie outside the array
+
+warning: initializer-string for char array is too long [-Wexcess-initializers]
+ --> sema-array-compound-literal-clang.c:8:26
+  |
+8 | char plain_too_long[3] = "abcd";
+  |                          ^^^^^^ characters past the array's end are dropped
+  |
+  = note: C99 §6.7.8p2 and p14: the string's characters initialize the array's elements; none may lie outside the array
+
+warning: 'array initialized from a compound literal' is a GNU extension [-Wpedantic]
+  --> sema-array-compound-literal-clang.c:9:19
+   |
+ 9 | wchar_t wide[3] = (wchar_t[3]){L"ab"};
+   |                   ^^^^^^^^^^^^^^^^^^^
+
+error: initializer cannot initialize this object
+  --> sema-array-compound-literal-clang.c:10:6
+   |
+10 | char mixed[3] = (unsigned char[3]){"ab"};
+   |      ^^^^^ invalid initializer
+   |
+   = note: C99 §6.7.8p2-3: initialization requires an appropriate complete object or incomplete array and compatible scalar values
+
+warning: 'array initialized from a compound literal' is a GNU extension [-Wpedantic]
+  --> sema-array-compound-literal-clang.c:11:19
+   |
+11 | int integers[2] = (int[2]){1, 2};
+   |                   ^^^^^^^^^^^^^^
+
+error: incompatible integer and pointer conversion [-Wint-conversion]
+  --> sema-array-compound-literal-clang.c:12:19
+   |
+12 | char braced[3] = {(char[3]){"ab"}};
+   |                   ^^^^^^^^^^^^^^^ pointer constraint violation
+   |
+   = note: C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
+
+error: initializer cannot initialize this object
+  --> sema-array-compound-literal-clang.c:13:6
+   |
+13 | char qualified_source[3] = (const char[3]){"ab"};
+   |      ^^^^^^^^^^^^^^^^ invalid initializer
+   |
+   = note: C99 §6.7.8p2-3: initialization requires an appropriate complete object or incomplete array and compatible scalar values
+
+error: incompatible integer and pointer conversion [-Wint-conversion]
+  --> sema-array-compound-literal-clang.c:14:55
+   |
+14 | struct member { char text[3]; int value; } member = { (char[3]){"ab"}, 1 };
+   |                                                       ^^^^^^^^^^^^^^^ pointer constraint violation
+   |
+   = note: C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
+
+error: initializer cannot initialize this object
+  --> sema-array-compound-literal-clang.c:15:6
+   |
+15 | char conditional[3] = 1 ? (char[3]){"ab"} : (char[3]){"cd"};
+   |      ^^^^^^^^^^^ invalid initializer
+   |
+   = note: C99 §6.7.8p2-3: initialization requires an appropriate complete object or incomplete array and compatible scalar values
+
+warning: 'array initialized from a compound literal' is a GNU extension [-Wpedantic]
+  --> sema-array-compound-literal-clang.c:17:25
+   |
+17 |     char automatic[3] = (char[3]){"ab"};
+   |                         ^^^^^^^^^^^^^^^
+
+warning: 'array initialized from a compound literal' is a GNU extension [-Wpedantic]
+  --> sema-array-compound-literal-clang.c:18:35
+   |
+18 |     static char local_static[3] = (char[3]){"ab"};
+   |                                   ^^^^^^^^^^^^^^^
+
+error: initializer cannot initialize this object
+  --> sema-array-compound-literal-clang.c:19:10
+   |
+19 |     char automatic_larger[4] = (char[3]){"ab"};
+   |          ^^^^^^^^^^^^^^^^ invalid initializer
+   |
+   = note: C99 §6.7.8p2-3: initialization requires an appropriate complete object or incomplete array and compatible scalar values
+
+error: array initialized from non-constant array expression
+  --> sema-array-compound-literal-clang.c:20:26
+   |
+20 |     int side_effect[2] = (int[2]){i++, 2};
+   |                          ^^^^^^^^^^^^^^^^ not a constant array
+   |
+   = note: C99 §6.7.8p16: an array is initialized by a braced list; GCC also accepts a compound literal of its type for static storage, Clang one without side effects
+
+9 errors and 10 warnings generated.

@@ -209,6 +209,12 @@ pub(crate) enum SemanticErrorKind {
     /// integer constant's value; the payload is the interned message.
     /// C99: §6.3.1.3p3, p. 43; PDF p. 55.
     ConstantConversion(StringCacheId),
+    /// A string literal initializes an array too short for its characters,
+    /// null character aside; the characters that fit are stored. GCC and
+    /// Clang accept it with a warning, as the constraint violation it is.
+    /// C99: §6.7.8 paragraph 2, p. 125; PDF p. 137; paragraph 14, p. 126;
+    /// PDF p. 138.
+    ExcessString,
     /// GNU extension: GCC "Other Builtins" probability constraint.
     /// <https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html>
     InvalidBuiltinProbability,
@@ -275,6 +281,10 @@ pub(crate) enum SemanticErrorKind {
     FailedAssertion,
     /// C99: §6.7.8p2-3, p. 125; PDF p. 137.
     InvalidInitializer,
+    /// GCC: an automatic array initialized by an array compound literal;
+    /// Clang: by one whose initializer has side effects.
+    /// GNU extension: GCC manual, "Compound Literals".
+    NonConstantArrayInitializer,
     /// C99: §6.7.8p2, p. 125; PDF p. 137.
     ExcessInitializer,
     /// A flexible array member given elements outside a static object's own
@@ -635,6 +645,7 @@ impl SemanticErrorKind {
                 Some(DiagnosticGroup::InconsistentDllimport),
             | Self::CallAttributeWarning => Some(DiagnosticGroup::AttributeWarning),
             | Self::ConstantConversion(_) => Some(DiagnosticGroup::ConstantConversion),
+            | Self::ExcessString => Some(DiagnosticGroup::ExcessInitializers),
             | _ => None,
         }
     }
@@ -734,6 +745,7 @@ impl SemanticErrorKind {
             | Self::InvalidFrameLevel => "expected an integer constant frame level",
             | Self::InvalidLongjmpValue => "expected the constant 1",
             | Self::ConstantConversion(_) => "the converted value differs",
+            | Self::ExcessString => "characters past the array's end are dropped",
             | Self::InvalidBuiltinAlignment => "expected a constant power-of-two alignment",
             | Self::InvalidPrefetchReadWrite => "expected an integer constant of 0 or 1",
             | Self::InvalidUnaryOperand | Self::InvalidAdditiveOperands =>
@@ -760,6 +772,7 @@ impl SemanticErrorKind {
             | Self::InvalidSwitchExpression => "controlling expression is not an integer",
             | Self::FailedAssertion => "assertion is false",
             | Self::InvalidInitializer => "invalid initializer",
+            | Self::NonConstantArrayInitializer => "not a constant array",
             | Self::ExcessInitializer => "no subobject is left to initialize",
             | Self::FlexibleArrayInitializer => "initializes a flexible array member",
             | Self::FlexibleArrayBraces => "not a brace-enclosed list",
@@ -976,7 +989,8 @@ impl SemanticErrorKind {
                     | crate::configuration::DiagnosticGroup::GnuFoldingConstant
                     | crate::configuration::DiagnosticGroup::GnuNullPointerArithmetic
                     | crate::configuration::DiagnosticGroup::ConstantPromotion
-                    | crate::configuration::DiagnosticGroup::ConstantConversion => "warning-group diagnostic",
+                    | crate::configuration::DiagnosticGroup::ConstantConversion
+                    | crate::configuration::DiagnosticGroup::ExcessInitializers => "warning-group diagnostic",
                 },
                 "C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1",
             ),
@@ -1001,6 +1015,11 @@ impl SemanticErrorKind {
             | Self::InvalidFrameLevel => (
                 "the frame level must be an integer constant",
                 "GNU extension: GCC requires the level of __builtin_frame_address and __builtin_return_address to be a constant unsigned integer",
+            ),
+            | Self::ExcessString => (
+                "initializer-string for char array is too long",
+                "C99 §6.7.8p2 and p14: the string's characters initialize the array's elements; \
+                 none may lie outside the array",
             ),
             | Self::ConstantConversion(_) => (
                 "implicit conversion changes the value of an integer constant",
@@ -1473,6 +1492,11 @@ impl SemanticErrorKind {
             | Self::FailedAssertion => (
                 "static assertion failed",
                 "C11 §6.7.10p2-3: the assertion requires a nonzero integer constant expression",
+            ),
+            | Self::NonConstantArrayInitializer => (
+                "array initialized from non-constant array expression",
+                "C99 §6.7.8p16: an array is initialized by a braced list; GCC also accepts a \
+                 compound literal of its type for static storage, Clang one without side effects",
             ),
             | Self::InvalidInitializer => (
                 "initializer cannot initialize this object",
@@ -2078,6 +2102,7 @@ impl GetSeverity for SemanticError {
                 | SemanticErrorKind::InitializerOverride
                 | SemanticErrorKind::PartialInitializerOverride
                 | SemanticErrorKind::ConstantConversion(_)
+                | SemanticErrorKind::ExcessString
                 | SemanticErrorKind::AttributeAfterDefinition
                 | SemanticErrorKind::UnevaluatedStringPrefix
                 | SemanticErrorKind::UnsupportedDeclspec

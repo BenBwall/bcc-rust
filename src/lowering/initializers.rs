@@ -580,7 +580,14 @@ impl<'tu, 's> FunctionLowerer<'_, '_, 'tu, '_, 's> {
         ty: TypeId,
         bit_field: Option<BitFieldBits>,
     ) -> Result<(), LoweringError> {
-        let item = self.pop();
+        let mut item = self.pop();
+        // GNU: an array compound literal initializes an array whole, as a
+        // copy of the literal's object.
+        if let Operand::Place(Place::Memory(address)) = item.operand
+            && matches!(self.unit.sema.types.kind(ty), TypeKind::Array(..))
+        {
+            item.operand = Operand::Aggregate(address);
+        }
         let (base, source) = match object {
             | Object::Local(binding) => {
                 let source = self.unit.sema.bindings[binding].name.source_vectors;

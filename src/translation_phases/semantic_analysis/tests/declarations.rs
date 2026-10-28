@@ -806,10 +806,8 @@ fn braced_strings_initialize_the_first_element_of_other_arrays() {
         for (source, expected) in [
             ("char *a[] = \"x\";", SemanticErrorKind::InvalidInitializer),
             ("int a[] = \"x\";", SemanticErrorKind::InvalidInitializer),
-            (
-                "char a[1] = { \"xy\" };",
-                SemanticErrorKind::ExcessInitializer,
-            ),
+            // GCC and Clang warn and store the characters that fit.
+            ("char a[1] = { \"xy\" };", SemanticErrorKind::ExcessString),
             (
                 "long a[3] = { \"ab\" };",
                 SemanticErrorKind::PointerConstraint(
