@@ -206,6 +206,17 @@ impl Compilation {
                      stages still show what the middle end made of it."
                 ),
             ),
+            | _ if let Some(include) = self.missing_header(error) => (
+                "Front end",
+                format!(
+                    "bcc could not find the header {include}{at}. This view compiles for x86-64 \
+                     in your browser, where bcc has only its own freestanding headers, such as \
+                     <limits.h>, <stdint.h> and <stddef.h>, and no C library: no <stdio.h> or \
+                     <stdlib.h>. Its WebAssembly view compiles for wasm32-wasip1 with bcc's own C \
+                     library, which has them: choose WebAssembly to compile this program and step \
+                     it."
+                ),
+            ),
             | _ => (
                 "Front end",
                 format!(
@@ -222,6 +233,17 @@ impl Compilation {
             explanation,
             line: error.range.map(|range| range.line),
         })
+    }
+
+    /// The header, as written, whose `#include` on the line of `error` was
+    /// not found.
+    fn missing_header(&self, error: &CompileDiagnostic) -> Option<String> {
+        let line = error.range?.line;
+        self.preprocessing
+            .includes
+            .iter()
+            .find(|include| !include.found && include.line == line)
+            .map(Include::spelled)
     }
 
     /// Whether `stage` should have run but an error stopped bcc first.

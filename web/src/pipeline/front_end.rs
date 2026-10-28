@@ -254,6 +254,18 @@ pub struct Include {
     pub lines:  usize,
 }
 
+impl Include {
+    /// The header's name as the `#include` spells it, `<stdio.h>` or
+    /// `"local.h"`.
+    pub fn spelled(&self) -> String {
+        if self.angled {
+            format!("<{}>", self.header)
+        } else {
+            format!("\"{}\"", self.header)
+        }
+    }
+}
+
 /// A `#define` or `#undef` in the source.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]

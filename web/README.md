@@ -217,7 +217,13 @@ reimplements none):
   hover, skipped lines are hatched, and conditionals carry a kept or
   skipped mark. The browser build has no host headers: `#include` finds only
   bcc's embedded freestanding headers (`<limits.h>`, `<stdint.h>`,
-  `<stddef.h>`, `<stdbool.h>`, …), so `<stdio.h>` is reported as not found.
+  `<stddef.h>`, `<stdbool.h>`, …), so `<stdio.h>` is reported as not found,
+  and the card and the stop explanation point to the WebAssembly view, whose
+  target has bcc's own C library. The pipeline does not borrow that
+  library's headers: they describe bcc's WASI runtime, not an x86-64 C
+  library, and the pipeline's stages are what the native `bcc-rust` prints
+  (`tests/integration/explorer.rs` compares them, and the lessons' LLVM IR
+  comes from the native compiler).
 - **Tokens (phases 5-7)** is the `--tokens` listing of a second, ordinary
   preprocessing run.
 
@@ -270,7 +276,10 @@ How live compilation runs:
 - **Diagnostics.** Errors and warnings are Monaco markers in the source, with
   the message on hover, and a list under the stage with each message's place
   (click it to show the line), the part of the compiler that reported it, and
-  the full rendered message. When an error stops bcc, the stage strip marks
+  the full rendered message. In the WebAssembly view the markers come instead
+  from bcc's `wasm32-wasip1` compilation of the editor's text (debounced the
+  same way; loading the program reuses it), whose C library headers the
+  x86-64 compilation lacks. When an error stops bcc, the stage strip marks
   the stages that did not run, and the stage explains, in beginner's terms,
   whether the front end found a mistake in the program, or the middle or back
   end met a construct bcc does not translate yet.

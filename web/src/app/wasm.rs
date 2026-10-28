@@ -25,9 +25,11 @@ use super::State;
 use crate::{
     editor::Decoration,
     engine,
+    pipeline::CompileDiagnostic,
     wasm::{
         Precompiled,
         WasmBackEnd,
+        WasmCompiled,
         WasmControl,
         WasmModule,
         WasmProgram,
@@ -44,6 +46,8 @@ const RUN_LIMIT: usize = 500;
 const TRAIL: usize = 6;
 /// Where the learner's choice of compiler is kept between visits.
 const COMPILER_KEY: &str = "bcc-wasm-compiler";
+/// bcc's WebAssembly compilations kept for their squiggles and for loading.
+const CHECKED_LIMIT: usize = 4;
 
 /// Which compiler made a module.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -90,6 +94,50 @@ pub enum BccFailure {
     /// The in-browser compiler did not finish (it timed out or its Worker
     /// stopped), which may not happen again, so compiling again may work.
     Stopped(String),
+}
+
+/// bcc's recent WebAssembly compilations of the editor's text, whose
+/// diagnostics are the editor's squiggles in this view and whose modules a
+/// load reuses.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Checks {
+    /// bcc's answer for each source, or why the compiler Worker gave none,
+    /// oldest first.
+    compiled: Vec<(String, Result<WasmCompiled, BccFailure>)>,
+    /// The source being compiled for its squiggles.
+    checking: Option<String>,
+}
+
+impl Checks {
+    /// bcc's diagnostics for `text` compiled for WebAssembly, once known.
+    pub fn diagnostics(&self, text: &str) -> &[CompileDiagnostic] {
+        self.answer(text)
+            .map_or(&[], |answer| answer.diagnostics.as_slice())
+    }
+
+    /// bcc's answer for `source`, if it is known.
+    fn answer(&self, source: &str) -> Option<&WasmCompiled> {
+        self.compiled
+            .iter()
+            .rev()
+            .find(|(known, _)| known == source)
+            .and_then(|(_, result)| result.as_ref().ok())
+    }
+
+    /// Whether `source` was compiled, whatever the outcome.
+    fn known(&self, source: &str) -> bool {
+        self.compiled.iter().any(|(known, _)| known == source)
+    }
+
+    /// Keeps `result` for `source` as the newest of at most
+    /// [`CHECKED_LIMIT`] compilations; each holds its module and its source.
+    fn remember(&mut self, source: &str, result: Result<WasmCompiled, BccFailure>) {
+        self.compiled.retain(|(known, _)| known != source);
+        self.compiled.push((source.to_owned(), result));
+        if self.compiled.len() > CHECKED_LIMIT {
+            _ = self.compiled.remove(0);
+        }
+    }
 }
 
 /// The modules a program has: bcc's, or why bcc has none, clang's for a
@@ -404,8 +452,37 @@ impl WasmState {
             });
             self.loading.set(false);
             // The program, or the compiler chosen, may have changed while
-            // this one loaded.
+            // this one loaded, and the editor's text may need its squiggles.
             self.ensure_loaded(state);
+            state.pump();
+        });
+    }
+
+    /// Compile the editor's text with bcc for WebAssembly once typing
+    /// pauses, unless it is known, so the editor shows the diagnostics of
+    /// the compilation this view runs: an x86-64 compilation has no C
+    /// library headers, while bcc's WASI target has its own. Text the view
+    /// is loading is left to the load, which compiles it anyway.
+    pub(super) fn check(self, state: State) {
+        let text = state.editor_text.get_untracked();
+        let (known, checking) = state
+            .wasm_checks
+            .with_untracked(|checks| (checks.known(&text), checks.checking.is_some()));
+        let loading =
+            self.loading.get_untracked() && state.source.with_untracked(|source| *source == text);
+        if known || checking || loading || crate::pipeline::too_large(&text).is_some() {
+            return;
+        }
+        state
+            .wasm_checks
+            .update(|checks| checks.checking = Some(text.clone()));
+        spawn_local(async move {
+            let result = compile_wasm(state, &text).await;
+            state.wasm_checks.update(|checks| {
+                checks.checking = None;
+                checks.remember(&text, result);
+            });
+            state.pump();
         });
     }
 
@@ -419,20 +496,22 @@ impl WasmState {
         if let Some(modules) = known {
             return modules;
         }
-        let bcc = match state.compiler().await {
-            | Ok(compiler) => {
-                let result = compiler.compile_wasm(source).await;
-                // A compiler that timed out or trapped is gone; the next
-                // compilation starts a fresh one.
-                if !compiler.connected() {
-                    state.compiler.set_value(None);
-                }
-                result.map_or_else(
-                    |error| Err(failure(error)),
-                    |answer| answer.map_err(BccFailure::Refused),
-                )
+        // The squiggles' compilation of the same text gives the module too.
+        let checked = state
+            .wasm_checks
+            .with_untracked(|checks| checks.answer(source).cloned());
+        let bcc = match checked {
+            | Some(answer) => answer.module.map_err(BccFailure::Refused),
+            | None => match compile_wasm(state, source).await {
+                | Ok(answer) => {
+                    let module = answer.module.clone().map_err(BccFailure::Refused);
+                    state
+                        .wasm_checks
+                        .update(|checks| checks.remember(source, Ok(answer)));
+                    module
+                },
+                | Err(failure) => Err(failure),
             },
-            | Err(error) => Err(BccFailure::Stopped(error)),
         };
         Modules {
             bcc,
@@ -944,6 +1023,19 @@ pub fn status(wasm: WasmState) -> (String, String) {
     })
 }
 
+/// `source` compiled by bcc for WebAssembly in the compiler Worker, which
+/// is started if it is not running, or why the Worker gave no answer.
+async fn compile_wasm(state: State, source: &str) -> Result<WasmCompiled, BccFailure> {
+    let compiler = state.compiler().await.map_err(BccFailure::Stopped)?;
+    let result = compiler.compile_wasm(source).await;
+    // A compiler that timed out or trapped is gone; the next compilation
+    // starts a fresh one.
+    if !compiler.connected() {
+        state.compiler.set_value(None);
+    }
+    result.map_err(failure)
+}
+
 /// What a compiler Worker error means for bcc's module: running out of
 /// memory, nesting too deeply or an internal error happen again on every
 /// try, while a timeout or a stopped Worker may not.
@@ -986,6 +1078,33 @@ mod tests {
             compiler,
             modules: Some(("source".into(), modules)),
         }
+    }
+
+    #[test]
+    fn checks_keep_the_newest_compilations_and_their_diagnostics() {
+        let compiled = |message: &str| WasmCompiled {
+            module:      Ok(module("bcc")),
+            diagnostics: vec![CompileDiagnostic {
+                severity: "warning".into(),
+                message: message.into(),
+                ..CompileDiagnostic::default()
+            }],
+        };
+        let mut checks = Checks::default();
+        checks.remember("a", Ok(compiled("first")));
+        checks.remember("b", Err(BccFailure::Stopped("timed out".into())));
+        assert_eq!(checks.diagnostics("a")[0].message, "first");
+        // A failed compilation is known, so it is not retried while the
+        // text stays, but it has no answer to reuse.
+        assert!(checks.known("b") && checks.answer("b").is_none());
+        assert!(checks.diagnostics("b").is_empty() && checks.diagnostics("c").is_empty());
+        checks.remember("a", Ok(compiled("again")));
+        assert_eq!(checks.diagnostics("a")[0].message, "again");
+        for source in ["c", "d", "e", "f"] {
+            checks.remember(source, Ok(compiled(source)));
+        }
+        assert!(!checks.known("a") && !checks.known("b"));
+        assert_eq!(checks.compiled.len(), CHECKED_LIMIT);
     }
 
     #[test]

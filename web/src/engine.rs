@@ -45,6 +45,7 @@ use crate::{
     },
     snapshot::Snapshot,
     wasm::{
+        WasmCompiled,
         WasmControl,
         WasmModule,
         WasmProgram,
@@ -225,9 +226,9 @@ impl Engine {
         }
     }
 
-    /// Compile `source` to WebAssembly with bcc in the Worker. The inner
-    /// error is bcc's refusal, with its diagnostics.
-    pub async fn compile_wasm(&self, source: &str) -> Result<Result<WasmModule, String>, String> {
+    /// Compile `source` to WebAssembly with bcc in the Worker. The error is
+    /// the Worker's; bcc's own refusal is in the answer.
+    pub async fn compile_wasm(&self, source: &str) -> Result<WasmCompiled, String> {
         match self
             .request(Command::CompileWasm(source.to_owned()))
             .await?

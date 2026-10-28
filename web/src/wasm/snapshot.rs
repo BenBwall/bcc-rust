@@ -7,6 +7,8 @@ use serde::{
     Serialize,
 };
 
+use crate::pipeline::CompileDiagnostic;
+
 /// A module to step, with where its code came from.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -22,6 +24,15 @@ pub struct WasmModule {
     /// The compiler's own text format of the module, shown in place of the
     /// stepper's listing. `None` lists the module as the stepper prints it.
     pub text:     Option<WasmText>,
+}
+
+/// bcc's answer for one source compiled to WebAssembly: its module, or its
+/// errors as it prints them when it refuses the program, and every
+/// diagnostic placed in the editor, which draws them as squiggles.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+pub struct WasmCompiled {
+    pub module:      Result<WasmModule, String>,
+    pub diagnostics: Vec<CompileDiagnostic>,
 }
 
 /// A compiler's `.wat` for a module, and where each instruction is in it.

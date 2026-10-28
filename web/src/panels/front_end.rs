@@ -339,11 +339,7 @@ fn presumed(place: Option<&str>) -> Option<impl IntoView + use<>> {
 }
 
 fn include_item(include: &Include, on_reveal: Callback<usize>) -> impl IntoView {
-    let name = if include.angled {
-        format!("<{}>", include.header)
-    } else {
-        format!("\"{}\"", include.header)
-    };
+    let name = include.spelled();
     let text = if include.found {
         format!(
             "is one of bcc's own headers, {} lines long. The preprocessor ran phases 1 to 4 on it \
@@ -351,9 +347,10 @@ fn include_item(include: &Include, on_reveal: Callback<usize>) -> impl IntoView 
             include.lines
         )
     } else {
-        "was not found. In the browser bcc has only its own freestanding headers, such as \
-         <limits.h>, <stdint.h>, <stddef.h> and <stdbool.h>, and no C library headers like \
-         <stdio.h>."
+        "was not found. Compiling for x86-64 in the browser, bcc has only its own freestanding \
+         headers, such as <limits.h>, <stdint.h>, <stddef.h> and <stdbool.h>, and no C library \
+         headers like <stdio.h>. The WebAssembly view compiles for wasm32-wasip1 with bcc's own C \
+         library, which has them."
             .to_owned()
     };
     view! {

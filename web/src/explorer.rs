@@ -48,7 +48,10 @@ use crate::{
         Answer,
         Command,
     },
-    wasm::WasmBackEnd,
+    wasm::{
+        Bcc,
+        WasmCompiled,
+    },
 };
 
 /// Run one request from the page.
@@ -59,11 +62,23 @@ pub fn run(command: Command) -> Result<Answer, String> {
     match command {
         | Command::Compile { source, optimize } =>
             Ok(Answer::Compiled(Box::new(compile(&source, optimize)))),
-        | Command::CompileWasm(source) => Ok(Answer::CompiledWasm(Box::new(
-            crate::wasm::Bcc.compile(&source),
-        ))),
+        | Command::CompileWasm(source) => Ok(Answer::CompiledWasm(Box::new(compile_wasm(&source)))),
         | Command::Load(_) | Command::Step | Command::WasmLoad(_) | Command::Wasm(_) =>
             Err("The compiler Worker does not run the abstract machine.".into()),
+    }
+}
+
+/// Compile `source` to WebAssembly with bcc (`wasm/bcc.rs`), its
+/// diagnostics placed in the editor.
+pub fn compile_wasm(source: &str) -> WasmCompiled {
+    let (module, diagnostics) = Bcc.compile_with_diagnostics(source);
+    let columns = Columns::new(source);
+    WasmCompiled {
+        module,
+        diagnostics: diagnostics
+            .iter()
+            .map(|found| diagnostic(found, &columns))
+            .collect(),
     }
 }
 
@@ -742,6 +757,47 @@ mod tests {
         assert!(stop.explanation.contains(&error.message));
         assert!(compilation.stopped_before(Stage::Ir));
         assert!(!compilation.stopped_before(Stage::Tokens));
+    }
+
+    /// `<stdio.h>` is one of bcc's own headers on wasm32-wasip1 but none on
+    /// x86-64 in the browser: the WebAssembly view's squiggles come from its
+    /// own compilation, and the pipeline's stop says where the header is.
+    #[test]
+    fn the_c_library_headers_are_found_only_for_webassembly() {
+        let source =
+            "#include <stdio.h>\nint main(void) {\n    printf(\"%d\\n\", 1);\n    return x;\n}\n";
+        let wasm = compile_wasm(source);
+        let [error] = &*wasm.diagnostics else {
+            panic!("{:#?}", wasm.diagnostics);
+        };
+        // Only the undeclared `x` on line 4, placed for a squiggle.
+        assert_eq!(error.severity, "error");
+        let range = error.range.expect("in the source");
+        assert_eq!((range.line, range.column), (4, 12), "{error:#?}");
+        assert!(wasm.module.is_err());
+        let fixed = source.replace("return x", "return 0");
+        let wasm = compile_wasm(&fixed);
+        assert!(wasm.diagnostics.is_empty(), "{:#?}", wasm.diagnostics);
+        assert!(wasm.module.is_ok());
+        // For x86-64 the header is missing, and the stop says where to go.
+        let compilation = compile(&fixed, false);
+        let error = compilation
+            .diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.severity == "error")
+            .expect("no <stdio.h> on x86-64");
+        assert_eq!(error.range.map(|range| range.line), Some(1));
+        let stop = compilation.stop().expect("the error stops bcc");
+        assert!(
+            stop.explanation.contains("<stdio.h>"),
+            "{}",
+            stop.explanation
+        );
+        assert!(
+            stop.explanation.contains("choose WebAssembly"),
+            "{}",
+            stop.explanation
+        );
     }
 
     #[test]
