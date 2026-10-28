@@ -94,7 +94,9 @@ void *malloc(size_t size) {
         size_t extra = need;
         if (last_free && (unsigned char *)last_free + (last_free[0] & ~FREE) == heap_end)
             extra = need - (last_free[0] & ~FREE);
-        if (!grow(extra + 65536u))
+        /* A page of slack saves growing again soon, unless memory cannot
+           hold it. */
+        if (!grow(extra + 65536u) && !grow(extra))
             return no_memory();
         if (last_free)
             merge(last_free);

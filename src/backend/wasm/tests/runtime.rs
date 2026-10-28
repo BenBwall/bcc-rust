@@ -284,10 +284,11 @@ int main(void) {
 }
 
 /// The heap never grows memory to all 65536 pages, whose end would wrap to
-/// 0 as a pointer: a request that needs the last page fails, and later
-/// requests still succeed.
+/// 0 as a pointer, but takes every page before it: a request that needs
+/// the last page fails, one that fills memory up to it succeeds, and the
+/// heap keeps working after both.
 #[test]
-fn the_heap_leaves_memorys_last_page() {
+fn the_heap_takes_every_page_but_the_last() {
     let source = r#"#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -298,20 +299,23 @@ int main(void) {
     size_t pages = __bcc_wasm_memory_size();
     uintptr_t end = (uintptr_t)b - 16 + ((big + 31) & ~(size_t)15);
     size_t rest = (size_t)(pages * 65536ull - end);
-    /* Exactly what all of memory up to its last page would hold. */
-    char *c = malloc(rest + (65536u - pages - 1) * 65536u - 16);
-    char *d = malloc(100), *e = malloc(100);
-    printf("%d %d %d %d %d\n", a != 0, b != 0, c == 0, d != 0 && e != 0 && d != e,
-           __bcc_wasm_memory_size() < 65536);
+    /* Exactly what all of memory up to its last page holds. */
+    size_t most = rest + (65536u - pages - 1) * 65536u - 16;
+    char *over = malloc(most + 16);
+    char *c = malloc(most);
+    printf("%d %d %d %d %d\n", a != 0, b != 0, over == 0, c != 0, __bcc_wasm_memory_size() == 65535);
+    char *full = malloc(100);
+    printf("%d %d\n", full == 0, (uintptr_t)c + most == 0xffff0000u);
     free(c);
+    char *d = malloc(100), *e = malloc(100);
     free(a);
     char *f = malloc(1u << 20);
-    printf("%d\n", f != 0);
+    printf("%d %d\n", d != 0 && e != 0 && d != e, f != 0);
     return 0;
 }
 "#;
     for output in outputs("alloc-last-page", source).into_iter().flatten() {
-        assert_eq!(output, "1 1 1 1 1\n1\n");
+        assert_eq!(output, "1 1 1 1 1\n1 1\n1 1\n");
     }
 }
 
