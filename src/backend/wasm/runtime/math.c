@@ -1,8 +1,9 @@
 /* <math.h> for wasm32-wasip1. sqrt, fabs, floor, ceil, trunc, rint,
    nearbyint and copysign are WebAssembly instructions, which the back end
    emits for calls to them; the definitions here serve calls through
-   pointers. The transcendental functions reduce their argument and sum a
-   series: accurate to about an ulp, but not correctly rounded.
+   pointers. sin, cos and tan are in trig.c (fdlibm's, with Payne-Hanek
+   reduction). The other transcendental functions reduce their argument
+   and sum a series: accurate to about an ulp, but not correctly rounded.
    C99: §7.12, pp. 211-242. */
 #include <errno.h>
 #include <math.h>
@@ -315,66 +316,6 @@ double cbrt(double x) {
     return r;
 }
 
-/* Reduces x to r in [-pi/4, pi/4] with x = r + n * pi/2. */
-static double reduce(double x, int *quadrant) {
-    static const double PIO2_1 = 1.57079632673412561417e+00, PIO2_2 = 6.07710050650619224932e-11,
-                        PIO2_3 = 2.02226624879595063154e-21;
-    double n = nearbyint(x * 0.63661977236758134308);
-    double r = ((x - n * PIO2_1) - n * PIO2_2) - n * PIO2_3;
-    *quadrant = (int)fmod(n, 4.0);
-    if (*quadrant < 0)
-        *quadrant += 4;
-    return r;
-}
-
-static double sin_series(double r) {
-    double r2 = r * r, term = r, sum = r;
-    for (int i = 1; i < 15; i++) {
-        term *= -r2 / ((2 * i) * (2 * i + 1));
-        sum += term;
-    }
-    return sum;
-}
-
-static double cos_series(double r) {
-    double r2 = r * r, term = 1, sum = 1;
-    for (int i = 1; i < 15; i++) {
-        term *= -r2 / ((2 * i - 1) * (2 * i));
-        sum += term;
-    }
-    return sum;
-}
-
-double sin(double x) {
-    if (x != x || fabs(x) == __builtin_inf())
-        return __builtin_nan("");
-    if (fabs(x) < 1e-8)
-        return x;
-    int q;
-    double r = reduce(x, &q);
-    switch (q) {
-    case 0: return sin_series(r);
-    case 1: return cos_series(r);
-    case 2: return -sin_series(r);
-    default: return -cos_series(r);
-    }
-}
-
-double cos(double x) {
-    if (x != x || fabs(x) == __builtin_inf())
-        return __builtin_nan("");
-    int q;
-    double r = reduce(x, &q);
-    switch (q) {
-    case 0: return cos_series(r);
-    case 1: return -sin_series(r);
-    case 2: return -cos_series(r);
-    default: return sin_series(r);
-    }
-}
-
-double tan(double x) { return sin(x) / cos(x); }
-
 double atan(double x) {
     if (x != x)
         return x;
@@ -448,7 +389,4 @@ double tanh(double x) {
 float expf(float x) { return (float)exp(x); }
 float logf(float x) { return (float)log(x); }
 float powf(float x, float y) { return (float)pow(x, y); }
-float sinf(float x) { return (float)sin(x); }
-float cosf(float x) { return (float)cos(x); }
-float tanf(float x) { return (float)tan(x); }
 float atan2f(float y, float x) { return (float)atan2(y, x); }

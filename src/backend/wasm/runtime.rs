@@ -74,6 +74,7 @@ pub(crate) const SOURCES: &[(&str, &str)] = &[
     ("string.c", include_str!("runtime/string.c")),
     ("stdlib.c", include_str!("runtime/stdlib.c")),
     ("math.c", include_str!("runtime/math.c")),
+    ("trig.c", include_str!("runtime/trig.c")),
     ("compiler_rt.c", include_str!("runtime/compiler_rt.c")),
 ];
 
