@@ -230,6 +230,13 @@ mod tests {
             return;
         }
         let runner = Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts/wasm/run.mjs");
+        // WebAssembly has no `_BitInt` above 128 bits, whose lines start
+        // with `w_`.
+        let mut narrow = String::new();
+        for line in clang.lines().filter(|line| !line.starts_with("w_")) {
+            narrow.push_str(line);
+            narrow.push('\n');
+        }
         for flags in [&["-O0"][..], &["-O2"], &["--opt=bcc"]] {
             let module = temporary("objects.wasm");
             let built = bcc(&[
@@ -255,7 +262,7 @@ mod tests {
                     .arg(&module),
             )
             .unwrap();
-            assert_eq!(text(&run.stdout), clang, "wasm32 {flags:?}");
+            assert_eq!(text(&run.stdout), narrow, "wasm32 {flags:?}");
             std::fs::remove_file(module).unwrap();
         }
     }

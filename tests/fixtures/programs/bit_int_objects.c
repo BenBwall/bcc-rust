@@ -39,6 +39,20 @@ static unsigned _BitInt(7) array7[3] = {-1, 5, -3};
 static _BitInt(100) array100[2] = {-1, 1};
 static unsigned _BitInt(65) *literal = &(unsigned _BitInt(65)){-1};
 
+#if __BITINT_MAXWIDTH__ > 128
+/* Wide unsigned values with bit 127 of their pattern set, 2^N - k,
+ * converted to every floating type, rounded once. */
+static _Float16 w_half = (unsigned _BitInt(129))-5;
+static float w_float = (unsigned _BitInt(200))-1;
+static double w_double = (unsigned _BitInt(200))-1;
+static double w_double2 = (unsigned _BitInt(150))(-(__int128)(((__int128)1 << 64) + 3));
+static long double w_long = (unsigned _BitInt(193))-7;
+static __float128 w_quad = (unsigned _BitInt(200))-1;
+static __float128 w_quad2 = (unsigned _BitInt(130))(-(__int128)((__int128)1 << 100));
+static _Complex double w_complex = (unsigned _BitInt(200))-1;
+static double w_huge = (unsigned _BitInt(4000))-1;
+#endif
+
 #if defined(__GNUC__) && !defined(__clang__)
 static _Atomic unsigned _BitInt(7) q7 = -1;
 static _Atomic _BitInt(33) q33 = -9;
@@ -63,6 +77,13 @@ int main(void) {
     SHOW(r7); SHOW(r9); SHOW(r33); SHOW(r65); SHOW(r100); SHOW(r127);
     u7 += 100; u65 += 2; s100 = s100 * 3;
     SHOW(u7); SHOW(u65); SHOW(s100);
+
+#if __BITINT_MAXWIDTH__ > 128
+    bytes("w_half", &w_half, 2);
+    SHOW(w_float); SHOW(w_double); SHOW(w_double2);
+    bytes("w_long", &w_long, 10);
+    SHOW(w_quad); SHOW(w_quad2); SHOW(w_complex); SHOW(w_huge);
+#endif
 
 #if defined(__GNUC__) && !defined(__clang__)
     printf("atomic %d %lld\n", (int)q7, (long long)q33);

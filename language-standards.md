@@ -2392,18 +2392,21 @@ Semantics follow C23:
   `int` (`(_BitInt(8))1 << 7` is -128 in both compilers). Values of widths
   above 128 bits exceed the 128-bit constant model (`Integer`), which
   holds such a value as its 128-bit pattern sign-extended to N bits: every
-  signed value converts, and so does an unsigned one below 2^127 or one of
-  another wide type. Arithmetic folds whenever `__int128` arithmetic on the
+  signed value converts, and so does an unsigned one below 2^127, or one of
+  another wide type converted to a type no wider (an unsigned pattern with
+  bit 127 set stands for 2^N - k, whose zero extension to a wider type no
+  such pattern holds). Converted to a floating type, 2^N - k rounds once
+  from its top 128 bits and a sticky bit (`bits::from_bit_precise`). Arithmetic folds whenever `__int128` arithmetic on the
   patterns does not overflow, which gives the exact result modulo 2^N:
   `+`, `-`, `*`, the bitwise operators, `~`, unary `-`, comparisons, a
   division or remainder of signed values (or of unsigned ones below 2^127),
   and shifts whose result stays in the pattern. Where a constant is
   required, a result the pattern cannot hold is refused with "not yet
   supported: folding this _BitInt constant of more than 128 bits"
-  (`UnsupportedWideConstant`): an unsigned 128-bit value with its top bit
-  set converted to a wider type (`(unsigned _BitInt(129))(unsigned
-  __int128)-1`), a huge unsigned value divided or shifted right, a shift
-  past bit 127. Both compilers fold these. The error replaces the generic
+  (`UnsupportedWideConstant`): an unsigned value with bit 127 set converted
+  to a wider type (`(unsigned _BitInt(129))(unsigned __int128)-1`,
+  `(_BitInt(200))(unsigned _BitInt(150))-1`), a huge unsigned value divided
+  or shifted right, a shift past bit 127. Both compilers fold these. The error replaces the generic
   one of every context: enumerators, case labels, array bounds (a variable
   length array at block scope), bit-field widths, `_Alignas`, static
   assertions and initializers, and `__builtin_choose_expr`.
@@ -2417,7 +2420,10 @@ Semantics follow C23:
   atomic builtin of type '_BitInt' is not supported"), and the `__sync`
   builtins unless N is a power of two ("atomic memory operand must have a
   power-of-two size"); the Clang identity does the same, with Clang's
-  wording. GCC accepts all of them, and its results wrap at the width.
+  wording. GCC accepts all of them, and its results wrap at the width. Both
+  refuse a `__sync` builtin on a `_BitInt` of more than 16 bytes (Clang:
+  "address argument to atomic builtin must be a pointer to 1,2,4,8 or 16
+  byte type").
   Two refusals predate `_BitInt` and hold for every type under every
   identity: an `_Atomic` object in the `__atomic` builtins, which GCC
   accepts and Clang refuses, and `__atomic_clear` on an object other than
