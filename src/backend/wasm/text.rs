@@ -245,9 +245,10 @@ impl<W: Write> Write for Counting<'_, W> {
     }
 }
 
-/// A symbol as a text identifier: `idchar`s pass through and anything else
-/// becomes its code point in hex between backticks, which no symbol bcc
-/// emits contains, so distinct names stay distinct.
+/// A symbol as a text identifier: `idchar`s (WebAssembly 2.0 §6.3.5) pass
+/// through and anything else becomes its code point in hex between
+/// backticks. The backtick is an `idchar` too, but it is the escape's
+/// delimiter, so it is always escaped and distinct names stay distinct.
 struct Id<'a>(&'a str);
 
 impl fmt::Display for Id<'_> {
@@ -274,6 +275,7 @@ impl fmt::Display for Id<'_> {
                         | '@'
                         | '\\'
                         | '^'
+                        | '_'
                         | '|'
                         | '~'
                 );
