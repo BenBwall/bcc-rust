@@ -177,6 +177,15 @@ impl<'a, 'ir> Linked<'a, 'ir> {
         self.names[unit][func.index()]
     }
 
+    /// The input function a function index defines, if it is one.
+    pub(crate) fn defined_function(&self, function: u32) -> Option<(usize, FuncId)> {
+        let position = function.checked_sub(u32_of(self.module.imports.len()))?;
+        match self.order.get(position as usize)? {
+            | &Defined::Input(unit, func) => Some((unit as usize, func)),
+            | Defined::Synthetic(_) => None,
+        }
+    }
+
     pub(crate) fn routine(&self, routine: Routine) -> u32 {
         self.routines[routine as usize]
     }

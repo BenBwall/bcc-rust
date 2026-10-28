@@ -377,3 +377,19 @@ fn offsets_text_lines_and_source_map_agree() {
         "{lines_seen:?}"
     );
 }
+
+/// A call through a declaration without a prototype passes its promoted
+/// arguments as the definition's parameters, not as variadic arguments.
+#[test]
+fn unprototyped_calls_reach_prototyped_definitions() {
+    if !node_available() {
+        eprintln!("note: node is not on the path; skipping the WebAssembly K&R call test");
+        return;
+    }
+    let source = "extern unsigned long strlen();\nextern void exit();\nstatic int twice(int x) { \
+                  return 2 * x; }\nint (*keep)(int) = twice;\nint main(void) { if \
+                  (strlen(\"four\") != 4) return 1; exit(9); }\n";
+    let bytes = compile(source, Target::Wasm32Wasi, false).unwrap();
+    let run = run("unprototyped", &bytes);
+    assert_eq!(run.status, 9, "{}", run.stderr);
+}

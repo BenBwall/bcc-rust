@@ -130,7 +130,7 @@ enum Target {
     Indirect(u32),
 }
 
-impl Codegen<'_, '_, '_, '_, '_> {
+impl<'ir> Codegen<'_, '_, '_, 'ir, '_> {
     pub(super) fn direct_call(&mut self, func: FuncId, args: &[Value], result: Option<Value>) {
         let signature = self.module.function_signature(func);
         if self.module.returns_twice(func) {
@@ -147,6 +147,23 @@ impl Codegen<'_, '_, '_, '_, '_> {
                     }
                     self.num(code);
                     self.store_result(result);
+                    return;
+                }
+                if let Some(defined) = self.prototype_of_unprototyped(signature, index) {
+                    if defined.params.len() == args.len()
+                        && defined
+                            .params
+                            .iter()
+                            .zip(args)
+                            .all(|(&ty, &arg)| ty == self.ty(arg))
+                        && defined.result == signature.result
+                    {
+                        self.call_sequence(defined, args, result, Target::Direct(index), None);
+                    } else {
+                        // Arguments that do not match the definition's
+                        // parameters are undefined behaviour.
+                        self.emit(Instr::Unreachable);
+                    }
                     return;
                 }
                 self.call_sequence(signature, args, result, Target::Direct(index), None);
@@ -166,6 +183,25 @@ impl Codegen<'_, '_, '_, '_, '_> {
                 self.emit(Instr::Unreachable);
             },
         }
+    }
+
+    /// The prototype of the definition a call through a declaration
+    /// without one reaches: such a call passes its promoted arguments as
+    /// the definition's parameters, as Clang calls it, not as variadic
+    /// arguments. `None` when the declaration has a prototype or the
+    /// definition has none.
+    /// C99: §6.5.2.2 paragraph 6, p. 72; PDF p. 84.
+    fn prototype_of_unprototyped(
+        &self,
+        signature: Signature<'_>,
+        index: u32,
+    ) -> Option<Signature<'ir>> {
+        if !signature.variadic || signature.fixed_count() != 0 {
+            return None;
+        }
+        let (unit, func) = self.link.defined_function(index)?;
+        let defined = self.link.module(unit).function_signature(func);
+        (!defined.variadic).then_some(defined)
     }
 
     pub(super) fn indirect_call(&mut self, sig: SigId, args: &[Value], result: Option<Value>) {
