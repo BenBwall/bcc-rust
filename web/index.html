@@ -11,8 +11,10 @@
     <!-- Trunk builds the hydrating Leptos app, the abstract machine's Worker
          and the compiler's Worker; its post_build hook prerenders the page
          into the body. The Monaco bundle and the web fonts come from
-         web/editor (npm run build). -->
-    <link data-trunk rel="rust" data-bin="bcc-web" data-cargo-features="hydrate" data-wasm-opt="z">
+         web/editor (npm run build). No integrity digests: every URL is
+         same-origin and named after its contents, and Chrome warns that it
+         ignores one on the Wasm preload. -->
+    <link data-trunk rel="rust" data-bin="bcc-web" data-cargo-features="hydrate" data-wasm-opt="z" data-integrity="none">
     <link data-trunk rel="rust" data-bin="engine-worker" data-type="worker" data-cargo-features="worker" data-wasm-opt="z">
     <link data-trunk rel="rust" data-bin="compiler-worker" data-type="worker" data-cargo-features="compiler" data-wasm-opt="z">
     <link data-trunk rel="css" href="style.css">
