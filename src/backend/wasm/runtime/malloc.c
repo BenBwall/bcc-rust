@@ -3,6 +3,7 @@
    (a multiple of 16, including the header) and whether it is free, and
    free blocks are merged with free neighbours that follow them.
    C99: §7.20.3, pp. 313-314. */
+#include <errno.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
@@ -15,7 +16,15 @@ static unsigned char *heap_start, *heap_end;
 
 static size_t *header(void *p) { return (size_t *)((unsigned char *)p - HEADER); }
 
+/* An allocation that cannot be satisfied: null, with errno ENOMEM. */
+static void *no_memory(void) {
+    errno = ENOMEM;
+    return 0;
+}
+
 static int grow(size_t bytes) {
+    if (bytes > (size_t)-1 - 65535u)
+        return 0;
     size_t pages = (bytes + 65535u) / 65536u;
     if (__bcc_wasm_memory_grow(pages) == (size_t)-1)
         return 0;
@@ -52,8 +61,10 @@ static void merge(size_t *block) {
 void *malloc(size_t size) {
     if (!heap_start)
         init();
+    /* Sizes this large could never be satisfied, and the header, the
+       rounding and the growth step below must not wrap. */
     if (size > (size_t)-1 / 2)
-        return 0;
+        return no_memory();
     size_t need = (size + HEADER + 15u) & ~(size_t)15u;
     for (int attempt = 0; attempt < 2; attempt++) {
         size_t *last_free = 0;
@@ -80,11 +91,11 @@ void *malloc(size_t size) {
         if (last_free && (unsigned char *)last_free + (last_free[0] & ~FREE) == heap_end)
             extra = need - (last_free[0] & ~FREE);
         if (!grow(extra + 65536u))
-            return 0;
+            return no_memory();
         if (last_free)
             merge(last_free);
     }
-    return 0;
+    return no_memory();
 }
 
 void free(void *p) {
@@ -97,7 +108,7 @@ void free(void *p) {
 
 void *calloc(size_t count, size_t size) {
     if (size && count > (size_t)-1 / size)
-        return 0;
+        return no_memory();
     void *p = malloc(count * size);
     if (p)
         memset(p, 0, count * size);
@@ -123,8 +134,14 @@ void *realloc(void *p, size_t size) {
 }
 
 void *aligned_alloc(size_t alignment, size_t size) {
+    if (alignment == 0 || (alignment & (alignment - 1)) != 0) {
+        errno = EINVAL;
+        return 0;
+    }
     if (alignment <= 16)
         return malloc(size);
+    if (size > (size_t)-1 - alignment - 32)
+        return no_memory();
     unsigned char *raw = malloc(size + alignment + 32);
     if (!raw || ((uintptr_t)raw & (alignment - 1)) == 0)
         return raw;
