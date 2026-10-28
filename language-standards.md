@@ -2276,6 +2276,8 @@ initializer is refused (`static unsigned char u = 300.7;`), and
 form, the half-precision ones and their excess precision included, on the
 interpreter, LLVM and the native back end under each identity against the
 GCC and Clang builds (`tests/integration/static_compound_literals.rs`);
+`backend/wasm/tests/execution.rs` checks the binary128 `long double` and
+`__fp16` bytes literals give static objects on `wasm32-wasip1`;
 `semantic_analysis/tests/compound_literal_statics.rs` and the
 `sema-static-compound-literal-{gcc,clang}` diagnostic goldens cover the
 rejections.
