@@ -388,12 +388,14 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
                 global.align.bytes()
             )
         } else {
-            writeln!(
-                self.out,
-                "\t.comm\t{name},{},{}",
-                global.size,
-                global.align.log2()
-            )?;
+            // Microsoft's linker aligns a communal symbol by its size, so
+            // LLVM rounds the size up to the alignment on the MSVC target.
+            let size = if self.target == Target::WindowsMsvc {
+                global.size.max(global.align.bytes())
+            } else {
+                global.size
+            };
+            writeln!(self.out, "\t.comm\t{name},{size},{}", global.align.log2())?;
             // A COFF common symbol carries no alignment; MinGW's linker
             // reads it from an `-aligncomm` directive, as LLVM writes one
             // for any alignment above a byte.

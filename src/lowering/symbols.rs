@@ -86,9 +86,10 @@ impl Unit<'_, '_, '_> {
     /// imported, or an attribute places it in a section, as Clang's
     /// `isVarDeclStrongDefinition` decides. On the MSVC target an object
     /// whose alignment its declaration, its type or a member of its record
-    /// type requires is no common symbol either, as there, since `cl`'s
-    /// linker aligns a communal symbol by its size; a WebAssembly module
-    /// has none.
+    /// type requires, or whose type needs more than 32-byte alignment, is
+    /// no common symbol either, as there, since Microsoft's linker aligns a
+    /// communal symbol by its size, to at most 32 bytes; a WebAssembly
+    /// module has none.
     /// Extension: C99 §J.5.11, p. 514; PDF p. 526.
     fn common_symbol(&self, binding: usize) -> bool {
         let data = self.sema.bindings[binding];
@@ -109,7 +110,13 @@ impl Unit<'_, '_, '_> {
             attributes.section.is_none()
                 && attributes.dll != Some(DllStorage::Import)
                 && !(microsoft && attributes.declared_alignment)
-        }) && !(microsoft && self.requires_alignment(data.ty, true))
+        }) && !(microsoft
+            && (self.requires_alignment(data.ty, true)
+                || self
+                    .sema
+                    .types
+                    .storage_alignment(data.ty)
+                    .is_some_and(|align| align > MSVC_COMMON_ALIGNMENT)))
     }
 
     /// Whether `ty`'s alignment is required rather than natural, as Clang's
@@ -301,3 +308,8 @@ impl Unit<'_, '_, '_> {
         }
     }
 }
+
+/// The largest alignment Microsoft's linker gives a communal symbol, in
+/// bytes; on the MSVC target an object whose type needs more is no common
+/// symbol, as Clang's `isVarDeclStrongDefinition` decides.
+const MSVC_COMMON_ALIGNMENT: u64 = 32;

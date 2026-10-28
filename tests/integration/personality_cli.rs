@@ -3086,8 +3086,10 @@ mod tests {
 
     /// A `const` tentative definition is common, and so not constant, as in
     /// Clang; GNU `common` makes an object common under `-fno-common` and
-    /// `nocommon` keeps one a definition under `-fcommon`, the last one
-    /// written winning, on both back ends.
+    /// `nocommon` keeps one a definition under `-fcommon`, and `common` on
+    /// any declaration wins over `nocommon` without a warning, as in Clang
+    /// (`nocommon` on an `extern` declaration still counts), on both back
+    /// ends.
     #[test]
     fn common_attributes_and_constant_objects() {
         if !cfg!(all(target_os = "linux", target_env = "gnu")) {
@@ -3098,15 +3100,22 @@ mod tests {
             "c.c",
             "const int cint;\n__attribute__((common)) int ca;\n__attribute__((nocommon)) int \
              na;\n__attribute__((nocommon)) int last;\n__attribute__((common)) int last;\nint \
-             pa;\n",
+             pa;\nint __attribute__((common, nocommon)) at_cn;\nint __attribute__((nocommon, \
+             common)) at_nc;\nint redecl1 __attribute__((common));\nint redecl1 \
+             __attribute__((nocommon));\nextern int redecl3 __attribute__((nocommon));\nint \
+             redecl3;\n",
         );
         for backend in ["--backend=llvm", "--backend=native"] {
             for (flag, expected) in [
-                ("-fcommon", &["cint", "ca", "last", "pa"][..]),
-                ("-fno-common", &["ca", "last"]),
+                (
+                    "-fcommon",
+                    &["cint", "ca", "last", "pa", "at_cn", "at_nc", "redecl1"][..],
+                ),
+                ("-fno-common", &["ca", "last", "at_cn", "at_nc", "redecl1"]),
             ] {
                 let output = directory.bcc("", &[backend, flag, "-c", "c.c", "-o", "c.o"]);
                 succeeds(&output);
+                assert_eq!(stderr(&output), "", "{backend} {flag}");
                 let Some(mut symbols) = common_symbols(&directory.path("c.o")) else {
                     return;
                 };
@@ -3134,7 +3143,10 @@ mod tests {
              __attribute__((aligned(8)));\nal8 aarr[4];\nstruct F { int x \
              __attribute__((aligned(8))); } f;\nstruct G { ai16 y; } g;\nstruct H { struct F f; } \
              h;\nstruct K { struct B b; } k;\n__declspec(dllexport) int dexp;\nchar onebyte;\nint \
-             plain;\n__attribute__((aligned(16))) int own;\n",
+             plain;\n__attribute__((aligned(16))) int own;\ntypedef float v16 \
+             __attribute__((vector_size(64)));\nv16 vec64;\ntypedef float v8 \
+             __attribute__((vector_size(32)));\nv8 vec32;\nstruct SV { v16 x; } sv;\nv16 \
+             varr[2];\nshort s2;\nchar c3[3];\n",
         );
         let communal = |object: &Path| -> Option<Vec<String>> {
             let listing = Command::new("objdump")
@@ -3172,10 +3184,15 @@ mod tests {
             (
                 "x86_64-w64-windows-gnu",
                 &[
-                    "aarr", "ai", "b64", "dexp", "f", "g", "h", "k", "onebyte", "own", "plain",
+                    "aarr", "ai", "b64", "c3", "dexp", "f", "g", "h", "k", "onebyte", "own",
+                    "plain", "s2", "sv", "varr", "vec32", "vec64",
                 ][..],
             ),
-            ("x86_64-pc-windows-msvc", &["dexp", "h", "onebyte", "plain"]),
+            // A 32-byte vector stays common there; a 64-byte one does not.
+            (
+                "x86_64-pc-windows-msvc",
+                &["c3", "dexp", "h", "onebyte", "plain", "s2", "vec32"],
+            ),
         ] {
             for backend in ["--backend=llvm", "--backend=native"] {
                 let output = directory.bcc(
@@ -3196,6 +3213,27 @@ mod tests {
                     return;
                 };
                 assert_eq!(names, expected, "{target} {backend}");
+                // Microsoft's linker aligns a communal symbol by its size,
+                // so it is rounded up to the alignment there, as LLVM does.
+                let size = if target.ends_with("msvc") { "4" } else { "" };
+                let listing = Command::new("objdump")
+                    .arg("-t")
+                    .arg(directory.path("w.obj"))
+                    .output()
+                    .unwrap();
+                for name in ["s2", "c3"] {
+                    let line = stdout(&listing)
+                        .lines()
+                        .find(|line| line.ends_with(&format!(" {name}")))
+                        .map(str::to_owned)
+                        .unwrap_or_default();
+                    let expected = match (name, size) {
+                        | ("s2", "") => "0x0000000000000002",
+                        | ("c3", "") => "0x0000000000000003",
+                        | _ => "0x0000000000000004",
+                    };
+                    assert!(line.contains(expected), "{target} {backend}: {line}");
+                }
                 let drectve = directives(&directory.path("w.obj"));
                 if target.ends_with("gnu") {
                     assert!(

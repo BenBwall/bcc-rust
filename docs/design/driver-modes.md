@@ -197,13 +197,16 @@ LLVM drop a later null check; bcc's own optimizer never drops one),
 a common symbol, LLVM `common` or the native back end's `.comm`, which its
 ELF and COFF writers encode, with MinGW's `-aligncomm` above a byte; GNU
 `common` asks for one under `-fno-common` and `nocommon` keeps an object a
-definition, the last written winning. As in Clang, a common symbol is
-never constant, `dllexport` exports it, and it is not made for a
-thread-local object, an imported one or one in a section, nor on the MSVC
-target for one whose alignment its declaration, its typedef, its
-`aligned` record type or a member of that record requires, since that
-linker aligns a communal symbol by its size; bcc's objects then link with
-GCC's `-fcommon` objects, an initialized definition winning),
+definition, `common` on any declaration winning silently, as in Clang,
+where GCC warns and keeps the attribute it met first. As in Clang, a
+common symbol is never constant, `dllexport` exports it, and it is not
+made for a thread-local object, an imported one or one in a section, nor
+on the MSVC target for one whose alignment its declaration, its typedef,
+its `aligned` record type or a member of that record requires, or whose
+type needs more than 32-byte alignment, since that linker aligns a
+communal symbol by its size, which is rounded up to the alignment there;
+bcc's objects then link with GCC's `-fcommon` objects, an initialized
+definition winning),
 `-fpack-struct=N` and `cl /ZpN` (the packing before any `#pragma pack`),
 `-fpack-struct` alone (every structure packed, the pragmas ignored with
 GCC's warning), the options that give up part of IEC 60559 semantics

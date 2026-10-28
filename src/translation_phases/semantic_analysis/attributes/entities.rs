@@ -362,10 +362,11 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         }
     }
 
-    /// GCC `common` and `nocommon` on an object with external linkage: the
-    /// last one written decides whether its tentative definition is a
-    /// common symbol, which lowering reads. Elsewhere they are ignored with
-    /// a warning.
+    /// GCC `common` and `nocommon` on an object with external linkage decide
+    /// whether its tentative definition is a common symbol, which lowering
+    /// reads: `common` on any of its declarations wins, silently, as in
+    /// Clang (GCC instead warns and keeps the attribute it met first).
+    /// Elsewhere they are ignored with a warning.
     /// GNU extension: GCC manual, "Common Variable Attributes".
     fn common_attribute(
         &mut self,
@@ -381,7 +382,8 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 if self.bindings[binding].linkage == Linkage::External =>
             {
                 let entity = self.entity_of(binding);
-                self.attributes.entity(entity).common = Some(common);
+                let attributes = self.attributes.entity(entity);
+                attributes.common = Some(common || attributes.common == Some(true));
             },
             | _ => self.ignored(attribute),
         }
