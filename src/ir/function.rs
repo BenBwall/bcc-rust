@@ -55,6 +55,10 @@ pub(crate) struct Body<'ir> {
     /// Frontend diagnostic IDs for calls. Messages and source provenance live
     /// outside the IR; these opaque IDs follow surviving calls through passes.
     pub(super) call_diagnostics: ArenaMap<'ir, Inst, u32>,
+    /// The source line each instruction came from, or 0. Lowering records
+    /// lines only for back ends that report them (the WebAssembly back
+    /// end's source map); passes that rebuild a body do not keep them.
+    pub(super) lines:            Table<'ir, Inst, u32>,
 }
 
 impl<'ir> Body<'ir> {
@@ -106,6 +110,11 @@ impl<'ir> Body<'ir> {
     /// Frontend diagnostic associated with this call, if any.
     pub(crate) fn call_diagnostic(&self, inst: Inst) -> Option<u32> {
         self.call_diagnostics.get(&inst).copied()
+    }
+
+    /// The source line `inst` came from, or 0 when it is unknown.
+    pub(crate) fn inst_line(&self, inst: Inst) -> u32 {
+        self.lines.get(inst).copied().unwrap_or(0)
     }
 
     pub(crate) fn inst_result(&self, inst: Inst) -> Option<Value> {
@@ -373,6 +382,7 @@ impl<'ir> Body<'ir> {
             pool:             ArenaVec::new_in(arena),
             constants:        Table::new_in(arena),
             call_diagnostics: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, arena),
+            lines:            Table::new_in(arena),
         }
     }
 }

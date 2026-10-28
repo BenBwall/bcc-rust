@@ -230,7 +230,9 @@ impl CallConv {
     /// The convention of `target`.
     pub(crate) const fn of(target: Target) -> Self {
         match target {
-            | Target::LinuxGnu | Target::LinuxMusl => Self::SYSTEM_V,
+            // The native back end refuses the WebAssembly targets first.
+            | Target::LinuxGnu | Target::LinuxMusl | Target::Wasm32Unknown | Target::Wasm32Wasi =>
+                Self::SYSTEM_V,
             | Target::WindowsGnu | Target::WindowsMsvc => Self::WIN64,
         }
     }

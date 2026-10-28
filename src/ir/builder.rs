@@ -50,6 +50,8 @@ pub(crate) struct FunctionBuilder<'m, 'ir> {
     func:            FuncId,
     pub(super) body: Body<'ir>,
     current:         Option<Block>,
+    /// The source line the next instructions get.
+    line:            u32,
 }
 
 impl FunctionBuilder<'_, '_> {
@@ -69,6 +71,7 @@ impl FunctionBuilder<'_, '_> {
             .expect("switch to a block before inserting instructions");
         let inst = self.body.insts.push(data);
         _ = self.body.results.push(result);
+        _ = self.body.lines.push(self.line);
         if let Some(value) = result {
             self.body.values[value] = ValueData {
                 ty:  self.module.result_type(&data).unwrap_or(Type::Ptr),
@@ -77,6 +80,12 @@ impl FunctionBuilder<'_, '_> {
         }
         self.body.blocks[block].insts.push(inst);
         inst
+    }
+
+    /// Gives the instructions inserted from now on the source line `line`
+    /// (0 for none).
+    pub(crate) fn set_line(&mut self, line: u32) {
+        self.line = line;
     }
 
     /// Retains a frontend diagnostic ID while this call survives optimization.
@@ -563,6 +572,7 @@ impl<'m, 'ir> FunctionBuilder<'m, 'ir> {
             func,
             body,
             current: None,
+            line: 0,
         }
     }
 

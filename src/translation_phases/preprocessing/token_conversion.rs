@@ -527,6 +527,8 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                     TokenType::Float(FloatTokenType::ImaginaryFloat128(v)),
                 | TokenType::Float(FloatTokenType::LongDouble(v)) =>
                     TokenType::Float(FloatTokenType::ImaginaryLongDouble(v)),
+                | TokenType::Float(FloatTokenType::LongDouble128(v)) =>
+                    TokenType::Float(FloatTokenType::ImaginaryLongDouble128(v)),
                 // No imaginary interchange or extended constants are
                 // modeled.
                 | TokenType::Float(
@@ -1238,10 +1240,17 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
         } else {
             &normalized
         };
+        // A target without the type has no suffix for it either: the pinned
+        // Clang calls `1.5f16` an invalid suffix on WebAssembly.
+        let target = self.context.configuration.target();
         if self.context.configuration.accepts(Feature::Float16)
             && let Some((format, length)) = half_suffix(contents)
-            && (format == HalfFormat::Binary16
-                || self.context.configuration.compiler_identity() == CompilerIdentity::Gcc)
+            && match format {
+                | HalfFormat::Binary16 => target.float16_type(),
+                | HalfFormat::BFloat16 =>
+                    target.bfloat16_type()
+                        && self.context.configuration.compiler_identity() == CompilerIdentity::Gcc,
+            }
         {
             let mut quad = ArenaString::new_in(self.scratch);
             quad.push_str(&contents[..contents.len() - 1 - length]);
@@ -1279,6 +1288,20 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
             | Some('q' | 'Q') =>
                 crate::binary128::parse(contents, self.scratch).map(FloatTokenType::Float128),
             | Some('f' | 'F') => string_to_float(contents).map(FloatTokenType::Float),
+            | Some('l' | 'L')
+                if self
+                    .context
+                    .configuration
+                    .target()
+                    .layout()
+                    .long_double_is_binary128() =>
+            {
+                // binary128 reads the constant spelled with its own suffix.
+                let mut quad = ArenaString::new_in(self.scratch);
+                quad.push_str(&contents[..contents.len() - 2]);
+                quad.push_str("q\0");
+                crate::binary128::parse(&quad, self.scratch).map(FloatTokenType::LongDouble128)
+            },
             | Some('l' | 'L')
                 if self
                     .context

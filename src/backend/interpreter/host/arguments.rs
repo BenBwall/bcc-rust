@@ -85,6 +85,10 @@ impl<'v> FormatArguments<'v> {
     ) -> Result<Self, Fault> {
         Ok(match source {
             | HostVaList::Values(values) => Self::Values(values.iter()),
+            | HostVaList::Target(Convention::Wasm32) =>
+                return Err(Fault::Unsupported(
+                    super::super::trap::Unsupported::VaListTarget,
+                )),
             | HostVaList::Target(Convention::SystemV) => {
                 let field =
                     |at: u64| memory.ptr_add(list, RuntimeValue::Int(u128::from(at)), false);

@@ -66,11 +66,16 @@ pub(super) fn link(args: &Cli, inputs: &[Input<'_>]) -> Result<i32, MainError> {
         return compile(args, source, Job::Generate(generation), dependencies)
             .map(|generated| generated.status);
     }
+    let target = args.target;
+    if target.is_wasm() {
+        return Err(MainError::Driver(
+            "the wasm32 targets link one C source into a module; pass a single source with -o",
+        ));
+    }
     let arena = Bump::new();
     let mut temporaries = Vec::new();
     let mut status = 0;
     let mut atomic_runtime = false;
-    let target = args.target;
     for input in inputs {
         let object = match input {
             | Input::Link(_) => continue,

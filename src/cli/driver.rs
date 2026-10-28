@@ -92,6 +92,11 @@ pub(super) fn run(args: &Cli, matches: &ArgMatches) -> Result<i32, MainError> {
     } else {
         Stage::Inspect
     };
+    if stage == Stage::Compile && args.target.is_wasm() {
+        return Err(MainError::Driver(
+            "the wasm32 targets write linked modules only: use -o, -S or --emit=wasm instead of -c",
+        ));
+    }
     if stage != Stage::Link {
         // GCC lets `-M` and `-MM` without `-E`, `-c` or `-S` write each
         // unit's rules to `-o` in turn, every unit replacing the one before.

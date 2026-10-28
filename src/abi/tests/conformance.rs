@@ -801,6 +801,7 @@ impl Runner {
             | Target::WindowsGnu | Target::WindowsMsvc => cfg!(windows),
             | Target::LinuxGnu => cfg!(all(target_os = "linux", target_env = "gnu")),
             | Target::LinuxMusl => cfg!(all(target_os = "linux", target_env = "musl")),
+            | Target::Wasm32Unknown | Target::Wasm32Wasi => false,
         };
         if native {
             return Some(Self::Native);

@@ -33,7 +33,7 @@
 //!   builds the lowered signature from it; `sysv.rs` classifies aggregates into
 //!   eightbyte classes, assigns argument registers and expands `va_arg` for
 //!   System V x86-64; `win64.rs` does the same for the Microsoft x64
-//!   convention.
+//!   convention, and `wasm.rs` for the WebAssembly basic C ABI.
 //! - Rewriting: `rewrite.rs` rebuilds a function body for its plans.
 //! - Errors: `errors.rs`. Tests: `tests.rs` and `tests/`.
 //!
@@ -53,6 +53,7 @@
 // Decisions
 mod plan;
 pub(crate) mod sysv;
+pub(crate) mod wasm;
 mod win64;
 
 // Rewriting

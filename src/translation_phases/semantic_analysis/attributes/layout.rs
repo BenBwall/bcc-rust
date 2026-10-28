@@ -360,7 +360,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             return None;
         }
         let target = self.context.configuration.target();
-        let x87 = !target.layout().long_double_is_double();
+        let x87 = target.layout().long_double_is_x87();
         let real = match &mode[..1] {
             | "S" => S::Float,
             | "D" => S::Double,

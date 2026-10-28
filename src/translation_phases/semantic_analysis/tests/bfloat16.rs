@@ -232,3 +232,51 @@ void g(void) { f(T(100, 76)); d(T(100, 47)); b(T(100, 92)); }
         |context, _| assert_eq!(context.pending_error_count(), 0, "{:?}", messages(context)),
     );
 }
+
+/// The WebAssembly targets follow the pinned Clang: `_Float16` and `__bf16`
+/// (and their constant suffixes) are not supported there, `_Complex` of
+/// either half type is invalid, and `__fp16` stays as the storage type it
+/// is everywhere, two bytes that promote to `float`. GCC's half
+/// characteristics macros describe only types the target has.
+#[test]
+fn webassembly_keeps_fp16_but_not_float16_or_bfloat16() {
+    let wasm =
+        |id| identity(id, ExtensionPolicy::Allow).with_target(crate::target::Target::Wasm32Wasi);
+    for (source, kind) in [
+        ("_Float16 x;", "UnsupportedFloat16"),
+        ("_Complex _Float16 x;", "UnsupportedFloat16"),
+        ("__bf16 x;", "UnsupportedBFloat16"),
+        ("float f(__bf16 *p) { return *p; }", "UnsupportedBFloat16"),
+        ("_Complex __bf16 x;", "ComplexBFloat16"),
+        ("_Complex __fp16 x;", "ComplexFp16"),
+        ("double d = 1.5f16;", "InvalidDecimalFloatLiteral"),
+    ] {
+        with_configuration(source, wasm(CompilerIdentity::Clang), |context, _| {
+            let errors = messages(context);
+            assert!(
+                errors.iter().any(|error| error.contains(kind)),
+                "{source}: {errors:?}"
+            );
+        });
+    }
+    let source = r#"
+__fp16 h = 1.5, table[3];
+_Static_assert(sizeof h == 2 && _Alignof(__fp16) == 2 && sizeof table == 6, "layout");
+_Static_assert(_Generic(h + h, float: 1, default: 0) && _Generic(-h, float: 1, default: 0), "promotes");
+#if defined __FLT16_MAX__ || defined __BFLT16_MAX__
+#error no half characteristics
+#endif
+"#;
+    with_configuration(source, wasm(CompilerIdentity::Clang), |context, _| {
+        assert_eq!(context.pending_error_count(), 0, "{:?}", messages(context));
+    });
+    // GCC has no `__fp16` off ARM; only its macros are checked.
+    with_configuration(
+        "#if defined __FLT16_MAX__ || defined __BFLT16_MAX__\n#error no half \
+         characteristics\n#endif\nint x;\n",
+        wasm(CompilerIdentity::Gcc),
+        |context, _| {
+            assert_eq!(context.pending_error_count(), 0, "{:?}", messages(context));
+        },
+    );
+}

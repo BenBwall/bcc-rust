@@ -108,6 +108,8 @@ pub(super) const fn gcc_machine(target: Target) -> &'static str {
         | Target::LinuxMusl => "x86_64-linux-musl",
         | Target::WindowsGnu => "x86_64-w64-mingw32",
         | Target::WindowsMsvc => "x86_64-pc-windows-msvc",
+        | Target::Wasm32Unknown => "wasm32-unknown-unknown",
+        | Target::Wasm32Wasi => "wasm32-wasip1",
     }
 }
 

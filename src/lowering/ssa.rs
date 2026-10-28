@@ -61,6 +61,8 @@ pub(super) struct Draft<'s> {
     lookups:           ArenaVec<'s, Lookup>,
     results:           ArenaVec<'s, Value>,
     visited:           ArenaSet<'s, Block>,
+    /// The source line of the instructions pushed from now on, or 0.
+    pub(super) line:   u32,
 }
 
 /// A scalar local whose value lives in SSA values rather than memory.
@@ -72,6 +74,8 @@ pub(super) struct DraftBlock<'s> {
     /// Explicit parameters first, then those SSA construction adds.
     pub(super) params:     ArenaVec<'s, Value>,
     pub(super) insts:      ArenaVec<'s, (Op<'s>, Option<Value>)>,
+    /// The source line of each instruction, or 0.
+    pub(super) lines:      ArenaVec<'s, u32>,
     pub(super) terminator: Option<Terminator<'s>>,
     /// Each incoming edge: the block it leaves and its index there.
     pub(super) preds:      ArenaVec<'s, (Block, u32)>,
@@ -281,6 +285,7 @@ impl<'s> Draft<'s> {
         self.blocks.push(DraftBlock {
             params:     ArenaVec::new_in(self.scratch),
             insts:      ArenaVec::new_in(self.scratch),
+            lines:      ArenaVec::new_in(self.scratch),
             terminator: None,
             preds:      ArenaVec::new_in(self.scratch),
             sealed:     false,
@@ -451,6 +456,7 @@ impl<'s> Draft<'s> {
         };
         let value = result.map(|ty| self.new_value(ty, def));
         self.blocks[self.current.index()].insts.push((op, value));
+        self.blocks[self.current.index()].lines.push(self.line);
         value
     }
 
@@ -558,6 +564,7 @@ impl<'s> Draft<'s> {
             lookups: ArenaVec::new_in(scratch),
             results: ArenaVec::new_in(scratch),
             visited: ArenaSet::with_hasher_in(rustc_hash::FxBuildHasher, scratch),
+            line: 0,
         };
         let entry = draft.create_block(params);
         draft.blocks[entry.index()].sealed = true;

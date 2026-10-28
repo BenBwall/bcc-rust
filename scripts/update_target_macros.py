@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parent.parent
 # other hosts), and macros such as __STDC_NO_THREADS__ follow it. Pin the
 # version bcc's _MSC_VER claims so that every host freezes one contract.
 MSVC_COMPATIBILITY_VERSION = "-fms-compatibility-version=19.33"
-TRIPLES = ("x86_64-unknown-linux-gnu", "x86_64-unknown-linux-musl", "x86_64-w64-windows-gnu", "x86_64-pc-windows-msvc")
+TRIPLES = ("x86_64-unknown-linux-gnu", "x86_64-unknown-linux-musl", "x86_64-w64-windows-gnu", "x86_64-pc-windows-msvc", "wasm32-unknown-unknown", "wasm32-wasip1")
 
 
 def exclusion(name):
