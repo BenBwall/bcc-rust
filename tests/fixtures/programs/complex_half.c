@@ -60,6 +60,9 @@ static void contexts(void) {
                        t = one ? wide : ({ a + a; });
         printf("conditional selected %a %a %a\n", (double)__real__ g, (double)__real__ k,
                (double)__real__ t);
+        /* __real__ of a real excess is that excess. */
+        printf("real of real %a %a\n", (double)__real__ (__real__ (one ? a * a : a)),
+               (double)__real__ (h * h));
     }
     printf("comma %08x\n", cb((0, X) * a));
     printf("real operands %08x %08x %08x\n", cb(a * h * h), cb(h * h * a), cb(a + h * h));

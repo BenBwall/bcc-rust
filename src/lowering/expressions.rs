@@ -1598,12 +1598,20 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             self.push_item(result, info.ty);
             return Ok(());
         }
-        // GCC's `__real__` and `__imag__` read a `_Complex _Float16` excess.
+        // GCC's `__real__` and `__imag__` read a `_Complex _Float16` excess
+        // (C99 §6.2.5p13 and GCC "Complex Numbers").
         if matches!(operator, U::Real | U::Imag) && self.half_in_float() {
             let operand = self.pop_excess();
             if let Some(parts) = self.complex_excess(operand) {
                 let part = parts[usize::from(operator == U::Imag)];
                 self.push_item(Operand::Excess(part), info.ty);
+                return Ok(());
+            }
+            // And `__real__` of a real excess is that excess.
+            if operator == U::Real
+                && let Operand::Excess(value) = operand.operand
+            {
+                self.push_item(Operand::Excess(value), info.ty);
                 return Ok(());
             }
             self.operands.push(operand);
