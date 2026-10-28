@@ -658,6 +658,7 @@ below; implicit functions use the existing shared extension diagnostic.
 | `NonConstantInitializer` | [static-initializer](sema2-static-initializer.c) | Static arithmetic/address constant eligibility. |
 | `NonConstantInitializer`, `FoldedIntegerConstant`, `Extension(ConstantCompoundLiteral)` | [GCC](sema-static-compound-literal-gcc.c), [Clang](sema-static-compound-literal-clang.c) | Compound literals in static initializers and integer constants under each identity: GCC's whole-literal wrappers and their pedantic report, Clang's folded literal values, and the forms both reject. |
 | `ConstantOverflow` | [static-overflow](sema2-static-overflow.c) | Shared exceptional constant evaluation in initializers. |
+| `PointerConstraint(IntToPointerCast, PointerToIntCast, ...)` | [GCC](sema-pointer-int-cast-gcc.c), [Clang](sema-pointer-int-cast-clang.c), [options](sema-pointer-int-cast-options.c) | Casts between a pointer and an integer of another width: GCC's two groups for any other width of a plain integer and a non-constant operand, Clang's narrower-only groups with their `void *` and enumeration children, and the parent options that re-enable or promote a child. |
 | `Extension(ImplicitFunctionDeclaration)` | [implicit function](sema2-implicit-function.c) | Removed C89 function declaration policy in GNU99 pedantic mode. |
 
 Positive and negative rules are checked in

@@ -2265,12 +2265,12 @@ These cases remain different from the compiler each identity claims:
   reproduced, as they are not for other initializers.
 
 Problems found while surveying that have nothing to do with literal reads
-remain open: `_BitInt` widths are not checked at all (`_BitInt((int){8})`
-and `int n; _BitInt(n) x;` are accepted, GCC rejects both), `static char
-c[3] = (char[3]){"ab"};` is rejected though GCC and Clang accept it, an
+(see "Semantic analysis gaps" below for those since fixed) remain open:
+`_BitInt` widths are not checked at all (`_BitInt((int){8})` and `int n;
+_BitInt(n) x;` are accepted, GCC rejects both), `static char c[3] =
+(char[3]){"ab"};` is rejected though GCC and Clang accept it, and an
 out-of-range floating value converted to an integer in a static
-initializer is refused (`static unsigned char u = 300.7;`), and
-`-Wint-to-pointer-cast` is not reported (`(void *)(int){0}`).
+initializer is refused (`static unsigned char u = 300.7;`).
 
 `tests/fixtures/programs/static_compound_literals.c` runs every accepted
 form, the half-precision ones and their excess precision included, on the
@@ -2281,3 +2281,36 @@ GCC and Clang builds (`tests/integration/static_compound_literals.rs`);
 `semantic_analysis/tests/compound_literal_statics.rs` and the
 `sema-static-compound-literal-{gcc,clang}` diagnostic goldens cover the
 rejections.
+
+## Semantic analysis gaps (2026-10-28)
+
+Each rule below was surveyed against GCC 15.2 and the bundled Clang 23 in
+C99, C17 and C23, GNU and ISO modes, with and without `-pedantic` and
+`-pedantic-errors`, and follows the selected `--compiler-identity`.
+
+### Casts between pointers and integers of another width
+
+A cast between a pointer and an integer whose width differs from the
+pointer's is implementation-defined and may not be representable (C99
+§6.3.2.3p5-6), and both compilers warn by default:
+
+| Cast | GCC | Clang |
+| --- | --- | --- |
+| integer to pointer | `-Wint-to-pointer-cast` when a plain integer type (not `_Bool`, not an enumeration) has any other width and the operand is not constant; an address constant (`(int)(long)&x`) counts as constant | `-Wint-to-pointer-cast` when the integer type (not `_Bool`, not an enumeration) is narrower and the operand is no integer constant expression; `-Wint-to-void-pointer-cast` for a `void *` destination |
+| pointer to integer | `-Wpointer-to-int-cast` for any other width of a plain integer type | `-Wpointer-to-int-cast` for a narrower integer other than `_Bool`; `-Wpointer-to-enum-cast` for an enumeration, and `-Wvoid-pointer-to-int-cast`/`-Wvoid-pointer-to-enum-cast` from a `void *` |
+
+So GCC warns for `(char *)q` with an `__int128 q` and for `(__int128)p`,
+Clang does not; Clang warns for `(enum E)p`, GCC does not. An operand that
+reads an object even in an unevaluated arm (`(char *)(1 ? 2 : i)`) or a
+compound literal (`(void *)(int){0}`) is not constant for either. Clang's
+groups nest: `int-to-pointer-cast` holds `int-to-void-pointer-cast`, and
+`pointer-to-int-cast` holds `pointer-to-enum-cast` and
+`void-pointer-to-int-cast`, which both hold `void-pointer-to-enum-cast`;
+a parent's `-W`, `-Wno-` or `-Werror=` applies to its children at its
+position on the command line, so `-Wno-int-to-void-pointer-cast
+-Werror=int-to-pointer-cast` makes both errors again. GCC has only the two
+parent groups, which control its warnings whatever the child options say.
+The MSVC and TCC identities follow Clang. The rules are in
+`Analyzer::pointer_integer_cast_warning`; the
+`sema-pointer-int-cast-{gcc,clang,options}` goldens and
+`semantic_analysis/tests/pointer_integer_casts.rs` pin them.

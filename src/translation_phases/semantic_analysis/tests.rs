@@ -35,6 +35,7 @@ mod labels_as_values;
 mod library_modes;
 mod math_builtins;
 mod mingw_inline;
+mod pointer_integer_casts;
 mod pointers;
 mod pragma_pack;
 mod predefined_identifiers;

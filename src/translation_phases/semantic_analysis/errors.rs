@@ -632,6 +632,14 @@ impl SemanticErrorKind {
     /// The primary label names what is wrong at the labeled source.
     const fn label(self) -> &'static str {
         match self {
+            | Self::PointerConstraint(
+                crate::configuration::DiagnosticGroup::PointerToIntCast
+                | crate::configuration::DiagnosticGroup::PointerToEnumCast
+                | crate::configuration::DiagnosticGroup::VoidPointerToIntCast
+                | crate::configuration::DiagnosticGroup::VoidPointerToEnumCast
+                | crate::configuration::DiagnosticGroup::IntToPointerCast
+                | crate::configuration::DiagnosticGroup::IntToVoidPointerCast,
+            ) => "the integer and pointer widths differ",
             | Self::PointerConstraint(_) => "pointer constraint violation",
             | Self::FoldedArrayBound => "folded array bound",
             | Self::FoldedIntegerConstant => "folded integer constant expression",
@@ -897,6 +905,22 @@ impl SemanticErrorKind {
                 "arithmetic on a null pointer treated as a cast from integer to pointer is a GNU extension",
                 "C99 §6.6p10 permits additional constant forms",
             ),
+            | Self::PointerConstraint(group @ (crate::configuration::DiagnosticGroup::PointerToIntCast
+            | crate::configuration::DiagnosticGroup::PointerToEnumCast
+            | crate::configuration::DiagnosticGroup::VoidPointerToIntCast
+            | crate::configuration::DiagnosticGroup::VoidPointerToEnumCast
+            | crate::configuration::DiagnosticGroup::IntToPointerCast
+            | crate::configuration::DiagnosticGroup::IntToVoidPointerCast)) => (
+                match group {
+                    | crate::configuration::DiagnosticGroup::PointerToIntCast => "cast from pointer to integer of different size",
+                    | crate::configuration::DiagnosticGroup::PointerToEnumCast => "cast from pointer to smaller enumeration type",
+                    | crate::configuration::DiagnosticGroup::VoidPointerToIntCast => "cast from 'void *' to smaller integer type",
+                    | crate::configuration::DiagnosticGroup::VoidPointerToEnumCast => "cast from 'void *' to smaller enumeration type",
+                    | crate::configuration::DiagnosticGroup::IntToPointerCast => "cast to pointer from integer of different size",
+                    | _ => "cast to 'void *' from smaller integer type",
+                },
+                "C99 §6.3.2.3p5-6: the result of converting between a pointer and an integer is implementation-defined and may not be representable",
+            ),
             | Self::PointerConstraint(group) => (
                 match group {
                     | crate::configuration::DiagnosticGroup::CompareDistinctPointerTypes => "comparison of distinct pointer types",
@@ -905,7 +929,6 @@ impl SemanticErrorKind {
                     | crate::configuration::DiagnosticGroup::PointerCompare => "comparison between pointer and zero character constant",
                     | crate::configuration::DiagnosticGroup::NullConversion => "implicit conversion of nullptr constant to bool",
                     | crate::configuration::DiagnosticGroup::PointerBoolConversion => "address always evaluates to true in a boolean context",
-                    | crate::configuration::DiagnosticGroup::PointerToIntCast => "cast to smaller integer type from pointer",
                     | crate::configuration::DiagnosticGroup::VoidPtrDereference => "dereferencing void pointer",
                     | crate::configuration::DiagnosticGroup::Nonnull => "null passed to a callee that requires a non-null argument",
                     | crate::configuration::DiagnosticGroup::PointerSign => "conversion between pointers to integer types with different sign",
@@ -917,6 +940,12 @@ impl SemanticErrorKind {
                     | crate::configuration::DiagnosticGroup::OrderedPointerIntegerCompare => "ordered comparison between pointer and integer",
                     | crate::configuration::DiagnosticGroup::PointerTypeMismatch => "pointer type mismatch in conditional expression",
                     | crate::configuration::DiagnosticGroup::ConditionalTypeMismatch => "pointer/integer type mismatch in conditional expression",
+                    | crate::configuration::DiagnosticGroup::PointerToIntCast
+                    | crate::configuration::DiagnosticGroup::PointerToEnumCast
+                    | crate::configuration::DiagnosticGroup::VoidPointerToIntCast
+                    | crate::configuration::DiagnosticGroup::VoidPointerToEnumCast
+                    | crate::configuration::DiagnosticGroup::IntToPointerCast
+                    | crate::configuration::DiagnosticGroup::IntToVoidPointerCast
                     | crate::configuration::DiagnosticGroup::NewlineEof
                     | crate::configuration::DiagnosticGroup::Undef
                     | crate::configuration::DiagnosticGroup::PredefinedOutsideFunction

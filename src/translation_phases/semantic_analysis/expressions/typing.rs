@@ -1224,20 +1224,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if !nullptr_cast {
             return self.invalid_expression(e, SemanticErrorKind::InvalidCast);
         }
-        if self.pointer_target(from).is_some()
-            && self
-                .integer_type(target)
-                .is_some_and(|(bits, _)| u64::from(bits) < self.types.target.pointer.size * 8)
-            && !matches!(
-                self.types.nodes[target.index],
-                TypeKind::Scalar(Scalar::Bool)
-            )
-        {
-            self.pointer_diagnostic(
-                crate::configuration::DiagnosticGroup::PointerToIntCast,
-                e.source_vectors,
-            );
-        }
+        self.pointer_integer_cast_warning(target, from, operand, e.source_vectors);
         self.convert(operand.expression, target, ConversionKind::Assignment);
         let mut info = Self::expression_result(e, target.unqualified());
         self.fold_conversion(&mut info, target, operand);

@@ -227,7 +227,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// C99: §6.6p6, p. 95; PDF p. 107.
     /// Modeled constant builtin calls are an extension under §6.6p10,
     /// p. 96; PDF p. 108.
-    fn valid_ice_operands(&mut self, expression: &'tu Expression<'tu>) -> bool {
+    pub(super) fn valid_ice_operands(&mut self, expression: &'tu Expression<'tu>) -> bool {
         let mut work = super::ArenaVec::new_in(self.scratch);
         let mut values = super::ArenaVec::new_in(self.scratch);
         work.push((expression, false, None));

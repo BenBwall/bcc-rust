@@ -53,6 +53,20 @@ impl CompilerConfiguration {
         if group == DiagnosticGroup::UnknownPragmas {
             self.warning_options[DiagnosticGroup::UnknownStdcPragma as usize].apply(option);
         }
+        let children: &[DiagnosticGroup] = match group {
+            | DiagnosticGroup::PointerToIntCast => &[
+                DiagnosticGroup::PointerToEnumCast,
+                DiagnosticGroup::VoidPointerToIntCast,
+                DiagnosticGroup::VoidPointerToEnumCast,
+            ],
+            | DiagnosticGroup::PointerToEnumCast | DiagnosticGroup::VoidPointerToIntCast =>
+                &[DiagnosticGroup::VoidPointerToEnumCast],
+            | DiagnosticGroup::IntToPointerCast => &[DiagnosticGroup::IntToVoidPointerCast],
+            | _ => &[],
+        };
+        for &child in children {
+            self.warning_options[child as usize].apply(option);
+        }
         if group == DiagnosticGroup::IncompatiblePointerTypes {
             self.warning_options[DiagnosticGroup::PointerQualifiers as usize].apply(option);
             self.warning_options[DiagnosticGroup::IncompatibleFunctionPointerTypes as usize]
@@ -186,7 +200,21 @@ diagnostic_groups! {
     PointerCompare => Some("pointer-compare"), Warning, false;
     NullConversion => Some("null-conversion"), Warning, false;
     PointerBoolConversion => Some("pointer-bool-conversion"), Warning, false;
+    /// A cast from a pointer to a narrower integer (GCC: an integer of any
+    /// other width); the parent of Clang's enumeration and `void *` groups.
     PointerToIntCast => Some("pointer-to-int-cast"), Warning, false;
+    /// Clang: a cast from a pointer to a narrower enumeration.
+    PointerToEnumCast => Some("pointer-to-enum-cast"), Warning, false;
+    /// Clang: a cast from a `void *` to a narrower integer.
+    VoidPointerToIntCast => Some("void-pointer-to-int-cast"), Warning, false;
+    /// Clang: a cast from a `void *` to a narrower enumeration.
+    VoidPointerToEnumCast => Some("void-pointer-to-enum-cast"), Warning, false;
+    /// A cast to a pointer from a narrower integer that is no constant
+    /// (GCC: an integer of any other width); the parent of Clang's
+    /// `void *` group.
+    IntToPointerCast => Some("int-to-pointer-cast"), Warning, false;
+    /// Clang: a cast to a `void *` from a narrower integer.
+    IntToVoidPointerCast => Some("int-to-void-pointer-cast"), Warning, false;
     VoidPtrDereference => Some("void-ptr-dereference"), Warning, false;
     Nonnull => Some("nonnull"), Warning, false;
     PredefinedOutsideFunction => Some("predefined-identifier-outside-function"), Warning, false;

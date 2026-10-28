@@ -88,6 +88,103 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         false
     }
 
+    /// Warns about a cast between a pointer and an integer of another width,
+    /// whose result C leaves implementation-defined and possibly
+    /// unrepresentable. GCC (`build_c_cast`) warns when a plain integer type
+    /// (neither `_Bool` nor an enumeration) and the pointer differ in width
+    /// either way, toward a pointer only when the operand is not constant
+    /// (an address constant is one). Clang (`SemaCast.cpp`) warns only when
+    /// the integer is narrower, toward a pointer only when the operand is no
+    /// integer constant expression, and splits its groups by a `void *` and
+    /// by an enumeration destination; neither compiler warns for `_Bool`.
+    /// The MSVC and TCC identities follow Clang.
+    /// C99: §6.3.2.3 paragraphs 5-6, p. 47; PDF p. 59.
+    pub(in crate::translation_phases::semantic_analysis) fn pointer_integer_cast_warning(
+        &mut self,
+        target: TypeId,
+        from: TypeId,
+        operand: ExpressionInfo<'tu>,
+        site: SourceVectors,
+    ) {
+        let pointer_bits = self.types.target.pointer.size * 8;
+        let gcc = matches!(
+            self.context.configuration.compiler_identity(),
+            crate::configuration::CompilerIdentity::Gcc
+        );
+        // The width of an integer type, and whether it is an enumeration.
+        let integer = |ty: TypeId| -> Option<(u64, bool)> {
+            let ty = self.types.non_atomic(ty);
+            let enumeration = match self.types.nodes[ty.index] {
+                | TypeKind::Scalar(Scalar::Bool) => return None,
+                | TypeKind::Tag(id) => self.types.tags[id].kind == TagKind::Enum,
+                | _ => false,
+            };
+            self.integer_type(ty)
+                .map(|(bits, _)| (u64::from(bits), enumeration))
+        };
+        let group = if let Some(to) = self.pointer_target(target)
+            && let Some((bits, enumeration)) = integer(from)
+        {
+            // Even an unevaluated operand that is no constant (`1 ? 2 : i`)
+            // keeps the cast from being an integer constant expression.
+            let ice = operand.ice && self.valid_ice_operands(operand.expression);
+            if gcc {
+                let constant = ice || self.casts_address_constant(operand.expression);
+                (bits != pointer_bits && !enumeration && !constant)
+                    .then_some(DiagnosticGroup::IntToPointerCast)
+            } else if bits < pointer_bits && !enumeration && !ice {
+                Some(if self.void_target(to) {
+                    DiagnosticGroup::IntToVoidPointerCast
+                } else {
+                    DiagnosticGroup::IntToPointerCast
+                })
+            } else {
+                None
+            }
+        } else if let Some(pointee) = self.pointer_target(from)
+            && let Some((bits, enumeration)) = integer(target)
+        {
+            if gcc {
+                (bits != pointer_bits && !enumeration).then_some(DiagnosticGroup::PointerToIntCast)
+            } else if bits < pointer_bits {
+                Some(match (self.void_target(pointee), enumeration) {
+                    | (true, true) => DiagnosticGroup::VoidPointerToEnumCast,
+                    | (true, false) => DiagnosticGroup::VoidPointerToIntCast,
+                    | (false, true) => DiagnosticGroup::PointerToEnumCast,
+                    | (false, false) => DiagnosticGroup::PointerToIntCast,
+                })
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        if let Some(group) = group {
+            self.pointer_diagnostic(group, site);
+        }
+    }
+
+    /// Whether `expression` is an address constant, possibly inside casts,
+    /// as GCC's `TREE_CONSTANT` finds `(int)(long)&x`.
+    /// C99: §6.6 paragraph 9, p. 96; PDF p. 108.
+    fn casts_address_constant(&self, mut expression: &'tu super::Expression<'tu>) -> bool {
+        use crate::translation_phases::parsing::syntax::ExpressionType as E;
+        loop {
+            let info = self.expression_info(expression);
+            if info.constant == super::ConstantClass::Address || info.folded_address() {
+                return true;
+            }
+            match expression.kind {
+                | E::Parenthesized { expression: inner }
+                | E::Cast {
+                    operand_expression: inner,
+                    ..
+                } => expression = inner,
+                | _ => return false,
+            }
+        }
+    }
+
     /// Diagnoses suspicious but valid C null pointer constants. Parentheses
     /// do not change whether the expression was a literal.
     /// C99: §6.3.2.3p3, p. 47; PDF p. 59.
