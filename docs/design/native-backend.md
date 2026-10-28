@@ -509,8 +509,9 @@ nothing recurses.
    must find in `r`), and states meet by intersection at joins
    until a fixed point. Facts about values the program no longer reads
    (by the program's own liveness) are dropped as they die, which changes
-   no verdict but keeps the state as small as the live set, so checking a
-   long function takes linear time. Then identity copies go, a copy followed by an
+   no verdict but keeps the state as small as the live set, so checking
+   is linear in the function's length for a bounded live set; its
+   liveness costs what the allocator's does (see "Still open" below). Then identity copies go, a copy followed by an
    addition (or a `lea` followed by one) becomes one `lea` where the flags
    are dead, a copy straight back after a copy goes, blocks holding only a
    `jmp` are threaded away, and a `jmp` to a block of at most eight
@@ -560,6 +561,16 @@ Still open behind the same interface:
   them; with memory operands and splitting it is rare.
 - *Value-based coalescing* of copies whose intervals overlap while both hold
   the same value.
+- *Sparse liveness.* The live sets are bit sets with a bit per virtual
+  register of the function in every block, so the dataflow (the
+  allocator's, and in debug builds the checker's) costs blocks × virtual
+  registers / 64 words in time and memory. A long function of many small
+  blocks, such as one `if`/`else` around a call per statement, grows
+  faster than its length: 1600, 3200 and 6400 such statements take 0.13,
+  0.29 and 0.69 s in a release build and peak at 100, 228 and 659 MB, and
+  25,600 exhaust 11 GB. Sets of live intervals per block, or a liveness
+  over SSA values whose sets hold only the values live there, would bound
+  it by the live set.
 - *`regalloc2`.* The `regalloc2` crate (Cranelift's allocator) was evaluated
   against the arena rules: it allocates its working state from the global
   allocator, takes its input through a trait over `Vec`-backed structures and

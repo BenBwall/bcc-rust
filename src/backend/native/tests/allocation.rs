@@ -238,57 +238,70 @@ fn the_checker_accepts_the_allocator_s_work() {
     }
 }
 
-/// A function of `statements` copies of `sink += f(f(a) * f(b)) + f(a)`,
-/// in which a call's result lives across the next call.
-fn chained_calls(statements: usize) -> String {
+/// A function of `statements` statements, each of which calls `f(a)`
+/// `CALLS` times and only then adds the results to `sink`: each result
+/// but the last lives across the calls after it.
+fn results_live_across_calls(statements: usize) -> String {
+    const CALLS: usize = 12;
     let mut ir = String::from(
         "abi lowered
 global @a external size 4, align 4 = bytes \"0000803f\"
-global @b external size 4, align 4 = bytes \"00000040\"
 global @sink external size 4, align 4 = zero
 function @f(f32) -> f32 external
 function @main() -> i32 external {
 block0:
 ",
     );
-    for statement in 0..statements {
-        let v = |offset: usize| 15 * statement + offset;
-        let lines = [
-            format!("v{} = global_addr @a", v(0)),
-            format!("v{} = load.f32 volatile v{}, align 4", v(1), v(0)),
-            format!("v{} = call @f(v{})", v(2), v(1)),
-            format!("v{} = global_addr @b", v(3)),
-            format!("v{} = load.f32 volatile v{}, align 4", v(4), v(3)),
-            format!("v{} = call @f(v{})", v(5), v(4)),
-            format!("v{} = fmul.f32 v{}, v{}", v(6), v(2), v(5)),
-            format!("v{} = call @f(v{})", v(7), v(6)),
-            format!("v{} = global_addr @a", v(8)),
-            format!("v{} = load.f32 volatile v{}, align 4", v(9), v(8)),
-            format!("v{} = call @f(v{})", v(10), v(9)),
-            format!("v{} = fadd.f32 v{}, v{}", v(11), v(7), v(10)),
-            format!("v{} = global_addr @sink", v(12)),
-            format!("v{} = load.f32 v{}, align 4", v(13), v(12)),
-            format!("v{} = fadd.f32 v{}, v{}", v(14), v(13), v(11)),
-            format!("store.f32 v{}, v{}, align 4", v(14), v(12)),
-        ];
-        for line in lines {
-            writeln!(ir, "    {line}").unwrap();
+    let mut next = 0;
+    let mut fresh = || {
+        next += 1;
+        next - 1
+    };
+    for _ in 0..statements {
+        let mut results = [0; CALLS];
+        for result in &mut results {
+            let (address, value) = (fresh(), fresh());
+            *result = fresh();
+            writeln!(ir, "    v{address} = global_addr @a").unwrap();
+            writeln!(ir, "    v{value} = load.f32 volatile v{address}, align 4").unwrap();
+            writeln!(ir, "    v{result} = call @f(v{value})").unwrap();
         }
+        let mut sum = results[0];
+        for &result in &results[1..] {
+            let total = fresh();
+            writeln!(ir, "    v{total} = fadd.f32 v{sum}, v{result}").unwrap();
+            sum = total;
+        }
+        let (address, old, new) = (fresh(), fresh(), fresh());
+        writeln!(ir, "    v{address} = global_addr @sink").unwrap();
+        writeln!(ir, "    v{old} = load.f32 v{address}, align 4").unwrap();
+        writeln!(ir, "    v{new} = fadd.f32 v{old}, v{sum}").unwrap();
+        writeln!(ir, "    store.f32 v{new}, v{address}, align 4").unwrap();
     }
-    let zero = 15 * statements;
+    let zero = fresh();
     writeln!(ir, "    v{zero} = iconst.i32 0\n    return v{zero}\n}}").unwrap();
     ir
 }
 
 #[test]
 fn the_checker_s_state_does_not_grow_with_the_function() {
-    // Every call result here is spilled across the next call. If the
-    // checker kept the facts about values that died (each in a slot of its
-    // own), its state would grow with the function, and so would the cost
-    // of each instruction: checking would take quadratic time.
+    // Eleven results live across a call: more than either convention
+    // keeps in callee-saved SSE registers (none on System V, %xmm6 to
+    // %xmm13 on Win64), so every statement spills some, each to a slot of
+    // its own. If the checker kept the facts about values that died there,
+    // its state would grow with the function, and so would the cost of
+    // each instruction: checking would take quadratic time.
     for target in [Target::LinuxGnu, Target::WindowsGnu] {
-        let short = check_corrupted(&chained_calls(8), "main", target, |_, _| {}).unwrap();
-        let long = check_corrupted(&chained_calls(256), "main", target, |_, _| {}).unwrap();
+        let state = |statements| {
+            check_corrupted(
+                &results_live_across_calls(statements),
+                "main",
+                target,
+                |_, _| {},
+            )
+            .unwrap()
+        };
+        let (short, long) = (state(8), state(256));
         assert!(
             long <= short,
             "{target:?}: the largest state grew from {short} facts to {long}"

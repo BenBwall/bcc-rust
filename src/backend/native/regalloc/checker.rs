@@ -43,8 +43,13 @@
 //! reads a live value, so the answers, and with them the verdict, stay the
 //! same, and a wrong liveness could only make the checker reject more. The
 //! state then holds facts about the live values and the physical
-//! registers' own values alone, and a long function costs time linear in
-//! its length rather than in its length times the values it ever spilled.
+//! registers' own values alone, so an instruction costs time in proportion
+//! to the live set rather than to every value spilled before it, and
+//! straight-line code with a bounded live set checks in time linear in its
+//! length. The liveness itself is the allocator's bit-set dataflow, whose
+//! sets have a bit per virtual register of the function: like allocation,
+//! it costs blocks × virtual registers / 64 words per pass, which a long
+//! function of many blocks still pays.
 
 use std::fmt;
 
@@ -101,10 +106,7 @@ pub(crate) fn check<'a>(
         }));
     }
     let liveness = Liveness::of_program(func, original.iter().copied(), arena);
-    let mut deaths = ArenaVec::with_capacity_in(original.len(), arena);
-    for (block, insts) in original.iter().enumerate() {
-        deaths.push(last_mentions(&liveness, block, insts, arena));
-    }
+    let deaths = last_mentions(&liveness, original, arena);
     let mut checker = Checker {
         arena,
         func,
@@ -168,32 +170,45 @@ pub(crate) fn check<'a>(
     Ok(checker.largest)
 }
 
-/// The virtual registers each instruction of `block` of the program
-/// mentions while not live after it, as `(instruction, register)` in
-/// instruction order: there the checker forgets them.
+/// For each block of the program, the virtual registers each of its
+/// instructions mentions while not live after it, as `(instruction,
+/// register)` in instruction order: there the checker forgets them.
 fn last_mentions<'a>(
     liveness: &Liveness<'_>,
-    block: usize,
-    insts: &[MInst],
+    original: &[&[MInst]],
     arena: &'a Bump,
-) -> &'a [(u32, VReg)] {
-    let mut live = ArenaVec::with_capacity_in(liveness.out(block).len(), arena);
-    live.extend_from_slice(liveness.out(block));
+) -> ArenaVec<'a, &'a [(u32, VReg)]> {
+    let mut live = ArenaVec::new_in(arena);
     let mut mentions = ArenaVec::new_in(arena);
-    for (index, inst) in insts.iter().enumerate().rev() {
-        let index = u32::try_from(index).expect("instruction numbers fit u32");
-        let mut inst = *inst;
-        inst.visit_registers(|reg, _| {
-            if let Reg::Virt(vreg) = *reg
-                && !contains(&live, vreg)
-            {
-                mentions.push((index, vreg));
-            }
-        });
-        transfer(&mut inst, &mut live);
+    let mut starts = ArenaVec::with_capacity_in(original.len() + 1, arena);
+    for (block, insts) in original.iter().enumerate() {
+        let start = mentions.len();
+        starts.push(start);
+        live.clear();
+        live.extend_from_slice(liveness.out(block));
+        for (index, inst) in insts.iter().enumerate().rev() {
+            let index = u32::try_from(index).expect("instruction numbers fit u32");
+            let mut inst = *inst;
+            inst.visit_registers(|reg, _| {
+                if let Reg::Virt(vreg) = *reg
+                    && !contains(&live, vreg)
+                {
+                    mentions.push((index, vreg));
+                }
+            });
+            transfer(&mut inst, &mut live);
+        }
+        mentions[start..].reverse();
     }
-    mentions.reverse();
-    arena.alloc_slice_copy(&mentions)
+    starts.push(mentions.len());
+    let mentions: &'a [(u32, VReg)] = mentions.leak();
+    let mut blocks = ArenaVec::with_capacity_in(original.len(), arena);
+    blocks.extend(
+        starts
+            .windows(2)
+            .map(|bounds| &mentions[bounds[0]..bounds[1]]),
+    );
+    blocks
 }
 
 /// Why a rewritten function does not compute what its program did.
