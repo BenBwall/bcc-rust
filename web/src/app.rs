@@ -870,6 +870,8 @@ impl State {
         if let Some(engine) = self.engine.try_update_value(Option::take).flatten() {
             engine.dispose("Rust engine stopped.");
         }
+        // The next engine has no WebAssembly module loaded.
+        self.wasm.engine_stopped();
         self.has_engine.set(false);
     }
 

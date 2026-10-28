@@ -24,6 +24,7 @@ use leptos::{
 use super::State;
 use crate::{
     editor::Decoration,
+    engine,
     wasm::{
         Precompiled,
         WasmBackEnd,
@@ -82,9 +83,12 @@ impl Compiler {
 pub enum BccFailure {
     /// bcc refused the program; its diagnostics say why.
     Refused(String),
-    /// The in-browser compiler did not finish (it timed out, ran out of
-    /// memory or stopped): a limit of the browser, not of the program, so
-    /// compiling again may work.
+    /// The program is beyond what bcc can compile inside the browser (it
+    /// ran out of a fixed memory region, nested too deeply, or hit an
+    /// internal error), which compiling again would only repeat.
+    Limit(String),
+    /// The in-browser compiler did not finish (it timed out or its Worker
+    /// stopped), which may not happen again, so compiling again may work.
     Stopped(String),
 }
 
@@ -155,6 +159,12 @@ impl Modules {
                 prose:    false,
                 retry:    false,
             }),
+            | Err(BccFailure::Limit(reason)) => Some(BccProblem {
+                headline: "bcc can't compile this program inside the browser:",
+                detail:   reason.clone(),
+                prose:    true,
+                retry:    false,
+            }),
             | Err(BccFailure::Stopped(error)) => Some(BccProblem {
                 headline: "bcc's in-browser compiler stopped before it finished. That is a limit \
                            of compiling inside this browser tab, not a mistake in the program:",
@@ -191,12 +201,15 @@ impl Modules {
         let advice = match &self.bcc {
             | Err(BccFailure::Refused(_)) =>
                 " Fix the error below, or step through the program on the abstract machine.",
+            | Err(BccFailure::Limit(_)) =>
+                " Make the program smaller or simpler, or compile it with the native bcc.",
             | Err(BccFailure::Stopped(_)) =>
                 " Compile again, or make the program smaller or simpler.",
             | Ok(_) => " Change the program, or step through it on the abstract machine.",
         };
         let headline = match &self.bcc {
             | Err(BccFailure::Refused(_)) => "bcc could not compile this program to WebAssembly.",
+            | Err(BccFailure::Limit(_)) => "bcc could not compile this program inside the browser.",
             | Err(BccFailure::Stopped(_)) => "bcc's in-browser compiler did not finish.",
             | Ok(_) => "bcc compiled this program, but the stepper can't run its module.",
         };
@@ -233,17 +246,20 @@ impl Choice {
             .and_then(|(_, modules)| modules.bcc_problem())
     }
 
-    /// Whether the view shows what it should for `source`: the module of
-    /// the compiler the learner prefers, or the only one there is, or
-    /// nothing when there is nothing to step. A module the stepper refused
-    /// counts as missing, so a failed load is not tried again.
-    fn settled(&self, source: &str) -> bool {
-        self.modules_of(source).is_some_and(|modules| {
-            let available = modules.available();
-            self.compiler == Some(self.preferred)
-                || (!available.contains(&self.preferred)
-                    && self.compiler == available.first().copied())
-        })
+    /// Whether the view shows what it should for `source`, given the source
+    /// the engine Worker has a module for (`loaded`; `None` after the engine
+    /// restarted): the module of the compiler the learner prefers, or the
+    /// only one there is, or nothing when there is nothing to step. A module
+    /// the stepper refused counts as missing, so a failed load is not tried
+    /// again.
+    fn settled(&self, source: &str, loaded: Option<&str>) -> bool {
+        loaded == Some(source)
+            && self.modules_of(source).is_some_and(|modules| {
+                let available = modules.available();
+                self.compiler == Some(self.preferred)
+                    || (!available.contains(&self.preferred)
+                        && self.compiler == available.first().copied())
+            })
     }
 
     /// `source`'s modules for a new load, unless the browser stopped bcc's
@@ -313,13 +329,21 @@ impl WasmState {
         }
     }
 
+    /// Whether the view shows what it should for `source` (see
+    /// [`Choice::settled`]).
+    fn settled(self, source: &str) -> bool {
+        let loaded = self.loaded.get_untracked();
+        self.choice
+            .with_untracked(|choice| choice.settled(source, loaded.as_deref()))
+    }
+
     /// Load the module for the program the page runs, from the compiler
     /// the learner prefers, unless the view already shows what it should.
     /// A module the stepper refuses is marked unloadable and the other
     /// compiler's is tried, so a refusal is shown once rather than retried.
     pub(super) fn ensure_loaded(self, state: State) {
         let source = state.source.get_untracked();
-        if self.choice.with_untracked(|choice| choice.settled(&source))
+        if self.settled(&source)
             || self.loading.get_untracked()
             || !state.has_engine.get_untracked()
         {
@@ -403,10 +427,10 @@ impl WasmState {
                 if !compiler.connected() {
                     state.compiler.set_value(None);
                 }
-                match result {
-                    | Ok(answer) => answer.map_err(BccFailure::Refused),
-                    | Err(error) => Err(BccFailure::Stopped(super::compiler_failure(error))),
-                }
+                result.map_or_else(
+                    |error| Err(failure(error)),
+                    |answer| answer.map_err(BccFailure::Refused),
+                )
             },
             | Err(error) => Err(BccFailure::Stopped(error)),
         };
@@ -451,7 +475,7 @@ impl WasmState {
             state
                 .announcement
                 .set("Compiling the program with bcc again.".to_owned());
-        } else if offered {
+        } else if offered && !self.settled(&state.source.get_untracked()) {
             state.announcement.set(format!(
                 "Loading the module {} compiled. Stepping starts again from the first instruction.",
                 compiler.name()
@@ -543,8 +567,13 @@ impl WasmState {
         if !state.engine_connected() {
             state.drop_engine();
             state.show_unavailable(error);
-            self.loaded.set(None);
         }
+    }
+
+    /// The engine Worker is gone, and with it the loaded module: the next
+    /// engine loads the program again (with the modules already compiled).
+    pub(super) fn engine_stopped(self) {
+        self.loaded.set(None);
     }
 
     pub(super) fn run_command(self, state: State, run: WasmRun) {
@@ -915,6 +944,20 @@ pub fn status(wasm: WasmState) -> (String, String) {
     })
 }
 
+/// What a compiler Worker error means for bcc's module: running out of
+/// memory, nesting too deeply or an internal error happen again on every
+/// try, while a timeout or a stopped Worker may not.
+fn failure(error: String) -> BccFailure {
+    if error == engine::OUT_OF_MEMORY
+        || error == engine::TOO_DEEP
+        || error.starts_with(engine::INTERNAL_ERROR)
+    {
+        BccFailure::Limit(error)
+    } else {
+        BccFailure::Stopped(super::compiler_failure(error))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -933,6 +976,9 @@ mod tests {
             unloadable: Vec::new(),
         }
     }
+
+    /// The engine Worker has the module for "source".
+    const LOADED: Option<&str> = Some("source");
 
     fn choice(preferred: Compiler, compiler: Option<Compiler>, modules: Modules) -> Choice {
         Choice {
@@ -957,13 +1003,36 @@ mod tests {
         assert_eq!(both.bcc_problem(), None);
         // Showing bcc's module is settled; preferring clang then is not.
         let shown = choice(Compiler::Bcc, Some(Compiler::Bcc), both);
-        assert!(shown.settled("source"));
-        assert!(!shown.settled("other source"));
+        assert!(shown.settled("source", LOADED));
+        assert!(!shown.settled("other source", Some("other source")));
         let switched = Choice {
             preferred: Compiler::Clang,
             ..shown
         };
-        assert!(!switched.settled("source"));
+        assert!(!switched.settled("source", LOADED));
+    }
+
+    /// The review's second regression: an engine trap or timeout starts a
+    /// new engine Worker, which has no module, so the same program and
+    /// choice must load again (Retry engine) instead of counting as shown.
+    #[test]
+    fn after_an_engine_restart_nothing_is_settled() {
+        let shown = choice(
+            Compiler::Bcc,
+            Some(Compiler::Bcc),
+            modules(Ok(module("bcc")), true),
+        );
+        assert!(shown.settled("source", LOADED));
+        assert!(!shown.settled("source", None));
+        // The modules are kept, so the new engine gets them without
+        // compiling again.
+        assert!(shown.reusable("source").is_some());
+        let refused = choice(
+            Compiler::Bcc,
+            None,
+            modules(Err(BccFailure::Refused("error".into())), false),
+        );
+        assert!(!refused.settled("source", None));
     }
 
     #[test]
@@ -971,7 +1040,7 @@ mod tests {
         let edited = modules(Ok(module("bcc")), false);
         assert_eq!(edited.available(), [Compiler::Bcc]);
         assert_eq!(edited.pick(Compiler::Clang).unwrap().0, Compiler::Bcc);
-        assert!(choice(Compiler::Clang, Some(Compiler::Bcc), edited).settled("source"));
+        assert!(choice(Compiler::Clang, Some(Compiler::Bcc), edited).settled("source", LOADED));
     }
 
     #[test]
@@ -988,7 +1057,7 @@ mod tests {
         let problem = refused.bcc_problem().unwrap();
         assert!(problem.detail.contains("setjmp") && !problem.retry && !problem.prose);
         let shown = choice(Compiler::Bcc, Some(Compiler::Clang), refused.clone());
-        assert!(shown.settled("source"));
+        assert!(shown.settled("source", LOADED));
         // A refusal is kept: the same source is not compiled again.
         assert!(shown.reusable("source").is_some());
         let edited = Modules {
@@ -997,7 +1066,7 @@ mod tests {
         };
         assert!(edited.pick(Compiler::Bcc).is_none());
         assert_eq!(edited.available(), []);
-        assert!(choice(Compiler::Bcc, None, edited.clone()).settled("source"));
+        assert!(choice(Compiler::Bcc, None, edited.clone()).settled("source", LOADED));
         let why = edited.nothing_to_step();
         assert!(why.contains("Fix the error below"), "{why}");
         assert!(why.contains("not one of the lessons"), "{why}");
@@ -1019,19 +1088,63 @@ mod tests {
         let problem = lesson.bcc_problem().unwrap();
         assert!(problem.headline.contains("the stepper can't run"));
         assert!(problem.detail.contains("338 pages") && problem.prose);
-        assert!(choice(Compiler::Bcc, Some(Compiler::Clang), lesson.clone()).settled("source"));
+        assert!(
+            choice(Compiler::Bcc, Some(Compiler::Clang), lesson.clone()).settled("source", LOADED)
+        );
         let edited = Modules {
             clang: None,
             ..lesson
         };
         assert!(edited.pick(Compiler::Bcc).is_none());
-        assert!(choice(Compiler::Bcc, None, edited.clone()).settled("source"));
+        assert!(choice(Compiler::Bcc, None, edited.clone()).settled("source", LOADED));
         let why = edited.nothing_to_step();
         assert!(why.contains("the stepper can't run its module"), "{why}");
         assert!(!why.contains("Fix the error"), "{why}");
     }
 
-    /// A compilation the browser stopped (a timeout, out of memory) is not
+    /// Running out of the compiler's memory (a macro that expands
+    /// enormously), nesting too deeply or an internal error repeat on every
+    /// try: a limit of compiling in the browser, not retried, and worded so.
+    /// A timeout or a stopped Worker may not repeat.
+    #[test]
+    fn deterministic_compiler_failures_are_limits_and_others_retry() {
+        for error in [
+            engine::OUT_OF_MEMORY.to_owned(),
+            engine::TOO_DEEP.to_owned(),
+            format!("{}index out of bounds", engine::INTERNAL_ERROR),
+        ] {
+            let limit = failure(error.clone());
+            assert_eq!(limit, BccFailure::Limit(error.clone()));
+            let edited = modules(Err(limit), false);
+            let problem = edited.bcc_problem().unwrap();
+            assert!(!problem.retry && problem.prose, "{error}");
+            assert!(problem.headline.contains("inside the browser"));
+            assert_eq!(edited.offered(), []);
+            let why = edited.nothing_to_step();
+            assert!(
+                why.contains("smaller or simpler") && !why.contains("Compile again"),
+                "{why}"
+            );
+            let shown = choice(Compiler::Bcc, None, edited);
+            assert!(
+                shown.reusable("source").is_some(),
+                "kept, not compiled again"
+            );
+        }
+        for error in [
+            engine::COMPILER.timed_out().to_owned(),
+            engine::COMPILER.stopped().to_owned(),
+            "RuntimeError: unreachable".to_owned(),
+        ] {
+            assert!(matches!(failure(error), BccFailure::Stopped(_)));
+        }
+        assert!(matches!(
+            failure("trap".into()),
+            BccFailure::Stopped(reason) if reason.contains("crashed")
+        ));
+    }
+
+    /// A compilation the browser stopped (a timeout, a stopped Worker) is not
     /// the program's fault: the view says so, settles without retrying on
     /// its own, keeps bcc in a lesson's switch, and compiles again on the
     /// next load.
@@ -1039,7 +1152,7 @@ mod tests {
     fn a_compilation_the_browser_stopped_is_tried_again_on_request() {
         let stopped = modules(
             Err(BccFailure::Stopped(
-                "bcc ran out of memory compiling this program".into(),
+                "bcc's in-browser compiler took longer than 10 seconds".into(),
             )),
             true,
         );
@@ -1047,7 +1160,7 @@ mod tests {
         assert_eq!(stopped.offered(), [Compiler::Bcc, Compiler::Clang]);
         assert!(stopped.bcc_problem().unwrap().retry);
         let shown = choice(Compiler::Bcc, Some(Compiler::Clang), stopped.clone());
-        assert!(shown.settled("source"));
+        assert!(shown.settled("source", LOADED));
         assert!(shown.reusable("source").is_none(), "compiled again");
         // Compiling again forgets the modules, so nothing is settled until
         // bcc has compiled the program anew, a lesson or not.
@@ -1056,7 +1169,7 @@ mod tests {
             modules: None,
             ..shown
         };
-        assert!(!retrying.settled("source"));
+        assert!(!retrying.settled("source", LOADED));
         let edited = Modules {
             clang: None,
             ..stopped
