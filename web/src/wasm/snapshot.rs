@@ -90,8 +90,9 @@ pub enum WasmControl {
     Reset,
     /// Stop before the instructions at these module offsets.
     Breakpoints(Vec<u32>),
-    /// Start again and run the C library's startup code, up to the first
-    /// instruction of `main`.
+    /// Start again and run the code before `main` (the C library's startup
+    /// and any constructors) up to its first instruction, or to a
+    /// breakpoint before it.
     StartAtMain,
 }
 

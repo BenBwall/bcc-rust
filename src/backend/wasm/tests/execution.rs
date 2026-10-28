@@ -504,6 +504,25 @@ int f(int p, int q) {
     assert_eq!(lines, [0, 11, 12, 14, 15, 17, 18], "{lines:?}");
 }
 
+/// The one case where bcc's lines differ from Clang's (see
+/// `Context::file_vector`): a macro invoked within an argument that starts
+/// on a later line takes the outer invocation's line, so `BUMP`'s
+/// `do … while` is on line 4 where Clang gives it line 5. Its `v += 2` is
+/// on line 5 anyway, since the file spells its first token, `x`, there.
+#[test]
+fn a_macro_in_a_later_argument_line_takes_the_outer_invocations_line() {
+    let source = "#define F(a) a\n#define BUMP(v) do { v += 2; } while (0)\nint f(int x) {\n    \
+                  F(\n        BUMP(x));\n    return x + 1;\n}\n";
+    let lines = compile_with(source, Target::Wasm32Unknown, false, |compiled| {
+        let mut lines: Vec<u32> = compiled.entries.iter().map(|entry| entry.line).collect();
+        lines.sort_unstable();
+        lines.dedup();
+        lines
+    })
+    .unwrap();
+    assert_eq!(lines, [0, 4, 5, 6], "{lines:?}");
+}
+
 /// Symbols keep their underscores in the text, since `_` is an `idchar`
 /// (WebAssembly 2.0 §6.3.5); only characters outside that set are escaped.
 #[test]

@@ -294,6 +294,14 @@ impl Context<'_> {
     /// token itself when a file spells it, a macro argument written within
     /// the invocation included, and otherwise the start of the outermost
     /// invocation that produced it. `source` must not be empty.
+    ///
+    /// One case differs: a macro invoked within an argument, as `BUMP` in
+    /// `F(\n BUMP(x))`, has its replacement placed at the outermost
+    /// invocation (`F`), where Clang follows the argument to the inner
+    /// invocation's line. Arguments are prescanned and replayed from copied
+    /// provenance, so the inner invocation is no longer known when the
+    /// tokens are read; the two lines differ only when the argument starts
+    /// on a later line than the outer invocation.
     /// C99: §5.1.1.2 paragraph 1 item 4, p. 10; PDF p. 22.
     pub(crate) fn file_vector(&self, source: SourceVectors) -> &SourceVector {
         self.invocation_site(source)

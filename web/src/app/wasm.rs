@@ -1053,7 +1053,7 @@ pub(super) fn WasmTransport(state: State, hidden: Signal<bool>) -> impl IntoView
                 type="button"
                 class="toggle-chip"
                 aria-pressed=move || wasm.choice.with(|choice| !choice.from_entry).to_string()
-                title="Begin at the first instruction of main, after the C library's startup code (Back still steps through it), or at the entry point's first instruction"
+                title="Begin at the first instruction of main, after the code that runs before it: the C library's startup and any constructors (Back still steps through it), or at the entry point's first instruction"
                 disabled=move || wasm.locked_tracked()
                 on:click=move |_| {
                     let on = wasm.choice.with_untracked(|choice| choice.from_entry);

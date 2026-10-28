@@ -107,9 +107,13 @@ impl WasmWorker {
         let mut skipped = None;
         let stop = match control {
             | WasmControl::Run(run) => Some(session.run(command(run), BUDGET)),
-            | WasmControl::StartAtMain => {
-                skipped = start_at_main(session);
-                None
+            | WasmControl::StartAtMain => match start_at_main(session) {
+                | Started::AtMain(steps) => {
+                    skipped = Some(steps);
+                    None
+                },
+                | Started::Breakpoint => Some(Stop::Breakpoint),
+                | Started::AtEntry => None,
             },
             | WasmControl::GoTo(step) => {
                 session.go_to(step);
@@ -137,13 +141,25 @@ impl WasmWorker {
     }
 }
 
+/// Where Start at main left a session.
+enum Started {
+    /// At the first instruction of `main`, after this many instructions.
+    AtMain(u64),
+    /// Before an instruction of the startup code with the learner's
+    /// breakpoint, which comes first.
+    Breakpoint,
+    /// At the first instruction: the entry point is `main` itself, or
+    /// `main` was not reached.
+    AtEntry,
+}
+
 /// Starts `session` again and runs it to the first instruction of the
 /// function compiled from C's `main` (`__original_main` in Clang's modules
-/// of `int main(void)`), so stepping begins at the learner's code. Returns
-/// how many instructions that ran, or `None`, at the first instruction,
-/// when the entry point is `main` itself or `main` is not reached within
-/// [`STARTUP_BUDGET`].
-fn start_at_main(session: &mut Session) -> Option<u64> {
+/// of `int main(void)`), so stepping begins at the learner's code, unless a
+/// breakpoint the learner set in the startup code comes first. It stays at
+/// the first instruction when the entry point is `main` itself or `main` is
+/// not reached within [`STARTUP_BUDGET`].
+fn start_at_main(session: &mut Session) -> Started {
     session.reset();
     let program = Rc::clone(session.program());
     let module = &program.module;
@@ -151,25 +167,27 @@ fn start_at_main(session: &mut Session) -> Option<u64> {
         (0..u32::try_from(module.funcs.len()).ok()?)
             .find(|&func| module.body(func).is_some() && module.func_name(func) == name)
     };
-    let main = named("__original_main").or_else(|| named("main"))?;
+    let Some(main) = named("__original_main").or_else(|| named("main")) else {
+        return Started::AtEntry;
+    };
+    let Some(&first) = module.body(main).and_then(|body| body.offsets.first()) else {
+        return Started::AtEntry;
+    };
     if program.entry == Some(main) {
-        return None;
+        return Started::AtEntry;
     }
-    let first = *module.body(main)?.offsets.first()?;
     let breakpoints: Vec<u32> = session.breakpoints().iter().copied().collect();
-    session.set_breakpoints([first]);
+    session.set_breakpoints(breakpoints.iter().copied().chain([first]));
     let stop = session.run(Command::Continue, STARTUP_BUDGET);
     session.set_breakpoints(breakpoints);
-    let at_main = stop == Stop::Breakpoint
-        && session
-            .machine()
-            .next()
-            .is_some_and(|(func, pc)| func == main && pc == 0);
-    if at_main {
-        Some(session.machine().steps)
+    let next = session.machine().next();
+    if stop == Stop::Breakpoint && next == Some((main, 0)) {
+        Started::AtMain(session.machine().steps)
+    } else if stop == Stop::Breakpoint {
+        Started::Breakpoint
     } else {
         session.reset();
-        None
+        Started::AtEntry
     }
 }
 
@@ -1158,8 +1176,9 @@ int main(int argc, char **argv) {
     }
 
     /// Start at main runs bcc's startup code, which allocates nothing, to
-    /// the first instruction of `main` and says what it skipped; Back still
-    /// steps through the startup, and running on ends as from the start.
+    /// the first instruction of `main` and says what it skipped, unless a
+    /// breakpoint in the startup comes first; Back still steps through the
+    /// startup, and running on ends as from the start.
     /// A module whose entry point is `main` itself (Clang's lessons start
     /// in `__original_main`) stays at its first instruction.
     #[cfg(feature = "compiler")]
@@ -1186,7 +1205,7 @@ int main(int argc, char **argv) {
                 at_main.step
             );
             assert!(
-                at_main.narration.title.contains("startup")
+                at_main.narration.title.contains("before `main`")
                     && at_main
                         .narration
                         .explanation
@@ -1196,6 +1215,21 @@ int main(int argc, char **argv) {
             );
             let before = worker.control(WasmControl::GoTo(at_main.step - 1)).unwrap();
             assert_ne!(innermost(&before), "main", "{}", demo.name);
+            // A breakpoint in the startup code stops Start at main there.
+            let call = before.next.as_ref().map(|place| place.offset).unwrap();
+            worker
+                .control(WasmControl::Breakpoints(vec![call]))
+                .unwrap();
+            let stopped = worker.control(WasmControl::StartAtMain).unwrap();
+            assert_eq!(
+                (stopped.step, stopped.stopped.as_deref()),
+                (at_main.step - 1, Some("breakpoint")),
+                "{}",
+                demo.name
+            );
+            worker
+                .control(WasmControl::Breakpoints(Vec::new()))
+                .unwrap();
             let again = worker.control(WasmControl::StartAtMain).unwrap();
             assert_eq!(again.step, at_main.step);
             let (_, from_start) = run_to_end(Bcc.compile(demo.source).unwrap());

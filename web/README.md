@@ -320,10 +320,11 @@ returns; **Next line** (`n`) runs to the next C line, through calls; **Run**
 number in the listing to set a breakpoint, or in the C source to set a run
 target. Hover either side to find the lines the other made. **Start at
 main** (on unless turned off; the browser's local storage keeps that) runs
-the C library's startup code when a program loads or is reset, up to the
-first instruction of `main` (`WasmControl::StartAtMain`, at most 100,000
-instructions, else it stays at the start), and the narration says what it
-skipped. Back still steps through the startup. A module whose entry point is
+the code before `main` (the C library's startup and any constructors) when
+a program loads or is reset, up to the first instruction of `main`
+(`WasmControl::StartAtMain`, at most 100,000 instructions, else it stays at
+the start), or to a breakpoint set in that code, and the narration says
+what it skipped. Back still steps through the startup. A module whose entry point is
 `main` itself, as Clang's lessons are, starts there anyway.
 
 Where modules come from is behind the `WasmBackEnd` trait in `src/wasm/`:
@@ -337,7 +338,10 @@ are two:
   `bcc_rust::explorer::compile` for `wasm32-wasip1` at `-O0`, as
   `bcc-rust program.c --target=wasm32-wasip1 -std=c17 -O0` would. Each
   source-map position becomes a line row (bcc records no columns, so the
-  column is 0, and a prologue's line is 0), and bcc's `.wat`, with the line
+  column is 0, and a prologue's line is 0; code a macro expands to has the
+  invocation's line, as in Clang's line tables, except that a macro invoked
+  in an argument that starts on a later line than the outer invocation has
+  the outer invocation's line), and bcc's `.wat`, with the line
   of every instruction (`ExplorerWasm::instructions`) and each function's
   range (`functions`), becomes the listing, in place of the stepper's own
   printout. The engine Worker places each step, call frame and block in it

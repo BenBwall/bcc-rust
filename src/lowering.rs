@@ -634,9 +634,9 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
     /// Gives the instructions `task` emits the physical source line of the
     /// statement or expression it lowers, for the WebAssembly back end's
     /// source map. A task without syntax keeps the line before it. Inside a
-    /// macro expansion that is the line of the outermost invocation, not the
-    /// definition's, unless a file spells the first token (an argument), as
-    /// Clang's and GCC's line tables do.
+    /// macro expansion that is the file location of the first token
+    /// (`Context::file_vector`): the outermost invocation's line, never
+    /// the definition's, as in Clang's and GCC's line tables.
     fn track_line(&mut self, task: Task<'tu>) {
         let source = match task {
             | Task::Statement(statement)

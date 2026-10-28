@@ -72,9 +72,7 @@ int main(int argc, char **argv) {
     let expected = |arguments: &[&str]| {
         let total: u64 = arguments
             .iter()
-            .map(|argument| {
-                88 + argument.bytes().skip(1).map(u64::from).sum::<u64>()
-            })
+            .map(|argument| 88 + argument.bytes().skip(1).map(u64::from).sum::<u64>())
             .sum();
         let first = arguments
             .first()
@@ -86,7 +84,12 @@ int main(int argc, char **argv) {
         for arguments in [&[][..], &["one", "two", "three"], &many, &[long.as_str()]] {
             let run = run_with_arguments("arguments", &bytes, b"", arguments);
             assert_eq!(run.status, 0, "{}", run.stderr);
-            assert_eq!(run.stdout, expected(arguments), "{} arguments", arguments.len());
+            assert_eq!(
+                run.stdout,
+                expected(arguments),
+                "{} arguments",
+                arguments.len()
+            );
         }
     }
 }
