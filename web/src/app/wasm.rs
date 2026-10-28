@@ -46,6 +46,8 @@ const RUN_LIMIT: usize = 500;
 const TRAIL: usize = 6;
 /// Where the learner's choice of compiler is kept between visits.
 const COMPILER_KEY: &str = "bcc-wasm-compiler";
+/// Where turning Start at main off is kept between visits.
+const START_KEY: &str = "bcc-wasm-start-at-main";
 /// bcc's WebAssembly compilations kept for their squiggles and for loading.
 const CHECKED_LIMIT: usize = 4;
 
@@ -270,12 +272,16 @@ impl Modules {
 #[derive(Clone, Debug, Default)]
 pub struct Choice {
     /// The compiler the learner wants to see; bcc until they choose.
-    pub preferred: Compiler,
+    pub preferred:  Compiler,
     /// Who compiled the module the view steps.
-    pub compiler:  Option<Compiler>,
+    pub compiler:   Option<Compiler>,
     /// The loaded source and its modules, so switching compiler needs no
     /// recompilation.
-    modules:       Option<(String, Modules)>,
+    modules:        Option<(String, Modules)>,
+    /// Whether a load or Reset stops at the entry point's first instruction
+    /// rather than running the C library's startup to `main` (Start at
+    /// main, on unless the learner turns it off).
+    pub from_entry: bool,
 }
 
 impl Choice {
@@ -435,9 +441,17 @@ impl WasmState {
             let compiler = loaded.as_ref().map(|(compiler, _)| *compiler);
             match loaded {
                 | Some((_, program)) => {
-                    let snapshot = program.snapshot.clone();
+                    let mut snapshot = program.snapshot.clone();
+                    if !self.choice.with_untracked(|choice| choice.from_entry)
+                        && let Ok(engine) = state.engine()
+                        && let Ok(at_main) = engine.wasm(WasmControl::StartAtMain).await
+                    {
+                        snapshot = at_main;
+                    }
                     self.unavailable.set(None);
                     self.program.set(Some(program));
+                    // The previous program's state is no earlier step.
+                    self.current.set(None);
                     self.show(state, snapshot);
                 },
                 | None => {
@@ -563,8 +577,9 @@ impl WasmState {
         self.ensure_loaded(state);
     }
 
-    /// The compiler chosen on an earlier visit, if any. Only the browser
-    /// keeps one, so the page calls this once it runs there.
+    /// The compiler chosen on an earlier visit, if any, and whether Start at
+    /// main was turned off. Only the browser keeps them, so the page calls
+    /// this once it runs there.
     pub(super) fn restore_choice(self) {
         let saved = web_sys::window()
             .and_then(|window| window.local_storage().ok().flatten())
@@ -573,7 +588,14 @@ impl WasmState {
             | Some("clang") => Compiler::Clang,
             | _ => Compiler::Bcc,
         };
-        self.choice.update(|choice| choice.preferred = compiler);
+        let from_entry = web_sys::window()
+            .and_then(|window| window.local_storage().ok().flatten())
+            .and_then(|storage| storage.get_item(START_KEY).ok().flatten())
+            .is_some_and(|saved| saved == "off");
+        self.choice.update(|choice| {
+            choice.preferred = compiler;
+            choice.from_entry = from_entry;
+        });
     }
 
     /// Send `control` to the Worker and show the answer, unless another
@@ -681,9 +703,38 @@ impl WasmState {
         self.act(state, move || self.request(state, WasmControl::GoTo(step)));
     }
 
+    /// Start the program again: at `main`'s first instruction with Start at
+    /// main, otherwise at the entry point's.
     pub(super) fn reset(self, state: State) {
-        self.trail.set(Vec::new());
-        self.act(state, move || self.request(state, WasmControl::Reset));
+        let control = if self.choice.with_untracked(|choice| choice.from_entry) {
+            WasmControl::Reset
+        } else {
+            WasmControl::StartAtMain
+        };
+        self.act(state, move || async move {
+            self.request(state, control).await?;
+            // The steps seen before were of the run now abandoned.
+            self.trail.set(Vec::new());
+            Ok(())
+        });
+    }
+
+    /// Turn Start at main on or off, remember it for later visits, and
+    /// start the program again where it now starts.
+    pub(super) fn set_start_at_main(self, state: State, on: bool) {
+        if let Some(storage) =
+            web_sys::window().and_then(|window| window.local_storage().ok().flatten())
+        {
+            _ = if on {
+                storage.remove_item(START_KEY)
+            } else {
+                storage.set_item(START_KEY, "off")
+            };
+        }
+        self.choice.update(|choice| choice.from_entry = !on);
+        if self.current.with_untracked(Option::is_some) {
+            self.reset(state);
+        }
     }
 
     /// Run line by line until the program stops, a breakpoint, or Pause.
@@ -941,7 +992,11 @@ pub(super) fn WasmTransport(state: State, hidden: Signal<bool>) -> impl IntoView
             <button
                 type="button"
                 class="button ghost"
-                title="Reset to the first instruction (Shift+R)"
+                title=move || if wasm.choice.with(|choice| choice.from_entry) {
+                    "Reset to the first instruction (Shift+R)"
+                } else {
+                    "Reset to the first instruction of main (Shift+R)"
+                }
                 disabled=move || wasm.locked_tracked() || wasm.current.with(Option::is_none)
                 on:click=move |_| wasm.reset(state)
             >
@@ -994,6 +1049,20 @@ pub(super) fn WasmTransport(state: State, hidden: Signal<bool>) -> impl IntoView
             >
                 {move || format!("Run to line {}", state.target_line.get().unwrap_or_default())}
             </button>
+            <button
+                type="button"
+                class="toggle-chip"
+                aria-pressed=move || wasm.choice.with(|choice| !choice.from_entry).to_string()
+                title="Begin at the first instruction of main, after the C library's startup code (Back still steps through it), or at the entry point's first instruction"
+                disabled=move || wasm.locked_tracked()
+                on:click=move |_| {
+                    let on = wasm.choice.with_untracked(|choice| choice.from_entry);
+                    wasm.set_start_at_main(state, on);
+                }
+            >
+                <span class="toggle-chip-dot" aria-hidden="true"></span>
+                "Start at main"
+            </button>
         </div>
     }
 }
@@ -1006,7 +1075,7 @@ pub fn status(wasm: WasmState) -> (String, String) {
         | Some(current) => {
             let label = match current.status.as_str() {
                 | "running" if current.stopped.as_deref() == Some("breakpoint") => "Breakpoint",
-                | "running" if current.step == 0 => "Ready",
+                | "running" if current.step == 0 || current.narration.label == "Start" => "Ready",
                 | "running" => "Paused",
                 | "finished" => "Finished",
                 | "exited" => "Exited",
@@ -1077,6 +1146,7 @@ mod tests {
             preferred,
             compiler,
             modules: Some(("source".into(), modules)),
+            ..Choice::default()
         }
     }
 

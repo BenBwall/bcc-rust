@@ -318,7 +318,13 @@ returns; **Next line** (`n`) runs to the next C line, through calls; **Run**
 (`r`) goes line by line until the program ends or reaches a breakpoint;
 **Back** (`←` or `k`) and **Reset** (`Shift+R`) go back. Click a line
 number in the listing to set a breakpoint, or in the C source to set a run
-target. Hover either side to find the lines the other made.
+target. Hover either side to find the lines the other made. **Start at
+main** (on unless turned off; the browser's local storage keeps that) runs
+the C library's startup code when a program loads or is reset, up to the
+first instruction of `main` (`WasmControl::StartAtMain`, at most 100,000
+instructions, else it stays at the start), and the narration says what it
+skipped. Back still steps through the startup. A module whose entry point is
+`main` itself, as Clang's lessons are, starts there anyway.
 
 Where modules come from is behind the `WasmBackEnd` trait in `src/wasm/`:
 C source in, a `WasmModule` out: the binary, optionally the C line of each
@@ -336,8 +342,10 @@ are two:
   range (`functions`), becomes the listing, in place of the stepper's own
   printout. The engine Worker places each step, call frame and block in it
   by module offset. bcc's module is a WASI command: `$_start`, which bcc's
-  bundled C library adds, calls `main` and passes its result to
-  `proc_exit`. When bcc refuses a program for WebAssembly (`setjmp`,
+  bundled C library adds, runs the constructors, reads the arguments
+  (`args_sizes_get`, `args_get`; up to eight, 256 bytes, in static storage,
+  so the heap is untouched), calls `main` and passes its result to
+  `proc_exit`, 125 instructions before `main` at `-O0`. When bcc refuses a program for WebAssembly (`setjmp`,
   `_Float16`, …), the view shows its diagnostics.
 - `Precompiled` serves the lessons, compiled by clang at `-O0 -g` into
   `web/wasm/`, whose DWARF line tables the stepper reads.
