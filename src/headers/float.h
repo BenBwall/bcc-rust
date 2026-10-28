@@ -55,10 +55,20 @@
 #undef LDBL_HAS_SUBNORM
 #endif
 #endif
+/* Clang's header gives the characteristics of later revisions outside
+   strict ISO modes too (FLT_EVAL_METHOD aside); GCC's from their revision
+   on, which the other identities follow. */
+#if defined(__clang__) && !defined(__STRICT_ANSI__)
+#define __BCC_FLOAT_ALL 1
+#endif
 #define FLT_RADIX __FLT_RADIX__
 #define FLT_ROUNDS 1
+#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 199901L
 #define FLT_EVAL_METHOD 0
+#endif
+#if (defined(__STDC_VERSION__) && __STDC_VERSION__ >= 199901L) || defined(__BCC_FLOAT_ALL)
 #define DECIMAL_DIG __LDBL_DECIMAL_DIG__
+#endif
 #define FLT_MANT_DIG __FLT_MANT_DIG__
 #define FLT_DIG __FLT_DIG__
 #define FLT_MIN_EXP __FLT_MIN_EXP__
@@ -68,12 +78,10 @@
 #define FLT_MAX __FLT_MAX__
 #define FLT_EPSILON __FLT_EPSILON__
 #define FLT_MIN __FLT_MIN__
-#ifdef __STDC_VERSION__
-#if __STDC_VERSION__ >= 201112L
+#if (defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L) || defined(__BCC_FLOAT_ALL)
 #define FLT_DECIMAL_DIG __FLT_DECIMAL_DIG__
 #define FLT_TRUE_MIN __FLT_DENORM_MIN__
 #define FLT_HAS_SUBNORM __FLT_HAS_DENORM__
-#endif
 #endif
 #define DBL_MANT_DIG __DBL_MANT_DIG__
 #define DBL_DIG __DBL_DIG__
@@ -84,12 +92,10 @@
 #define DBL_MAX __DBL_MAX__
 #define DBL_EPSILON __DBL_EPSILON__
 #define DBL_MIN __DBL_MIN__
-#ifdef __STDC_VERSION__
-#if __STDC_VERSION__ >= 201112L
+#if (defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L) || defined(__BCC_FLOAT_ALL)
 #define DBL_DECIMAL_DIG __DBL_DECIMAL_DIG__
 #define DBL_TRUE_MIN __DBL_DENORM_MIN__
 #define DBL_HAS_SUBNORM __DBL_HAS_DENORM__
-#endif
 #endif
 #define LDBL_MANT_DIG __LDBL_MANT_DIG__
 #define LDBL_DIG __LDBL_DIG__
@@ -100,13 +106,35 @@
 #define LDBL_MAX __LDBL_MAX__
 #define LDBL_EPSILON __LDBL_EPSILON__
 #define LDBL_MIN __LDBL_MIN__
-#ifdef __STDC_VERSION__
-#if __STDC_VERSION__ >= 201112L
+#if (defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L) || defined(__BCC_FLOAT_ALL)
 #define LDBL_DECIMAL_DIG __LDBL_DECIMAL_DIG__
 #define LDBL_TRUE_MIN __LDBL_DENORM_MIN__
 #define LDBL_HAS_SUBNORM __LDBL_HAS_DENORM__
 #endif
+/* C23 §5.2.5.3.3 paragraphs 28-32 (N3220, pp. 26-28): the largest
+   normalized values, the signaling NaNs, and INFINITY and NAN, which
+   <math.h> may have defined too; GCC also says which types are IEC 60559
+   formats, from its __FLT_IS_IEC_60559__ family, and names the header's
+   revision. */
+#if (defined(__STDC_VERSION__) && __STDC_VERSION__ > 201710L) || defined(__BCC_FLOAT_ALL)
+#define FLT_NORM_MAX __FLT_NORM_MAX__
+#define DBL_NORM_MAX __DBL_NORM_MAX__
+#define LDBL_NORM_MAX __LDBL_NORM_MAX__
+#define FLT_SNAN (__builtin_nansf(""))
+#define DBL_SNAN (__builtin_nans(""))
+#define LDBL_SNAN (__builtin_nansl(""))
+#undef INFINITY
+#undef NAN
+#define INFINITY (__builtin_inff())
+#define NAN (__builtin_nanf(""))
+#if defined(__FLT_IS_IEC_60559__) && __STDC_VERSION__ > 201710L
+#define FLT_IS_IEC_60559 __FLT_IS_IEC_60559__
+#define DBL_IS_IEC_60559 __DBL_IS_IEC_60559__
+#define LDBL_IS_IEC_60559 __LDBL_IS_IEC_60559__
+#define __STDC_VERSION_FLOAT_H__ 202311L
 #endif
+#endif
+#undef __BCC_FLOAT_ALL
 /* ISO/IEC TS 18661-3 (C23 Annex H.11): the _FloatN and _FloatNx
    characteristics, as GCC's <float.h> defines them for the types whose
    __FLTN_MANT_DIG__ the compiler predefines (_Float16 for the GCC and

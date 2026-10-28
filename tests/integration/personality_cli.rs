@@ -2439,7 +2439,10 @@ mod tests {
         // libraries the link fails in bcc's driver.
         directory.write("m.c", "int main(void) { return 0; }\n");
         for (mode, prefix) in [
-            ("--msvc-mode", "cl : Command line error : cannot build `m.exe`: "),
+            (
+                "--msvc-mode",
+                "cl : Command line error : cannot build `m.exe`: ",
+            ),
             ("--clang-cl-mode", "clang-cl: error: cannot build `m.exe`: "),
         ] {
             let output = directory.bcc(mode, &["/nologo", "m.c"]);
@@ -2475,12 +2478,29 @@ mod tests {
         let output = directory.bcc(
             "--clang-mode",
             &[
-                "-c", "a.c", "-shared-libgcc", "-T", "x.ld", "-u", "sym", "-L", "/a", "-Xlinker",
-                "-y", "-l", "m", "b.o", "-z", "now", "-Wl,-a,-b", "-s",
+                "-c",
+                "a.c",
+                "-shared-libgcc",
+                "-T",
+                "x.ld",
+                "-u",
+                "sym",
+                "-L",
+                "/a",
+                "-Xlinker",
+                "-y",
+                "-l",
+                "m",
+                "b.o",
+                "-z",
+                "now",
+                "-Wl,-a,-b",
+                "-s",
             ],
         );
         succeeds(&output);
-        let unused = |what: &str| format!("clang: warning: {what} [-Wunused-command-line-argument]\n");
+        let unused =
+            |what: &str| format!("clang: warning: {what} [-Wunused-command-line-argument]\n");
         let expected: String = [
             "-Xlinker -y: 'linker' input unused",
             "-lm: 'linker' input unused",
@@ -2628,7 +2648,10 @@ mod tests {
     #[test]
     fn header_tree_follows_each_compiler() {
         let directory = Directory::new();
-        directory.write("guarded.h", "/* c */\n#ifndef G\n#define G\n#include \"b.h\"\n#endif\n");
+        directory.write(
+            "guarded.h",
+            "/* c */\n#ifndef G\n#define G\n#include \"b.h\"\n#endif\n",
+        );
         directory.write("defined.h", "#if !defined(D)\n#define D\n#endif\n\n");
         directory.write("open.h", "#ifndef O\n#define O\n#endif\nint o;\n");
         directory.write("b.h", "");
@@ -2675,8 +2698,16 @@ mod tests {
         for (mode, option, expected) in [
             ("--gcc-mode", "-M", "g.o: g.c gen.h missing/sys.h a.h b.h\n"),
             ("--gcc-mode", "-MM", "g.o: g.c gen.h a.h b.h\n"),
-            ("--clang-mode", "-M", "g.o: g.c gen.h missing/sys.h a.h b.h\n"),
-            ("--clang-mode", "-MM", "g.o: g.c gen.h missing/sys.h a.h b.h\n"),
+            (
+                "--clang-mode",
+                "-M",
+                "g.o: g.c gen.h missing/sys.h a.h b.h\n",
+            ),
+            (
+                "--clang-mode",
+                "-MM",
+                "g.o: g.c gen.h missing/sys.h a.h b.h\n",
+            ),
         ] {
             let output = directory.bcc(mode, &[option, "-MG", "g.c"]);
             succeeds(&output);
@@ -2684,8 +2715,14 @@ mod tests {
             assert_eq!(stderr(&output), "", "{mode} {option}");
         }
         for (mode, expected) in [
-            ("--gcc-mode", "gcc: error: '-MG' may only be used with '-M' or '-MM'\n"),
-            ("--clang-mode", "clang: error: option '-MG' requires '-M' or '-MM'\n"),
+            (
+                "--gcc-mode",
+                "gcc: error: '-MG' may only be used with '-M' or '-MM'\n",
+            ),
+            (
+                "--clang-mode",
+                "clang: error: option '-MG' requires '-M' or '-MM'\n",
+            ),
         ] {
             let output = directory.bcc(mode, &["-MD", "-MG", "-c", "g.c"]);
             assert_eq!(output.status.code(), Some(1));
@@ -2694,5 +2731,87 @@ mod tests {
         // Without `-MG` the missing header is an error.
         let output = directory.bcc("--gcc-mode", &["-M", "g.c"]);
         assert_eq!(output.status.code(), Some(1));
+    }
+
+    /// C23's `<float.h>` additions (`FLT_NORM_MAX`, `FLT_SNAN`, `INFINITY`,
+    /// `NAN`), with GCC's `FLT_IS_IEC_60559` family and
+    /// `__STDC_VERSION_FLOAT_H__` for the GCC identity; Clang's header also
+    /// gives them outside strict ISO modes, GCC's only in C23. The values
+    /// are GCC 15's and the pinned Clang's, with `<math.h>` before or after.
+    #[test]
+    fn c23_float_h_follows_each_compiler() {
+        let directory = Directory::new();
+        let program = "#include <stdio.h>\nint main(void) {\n  printf(\"%a %a %La %d %d %d \
+                       %d\\n\", FLT_NORM_MAX, DBL_NORM_MAX, LDBL_NORM_MAX, isnan(FLT_SNAN), \
+                       isnan(LDBL_SNAN), isinf(INFINITY), isnan(NAN));\n#ifdef FLT_IS_IEC_60559\n  \
+                       printf(\"%d %d %d %ld\\n\", FLT_IS_IEC_60559, DBL_IS_IEC_60559, \
+                       LDBL_IS_IEC_60559, (long)__STDC_VERSION_FLOAT_H__);\n#endif\n  return \
+                       0;\n}\n";
+        directory.write(
+            "first.c",
+            &format!("#include <float.h>\n#include <math.h>\n{program}"),
+        );
+        directory.write(
+            "last.c",
+            &format!("#include <math.h>\n#include <float.h>\n{program}"),
+        );
+        let values = "0x1.fffffep+127 0x1.fffffffffffffp+1023 0xf.fffffffffffffffp+16380 1 1 1 1\n";
+        if cfg!(all(target_os = "linux", target_env = "gnu")) {
+            for (mode, expected) in [
+                ("--gcc-mode", format!("{values}1 1 1 202311\n")),
+                ("--clang-mode", values.to_owned()),
+            ] {
+                for source in ["first.c", "last.c"] {
+                    let output =
+                        directory.bcc(mode, &["-std=c23", "-Wall", "-Werror", source, "-o", "f"]);
+                    succeeds(&output);
+                    let run = Command::new(directory.path("f")).output().unwrap();
+                    assert_eq!(stdout(&run), expected, "{mode} {source}");
+                }
+            }
+        }
+        let float_macros = |mode: &str, standard: &str| {
+            directory.write("float.c", "#include <float.h>\n");
+            let output = directory.bcc(mode, &[standard, "-E", "-dM", "float.c"]);
+            succeeds(&output);
+            stdout(&output)
+        };
+        for (mode, standard, defined) in [
+            ("--gcc-mode", "-std=gnu17", false),
+            ("--gcc-mode", "-std=c23", true),
+            ("--clang-mode", "-std=gnu17", true),
+            ("--clang-mode", "-std=c17", false),
+            ("--clang-mode", "-std=c23", true),
+        ] {
+            let listing = float_macros(mode, standard);
+            for name in ["FLT_SNAN", "LDBL_NORM_MAX", "INFINITY", "NAN"] {
+                assert_eq!(
+                    defines(&listing, name).is_some(),
+                    defined,
+                    "{mode} {standard} {name}"
+                );
+            }
+            assert_eq!(
+                defines(&listing, "FLT_IS_IEC_60559").is_some(),
+                defined && mode == "--gcc-mode",
+                "{mode} {standard}"
+            );
+        }
+        // C99's DECIMAL_DIG and C11's FLT_TRUE_MIN, which Clang's header
+        // gives in GNU89 too.
+        for (mode, defined) in [("--gcc-mode", false), ("--clang-mode", true)] {
+            let listing = float_macros(mode, "-std=gnu89");
+            assert_eq!(
+                defines(&listing, "DECIMAL_DIG").is_some(),
+                defined,
+                "{mode}"
+            );
+            assert_eq!(
+                defines(&listing, "FLT_TRUE_MIN").is_some(),
+                defined,
+                "{mode}"
+            );
+            assert!(defines(&listing, "FLT_EVAL_METHOD").is_none(), "{mode}");
+        }
     }
 }
