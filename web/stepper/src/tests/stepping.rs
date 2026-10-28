@@ -367,3 +367,48 @@ fn line_maps_cover_from_each_row_to_the_next() {
     assert_eq!(map.line_at(19), Some(3));
     assert_eq!(map.line_at(20), None, "line 0 is no line");
 }
+
+#[test]
+fn a_breakpoint_where_a_command_stops_is_reported() {
+    let mut module = Builder::new();
+    module.func(
+        "main",
+        &[],
+        &[I32],
+        &[],
+        "nop nop nop nop nop nop i32.const 7",
+    );
+    let probe = Program::load(&module.build(), None).unwrap();
+    let main = probe.entry.unwrap();
+    let rows = (0..7)
+        .map(|pc| Row {
+            offset: probe.offset_of(main, pc).unwrap(),
+            line:   pc + 1,
+            column: 0,
+        })
+        .collect();
+    let program = Rc::new(Program::load(&module.build(), Some(LineMap::new(rows))).unwrap());
+    let breakpoint = program.offset_of(main, 3).unwrap();
+    let mut session = Session::new(Rc::clone(&program)).unwrap();
+    session.set_breakpoints([breakpoint]);
+    // Next line stops on each line; on line 4 it reports the breakpoint.
+    let stops: Vec<Stop> = (0..4)
+        .map(|_| session.run(Command::NextLine, 100))
+        .collect();
+    assert_eq!(
+        stops,
+        [Stop::Done, Stop::Done, Stop::Breakpoint, Stop::Done]
+    );
+    // A run made of Next line commands therefore stops there too.
+    session.reset();
+    loop {
+        match session.run(Command::NextLine, 100) {
+            | Stop::Done => {},
+            | stop => {
+                assert_eq!(stop, Stop::Breakpoint);
+                break;
+            },
+        }
+    }
+    assert_eq!(session.machine().next(), Some((main, 3)));
+}

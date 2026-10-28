@@ -153,7 +153,9 @@ pub struct Session {
 const CHECKPOINTS: usize = 48;
 
 impl Session {
-    /// Run `command`, executing at most `budget` instructions.
+    /// Run `command`, executing at most `budget` instructions. After its
+    /// first instruction, any command stops before an instruction with a
+    /// breakpoint, even where it would have stopped anyway.
     pub fn run(&mut self, command: Command, budget: u64) -> Stop {
         let depth = self.machine.frames.len();
         let start_line = self.next_line();
@@ -166,9 +168,6 @@ impl Session {
         loop {
             if self.machine.status != Status::Running {
                 return Stop::Ended;
-            }
-            if executed > 0 && self.at_breakpoint() {
-                return Stop::Breakpoint;
             }
             if self.machine.steps >= MAX_STEPS {
                 return Stop::Limit;
@@ -198,6 +197,11 @@ impl Session {
             };
             if line.is_some() {
                 previous_line = line;
+            }
+            // A breakpoint wins even where the command would stop anyway,
+            // so a run made of several commands cannot step past it.
+            if self.at_breakpoint() {
+                return Stop::Breakpoint;
             }
             if done {
                 return Stop::Done;
