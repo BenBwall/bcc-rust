@@ -1039,6 +1039,7 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
             complex_values: ArenaVec::new_in(scratch),
             widened: ArenaVec::new_in(scratch),
             widened_constants: ArenaVec::new_in(scratch),
+            runtime_constants: ArenaVec::new_in(scratch),
             conditional_arms: ArenaVec::new_in(scratch),
             excess_arm: false,
             initializer_values: ArenaVec::new_in(scratch),

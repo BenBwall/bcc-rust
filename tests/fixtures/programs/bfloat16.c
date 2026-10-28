@@ -217,6 +217,11 @@ static void conversions(void) {
         printf("folded integers %04x %04x %04x %a\n", bits(wide), bits((B)WIDE),
                bits(from_int128(WIDE)), (double)single);
     }
+    /* GCC folds a cast of a literal as it parses it, rounding a conversion
+       to _Float16 it leaves unrounded for a negated or computed operand. */
+    printf("parse folding %a %a %a %a\n", (double)(long double)(_Float16)(B)0x1p20Q,
+           (double)(long double)(_Float16)(B)-0x1p20Q, (double)(long double)(_Float16)(B)(0x1p20Q * 1),
+           (double)(long double)(one ? (B)-0x1p20Q : vh));
 }
 
 /* small * small is 2^-140: a float subnormal, but zero as a __bf16. */

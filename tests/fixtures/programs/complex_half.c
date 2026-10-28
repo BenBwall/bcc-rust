@@ -51,6 +51,15 @@ static void contexts(void) {
         volatile __bf16 bf = 1.0078125f;
         _Complex float r = one ? h * h : a, s = one ? bf * bf : a;
         printf("conditional real %a %a\n", (double)__real__ r, (double)__real__ s);
+        /* GCC follows the selected operand of _Generic and
+           __builtin_choose_expr to see an excess arm; it rounds a statement
+           expression's value. */
+        volatile __bf16 wide = 0x1p20f;
+        _Complex float g = one ? wide : _Generic(0, int: a + a),
+                       k = one ? wide : __builtin_choose_expr(1, a + a, a),
+                       t = one ? wide : ({ a + a; });
+        printf("conditional selected %a %a %a\n", (double)__real__ g, (double)__real__ k,
+               (double)__real__ t);
     }
     printf("comma %08x\n", cb((0, X) * a));
     printf("real operands %08x %08x %08x\n", cb(a * h * h), cb(h * h * a), cb(a + h * h));

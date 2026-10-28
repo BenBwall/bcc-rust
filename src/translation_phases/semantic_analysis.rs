@@ -77,6 +77,7 @@ mod traversal;
 
 // Types and constant values
 mod constants;
+mod excess;
 mod integer;
 mod types;
 
@@ -106,6 +107,10 @@ use declarations::compatible_enum_type;
 pub(crate) use errors::{
     SemanticError,
     SemanticErrorKind,
+};
+pub(crate) use excess::{
+    excess_expression,
+    folded_constant,
 };
 pub(crate) use expressions::{
     ConstantClass,

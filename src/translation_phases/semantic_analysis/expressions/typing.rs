@@ -1278,7 +1278,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             };
         }
         if self.arithmetic(target) && self.integer_type(target).is_none() {
-            info.set_floating(self.converted_floating(operand, target));
+            info.set_floating(if self.unrounded_half_cast(operand, target) {
+                // A complex operand gives its real part.
+                operand
+                    .floating()
+                    .map(|value| super::super::Floating::real(value.real))
+            } else {
+                self.converted_floating(operand, target)
+            });
         }
         if self.arithmetic(target) && operand.constant == ConstantClass::Arithmetic {
             info.constant = ConstantClass::Arithmetic;

@@ -54,8 +54,8 @@ use crate::{
             BinaryOperator,
             Expression,
         },
-        preprocessing::FloatTokenType,
         semantic_analysis::{
+            self,
             Scalar,
             TypeId,
             TypeKind,
@@ -63,7 +63,7 @@ use crate::{
     },
 };
 
-impl FunctionLowerer<'_, '_, '_, '_, '_> {
+impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
     /// Rounds an excess `_Float16` or `__bf16` operand to its `f16` or
     /// `bf16` value; any other operand is returned unchanged. A constant
     /// rounds here.
@@ -203,6 +203,39 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
         let bits = floats::constant_bits(folded, Type::F32)
             .ok_or_else(|| LoweringError::missing("a floating constant has no bits", source))?;
         Ok(Operand::Excess(self.fconst(Type::F32, bits)))
+    }
+
+    /// GCC's folded plain half constant: a value in its own format, unless
+    /// semantic analysis kept a value it cannot hold (GCC's unrounded
+    /// conversion of a run-time-like value), which stays a widened `f32`.
+    /// One GCC does not fold as it parses converts as a run-time value.
+    pub(super) fn plain_constant(
+        &mut self,
+        expression: &'tu Expression<'tu>,
+        folded: &crate::float_parsing::LongDouble,
+        half: Type,
+        source: SourceVectors,
+    ) -> Result<Operand, LoweringError> {
+        let bits = floats::constant_bits(folded, half)
+            .ok_or_else(|| LoweringError::missing("a floating constant has no bits", source))?;
+        // Both are exact in `float`, so their binary32 bits compare them.
+        let format = half.half_format().expect("a 16-bit floating type");
+        let exact = u16::try_from(bits)
+            .ok()
+            .map(|bits| u128::from(format.widen(bits).to_bits()))
+            == floats::constant_bits(folded, Type::F32);
+        if !exact {
+            let Operand::Excess(value) = self.excess_constant(folded, source)? else {
+                unreachable!("an excess constant")
+            };
+            self.widened.push(value);
+            return Ok(Operand::Excess(value));
+        }
+        let value = self.fconst(half, bits);
+        if !self.folded_constant(expression) {
+            self.runtime_constants.push(value);
+        }
+        Ok(Operand::Value(value))
     }
 
     /// A binary operator whose operands are `_Float16` or `__bf16`: `+`,
@@ -347,7 +380,8 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
         if !self.half_in_float() || from == target {
             return None;
         }
-        let constant = self.draft.float_constant(value).is_some();
+        let constant =
+            self.draft.float_constant(value).is_some() && !self.runtime_constants.contains(&value);
         let single = self.widen_half(value);
         self.widened.push(single);
         if constant {
@@ -360,6 +394,18 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
             Operand::Excess(single)
         };
         Some(Item { operand, ty: to })
+    }
+
+    /// Whether GCC holds `item`, a half value, as a plain value: its own
+    /// format's value (in a register or as a folded constant), or one
+    /// [`Self::widen_plain`] gave. Clang has no such class.
+    pub(super) fn plain_half(&self, item: Item) -> bool {
+        self.half_in_float()
+            && match item.operand {
+                | Operand::Value(_) => true,
+                | Operand::Complex(_) => self.complex_excess(item).is_none() || self.widened(item),
+                | _ => self.widened(item),
+            }
     }
 
     /// Whether `item` holds a value [`Self::widen_plain`] gave.
@@ -376,51 +422,6 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
     /// GCC rounds as a `?:` arm: it folds the conversion to the arm's type.
     pub(super) fn widened_constant(&self, item: Item) -> bool {
         matches!(item.operand, Operand::Excess(value) if self.widened_constants.contains(&value))
-    }
-
-    /// Whether GCC evaluates `expression` with excess precision: a `+`,
-    /// `-`, `*` or `/` operation, a unary `+` or `-`, or an `f16` or `bf16`
-    /// constant, through parentheses, `__extension__`, the comma operator's
-    /// right operand and either arm of `?:`. Any other half expression, a
-    /// cast or a variable's value, is plain.
-    /// GCC: `c_parser_expr_no_commas` and `EXCESS_PRECISION_EXPR`.
-    pub(super) fn excess_expression(expression: &Expression<'_>) -> bool {
-        use crate::translation_phases::parsing::syntax::{
-            Constant,
-            ExpressionType as E,
-            UnaryOperator as U,
-        };
-        let mut expression = expression;
-        loop {
-            match expression.kind {
-                | E::Parenthesized { expression: inner }
-                | E::Unary {
-                    operator: U::Extension,
-                    operand_expression: inner,
-                }
-                | E::Binary {
-                    operator: BinaryOperator::Comma,
-                    right_expression: inner,
-                    ..
-                } => expression = inner,
-                | E::Binary { operator, .. } =>
-                    return matches!(
-                        operator,
-                        BinaryOperator::Addition
-                            | BinaryOperator::Subtraction
-                            | BinaryOperator::Multiplication
-                            | BinaryOperator::Division
-                    ),
-                | E::Unary { operator, .. } => return matches!(operator, U::Plus | U::Minus),
-                | E::Constant(Constant::Float(
-                    FloatTokenType::Float16(_) | FloatTokenType::BFloat16(_),
-                )) => return true,
-                | E::Conditional(conditional) =>
-                    return Self::excess_expression(conditional.then_expression)
-                        || Self::excess_expression(conditional.else_expression),
-                | _ => return false,
-            }
-        }
     }
 
     /// Whether `ty` is `_Complex _Float16`.
@@ -446,5 +447,17 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
     fn single_constant(&self, value: Value) -> Option<f32> {
         let bits = self.draft.float_constant(value)?;
         Some(f32::from_bits(u32::try_from(bits).ok()?))
+    }
+
+    /// Whether GCC evaluates `expression` with excess precision
+    /// ([`semantic_analysis::excess_expression`]).
+    pub(super) fn excess_expression(&self, expression: &'tu Expression<'tu>) -> bool {
+        semantic_analysis::excess_expression(expression, &|e| self.info(e).ok().copied())
+    }
+
+    /// Whether GCC folds `expression` to a constant as it parses it
+    /// ([`semantic_analysis::folded_constant`]).
+    pub(super) fn folded_constant(&self, expression: &'tu Expression<'tu>) -> bool {
+        semantic_analysis::folded_constant(expression, &|e| self.info(e).ok().copied())
     }
 }

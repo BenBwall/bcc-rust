@@ -188,11 +188,8 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         if let Some(folded) = info.floating().filter(|_| !info.runtime_query)
             && let Some(half) = self.half(info.ty)
         {
-            let operand = if self.half_in_float() && !Self::excess_expression(expression) {
-                let bits = floats::constant_bits(&folded.real, half).ok_or_else(|| {
-                    LoweringError::missing("a floating constant has no bits", source)
-                })?;
-                Operand::Value(self.fconst(half, bits))
+            let operand = if self.half_in_float() && !self.excess_expression(expression) {
+                self.plain_constant(expression, &folded.real, half, source)?
             } else {
                 self.excess_constant(&folded.real, source)?
             };
@@ -1348,8 +1345,8 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         // GCC converts both arms to the excess type when either arm is
         // evaluated with excess precision, and otherwise to the result type.
         if self.half_in_float() {
-            let excess = Self::excess_expression(conditional.then_expression)
-                || Self::excess_expression(conditional.else_expression);
+            let excess = self.excess_expression(conditional.then_expression)
+                || self.excess_expression(conditional.else_expression);
             for arm in [conditional.then_expression, conditional.else_expression] {
                 self.conditional_arms
                     .push((std::ptr::from_ref(arm).addr(), excess));
@@ -1584,12 +1581,18 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         source: SourceVectors,
     ) -> Result<(), LoweringError> {
         use UnaryOperator as U;
+        // GCC's `+` and `-` are exact: a plain operand's result is plain,
+        // widened rather than excess.
         if matches!(operator, U::Plus | U::Minus) && self.complex_half(info.ty) {
             let operand = self.pop_excess();
+            let plain = self.plain_half(operand);
             let operand = self.single_operand(operand, true, source)?;
             let mut pair = self.complex_parts(operand, source)?;
             if operator == U::Minus {
                 pair = pair.map(|part| self.convert(Opcode::Fneg, Type::F32, part));
+            }
+            if plain {
+                self.widened.push(pair[0]);
             }
             let result = self.complex_pair(pair);
             self.push_item(result, info.ty);
@@ -1607,12 +1610,16 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         }
         if matches!(operator, U::Plus | U::Minus) && self.half(info.ty).is_some() {
             let operand = self.pop_excess();
+            let plain = self.plain_half(operand);
             let value = self.excess(operand, source)?;
             let result = if operator == U::Minus {
                 self.convert(Opcode::Fneg, Type::F32, value)
             } else {
                 value
             };
+            if plain {
+                self.widened.push(result);
+            }
             self.push_item(Operand::Excess(result), info.ty);
             return Ok(());
         }

@@ -1002,9 +1002,11 @@ parameters). Under GCC, a plain half converted to the other half type is
 widened to `f32` without rounding (`widen_plain`); a cast leaves such a
 value, a store rounds it, and so does the conversion of a `?:` arm to
 `_Complex _Float16` unless either arm is an excess-precision expression
-(`excess_expression`, recorded per arm in `conditional_arms`). A folded
-plain half constant is a `Value` in its own format, so it converts as
-GCC's constant folder converts it. Clang's `__fp16` is `f16` storage; semantic
+(`excess_expression`, recorded per arm in `conditional_arms`); `+` and `-`
+of a plain value give a widened one. A folded plain half constant is a
+`Value` in its own format, so it converts as GCC's constant folder converts
+it, unless GCC's parser would not have folded it (`folded_constant`): then
+it converts as a run-time value. Clang's `__fp16` is `f16` storage; semantic
 analysis promotes its values to `float`.
 
 Complex scalars use two immutable SSA component values retained in a sparse

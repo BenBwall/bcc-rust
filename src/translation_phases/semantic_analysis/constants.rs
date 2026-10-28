@@ -296,6 +296,28 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
+    /// Whether GCC's cast of `operand` to `target` keeps the operand's value
+    /// unrounded: a plain value of one half type converted to the other
+    /// (real or complex), which GCC folds only after it parses it, unless
+    /// the operand is a literal it folds at once
+    /// ([`super::excess::folded_constant`]). See `lowering/half.rs`.
+    /// C99: §6.3.1.5 paragraph 2, p. 44; PDF p. 56; §5.2.4.2.2 paragraph 7,
+    /// p. 24; PDF p. 36.
+    pub(super) fn unrounded_half_cast(&self, operand: ExpressionInfo<'tu>, target: TypeId) -> bool {
+        let to = match self.types.nodes[self.types.non_atomic(target).index] {
+            | TypeKind::Scalar(Scalar::ComplexFloat16) => Some(HalfFormat::Binary16),
+            | _ => self.half_format(target),
+        };
+        let lookup = |e| Some(self.expression_info(e));
+        self.half_in_float()
+            && to.is_some()
+            && self.half_format(operand.ty).is_some()
+            && self.half_format(operand.ty) != to
+            && operand.floating().is_some()
+            && !super::excess::excess_expression(operand.expression, &lookup)
+            && !super::excess::folded_constant(operand.expression, &lookup)
+    }
+
     /// Whether `ty` is a complex floating type.
     fn complex_type(&self, ty: TypeId) -> bool {
         matches!(

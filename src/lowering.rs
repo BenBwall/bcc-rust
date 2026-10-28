@@ -559,6 +559,9 @@ struct FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
     widened:            ArenaVec<'s, crate::ir::Value>,
     /// The constants among them, which GCC rounds as `?:` arms.
     widened_constants:  ArenaVec<'s, crate::ir::Value>,
+    /// Folded half constants GCC does not fold as it parses, which it
+    /// converts as run-time values.
+    runtime_constants:  ArenaVec<'s, crate::ir::Value>,
     /// The arms of GCC's conditionals, by address, and whether either arm
     /// of each is evaluated with excess precision (`half.rs`).
     conditional_arms:   ArenaVec<'s, (usize, bool)>,

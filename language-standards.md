@@ -1577,9 +1577,12 @@ exact `float` value: `(_Float16)b` keeps a `__bf16` beyond binary16's range
 and `(__bf16)h` keeps binary16's precision. It rounds such a value only to
 store, pass or return it, and as an arm of a `?:` whose type is
 `_Complex _Float16` when neither arm is an excess-precision expression
-(an arithmetic operation or an `f16` constant). Its constant folder rounds
-these conversions where its code does not: a folded plain constant
-converted in a `?:` arm, and a folded cast, round. bcc follows each case;
+(an arithmetic operation or an `f16` constant, seen through parentheses,
+unary `+` and `-`, which are exact, the comma operator, `_Generic` and
+`__builtin_choose_expr`). GCC's parser folds a cast of a literal and rounds
+that conversion where its code does not: `(_Float16)(__bf16)0x1p20` is
+infinite, but `(_Float16)(__bf16)-0x1p20`, whose operand GCC folds only
+later, is `-0x1p20`. bcc follows each case (`semantic_analysis/excess.rs`);
 `scripts/generate_half_matrix.py` writes a program converting every pair
 of integer, real and complex types through `+`, `?:` and casts, with each
 compiler's output as the expectation (`tests/integration/half_precision.rs`). The ABI passes it as `_Float16`; it is never promoted through `...`.
