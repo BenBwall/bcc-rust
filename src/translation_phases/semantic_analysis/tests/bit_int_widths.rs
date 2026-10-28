@@ -158,3 +158,28 @@ fn gcc_reports_the_type_before_c23_only_with_a_valid_width() {
         }
     }
 }
+
+#[test]
+fn bit_int_maxwidth_follows_the_identity() {
+    for (identity, width) in [
+        (CompilerIdentity::Gcc, 65535),
+        (CompilerIdentity::Tcc, 65535),
+        (CompilerIdentity::Msvc, 65535),
+        (CompilerIdentity::Clang, 8_388_608),
+        (CompilerIdentity::ClangCl, 8_388_608),
+    ] {
+        // The widest width the macro names is valid, and one more is not.
+        assert_eq!(
+            kinds(
+                &format!(
+                    "_Static_assert(__BITINT_MAXWIDTH__ == {width}, \"\"); unsigned \
+                     _BitInt(__BITINT_MAXWIDTH__) x; unsigned _BitInt(__BITINT_MAXWIDTH__ + 1) y;"
+                ),
+                CStandard::C23,
+                identity,
+            ),
+            [SemanticErrorKind::BitIntWidthTooLarge],
+            "{identity:?}"
+        );
+    }
+}

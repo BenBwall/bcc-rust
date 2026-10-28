@@ -2325,14 +2325,28 @@ read the value differently:
 | `_BitInt(8388609)`, `_BitInt(4294967298LL)` | error: too large | error: too large |
 
 Clang zero-extends the value from its type and keeps the low 64 bits
-(`BuildBitIntType`), which the identity reproduces; the MSVC and TCC
-identities follow Clang. `_BitInt` types themselves stay unmodeled, so
-lowering still refuses them. In GNU modes bcc folds a read of a `static
-const int` wherever an integer constant expression is required, which Clang
-does for `_BitInt(k)` and enumerators and GCC does not; that predates this
-check and is shared with enumerators and array bounds. The check is
-`Analyzer::bit_int_width`; the `sema-bitint-width-{gcc,clang}` goldens and
-`semantic_analysis/tests/bit_int_widths.rs` pin it.
+(`BuildBitIntType`), which the identity reproduces. Clang also folds a read
+of a `static const int k` in `_BitInt(k)`, in every mode. bcc's typing
+reads such an object only in GNU modes, so the Clang identity folds
+`_BitInt(k)` there and rejects it in ISO modes; the GCC identity rejects it
+in every mode, as GCC does. Before C23, GCC reports the type under
+`-pedantic` only once its width is valid ("ISO C does not support
+'_BitInt(8)' before C23"), so the GCC identity reports it from semantic
+analysis; Clang reports the keyword (`-Wbit-int-extension`, bcc's
+`[-Wpedantic]`).
+
+`__BITINT_MAXWIDTH__` is predefined in every mode and `<limits.h>` defines
+`BITINT_MAXWIDTH` from C23, as 65535 under GCC's rules and 8388608 under
+Clang's. The frozen Clang target tables keep excluding the macro, which is
+defined beside the identity macros instead.
+
+`_BitInt` types themselves stay unmodeled, so lowering still refuses them,
+but a checked type records its width. A cast between it and a pointer
+takes the pointer-cast warnings below (`(void *)(_BitInt(32))x`,
+`(_BitInt(32))p`), as both compilers report; an operand like
+`(_BitInt(32))1` is not treated as constant, as it is for Clang. The check
+is `Analyzer::bit_int_width`; the `sema-bitint-width-{gcc,clang}` goldens
+and `semantic_analysis/tests/bit_int_widths.rs` pin it.
 
 ### Imaginary interchange constants
 
