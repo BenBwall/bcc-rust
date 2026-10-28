@@ -293,3 +293,30 @@ impl FixedRanges<'_> {
         next_intersection(&self.ranges[register.index()], ranges, from)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ir::Entity;
+
+    /// An interval of `vreg` over `ranges`, with no uses.
+    fn interval<'a>(vreg: usize, ranges: &[Range], arena: &'a Bump) -> Interval<'a> {
+        let mut interval = Interval::new(VReg::new(vreg), RegClass::Gpr, arena);
+        interval.ranges.extend_from_slice(ranges);
+        interval
+    }
+
+    #[test]
+    fn absorbing_joins_ranges_that_touch() {
+        let arena = Bump::new();
+        for merged in [false, true] {
+            // The joined interval starts where the representative's last
+            // range ends, and ends where its next one would start.
+            let mut rep = interval(0, &[(0, 4), (10, 20)], &arena);
+            rep.absorb(&interval(1, &[(20, 30)], &arena), merged, &arena);
+            assert_eq!(&rep.ranges[..], &[(0, 4), (10, 30)], "merged: {merged}");
+            rep.absorb(&interval(2, &[(6, 10)], &arena), true, &arena);
+            assert_eq!(&rep.ranges[..], &[(0, 4), (6, 30)], "merged: {merged}");
+        }
+    }
+}

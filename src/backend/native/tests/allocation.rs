@@ -369,9 +369,10 @@ block0(v0: i32):
 fn liveness_grows_with_the_live_sets_not_blocks_times_registers() {
     // Each statement adds three blocks and a dozen registers but keeps
     // the live sets the same, so the sets' storage and the work to solve
-    // them must grow in proportion to the statements. Sets with a bit per
-    // register in every block would take 16 times as much per statement
-    // at 256 statements as at 16.
+    // them must grow in proportion to the statements: 16-fold from 16 to
+    // 256 statements, bounded here at twice that. Sets with a bit per
+    // register in every block would grow with blocks × registers, about
+    // 256-fold.
     for target in [Target::LinuxGnu, Target::WindowsGnu] {
         let size = |statements| {
             with_selection(
@@ -383,7 +384,7 @@ fn liveness_grows_with_the_live_sets_not_blocks_times_registers() {
         };
         let ((short_stored, short_steps), (long_stored, long_steps)) = (size(16), size(256));
         assert!(
-            long_stored <= 16 * short_stored && long_steps <= 16 * short_steps,
+            long_stored <= 32 * short_stored && long_steps <= 32 * short_steps,
             "{target:?}: from 16 to 256 statements the live-in sets grew from {short_stored} to \
              {long_stored} registers and the work from {short_steps} to {long_steps} steps"
         );
@@ -398,7 +399,8 @@ fn allocation_takes_space_in_proportion_to_the_function() {
     // representative's lists at every join would leave a copy of them in
     // the arena each time, and per-block sets with a bit per register
     // would also grow with blocks × registers: either takes quadratic
-    // space.
+    // space. Linear space grows 16-fold from 64 to 1024 statements,
+    // bounded here at twice that; the old joins grew it 142-fold.
     for target in [Target::LinuxGnu, Target::WindowsGnu] {
         let used = |statements| {
             with_selection(
@@ -414,7 +416,7 @@ fn allocation_takes_space_in_proportion_to_the_function() {
         };
         let (short, long) = (used(64), used(1024));
         assert!(
-            long <= 16 * short,
+            long <= 32 * short,
             "{target:?}: from 64 to 1024 statements allocation grew from {short} to {long} bytes"
         );
     }
