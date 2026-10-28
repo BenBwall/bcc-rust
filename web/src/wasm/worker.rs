@@ -46,6 +46,9 @@ use super::{
 const BUDGET: u64 = 2_000_000;
 /// Bytes shown per memory window.
 const WINDOW: u32 = 256;
+/// The most instructions Start at main runs to reach `main`; bcc's startup
+/// takes about a hundred.
+const STARTUP_BUDGET: u64 = 100_000;
 
 #[derive(Default)]
 pub struct WasmWorker {
@@ -101,8 +104,17 @@ impl WasmWorker {
             .session
             .as_mut()
             .ok_or("No WebAssembly program is loaded.")?;
+        let mut skipped = None;
         let stop = match control {
             | WasmControl::Run(run) => Some(session.run(command(run), BUDGET)),
+            | WasmControl::StartAtMain => match start_at_main(session) {
+                | Started::AtMain(steps) => {
+                    skipped = Some(steps);
+                    None
+                },
+                | Started::Breakpoint => Some(Stop::Breakpoint),
+                | Started::AtEntry => None,
+            },
             | WasmControl::GoTo(step) => {
                 session.go_to(step);
                 None
@@ -121,7 +133,61 @@ impl WasmWorker {
             | Some(Stop::Budget) => Some("budget".to_owned()),
             | _ => None,
         };
-        Ok(snapshot(session, &self.listing, stopped))
+        let mut snapshot = snapshot(session, &self.listing, stopped);
+        if let Some(skipped) = skipped {
+            snapshot.narration = narration::skipped_startup(session, skipped);
+        }
+        Ok(snapshot)
+    }
+}
+
+/// Where Start at main left a session.
+enum Started {
+    /// At the first instruction of `main`, after this many instructions.
+    AtMain(u64),
+    /// Before an instruction of the startup code with the learner's
+    /// breakpoint, which comes first.
+    Breakpoint,
+    /// At the first instruction: the entry point is `main` itself, or
+    /// `main` was not reached.
+    AtEntry,
+}
+
+/// Starts `session` again and runs it to the first instruction of the
+/// function compiled from C's `main` (`__original_main` in Clang's modules
+/// of `int main(void)`), so stepping begins at the learner's code, unless a
+/// breakpoint the learner set in the startup code comes first. It stays at
+/// the first instruction when the entry point is `main` itself or `main` is
+/// not reached within [`STARTUP_BUDGET`].
+fn start_at_main(session: &mut Session) -> Started {
+    session.reset();
+    let program = Rc::clone(session.program());
+    let module = &program.module;
+    let named = |name: &str| {
+        (0..u32::try_from(module.funcs.len()).ok()?)
+            .find(|&func| module.body(func).is_some() && module.func_name(func) == name)
+    };
+    let Some(main) = named("__original_main").or_else(|| named("main")) else {
+        return Started::AtEntry;
+    };
+    let Some(&first) = module.body(main).and_then(|body| body.offsets.first()) else {
+        return Started::AtEntry;
+    };
+    if program.entry == Some(main) {
+        return Started::AtEntry;
+    }
+    let breakpoints: Vec<u32> = session.breakpoints().iter().copied().collect();
+    session.set_breakpoints(breakpoints.iter().copied().chain([first]));
+    let stop = session.run(Command::Continue, STARTUP_BUDGET);
+    session.set_breakpoints(breakpoints);
+    let next = session.machine().next();
+    if stop == Stop::Breakpoint && next == Some((main, 0)) {
+        Started::AtMain(session.machine().steps)
+    } else if stop == Stop::Breakpoint {
+        Started::Breakpoint
+    } else {
+        session.reset();
+        Started::AtEntry
     }
 }
 
@@ -1107,6 +1173,83 @@ int main(int argc, char **argv) {
             error.contains("at most 64 MiB") && error.contains("largest arrays smaller"),
             "{error}"
         );
+    }
+
+    /// Start at main runs bcc's startup code, which allocates nothing, to
+    /// the first instruction of `main` and says what it skipped, unless a
+    /// breakpoint in the startup comes first; Back still steps through the
+    /// startup, and running on ends as from the start.
+    /// A module whose entry point is `main` itself (Clang's lessons start
+    /// in `__original_main`) stays at its first instruction.
+    #[cfg(feature = "compiler")]
+    #[test]
+    fn start_at_main_runs_the_startup_code_to_main() {
+        use crate::wasm::Bcc;
+        for demo in &DEMOS {
+            let mut worker = WasmWorker::default();
+            worker.load(Bcc.compile(demo.source).unwrap()).unwrap();
+            let at_main = worker.control(WasmControl::StartAtMain).unwrap();
+            let innermost = |snapshot: &WasmSnapshot| {
+                snapshot
+                    .frames
+                    .first()
+                    .map(|frame| frame.name.clone())
+                    .unwrap_or_default()
+            };
+            assert_eq!(innermost(&at_main), "main", "{}", demo.name);
+            // 512 before startup kept its arguments out of the heap.
+            assert!(
+                (1..200).contains(&at_main.step),
+                "{}: {}",
+                demo.name,
+                at_main.step
+            );
+            assert!(
+                at_main.narration.title.contains("before `main`")
+                    && at_main
+                        .narration
+                        .explanation
+                        .contains(&format!("{} instructions", at_main.step)),
+                "{:?}",
+                at_main.narration
+            );
+            let before = worker.control(WasmControl::GoTo(at_main.step - 1)).unwrap();
+            assert_ne!(innermost(&before), "main", "{}", demo.name);
+            // A breakpoint in the startup code stops Start at main there.
+            let call = before.next.as_ref().map(|place| place.offset).unwrap();
+            worker
+                .control(WasmControl::Breakpoints(vec![call]))
+                .unwrap();
+            let stopped = worker.control(WasmControl::StartAtMain).unwrap();
+            assert_eq!(
+                (stopped.step, stopped.stopped.as_deref()),
+                (at_main.step - 1, Some("breakpoint")),
+                "{}",
+                demo.name
+            );
+            worker
+                .control(WasmControl::Breakpoints(Vec::new()))
+                .unwrap();
+            let again = worker.control(WasmControl::StartAtMain).unwrap();
+            assert_eq!(again.step, at_main.step);
+            let (_, from_start) = run_to_end(Bcc.compile(demo.source).unwrap());
+            let mut last = again;
+            while last.can_step() {
+                last = worker.control(WasmControl::Run(WasmRun::Continue)).unwrap();
+            }
+            assert_eq!(
+                (last.exit, last.step),
+                (from_start.exit, from_start.step),
+                "{}",
+                demo.name
+            );
+            let mut clang = WasmWorker::default();
+            if let Ok(module) = Precompiled.compile(demo.source) {
+                clang.load(module).unwrap();
+                let start = clang.control(WasmControl::StartAtMain).unwrap();
+                assert_eq!(start.step, 0, "{}", demo.name);
+            }
+        }
     }
 
     /// Next line from `$_start`, which has no C line, reaches `main`'s first

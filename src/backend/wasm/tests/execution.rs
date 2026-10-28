@@ -146,12 +146,24 @@ pub(crate) fn run(name: &str, bytes: &[u8]) -> Run {
 
 /// Runs a WASI module under Node with `input` on its standard input.
 pub(crate) fn run_with_input(name: &str, bytes: &[u8], input: &[u8]) -> Run {
+    run_with_arguments(name, bytes, input, &[])
+}
+
+/// Runs a WASI module under Node with `input` on its standard input and
+/// `arguments` after its path in `argv`.
+pub(crate) fn run_with_arguments(
+    name: &str,
+    bytes: &[u8],
+    input: &[u8],
+    arguments: &[&str],
+) -> Run {
     let path = scratch_path(name);
     std::fs::write(&path, bytes).unwrap();
     let mut child = Command::new("node")
         .arg("--no-warnings")
         .arg(runner())
         .arg(&path)
+        .args(arguments)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -451,6 +463,64 @@ fn offsets_text_lines_and_source_map_agree() {
         lines_seen.contains(&2) && lines_seen.contains(&3),
         "{lines_seen:?}"
     );
+}
+
+/// Code a macro expands to has the line of the outermost invocation, never
+/// one inside the `#define`, as Clang's `-g` line tables give it, also for
+/// an argument spelled in another macro's definition (`NESTED`).
+#[test]
+fn macro_expansions_have_the_lines_of_their_invocations() {
+    let source = r"#define SWAP(a, b) do {   \
+        int t = (a);      \
+        (a) = (b);        \
+        (b) = t;          \
+    } while (0)
+#define INC(x) ((x) + 1)
+#define TWICE(y) INC(INC(y))
+#define NESTED INC(seven)
+int seven = 7;
+int f(int p, int q) {
+    if (p > q) {
+        SWAP(p, q);
+    }
+    int r = TWICE(p);
+    int s = INC(
+        q);
+    int u = NESTED;
+    return r + s + u;
+}
+";
+    assert_eq!(source.lines().nth(11), Some("        SWAP(p, q);"));
+    let lines = compile_with(source, Target::Wasm32Unknown, false, |compiled| {
+        let mut lines: Vec<u32> = compiled.entries.iter().map(|entry| entry.line).collect();
+        lines.sort_unstable();
+        lines.dedup();
+        lines
+    })
+    .unwrap();
+    // Line 0 is the prologue; every other line is one of `f`'s own. bcc
+    // gives a statement or expression the line its first token is on, so
+    // `INC(\n q)` is line 15 as `((\n q) + 1)` would be.
+    assert_eq!(lines, [0, 11, 12, 14, 15, 17, 18], "{lines:?}");
+}
+
+/// The one case where bcc's lines differ from Clang's (see
+/// `Context::file_vector`): a macro invoked within an argument that starts
+/// on a later line takes the outer invocation's line, so `BUMP`'s
+/// `do … while` is on line 4 where Clang gives it line 5. Its `v += 2` is
+/// on line 5 anyway, since the file spells its first token, `x`, there.
+#[test]
+fn a_macro_in_a_later_argument_line_takes_the_outer_invocations_line() {
+    let source = "#define F(a) a\n#define BUMP(v) do { v += 2; } while (0)\nint f(int x) {\n    \
+                  F(\n        BUMP(x));\n    return x + 1;\n}\n";
+    let lines = compile_with(source, Target::Wasm32Unknown, false, |compiled| {
+        let mut lines: Vec<u32> = compiled.entries.iter().map(|entry| entry.line).collect();
+        lines.sort_unstable();
+        lines.dedup();
+        lines
+    })
+    .unwrap();
+    assert_eq!(lines, [0, 4, 5, 6], "{lines:?}");
 }
 
 /// Symbols keep their underscores in the text, since `_` is an `idchar`

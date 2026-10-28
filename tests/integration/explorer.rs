@@ -1143,6 +1143,76 @@ mod tests {
     }
 
     #[test]
+    fn line_maps_place_macro_expansions_at_their_invocations() {
+        let source = "#define SWAP(a, b) do { \\\n    int t = (a); \\\n    (a) = (b); \\\n    (b) \
+                      = t; \\\n} while (0)\n#define GETTER(name, value) int get_##name(void) { \
+                      return value; }\nGETTER(seven, 7)\n#define STATIC static\n\nSTATIC int \
+                      main2(void) {\n    int x = 1, y = 2;\n    SWAP(x, y);\n    return x + \
+                      get_seven();\n}\nint main(void) { return main2(); }\n";
+        let output = compile(source, &ExplorerOptions::default());
+        assert!(output.diagnostics.is_empty(), "{:#?}", output.diagnostics);
+        let ranges: Vec<_> = output
+            .line_map
+            .iter()
+            .map(|mapping| {
+                (
+                    mapping.function.as_str(),
+                    mapping.source.start,
+                    mapping.source.end,
+                )
+            })
+            .collect();
+        // Neither starts in a `#define`: `get_seven` is all on its
+        // invocation's line, and `main2` starts at `STATIC`.
+        assert_eq!(
+            ranges,
+            [("get_seven", 7, 7), ("main2", 10, 14), ("main", 15, 15)]
+        );
+    }
+
+    /// Stepping `SWAP` in the macros lesson shows the line that invokes it,
+    /// not the lines of its `#define`.
+    #[test]
+    fn wasm_positions_place_macro_expansions_at_their_invocations() {
+        let lesson = std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("web/demos/macros.c"),
+        )
+        .unwrap();
+        let swap = 1 + lesson
+            .lines()
+            .position(|line| line.trim() == "SWAP(low, high);")
+            .unwrap() as u32;
+        let output = compile(
+            &lesson,
+            &ExplorerOptions {
+                target: "wasm32-wasip1".into(),
+                ..options(false)
+            },
+        );
+        let wasm = output.wasm.as_ref().expect("a module");
+        let main = wasm
+            .functions
+            .iter()
+            .find(|function| function.name == "main")
+            .unwrap();
+        let source = main.source.unwrap();
+        assert_eq!((source.start, source.end), (16, 28));
+        let lines: Vec<u32> = wasm
+            .positions
+            .iter()
+            .filter(|position| (main.start..main.end).contains(&position.offset))
+            .filter_map(|position| position.line)
+            .collect();
+        assert!(lines.contains(&swap), "{lines:?}");
+        assert!(
+            lines
+                .iter()
+                .all(|line| (source.start..=source.end).contains(line)),
+            "{lines:?}"
+        );
+    }
+
+    #[test]
     fn host_files_are_never_found_or_read() {
         let host = temporary("host.h");
         std::fs::write(&host, "int host_header;\n").unwrap();

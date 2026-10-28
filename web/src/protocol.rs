@@ -12,6 +12,7 @@ use crate::{
     pipeline::Compilation,
     snapshot::Snapshot,
     wasm::{
+        WasmCompiled,
         WasmControl,
         WasmModule,
         WasmProgram,
@@ -55,8 +56,9 @@ pub enum Answer {
     Compiled(Box<Compilation>),
     WasmLoaded(Box<WasmProgram>),
     Wasm(Box<WasmSnapshot>),
-    /// bcc's module, or its diagnostics when it refuses the program.
-    CompiledWasm(Box<Result<WasmModule, String>>),
+    /// bcc's module, or its errors when it refuses the program, and its
+    /// placed diagnostics.
+    CompiledWasm(Box<WasmCompiled>),
 }
 
 /// A Worker-to-page message.

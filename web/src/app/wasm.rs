@@ -25,9 +25,11 @@ use super::State;
 use crate::{
     editor::Decoration,
     engine,
+    pipeline::CompileDiagnostic,
     wasm::{
         Precompiled,
         WasmBackEnd,
+        WasmCompiled,
         WasmControl,
         WasmModule,
         WasmProgram,
@@ -44,6 +46,10 @@ const RUN_LIMIT: usize = 500;
 const TRAIL: usize = 6;
 /// Where the learner's choice of compiler is kept between visits.
 const COMPILER_KEY: &str = "bcc-wasm-compiler";
+/// Where turning Start at main off is kept between visits.
+const START_KEY: &str = "bcc-wasm-start-at-main";
+/// bcc's WebAssembly compilations kept for their squiggles and for loading.
+const CHECKED_LIMIT: usize = 4;
 
 /// Which compiler made a module.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -90,6 +96,50 @@ pub enum BccFailure {
     /// The in-browser compiler did not finish (it timed out or its Worker
     /// stopped), which may not happen again, so compiling again may work.
     Stopped(String),
+}
+
+/// bcc's recent WebAssembly compilations of the editor's text, whose
+/// diagnostics are the editor's squiggles in this view and whose modules a
+/// load reuses.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Checks {
+    /// bcc's answer for each source, or why the compiler Worker gave none,
+    /// oldest first.
+    compiled: Vec<(String, Result<WasmCompiled, BccFailure>)>,
+    /// The source being compiled for its squiggles.
+    checking: Option<String>,
+}
+
+impl Checks {
+    /// bcc's diagnostics for `text` compiled for WebAssembly, once known.
+    pub fn diagnostics(&self, text: &str) -> &[CompileDiagnostic] {
+        self.answer(text)
+            .map_or(&[], |answer| answer.diagnostics.as_slice())
+    }
+
+    /// bcc's answer for `source`, if it is known.
+    fn answer(&self, source: &str) -> Option<&WasmCompiled> {
+        self.compiled
+            .iter()
+            .rev()
+            .find(|(known, _)| known == source)
+            .and_then(|(_, result)| result.as_ref().ok())
+    }
+
+    /// Whether `source` was compiled, whatever the outcome.
+    fn known(&self, source: &str) -> bool {
+        self.compiled.iter().any(|(known, _)| known == source)
+    }
+
+    /// Keeps `result` for `source` as the newest of at most
+    /// [`CHECKED_LIMIT`] compilations; each holds its module and its source.
+    fn remember(&mut self, source: &str, result: Result<WasmCompiled, BccFailure>) {
+        self.compiled.retain(|(known, _)| known != source);
+        self.compiled.push((source.to_owned(), result));
+        if self.compiled.len() > CHECKED_LIMIT {
+            _ = self.compiled.remove(0);
+        }
+    }
 }
 
 /// The modules a program has: bcc's, or why bcc has none, clang's for a
@@ -222,12 +272,16 @@ impl Modules {
 #[derive(Clone, Debug, Default)]
 pub struct Choice {
     /// The compiler the learner wants to see; bcc until they choose.
-    pub preferred: Compiler,
+    pub preferred:  Compiler,
     /// Who compiled the module the view steps.
-    pub compiler:  Option<Compiler>,
+    pub compiler:   Option<Compiler>,
     /// The loaded source and its modules, so switching compiler needs no
     /// recompilation.
-    modules:       Option<(String, Modules)>,
+    modules:        Option<(String, Modules)>,
+    /// Whether a load or Reset stops at the entry point's first instruction
+    /// rather than running the C library's startup to `main` (Start at
+    /// main, on unless the learner turns it off).
+    pub from_entry: bool,
 }
 
 impl Choice {
@@ -387,9 +441,17 @@ impl WasmState {
             let compiler = loaded.as_ref().map(|(compiler, _)| *compiler);
             match loaded {
                 | Some((_, program)) => {
-                    let snapshot = program.snapshot.clone();
+                    let mut snapshot = program.snapshot.clone();
+                    if !self.choice.with_untracked(|choice| choice.from_entry)
+                        && let Ok(engine) = state.engine()
+                        && let Ok(at_main) = engine.wasm(WasmControl::StartAtMain).await
+                    {
+                        snapshot = at_main;
+                    }
                     self.unavailable.set(None);
                     self.program.set(Some(program));
+                    // The previous program's state is no earlier step.
+                    self.current.set(None);
                     self.show(state, snapshot);
                 },
                 | None => {
@@ -404,8 +466,37 @@ impl WasmState {
             });
             self.loading.set(false);
             // The program, or the compiler chosen, may have changed while
-            // this one loaded.
+            // this one loaded, and the editor's text may need its squiggles.
             self.ensure_loaded(state);
+            state.pump();
+        });
+    }
+
+    /// Compile the editor's text with bcc for WebAssembly once typing
+    /// pauses, unless it is known, so the editor shows the diagnostics of
+    /// the compilation this view runs: an x86-64 compilation has no C
+    /// library headers, while bcc's WASI target has its own. Text the view
+    /// is loading is left to the load, which compiles it anyway.
+    pub(super) fn check(self, state: State) {
+        let text = state.editor_text.get_untracked();
+        let (known, checking) = state
+            .wasm_checks
+            .with_untracked(|checks| (checks.known(&text), checks.checking.is_some()));
+        let loading =
+            self.loading.get_untracked() && state.source.with_untracked(|source| *source == text);
+        if known || checking || loading || crate::pipeline::too_large(&text).is_some() {
+            return;
+        }
+        state
+            .wasm_checks
+            .update(|checks| checks.checking = Some(text.clone()));
+        spawn_local(async move {
+            let result = compile_wasm(state, &text).await;
+            state.wasm_checks.update(|checks| {
+                checks.checking = None;
+                checks.remember(&text, result);
+            });
+            state.pump();
         });
     }
 
@@ -419,20 +510,22 @@ impl WasmState {
         if let Some(modules) = known {
             return modules;
         }
-        let bcc = match state.compiler().await {
-            | Ok(compiler) => {
-                let result = compiler.compile_wasm(source).await;
-                // A compiler that timed out or trapped is gone; the next
-                // compilation starts a fresh one.
-                if !compiler.connected() {
-                    state.compiler.set_value(None);
-                }
-                result.map_or_else(
-                    |error| Err(failure(error)),
-                    |answer| answer.map_err(BccFailure::Refused),
-                )
+        // The squiggles' compilation of the same text gives the module too.
+        let checked = state
+            .wasm_checks
+            .with_untracked(|checks| checks.answer(source).cloned());
+        let bcc = match checked {
+            | Some(answer) => answer.module.map_err(BccFailure::Refused),
+            | None => match compile_wasm(state, source).await {
+                | Ok(answer) => {
+                    let module = answer.module.clone().map_err(BccFailure::Refused);
+                    state
+                        .wasm_checks
+                        .update(|checks| checks.remember(source, Ok(answer)));
+                    module
+                },
+                | Err(failure) => Err(failure),
             },
-            | Err(error) => Err(BccFailure::Stopped(error)),
         };
         Modules {
             bcc,
@@ -484,8 +577,9 @@ impl WasmState {
         self.ensure_loaded(state);
     }
 
-    /// The compiler chosen on an earlier visit, if any. Only the browser
-    /// keeps one, so the page calls this once it runs there.
+    /// The compiler chosen on an earlier visit, if any, and whether Start at
+    /// main was turned off. Only the browser keeps them, so the page calls
+    /// this once it runs there.
     pub(super) fn restore_choice(self) {
         let saved = web_sys::window()
             .and_then(|window| window.local_storage().ok().flatten())
@@ -494,7 +588,14 @@ impl WasmState {
             | Some("clang") => Compiler::Clang,
             | _ => Compiler::Bcc,
         };
-        self.choice.update(|choice| choice.preferred = compiler);
+        let from_entry = web_sys::window()
+            .and_then(|window| window.local_storage().ok().flatten())
+            .and_then(|storage| storage.get_item(START_KEY).ok().flatten())
+            .is_some_and(|saved| saved == "off");
+        self.choice.update(|choice| {
+            choice.preferred = compiler;
+            choice.from_entry = from_entry;
+        });
     }
 
     /// Send `control` to the Worker and show the answer, unless another
@@ -602,9 +703,38 @@ impl WasmState {
         self.act(state, move || self.request(state, WasmControl::GoTo(step)));
     }
 
+    /// Start the program again: at `main`'s first instruction with Start at
+    /// main, otherwise at the entry point's.
     pub(super) fn reset(self, state: State) {
-        self.trail.set(Vec::new());
-        self.act(state, move || self.request(state, WasmControl::Reset));
+        let control = if self.choice.with_untracked(|choice| choice.from_entry) {
+            WasmControl::Reset
+        } else {
+            WasmControl::StartAtMain
+        };
+        self.act(state, move || async move {
+            self.request(state, control).await?;
+            // The steps seen before were of the run now abandoned.
+            self.trail.set(Vec::new());
+            Ok(())
+        });
+    }
+
+    /// Turn Start at main on or off, remember it for later visits, and
+    /// start the program again where it now starts.
+    pub(super) fn set_start_at_main(self, state: State, on: bool) {
+        if let Some(storage) =
+            web_sys::window().and_then(|window| window.local_storage().ok().flatten())
+        {
+            _ = if on {
+                storage.remove_item(START_KEY)
+            } else {
+                storage.set_item(START_KEY, "off")
+            };
+        }
+        self.choice.update(|choice| choice.from_entry = !on);
+        if self.current.with_untracked(Option::is_some) {
+            self.reset(state);
+        }
     }
 
     /// Run line by line until the program stops, a breakpoint, or Pause.
@@ -862,7 +992,11 @@ pub(super) fn WasmTransport(state: State, hidden: Signal<bool>) -> impl IntoView
             <button
                 type="button"
                 class="button ghost"
-                title="Reset to the first instruction (Shift+R)"
+                title=move || if wasm.choice.with(|choice| choice.from_entry) {
+                    "Reset to the first instruction (Shift+R)"
+                } else {
+                    "Reset to the first instruction of main (Shift+R)"
+                }
                 disabled=move || wasm.locked_tracked() || wasm.current.with(Option::is_none)
                 on:click=move |_| wasm.reset(state)
             >
@@ -915,6 +1049,20 @@ pub(super) fn WasmTransport(state: State, hidden: Signal<bool>) -> impl IntoView
             >
                 {move || format!("Run to line {}", state.target_line.get().unwrap_or_default())}
             </button>
+            <button
+                type="button"
+                class="toggle-chip"
+                aria-pressed=move || wasm.choice.with(|choice| !choice.from_entry).to_string()
+                title="Begin at the first instruction of main, after the code that runs before it: the C library's startup and any constructors (Back still steps through it), or at the entry point's first instruction"
+                disabled=move || wasm.locked_tracked()
+                on:click=move |_| {
+                    let on = wasm.choice.with_untracked(|choice| choice.from_entry);
+                    wasm.set_start_at_main(state, on);
+                }
+            >
+                <span class="toggle-chip-dot" aria-hidden="true"></span>
+                "Start at main"
+            </button>
         </div>
     }
 }
@@ -927,7 +1075,7 @@ pub fn status(wasm: WasmState) -> (String, String) {
         | Some(current) => {
             let label = match current.status.as_str() {
                 | "running" if current.stopped.as_deref() == Some("breakpoint") => "Breakpoint",
-                | "running" if current.step == 0 => "Ready",
+                | "running" if current.step == 0 || current.narration.label == "Start" => "Ready",
                 | "running" => "Paused",
                 | "finished" => "Finished",
                 | "exited" => "Exited",
@@ -942,6 +1090,19 @@ pub fn status(wasm: WasmState) -> (String, String) {
             (label.to_owned(), kind.to_owned())
         },
     })
+}
+
+/// `source` compiled by bcc for WebAssembly in the compiler Worker, which
+/// is started if it is not running, or why the Worker gave no answer.
+async fn compile_wasm(state: State, source: &str) -> Result<WasmCompiled, BccFailure> {
+    let compiler = state.compiler().await.map_err(BccFailure::Stopped)?;
+    let result = compiler.compile_wasm(source).await;
+    // A compiler that timed out or trapped is gone; the next compilation
+    // starts a fresh one.
+    if !compiler.connected() {
+        state.compiler.set_value(None);
+    }
+    result.map_err(failure)
 }
 
 /// What a compiler Worker error means for bcc's module: running out of
@@ -985,7 +1146,35 @@ mod tests {
             preferred,
             compiler,
             modules: Some(("source".into(), modules)),
+            ..Choice::default()
         }
+    }
+
+    #[test]
+    fn checks_keep_the_newest_compilations_and_their_diagnostics() {
+        let compiled = |message: &str| WasmCompiled {
+            module:      Ok(module("bcc")),
+            diagnostics: vec![CompileDiagnostic {
+                severity: "warning".into(),
+                message: message.into(),
+                ..CompileDiagnostic::default()
+            }],
+        };
+        let mut checks = Checks::default();
+        checks.remember("a", Ok(compiled("first")));
+        checks.remember("b", Err(BccFailure::Stopped("timed out".into())));
+        assert_eq!(checks.diagnostics("a")[0].message, "first");
+        // A failed compilation is known, so it is not retried while the
+        // text stays, but it has no answer to reuse.
+        assert!(checks.known("b") && checks.answer("b").is_none());
+        assert!(checks.diagnostics("b").is_empty() && checks.diagnostics("c").is_empty());
+        checks.remember("a", Ok(compiled("again")));
+        assert_eq!(checks.diagnostics("a")[0].message, "again");
+        for source in ["c", "d", "e", "f"] {
+            checks.remember(source, Ok(compiled(source)));
+        }
+        assert!(!checks.known("a") && !checks.known("b"));
+        assert_eq!(checks.compiled.len(), CHECKED_LIMIT);
     }
 
     #[test]

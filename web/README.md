@@ -110,12 +110,12 @@ and without JavaScript, the code views show Rust-highlighted text.
 ## Deploy
 
 `web/dist/` is the whole site: upload it as-is to any static host or CDN. The
-Pages workflow (`.github/workflows/pages.yml`) tests and builds it on pull
-requests and deploys it from `main`. There is no server code or routing. Asset
-URLs are relative (`public_url = "./"`), so it works at the origin root or
-under any path prefix, provided the page is requested at a URL ending in `/`
-(or as `index.html`). All files must share an origin, because browsers only
-start Workers from the page's origin.
+Pages workflow (`.github/workflows/pages.yml`) lints, tests and builds it on
+pull requests and deploys it from `main`. There is no server code or routing.
+Asset URLs are relative (`public_url = "./"`), so it works at the origin root
+or under any path prefix, provided the page is requested at a URL ending in
+`/` (or as `index.html`). All files must share an origin, because browsers
+only start Workers from the page's origin.
 
 Every file except `index.html` has a content hash or version in its URL, so a
 new build never reuses a URL for different bytes. Suggested caching:
@@ -217,7 +217,13 @@ reimplements none):
   hover, skipped lines are hatched, and conditionals carry a kept or
   skipped mark. The browser build has no host headers: `#include` finds only
   bcc's embedded freestanding headers (`<limits.h>`, `<stdint.h>`,
-  `<stddef.h>`, `<stdbool.h>`, …), so `<stdio.h>` is reported as not found.
+  `<stddef.h>`, `<stdbool.h>`, …), so `<stdio.h>` is reported as not found,
+  and the card and the stop explanation point to the WebAssembly view, whose
+  target has bcc's own C library. The pipeline does not borrow that
+  library's headers: they describe bcc's WASI runtime, not an x86-64 C
+  library, and the pipeline's stages are what the native `bcc-rust` prints
+  (`tests/integration/explorer.rs` compares them, and the lessons' LLVM IR
+  comes from the native compiler).
 - **Tokens (phases 5-7)** is the `--tokens` listing of a second, ordinary
   preprocessing run.
 
@@ -270,7 +276,10 @@ How live compilation runs:
 - **Diagnostics.** Errors and warnings are Monaco markers in the source, with
   the message on hover, and a list under the stage with each message's place
   (click it to show the line), the part of the compiler that reported it, and
-  the full rendered message. When an error stops bcc, the stage strip marks
+  the full rendered message. In the WebAssembly view the markers come instead
+  from bcc's `wasm32-wasip1` compilation of the editor's text (debounced the
+  same way; loading the program reuses it), whose C library headers the
+  x86-64 compilation lacks. When an error stops bcc, the stage strip marks
   the stages that did not run, and the stage explains, in beginner's terms,
   whether the front end found a mistake in the program, or the middle or back
   end met a construct bcc does not translate yet.
@@ -309,7 +318,14 @@ returns; **Next line** (`n`) runs to the next C line, through calls; **Run**
 (`r`) goes line by line until the program ends or reaches a breakpoint;
 **Back** (`←` or `k`) and **Reset** (`Shift+R`) go back. Click a line
 number in the listing to set a breakpoint, or in the C source to set a run
-target. Hover either side to find the lines the other made.
+target. Hover either side to find the lines the other made. **Start at
+main** (on unless turned off; the browser's local storage keeps that) runs
+the code before `main` (the C library's startup and any constructors) when
+a program loads or is reset, up to the first instruction of `main`
+(`WasmControl::StartAtMain`, at most 100,000 instructions, else it stays at
+the start), or to a breakpoint set in that code, and the narration says
+what it skipped. Back still steps through the startup. A module whose entry point is
+`main` itself, as Clang's lessons are, starts there anyway.
 
 Where modules come from is behind the `WasmBackEnd` trait in `src/wasm/`:
 C source in, a `WasmModule` out: the binary, optionally the C line of each
@@ -322,13 +338,18 @@ are two:
   `bcc_rust::explorer::compile` for `wasm32-wasip1` at `-O0`, as
   `bcc-rust program.c --target=wasm32-wasip1 -std=c17 -O0` would. Each
   source-map position becomes a line row (bcc records no columns, so the
-  column is 0, and a prologue's line is 0), and bcc's `.wat`, with the line
+  column is 0, and a prologue's line is 0; code a macro expands to has the
+  invocation's line, as in Clang's line tables, except that a macro invoked
+  in an argument that starts on a later line than the outer invocation has
+  the outer invocation's line), and bcc's `.wat`, with the line
   of every instruction (`ExplorerWasm::instructions`) and each function's
   range (`functions`), becomes the listing, in place of the stepper's own
   printout. The engine Worker places each step, call frame and block in it
   by module offset. bcc's module is a WASI command: `$_start`, which bcc's
-  bundled C library adds, calls `main` and passes its result to
-  `proc_exit`. When bcc refuses a program for WebAssembly (`setjmp`,
+  bundled C library adds, runs the constructors, reads the arguments
+  (`args_sizes_get`, `args_get`; up to eight, 256 bytes, in static storage,
+  so the heap is untouched), calls `main` and passes its result to
+  `proc_exit`, 125 instructions before `main` at `-O0`. When bcc refuses a program for WebAssembly (`setjmp`,
   `_Float16`, …), the view shows its diagnostics.
 - `Precompiled` serves the lessons, compiled by clang at `-O0 -g` into
   `web/wasm/`, whose DWARF line tables the stepper reads.
@@ -403,5 +424,15 @@ specification's values, control flow, traps, memory bounds, decoding and
 validation, the stepping commands, the WASI host, and the lesson modules. The
 engine's own
 tests run from the repository root with `cargo test --lib --no-default-features
---features abstract-machine abstract_machine`. Generated artifacts belong in
-ignored `web/target/`, `web/dist/` and `web/editor/{node_modules,dist,fonts}/`.
+--features abstract-machine abstract_machine`.
+
+The crate enables clippy's pedantic group (`web/Cargo.toml`), and the Pages
+workflow's lint job fails on any warning, natively and for each wasm32 build:
+
+```sh
+RUSTFLAGS= cargo clippy --workspace --all-targets --features ssr,worker,compiler -- -D warnings
+cargo clippy --target wasm32-unknown-unknown --features hydrate -- -D warnings   # and worker, compiler
+```
+
+Generated artifacts belong in ignored `web/target/`, `web/dist/` and
+`web/editor/{node_modules,dist,fonts}/`.

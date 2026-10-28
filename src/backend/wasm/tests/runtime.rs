@@ -12,6 +12,7 @@
 use super::execution::{
     compile,
     node_available,
+    run_with_arguments,
     run_with_input,
 };
 use crate::target::Target;
@@ -38,6 +39,59 @@ fn outputs_with_input(name: &str, source: &str, input: &str) -> Option<[String; 
         );
         run.stdout
     }))
+}
+
+/// `_start` reads a few short arguments into static storage and more, or
+/// longer, ones into the heap; either way `argv[argc]` is a null pointer
+/// and the strings are modifiable (C99 §5.1.2.2.1p2).
+#[test]
+fn arguments_reach_main_from_static_storage_or_the_heap() {
+    if !node_available() {
+        eprintln!("note: node is not on the path; skipping the argument test");
+        return;
+    }
+    let source = r#"
+#include <stdio.h>
+#include <stdlib.h>
+int main(int argc, char **argv) {
+    void *first = malloc(1);
+    unsigned long total = 0;
+    for (int i = 1; i < argc; i++) {
+        argv[i][0] = 'X';
+        for (char *c = argv[i]; *c; c++)
+            total += (unsigned char)*c;
+    }
+    printf("%d %d %lu %s\n", argc, argv[argc] == 0, total, argc > 1 ? argv[1] : "-");
+    free(first);
+    return 0;
+}
+"#;
+    let long = "y".repeat(300);
+    let many: Vec<String> = (0..20).map(|index| format!("a{index}")).collect();
+    let many: Vec<&str> = many.iter().map(String::as_str).collect();
+    let expected = |arguments: &[&str]| {
+        let total: u64 = arguments
+            .iter()
+            .map(|argument| 88 + argument.bytes().skip(1).map(u64::from).sum::<u64>())
+            .sum();
+        let first = arguments
+            .first()
+            .map_or_else(|| "-".to_owned(), |argument| format!("X{}", &argument[1..]));
+        format!("{} 1 {total} {first}\n", arguments.len() + 1)
+    };
+    for optimize in [false, true] {
+        let bytes = compile(source, Target::Wasm32Wasi, optimize).unwrap();
+        for arguments in [&[][..], &["one", "two", "three"], &many, &[long.as_str()]] {
+            let run = run_with_arguments("arguments", &bytes, b"", arguments);
+            assert_eq!(run.status, 0, "{}", run.stderr);
+            assert_eq!(
+                run.stdout,
+                expected(arguments),
+                "{} arguments",
+                arguments.len()
+            );
+        }
+    }
 }
 
 #[test]

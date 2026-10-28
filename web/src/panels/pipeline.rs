@@ -38,6 +38,7 @@ const SOURCE_URL: &str = "https://github.com/BenBwall/bcc-rust/blob/main/";
 
 #[component]
 #[expect(clippy::too_many_arguments, reason = "The page state the view reads.")]
+#[expect(clippy::too_many_lines, reason = "One block per part of the view.")]
 pub fn PipelineView(
     stage: RwSignal<Stage>,
     /// Whether to show `-O2` output rather than `-O0`.

@@ -87,6 +87,35 @@ pub fn narrate(session: &Session) -> WasmNarration {
     narration
 }
 
+/// The narration after Start at main ran the code before `main`, `skipped`
+/// instructions: the C library's startup, and any constructors the
+/// program has.
+pub fn skipped_startup(session: &Session, skipped: u64) -> WasmNarration {
+    let program = session.program();
+    let entry = program.entry.map_or_else(
+        || "_start".to_owned(),
+        |func| program.module.func_name(func),
+    );
+    Step::new(
+        "call",
+        "Start",
+        "Skipped the code before `main`: `main` is about to run",
+        &format!(
+            "The host (here, this page) called `${entry}`, the entry point every WASI program \
+             exports, and it ran {skipped} instruction{} before calling your `main`: the C \
+             library's startup, such as asking the host for the program's arguments (WASI's \
+             `args_sizes_get` and `args_get`) to pass as `argc` and `argv`, and any constructors \
+             the program has. It will pass `main`'s result to `proc_exit` as the exit status. \
+             Start at main ran them for you, so the first instruction of `main` is next. Back \
+             steps through them; turn Start at main off to begin at `${entry}`.",
+            plural(skipped)
+        ),
+    )
+    .with(concepts::instantiation())
+    .with(concepts::host())
+    .finish("")
+}
+
 /// A narration in progress.
 struct Step {
     category:    &'static str,

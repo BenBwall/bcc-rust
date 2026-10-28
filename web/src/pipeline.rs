@@ -206,6 +206,17 @@ impl Compilation {
                      stages still show what the middle end made of it."
                 ),
             ),
+            | _ if let Some(include) = self.missing_header(error) => (
+                "Front end",
+                format!(
+                    "bcc could not find the header {include}{at}. This view compiles for x86-64 \
+                     in your browser, where bcc has only its own freestanding headers, such as \
+                     <limits.h>, <stdint.h> and <stddef.h>, and no C library: no <stdio.h> or \
+                     <stdlib.h>. Its WebAssembly view compiles for wasm32-wasip1 with bcc's own C \
+                     library, which has them: choose WebAssembly to compile this program and step \
+                     it."
+                ),
+            ),
             | _ => (
                 "Front end",
                 format!(
@@ -222,6 +233,17 @@ impl Compilation {
             explanation,
             line: error.range.map(|range| range.line),
         })
+    }
+
+    /// The header, as written, whose `#include` on the line of `error` was
+    /// not found.
+    fn missing_header(&self, error: &CompileDiagnostic) -> Option<String> {
+        let line = error.range?.line;
+        self.preprocessing
+            .includes
+            .iter()
+            .find(|include| !include.found && include.line == line)
+            .map(Include::spelled)
     }
 
     /// Whether `stage` should have run but an error stopped bcc first.
@@ -452,10 +474,11 @@ impl Stage {
     }
 
     /// The rules of C99 this stage applies, for the front end.
-    pub fn clauses(self) -> &'static [Citation] {
+    #[expect(clippy::too_many_lines, reason = "One list per stage.")]
+    pub fn clauses(self) -> &'static [Rule] {
         match self {
             | Self::Lines => &[
-                Citation {
+                Rule {
                     id:       "5.1.1.2p1",
                     title:    "Translation phase 1",
                     gloss:    "The file's characters are mapped to the source character set, line \
@@ -463,7 +486,7 @@ impl Stage {
                                replaced.",
                     citation: "C99: §5.1.1.2 paragraph 1 item 1, p. 9; PDF p. 21.",
                 },
-                Citation {
+                Rule {
                     id:       "5.2.1.1p1",
                     title:    "Trigraph sequences",
                     gloss:    "Nine sequences starting with ?? stand for # [ ] { } \\ | ^ ~. bcc \
@@ -471,7 +494,7 @@ impl Stage {
                                the GNU modes.",
                     citation: "C99: §5.2.1.1 paragraph 1, p. 18; PDF p. 30.",
                 },
-                Citation {
+                Rule {
                     id:       "5.1.1.2p1",
                     title:    "Translation phase 2",
                     gloss:    "Each backslash immediately followed by a new-line is deleted, \
@@ -480,14 +503,14 @@ impl Stage {
                 },
             ],
             | Self::PpTokens => &[
-                Citation {
+                Rule {
                     id:       "5.1.1.2p1",
                     title:    "Translation phase 3",
                     gloss:    "The source is decomposed into preprocessing tokens and white \
                                space. Each comment is replaced by one space; new-lines are kept.",
                     citation: "C99: §5.1.1.2 paragraph 1 item 3, p. 10; PDF p. 22.",
                 },
-                Citation {
+                Rule {
                     id:       "6.4p3",
                     title:    "Preprocessing tokens",
                     gloss:    "Header names, identifiers, pp-numbers, character constants, string \
@@ -495,7 +518,7 @@ impl Stage {
                                these.",
                     citation: "C99: §6.4 paragraph 3, p. 49; PDF p. 61.",
                 },
-                Citation {
+                Rule {
                     id:       "6.4p4",
                     title:    "The longest token",
                     gloss:    "The next preprocessing token is the longest sequence that could be \
@@ -504,7 +527,7 @@ impl Stage {
                 },
             ],
             | Self::Preprocessor => &[
-                Citation {
+                Rule {
                     id:       "5.1.1.2p1",
                     title:    "Translation phase 4",
                     gloss:    "Directives are executed and macro invocations expanded; #include \
@@ -512,34 +535,34 @@ impl Stage {
                                directive is deleted.",
                     citation: "C99: §5.1.1.2 paragraph 1 item 4, p. 10; PDF p. 22.",
                 },
-                Citation {
+                Rule {
                     id:       "6.10.1p6",
                     title:    "Conditional inclusion",
                     gloss:    "Only the first group whose condition holds is processed; the \
                                others are skipped.",
                     citation: "C99: §6.10.1 paragraph 6, p. 149; PDF p. 161.",
                 },
-                Citation {
+                Rule {
                     id:       "6.10.3p10",
                     title:    "Function-like macros",
                     gloss:    "The name followed by ( is replaced by the replacement list, with \
                                each parameter replaced by its argument.",
                     citation: "C99: §6.10.3 paragraph 10, p. 152; PDF p. 164.",
                 },
-                Citation {
+                Rule {
                     id:       "6.10.3.2p2",
                     title:    "The # operator",
                     gloss:    "A parameter after # becomes a string literal that spells its \
                                argument as written.",
                     citation: "C99: §6.10.3.2 paragraph 2, p. 153; PDF p. 165.",
                 },
-                Citation {
+                Rule {
                     id:       "6.10.3.3p3",
                     title:    "The ## operator",
                     gloss:    "The tokens on either side of ## are concatenated into one token.",
                     citation: "C99: §6.10.3.3 paragraph 3, p. 154; PDF p. 166.",
                 },
-                Citation {
+                Rule {
                     id:       "6.10.3.4p2",
                     title:    "Rescanning",
                     gloss:    "The replacement is scanned again for macros, but the macro being \
@@ -548,14 +571,14 @@ impl Stage {
                 },
             ],
             | Self::Tokens => &[
-                Citation {
+                Rule {
                     id:       "5.1.1.2p1",
                     title:    "Translation phases 5 and 6",
                     gloss:    "Escape sequences in character constants and string literals are \
                                converted, and adjacent string literals are concatenated.",
                     citation: "C99: §5.1.1.2 paragraph 1 items 5-6, p. 10; PDF p. 22.",
                 },
-                Citation {
+                Rule {
                     id:       "5.1.1.2p1",
                     title:    "Translation phase 7",
                     gloss:    "White space stops being significant, and each preprocessing token \
@@ -606,7 +629,7 @@ impl Stage {
 
 /// A rule of C99, cited with its paragraph and page.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Citation {
+pub struct Rule {
     /// Clause and paragraph, such as `6.10.3.2p2`.
     pub id:       &'static str,
     pub title:    &'static str,
@@ -621,13 +644,17 @@ pub struct Links {
     /// For each output line (1-based, index 0 unused), the source lines it
     /// came from (first and last, inclusive), for stages that record
     /// locations.
-    exact:     Option<Vec<Option<(usize, usize)>>>,
+    exact:     Option<LineLinks>,
     /// For each output line, where exactly in the source it is, for stages
     /// that list one source range per line.
     ranges:    Vec<SourceSpan>,
     /// Otherwise each function's source lines and output lines, inclusive.
     functions: Vec<((usize, usize), (usize, usize))>,
 }
+
+/// For each output line (1-based, index 0 unused), the first and last
+/// source lines it came from, if any.
+pub type LineLinks = Vec<Option<(usize, usize)>>;
 
 impl Links {
     /// Output lines that came from `line` of the source.
@@ -687,7 +714,7 @@ pub fn displayed(
     stage: Stage,
     compilation: &Compilation,
     headers: bool,
-) -> Option<(String, Option<Vec<Option<(usize, usize)>>>)> {
+) -> Option<(String, Option<LineLinks>)> {
     let output = compilation.output(stage)?;
     if stage != Stage::Preprocessor {
         return Some((output.to_owned(), None));
