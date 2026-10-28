@@ -1933,12 +1933,12 @@ mod tests {
                 .stderr(std::process::Stdio::piped())
                 .spawn()
                 .unwrap();
-            child
-                .stdin
-                .take()
-                .unwrap()
-                .write_all(b"int from_stdin;\n")
-                .unwrap();
+            // A driver that refuses standard input exits without reading
+            // it, which may close the pipe before this write.
+            let written = child.stdin.take().unwrap().write_all(b"int from_stdin;\n");
+            if let Err(error) = written {
+                assert_eq!(error.kind(), std::io::ErrorKind::BrokenPipe, "{error}");
+            }
             child.wait_with_output().unwrap()
         };
         for mode in ["--gcc-mode", "--clang-mode"] {
