@@ -391,6 +391,36 @@ fn liveness_grows_with_the_live_sets_not_blocks_times_registers() {
 }
 
 #[test]
+fn allocation_takes_space_in_proportion_to_the_function() {
+    // Coalescing joins each statement's `s` and `t` to the previous
+    // statement's, which their block arguments copy, so each of the two
+    // representatives absorbs an interval per statement. Rebuilding the
+    // representative's lists at every join would leave a copy of them in
+    // the arena each time, and per-block sets with a bit per register
+    // would also grow with blocks × registers: either takes quadratic
+    // space.
+    for target in [Target::LinuxGnu, Target::WindowsGnu] {
+        let used = |statements| {
+            with_selection(
+                &branch_per_statement(statements),
+                "f",
+                target,
+                |_, mut func, scratch| {
+                    let before = scratch.used();
+                    let _allocation = regalloc::allocate(&mut func, CallConv::of(target), scratch);
+                    scratch.used() - before
+                },
+            )
+        };
+        let (short, long) = (used(64), used(1024));
+        assert!(
+            long <= 16 * short,
+            "{target:?}: from 64 to 1024 statements allocation grew from {short} to {long} bytes"
+        );
+    }
+}
+
+#[test]
 fn the_checker_rejects_a_value_left_in_a_clobbered_register() {
     let result = check_corrupted(ACROSS_CALLS, "f", Target::LinuxGnu, |func, allocation| {
         let MInst::Mov {

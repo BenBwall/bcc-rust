@@ -475,7 +475,12 @@ nothing recurses.
    special cases.
 6. **Coalescing.** Copies between vregs whose intervals do not overlap are
    joined, deepest loop first, into one interval (union-find over the
-   representatives; later candidates test against the union). The copy
+   representatives; later candidates test against the union, from the
+   later of the two starts). A join rebuilds the representative's sorted
+   ranges and uses only from just before the joined interval's first one,
+   so a chain of block-argument copies, which joins one statement's
+   interval after another to the end of a growing one, costs each join the
+   joined interval rather than the whole union. The copy
    becomes a move between a register and itself, which the rewrite deletes;
    `mov t, i; add t, 1` and a back edge's `i := t` become one `add` in place.
 7. **Scan.** A binary heap orders intervals by start. *Active* intervals hold
