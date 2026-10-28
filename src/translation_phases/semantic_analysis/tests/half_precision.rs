@@ -125,8 +125,7 @@ fn only_the_gcc_and_clang_identities_provide_the_type() {
 
 /// GCC: "ISO C does not support the '_Float16' type before C23" and
 /// "non-standard suffix on floating constant"; Clang reports neither.
-/// An out-of-range constant is reported in both, and `_Complex _Float16`
-/// is refused.
+/// An out-of-range constant is reported in both.
 #[test]
 fn diagnostics_follow_the_identity() {
     let source = "_Float16 x = 1.5f16;";
@@ -160,13 +159,43 @@ fn diagnostics_follow_the_identity() {
             );
         },
     );
-    with_source("_Complex _Float16 z;", |context, _| {
-        let errors = messages(context);
-        assert!(
-            errors
-                .iter()
-                .any(|error| error.contains("UnsupportedComplexHalf")),
-            "{errors:?}"
-        );
-    });
+}
+
+/// `_Complex _Float16` occupies two halves and computes in `float
+/// _Complex`: GCC keeps the excess of `C * C`, while Clang's constant
+/// evaluator rounds each operation (its function code keeps a chain's
+/// excess, so lowering evaluates those operators).
+#[test]
+fn complex_half_folds_in_each_identitys_evaluation_format() {
+    let source = r#"
+#ifdef __clang__
+#define V(gcc, clang) clang
+#else
+#define V(gcc, clang) gcc
+#endif
+#define T(x) _Generic((x), _Complex _Float16: 1, _Complex float: 2, _Float16: 3, float: 4, default: 0)
+_Complex _Float16 z; _Float16 h;
+_Static_assert(sizeof(z) == 4 && _Alignof(_Complex _Float16) == 2, "layout");
+_Static_assert(T(z) == 1 && T(z * z) == 1 && T(z + h) == 1 && T(z + 1) == 1 && T(h + z) == 1, "types");
+_Static_assert(T(z + 1.0f) == 2 && T(__real__ z) == 3 && T(-z) == 1, "conversions");
+#define C ((_Complex _Float16)1.0009765625f16)
+_Static_assert((int)((__real__ (C * C) - 1) * 1048576.0f) == V(2049, 2048), "excess");
+_Static_assert((int)((__real__ (C * C * C) - 1) * 1048576.0f) == V(3075, 3072), "a chain");
+_Static_assert((int)(__real__ (C / (_Complex _Float16)3) * 3072) == 1025, "division");
+_Static_assert(!__builtin_signbit((float)__imag__ (_Complex _Float16)-0x1p0Q), "+0 imaginary");
+_Static_assert(!__builtin_signbit(__imag__ (_Complex double)-0x1p0Q), "from binary128");
+"#;
+    for id in [CompilerIdentity::Gcc, CompilerIdentity::Clang] {
+        let configuration = identity(id, ExtensionPolicy::Allow).with_gnu_extensions(true);
+        with_configuration(source, configuration, |context, unit| {
+            assert_eq!(
+                context.pending_error_count(),
+                0,
+                "{id:?}: {:?}",
+                messages(context)
+            );
+            let runtime = unit.expressions.iter().any(|info| info.runtime_query);
+            assert_eq!(runtime, id == CompilerIdentity::Clang);
+        });
+    }
 }

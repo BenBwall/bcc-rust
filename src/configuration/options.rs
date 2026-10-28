@@ -63,7 +63,8 @@ impl CompilerConfiguration {
                     | None => !self.gnu && (self.standard as u8) <= CStandard::C17 as u8,
                 },
                 | Feature::InterchangeFloatTypes => self.interchange_float_types(),
-                | Feature::Float16 => self.half_precision_types(),
+                | Feature::Float16 | Feature::BFloat16 => self.half_precision_types(),
+                | Feature::Fp16 => self.storage_half_type(),
                 | _ => true,
             };
             if accepted {
@@ -211,14 +212,25 @@ impl CompilerConfiguration {
         }
     }
 
-    /// Whether `_Float16` is a type, as GCC 12 and later and Clang provide
-    /// it on x86-64 with SSE2. MSVC and TCC have no half-precision type.
+    /// Whether `_Float16` and `__bf16` are types, as GCC 12 (`__bf16`: 13)
+    /// and later and Clang provide them on x86-64 with SSE2. MSVC and TCC
+    /// have no half-precision type.
     pub(crate) const fn half_precision_types(self) -> bool {
         matches!(
             self.identity,
             super::CompilerIdentity::Gcc
                 | super::CompilerIdentity::Clang
                 | super::CompilerIdentity::ClangCl
+        )
+    }
+
+    /// Whether `__fp16` is a type, as Clang provides it on every target:
+    /// binary16 storage whose values promote to `float`. GCC provides it
+    /// only on ARM.
+    pub(crate) const fn storage_half_type(self) -> bool {
+        matches!(
+            self.identity,
+            super::CompilerIdentity::Clang | super::CompilerIdentity::ClangCl
         )
     }
 

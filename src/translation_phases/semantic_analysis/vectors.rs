@@ -558,8 +558,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         };
         // GNU binary128 widening uses type precision, not the long-double
         // rounding bridge, which cannot represent a binary128 destination.
+        // An integer is checked by its width below: the x87 carrier cannot
+        // hold every 128-bit value.
         if precision != 113
             && scalar.constant == super::ConstantClass::Arithmetic
+            && scalar.floating().is_some()
             && let Some(value) = self.floating_value(scalar)
         {
             return self.round_floating(value, element).is_some_and(|rounded| {

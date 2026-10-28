@@ -1,6 +1,8 @@
 //! Scalar types and target layouts describe C representations independently
 //! of the host Rust data model.
 
+use crate::half_precision::HalfFormat;
+
 /// Scalar layout and implementation-defined ABI choices. The System V base
 /// is shared by the Linux targets. C99: representations §6.2.5, pp. 33-37; PDF
 /// pp. 45-49.
@@ -15,7 +17,7 @@ pub(crate) struct TargetLayout {
     pub(crate) mb_len_max:         u32,
     pub(crate) wint_t:             Scalar,
     pub(crate) va_list:            Layout,
-    pub(crate) scalars:            [Option<Layout>; 24],
+    pub(crate) scalars:            [Option<Layout>; 27],
     pub(crate) pointer:            Layout,
     pub(crate) char_signed:        bool,
     pub(crate) size_t:             Scalar,
@@ -123,6 +125,9 @@ impl TargetLayout {
                 align: 16,
             }),
             Some(Layout { size: 2, align: 2 }),
+            Some(Layout { size: 2, align: 2 }),
+            Some(Layout { size: 4, align: 2 }),
+            Some(Layout { size: 2, align: 2 }),
         ],
         pointer:            Layout { size: 8, align: 8 },
         char_signed:        true,
@@ -168,6 +173,17 @@ pub(crate) enum Scalar {
     /// C23: Annex H, §H.2.2 paragraph 1, p. 553; PDF p. 566. Extension to
     /// C99 §6.2.5 paragraph 10, p. 34; PDF p. 46.
     Float16,
+    /// GCC's and Clang's `__bf16`, bfloat16. Both compute with it in `float`
+    /// on x86-64, as with `_Float16`, which outranks it.
+    /// Extension to C99 §6.2.5 paragraph 10, p. 34; PDF p. 46.
+    BFloat16,
+    /// `_Complex _Float16`, computed in `float _Complex`.
+    /// C23: §H.2.2 paragraph 3, p. 553; PDF p. 566.
+    ComplexFloat16,
+    /// Clang's `__fp16`, binary16 storage: a value promotes to `float`
+    /// before any operation, as an integer promotes to `int`.
+    /// Extension to C99 §6.2.5 paragraph 10, p. 34; PDF p. 46.
+    Fp16,
     /// The interchange types `_Float32` and `_Float64` and the extended types
     /// `_Float32x` and `_Float64x`, with their complex types. Each is a
     /// distinct type with the representation of the standard type
@@ -212,6 +228,9 @@ impl Scalar {
             | Self::Float128 => "__float128",
             | Self::ComplexFloat128 => "__float128 _Complex",
             | Self::Float16 => "_Float16",
+            | Self::BFloat16 => "__bf16",
+            | Self::ComplexFloat16 => "_Float16 _Complex",
+            | Self::Fp16 => "__fp16",
             | Self::Float32 => "_Float32",
             | Self::Float64 => "_Float64",
             | Self::Float32x => "_Float32x",
@@ -253,6 +272,7 @@ impl Scalar {
                 | Self::ComplexDouble
                 | Self::ComplexLongDouble
                 | Self::ComplexFloat128
+                | Self::ComplexFloat16
                 | Self::ComplexFloat32
                 | Self::ComplexFloat64
                 | Self::ComplexFloat32x
@@ -269,6 +289,7 @@ impl Scalar {
             | Self::ComplexDouble => Self::Double,
             | Self::ComplexLongDouble => Self::LongDouble,
             | Self::ComplexFloat128 => Self::Float128,
+            | Self::ComplexFloat16 => Self::Float16,
             | Self::ComplexFloat32 => Self::Float32,
             | Self::ComplexFloat64 => Self::Float64,
             | Self::ComplexFloat32x => Self::Float32x,
@@ -286,11 +307,21 @@ impl Scalar {
             | Self::Double => Self::ComplexDouble,
             | Self::LongDouble => Self::ComplexLongDouble,
             | Self::Float128 => Self::ComplexFloat128,
+            | Self::Float16 => Self::ComplexFloat16,
             | Self::Float32 => Self::ComplexFloat32,
             | Self::Float64 => Self::ComplexFloat64,
             | Self::Float32x => Self::ComplexFloat32x,
             | Self::Float64x => Self::ComplexFloat64x,
             | _ => self,
+        }
+    }
+
+    /// The 16-bit format of `_Float16`, `__bf16` and `__fp16`.
+    pub(crate) const fn half_format(self) -> Option<HalfFormat> {
+        match self {
+            | Self::Float16 | Self::Fp16 => Some(HalfFormat::Binary16),
+            | Self::BFloat16 => Some(HalfFormat::BFloat16),
+            | _ => None,
         }
     }
 
@@ -301,17 +332,22 @@ impl Scalar {
     }
 
     /// Orders the floating types for the usual arithmetic conversions; 0 for
-    /// every other type. The set of values comes first: binary16, binary32,
-    /// binary64, the x87 format, then binary128, each class holding the types
-    /// with that representation, so `long double` joins the binary64 class
-    /// where `long_double_is_double` (the MSVC target). Within a class of
+    /// every other type. The set of values comes first: the 16-bit formats,
+    /// binary32, binary64, the x87 format, then binary128, each class holding
+    /// the types with that representation, so `long double` joins the
+    /// binary64 class where `long_double_is_double` (the MSVC target).
+    /// Within a class of
     /// equal sets of values an interchange type is chosen, then
     /// `long double`, then `double` or `float`, then an extended type.
     /// C99: §6.3.1.8 paragraph 1, pp. 44-45; PDF pp. 56-57. C23: §H.4.3
     /// paragraph 1, pp. 558-559; PDF pp. 571-572.
     pub(crate) const fn floating_rank(self, long_double_is_double: bool) -> u8 {
         let (class, preference) = match self.real_type() {
+            // GCC and Clang convert `__bf16` to `_Float16`; an `__fp16`
+            // operand has already promoted to `float`.
             | Self::Float16 => (0, 3),
+            | Self::Fp16 => (0, 2),
+            | Self::BFloat16 => (0, 1),
             | Self::Float => (1, 1),
             | Self::Float32 => (1, 3),
             | Self::Double => (2, 1),

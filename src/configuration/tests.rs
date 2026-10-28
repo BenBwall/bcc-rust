@@ -189,7 +189,7 @@ fn feature_lists_name_every_variant_in_order() {
     }
     assert_eq!(
         Feature::ALL.last().map(|feature| *feature as usize),
-        Some(Feature::Float16 as usize)
+        Some(Feature::Fp16 as usize)
     );
     for (index, feature) in MsvcFeature::ALL.iter().enumerate() {
         assert_eq!(*feature as usize, index, "{feature:?}");

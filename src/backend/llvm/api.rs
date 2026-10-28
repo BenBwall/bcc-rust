@@ -46,6 +46,7 @@ use llvm_sys::{
         LLVMAliasSetAliasee,
         LLVMAppendBasicBlockInContext,
         LLVMArrayType2,
+        LLVMBFloatTypeInContext,
         LLVMBlockAddress,
         LLVMBuildAlloca,
         LLVMBuildArrayAlloca,
@@ -376,6 +377,8 @@ impl<'id> Session<'id> {
             // SAFETY: The session owns the live context.
             | Type::F16 => unsafe { LLVMHalfTypeInContext(self.context) },
             // SAFETY: The session owns the live context.
+            | Type::BF16 => unsafe { LLVMBFloatTypeInContext(self.context) },
+            // SAFETY: The session owns the live context.
             | Type::F32 => unsafe { LLVMFloatTypeInContext(self.context) },
             // SAFETY: The session owns the live context.
             | Type::F64 => unsafe { LLVMDoubleTypeInContext(self.context) },
@@ -446,6 +449,30 @@ impl<'id> Session<'id> {
         // operands have the verified IR types.
         let raw = unsafe { LLVMAddFunction(self.module, name.as_ptr(), ty.0) };
         Val(raw, PhantomData)
+    }
+
+    /// A call of the runtime library function `name`, declared on first
+    /// use with the given scalar result and parameter types.
+    pub(super) fn runtime_call(
+        &self,
+        name: &CStr,
+        result: Type,
+        params: &[Type],
+        args: &[Val<'id>],
+    ) -> Val<'id> {
+        let mut types = [self.ty(Type::Ptr); 4];
+        for (slot, &param) in types.iter_mut().zip(params) {
+            *slot = self.ty(param);
+        }
+        let signature = self.signature(self.ty(result), &types[..params.len()], false);
+        // SAFETY: The module is live and `name` is NUL-terminated.
+        let raw = unsafe { LLVMGetNamedFunction(self.module, name.as_ptr()) };
+        let function = if raw.is_null() {
+            self.function(name, signature)
+        } else {
+            Val(raw, PhantomData)
+        };
+        self.call(signature, function, args)
     }
 
     pub(super) fn global(&self, name: &CStr, ty: Ty<'id>) -> Val<'id> {
