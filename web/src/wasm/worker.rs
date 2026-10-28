@@ -959,8 +959,8 @@ mod tests {
             assert_eq!(program.wat, text.text);
             assert!(program.has_lines);
             assert_eq!(program.lines.len(), program.wat.lines().count());
-            for index in 0..loaded.module.funcs.len() {
-                let Some(body) = loaded.module.body(index as u32) else {
+            for index in 0..u32::try_from(loaded.module.funcs.len()).unwrap() {
+                let Some(body) = loaded.module.body(index) else {
                     continue;
                 };
                 for &offset in &body.offsets {
@@ -981,7 +981,7 @@ mod tests {
             assert!(
                 c_lines
                     .iter()
-                    .all(|&line| (1..=source_lines as u32).contains(&line))
+                    .all(|&line| (1..=u32::try_from(source_lines).unwrap()).contains(&line))
             );
             // Hovering `main`'s first line finds its code in the text.
             let main = demo

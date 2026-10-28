@@ -47,9 +47,10 @@ const NO_MODULE: &str = "bcc could not compile this program to WebAssembly, and 
                          error below, or step through the program on the abstract machine.";
 
 /// Which compiler made a module.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Compiler {
     /// bcc, compiling in the browser.
+    #[default]
     Bcc,
     /// clang from wasi-sdk, ahead of time (the lessons only).
     Clang,
@@ -112,22 +113,49 @@ impl Modules {
     }
 }
 
+/// Which compiler's module the view steps, and the modules it chooses
+/// from.
+#[derive(Clone, Debug, Default)]
+pub struct Choice {
+    /// The compiler the learner wants to see; bcc until they choose.
+    pub preferred: Compiler,
+    /// Who compiled the module the view steps.
+    pub compiler:  Option<Compiler>,
+    /// The loaded source and its modules, so switching compiler needs no
+    /// recompilation.
+    modules:       Option<(String, Modules)>,
+}
+
+impl Choice {
+    /// The compilers with a module for the loaded source.
+    pub fn available(&self) -> Vec<Compiler> {
+        self.modules
+            .as_ref()
+            .map(|(_, modules)| modules.available())
+            .unwrap_or_default()
+    }
+
+    /// bcc's diagnostics, when it refused the loaded source.
+    pub fn refusal(&self) -> Option<&str> {
+        self.modules
+            .as_ref()
+            .and_then(|(_, modules)| modules.refusal())
+    }
+
+    fn modules_of(&self, source: &str) -> Option<&Modules> {
+        self.modules
+            .as_ref()
+            .filter(|(known, _)| known == source)
+            .map(|(_, modules)| modules)
+    }
+}
+
 #[derive(Clone, Copy)]
 pub struct WasmState {
     pub program:      RwSignal<Option<WasmProgram>>,
     /// The source text the program was loaded for.
     loaded:           RwSignal<Option<String>>,
-    /// The compiler the learner wants to see; bcc until they choose.
-    pub preferred:    RwSignal<Compiler>,
-    /// Who compiled the module the view steps.
-    pub compiler:     RwSignal<Option<Compiler>>,
-    /// The compilers with a module for the loaded source.
-    pub available:    RwSignal<Vec<Compiler>>,
-    /// bcc's diagnostics, when it refused the loaded source.
-    pub refusal:      RwSignal<Option<String>>,
-    /// The loaded source's modules, so switching compiler needs no
-    /// recompilation.
-    modules:          StoredValue<Option<(String, Modules)>>,
+    pub choice:       RwSignal<Choice>,
     pub current:      RwSignal<Option<WasmSnapshot>>,
     /// Steps visited before the current one, oldest first: step, title,
     /// category.
@@ -156,11 +184,7 @@ impl WasmState {
         Self {
             program:      RwSignal::new(None),
             loaded:       RwSignal::new(None),
-            preferred:    RwSignal::new(Compiler::Bcc),
-            compiler:     RwSignal::new(None),
-            available:    RwSignal::new(Vec::new()),
-            refusal:      RwSignal::new(None),
-            modules:      StoredValue::new(None),
+            choice:       RwSignal::new(Choice::default()),
             current:      RwSignal::new(None),
             trail:        RwSignal::new(Vec::new()),
             unavailable:  RwSignal::new(None),
@@ -181,14 +205,13 @@ impl WasmState {
     /// the learner prefers, unless it is loaded.
     pub(super) fn ensure_loaded(self, state: State) {
         let source = state.source.get_untracked();
-        let preferred = self.preferred.get_untracked();
+        let preferred = self.choice.with_untracked(|choice| choice.preferred);
         let current = self
             .loaded
             .with_untracked(|loaded| loaded.as_ref() == Some(&source))
-            && (self.compiler.get_untracked() == Some(preferred)
-                || !self
-                    .available
-                    .with_untracked(|available| available.contains(&preferred)));
+            && self.choice.with_untracked(|choice| {
+                choice.compiler == Some(preferred) || !choice.available().contains(&preferred)
+            });
         if current || self.loading.get_untracked() || !state.has_engine.get_untracked() {
             return;
         }
@@ -212,21 +235,21 @@ impl WasmState {
                 | None => Err(NO_MODULE.to_owned()),
             };
             self.loaded.set(Some(source.clone()));
-            self.available.set(modules.available());
-            self.refusal.set(modules.refusal().map(str::to_owned));
-            self.modules.set_value(Some((source, modules)));
+            let compiler = result.as_ref().ok().map(|(compiler, _)| *compiler);
+            self.choice.update(|choice| {
+                choice.compiler = compiler;
+                choice.modules = Some((source, modules));
+            });
             self.trail.set(Vec::new());
             self.breakpoints.set(Vec::new());
             match result {
-                | Ok((compiler, program)) => {
+                | Ok((_, program)) => {
                     let snapshot = program.snapshot.clone();
                     self.unavailable.set(None);
-                    self.compiler.set(Some(compiler));
                     self.program.set(Some(program));
                     self.show(state, snapshot);
                 },
                 | Err(error) => {
-                    self.compiler.set(None);
                     self.program.set(None);
                     self.current.set(None);
                     self.unavailable.set(Some(error));
@@ -242,12 +265,10 @@ impl WasmState {
     /// `source`'s modules: bcc compiles it in the compiler Worker, and a
     /// lesson also has clang's.
     async fn modules_for(self, state: State, source: &str) -> Modules {
-        if let Some(modules) = self.modules.with_value(|modules| {
-            modules
-                .as_ref()
-                .filter(|(known, _)| known == source)
-                .map(|(_, modules)| modules.clone())
-        }) {
+        if let Some(modules) = self
+            .choice
+            .with_untracked(|choice| choice.modules_of(source).cloned())
+        {
             return modules;
         }
         let bcc = match state.compiler().await {
@@ -270,16 +291,17 @@ impl WasmState {
 
     /// Step `compiler`'s module from now on, if the program has one.
     pub fn choose(self, state: State, compiler: Compiler) {
-        if self.preferred.get_untracked() == compiler
-            && self.compiler.get_untracked() == Some(compiler)
-        {
+        let (current, available) = self.choice.with_untracked(|choice| {
+            (
+                choice.preferred == compiler && choice.compiler == Some(compiler),
+                choice.available().contains(&compiler),
+            )
+        });
+        if current {
             return;
         }
-        self.preferred.set(compiler);
-        if self
-            .available
-            .with_untracked(|available| available.contains(&compiler))
-        {
+        self.choice.update(|choice| choice.preferred = compiler);
+        if available {
             state.announcement.set(format!(
                 "Loading the module {} compiled. Stepping starts again from the first instruction.",
                 compiler.name()
@@ -472,6 +494,17 @@ impl WasmState {
                 _ = engine.wasm(WasmControl::Breakpoints(offsets)).await;
             }
         });
+    }
+
+    /// Who compiled the module the view steps.
+    pub fn compiler(self) -> Option<Compiler> {
+        self.choice.with(|choice| choice.compiler)
+    }
+
+    /// bcc's diagnostics, when it refused the loaded source.
+    pub fn refusal(self) -> Option<String> {
+        self.choice
+            .with(|choice| choice.refusal().map(str::to_owned))
     }
 
     pub fn locked(self) -> bool {
@@ -772,6 +805,6 @@ mod tests {
             ..modules
         };
         assert!(refused.pick(Compiler::Bcc).is_none());
-        assert!(refused.available().is_empty());
+        assert_eq!(refused.available(), []);
     }
 }

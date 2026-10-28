@@ -36,8 +36,8 @@ pub fn WasmView(
             <div class="stage-missing wasm-unavailable" hidden=move || shown() || wasm.unavailable.with(Option::is_none)>
                 <p class="wasm-unavailable-title">"No WebAssembly module for this program"</p>
                 <p>{move || wasm.unavailable.get().unwrap_or_default()}</p>
-                <pre class="wasm-diagnostic" hidden=move || wasm.refusal.with(Option::is_none)>
-                    {move || wasm.refusal.get().unwrap_or_default()}
+                <pre class="wasm-diagnostic" hidden=move || wasm.refusal().is_none()>
+                    {move || wasm.refusal().unwrap_or_default()}
                 </pre>
             </div>
             <p class="edit-hint" hidden=move || !stale.get() || !shown()>
@@ -70,10 +70,9 @@ pub fn WasmView(
 /// program and clang's module stands in.
 #[component]
 fn Provenance(wasm: WasmState, on_choose: Callback<Compiler>) -> impl IntoView {
-    let compiler = move || wasm.compiler.get();
-    let both = move || wasm.available.with(|available| available.len() > 1);
-    let fell_back =
-        move || compiler() == Some(Compiler::Clang) && wasm.refusal.with(Option::is_some);
+    let compiler = move || wasm.compiler();
+    let both = move || wasm.choice.with(|choice| choice.available().len() > 1);
+    let fell_back = move || compiler() == Some(Compiler::Clang) && wasm.refusal().is_some();
     let command = move || {
         wasm.program.with(|program| {
             program
@@ -132,7 +131,7 @@ fn Provenance(wasm: WasmState, on_choose: Callback<Compiler>) -> impl IntoView {
             </p>
             <div class="wasm-fallback" hidden=move || !fell_back()>
                 <p>"bcc can't compile this program to WebAssembly, so you are stepping Clang's module instead. bcc said:"</p>
-                <pre class="wasm-diagnostic">{move || wasm.refusal.get().unwrap_or_default()}</pre>
+                <pre class="wasm-diagnostic">{move || wasm.refusal().unwrap_or_default()}</pre>
             </div>
             <code class="wasm-command">{command}</code>
         </article>
@@ -352,11 +351,11 @@ pub fn WasmListing(
                         <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M2.5 3.5h11v9h-11zM5 6.5h6M5 9.5h4" /></svg>
                         "WebAssembly text"
                     </h2>
-                    <span class="wat-compiler" title=command data-compiler=move || match wasm.compiler.get() {
+                    <span class="wat-compiler" title=command data-compiler=move || match wasm.compiler() {
                         | Some(Compiler::Bcc) => "bcc",
                         | _ => "clang",
                     }>
-                        {move || match wasm.compiler.get() {
+                        {move || match wasm.compiler() {
                             | Some(Compiler::Bcc) => "compiled by bcc",
                             | _ => "compiled by Clang (wasi-sdk)",
                         }}
