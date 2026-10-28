@@ -96,7 +96,10 @@ class Editor {
       quickSuggestions: false,
       suggestOnTriggerCharacters: false,
       contextmenu: false,
-      tabFocusMode: false,
+      // Tab moves the keyboard focus on, as everywhere else on the page,
+      // instead of trapping it in the editor (and editing the lesson);
+      // Ctrl+M switches Tab to indenting while editing.
+      tabFocusMode: true,
     });
   }
 

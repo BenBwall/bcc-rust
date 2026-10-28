@@ -133,6 +133,9 @@ new build never reuses a URL for different bytes. Suggested caching:
   stops it; **Reset** (`Shift+R`) reloads the program. Shortcuts are ignored
   while typing in the editor. Click a line number to set a run target, then
   **Run to line**.
+- `Tab` moves the keyboard focus through the page, editors included, rather
+  than indenting (Monaco's `tabFocusMode`); `Ctrl+M` in an editor switches
+  `Tab` to indenting, as in VS Code.
 - The narration card names the rule each step applied, colour coded by kind
   (evaluate, convert, memory, lifetime, control flow, call, stopped), marks
   sequence points, and lists the cited C99 paragraphs with a gloss. Earlier
