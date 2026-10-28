@@ -1935,8 +1935,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         };
         // C23 §H.4.3p1: within one precision, an interchange type is
         // chosen over a standard type, and that over an extended type.
-        let long_double_is_double = self.types.target.long_double_is_double();
-        let float_rank = |s: Scalar| s.floating_rank(long_double_is_double);
+        let long_double_class = self.types.target.long_double_class();
+        let float_rank = |s: Scalar| s.floating_rank(long_double_class);
         let rank = float_rank(ls).max(float_rank(rs));
         let complex = ls.complex() || rs.complex();
         let scalar = if rank != 0 {

@@ -192,7 +192,10 @@ const fn is_host(target: Target) -> bool {
         && match target {
             | Target::LinuxGnu => cfg!(target_env = "gnu"),
             | Target::LinuxMusl => cfg!(target_env = "musl"),
-            | Target::WindowsGnu | Target::WindowsMsvc => false,
+            | Target::WindowsGnu
+            | Target::WindowsMsvc
+            | Target::Wasm32Unknown
+            | Target::Wasm32Wasi => false,
         }
 }
 

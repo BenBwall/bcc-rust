@@ -5,6 +5,8 @@
 //!
 //! Selecting `x86_64-pc-windows-msvc` makes `long` four bytes and uses binary64
 //! for `long double`. Selecting a Linux target keeps the LP64 representation.
+//! The WebAssembly targets `wasm32-unknown-unknown` and `wasm32-wasip1` use
+//! Clang's ILP32 model with binary128 `long double`.
 //!
 //! Read [`Target::layout`], [`Target`], and [`TargetLayout`], then
 //! [`TargetLayout::integer`] and [`Target::predefined_macros`].
@@ -57,6 +59,7 @@ impl Target {
     pub(crate) const fn layout(self) -> TargetLayout {
         match self {
             | Self::LinuxGnu | Self::LinuxMusl => TargetLayout::LP64,
+            | Self::Wasm32Unknown | Self::Wasm32Wasi => TargetLayout::ILP32_WASM,
             | Self::WindowsGnu | Self::WindowsMsvc => {
                 let mut layout = TargetLayout::LP64;
                 layout.ms_bitfields = true;
@@ -95,4 +98,8 @@ pub(crate) enum Target {
     LinuxMusl,
     WindowsGnu,
     WindowsMsvc,
+    /// Freestanding WebAssembly: undefined functions become imports.
+    Wasm32Unknown,
+    /// WebAssembly with the WASI preview 1 system interface.
+    Wasm32Wasi,
 }

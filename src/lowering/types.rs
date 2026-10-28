@@ -110,6 +110,19 @@ pub(super) fn repr(types: &Types<'_>, mut ty: TypeId) -> Result<Repr, LoweringEr
 /// C99: §6.2.5 paragraphs 2-11, pp. 33-34; PDF pp. 45-46.
 /// An interchange or extended floating type lowers as the type whose
 /// representation it shares (C23 §H.2.2 paragraph 3, p. 553; PDF p. 566).
+/// The IR type of `long double`: `f64` on MSVC, `f128` on WebAssembly and
+/// the x87 `f80` elsewhere.
+/// C99: §6.2.5 paragraph 10, p. 34; PDF p. 46.
+fn long_double_type(types: &Types<'_>) -> Type {
+    if types.target.long_double_is_double() {
+        Type::F64
+    } else if types.target.long_double_is_binary128() {
+        Type::F128
+    } else {
+        Type::F80
+    }
+}
+
 fn scalar_repr(types: &Types<'_>, scalar: Scalar) -> Result<Repr, LoweringErrorKind> {
     match scalar.representation() {
         | Scalar::Void => Ok(Repr::Void),
@@ -118,11 +131,7 @@ fn scalar_repr(types: &Types<'_>, scalar: Scalar) -> Result<Repr, LoweringErrorK
         | Scalar::Float => Ok(Repr::Float { ty: Type::F32 }),
         | Scalar::Double => Ok(Repr::Float { ty: Type::F64 }),
         | Scalar::LongDouble => Ok(Repr::Float {
-            ty: if types.target.long_double_is_double() {
-                Type::F64
-            } else {
-                Type::F80
-            },
+            ty: long_double_type(types),
         }),
         | Scalar::Float128 => Ok(Repr::Float { ty: Type::F128 }),
         | Scalar::ComplexFloat128 => Ok(Repr::Complex {
@@ -135,11 +144,7 @@ fn scalar_repr(types: &Types<'_>, scalar: Scalar) -> Result<Repr, LoweringErrorK
             component: Type::F64,
         }),
         | Scalar::ComplexLongDouble => Ok(Repr::Complex {
-            component: if types.target.long_double_is_double() {
-                Type::F64
-            } else {
-                Type::F80
-            },
+            component: long_double_type(types),
         }),
         | _ => {
             let (bits, signed) =
@@ -358,8 +363,16 @@ fn flattened_layout<'s>(
                 | TypeKind::Unmodeled(reason) =>
                     return Err(LoweringErrorKind::UnmodeledType(reason)),
                 | TypeKind::Scalar(scalar) => scalar_leaves(types, scalar, offset, &mut scalars)?,
-                | TypeKind::Pointer(_) | TypeKind::Nullptr =>
-                    push_scalar(&mut scalars, offset, Type::Ptr)?,
+                // An ILP32 pointer object is accessed as `i32` (`emit.rs`).
+                | TypeKind::Pointer(_) | TypeKind::Nullptr => push_scalar(
+                    &mut scalars,
+                    offset,
+                    if types.target.pointer.size == 4 {
+                        Type::I32
+                    } else {
+                        Type::Ptr
+                    },
+                )?,
                 | TypeKind::Array(element, bound) => {
                     let count = match bound {
                         | ArrayBound::Constant(count) => count,
@@ -483,10 +496,7 @@ fn scalar_leaves(
     offset: u64,
     scalars: &mut ArenaVec<'_, AggregateScalar>,
 ) -> Result<(), LoweringErrorKind> {
-    let long_double = || match types.target.scalar(Scalar::LongDouble) {
-        | Some(Layout { size: 8, .. }) => Type::F64,
-        | _ => Type::F80,
-    };
+    let long_double = || long_double_type(types);
     let (ty, parts) = match scalar.representation() {
         | Scalar::Void =>
             return Err(LoweringErrorKind::MissingFact(
@@ -565,5 +575,7 @@ pub(super) fn data_layout(target: Target) -> &'static str {
             "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128",
         | Target::WindowsGnu | Target::WindowsMsvc =>
             "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128",
+        | Target::Wasm32Unknown | Target::Wasm32Wasi =>
+            "e-m:e-p:32:32-p10:8:8-p20:8:8-i64:64-i128:128-n32:64-S128-ni:1:10:20",
     }
 }

@@ -1292,7 +1292,7 @@ fn verify_global<'m>(
     for relocation in relocations {
         if relocation
             .offset
-            .checked_add(relocation.size())
+            .checked_add(relocation.size(module.pointer_bytes()))
             .is_none_or(|end| end > data.size)
         {
             error(VerifierErrorKind::RelocationRange(relocation.offset));

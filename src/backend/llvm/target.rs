@@ -17,5 +17,7 @@ pub(crate) const fn data_layout(target: Target) -> &'static str {
             "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128",
         | Target::WindowsGnu | Target::WindowsMsvc =>
             "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128",
+        | Target::Wasm32Unknown | Target::Wasm32Wasi =>
+            "e-m:e-p:32:32-p10:8:8-p20:8:8-i64:64-i128:128-n32:64-S128-ni:1:10:20",
     }
 }

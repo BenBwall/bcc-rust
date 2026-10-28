@@ -5,6 +5,7 @@
 use super::{
     AbiErrorKind,
     sysv,
+    wasm,
     win64,
 };
 use crate::{
@@ -53,6 +54,7 @@ pub(crate) fn plan_signature<'ir: 's, 's>(
         | Some(ParamAbi::Result(layout)) => match convention {
             | Convention::SystemV => sysv::result(layout, &mut registers)?,
             | Convention::Win64 => win64::result(layout),
+            | Convention::Wasm32 => wasm::result(layout),
         },
         | _ if convention == Convention::Win64 && signature.result == Some(Type::I128) =>
             ResultPlan::VectorI128,
@@ -67,6 +69,7 @@ pub(crate) fn plan_signature<'ir: 's, 's>(
             | Some(ParamAbi::Aggregate(layout)) => match convention {
                 | Convention::SystemV => sysv::argument(layout, &mut registers)?,
                 | Convention::Win64 => win64::argument(layout),
+                | Convention::Wasm32 => wasm::argument(layout),
             },
             | _ if convention == Convention::Win64 && ty == Type::I128 => ArgPlan::IndirectI128,
             | _ => {
@@ -206,6 +209,8 @@ pub(crate) enum Convention {
     /// The Microsoft x64 convention, used by the Windows targets with either
     /// C library.
     Win64,
+    /// The WebAssembly basic C ABI, used by the `wasm32` targets.
+    Wasm32,
 }
 
 impl Convention {
@@ -213,6 +218,7 @@ impl Convention {
         match target {
             | Target::LinuxGnu | Target::LinuxMusl => Self::SystemV,
             | Target::WindowsGnu | Target::WindowsMsvc => Self::Win64,
+            | Target::Wasm32Unknown | Target::Wasm32Wasi => Self::Wasm32,
         }
     }
 
@@ -222,6 +228,7 @@ impl Convention {
         match self {
             | Self::SystemV => Some(sysv::extension(extension)),
             | Self::Win64 => win64::extension(extension),
+            | Self::Wasm32 => Some(wasm::extension(extension)),
         }
     }
 }

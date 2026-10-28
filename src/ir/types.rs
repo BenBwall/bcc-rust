@@ -29,7 +29,9 @@ pub(crate) enum Type {
     F80,
     /// The IEEE 754 binary128 format.
     F128,
-    /// An opaque pointer. Every supported target is 64-bit.
+    /// An opaque pointer: 64 bits on the x86-64 targets, 32 on wasm32,
+    /// where lowering accesses pointer objects in memory as `i32`
+    /// ([`Module::pointer_bytes`](super::Module::pointer_bytes)).
     Ptr,
 }
 

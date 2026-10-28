@@ -26,7 +26,7 @@ impl Target {
     pub(crate) fn write_interchange_float_macros(self, out: &mut impl Write) {
         for characteristics in CHARACTERISTICS {
             let provided = match characteristics.name {
-                | "FLT64X" => !self.layout().long_double_is_double(),
+                | "FLT64X" => self.layout().long_double_is_x87(),
                 | "FLT128" => self.float128_type(),
                 | _ => true,
             };

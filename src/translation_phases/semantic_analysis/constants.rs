@@ -190,6 +190,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | Scalar::LongDouble | Scalar::ComplexLongDouble =>
                 if self.types.target.long_double_is_double() {
                     2
+                } else if self.types.target.long_double_is_binary128() {
+                    return None;
                 } else {
                     3
                 },

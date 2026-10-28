@@ -10,6 +10,8 @@ impl Target {
             | "x86_64-w64-windows-gnu" | "x86_64-w64-mingw32" | "x86_64-pc-windows-gnu" =>
                 Some(Self::WindowsGnu),
             | "x86_64-pc-windows-msvc" => Some(Self::WindowsMsvc),
+            | "wasm32-unknown-unknown" | "wasm32" => Some(Self::Wasm32Unknown),
+            | "wasm32-wasip1" | "wasm32-wasi" | "wasm32-unknown-wasi" => Some(Self::Wasm32Wasi),
             | _ => None,
         }
     }
@@ -20,7 +22,15 @@ impl Target {
             | Self::LinuxMusl => "x86_64-unknown-linux-musl",
             | Self::WindowsGnu => "x86_64-w64-windows-gnu",
             | Self::WindowsMsvc => "x86_64-pc-windows-msvc",
+            | Self::Wasm32Unknown => "wasm32-unknown-unknown",
+            | Self::Wasm32Wasi => "wasm32-wasip1",
         }
+    }
+
+    /// Whether this is a WebAssembly target, which only the WebAssembly
+    /// back end compiles.
+    pub(crate) const fn is_wasm(self) -> bool {
+        matches!(self, Self::Wasm32Unknown | Self::Wasm32Wasi)
     }
 
     /// Preserve the original default-target inspection spelling.
@@ -51,5 +61,13 @@ impl Target {
     /// <https://gcc.gnu.org/onlinedocs/gcc/Floating-Types.html>
     pub(crate) const fn float128_type(self) -> bool {
         !matches!(self, Self::WindowsMsvc)
+    }
+
+    /// Whether source may name `_Float16`. The pinned Clang rejects it on
+    /// the WebAssembly targets ("_Float16 is not supported on this
+    /// target"), and so does bcc.
+    /// C23: Annex H, §H.2.2 paragraph 1, p. 553; PDF p. 566.
+    pub(crate) const fn float16_type(self) -> bool {
+        !self.is_wasm()
     }
 }

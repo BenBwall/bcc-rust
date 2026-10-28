@@ -31,6 +31,7 @@ use super::{
         self,
         va_list,
     },
+    wasm,
     win64,
 };
 use crate::{
@@ -68,6 +69,7 @@ pub(super) fn check_va_arg(target: Target, ty: Type) -> Result<(), AbiErrorKind>
             .map(|_| ())
             .ok_or(AbiErrorKind::VaArgType(ty)),
         | Convention::Win64 => win64::check_va_arg(ty),
+        | Convention::Wasm32 => wasm::check_va_arg(ty),
     }
 }
 
@@ -359,7 +361,28 @@ impl<'a> Rewriter<'a, '_, '_, '_> {
                 let address = match self.convention {
                     | Convention::SystemV => self.sysv_va_arg(ty, arg),
                     | Convention::Win64 => self.win64_va_arg(arg),
+                    | Convention::Wasm32 => {
+                        let (size, align) = wasm::va_slot(ty);
+                        self.wasm_va_arg(arg, size, align)
+                    },
                 };
+                if self.convention == Convention::Wasm32 && ty == Type::Ptr {
+                    // An ILP32 pointer object is an `i32` (lowering/emit.rs).
+                    let bits = self.builder.load(
+                        Type::I32,
+                        address,
+                        MemFlags::aligned(natural_align(Type::I32)),
+                    );
+                    _ = self.builder.insert_with_result(
+                        InstData::Unary {
+                            opcode: Opcode::Inttoptr,
+                            ty:     Type::Ptr,
+                            arg:    bits,
+                        },
+                        result,
+                    );
+                    return;
+                }
                 _ = self.builder.insert_with_result(
                     InstData::Load {
                         ty,
@@ -805,11 +828,55 @@ impl<'a> Rewriter<'a, '_, '_, '_> {
         slot
     }
 
+    /// The address of the next argument in the WebAssembly `va_list` at
+    /// `list`, a `char *` cursor that this aligns to `align` and advances
+    /// past the argument's `size` bytes.
+    /// Clang `emitVoidPtrVAArg`, as `WebAssemblyABIInfo::EmitVAArg` calls it.
+    fn wasm_va_arg(&mut self, list: Value, size: u64, align: u64) -> Value {
+        let word = MemFlags::aligned(natural_align(Type::I32));
+        let cursor = self.builder.load(Type::I32, list, word);
+        let cursor = if align > 4 {
+            let bump = self.builder.iconst(Type::I32, i128::from(align - 1));
+            let raised = self
+                .builder
+                .binary(Opcode::Iadd, InstFlags::empty(), cursor, bump);
+            let mask = self.builder.iconst(Type::I32, -i128::from(align));
+            self.builder
+                .binary(Opcode::And, InstFlags::empty(), raised, mask)
+        } else {
+            cursor
+        };
+        let step = self.builder.iconst(Type::I32, i128::from(size));
+        let next = self
+            .builder
+            .binary(Opcode::Iadd, InstFlags::empty(), cursor, step);
+        self.builder.store(next, list, word);
+        self.builder.convert(Opcode::Inttoptr, Type::Ptr, cursor)
+    }
+
     /// Reconstructs the object, since SSE save slots are sixteen bytes apart
     /// and mixed classes occupy independent register areas.
     /// C99: §7.15.1.1, pp. 249-250; PDF pp. 261-262; psABI §3.5.7.
     fn aggregate_va_arg(&mut self, layout: AggregateLayout<'_>, list: Value) -> Value {
         let object = self.temporary(layout.size.max(16), layout.align);
+        if self.convention == Convention::Wasm32 {
+            match wasm::argument(layout) {
+                | ArgPlan::Ignore(_) => {},
+                | ArgPlan::Registers { parts, .. } => {
+                    let (size, align) = wasm::va_slot(parts.types()[0]);
+                    let slot = self.wasm_va_arg(list, size, align);
+                    self.copy(object, slot, layout.size, layout.align);
+                },
+                | _ => {
+                    let slot = self.wasm_va_arg(list, 4, 4);
+                    let word = MemFlags::aligned(natural_align(Type::I32));
+                    let bits = self.builder.load(Type::I32, slot, word);
+                    let address = self.builder.convert(Opcode::Inttoptr, Type::Ptr, bits);
+                    self.copy(object, address, layout.size, layout.align);
+                },
+            }
+            return object;
+        }
         if self.convention == Convention::Win64 {
             let slot = self.win64_va_arg(list);
             let address = match win64::argument(layout) {

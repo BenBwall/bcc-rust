@@ -21,6 +21,9 @@ pub(crate) struct TargetLayout {
     pub(crate) size_t:             Scalar,
     pub(crate) ptrdiff_t:          Scalar,
     pub(crate) wchar_t:            Scalar,
+    /// Whether `long double` is IEEE binary128 rather than what its layout
+    /// implies; see [`TargetLayout::long_double_is_binary128`].
+    pub(crate) long_double_format: LongDoubleFormat,
 }
 
 impl TargetLayout {
@@ -61,9 +64,56 @@ impl TargetLayout {
     pub(crate) fn long_double_is_double(self) -> bool {
         self.scalar(Scalar::LongDouble) == self.scalar(Scalar::Double)
     }
+
+    /// C99: implementation-defined floating representations §6.2.5p10,
+    /// p. 34; PDF p. 46. The WebAssembly targets use IEEE binary128 for
+    /// `long double`, as Clang does there.
+    pub(crate) fn long_double_is_binary128(self) -> bool {
+        self.long_double_format == LongDoubleFormat::Binary128
+    }
+
+    /// The class of `long double`'s set of values in
+    /// [`Scalar::floating_rank`]: 2 for binary64, 3 for the x87 format and 4
+    /// for binary128.
+    /// C99: §6.3.1.8 paragraph 1, pp. 44-45; PDF pp. 56-57.
+    pub(crate) fn long_double_class(self) -> u8 {
+        if self.long_double_is_double() {
+            2
+        } else if self.long_double_is_binary128() {
+            4
+        } else {
+            3
+        }
+    }
+
+    /// Whether `long double` is the x87 80-bit extended format: neither
+    /// binary64 (MSVC) nor binary128 (WebAssembly).
+    /// C99: §6.2.5p10, p. 34; PDF p. 46.
+    pub(crate) fn long_double_is_x87(self) -> bool {
+        !self.long_double_is_double() && !self.long_double_is_binary128()
+    }
 }
 
 impl TargetLayout {
+    /// The WebAssembly `wasm32` data model, as Clang's
+    /// `WebAssembly32TargetInfo` defines it: ILP32 with 64-bit `long long`,
+    /// binary128 `long double` and `__int128` aligned to 16 bytes, a
+    /// `char *` `va_list`, signed `char`, and `int` for `wchar_t` and
+    /// `wint_t`.
+    /// C99: representations §6.2.5, pp. 33-37; PDF pp. 45-49.
+    pub(crate) const ILP32_WASM: Self = {
+        let mut layout = Self::LP64;
+        layout.va_list = Layout { size: 4, align: 4 };
+        layout.va_list_is_pointer = true;
+        layout.pointer = Layout { size: 4, align: 4 };
+        layout.intmax_t = Scalar::LongLong;
+        layout.uintmax_t = Scalar::UnsignedLongLong;
+        layout.wint_t = Scalar::Int;
+        layout.scalars[Scalar::Long as usize] = Some(Layout { size: 4, align: 4 });
+        layout.scalars[Scalar::UnsignedLong as usize] = Some(Layout { size: 4, align: 4 });
+        layout.long_double_format = LongDoubleFormat::Binary128;
+        layout
+    };
     pub(crate) const LP64: Self = Self {
         fixed_enum_type:    None,
         va_list_is_pointer: false,
@@ -129,7 +179,19 @@ impl TargetLayout {
         size_t:             Scalar::UnsignedLong,
         ptrdiff_t:          Scalar::Long,
         wchar_t:            Scalar::Int,
+        long_double_format: LongDoubleFormat::Layout,
     };
+}
+
+/// How `long double` is represented. C99 leaves it to the implementation
+/// (§6.2.5 paragraph 10, p. 34; PDF p. 46).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LongDoubleFormat {
+    /// As its layout implies: binary64 when it is `double`'s (MSVC), else
+    /// the x87 80-bit format in 16 bytes.
+    Layout,
+    /// IEEE binary128 (WebAssembly).
+    Binary128,
 }
 
 /// Distinct fundamental types, even when representation is identical.
@@ -297,19 +359,20 @@ impl Scalar {
     /// Whether this is a real or complex floating type.
     /// C99: §6.2.5 paragraphs 10-11, p. 34; PDF p. 46.
     pub(crate) const fn floating(self) -> bool {
-        self.floating_rank(false) != 0
+        self.floating_rank(3) != 0
     }
 
     /// Orders the floating types for the usual arithmetic conversions; 0 for
     /// every other type. The set of values comes first: binary16, binary32,
     /// binary64, the x87 format, then binary128, each class holding the types
-    /// with that representation, so `long double` joins the binary64 class
-    /// where `long_double_is_double` (the MSVC target). Within a class of
-    /// equal sets of values an interchange type is chosen, then
+    /// with that representation, so `long double` joins the class
+    /// `long_double_class` names: binary64 (2) on the MSVC target, x87 (3) on
+    /// the other x86-64 targets, binary128 (4) on WebAssembly. Within a class
+    /// of equal sets of values an interchange type is chosen, then
     /// `long double`, then `double` or `float`, then an extended type.
     /// C99: §6.3.1.8 paragraph 1, pp. 44-45; PDF pp. 56-57. C23: §H.4.3
     /// paragraph 1, pp. 558-559; PDF pp. 571-572.
-    pub(crate) const fn floating_rank(self, long_double_is_double: bool) -> u8 {
+    pub(crate) const fn floating_rank(self, long_double_class: u8) -> u8 {
         let (class, preference) = match self.real_type() {
             | Self::Float16 => (0, 3),
             | Self::Float => (1, 1),
@@ -317,8 +380,7 @@ impl Scalar {
             | Self::Double => (2, 1),
             | Self::Float64 => (2, 3),
             | Self::Float32x => (2, 0),
-            | Self::LongDouble if long_double_is_double => (2, 2),
-            | Self::LongDouble => (3, 2),
+            | Self::LongDouble => (long_double_class, 2),
             | Self::Float64x => (3, 0),
             | Self::Float128 => (4, 3),
             | _ => return 0,

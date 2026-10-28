@@ -62,7 +62,7 @@ fn parsed_labels_name_their_blocks() {
     let Some(GlobalInit::Bytes { relocations, .. }) = module.global(offsets).init else {
         panic!("@offsets has bytes");
     };
-    assert_eq!(relocations[1].size(), 4);
+    assert_eq!(relocations[1].size(8), 4);
     assert_eq!(
         relocations[1].target,
         RelocationTarget::LabelDifference {

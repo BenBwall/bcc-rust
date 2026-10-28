@@ -188,7 +188,8 @@ fn encode_object(
     }
     let arena = Bump::new();
     let encoded = match target {
-        | Target::LinuxGnu | Target::LinuxMusl => super::object::encode(text, &arena),
+        | Target::LinuxGnu | Target::LinuxMusl | Target::Wasm32Unknown | Target::Wasm32Wasi =>
+            super::object::encode(text, &arena),
         | Target::WindowsGnu | Target::WindowsMsvc =>
             super::object::encode_coff(text, target, &arena),
     };
