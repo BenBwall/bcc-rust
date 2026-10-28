@@ -247,3 +247,53 @@ fn the_2_0_module_rules_are_enforced() {
     module.func("f", &[], &[], &[], "");
     program(&module);
 }
+
+#[test]
+fn element_segments_print_as_valid_text() {
+    // An externref table and a funcref table; an active segment for table 1
+    // holding function 0, and a passive externref segment holding null.
+    let types: &[u8] = &[1, 0x60, 0, 0];
+    let tables: &[u8] = &[2, 0x6F, 0, 1, 0x70, 0, 1];
+    let elements: &[u8] = &[
+        2, // segments
+        2, 1, 0x41, 0, 0x0B, 0x00, 1, 0, // flags 2: table 1, offset 0, func 0
+        5, 0x6F, 1, 0xD0, 0x6F, 0x0B, // flags 5: passive externref (ref.null extern)
+    ];
+    let code: &[u8] = &[1, 2, 0, 0x0B];
+    let program = Program::load(
+        &raw(&[
+            (1, types),
+            (3, &[1, 0]),
+            (4, tables),
+            (9, elements),
+            (10, code),
+        ]),
+        None,
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
+    let text = &program.wat.text;
+    assert!(
+        text.contains("  (elem (;0;) (table 1) (i32.const 0) func 0)"),
+        "{text}"
+    );
+    assert!(
+        text.contains("  (elem (;1;) externref (ref.null extern))"),
+        "{text}"
+    );
+    // An unnamed function or global is declared with its index as a comment.
+    assert!(text.contains("  (func (;0;) (type 0)"), "{text}");
+    let globals: &[u8] = &[1, 0x7F, 0, 0x41, 7, 0x0B];
+    let program = Program::load(
+        &raw(&[(1, types), (3, &[1, 0]), (6, globals), (10, code)]),
+        None,
+    )
+    .unwrap();
+    assert!(
+        program
+            .wat
+            .text
+            .contains("  (global (;0;) i32 (i32.const 7))"),
+        "{}",
+        program.wat.text
+    );
+}

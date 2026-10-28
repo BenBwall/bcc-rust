@@ -116,7 +116,7 @@ impl Printer<'_> {
         for import in &module.imports {
             let description = match &import.kind {
                 | ImportKind::Func(ty) => {
-                    let text = format!("(func {} (type {ty}))", self.func_ref(func_index));
+                    let text = format!("(func {} (type {ty}))", self.func_id(func_index));
                     func_index += 1;
                     text
                 },
@@ -129,7 +129,7 @@ impl Printer<'_> {
                 | ImportKind::Global(ty) => {
                     let text = format!(
                         "(global {} {})",
-                        self.global_ref(global_index),
+                        self.global_id(global_index),
                         global_type(ty.value, ty.mutable)
                     );
                     global_index += 1;
@@ -160,7 +160,7 @@ impl Printer<'_> {
         for global in &module.globals {
             let text = format!(
                 "  (global {} {} ({}))",
-                self.global_ref(global_index),
+                self.global_id(global_index),
                 global_type(global.ty.value, global.ty.mutable),
                 self.const_expr(&global.init)
             );
@@ -184,23 +184,41 @@ impl Printer<'_> {
             self.plain(&text);
         }
         for (index, element) in module.elements.iter().enumerate() {
-            let items: Vec<String> = element
-                .items
-                .iter()
-                .map(|item| match item.code.first() {
-                    | Some(Instr::RefFunc(func)) => self.func_ref(*func),
-                    | _ => format!("({})", self.const_expr(item)),
+            // `func 0 1` when every item names a function, otherwise the
+            // element type and each item's expression.
+            let functions: Option<Vec<String>> = (element.ty == ValType::FuncRef)
+                .then(|| {
+                    element
+                        .items
+                        .iter()
+                        .map(|item| match item.code.as_slice() {
+                            | [Instr::RefFunc(func)] | [Instr::RefFunc(func), Instr::End] =>
+                                Some(self.func_ref(*func)),
+                            | _ => None,
+                        })
+                        .collect()
                 })
-                .collect();
+                .flatten();
+            let list = match functions {
+                | Some(functions) => format!("func {}", functions.join(" ")),
+                | None => {
+                    let items: Vec<String> = element
+                        .items
+                        .iter()
+                        .map(|item| format!("({})", self.const_expr(item)))
+                        .collect();
+                    format!("{} {}", ref_type(element.ty), items.join(" "))
+                },
+            };
             let mode = match &element.mode {
-                | SegmentMode::Active { offset, .. } => format!(" ({})", self.const_expr(offset)),
+                | SegmentMode::Active { index: 0, offset } =>
+                    format!(" ({})", self.const_expr(offset)),
+                | SegmentMode::Active { index, offset } =>
+                    format!(" (table {index}) ({})", self.const_expr(offset)),
                 | SegmentMode::Passive => String::new(),
                 | SegmentMode::Declarative => " declare".to_owned(),
             };
-            self.plain(&format!(
-                "  (elem (;{index};){mode} func {})",
-                items.join(" ")
-            ));
+            self.plain(&format!("  (elem (;{index};){mode} {})", list.trim_end()));
         }
         for (index, data) in module.data.iter().enumerate() {
             let name = module
@@ -246,7 +264,7 @@ impl Printer<'_> {
         };
         let mut text = format!(
             "  (func {} (type {})",
-            self.func_ref(func),
+            self.func_id(func),
             module.funcs[func as usize].ty
         );
         for (index, param) in ty.params.iter().enumerate() {
@@ -416,6 +434,22 @@ impl Printer<'_> {
             .map(|instr| self.instruction(instr, &[]))
             .collect();
         parts.join(") (")
+    }
+
+    /// A function's identifier where it is declared: `$name`, or its index
+    /// as a comment, since a bare number cannot declare one.
+    fn func_id(&self, func: u32) -> String {
+        match self.module.names.function(func) {
+            | Some(name) => format!("${}", identifier(name)),
+            | None => format!("(;{func};)"),
+        }
+    }
+
+    fn global_id(&self, global: u32) -> String {
+        match self.module.global_name(global) {
+            | Some(name) => format!("${}", identifier(name)),
+            | None => format!("(;{global};)"),
+        }
     }
 
     fn func_ref(&self, func: u32) -> String {
