@@ -113,6 +113,29 @@ double nextafter(double x, double y) {
     return v.d;
 }
 
+long double nextafterl(long double x, long double y) {
+    if (x != x || y != y)
+        return x + y;
+    if (x == y)
+        return y;
+    union {
+        long double f;
+        unsigned __int128 u;
+    } v = {x};
+    if (x == 0.0L) {
+        v.u = (unsigned __int128)(signbit(y) ? 1 : 0) << 127 | 1;
+        return v.f;
+    }
+    if ((x < y) == (x > 0.0L))
+        v.u++;
+    else
+        v.u--;
+    unsigned exponent = (unsigned)(v.u >> 112) & 0x7FFFu;
+    if (exponent == 0x7FFFu || exponent == 0)
+        errno = ERANGE;
+    return v.f;
+}
+
 float nextafterf(float x, float y) {
     if (x != x || y != y)
         return x + y;

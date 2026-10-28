@@ -812,25 +812,6 @@ static int h_parts(hf_bits h, int *exponent, unsigned *fraction) {
     return field;
 }
 
-double __extendhfdf2(hf_bits h) {
-    union {
-        uint64_t u;
-        double f;
-    } v;
-    uint64_t sign = (uint64_t)(h >> 15) << 63;
-    int exponent;
-    unsigned fraction;
-    if ((h & 0x7FFFu) == 0) {
-        v.u = sign;
-    } else if ((h & 0x7C00u) == 0x7C00u) {
-        v.u = sign | 0x7FF0000000000000ull | (uint64_t)(h & 0x3FFu) << 42;
-    } else {
-        h_parts(h, &exponent, &fraction);
-        v.u = sign | (uint64_t)(exponent + 1023) << 52 | (uint64_t)fraction << 42;
-    }
-    return v.f;
-}
-
 float __extendhfsf2(hf_bits h) {
     union {
         uint32_t u;
@@ -861,21 +842,3 @@ long double __extendhftf2(hf_bits h) {
     h_parts(h, &exponent, &fraction);
     return q_value(make(sign | (uint64_t)(exponent + Q_BIAS) << 48 | (uint64_t)fraction << 38, 0));
 }
-
-/* Integers to binary16 through double: below 2^53 the integer is exact
-   there, and from 2^53 up both roundings give infinity, so the result is
-   rounded once. */
-hf_bits __floatsihf(int32_t a) { return __truncdfhf2((double)a); }
-hf_bits __floatunsihf(uint32_t a) { return __truncdfhf2((double)a); }
-hf_bits __floatdihf(int64_t a) { return __truncdfhf2((double)a); }
-hf_bits __floatundihf(uint64_t a) { return __truncdfhf2((double)a); }
-hf_bits __floattihf(ti_int a) { return __truncdfhf2(__floattidf(a)); }
-hf_bits __floatuntihf(tu_int a) { return __truncdfhf2(__floatuntidf(a)); }
-
-/* binary16 to integers through float, which holds every binary16. */
-int32_t __fixhfsi(hf_bits h) { return (int32_t)__extendhfsf2(h); }
-uint32_t __fixunshfsi(hf_bits h) { return (uint32_t)__extendhfsf2(h); }
-int64_t __fixhfdi(hf_bits h) { return (int64_t)__extendhfsf2(h); }
-uint64_t __fixunshfdi(hf_bits h) { return (uint64_t)__extendhfsf2(h); }
-ti_int __fixhfti(hf_bits h) { return __fixsfti(__extendhfsf2(h)); }
-tu_int __fixunshfti(hf_bits h) { return __fixunssfti(__extendhfsf2(h)); }

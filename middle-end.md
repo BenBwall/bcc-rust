@@ -2434,11 +2434,11 @@ target"), with their `f16` and `bf16` constant suffixes and GCC's
 `__FLT16_*`/`__BFLT16_*` macros, so complex halves do not arise either;
 `_Float64x` does not exist. `__fp16` stays the storage type it is on
 every Clang target: two bytes whose values compute in `float`, loaded
-and stored as `i16`, and converted by compiler-rt's routines as Clang's
-code calls them (`__extendhfsf2`, `__truncsfhf2`, `__truncdfhf2`,
-`__trunctfhf2`, and integer conversions named in compiler-rt's style,
-`__floatsihf`, `__fixhfsi` and the like; each is one call that rounds
-once), which the bundled runtime defines and a
+and stored as `i16`, and converted by compiler-rt's routines as LLVM's
+code for Clang calls them (`__extendhfsf2`, then `f64.promote_f32` for a
+`double`; `__extendhftf2`; and `__truncsfhf2`, `__truncdfhf2` and
+`__trunctfhf2`, each one call that rounds once; integers convert through
+`float`, as Clang's lowering does), which the bundled runtime defines and a
 freestanding module imports; a single-element record of one travels as
 its bits in an `i32`, as Clang passes it. A
 `long double` constant is parsed and folded in binary128
@@ -2533,7 +2533,8 @@ fdlibm with Payne-Hanek argument reduction, translated from rust-lang/libm
 under its MIT and Sun notices, so they give musl's results, which can
 differ from glibc's by a few ulps; the float variants round the double
 result; the other transcendental functions are accurate to about an ulp,
-not correctly rounded; `nan` and `strtod` keep NaN payloads as glibc),
+not correctly rounded; `nan`, `nanl`, `strtod` and `strtold` keep NaN
+payloads, and `nextafter` and `nextafterl` set `ERANGE`, as glibc),
 `<time.h>`, and compiler-rt's `i128` and binary128 routines (the
 floating-to-integer conversions with compiler-rt's exact saturation rules).
 Allocation sizes that would wrap fail with `ENOMEM`, and the heap never

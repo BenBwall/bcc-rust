@@ -434,9 +434,10 @@ int main(void) {
 
 /// `__fp16` on WebAssembly, binary16 storage whose values compute in
 /// `float`, converts through the runtime's compiler-rt routines as Clang's
-/// code does: to binary16 from `float`, `double`, binary128 and integers of
-/// every width with one rounding (ties, subnormals, overflow and NaN
-/// payloads), back exactly, and in single-element records as the bits.
+/// code does: to binary16 from `float`, `double` and binary128 with one
+/// rounding (ties, subnormals, overflow and NaN payloads), from integers of
+/// every width through `float` as Clang's lowering converts them, back
+/// exactly, and in single-element records as the bits.
 /// The expected output is Clang's on x86-64, which wasi-sdk's Clang and
 /// compiler-rt give on wasm32 too.
 #[test]
@@ -528,6 +529,126 @@ int main(void) {
         "1.500000 -2.250",
     ];
     for output in outputs("fp16", source).into_iter().flatten() {
+        assert_eq!(output, expected.join("\n") + "\n");
+    }
+}
+
+/// A signaling `__fp16` NaN widens as LLVM's code for Clang widens it on
+/// wasm32: to `float` through `__extendhfsf2`, which keeps it signaling,
+/// to `double` through that and `f64.promote_f32`, which quiets it, and to
+/// binary128 through `__extendhftf2`. The expected output is wasi-sdk's
+/// Clang with compiler-rt; Clang on x86-64 quiets the `float` too and has
+/// x87 `long double`.
+#[test]
+fn fp16_signaling_nans_widen_as_wasm_clang_does() {
+    let source = r#"#include <stdio.h>
+#include <string.h>
+int main(void) {
+    unsigned short raw[] = {0x7d01, 0xfd01, 0x7e01, 0x7c00};
+    for (int i = 0; i < 4; i++) {
+        __fp16 h;
+        memcpy(&h, &raw[i], 2);
+        double d = h;
+        float f = h;
+        long double l = h;
+        unsigned long long db, lb[2];
+        unsigned fb;
+        memcpy(&db, &d, 8);
+        memcpy(&fb, &f, 4);
+        memcpy(lb, &l, 16);
+        printf("%04x %016llx %08x %016llx:%016llx\n", raw[i], db, fb, lb[1], lb[0]);
+    }
+    return 0;
+}
+"#;
+    let expected = [
+        "7d01 7ffc040000000000 7fa02000 7fff404000000000:0000000000000000",
+        "fd01 fffc040000000000 ffa02000 ffff404000000000:0000000000000000",
+        "7e01 7ff8040000000000 7fc02000 7fff804000000000:0000000000000000",
+        "7c00 7ff0000000000000 7f800000 7fff000000000000:0000000000000000",
+    ];
+    for output in outputs("fp16-signaling", source).into_iter().flatten() {
+        assert_eq!(output, expected.join("\n") + "\n");
+    }
+}
+
+/// `nanl`, which `__builtin_nanl` calls, `strtold` of a NaN and
+/// `nextafterl` on binary128 `long double`: a NaN keeps its sign and whole
+/// payload in the low bits and `nextafterl` sets `ERANGE` as glibc does
+/// where `long double` is binary128, the rules `nan` and `nextafter`
+/// follow. Every other bit agrees with wasi-sdk's Clang and wasi-libc,
+/// which drops payloads and signs and never sets `ERANGE`.
+#[test]
+fn nanl_strtold_and_nextafterl_follow_glibc_rules() {
+    let source = r#"#include <errno.h>
+#include <float.h>
+#include <math.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+static void show(const char *what, long double v) {
+    unsigned long long w[2];
+    memcpy(w, &v, 16);
+    printf("%s %016llx:%016llx\n", what, w[1], w[0]);
+}
+#define NEXT(x, y)                                                   \
+    do {                                                             \
+        volatile long double vx = (x), vy = (y);                     \
+        errno = 0;                                                   \
+        long double v = nextafterl(vx, vy);                          \
+        int range = errno == ERANGE;                                 \
+        show(#x " " #y, v);                                          \
+        printf("  %d\n", range);                                     \
+    } while (0)
+int main(void) {
+    char tag[8];
+    strcpy(tag, "123");
+    show("nanl", __builtin_nanl(""));
+    show("nanl(123)", nanl(tag));
+    show("strtold", strtold("nan(0x7b)", 0));
+    show("strtold-", strtold("-nan(5)", 0));
+    show("strtold1.5", strtold("1.5", 0));
+    char *end;
+    strtold("  nan(12x", &end);
+    printf("end %s\n", end);
+    NEXT(1.0L, 2.0L);
+    NEXT(1.0L, 0.0L);
+    NEXT(-1.0L, 0.0L);
+    NEXT(0.0L, -1.0L);
+    NEXT(LDBL_MAX, INFINITY);
+    NEXT(INFINITY, 0.0L);
+    NEXT(LDBL_MIN, 0.0L);
+    NEXT(0x1p-16494L, 0.0L);
+    printf("%d %d\n", isnan(nextafterl(NAN, 1.0L)), nextafterl(2.0L, 2.0L) == 2.0L);
+    return 0;
+}
+"#;
+    let expected = [
+        "nanl 7fff800000000000:0000000000000000",
+        "nanl(123) 7fff800000000000:000000000000007b",
+        "strtold 7fff800000000000:000000000000007b",
+        "strtold- ffff800000000000:0000000000000005",
+        "strtold1.5 3fff800000000000:0000000000000000",
+        "end (12x",
+        "1.0L 2.0L 3fff000000000000:0000000000000001",
+        "  0",
+        "1.0L 0.0L 3ffeffffffffffff:ffffffffffffffff",
+        "  0",
+        "-1.0L 0.0L bffeffffffffffff:ffffffffffffffff",
+        "  0",
+        "0.0L -1.0L 8000000000000000:0000000000000001",
+        "  0",
+        "LDBL_MAX INFINITY 7fff000000000000:0000000000000000",
+        "  1",
+        "INFINITY 0.0L 7ffeffffffffffff:ffffffffffffffff",
+        "  0",
+        "LDBL_MIN 0.0L 0000ffffffffffff:ffffffffffffffff",
+        "  1",
+        "0x1p-16494L 0.0L 0000000000000000:0000000000000000",
+        "  1",
+        "1 1",
+    ];
+    for output in outputs("nanl", source).into_iter().flatten() {
         assert_eq!(output, expected.join("\n") + "\n");
     }
 }

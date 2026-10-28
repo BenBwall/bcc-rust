@@ -129,6 +129,31 @@ static double nan_double(int negative, unsigned long long payload) {
     return bits.d;
 }
 
+/* The quiet binary128 NaN (long double on wasm32) with a sign and a
+   payload, which its 111 bits below the quiet bit hold whole. */
+static long double nan_quad(int negative, unsigned long long payload) {
+    union {
+        unsigned long long words[2];
+        long double f;
+    } bits = {{payload, (negative ? 1ull << 63 : 0) | 0x7FFF800000000000ull}};
+    return bits.f;
+}
+
+/* Reads what follows "nan": an optional (n-char-sequence), whose payload
+   it stores, 0 without one. Returns the end of what it read. */
+static const char *nan_sequence(const char *p, unsigned long long *payload) {
+    *payload = 0;
+    if (*p != '(')
+        return p;
+    const char *q = p + 1;
+    while (isalnum((unsigned char)*q) || *q == '_')
+        q++;
+    if (*q != ')')
+        return p;
+    *payload = nan_payload(p + 1, q);
+    return q + 1;
+}
+
 static float nan_float(int negative, unsigned long long payload) {
     union {
         unsigned u;
@@ -158,17 +183,8 @@ double strtod(const char *s, char **end) {
         return sign * __builtin_inf();
     }
     if (!strncasecmp(p, "nan", 3)) {
-        p += 3;
-        unsigned long long payload = 0;
-        if (*p == '(') {
-            const char *q = p + 1;
-            while (isalnum((unsigned char)*q) || *q == '_')
-                q++;
-            if (*q == ')') {
-                payload = nan_payload(p + 1, q);
-                p = q + 1;
-            }
-        }
+        unsigned long long payload;
+        p = nan_sequence(p + 3, &payload);
         if (end)
             *end = (char *)p;
         return nan_double(negative, payload);
@@ -324,8 +340,27 @@ static unsigned long long tag_payload(const char *tag) {
 
 double nan(const char *tag) { return nan_double(0, tag_payload(tag)); }
 float nanf(const char *tag) { return nan_float(0, tag_payload(tag)); }
+long double nanl(const char *tag) { return nan_quad(0, tag_payload(tag)); }
 
-long double strtold(const char *s, char **end) { return strtod(s, end); }
+/* strtold reads at double precision, except that a NaN keeps its whole
+   payload in binary128's low bits, as glibc's does where long double is
+   binary128. */
+long double strtold(const char *s, char **end) {
+    const char *p = s;
+    while (isspace((unsigned char)*p))
+        p++;
+    int negative = 0;
+    if (*p == '+' || *p == '-')
+        negative = *p++ == '-';
+    if (!strncasecmp(p, "nan", 3)) {
+        unsigned long long payload;
+        p = nan_sequence(p + 3, &payload);
+        if (end)
+            *end = (char *)p;
+        return nan_quad(negative, payload);
+    }
+    return strtod(s, end);
+}
 double atof(const char *s) { return strtod(s, 0); }
 
 static unsigned long long random_state = 1;

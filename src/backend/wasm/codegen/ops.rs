@@ -779,10 +779,11 @@ impl Codegen<'_, '_, '_, '_, '_> {
         }
     }
 
-    /// Conversions to and from `f16` (`__fp16`), which WebAssembly has no
-    /// instructions for, through compiler-rt's routines as Clang calls them
-    /// on wasm32; `bf16`, which semantic analysis refuses for WebAssembly
-    /// as Clang does, is refused here too.
+    /// Conversions between `f16` (`__fp16`) and the floating types, which
+    /// WebAssembly has no instructions for, through compiler-rt's routines
+    /// as LLVM calls them for Clang on wasm32 ([`half_routine`]); `bf16`,
+    /// which semantic analysis refuses for WebAssembly as Clang does, is
+    /// refused here too.
     fn half_conversion(
         &mut self,
         opcode: Opcode,
@@ -796,29 +797,25 @@ impl Codegen<'_, '_, '_, '_, '_> {
             self.store_result(result);
             return;
         }
-        let routine = if from == Type::BF16 || to == Type::BF16 {
-            None
-        } else {
-            half_routine(opcode, from, to)
-        };
-        let Some(routine) = routine else {
+        if from == Type::BF16 || to == Type::BF16 {
             self.refuse("__bf16 values");
             return;
-        };
-        let args = [if opcode == Opcode::Sitofp {
-            Arg::Signed(arg)
-        } else {
-            Arg::Value(arg)
-        }];
-        if matches!(to, Type::F128 | Type::I128) {
-            self.call_routine(routine, &args, result);
-        } else {
-            self.call_routine_scalar(routine, &args);
-            if matches!(opcode, Opcode::Fptosi | Opcode::Fptoui) {
-                self.mask(to);
-            }
-            self.store_result(result);
         }
+        let Some(routine) = half_routine(opcode, from, to) else {
+            self.refuse("this __fp16 conversion");
+            return;
+        };
+        let args = [Arg::Value(arg)];
+        if to == Type::F128 {
+            self.call_routine(routine, &args, result);
+            return;
+        }
+        self.call_routine_scalar(routine, &args);
+        if to == Type::F64 {
+            // As LLVM widens it: a signaling NaN becomes quiet.
+            self.num(op::F64_PROMOTE_F32);
+        }
+        self.store_result(result);
     }
 
     /// Conversions between `i128` and `f32` or `f64`, through compiler-rt.
