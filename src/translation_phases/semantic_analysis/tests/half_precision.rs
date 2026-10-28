@@ -182,6 +182,8 @@ _Static_assert(T(z + 1.0f) == 2 && T(__real__ z) == 3 && T(-z) == 1, "conversion
 _Static_assert((int)((__real__ (C * C) - 1) * 1048576.0f) == V(2049, 2048), "excess");
 _Static_assert((int)((__real__ (C * C * C) - 1) * 1048576.0f) == V(3075, 3072), "a chain");
 _Static_assert((int)(__real__ (C / (_Complex _Float16)3) * 3072) == 1025, "division");
+_Static_assert(!__builtin_signbit((float)__imag__ (_Complex _Float16)-0x1p0Q), "+0 imaginary");
+_Static_assert(!__builtin_signbit(__imag__ (_Complex double)-0x1p0Q), "from binary128");
 "#;
     for id in [CompilerIdentity::Gcc, CompilerIdentity::Clang] {
         let configuration = identity(id, ExtensionPolicy::Allow).with_gnu_extensions(true);

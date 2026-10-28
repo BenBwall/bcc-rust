@@ -296,6 +296,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
+    /// Whether `ty` is a complex floating type.
+    fn complex_type(&self, ty: TypeId) -> bool {
+        matches!(
+            self.types.nodes[self.types.non_atomic(ty).index],
+            TypeKind::Scalar(scalar) if scalar.complex()
+        )
+    }
+
     /// Whether `ty` is Clang's storage-only `__fp16`.
     pub(super) fn storage_half(&self, ty: TypeId) -> bool {
         matches!(
@@ -440,6 +448,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     .to_integer(signed, bits)
                     .map(|bits_value| Integer::int(bits_value.cast_signed()).cast(bits, signed));
             } else if self.arithmetic(ty) {
+                // A real operand's imaginary part is +0, whatever sign
+                // negating it gave the folded zero (C99 §6.3.1.7p1).
+                let value = if self.complex_type(operand.ty) {
+                    value
+                } else {
+                    Binary128Value::real(value.real)
+                };
                 info.set_floating(self.floating_from_binary128(value, ty));
             }
         }
