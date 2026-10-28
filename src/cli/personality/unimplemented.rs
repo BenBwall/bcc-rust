@@ -79,24 +79,12 @@ fn matches(pattern: &str, option: &str) -> bool {
 /// before the broader lists below.
 const REFUSED: &[(&str, &str)] = &[
     (
-        "-fno-delete-null-pointer-checks",
-        "bcc assumes a dereferenced pointer is not null",
-    ),
-    (
         "-fno-aggressive-loop-optimizations",
         "bcc's optimizer may rely on undefined behavior in loops",
     ),
     (
         "-fno-finite-loops",
         "bcc's optimizer may assume that loops terminate",
-    ),
-    (
-        "-fno-strict-overflow",
-        "bcc assumes that pointer arithmetic does not wrap; -fwrapv makes signed integers wrap",
-    ),
-    (
-        "-fwrapv-pointer",
-        "bcc assumes that pointer arithmetic does not wrap",
     ),
     (
         "-fshort-enums",
@@ -505,9 +493,7 @@ const IGNORED: &[&str] = &[
     "-f[no-]strict-aliasing",
     "-f[no-]struct-path-tbaa",
     "-f[no-]pointer-tbaa",
-    "-fdelete-null-pointer-checks",
     "-faggressive-loop-optimizations",
-    "-fno-wrapv-pointer",
     "-fno-semantic-interposition",
     "-fstrict-bool",
     "-f[no-]assumptions",
@@ -1024,7 +1010,6 @@ mod tests {
             "-fshort-enums",
             "-fexec-charset=latin1",
             "-ffast-math",
-            "-fno-strict-overflow",
             "-fsanitize=address",
             "-fprofile-arcs",
             "-fopenmp",

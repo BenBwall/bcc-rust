@@ -42,6 +42,7 @@ mod code_options;
 pub(crate) mod sections;
 
 pub(crate) use code_options::{
+    CodeAssumptions,
     CodeOptions,
     Relocation,
     TlsModel,

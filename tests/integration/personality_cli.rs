@@ -1090,8 +1090,8 @@ mod tests {
             ),
             (
                 "--clang-mode",
-                "-fno-delete-null-pointer-checks",
-                "clang: error: '-fno-delete-null-pointer-checks' is not supported",
+                "-frounding-math",
+                "clang: error: '-frounding-math' is not supported",
             ),
             (
                 "--tcc-mode",
@@ -2812,6 +2812,71 @@ mod tests {
                 "{mode}"
             );
             assert!(defines(&listing, "FLT_EVAL_METHOD").is_none(), "{mode}");
+        }
+    }
+
+    /// `-fno-delete-null-pointer-checks` marks every function
+    /// `null_pointer_is_valid`, as Clang does, so LLVM keeps a null check
+    /// after a dereference; `-fwrapv-pointer` and `-fno-strict-overflow`
+    /// drop `inbounds` from pointer arithmetic, so it wraps; the last flag
+    /// of each pair wins, and every personality passes them on.
+    #[test]
+    fn pointer_assumptions_reach_llvm() {
+        let directory = Directory::new();
+        directory.write(
+            "p.c",
+            "int f(int *p) { int x = *p; if (!p) return -1; return x; }\nchar *h(char *p, long n) \
+             { return p + n; }\n",
+        );
+        let llvm = |options: &[&str]| {
+            let mut args = vec!["--emit=llvm"];
+            args.extend(options);
+            args.push("p.c");
+            let output = directory.bcc("", &args);
+            succeeds(&output);
+            stdout(&output)
+        };
+        let plain = llvm(&[]);
+        assert!(!plain.contains("null_pointer_is_valid"), "{plain}");
+        assert!(plain.contains("getelementptr inbounds i8"), "{plain}");
+        let null = llvm(&["-fno-delete-null-pointer-checks"]);
+        assert!(
+            null.contains("attributes #0 = { null_pointer_is_valid }"),
+            "{null}"
+        );
+        let restored = llvm(&[
+            "-fno-delete-null-pointer-checks",
+            "-fdelete-null-pointer-checks",
+        ]);
+        assert!(!restored.contains("null_pointer_is_valid"), "{restored}");
+        for options in [&["-fwrapv-pointer"][..], &["-fno-strict-overflow"]] {
+            let wrapping = llvm(options);
+            assert!(
+                wrapping.contains("getelementptr i8"),
+                "{options:?}: {wrapping}"
+            );
+            assert!(!wrapping.contains("inbounds"), "{options:?}: {wrapping}");
+        }
+        let strict = llvm(&["-fno-strict-overflow", "-fstrict-overflow"]);
+        assert!(strict.contains("getelementptr inbounds i8"), "{strict}");
+        // `-fno-strict-overflow` implies `-fwrapv`, as in GCC.
+        directory.write("w.c", "int w(int a) { return a + 1; }\n");
+        let output = directory.bcc("", &["--emit=llvm", "-fno-strict-overflow", "w.c"]);
+        succeeds(&output);
+        assert!(!stdout(&output).contains("add nsw"), "{}", stdout(&output));
+        for mode in ["--gcc-mode", "--clang-mode", "--tcc-mode"] {
+            let output = directory.bcc(
+                mode,
+                &[
+                    "-c",
+                    "-fno-delete-null-pointer-checks",
+                    "-fwrapv-pointer",
+                    "-fno-strict-overflow",
+                    "p.c",
+                ],
+            );
+            succeeds(&output);
+            assert_eq!(stderr(&output), "", "{mode}");
         }
     }
 }

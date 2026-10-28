@@ -130,6 +130,7 @@ pub(super) fn compile(
     }
     let mut context = Context::with_configuration(&tu, args.configuration());
     context.library_builtins = args.library_builtins(&tu);
+    context.code_assumptions = args.code_assumptions();
     if args.driver.header_tree || args.driver.show_includes {
         context.include_entries = Some(ArenaVec::new_in(&tu));
     }

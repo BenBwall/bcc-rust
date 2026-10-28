@@ -54,6 +54,7 @@ impl<'tu> Context<'tu> {
             missing_headers_generated: false,
             generated_headers: ArenaVec::new_in(tu),
             library_builtins: crate::configuration::LibraryBuiltins::All,
+            code_assumptions: crate::target::CodeAssumptions::default(),
             file_system: FileSystem::Host,
             preprocessed_tokens: 0,
             pack_pragmas: ArenaVec::new_in(tu),

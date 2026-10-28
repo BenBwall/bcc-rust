@@ -84,6 +84,7 @@ pub(super) fn declare<'id, 'a, 'm>(
         }
         if function.body.is_some() {
             library_builtins(api, value, module.library_builtins(), arena);
+            null_pointer_validity(api, value, module);
         }
         sections(api, value, function.attributes);
         functions.push(value);
@@ -97,6 +98,7 @@ pub(super) fn declare<'id, 'a, 'm>(
             // The copy's body becomes the external function's, which was
             // declared without one, so it takes the builtin controls here.
             library_builtins(api, value, module.library_builtins(), arena);
+            null_pointer_validity(api, value, module);
             if let Some(keyword) = function.inlining.keyword() {
                 api.attribute(value, FUNCTION_INDEX, keyword, 0, None, false);
             }
@@ -312,6 +314,22 @@ pub(super) fn special_arrays<'id>(
         api.linkage(array, Linkage::Appending);
         api.initializer(array, api.const_array(ptr, &used));
         api.section(array, "llvm.metadata");
+    }
+}
+
+/// Marks a function in which LLVM must not assume that a dereferenced
+/// pointer is non-null, as Clang marks every function under
+/// `-fno-delete-null-pointer-checks`.
+fn null_pointer_validity<'id>(api: &Session<'id>, function: Val<'id>, module: &Module<'_>) {
+    if module.null_pointer_is_valid() {
+        api.attribute(
+            function,
+            FUNCTION_INDEX,
+            "null_pointer_is_valid",
+            0,
+            None,
+            false,
+        );
     }
 }
 

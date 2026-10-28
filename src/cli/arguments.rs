@@ -388,6 +388,22 @@ impl Cli {
         }
     }
 
+    /// What code generation may assume about pointers, each from the last
+    /// flag that sets it, as GCC reads them.
+    pub(super) fn code_assumptions(&self) -> crate::target::CodeAssumptions {
+        let mut assumptions = crate::target::CodeAssumptions::default();
+        for option in &self.language_option {
+            match option.as_str() {
+                | "-fwrapv-pointer" | "-fno-strict-overflow" => assumptions.wrapv_pointer = true,
+                | "-fno-wrapv-pointer" | "-fstrict-overflow" => assumptions.wrapv_pointer = false,
+                | "-fno-delete-null-pointer-checks" => assumptions.null_pointer_is_valid = true,
+                | "-fdelete-null-pointer-checks" => assumptions.null_pointer_is_valid = false,
+                | _ => {},
+            }
+        }
+        assumptions
+    }
+
     /// The last `-fpic`-family flag if it asks for position independence
     /// on the MSVC target, which Clang rejects as unsupported there.
     #[expect(
@@ -570,6 +586,9 @@ enum LanguageFlag {
     Builtins,
     /// A `-fpic`-family flag, which [`Cli::code_options`] reads in order.
     Relocation,
+    /// `-f[no-]wrapv-pointer` or `-f[no-]delete-null-pointer-checks`,
+    /// which [`Cli::code_assumptions`] reads in order.
+    Code,
 }
 
 impl LanguageFlag {
@@ -633,8 +652,14 @@ impl LanguageFlag {
             | "-fno-floatn-types" => return Some(Self::InterchangeFloatTypes(false)),
             | "-trigraphs" | "-ftrigraphs" => return Some(Self::Trigraphs(true)),
             | "-fno-trigraphs" => return Some(Self::Trigraphs(false)),
-            | "-fwrapv" => return Some(Self::Wrapv(true)),
+            // `-f[no-]strict-overflow` also sets the pointer option, which
+            // `Cli::code_assumptions` reads.
+            | "-fwrapv" | "-fno-strict-overflow" => return Some(Self::Wrapv(true)),
             | "-fno-wrapv" | "-fstrict-overflow" => return Some(Self::Wrapv(false)),
+            | "-fwrapv-pointer"
+            | "-fno-wrapv-pointer"
+            | "-fdelete-null-pointer-checks"
+            | "-fno-delete-null-pointer-checks" => return Some(Self::Code),
             | "-fbuiltin" | "-fno-builtin" => return Some(Self::Builtins),
             | "-fpack-struct" => return Some(Self::PackAll(true)),
             | "-fno-pack-struct" => return Some(Self::PackAll(false)),
@@ -693,8 +718,11 @@ impl LanguageFlag {
 
     fn apply(self, configuration: CompilerConfiguration) -> CompilerConfiguration {
         match self {
-            | Self::UnknownWarning | Self::ExtraWarnings | Self::Relocation | Self::Builtins =>
-                configuration,
+            | Self::UnknownWarning
+            | Self::ExtraWarnings
+            | Self::Relocation
+            | Self::Code
+            | Self::Builtins => configuration,
             | Self::AllWarnings(enabled) => configuration.with_warning_option(
                 DiagnosticGroup::UnusedFunction,
                 WarningOption::Enable(enabled),
