@@ -14,17 +14,21 @@
 
 mod front_end;
 
+// Only the compiler Worker builds these, from the compiler's output.
+#[cfg(feature = "compiler")]
 pub use front_end::{
     Conditional,
     Definition,
     Directive,
-    Expansion,
     ExpansionStep,
+    SourceChange,
+};
+pub use front_end::{
+    Expansion,
     Include,
     LogicalLine,
     OutputLine,
     Preprocessing,
-    SourceChange,
     is_folded,
     line_labels,
 };

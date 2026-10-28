@@ -16,6 +16,8 @@
 //! replacement, §6.10.3 paragraphs 9-10, p. 152; PDF p. 164; rescanning,
 //! §6.10.3.4 paragraph 1, p. 155; PDF p. 167.
 
+use std::alloc::Layout;
+
 use super::{
     super::{
         Expander,
@@ -29,7 +31,7 @@ use crate::{
         Context,
         SourceVector,
         SourceVectors,
-        TranslationPhase,
+        preprocessing::macro_expansion::FunctionLikeMacroArgument,
         preprocessor_tokenizer::{
             PreprocessorToken,
             PreprocessorTokenType,
@@ -38,7 +40,6 @@ use crate::{
     },
     util::{
         bump::{
-            ArenaString,
             ArenaVec,
             Bump,
         },
@@ -46,9 +47,10 @@ use crate::{
     },
 };
 
-/// One thing phase 4 did. Spellings are interned; places are physical
-/// source segments, which outlive the provenance compaction between output
-/// tokens.
+/// One thing phase 4 did. Names and token spellings are the interned
+/// ones phase 4 already holds; what the trace spells itself (arguments, a
+/// header name) is in the trace's own arena. Places are physical source
+/// segments, which outlive the provenance compaction between output tokens.
 #[derive(Debug, Clone)]
 pub(crate) enum TraceEvent<'pp> {
     /// `#define` stored a macro definition.
@@ -81,8 +83,8 @@ pub(crate) enum TraceEvent<'pp> {
         depth:     u32,
         /// For a function-like macro, each parameter and the argument it
         /// stands for, spelled as written with each run of whitespace as one
-        /// space.
-        arguments: Option<&'pp [(StringCacheId, StringCacheId)]>,
+        /// space; a spelling longer than 160 bytes is cut and ends in `…`.
+        arguments: Option<&'pp [(StringCacheId, &'pp str)]>,
         /// Whether the name was read from an argument of an enclosing
         /// replacement, which is macro-replaced before it is substituted.
         /// C99: §6.10.3.1 paragraph 1, p. 153; PDF p. 165.
@@ -153,16 +155,17 @@ pub(crate) enum TraceEvent<'pp> {
         /// group are skipped without it.
         evaluated: bool,
     },
-    /// The physical lines of a group that was skipped, both inclusive, in
-    /// its physical file, which `#line` does not change.
+    /// A group that was skipped, in its physical file, which `#line` does
+    /// not change: from byte `after` (or from the line after it unless
+    /// `at_line_start`) through the line before byte `until`, where the
+    /// directive ending the group starts, or through the end of the file.
     /// C99: §6.10.1 paragraph 6, p. 149; PDF p. 161.
     Skipped {
-        file:       u32,
-        first_line: u32,
-        last_line:  u32,
+        file:          u32,
+        after:         usize,
+        at_line_start: bool,
+        until:         Option<usize>,
     },
-    /// The trace stopped here: it holds [`MAX_TRACE_EVENTS`] events.
-    Truncated,
     /// `#include` named a header, which was found as `file` or not at all.
     /// C99: §6.10.2 paragraphs 2-4, pp. 149-150; PDF pp. 161-162.
     Included {
@@ -170,17 +173,45 @@ pub(crate) enum TraceEvent<'pp> {
         /// The header name in the directive, delimiters included, when it
         /// is written in one place.
         name:      Option<SourceVector>,
-        header:    StringCacheId,
+        header:    &'pp str,
         angled:    bool,
         file:      Option<u32>,
     },
 }
 
-/// The most events a trace records. The trace lives in the preprocessing
-/// arena, beside the files and macros, and a macro expansion that multiplies
-/// its input can make any number of events, so the trace stops before it
-/// could fill that arena (one fixed region in WebAssembly).
+/// Why and where a trace stopped short: it ran out of its budget of bytes
+/// or reached [`MAX_TRACE_EVENTS`], and records nothing after.
+#[derive(Debug, Clone)]
+pub(crate) struct Truncated {
+    /// The top-level replacement the trace holds only in part, if the trace
+    /// stopped inside one or as one began.
+    pub(crate) expansion: Option<Unfinished>,
+}
+
+/// A top-level replacement whose events the trace holds only in part.
+#[derive(Debug, Clone)]
+pub(crate) struct Unfinished {
+    /// The replaced macro name.
+    pub(crate) name:      StringCacheId,
+    /// The invocation, as in [`TraceEvent::Invoked`].
+    pub(crate) expansion: SourceVector,
+    pub(crate) end:       SourceVector,
+    pub(crate) directive: bool,
+    /// Whether the trace holds its start, so the expansion is open: it
+    /// stopped while the replacement was read rather than as it began.
+    pub(crate) open:      bool,
+}
+
+/// The most events a trace records. A macro expansion that multiplies its
+/// input can make any number of them, and each becomes part of the
+/// explorer's account.
 pub(crate) const MAX_TRACE_EVENTS: usize = 50_000;
+
+/// The most bytes a trace takes from its arena, all told: the event vector
+/// at each size it grows to, argument lists, and spellings. It is a quarter
+/// of a WebAssembly region (`util::vm::REGION_BYTES`), so the trace's arena
+/// never fills, and it is apart from every arena phase 4 itself uses.
+const TRACE_BYTES: usize = 8 << 20;
 
 /// The most bytes of one argument a trace spells; a longer argument is cut
 /// and ends in `…`. Nested invocations each spell what is left of their
@@ -188,41 +219,42 @@ pub(crate) const MAX_TRACE_EVENTS: usize = 50_000;
 /// the square of its depth.
 const MAX_ARGUMENT_BYTES: usize = 160;
 
-/// The most bytes of arguments a trace spells, all told; past it the trace
-/// stops as it does at [`MAX_TRACE_EVENTS`]. The spellings are interned, so
-/// they stay for the rest of the compilation.
-const MAX_SPELLED_BYTES: usize = 1 << 20;
-
-/// What phase 4 did, as far as it was recorded, and what recording it
-/// spent. Recording stops (with [`TraceEvent::Truncated`]) before it could
-/// fill an arena, so tracing never makes a program fail that compiles
-/// without it.
+/// What phase 4 did, as far as it was recorded. Every byte the trace keeps
+/// comes from its own arena and is charged to [`TRACE_BYTES`] before it is
+/// allocated; when a charge or an allocation fails, the trace stops
+/// ([`Truncated`]) and phase 4 goes on unrecorded, so tracing never makes a
+/// program fail that compiles without it. Reading an argument to spell it
+/// allocates nothing.
 pub(in crate::translation_phases::preprocessing) struct Trace<'pp> {
-    events:  ArenaVec<'pp, TraceEvent<'pp>>,
-    /// Bytes of arguments spelled so far.
-    spelled: usize,
-    /// Whether the trace stopped.
-    full:    bool,
+    arena:     &'pp Bump,
+    events:    ArenaVec<'pp, TraceEvent<'pp>>,
+    /// Bytes the trace may still take from `arena`.
+    budget:    usize,
+    truncated: Option<Truncated>,
 }
 
 impl<'pp> Preprocessor<'_, 'pp> {
-    /// Starts recording a trace; call it before preprocessing.
-    pub(crate) fn record_trace(&mut self) {
-        let state = &mut self.resting_mut().state;
-        state.trace = Some(Trace {
-            events:  ArenaVec::new_in(state.arena),
-            spelled: 0,
-            full:    false,
+    /// Starts recording a trace in `arena`, which holds nothing else; call
+    /// it before preprocessing.
+    pub(crate) fn record_trace(&mut self, arena: &'pp Bump) {
+        self.resting_mut().state.trace = Some(Trace {
+            arena,
+            events: ArenaVec::new_in(arena),
+            budget: TRACE_BYTES,
+            truncated: None,
         });
     }
 
-    /// What phase 4 did so far, if it was recorded.
-    pub(crate) fn trace(&mut self) -> &[TraceEvent<'pp>] {
+    /// What phase 4 did so far, if it was recorded, and where the trace
+    /// stopped short, if it did.
+    pub(crate) fn trace(&mut self) -> (&[TraceEvent<'pp>], Option<&Truncated>) {
         self.resting_mut()
             .state
             .trace
             .as_ref()
-            .map_or(&[], |trace| &trace.events)
+            .map_or((&[], None), |trace| {
+                (&trace.events, trace.truncated.as_ref())
+            })
     }
 }
 
@@ -233,7 +265,10 @@ impl<'pp> Expander<'_, '_, 'pp, '_> {
     pub(in crate::translation_phases::preprocessing) fn tracing(&self) -> bool {
         // Once truncated, the trace records nothing more, so nothing more is
         // spelled or allocated for it.
-        self.state.trace.as_ref().is_some_and(|trace| !trace.full)
+        self.state
+            .trace
+            .as_ref()
+            .is_some_and(|trace| trace.truncated.is_none())
     }
 
     #[inline(never)]
@@ -246,11 +281,14 @@ impl<'pp> Expander<'_, '_, 'pp, '_> {
             .context
             .first_source_vector_or_default(name.source_vectors);
         let name = name.identifier_id(self.context);
-        self.push_trace(TraceEvent::Defined {
-            name,
-            at,
-            function_like,
-        });
+        self.push_trace(
+            TraceEvent::Defined {
+                name,
+                at,
+                function_like,
+            },
+            None,
+        );
     }
 
     #[inline(never)]
@@ -262,7 +300,7 @@ impl<'pp> Expander<'_, '_, 'pp, '_> {
             .context
             .first_source_vector_or_default(name.source_vectors);
         let name = name.identifier_id(self.context);
-        self.push_trace(TraceEvent::Undefined { name, at });
+        self.push_trace(TraceEvent::Undefined { name, at }, None);
     }
 
     /// Records the replacement `frame` is about to start, before it is
@@ -272,50 +310,36 @@ impl<'pp> Expander<'_, '_, 'pp, '_> {
         &mut self,
         frame: &TokenizerFrame<'_>,
     ) {
-        let (name, expansion, end, arguments) = match &frame.frame_type {
+        let (name, invocation, end, arguments) = match &frame.frame_type {
             | TokenizerFrameType::ObjectLikeMacroInvocation {
                 name,
                 invocation,
                 invocation_end,
                 ..
-            } => (*name, invocation.clone(), invocation_end.clone(), None),
+            } => (*name, invocation, invocation_end, None),
             | TokenizerFrameType::FunctionLikeMacroInvocation {
                 name,
                 invocation,
                 invocation_end,
                 arguments,
                 ..
-            } => {
-                let arena = self.state.arena;
-                let mut spelled = ArenaVec::with_capacity_in(arguments.len(), arena);
-                let mut bytes = 0;
-                for argument in *arguments {
-                    // An argument read from its invocation ends with the
-                    // call's closing parenthesis.
-                    let (spelling, length) = spell_argument(
-                        self.context,
-                        self.scratch,
-                        argument.tokenizer.clone(),
-                        !argument.substituted,
-                    );
-                    bytes += length;
-                    spelled.push((argument.name, spelling));
-                }
-                if let Some(trace) = &mut self.state.trace {
-                    trace.spelled += bytes;
-                    if trace.spelled > MAX_SPELLED_BYTES {
-                        trace.stop();
-                        return;
-                    }
-                }
-                (
-                    *name,
-                    invocation.clone(),
-                    invocation_end.clone(),
-                    Some(&*spelled.leak()),
-                )
-            },
+            } => (*name, invocation, invocation_end, Some(*arguments)),
             | _ => return,
+        };
+        let starting = Unfinished {
+            name,
+            expansion: invocation.clone(),
+            end: end.clone(),
+            directive: self.state.in_directive,
+            open: false,
+        };
+        let arguments = match arguments.map(|arguments| self.spell_arguments(arguments)) {
+            | None => None,
+            | Some(Some(spelled)) => Some(spelled),
+            | Some(None) => {
+                self.stop_trace(Some(starting));
+                return;
+            },
         };
         let depth = self.replacement_depth();
         // A nested replacement belongs to the outermost one being read,
@@ -323,18 +347,39 @@ impl<'pp> Expander<'_, '_, 'pp, '_> {
         // invocation around it only up to an argument's boundary.
         let expansion = self
             .replacement()
-            .map_or(expansion, |(outermost, _)| outermost);
+            .map_or_else(|| invocation.clone(), |(outermost, _)| outermost);
         let prescan = self.reading_argument();
         let directive = self.state.in_directive;
-        self.push_trace(TraceEvent::Invoked {
-            name,
-            expansion,
-            end,
-            depth,
-            arguments,
-            prescan,
-            directive,
-        });
+        self.push_trace(
+            TraceEvent::Invoked {
+                name,
+                expansion,
+                end: end.clone(),
+                depth,
+                arguments,
+                prescan,
+                directive,
+            },
+            Some(starting),
+        );
+    }
+
+    /// Each argument under its parameter's name, spelled into the trace's
+    /// arena, or `None` once the trace's budget is spent.
+    fn spell_arguments(
+        &mut self,
+        arguments: &[FunctionLikeMacroArgument<'_>],
+    ) -> Option<&'pp [(StringCacheId, &'pp str)]> {
+        let context = &*self.context;
+        let trace = self.state.trace.as_mut()?;
+        let mut spelled = trace.vec_with_capacity(arguments.len())?;
+        for argument in arguments {
+            // An argument read from its invocation ends with the call's
+            // closing parenthesis.
+            let spelling = Spelling::of(context, &argument.tokenizer, !argument.substituted);
+            spelled.push((argument.name, trace.copy_str(spelling.as_str())?));
+        }
+        Some(spelled.leak())
     }
 
     /// Records that the predefined macro `token` names became `result`.
@@ -352,15 +397,26 @@ impl<'pp> Expander<'_, '_, 'pp, '_> {
         let directive = self.state.in_directive;
         let depth = self.replacement_depth();
         let prescan = self.reading_argument();
-        self.push_trace(TraceEvent::Builtin {
+        // Outside a replacement, the builtin is an expansion of its own.
+        let starting = expansion.is_none().then(|| Unfinished {
             name,
-            at,
-            expansion,
-            depth,
-            prescan,
-            result: result.map(|token| token.contents),
+            expansion: at.clone(),
+            end: at.clone(),
             directive,
+            open: false,
         });
+        self.push_trace(
+            TraceEvent::Builtin {
+                name,
+                at,
+                expansion,
+                depth,
+                prescan,
+                result: result.map(|token| token.contents),
+                directive,
+            },
+            starting,
+        );
     }
 
     /// Records the directive whose name is `name`.
@@ -372,10 +428,13 @@ impl<'pp> Expander<'_, '_, 'pp, '_> {
         let at = self
             .context
             .first_source_vector_or_default(name.source_vectors);
-        self.push_trace(TraceEvent::Directive {
-            name: name.contents,
-            at,
-        });
+        self.push_trace(
+            TraceEvent::Directive {
+                name: name.contents,
+                at,
+            },
+            None,
+        );
     }
 
     #[inline(never)]
@@ -384,12 +443,16 @@ impl<'pp> Expander<'_, '_, 'pp, '_> {
         result: PreprocessorToken,
     ) {
         if let Some((expansion, macro_name)) = self.replacement() {
-            self.push_trace(TraceEvent::Stringified {
-                expansion,
-                depth: self.replacement_depth(),
-                macro_name,
-                result: result.contents,
-            });
+            let depth = self.replacement_depth();
+            self.push_trace(
+                TraceEvent::Stringified {
+                    expansion,
+                    depth,
+                    macro_name,
+                    result: result.contents,
+                },
+                None,
+            );
         }
     }
 
@@ -401,14 +464,18 @@ impl<'pp> Expander<'_, '_, 'pp, '_> {
         result: Option<PreprocessorToken>,
     ) {
         if let Some((expansion, macro_name)) = self.replacement() {
-            self.push_trace(TraceEvent::Pasted {
-                expansion,
-                depth: self.replacement_depth(),
-                macro_name,
-                left: left.contents,
-                right: right.contents,
-                result: result.map(|token| token.contents),
-            });
+            let depth = self.replacement_depth();
+            self.push_trace(
+                TraceEvent::Pasted {
+                    expansion,
+                    depth,
+                    macro_name,
+                    left: left.contents,
+                    right: right.contents,
+                    result: result.map(|token| token.contents),
+                },
+                None,
+            );
         }
     }
 
@@ -432,12 +499,15 @@ impl<'pp> Expander<'_, '_, 'pp, '_> {
                 .and_then(|text| text.as_bytes().get((vector.index as usize).checked_sub(1)?))
                 .is_some_and(u8::is_ascii_whitespace)
         });
-        self.push_trace(TraceEvent::Produced {
-            expansion,
-            spelling: token.contents,
-            spelled,
-            white_before,
-        });
+        self.push_trace(
+            TraceEvent::Produced {
+                expansion,
+                spelling: token.contents,
+                spelled,
+                white_before,
+            },
+            None,
+        );
     }
 
     #[inline(never)]
@@ -448,18 +518,20 @@ impl<'pp> Expander<'_, '_, 'pp, '_> {
         evaluated: bool,
     ) {
         let directive = self.context.first_source_vector_or_default(directive);
-        self.push_trace(TraceEvent::Condition {
-            directive,
-            taken,
-            evaluated,
-        });
+        self.push_trace(
+            TraceEvent::Condition {
+                directive,
+                taken,
+                evaluated,
+            },
+            None,
+        );
     }
 
-    /// Records the lines of `file` (a source file index, which `#line` may
-    /// have renamed) that a skip passed over: from byte `after`, or from
-    /// the line after it unless `at_line_start`, through the line before the
-    /// byte `until` that starts the directive ending the group, or through
-    /// the end of the file. Lines are physical, as an editor counts them.
+    /// Records that a skip passed over `file` (a source file index, which
+    /// `#line` may have renamed) from byte `after`, or from the line after
+    /// it unless `at_line_start`, up to the byte `until` that starts the
+    /// directive ending the group, or to the end of the file.
     #[inline(never)]
     pub(in crate::translation_phases::preprocessing) fn trace_skipped(
         &mut self,
@@ -467,26 +539,16 @@ impl<'pp> Expander<'_, '_, 'pp, '_> {
         (after, at_line_start): (usize, bool),
         until: Option<usize>,
     ) {
-        let physical = self.context.physical_source_file(file);
-        let line = |offset: usize| self.context.physical_position(physical, offset);
-        let Some((start, _)) = line(after) else {
-            return;
-        };
-        let first_line = if at_line_start { start } else { start + 1 };
-        let last_line = match until {
-            | Some(until) => line(until).map(|(line, _)| line.saturating_sub(1)),
-            | None => {
-                let length = self.context.source_text(physical).map_or(0, str::len);
-                line(length).map(|(line, column)| if column == 1 { line - 1 } else { line })
+        let file = self.context.physical_source_file(file);
+        self.push_trace(
+            TraceEvent::Skipped {
+                file,
+                after,
+                at_line_start,
+                until,
             },
-        };
-        if let Some(last_line) = last_line.filter(|&last| last >= first_line) {
-            self.push_trace(TraceEvent::Skipped {
-                file: physical,
-                first_line,
-                last_line,
-            });
-        }
+            None,
+        );
     }
 
     #[inline(never)]
@@ -510,14 +572,25 @@ impl<'pp> Expander<'_, '_, 'pp, '_> {
                 }),
             | _ => None,
         };
-        let header = self.context.string_cache.intern(header);
-        self.push_trace(TraceEvent::Included {
-            directive,
-            name,
-            header,
-            angled,
-            file,
-        });
+        let Some(header) = self
+            .state
+            .trace
+            .as_mut()
+            .and_then(|trace| trace.copy_str(header))
+        else {
+            self.stop_trace(None);
+            return;
+        };
+        self.push_trace(
+            TraceEvent::Included {
+                directive,
+                name,
+                header,
+                angled,
+                file,
+            },
+            None,
+        );
     }
 
     /// The outermost replacement being read, by the place of its
@@ -549,28 +622,108 @@ impl<'pp> Expander<'_, '_, 'pp, '_> {
         u32::try_from(depth).unwrap_or(u32::MAX)
     }
 
-    /// Records `event`, unless the trace already holds
-    /// [`MAX_TRACE_EVENTS`]; the first event past that is recorded as
-    /// [`TraceEvent::Truncated`].
-    fn push_trace(&mut self, event: TraceEvent<'pp>) {
-        if let Some(trace) = self.state.trace.as_mut().filter(|trace| !trace.full) {
-            if trace.events.len() < MAX_TRACE_EVENTS {
-                trace.events.push(event);
-            } else {
-                trace.stop();
-            }
+    /// Records `event`, or stops the trace if it has no room for it. The
+    /// replacement `event` starts, if any, is `starting`.
+    fn push_trace(&mut self, event: TraceEvent<'pp>, starting: Option<Unfinished>) {
+        if let Some(trace) = self.state.trace.as_mut()
+            && trace.truncated.is_none()
+            && !trace.record(event)
+        {
+            self.stop_trace(starting);
+        }
+    }
+
+    /// Stops the trace, which then records, spells and allocates nothing
+    /// more. The replacement it holds only in part is the outermost one
+    /// being read, or else `starting`, the one that was about to begin.
+    #[cold]
+    #[inline(never)]
+    fn stop_trace(&mut self, starting: Option<Unfinished>) {
+        let open = self
+            .tokenizer_stack
+            .iter()
+            .find_map(|frame| match &frame.frame_type {
+                | TokenizerFrameType::ObjectLikeMacroInvocation {
+                    name,
+                    invocation,
+                    invocation_end,
+                    ..
+                }
+                | TokenizerFrameType::FunctionLikeMacroInvocation {
+                    name,
+                    invocation,
+                    invocation_end,
+                    ..
+                } => Some(Unfinished {
+                    name:      *name,
+                    expansion: invocation.clone(),
+                    end:       invocation_end.clone(),
+                    directive: self.state.in_directive,
+                    open:      true,
+                }),
+                | _ => None,
+            });
+        if let Some(trace) = self
+            .state
+            .trace
+            .as_mut()
+            .filter(|trace| trace.truncated.is_none())
+        {
+            trace.truncated = Some(Truncated {
+                expansion: open.or(starting),
+            });
         }
     }
 }
 
-impl Trace<'_> {
-    /// Ends the trace with [`TraceEvent::Truncated`]; nothing more is
-    /// recorded, spelled or allocated for it.
-    fn stop(&mut self) {
-        if !self.full {
-            self.events.push(TraceEvent::Truncated);
-            self.full = true;
+impl<'pp> Trace<'pp> {
+    /// Records `event`, unless the trace holds [`MAX_TRACE_EVENTS`] or
+    /// cannot afford a larger vector.
+    fn record(&mut self, event: TraceEvent<'pp>) -> bool {
+        let length = self.events.len();
+        if length == self.events.capacity() {
+            let capacity = (length * 2).clamp(64, MAX_TRACE_EVENTS);
+            if length == MAX_TRACE_EVENTS
+                || !Layout::array::<TraceEvent<'_>>(capacity)
+                    .is_ok_and(|layout| self.charge(layout))
+                || self.events.try_reserve_exact(capacity - length).is_err()
+            {
+                return false;
+            }
         }
+        self.events.push(event);
+        true
+    }
+
+    /// An empty vector with room for `capacity` values, charged to the
+    /// budget, or `None` if the budget or the arena cannot hold it.
+    fn vec_with_capacity<T>(&mut self, capacity: usize) -> Option<ArenaVec<'pp, T>> {
+        let mut values = ArenaVec::new_in(self.arena);
+        if capacity != 0 {
+            if !self.charge(Layout::array::<T>(capacity).ok()?) {
+                return None;
+            }
+            values.try_reserve_exact(capacity).ok()?;
+        }
+        Some(values)
+    }
+
+    /// `text` copied into the trace's arena, as for
+    /// [`Trace::vec_with_capacity`].
+    fn copy_str(&mut self, text: &str) -> Option<&'pp str> {
+        let mut bytes = self.vec_with_capacity(text.len())?;
+        bytes.extend_from_slice(text.as_bytes());
+        std::str::from_utf8(bytes.leak()).ok()
+    }
+
+    /// Takes room for a block of `layout` from the budget, with the most
+    /// padding aligning it can add, if the budget has that much left.
+    fn charge(&mut self, layout: Layout) -> bool {
+        let cost = layout.size().saturating_add(layout.align());
+        self.budget
+            .checked_sub(cost)
+            .map(|left| self.budget = left)
+            .is_some()
     }
 }
 
@@ -587,64 +740,99 @@ fn invocation<'f>(frame: &'f TokenizerFrame<'_>) -> Option<(&'f SourceVector, St
     }
 }
 
-/// The argument `tokens` replays, spelled with each run of whitespace as one
-/// space and none at either end, as `#` would spell it without the quotes,
-/// and how many bytes that took. With `closing`, the replay ends with the
-/// call's closing parenthesis, which is not part of the argument. Spelling
-/// stops after [`MAX_ARGUMENT_BYTES`], so it reads no more of a long
-/// argument than it spells.
-fn spell_argument(
-    context: &mut Context<'_>,
-    scratch: &Bump,
-    mut tokens: TokenSource<'_>,
-    closing: bool,
-) -> (StringCacheId, usize) {
-    let mut text = ArenaString::new_in(scratch);
-    let mut space = false;
-    let mut append = |context: &Context<'_>,
-                      text: &mut ArenaString<'_>,
-                      token: PreprocessorToken| match token.kind {
-        | PreprocessorTokenType::Whitespace | PreprocessorTokenType::Newline => {
-            space = !text.is_empty();
-        },
-        | PreprocessorTokenType::Placeholder => {},
-        | _ => {
-            if std::mem::take(&mut space) {
-                text.push(' ');
+/// Appended to an argument's spelling where it is cut.
+const CUT: &str = " …";
+
+/// An argument spelled with each run of whitespace as one space and none at
+/// either end, as `#` would spell it without the quotes, cut after
+/// [`MAX_ARGUMENT_BYTES`]. It is spelled in place, so spelling allocates
+/// nothing.
+struct Spelling {
+    bytes: [u8; MAX_ARGUMENT_BYTES + CUT.len()],
+    len:   usize,
+    cut:   bool,
+}
+
+impl Spelling {
+    /// Spells the argument left in `tokens`, without reading them: nothing
+    /// is reported and no provenance is recorded. With `closing`, the
+    /// tokens end with the call's closing parenthesis, which is not part of
+    /// the argument. Spelling stops where it is cut, so it reads no more of
+    /// a long argument than it spells.
+    fn of(context: &Context<'_>, tokens: &TokenSource<'_>, closing: bool) -> Self {
+        let mut spelling = Self {
+            bytes: [0; MAX_ARGUMENT_BYTES + CUT.len()],
+            len:   0,
+            cut:   false,
+        };
+        let mut space = false;
+        // Each token is spelled once the next is read, so the last one, the
+        // closing parenthesis, can be left out.
+        let mut pending = None;
+        for token in tokens.spellings() {
+            if let Some(previous) = pending.replace(token) {
+                spelling.append(context, previous, &mut space);
+                if spelling.cut {
+                    return spelling;
+                }
             }
-            text.push_str(
-                context
-                    .string_cache
-                    .at(token.contents)
-                    .trim_end_matches('\0'),
-            );
-        },
-    };
-    // Each token is spelled once the next is read, so the last one, the
-    // closing parenthesis, can be left out.
-    let mut pending = None;
-    while let Some(token) = tokens.next_item(context) {
-        if let Some(previous) = pending.replace(token) {
-            append(context, &mut text, previous);
         }
-        if text.len() >= MAX_ARGUMENT_BYTES {
-            // One long token, such as a string literal, is cut too.
-            let mut cut = MAX_ARGUMENT_BYTES;
-            while !text.is_char_boundary(cut) {
-                cut -= 1;
-            }
-            let mut shown = ArenaString::new_in(scratch);
-            shown.push_str(&text[..cut]);
-            shown.push_str(" …");
-            let length = shown.len();
-            return (context.string_cache.intern(&*shown), length);
+        if let Some(last) = pending
+            && !(closing && last.0 == PreprocessorTokenType::ClosingParenthesis)
+        {
+            spelling.append(context, last, &mut space);
+        }
+        spelling
+    }
+
+    fn append(
+        &mut self,
+        context: &Context<'_>,
+        (kind, contents): (PreprocessorTokenType, StringCacheId),
+        space: &mut bool,
+    ) {
+        match kind {
+            | PreprocessorTokenType::Whitespace | PreprocessorTokenType::Newline => {
+                *space = self.len != 0;
+            },
+            | PreprocessorTokenType::Placeholder => {},
+            | _ => {
+                if std::mem::take(space) {
+                    self.push(" ");
+                }
+                self.push(context.string_cache.at(contents).trim_end_matches('\0'));
+            },
         }
     }
-    if let Some(last) = pending
-        && !(closing && last.kind == PreprocessorTokenType::ClosingParenthesis)
-    {
-        append(context, &mut text, last);
+
+    /// Appends `text`, or as much of it as fits, cut at a character
+    /// boundary and followed by [`CUT`].
+    fn push(&mut self, text: &str) {
+        if self.cut {
+            return;
+        }
+        let mut length = text.len();
+        let room = MAX_ARGUMENT_BYTES - self.len;
+        if length > room {
+            length = room;
+            while !text.is_char_boundary(length) {
+                length -= 1;
+            }
+            self.cut = true;
+        }
+        self.bytes[self.len..self.len + length].copy_from_slice(&text.as_bytes()[..length]);
+        self.len += length;
+        if self.cut {
+            while self.len > 0 && self.bytes[self.len - 1] == b' ' {
+                self.len -= 1;
+            }
+            self.bytes[self.len..self.len + CUT.len()].copy_from_slice(CUT.as_bytes());
+            self.len += CUT.len();
+        }
     }
-    let length = text.len();
-    (context.string_cache.intern(&*text), length)
+
+    fn as_str(&self) -> &str {
+        // Only whole characters are copied.
+        std::str::from_utf8(&self.bytes[..self.len]).unwrap_or_default()
+    }
 }

@@ -74,7 +74,10 @@ pub(super) use frames::{
 pub(super) use lifecycle::Resting;
 pub(crate) use text_output::ReadAt;
 use trace::Trace;
-pub(crate) use trace::TraceEvent;
+pub(crate) use trace::{
+    TraceEvent,
+    Truncated,
+};
 
 use super::{
     conditional::ConditionalGroup,

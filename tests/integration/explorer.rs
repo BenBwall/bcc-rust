@@ -857,6 +857,80 @@ mod tests {
     }
 
     #[test]
+    fn a_trace_that_stops_as_an_expansion_begins_lists_that_one_as_partial() {
+        // An empty replacement is one event, so the trace stops as an
+        // invocation in the source begins rather than inside one.
+        let source = format!("#define E\n{}", "E\n".repeat(60_000));
+        let trace = trace_of(&source);
+        assert!(trace.truncated);
+        let [.., complete, last] = &trace.expansions[..] else {
+            panic!("{} expansions", trace.expansions.len());
+        };
+        assert!(!complete.partial);
+        assert!(last.partial && last.steps.is_empty());
+        assert_eq!(
+            (last.invocation.as_str(), last.line),
+            ("E", complete.line + 1)
+        );
+        let partial = trace.expansions.iter().filter(|e| e.partial).count();
+        assert_eq!(partial, 1);
+    }
+
+    #[test]
+    fn an_argument_is_cut_only_past_its_limit() {
+        let fits = "a".repeat(160);
+        let over = "a".repeat(161);
+        let wide = "é".repeat(81);
+        let source = format!(
+            "#define F(x) 0\nint a = F({fits});\nint b = F({over});\nint c = F(u8\"{wide}\");\n"
+        );
+        let trace = trace_of(&source);
+        let arguments: Vec<&str> = trace
+            .expansions
+            .iter()
+            .map(|expansion| expansion.steps[0].arguments[0].argument.as_str())
+            .collect();
+        assert_eq!(
+            arguments,
+            [
+                fits.clone(),
+                format!("{fits} …"),
+                format!("u8\"{} …", "é".repeat(78)),
+            ]
+        );
+    }
+
+    #[test]
+    fn tracing_changes_nothing_but_the_trace() {
+        let blow_up = "#define A 0,0,0,\n#define B A A A A A A A A A A\n#define C B B B B B B B B \
+                       B B\n#define D C C C C C C C C C C\n#define E D D D D D D D D D D\nint a[] \
+                       = {E 0};\n";
+        let nested = format!(
+            "#define F(x) x\nint x={}1{};\n",
+            "F(".repeat(400),
+            ")".repeat(400)
+        );
+        for source in [blow_up, &nested, "int main(void) { return 1 +; }\n"] {
+            let traced = compile(source, &options(false));
+            let untraced = compile(
+                source,
+                &ExplorerOptions {
+                    trace: false,
+                    ..options(false)
+                },
+            );
+            assert!(traced.preprocessing.is_some() && untraced.preprocessing.is_none());
+            assert_eq!(
+                ExplorerOutput {
+                    preprocessing: None,
+                    ..traced
+                },
+                untraced
+            );
+        }
+    }
+
+    #[test]
     fn each_skipped_group_is_traced_with_its_own_lines() {
         let source = "#if 0\na\n#elif 0\nb\n#elif 1\nc\n#else\nd\n#endif\n";
         let trace = compile(source, &options(false)).preprocessing.unwrap();

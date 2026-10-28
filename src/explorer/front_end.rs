@@ -61,6 +61,7 @@ use crate::{
         TextWriter,
         describe_token,
         with_preprocessor,
+        with_traced_preprocessor,
         would_paste,
     },
     translation_phases::{
@@ -68,7 +69,10 @@ use crate::{
         SourcePosition,
         SourceVector,
         TranslationPhase,
-        preprocessing::TraceEvent,
+        preprocessing::{
+            TraceEvent,
+            Truncated,
+        },
         preprocessor_tokenizer::{
             PreprocessorTokenType,
             RemapKind,
@@ -88,7 +92,7 @@ pub(super) struct FrontEnd {
     pub(super) pp_tokens:          Vec<ExplorerPpToken>,
     pub(super) preprocessed:       String,
     pub(super) preprocessed_lines: Vec<ExplorerOutputLine>,
-    pub(super) preprocessing:      ExplorerPreprocessing,
+    pub(super) preprocessing:      Option<ExplorerPreprocessing>,
     pub(super) tokens:             String,
 }
 
@@ -340,9 +344,9 @@ fn pp_token_kind(kind: PreprocessorTokenType) -> &'static str {
     }
 }
 
-/// Phase 4 alone, with the trace on: the text phase 4 leaves (adjacent
-/// strings still apart, each token spelled as written) as `-E` lays it
-/// out, where each of its lines came from, what phase 4 did, and the byte
+/// Phase 4 alone: the text phase 4 leaves (adjacent strings still apart,
+/// each token spelled as written) as `-E` lays it out, where each of its
+/// lines came from and, with the trace on, what phase 4 did and the byte
 /// ranges of the main file's header names.
 fn phase_four(
     source: &str,
@@ -351,9 +355,11 @@ fn phase_four(
 ) -> (
     String,
     Vec<ExplorerOutputLine>,
-    ExplorerPreprocessing,
+    Option<ExplorerPreprocessing>,
     Vec<Range<usize>>,
 ) {
+    // The trace's own arena, which no compilation stage shares.
+    let trace_arena = Bump::new();
     let tu = Bump::new();
     let source = tu.alloc_str(source);
     let mut context = new_context(&tu, configuration, options);
@@ -369,13 +375,13 @@ fn phase_four(
     let mut lines = OutputLines::default();
     // Each token is written as it is read, with its provenance still live,
     // so a large source keeps no token array.
-    let (preprocessing, header_names) = with_preprocessor(
+    let traced = with_traced_preprocessor(
         &mut context,
         Path::new(INPUT),
         source,
         header_search(&tu, options),
-        |mut preprocessor, context, _pp| {
-            preprocessor.record_trace();
+        options.trace.then_some(&trace_arena),
+        |mut preprocessor, context| {
             preprocessor.keep_strings_apart();
             let mut ordinal = 0;
             preprocessor.for_each_iterator_item_read_at(context, |context, token, at| {
@@ -385,9 +391,17 @@ fn phase_four(
                 let place = writer.token(context, token, at);
                 lines.written(&writer.text, context, main_file, place, root);
             });
-            Trace::new(context).read(preprocessor.trace())
+            options.trace.then(|| {
+                let (events, truncated) = preprocessor.trace();
+                Trace::new(context).read(events, truncated)
+            })
         },
     );
+    // Header names are known from the trace alone.
+    let (preprocessing, header_names) = traced
+        .map_or((None, Vec::new()), |(preprocessing, header_names)| {
+            (Some(preprocessing), header_names)
+        });
     pragmas.write_before(&context, usize::MAX, &mut writer);
     writer.finish();
     lines.written(&writer.text, &context, main_file, None, None);
@@ -534,11 +548,44 @@ impl<'c, 'tu> Trace<'c, 'tu> {
         }
     }
 
-    fn read(mut self, trace: &[TraceEvent<'_>]) -> (ExplorerPreprocessing, Vec<Range<usize>>) {
-        for event in trace {
+    fn read(
+        mut self,
+        events: &[TraceEvent<'_>],
+        truncated: Option<&Truncated>,
+    ) -> (ExplorerPreprocessing, Vec<Range<usize>>) {
+        for event in events {
             self.event(event);
         }
+        if let Some(truncated) = truncated {
+            self.truncated(truncated);
+        }
         (self.output, self.header_names)
+    }
+
+    /// Marks the trace as stopped short, and the expansion it holds only
+    /// in part as partial: the one it stopped in, or one it stopped as it
+    /// began, which it lists with no steps.
+    fn truncated(&mut self, truncated: &Truncated) {
+        self.output.truncated = true;
+        let Some(unfinished) = &truncated.expansion else {
+            return;
+        };
+        let open = unfinished
+            .open
+            .then(|| self.expansion(&unfinished.expansion))
+            .flatten();
+        let index = open.unwrap_or_else(|| {
+            let invocation =
+                self.invocation(&unfinished.expansion, &unfinished.end, unfinished.name);
+            self.open_expansion(
+                &unfinished.expansion,
+                &unfinished.end,
+                invocation,
+                unfinished.directive,
+            );
+            self.output.expansions.len() - 1
+        });
+        self.output.expansions[index].partial = true;
     }
 
     fn event(&mut self, event: &TraceEvent<'_>) {
@@ -571,7 +618,7 @@ impl<'c, 'tu> Trace<'c, 'tu> {
                     .flat_map(|arguments| arguments.iter())
                     .map(|&(parameter, argument)| ExplorerArgument {
                         parameter: self.spell(parameter).to_owned(),
-                        argument:  self.spell(argument).to_owned(),
+                        argument:  argument.to_owned(),
                     })
                     .collect();
                 let step = ExplorerExpansionStep {
@@ -618,14 +665,6 @@ impl<'c, 'tu> Trace<'c, 'tu> {
                     }
                 }
                 self.step(outermost, step);
-            },
-            | TraceEvent::Truncated => {
-                self.output.truncated = true;
-                // The expansion being read when the trace stopped may lack
-                // its end.
-                if let Some(last) = self.output.expansions.last_mut() {
-                    last.partial = true;
-                }
             },
             | TraceEvent::Directive { name, at } => {
                 let (file, line, presumed) = self.place(at);
@@ -701,15 +740,10 @@ impl<'c, 'tu> Trace<'c, 'tu> {
             },
             | TraceEvent::Skipped {
                 file,
-                first_line,
-                last_line,
-            } => self.output.skipped.push(ExplorerSkippedLines {
-                file:  self.file_name(*file),
-                lines: ExplorerLineRange {
-                    start: *first_line,
-                    end:   *last_line,
-                },
-            }),
+                after,
+                at_line_start,
+                until,
+            } => self.skipped(*file, *after, *at_line_start, *until),
             | TraceEvent::Included {
                 directive,
                 name,
@@ -724,7 +758,7 @@ impl<'c, 'tu> Trace<'c, 'tu> {
                 self.output.includes.push(ExplorerInclude {
                     file: including,
                     line,
-                    header: self.spell(*header).to_owned(),
+                    header: (*header).to_owned(),
                     angled: *angled,
                     found: file.map(|file| self.file_name(file)),
                     system: file.is_some_and(|file| self.context.has_system_header_part(file)),
@@ -768,6 +802,35 @@ impl<'c, 'tu> Trace<'c, 'tu> {
             steps: Vec::new(),
         });
         self.keys.push((key(expansion), ResultEnd::default()));
+    }
+
+    /// Lists the physical lines of `file` a skip passed over, as
+    /// [`TraceEvent::Skipped`] gives them, if it passed over any.
+    fn skipped(&mut self, file: u32, after: usize, at_line_start: bool, until: Option<usize>) {
+        let line = |offset: usize| Positions::line(self.context, file, offset);
+        let Some(start) = line(after) else {
+            return;
+        };
+        let first_line = if at_line_start { start } else { start + 1 };
+        let last_line = match until {
+            | Some(until) => line(until).map(|line| line.saturating_sub(1)),
+            | None => {
+                // Through the end of the file, which may end its last line
+                // with a new-line or not.
+                let text = self.context.source_text(file).unwrap_or_default();
+                let ends_line = text.is_empty() || text.ends_with(['\n', '\r']);
+                line(text.len()).map(|line| if ends_line { line - 1 } else { line })
+            },
+        };
+        if let Some(last_line) = last_line.filter(|&last| last >= first_line) {
+            self.output.skipped.push(ExplorerSkippedLines {
+                file:  self.file_name(file),
+                lines: ExplorerLineRange {
+                    start: first_line,
+                    end:   last_line,
+                },
+            });
+        }
     }
 
     fn definition(&mut self, name: StringCacheId, at: &SourceVector, kind: &str) {

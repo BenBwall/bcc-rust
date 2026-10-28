@@ -118,7 +118,7 @@ pub(super) fn compile_views(
         output.pp_tokens = Some(front.pp_tokens);
         output.preprocessed = Some(front.preprocessed);
         output.preprocessed_lines = Some(front.preprocessed_lines);
-        output.preprocessing = Some(front.preprocessing);
+        output.preprocessing = front.preprocessing;
         output.tokens = Some(front.tokens);
     }
     let tu = Bump::new();

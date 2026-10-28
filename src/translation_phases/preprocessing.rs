@@ -83,6 +83,7 @@ use runtime::{
 pub(crate) use runtime::{
     ReadAt,
     TraceEvent,
+    Truncated,
 };
 pub(crate) use token::{
     CharacterTokenType,

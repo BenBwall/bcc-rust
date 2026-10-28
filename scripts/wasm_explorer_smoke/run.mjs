@@ -11,17 +11,22 @@
 import { readFileSync } from "node:fs";
 import assert from "node:assert/strict";
 
-const { instance } = await WebAssembly.instantiate(readFileSync(process.argv[2]));
-const { memory, smoke_alloc, smoke_compile } = instance.exports;
+const module = await WebAssembly.compile(readFileSync(process.argv[2]));
 
-function compile(source, { optimize = false, depth = 0 } = {}) {
-  const bytes = new TextEncoder().encode(source);
-  const pointer = smoke_alloc(bytes.length);
-  new Uint8Array(memory.buffer, pointer, bytes.length).set(bytes);
-  const report = smoke_compile(pointer, bytes.length, optimize ? 1 : 0, depth);
-  const length = new DataView(memory.buffer).getUint32(report, true);
-  return new TextDecoder().decode(new Uint8Array(memory.buffer, report + 4, length));
+/// A fresh instance's compile function and its linear memory.
+async function instantiate() {
+  const { memory, smoke_alloc, smoke_compile } = (await WebAssembly.instantiate(module)).exports;
+  const compile = (source, { optimize = false, depth = 0, trace = true } = {}) => {
+    const bytes = new TextEncoder().encode(source);
+    const pointer = smoke_alloc(bytes.length);
+    new Uint8Array(memory.buffer, pointer, bytes.length).set(bytes);
+    const report = smoke_compile(pointer, bytes.length, optimize ? 1 : 0, depth, trace ? 1 : 0);
+    const length = new DataView(memory.buffer).getUint32(report, true);
+    return new TextDecoder().decode(new Uint8Array(memory.buffer, report + 4, length));
+  };
+  return { compile, memory };
 }
+const { compile } = await instantiate();
 
 const program = `#include <stdint.h>
 static int32_t square(int32_t x) { return x * x; }
@@ -110,6 +115,78 @@ for (const depth of [400, 410]) {
   assert.match(nestedCalls, /^int x= *1 *;$/m, `${depth}`);
   assert.match(nestedCalls, /^== asm$/m, `${depth}`);
 }
+
+// Tracing never changes what is compiled. Every byte the trace keeps is
+// charged to one budget in an arena of its own, so running out stops the
+// trace, never the compilation: each shape below, which spends a different
+// part of that budget, compiles with the trace on exactly as with it off,
+// and only the report's trace sections differ.
+const untraced = (report) =>
+  report.replace(/^== (?:trace truncated|expansions)\n(?:(?!== ).*\n)*/gm, "");
+const join = (count, text, separator = "+") => Array(count).fill(text).join(separator);
+const parameters = (count) => Array.from({ length: count }, (_, i) => `a${i}`).join(",");
+// F replaced fan³ times inside one invocation in the source, each time
+// spelling `argument` for each of its parameters.
+const tower = (argument, fan, arity = 1) => {
+  const call = join(arity, "y", ",");
+  return `#define F(${parameters(arity)}) 0\n#define H(y) ${join(fan, `F(${call})`)}\n` +
+    `#define H2(y) ${join(fan, "H(y)")}\n#define H3(y) ${join(fan, "H2(y)")}\n` +
+    `int x = H3(${argument});\n`;
+};
+// E0 is `unit`, and each E(n+1) is ten E(n).
+const tens = (unit) =>
+  `#define E0 ${unit}\n` + [1, 2, 3, 4].map((n) => `#define E${n} ${join(10, `E${n - 1}`, " ")}\n`).join("");
+const lines = (head, line) => {
+  let text = head;
+  for (let i = 0; text.length < LIMIT - 1024; i++) text += line(i);
+  return text;
+};
+for (const [name, source, truncated, expansions] of [
+  ["a trivial program", "int main(void) { return 0; }\n", false],
+  ["arguments cut by every invocation", tower(`"${"a".repeat(4000)}"`, 25), true],
+  ["arguments that spend the byte budget", tower(`"${"a".repeat(400)}"`, 25, 4), true],
+  ["one token longer than every cut", tower(`"${"a".repeat(50000)}"`, 10), false],
+  ["empty arguments", lines(
+    `#define F(${parameters(1000)}) 1\n#define E ${",".repeat(999)}\n#define APPLY(m, x) m(x)\n` +
+      `#define G ${join(10, "APPLY(F,E)")}\n#define G2 ${join(10, "G")}\n`,
+    (i) => `int v${i} = G2;\n`).slice(0, 6500), true],
+  ["many arguments", `#define F(${parameters(2000)}) a0+a1999\nint x = F(${join(2000, "1", ",")});\n`, false],
+  ["arguments around the cut", lines("#define F(x) sizeof x\n",
+    (i) => `int n${i} = F("${"a".repeat(150 + (i % 20))}");\n`), false],
+  // An empty replacement is one event, so after 30,000 events from one
+  // expansion the trace stops as one of these begins.
+  ["a stop as an expansion begins", `${tens("0,")}int a[] = {E4 0};\n#define Z\n${"Z\n".repeat(25000)}`, true,
+    /^E4 -> 0,[^]*^partial: Z -> $(?![^]*^Z -> )/m],
+  ["a stop inside an expansion", `${tens("0,0,0,")}int a[] = {E4 0};\n`, true, /^partial: E4 -> 0,/m],
+  ["stringified arguments", `#define S(x) #x\n#define T(x) S(x)\n#define U(x) T(x) T(x) T(x)\n` +
+    `const char *s[] = {U(${"b ".repeat(20000)})};\n`, false],
+  ["pasted arguments", `#define CAT(a,b) a##b\n#define C2(a,b) CAT(a,b)\n` +
+    `int C2(${"a".repeat(20000)},${"b".repeat(20000)});\n`, false],
+  ["included headers", `${"#include <stdint.h>\n".repeat(500)}int x;\n`, false],
+  ["nested calls", `#define F(x) x\nint x=${"F(".repeat(410)}1${")".repeat(410)};\n`, false],
+]) {
+  const started = Date.now();
+  const traced = compile(source);
+  const plain = compile(source, { trace: false });
+  assert.doesNotMatch(plain, /^== expansions$/m, name);
+  assert.match(traced, expansions ?? /^== expansions$/m, name);
+  assert.equal(/^== trace truncated$/m.test(traced), truncated, name);
+  // Only the expansion the trace stopped in, or as it began, is partial.
+  assert.ok((traced.match(/^partial: /gm) ?? []).length <= 1, name);
+  assert.equal(untraced(traced), plain, name);
+  assert.ok(Date.now() - started < 20000, `${name} took ${Date.now() - started} ms`);
+}
+
+// Tracing a trivial program costs the explorer no more linear memory than
+// one region: released regions are kept whole for the next stage rather
+// than split by small allocations.
+const footprint = async (trace) => {
+  const { compile, memory } = await instantiate();
+  compile("int main(void) { return 0; }\n", { trace });
+  return memory.buffer.byteLength;
+};
+const [plainBytes, tracedBytes] = [await footprint(false), await footprint(true)];
+assert.ok(tracedBytes - plainBytes < 32 * 2 ** 20, `${plainBytes} -> ${tracedBytes}`);
 
 const errors = compile("int main(void) { return 1 +; }\n");
 assert.match(errors, /== diagnostic error\nerror: expected an expression/);

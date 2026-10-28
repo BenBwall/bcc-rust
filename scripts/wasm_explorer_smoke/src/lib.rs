@@ -19,7 +19,7 @@ pub extern "C" fn smoke_alloc(length: usize) -> *mut u8 {
 
 /// Compiles the `length` bytes at `source` (from [`smoke_alloc`]) and returns
 /// the report, or with `optimize` set, as `-O2` does. A nonzero `depth` is the
-/// nesting limit.
+/// nesting limit. A zero `trace` leaves out the phase-4 trace.
 ///
 /// # Safety
 ///
@@ -30,6 +30,7 @@ pub unsafe extern "C" fn smoke_compile(
     length: usize,
     optimize: u32,
     depth: u32,
+    trace: u32,
 ) -> *const u8 {
     // SAFETY: The host wrote `length` bytes into the allocation.
     let bytes = unsafe { Vec::from_raw_parts(source, length, length) };
@@ -37,6 +38,7 @@ pub unsafe extern "C" fn smoke_compile(
     let output = compile(&source, &ExplorerOptions {
         optimize: optimize != 0,
         max_nesting_depth: (depth != 0).then_some(depth),
+        trace: trace != 0,
         ..ExplorerOptions::default()
     });
     let mut report = String::new();
@@ -60,7 +62,8 @@ pub unsafe extern "C" fn smoke_compile(
         }
         _ = writeln!(report, "== expansions");
         for expansion in trace.expansions.iter().filter(|expansion| expansion.file == "<input>") {
-            _ = writeln!(report, "{} -> {}", expansion.invocation, expansion.result);
+            let partial = if expansion.partial { "partial: " } else { "" };
+            _ = writeln!(report, "{partial}{} -> {}", expansion.invocation, expansion.result);
         }
     }
     for (name, text) in [

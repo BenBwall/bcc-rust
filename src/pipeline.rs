@@ -57,6 +57,8 @@ pub(crate) use preprocessed_text::{
     TextWriter,
     would_paste,
 };
+#[cfg(feature = "explorer")]
+pub(crate) use stages::with_traced_preprocessor;
 pub(crate) use stages::{
     parse_with_arena,
     preprocess_with_diagnostics,

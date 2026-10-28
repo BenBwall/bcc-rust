@@ -272,7 +272,7 @@ fn preprocessor_card(compilation: &Compilation, on_reveal: Callback<usize>) -> A
                 {trace.truncated.then(|| view! {
                     <p class="phase-summary">
                         "A macro here expands so much that bcc stopped recording it (the record keeps \
-                         at most 50,000 steps and 1 MiB of arguments): the lists above end there, \
+                         at most 50,000 steps and 8 MiB in all): the lists above end there, \
                          while the output is complete."
                     </p>
                 })}

@@ -37,6 +37,10 @@ pub struct ExplorerOptions {
     /// `--syntax-locations` does, so a viewer can link the tree to the
     /// source line by line.
     pub syntax_locations:  bool,
+    /// Records what phase 4 did, for
+    /// [`ExplorerOutput::preprocessing`]; without it, that is `None`.
+    /// Recording never changes what is compiled or how.
+    pub trace:             bool,
 }
 
 /// An in-memory header.
@@ -283,8 +287,8 @@ pub struct ExplorerPreprocessing {
     /// were not.
     pub directives:   Vec<ExplorerDirective>,
     /// Whether phase 4 did more than this records: the trace stops after a
-    /// fixed number of events, which only a macro expansion that multiplies
-    /// its input reaches.
+    /// fixed number of events or bytes, which only a macro expansion that
+    /// multiplies its input reaches.
     pub truncated:    bool,
 }
 
@@ -316,7 +320,8 @@ pub struct ExplorerExpansion {
     /// a replacement that produced none or that a directive read.
     pub result:     String,
     /// Whether the trace stopped while this expansion was being read, so
-    /// `result` and `steps` may lack its end; the preprocessed text has it.
+    /// `result` and `steps` may lack its end, or as it began, so they are
+    /// empty; the preprocessed text has it whole.
     pub partial:    bool,
     /// The replacements, `#` and `##` operations it took, in order.
     pub steps:      Vec<ExplorerExpansionStep>,
@@ -467,6 +472,7 @@ impl Default for ExplorerOptions {
             source_date_epoch: None,
             files:             Vec::new(),
             syntax_locations:  false,
+            trace:             true,
         }
     }
 }
