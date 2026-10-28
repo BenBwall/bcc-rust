@@ -201,6 +201,69 @@ fn independent_macro_expansions_keep_scratch_memory_bounded() {
     );
 }
 
+/// A call nested in an argument shares that argument's tokens and copies
+/// one frame, so expansion scratch and provenance grow with the nesting
+/// depth, not its square: four times as deep costs at most five times as
+/// much, where copying what is left of each argument cost sixteen.
+#[test]
+fn nested_arguments_keep_scratch_memory_and_provenance_linear() {
+    /// `F(F(…F(0)…))`, or with `listed`, `G(1, G(2, …G(depth, 0)…))`.
+    fn run(definition: &str, listed: bool, depth: usize) -> [usize; 2] {
+        let source = format!(
+            "{definition}\nint x = {}0{};\n",
+            (1..=depth)
+                .map(|level| if listed {
+                    format!("G({level}, ")
+                } else {
+                    "F(".to_owned()
+                })
+                .collect::<String>(),
+            ")".repeat(depth)
+        );
+        crate::test_support::on_compilation_stack(|| {
+            let tu = crate::util::bump::Bump::new();
+            let mut context = Context::new(&tu);
+            let preprocess_arena = crate::util::bump::Bump::new();
+            let mut preprocessor = Preprocessor::new(
+                &preprocess_arena,
+                &mut context,
+                PathBuf::from("<test>").into_boxed_path(),
+                &source,
+                SharedVec::default(),
+                SharedVec::default(),
+            );
+            let mut output = Vec::new();
+            preprocessor.for_each_item(&mut context, |context, token| {
+                let spelling = context.string_cache.at(token.contents);
+                output.push(spelling.trim_end_matches('\0').to_owned());
+            });
+            assert_eq!(output, ["int", "x", "=", "0", ";"]);
+            assert_eq!(context.pending_error_count(), 0);
+            // `for_each_item` never compacts, so the provenance store holds
+            // every segment recorded.
+            [
+                preprocessor.expansion.high_water(),
+                context.source_segment_count(),
+            ]
+        })
+    }
+
+    for (definition, listed) in [("#define F(x) x", false), ("#define G(a, b) b", true)] {
+        let short = run(definition, listed, 500);
+        let long = run(definition, listed, 2_000);
+        for (measure, short, long) in [
+            ("expansion bytes", short[0], long[0]),
+            ("provenance segments", short[1], long[1]),
+        ] {
+            assert!(
+                long <= short * 5,
+                "{definition}: {measure} grew faster than the nesting: {short} at 500 levels, \
+                 {long} at 2,000"
+            );
+        }
+    }
+}
+
 #[test]
 fn adjacent_string_lookahead_restores_diagnostics_to_the_phase_context() {
     preprocess("\"a\" 0xg\n", |_, errors| {

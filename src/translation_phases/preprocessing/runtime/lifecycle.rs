@@ -28,6 +28,7 @@ use crate::{
         preprocessor_tokenizer::TokenSource,
     },
     util::bump::{
+        ArenaMap,
         ArenaVec,
         Bump,
     },
@@ -81,6 +82,7 @@ impl<'c, 'tu, 'pp, 'x> Expander<'c, 'tu, 'pp, 'x> {
             pending_parser_errors,
             source_segment_limit,
             pushed_frames: 0,
+            paren_ends: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, scratch),
         }
     }
 

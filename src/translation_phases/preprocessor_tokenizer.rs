@@ -28,7 +28,7 @@
 //!   `ucn.rs` canonicalizes identifier universal character names.
 //! - Packed storage: `storage.rs` packs entries and side tables.
 //! - Token sources: `token_source.rs` reads lexed files; `replay.rs` reads
-//!   tokens made in phase 4.
+//!   tokens made in phase 4, which nested macro arguments share.
 //! - Token and diagnostic types: `token.rs` defines preprocessing tokens;
 //!   `errors.rs` defines the lexical diagnostics.
 //! - Tests: `tests.rs` checks lexer snapshots, replay, and preprocessing;
@@ -71,6 +71,11 @@ pub(crate) use errors::{
 };
 use positions::PositionTracker;
 pub(crate) use positions::position_after;
+pub(crate) use replay::{
+    CopiedRun,
+    SharedRun,
+    SharedToken,
+};
 pub(crate) use splicing::{
     LogicalCharacter,
     RemapKind,

@@ -42,21 +42,32 @@ use crate::{
 )]
 impl<'x> Expander<'_, '_, '_, 'x> {
     /// Substitutes the macro-replaced argument for a parameter that is not a
-    /// `#` or `##` operand.
+    /// `#` or `##` operand, pushing it to be rescanned. Returns whether
+    /// `token` was such a parameter.
+    ///
+    /// Out of line, as the frames built here would otherwise enlarge the
+    /// reader's own frame, which every argument prescan nests once more.
     ///
     /// C99: §6.10.3.1 paragraph 1, p. 153; PDF p. 165.
+    #[inline(never)]
     pub(in crate::translation_phases::preprocessing) fn handle_macro_argument(
         &mut self,
         token: PreprocessorToken,
-    ) -> Option<TokenizerFrame<'x>> {
-        let arguments = self.get_arguments()?;
-        let argument = find_argument(arguments, token.identifier_id(self.context))?;
+    ) -> bool {
+        let Some(argument) = self
+            .get_arguments()
+            .and_then(|arguments| find_argument(arguments, token.identifier_id(self.context)))
+        else {
+            return false;
+        };
         // Prescan is isolated from the replacement list. Rescanning the result
         // then uses the callee's disabled-name set, not the caller's.
-        Some(TokenizerFrame {
+        let tokenizer = self.expanded_argument(token, argument);
+        self.push_tokenizer_frame(TokenizerFrame {
             frame_type: TokenizerFrameType::Rescan { argument: true },
-            tokenizer:  self.expanded_argument(token, argument),
-        })
+            tokenizer,
+        });
+        true
     }
 
     pub(in crate::translation_phases::preprocessing) fn get_arguments(
@@ -102,7 +113,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                     continue,
                 | Some(token) =>
                     break depth.is_some_and(|depth| {
-                        self.update_macro_argument_paren_depth(token, variadic, depth)
+                        self.update_macro_argument_paren_depth(token.kind, variadic, depth)
                             .is_none()
                     }),
                 | None => break true,
@@ -114,11 +125,13 @@ impl<'x> Expander<'_, '_, '_, 'x> {
 
     /// Share prescan results with speculative invocation lookahead too:
     /// repeating replacement would also repeat its diagnostics and
-    /// `_Pragma` effects.
+    /// `_Pragma` effects. Inlined, as one frame fewer for each argument
+    /// prescan that nests leaves room for deeper nesting.
     ///
     /// C99: §6.10.3.1 paragraph 1, p. 153; PDF p. 165: the argument is
     /// replaced as if it formed the rest of the file, with no other tokens
     /// available.
+    #[inline(always)]
     pub(super) fn expanded_argument(
         &mut self,
         token: PreprocessorToken,
@@ -128,10 +141,23 @@ impl<'x> Expander<'_, '_, '_, 'x> {
             return tokenizer.clone();
         }
         let tokens = self.read_argument(argument, true);
+        self.keep_expansion(token, argument, &tokens)
+    }
+
+    /// Keeps `tokens`, the prescan of `argument`, for each use of its
+    /// parameter, here `token`, and returns a replay of them. Out of line,
+    /// so that the frames of the prescans that nest do not hold the replay.
+    #[inline(never)]
+    fn keep_expansion(
+        &mut self,
+        token: PreprocessorToken,
+        argument: &'x FunctionLikeMacroArgument<'x>,
+        tokens: &[PreprocessorToken],
+    ) -> TokenSource<'x> {
         let location = self
             .context
             .first_source_vector_or_default(token.source_vectors);
-        let tokenizer = TokenSource::replay(self.context, self.scratch, &[&tokens], location);
+        let tokenizer = TokenSource::replay(self.context, self.scratch, &[tokens], location);
         drop(argument.expanded.set(tokenizer.clone()));
         tokenizer
     }
@@ -219,6 +245,14 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         self.read_argument(argument, false)
     }
 
+    /// Reads `argument` to its end through the reader, macro-replacing it
+    /// with `expand`, and returns its tokens without leading or trailing
+    /// white space.
+    ///
+    /// Inlined: a prescan nests the reader once per argument nested in an
+    /// argument, and each frame fewer per level lets the explorer's
+    /// WebAssembly stack hold deeper nesting.
+    #[inline(always)]
     pub(super) fn read_argument(
         &mut self,
         argument: &'x FunctionLikeMacroArgument<'x>,
@@ -227,15 +261,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         let hash_hash_stack = replace(&mut self.hash_hash_stack, ArenaVec::new_in(self.scratch));
         let generate_placeholders = self.generate_placeholders;
         let newlines = (self.last_was_newline, self.current_is_newline);
-        self.push_tokenizer_frame(TokenizerFrame {
-            frame_type: TokenizerFrameType::FunctionLikeMacroArgument {
-                argument,
-                paren_depth: (!argument.substituted).then_some(1),
-                has_generated_token: false,
-                released: false,
-            },
-            tokenizer:  argument.tokenizer.clone(),
-        });
+        self.push_argument_frame(argument);
         let depth = self.tokenizer_stack.len();
         let fence = replace(&mut self.operand_fence, if expand { 0 } else { depth });
         let expansion_fence = replace(&mut self.expansion_fence, depth);
@@ -276,6 +302,21 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         tokens
     }
 
+    /// Pushes a frame that reads `argument` as written. Out of line, so that
+    /// the frames of the prescans that nest do not hold it.
+    #[inline(never)]
+    fn push_argument_frame(&mut self, argument: &'x FunctionLikeMacroArgument<'x>) {
+        self.push_tokenizer_frame(TokenizerFrame {
+            frame_type: TokenizerFrameType::FunctionLikeMacroArgument {
+                argument,
+                paren_depth: (!argument.substituted).then_some(1),
+                has_generated_token: false,
+                released: false,
+            },
+            tokenizer:  argument.tokenizer.clone(),
+        });
+    }
+
     /// The placemarker that stands for an empty `##` operand; it exists only
     /// within phase 4.
     ///
@@ -290,7 +331,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
 
     pub(super) fn update_macro_argument_paren_depth(
         &self,
-        token: PreprocessorToken,
+        kind: PreprocessorTokenType,
         variadic: bool,
         paren_depth: usize,
     ) -> Option<usize> {
@@ -298,15 +339,15 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         // C99 §6.10.3p11: only a comma outside inner parentheses ends a
         // named argument.
         if paren_depth == 1
-            && ((token.kind == PreprocessorTokenType::Comma && !variadic)
-                || token.kind == PreprocessorTokenType::ClosingParenthesis)
+            && ((kind == PreprocessorTokenType::Comma && !variadic)
+                || kind == PreprocessorTokenType::ClosingParenthesis)
         {
             return None;
         }
-        if token.kind == PreprocessorTokenType::OpeningParenthesis {
+        if kind == PreprocessorTokenType::OpeningParenthesis {
             return Some(paren_depth + 1);
         }
-        if token.kind == PreprocessorTokenType::ClosingParenthesis {
+        if kind == PreprocessorTokenType::ClosingParenthesis {
             return Some(paren_depth - 1);
         }
         Some(paren_depth)
