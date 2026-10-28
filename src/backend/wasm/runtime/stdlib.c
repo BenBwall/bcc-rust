@@ -362,8 +362,8 @@ time_t time(time_t *timer) {
 
 double difftime(time_t a, time_t b) { return (double)(a - b); }
 
-/* scanf: whitespace, literal characters, %%, and %d %i %u %o %x %c %s %[
-   %f %e %g %n with the hh, h, l, ll, j, z, t and L lengths and *. */
+/* scanf: whitespace, literal characters, %%, and %d %i %u %o %x %p %c %s
+   %[ %f %e %g %a %n with the hh, h, l, ll, j, z, t and L lengths and *. */
 struct source {
     const char *string;
     FILE *file;
@@ -383,10 +383,10 @@ static void take(struct source *in) {
 }
 
 /* Stores an integer conversion's value, or %n's count, in the object its
-   length modifier names. */
+   length modifier names; L (3) means long long here, as in glibc. */
 #define STORE_INTEGER(ap, length, value)                         \
     do {                                                         \
-        if ((length) == 2)                                       \
+        if ((length) == 2 || (length) == 3)                      \
             *va_arg(ap, long long *) = (long long)(value);       \
         else if ((length) == 1)                                  \
             *va_arg(ap, long *) = (long)(value);                 \
@@ -453,6 +453,11 @@ static int scan(struct source *in, const char *fmt, va_list ap) {
             fmt++;
         }
         char c = *fmt;
+        if (c == 'p') {
+            /* A pointer reads as %lx: void * and long are both 32 bits. */
+            c = 'x';
+            length = 1;
+        }
         if (c == 'n') {
             if (!skip)
                 STORE_INTEGER(ap, length, in->count);
@@ -521,7 +526,9 @@ static int scan(struct source *in, const char *fmt, va_list ap) {
         }
         /* Numbers: consume exactly the characters that can continue the
            number (C99 7.19.6.2p9: the longest prefix of a matching input
-           sequence), leaving the next one unread. */
+           sequence), leaving the next one unread. If that prefix is not a
+           whole number ("0x", "1e+", "infin"), the directive fails
+           (7.19.6.2p10), and the characters stay consumed. */
         int floating = c == 'f' || c == 'e' || c == 'g' || c == 'a' || c == 'E' || c == 'G' || c == 'F' ||
                        c == 'A';
         int limit = width < (int)sizeof buffer - 1 ? width : (int)sizeof buffer - 1;
@@ -537,8 +544,17 @@ static int scan(struct source *in, const char *fmt, va_list ap) {
             int lead = peek(in) | 32;
             if (lead == 'i' || lead == 'n') {
                 const char *word = lead == 'i' ? "infinity" : "nan";
-                for (int k = 0; word[k] && NEXT_IS((peek(in) | 32) == word[k]); k++)
+                int k = 0;
+                for (; word[k] && NEXT_IS((peek(in) | 32) == word[k]); k++)
                     TAKE();
+                /* NAN(n-char-sequence), C99 7.20.1.3p3. */
+                if (lead == 'n' && k == 3 && NEXT_IS(peek(in) == '(')) {
+                    TAKE();
+                    while (NEXT_IS(isalnum(peek(in)) || peek(in) == '_'))
+                        TAKE();
+                    if (NEXT_IS(peek(in) == ')'))
+                        TAKE();
+                }
             } else {
                 int hex = 0, digits = 0;
                 if (NEXT_IS(peek(in) == '0')) {
@@ -570,17 +586,27 @@ static int scan(struct source *in, const char *fmt, va_list ap) {
             }
         } else {
             int base = c == 'd' || c == 'u' ? 10 : c == 'o' ? 8 : c == 'x' || c == 'X' ? 16 : 0;
+            int digits = 0;
             if ((base == 0 || base == 16) && NEXT_IS(peek(in) == '0')) {
                 TAKE();
-                if (NEXT_IS((peek(in) | 32) == 'x'))
+                if (NEXT_IS((peek(in) | 32) == 'x')) {
+                    /* The prefix's 0 is no digit: "0x" alone fails. */
                     TAKE();
-                else if (base == 0)
-                    base = 8;
+                    base = 16;
+                } else {
+                    digits = 1;
+                    if (base == 0)
+                        base = 8;
+                }
             }
             if (base == 0)
                 base = 10;
-            while (NEXT_IS(base_digit(peek(in), base)))
+            while (NEXT_IS(base_digit(peek(in), base))) {
                 TAKE();
+                digits++;
+            }
+            if (!digits)
+                break;
         }
 #undef TAKE
 #undef NEXT_IS
@@ -588,7 +614,7 @@ static int scan(struct source *in, const char *fmt, va_list ap) {
         char *end;
         if (floating) {
             double v = strtod(buffer, &end);
-            if (end == buffer)
+            if (n == 0 || end != buffer + n)
                 break;
             if (!skip) {
                 if (length == 1)
@@ -605,7 +631,7 @@ static int scan(struct source *in, const char *fmt, va_list ap) {
         unsigned long long v = strtoull(buffer, &end, base);
         if (c == 'd' || c == 'i')
             v = (unsigned long long)strtoll(buffer, &end, base);
-        if (end == buffer)
+        if (end != buffer + n)
             break;
         if (!skip) {
             STORE_INTEGER(ap, length, v);
