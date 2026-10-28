@@ -2462,4 +2462,81 @@ mod tests {
             );
         }
     }
+
+    /// Clang reports the linker options and the options of the link that a
+    /// command line which does not link leaves unused, the linker inputs
+    /// first and in order with the input files, then the other unused
+    /// arguments in order; GCC reports neither.
+    #[test]
+    fn clang_reports_unused_link_options() {
+        let directory = Directory::new();
+        directory.write("a.c", "int a;\n");
+        directory.write("b.o", "");
+        let output = directory.bcc(
+            "--clang-mode",
+            &[
+                "-c", "a.c", "-shared-libgcc", "-T", "x.ld", "-u", "sym", "-L", "/a", "-Xlinker",
+                "-y", "-l", "m", "b.o", "-z", "now", "-Wl,-a,-b", "-s",
+            ],
+        );
+        succeeds(&output);
+        let unused = |what: &str| format!("clang: warning: {what} [-Wunused-command-line-argument]\n");
+        let expected: String = [
+            "-Xlinker -y: 'linker' input unused",
+            "-lm: 'linker' input unused",
+            "b.o: 'linker' input unused",
+            "-z now: 'linker' input unused",
+            "-Wl,-a,-b: 'linker' input unused",
+            "argument unused during compilation: '-shared-libgcc'",
+            "argument unused during compilation: '-T x.ld'",
+            "argument unused during compilation: '-u sym'",
+            "argument unused during compilation: '-L/a'",
+            "argument unused during compilation: '-s'",
+        ]
+        .into_iter()
+        .map(unused)
+        .collect();
+        assert_eq!(stderr(&output), expected);
+        // `-fsyntax-only` leaves the stage unused; `-E` leaves
+        // `-fsyntax-only` unused, in order with the link's options.
+        let output = directory.bcc("--clang-mode", &["-L/tmp", "-fsyntax-only", "-c", "a.c"]);
+        succeeds(&output);
+        assert_eq!(
+            stderr(&output),
+            [
+                "argument unused during compilation: '-L/tmp'",
+                "argument unused during compilation: '-c'",
+            ]
+            .into_iter()
+            .map(unused)
+            .collect::<String>()
+        );
+        let output = directory.bcc(
+            "--clang-mode",
+            &["-fsyntax-only", "-L/tmp", "-E", "a.c", "-o", "a.i", "-lm"],
+        );
+        succeeds(&output);
+        assert_eq!(
+            stderr(&output),
+            [
+                "-lm: 'linker' input unused",
+                "argument unused during compilation: '-fsyntax-only'",
+                "argument unused during compilation: '-L/tmp'",
+            ]
+            .into_iter()
+            .map(unused)
+            .collect::<String>()
+        );
+        // `-Werror` makes the first one an error.
+        let output = directory.bcc("--clang-mode", &["-c", "-lm", "a.c", "-Werror"]);
+        assert_eq!(output.status.code(), Some(1));
+        assert_eq!(
+            stderr(&output),
+            "clang: error: -lm: 'linker' input unused [-Werror,-Wunused-command-line-argument]\n"
+        );
+        // A command line that links uses them all, and GCC reports none.
+        let output = directory.bcc("--gcc-mode", &["-c", "a.c", "-lm", "-L/tmp", "-Wl,-x"]);
+        succeeds(&output);
+        assert_eq!(stderr(&output), "");
+    }
 }
