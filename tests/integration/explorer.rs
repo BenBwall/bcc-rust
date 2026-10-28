@@ -124,11 +124,20 @@ mod tests {
                         Some(&*with(&["--tokens"]).1),
                         "{name}"
                     );
-                    assert_eq!(
-                        output.preprocessed.as_deref(),
-                        Some(&*with(&["-E"]).0),
-                        "{name}"
-                    );
+                    // The explorer shows phase 4's text, which `-E` writes
+                    // after phases 5 and 6 have converted and joined string
+                    // literals; without them the two are the same.
+                    let preprocessed = with(&["-E"]).0;
+                    if !preprocessed
+                        .lines()
+                        .any(|line| !line.starts_with('#') && line.contains(['"', '\'']))
+                    {
+                        assert_eq!(
+                            output.preprocessed.as_deref(),
+                            Some(&*preprocessed),
+                            "{name}"
+                        );
+                    }
                     assert_eq!(
                         output.syntax_tree.as_deref(),
                         Some(&*with(&["--syntax-tree"]).1),
@@ -493,12 +502,196 @@ mod tests {
                 ("T", "object")
             ]
         );
+        assert!(input[0].directive && !input[1].directive);
         let text = output.preprocessed.unwrap();
         assert!(
             text.contains("int release = ((2 + 1) * (2 + 1));"),
             "{text}"
         );
+        // Phase 4 leaves adjacent string literals apart; phase 6 joins them.
+        assert!(text.contains("const char *s = \"a + b\" \"!\";"), "{text}");
         assert!(text.contains("# 1 \"<input>\""), "{text}");
+    }
+
+    /// What phase 4 did with `source`.
+    fn trace_of(source: &str) -> bcc_rust::explorer::ExplorerPreprocessing {
+        compile(source, &options(false)).preprocessing.unwrap()
+    }
+
+    #[test]
+    fn argument_prescans_are_steps_of_their_expansion() {
+        let trace = trace_of("#define A(x) x+x\n#define B(x) A(x)\nint a = A(B(2));\n");
+        let [expansion] = &trace.expansions[..] else {
+            panic!("{:#?}", trace.expansions);
+        };
+        assert_eq!(expansion.invocation, "A(B(2))");
+        assert_eq!(expansion.result, "2+2+2+2");
+        let steps: Vec<(&str, u32, bool, String)> = expansion
+            .steps
+            .iter()
+            .map(|step| {
+                let arguments: Vec<String> = step
+                    .arguments
+                    .iter()
+                    .map(|argument| format!("{}={}", argument.parameter, argument.argument))
+                    .collect();
+                (
+                    step.macro_name.as_str(),
+                    step.depth,
+                    step.prescan,
+                    arguments.join(","),
+                )
+            })
+            .collect();
+        // B is replaced while A's argument is prescanned (C99 §6.10.3.1p1),
+        // and the A of B's replacement list inside that.
+        assert_eq!(
+            steps,
+            [
+                ("A", 0, false, "x=B(2)".to_owned()),
+                ("B", 1, true, "x=2".to_owned()),
+                ("A", 2, false, "x=2".to_owned()),
+            ]
+        );
+    }
+
+    #[test]
+    fn predefined_macros_and_every_directive_are_traced() {
+        let trace = trace_of("#pragma once\nint line = __LINE__;\n#if __LINE__ > 1\n#endif\n");
+        let shown: Vec<(&str, &str, bool)> = trace
+            .expansions
+            .iter()
+            .map(|expansion| {
+                (
+                    expansion.invocation.as_str(),
+                    expansion.result.as_str(),
+                    expansion.directive,
+                )
+            })
+            .collect();
+        assert_eq!(shown, [("__LINE__", "2", false), ("__LINE__", "", true)]);
+        assert_eq!(trace.expansions[0].steps[0].kind, "builtin");
+        assert_eq!(trace.expansions[1].steps[0].result, "3");
+        // The target's predefined macros are directives of their own file.
+        let directives: Vec<(u32, &str)> = trace
+            .directives
+            .iter()
+            .filter(|directive| directive.file == "<input>")
+            .map(|directive| (directive.line, directive.name.as_str()))
+            .collect();
+        assert_eq!(directives, [(1, "pragma"), (3, "if"), (4, "endif")]);
+    }
+
+    #[test]
+    fn an_empty_replacement_is_not_a_directive() {
+        let trace = trace_of("#define EMPTY\nint x EMPTY;\n");
+        let expansion = &trace.expansions[0];
+        assert_eq!(
+            (expansion.result.as_str(), expansion.directive),
+            ("", false)
+        );
+    }
+
+    #[test]
+    fn line_directives_leave_the_trace_physical() {
+        let source = "int a;\n#line 1000 \"fake.c\"\n#if 0\nint b;\n#else\nint c;\n#endif\n";
+        let trace = trace_of(source);
+        let conditions: Vec<(&str, u32, &str, Option<&str>)> = trace
+            .conditionals
+            .iter()
+            .map(|conditional| {
+                (
+                    conditional.file.as_str(),
+                    conditional.line,
+                    conditional.directive.as_str(),
+                    conditional.presumed.as_deref(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            conditions,
+            [
+                ("<input>", 3, "#if 0", Some("fake.c:1000")),
+                ("<input>", 5, "#else", Some("fake.c:1002")),
+            ]
+        );
+        let skipped: Vec<(&str, u32, u32)> = trace
+            .skipped
+            .iter()
+            .map(|skipped| {
+                (
+                    skipped.file.as_str(),
+                    skipped.lines.start,
+                    skipped.lines.end,
+                )
+            })
+            .collect();
+        assert_eq!(skipped, [("<input>", 4, 4)]);
+    }
+
+    #[test]
+    fn each_arm_after_a_processed_group_is_traced() {
+        let trace = trace_of("#if 1\na\n#elif 0\nb\n#elif 0\nc\n#else\nd\n#endif\n");
+        let conditions: Vec<(u32, bool, bool)> = trace
+            .conditionals
+            .iter()
+            .map(|conditional| (conditional.line, conditional.taken, conditional.evaluated))
+            .collect();
+        assert_eq!(
+            conditions,
+            [
+                (1, true, true),
+                (3, false, false),
+                (5, false, false),
+                (7, false, false),
+            ]
+        );
+        let skipped: Vec<(u32, u32)> = trace
+            .skipped
+            .iter()
+            .map(|skipped| (skipped.lines.start, skipped.lines.end))
+            .collect();
+        assert_eq!(skipped, [(4, 4), (6, 6), (8, 8)]);
+    }
+
+    #[test]
+    fn preprocessed_lines_say_which_include_brought_a_header_in() {
+        let source = "int a;\n#include <stdint.h>\nint32_t x;\n";
+        let output = compile(source, &options(false));
+        let text = output.preprocessed.unwrap();
+        let lines = output.preprocessed_lines.unwrap();
+        assert_eq!(lines.len(), text.lines().count(), "{text}");
+        let of = |wanted: &str| {
+            let index = text
+                .lines()
+                .position(|line| line == wanted)
+                .unwrap_or_else(|| panic!("{wanted}: {text}"));
+            &lines[index]
+        };
+        let first = of("int a;");
+        assert_eq!(
+            (first.file.as_str(), first.line, first.include),
+            ("<input>", Some(1), None)
+        );
+        assert_eq!(of("int32_t x;").line, Some(3));
+        let header = text
+            .lines()
+            .position(|line| line.starts_with("typedef"))
+            .map(|index| &lines[index])
+            .expect("stdint.h declares types");
+        assert!(
+            header.file.ends_with("stdint.h") && header.line.is_some(),
+            "{header:#?}"
+        );
+        assert_eq!(header.include, Some(2));
+        // Every line from the header, line markers too, names the include.
+        for (line, place) in text.lines().zip(&lines) {
+            assert_eq!(
+                place.include.is_some(),
+                place.file != "<input>",
+                "{line}: {place:#?}"
+            );
+        }
     }
 
     #[test]

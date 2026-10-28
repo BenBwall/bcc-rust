@@ -81,7 +81,7 @@ pub(super) fn print_preprocessed<'tu>(
         }
         if macros.is_none() {
             pragmas.write_before(context, ordinal, &mut writer);
-            writer.token(context, token, at);
+            _ = writer.token(context, token, at);
             if writer.text.len() >= FLUSH_BYTES {
                 out.write_all(writer.text.as_bytes())?;
                 writer.text.clear();

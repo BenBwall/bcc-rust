@@ -458,7 +458,11 @@ impl Expander<'_, '_, '_, '_> {
                         continue;
                     },
                     | MacroDefinition::BuiltIn => {
-                        if let Some(result) = self.expand_builtin(token) {
+                        let result = self.expand_builtin(token);
+                        if self.tracing() {
+                            self.trace_builtin(token, result);
+                        }
+                        if let Some(result) = result {
                             break 'base Some(result);
                         }
                         continue 'base;

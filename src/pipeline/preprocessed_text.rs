@@ -99,6 +99,9 @@ pub(crate) struct TextOptions {
     /// `-dM`: the macro definitions in effect at the end instead of the
     /// text.
     pub(crate) macros:          bool,
+    /// Spell each token as its preprocessing token was spelled, as phase 4
+    /// leaves it, rather than as the token phases 5 and 6 made of it.
+    pub(crate) as_written:      bool,
 }
 
 /// More blank lines than this are replaced by a line marker, as GCC does.
@@ -192,14 +195,21 @@ impl<'a> TextWriter<'a> {
     }
 
     /// Writes `token`, starting a new line or a line marker first when it
-    /// belongs to a later line or another file.
-    pub(crate) fn token(&mut self, context: &Context<'_>, token: Token, at: Option<ReadAt>) {
+    /// belongs to a later line or another file. Returns the place it was
+    /// written for: a source file index, which `#line` may have renamed,
+    /// and a byte offset there.
+    pub(crate) fn token(
+        &mut self,
+        context: &Context<'_>,
+        token: Token,
+        at: Option<ReadAt>,
+    ) -> Option<(u32, usize)> {
         let spelled = context.get_source_vectors(token.source_vectors).first();
         // Where the token belongs: where the outermost invocation is for a
         // token a macro produced, even when the macro is defined in the same
         // file, otherwise its own place if the reader's file spells it, and
         // failing both the line the reader is on.
-        let (file, line, column) = match (spelled, at) {
+        let (file, line, column, offset) = match (spelled, at) {
             | (
                 _,
                 Some(ReadAt {
@@ -207,7 +217,12 @@ impl<'a> TextWriter<'a> {
                     expansion: Some(invocation),
                     ..
                 }),
-            ) if invocation.source_file_index == file => (file, invocation.line, invocation.column),
+            ) if invocation.source_file_index == file => (
+                file,
+                invocation.line,
+                invocation.column,
+                Some(invocation.index as usize),
+            ),
             | (
                 Some(vector),
                 Some(ReadAt {
@@ -215,10 +230,21 @@ impl<'a> TextWriter<'a> {
                     expansion: None,
                     ..
                 }),
-            ) if vector.source_file_index == file => (file, vector.line, vector.column),
-            | (_, Some(ReadAt { file, position, .. })) => (file, position.line, 0),
-            | (Some(vector), None) => (vector.source_file_index, vector.line, vector.column),
-            | (None, None) => (0, 0, 0),
+            ) if vector.source_file_index == file => (
+                file,
+                vector.line,
+                vector.column,
+                Some(vector.index as usize),
+            ),
+            | (_, Some(ReadAt { file, position, .. })) =>
+                (file, position.line, 0, Some(position.index)),
+            | (Some(vector), None) => (
+                vector.source_file_index,
+                vector.line,
+                vector.column,
+                Some(vector.index as usize),
+            ),
+            | (None, None) => (0, 0, 0, None),
         };
         let gap = match (self.end, spelled) {
             // Tokens from one place in the source keep its spacing.
@@ -289,7 +315,14 @@ impl<'a> TextWriter<'a> {
             }
         }
         self.scratch.reset();
-        let spelling = spelling(context, &self.scratch, token);
+        let spelling = if self.options.as_written {
+            context
+                .string_cache
+                .at(token.contents)
+                .trim_end_matches('\0')
+        } else {
+            spelling(context, &self.scratch, token)
+        };
         self.text.push_str(spelling);
         self.last = (
             spelling.as_bytes().first().copied(),
@@ -297,6 +330,7 @@ impl<'a> TextWriter<'a> {
         );
         self.end = spelled.map(|vector| (vector.source_file_index, vector.end()));
         self.end_line = spelled.map_or(0, |vector| vector.line);
+        offset.map(|offset| (file, offset))
     }
 
     /// Writes `# LINE "FILE"` and a new line, with flag 3 for a system

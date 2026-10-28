@@ -102,6 +102,9 @@ impl Expander<'_, '_, '_, '_> {
         // Count before string lookahead: a pragma read beyond a string belongs
         // after that output token, even while its concatenation is pending.
         self.context.preprocessed_tokens += 1;
+        if self.state.strings_apart {
+            return Some(token);
+        }
         Some(self.concatenate_adjacent_strings(token))
     }
 }

@@ -56,36 +56,40 @@ pub struct ExplorerFile {
 pub struct ExplorerOutput {
     /// The compilation's diagnostics in the order the CLI prints them, then
     /// any a back-end stage reported.
-    pub diagnostics:   Vec<ExplorerDiagnostic>,
+    pub diagnostics:        Vec<ExplorerDiagnostic>,
     /// The source after translation phases 1 and 2: its logical lines,
     /// with what mapping characters and splicing lines changed.
-    pub logical_lines: Option<Vec<ExplorerLogicalLine>>,
+    pub logical_lines:      Option<Vec<ExplorerLogicalLine>>,
     /// The source's preprocessing tokens and white space, as phase 3
     /// decomposes it.
-    pub pp_tokens:     Option<Vec<ExplorerPpToken>>,
-    /// The preprocessed translation unit as text, with line markers, as
-    /// `-E` prints it.
-    pub preprocessed:  Option<String>,
+    pub pp_tokens:          Option<Vec<ExplorerPpToken>>,
+    /// The translation unit as phase 4 leaves it, as text with line
+    /// markers, written as `-E` writes it but with each preprocessing token
+    /// spelled as written and adjacent string literals still apart: `-E`
+    /// shows them after phases 5 and 6.
+    pub preprocessed:       Option<String>,
+    /// Where each line of `preprocessed` came from.
+    pub preprocessed_lines: Option<Vec<ExplorerOutputLine>>,
     /// What phase 4 did to produce `preprocessed`.
-    pub preprocessing: Option<ExplorerPreprocessing>,
+    pub preprocessing:      Option<ExplorerPreprocessing>,
     /// The preprocessed tokens, one per line, as `--tokens` prints them.
-    pub tokens:        Option<String>,
+    pub tokens:             Option<String>,
     /// The syntax tree, as `--syntax-tree` prints it.
-    pub syntax_tree:   Option<String>,
+    pub syntax_tree:        Option<String>,
     /// The bcc IR before ABI lowering, as `--emit=ir --backend=native`
     /// prints it.
-    pub ir:            Option<String>,
+    pub ir:                 Option<String>,
     /// The bcc IR after ABI lowering, as `--emit=ir-abi --backend=native`
     /// prints it.
-    pub ir_abi:        Option<String>,
+    pub ir_abi:             Option<String>,
     /// The native back end's assembly, as `--emit=asm --backend=native`
     /// prints it.
-    pub asm:           Option<String>,
+    pub asm:                Option<String>,
     /// Each function's machine code, encoded from `asm` as
     /// `--native-object` would encode it. ELF targets only.
-    pub machine_code:  Option<Vec<ExplorerFunctionBytes>>,
+    pub machine_code:       Option<Vec<ExplorerFunctionBytes>>,
     /// Which lines of the outputs each function definition became.
-    pub line_map:      Vec<ExplorerLineMapping>,
+    pub line_map:           Vec<ExplorerLineMapping>,
 }
 
 /// One diagnostic.
@@ -242,6 +246,21 @@ pub struct ExplorerPpToken {
     pub canonical:     Option<String>,
 }
 
+/// Where one line of the preprocessed text came from.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct ExplorerOutputLine {
+    /// The physical file its text comes from, `<input>` or a header's
+    /// name; for a line marker, the file the next text comes from.
+    pub file:    String,
+    /// The physical line its text comes from; `None` for a line marker, a
+    /// pragma written back, or a blank line with no known place.
+    pub line:    Option<u32>,
+    /// For a line from a header, the physical line of `<input>` whose
+    /// `#include` brought it in, at the outermost level.
+    pub include: Option<u32>,
+}
+
 /// What phase 4 did: its macro expansions, conditional groups, includes and
 /// definitions, in source order.
 /// C99: §5.1.1.2 paragraph 1 item 4, p. 10; PDF p. 22.
@@ -260,6 +279,9 @@ pub struct ExplorerPreprocessing {
     pub includes:     Vec<ExplorerInclude>,
     /// `#define` and `#undef`, in order.
     pub definitions:  Vec<ExplorerDefinition>,
+    /// Every directive that was executed, in order; those in skipped groups
+    /// were not.
+    pub directives:   Vec<ExplorerDirective>,
 }
 
 /// One replacement of a macro name in a file, and everything it set off.
@@ -278,8 +300,14 @@ pub struct ExplorerExpansion {
     pub end_line:   u32,
     /// The character column just past its end.
     pub end_column: u32,
+    /// The place `#line` gives it, as `file:line`, when that differs from
+    /// the physical one.
+    pub presumed:   Option<String>,
     /// The invocation as written, each run of white space as one space.
     pub invocation: String,
+    /// Whether a directive read it, as `#if` reads its condition; its
+    /// result then goes to the directive, not to the output.
+    pub directive:  bool,
     /// The tokens it produced, spelled as `-E` would write them; empty for
     /// a replacement that produced none or that a directive read.
     pub result:     String,
@@ -291,9 +319,13 @@ pub struct ExplorerExpansion {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ExplorerExpansionStep {
-    /// `"replace"` (a macro name replaced), `"stringify"` (`#`) or
+    /// `"replace"` (a macro name replaced), `"builtin"` (a predefined
+    /// macro such as `__LINE__` replaced), `"stringify"` (`#`) or
     /// `"paste"` (`##`).
     pub kind:       String,
+    /// Whether the name was read from an argument, which is macro-replaced
+    /// before it is substituted (C99 §6.10.3.1p1).
+    pub prescan:    bool,
     /// The macro replaced, or whose replacement list holds the operator.
     pub macro_name: String,
     /// How many replacements enclose a replaced name: 0 for the name in the
@@ -303,7 +335,8 @@ pub struct ExplorerExpansionStep {
     pub arguments:  Vec<ExplorerArgument>,
     /// For `##`, its operands, empty for a placemarker.
     pub operands:   Vec<String>,
-    /// For `#` and `##`, the token made; empty for a placemarker.
+    /// For `#`, `##` and a predefined macro, the token made; empty for a
+    /// placemarker.
     pub result:     String,
 }
 
@@ -327,10 +360,15 @@ pub struct ExplorerConditional {
     pub file:      String,
     /// The directive's 1-based physical line.
     pub line:      u32,
+    /// The place `#line` gives it, when that differs.
+    pub presumed:  Option<String>,
     /// The directive's line as written, such as `#if DEBUG > 1`.
     pub directive: String,
     /// Whether the group it controls is processed.
     pub taken:     bool,
+    /// Whether its condition was evaluated; an arm after a processed group
+    /// is skipped without it.
+    pub evaluated: bool,
 }
 
 /// The physical lines of a group that was skipped, both inclusive.
@@ -378,6 +416,23 @@ pub struct ExplorerDefinition {
     /// `"object"`, `"function"` or `"undef"`.
     pub kind:      String,
     /// The directive's line as written.
+    pub directive: String,
+}
+
+/// A directive that was executed.
+/// C99: §6.10 paragraph 2, pp. 146-147; PDF pp. 158-159.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct ExplorerDirective {
+    /// The file the directive is in.
+    pub file:      String,
+    /// Its 1-based physical line.
+    pub line:      u32,
+    /// The place `#line` gives it, when that differs.
+    pub presumed:  Option<String>,
+    /// Its name, such as `pragma` or `error`.
+    pub name:      String,
+    /// Its line as written.
     pub directive: String,
 }
 

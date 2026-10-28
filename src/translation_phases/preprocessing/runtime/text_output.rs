@@ -51,9 +51,20 @@ pub(crate) struct ReadAt {
     /// For a token a macro expansion produced, where the outermost
     /// invocation's name is.
     pub(crate) expansion: Option<SourceVector>,
+    /// The outermost source file being read and the reader's position in
+    /// it: for a header's tokens, at the end of the main file's `#include`
+    /// line that brought the header in.
+    pub(crate) root:      Option<(u32, SourcePosition)>,
 }
 
 impl<'tu> Preprocessor<'tu, '_> {
+    /// Leaves adjacent string literals apart, so the tokens read are phase
+    /// 4's, not concatenated as phase 6 does; call it before reading.
+    /// C99: §5.1.1.2 paragraph 1 items 4 and 6, p. 10; PDF p. 22.
+    pub(crate) fn keep_strings_apart(&mut self) {
+        self.resting_mut().state.strings_apart = true;
+    }
+
     /// Calls `visit` with each phase-6 token, as
     /// [`Preprocessor::for_each_iterator_item`] does, and with where the
     /// reader was once the token was read. A token a macro expands to is
@@ -68,12 +79,14 @@ impl<'tu> Preprocessor<'tu, '_> {
             match preprocessor.next_iterator_item() {
                 | Some(token) => {
                     let expansion = preprocessor.outermost_invocation().cloned();
+                    let root = preprocessor.root_position();
                     let at = preprocessor
                         .reading_position()
                         .map(|(file, position)| ReadAt {
                             file,
                             position,
                             expansion,
+                            root,
                         });
                     visit(preprocessor.context, token, at);
                     ControlFlow::Continue(())
@@ -201,6 +214,24 @@ impl Expander<'_, '_, '_, '_> {
             .iter()
             .enumerate()
             .rev()
+            .find(|(_, frame)| matches!(frame.frame_type, TokenizerFrameType::SourceFile { .. }))
+            .map(|(index, frame)| {
+                let cursor = if index == last {
+                    &self.tokenizer
+                } else {
+                    &frame.tokenizer
+                };
+                (cursor.source_file_index(), cursor.position(self.context))
+            })
+    }
+
+    /// The outermost source file being read, and the reader's position in
+    /// it: the cursor its frame saved when a header or macro was pushed.
+    fn root_position(&self) -> Option<(u32, SourcePosition)> {
+        let last = self.tokenizer_stack.len().checked_sub(1)?;
+        self.tokenizer_stack
+            .iter()
+            .enumerate()
             .find(|(_, frame)| matches!(frame.frame_type, TokenizerFrameType::SourceFile { .. }))
             .map(|(index, frame)| {
                 let cursor = if index == last {

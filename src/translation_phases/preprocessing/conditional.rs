@@ -50,7 +50,7 @@ impl Expander<'_, '_, '_, '_> {
         let taken =
             self.eval_preprocessor_expression(PreprocessorErrorType::NoConditionInIfDirective);
         if self.tracing() {
-            self.trace_condition(directive.source_vectors, taken);
+            self.trace_condition(directive.source_vectors, taken, true);
         }
         if taken {
             self.resume_at_line_start();
@@ -123,16 +123,12 @@ impl Expander<'_, '_, '_, '_> {
     /// of skipped groups, §6.10 paragraph 4, p. 147; PDF p. 159.
     fn skip_over_dead_code(&mut self, mut at_line_start: bool, mode: SkipMode) {
         let depth = self.state.open_conditionals.len();
-        // The line the skip starts after, and the line of the directive that
-        // ends it, for the trace.
-        let start = self.position();
+        // Where the skipped group starts and where the directive that ends
+        // it starts, as byte offsets, for the trace: `#line` changes the
+        // lines it counts, not the bytes.
         let file = self.source_file_index();
-        let mut after_line = if at_line_start {
-            start.line.saturating_sub(1)
-        } else {
-            start.line
-        };
-        let mut until_line = None;
+        let mut after = (self.position().index, at_line_start);
+        let mut until = None;
         self.context.set_ignore_tokenizer_errors(true);
         'lines: while depth > 0 && self.state.open_conditionals.len() >= depth {
             if !at_line_start {
@@ -177,10 +173,10 @@ impl Expander<'_, '_, '_, '_> {
                     "endif" | "elif" | "elifdef" | "elifndef" | "else"
                 )
             {
-                until_line = Some(
+                until = Some(
                     self.context
                         .first_source_vector_or_default(name.source_vectors)
-                        .line,
+                        .index as usize,
                 );
             }
             match self.context.string_cache.at(name.contents) {
@@ -197,7 +193,11 @@ impl Expander<'_, '_, '_, '_> {
                     }
                 },
                 | "elif" if innermost => {
-                    if !self.check_conditional_arm(name, false) || mode == SkipMode::ToEndif {
+                    let valid = self.check_conditional_arm(name, false);
+                    if !valid || mode == SkipMode::ToEndif {
+                        if valid {
+                            self.trace_unevaluated_arm(name, file, &mut after, until);
+                        }
                         continue 'lines;
                     }
                     self.context.set_ignore_tokenizer_errors(false);
@@ -205,22 +205,26 @@ impl Expander<'_, '_, '_, '_> {
                         PreprocessorErrorType::NoConditionInElifDirective,
                     );
                     if self.tracing() {
-                        self.trace_condition(name.source_vectors, taken);
+                        self.trace_condition(name.source_vectors, taken, true);
                     }
-                    self.trace_skip_end(file, after_line, until_line);
+                    self.trace_skip_end(file, after, until);
                     if taken {
                         self.resume_at_line_start();
                         return;
                     }
                     // The next group is skipped on its own.
-                    after_line = until_line.unwrap_or(after_line);
+                    after = (until.unwrap_or(after.0), false);
                     self.context.set_ignore_tokenizer_errors(true);
                     at_line_start = true;
                 },
                 | "elifdef" | "elifndef"
                     if innermost && self.context.configuration.accepts(Feature::Elifdef) =>
                 {
-                    if !self.check_conditional_arm(name, false) || mode == SkipMode::ToEndif {
+                    let valid = self.check_conditional_arm(name, false);
+                    if !valid || mode == SkipMode::ToEndif {
+                        if valid {
+                            self.trace_unevaluated_arm(name, file, &mut after, until);
+                        }
                         continue 'lines;
                     }
                     self.context.set_ignore_tokenizer_errors(false);
@@ -236,15 +240,15 @@ impl Expander<'_, '_, '_, '_> {
                     );
                     let taken = self.eval_macro_test(directive);
                     if self.tracing() {
-                        self.trace_condition(name.source_vectors, taken);
+                        self.trace_condition(name.source_vectors, taken, true);
                     }
                     at_line_start = true;
-                    self.trace_skip_end(file, after_line, until_line);
+                    self.trace_skip_end(file, after, until);
                     if taken {
                         self.resume_at_line_start();
                         return;
                     }
-                    after_line = until_line.unwrap_or(after_line);
+                    after = (until.unwrap_or(after.0), false);
                     self.context.set_ignore_tokenizer_errors(true);
                 },
                 | "else" if innermost => {
@@ -254,11 +258,14 @@ impl Expander<'_, '_, '_, '_> {
                     at_line_start = true;
                     let taken = valid && mode == SkipMode::FalseGroup;
                     if self.tracing() {
-                        self.trace_condition(name.source_vectors, taken);
+                        self.trace_condition(name.source_vectors, taken, taken);
                     }
                     if taken {
                         break 'lines;
                     }
+                    // The `#else` group is skipped on its own.
+                    self.trace_skip_end(file, after, until);
+                    after = (until.unwrap_or(after.0), false);
                     self.context.set_ignore_tokenizer_errors(true);
                 },
                 | _ => {},
@@ -268,17 +275,35 @@ impl Expander<'_, '_, '_, '_> {
         if !at_line_start {
             self.skip_until_newline();
         }
-        self.trace_skip_end(file, after_line, until_line);
+        self.trace_skip_end(file, after, until);
         self.resume_at_line_start();
     }
 
-    /// Records the lines a skip passed over: those after `after_line` and
-    /// before the directive on `until_line` that ended it, or to the end of
-    /// the file.
-    fn trace_skip_end(&mut self, file: u32, after_line: u32, until_line: Option<u32>) {
+    /// Records the lines a skip passed over: from `after` up to the
+    /// directive at byte `until` that ended the group, or to the end of the
+    /// file.
+    fn trace_skip_end(&mut self, file: u32, after: (usize, bool), until: Option<usize>) {
         if self.tracing() {
-            let until_line = until_line.unwrap_or_else(|| self.position().line + 1);
-            self.trace_skipped(file, after_line, until_line);
+            self.trace_skipped(file, after, until);
+        }
+    }
+
+    /// Records an `#elif` met after a processed group, whose condition is
+    /// not evaluated, and the group before it; the group after it is
+    /// skipped on its own.
+    ///
+    /// C99: §6.10.1 paragraph 6, p. 149; PDF p. 161.
+    fn trace_unevaluated_arm(
+        &mut self,
+        name: PreprocessorToken,
+        file: u32,
+        after: &mut (usize, bool),
+        until: Option<usize>,
+    ) {
+        if self.tracing() {
+            self.trace_condition(name.source_vectors, false, false);
+            self.trace_skip_end(file, *after, until);
+            *after = (until.unwrap_or(after.0), false);
         }
     }
 }
@@ -344,7 +369,7 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
         let is_else = self.context.string_cache.at(directive.contents) == "else";
         _ = self.check_conditional_arm(directive, is_else);
         if self.tracing() {
-            self.trace_condition(directive.source_vectors, false);
+            self.trace_condition(directive.source_vectors, false, false);
         }
         if is_else {
             self.finish_conditional_directive("else");
@@ -403,7 +428,7 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
         ));
         let taken = self.eval_macro_test(name);
         if self.tracing() {
-            self.trace_condition(directive.source_vectors, taken);
+            self.trace_condition(directive.source_vectors, taken, true);
         }
         if taken {
             self.resume_at_line_start();

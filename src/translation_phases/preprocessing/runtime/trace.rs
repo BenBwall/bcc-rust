@@ -82,6 +82,29 @@ pub(crate) enum TraceEvent<'pp> {
         /// stands for, spelled as written with each run of whitespace as one
         /// space.
         arguments: Option<&'pp [(StringCacheId, StringCacheId)]>,
+        /// Whether the name was read from an argument of an enclosing
+        /// replacement, which is macro-replaced before it is substituted.
+        /// C99: §6.10.3.1 paragraph 1, p. 153; PDF p. 165.
+        prescan:   bool,
+        /// Whether a directive read the name, as `#if` reads its condition.
+        directive: bool,
+    },
+    /// A predefined macro such as `__LINE__` was replaced by its value.
+    /// C99: §6.10.8 paragraph 1, p. 160; PDF p. 172.
+    Builtin {
+        name:      StringCacheId,
+        at:        SourceVector,
+        /// The outermost invocation around it, if it was read inside one.
+        expansion: Option<SourceVector>,
+        /// The token it became, if it became one token.
+        result:    Option<StringCacheId>,
+        directive: bool,
+    },
+    /// A directive was executed; the ones a skipped group holds are not.
+    /// C99: §6.10 paragraph 2, pp. 146-147; PDF pp. 158-159.
+    Directive {
+        name: StringCacheId,
+        at:   SourceVector,
     },
     /// `#` spelled an argument as a character string literal.
     /// C99: §6.10.3.2 paragraph 2, p. 153; PDF p. 165.
@@ -116,8 +139,12 @@ pub(crate) enum TraceEvent<'pp> {
     Condition {
         directive: SourceVector,
         taken:     bool,
+        /// Whether its condition was evaluated: the arms after a processed
+        /// group are skipped without it.
+        evaluated: bool,
     },
-    /// The physical lines of a group that was skipped, both inclusive.
+    /// The physical lines of a group that was skipped, both inclusive, in
+    /// its physical file, which `#line` does not change.
     /// C99: §6.10.1 paragraph 6, p. 149; PDF p. 161.
     Skipped {
         file:       u32,
@@ -241,12 +268,59 @@ impl<'pp> Expander<'_, '_, 'pp, '_> {
             | _ => return,
         };
         let depth = self.replacement_depth();
+        // A nested replacement belongs to the outermost one being read,
+        // whose frame is lowest on the stack; a frame records the nearest
+        // invocation around it only up to an argument's boundary.
+        let expansion = self
+            .replacement()
+            .map_or(expansion, |(outermost, _)| outermost);
+        let prescan = self.reading_argument();
+        let directive = self.state.in_directive;
         self.push_trace(TraceEvent::Invoked {
             name,
             expansion,
             end,
             depth,
             arguments,
+            prescan,
+            directive,
+        });
+    }
+
+    /// Records that the predefined macro `token` names became `result`.
+    #[inline(never)]
+    pub(in crate::translation_phases::preprocessing) fn trace_builtin(
+        &mut self,
+        token: PreprocessorToken,
+        result: Option<PreprocessorToken>,
+    ) {
+        let at = self
+            .context
+            .first_source_vector_or_default(token.source_vectors);
+        let name = token.identifier_id(self.context);
+        let expansion = self.replacement().map(|(outermost, _)| outermost);
+        let directive = self.state.in_directive;
+        self.push_trace(TraceEvent::Builtin {
+            name,
+            at,
+            expansion,
+            result: result.map(|token| token.contents),
+            directive,
+        });
+    }
+
+    /// Records the directive whose name is `name`.
+    #[inline(never)]
+    pub(in crate::translation_phases::preprocessing) fn trace_directive(
+        &mut self,
+        name: PreprocessorToken,
+    ) {
+        let at = self
+            .context
+            .first_source_vector_or_default(name.source_vectors);
+        self.push_trace(TraceEvent::Directive {
+            name: name.contents,
+            at,
         });
     }
 
@@ -315,25 +389,46 @@ impl<'pp> Expander<'_, '_, 'pp, '_> {
         &mut self,
         directive: SourceVectors,
         taken: bool,
+        evaluated: bool,
     ) {
         let directive = self.context.first_source_vector_or_default(directive);
-        self.push_trace(TraceEvent::Condition { directive, taken });
+        self.push_trace(TraceEvent::Condition {
+            directive,
+            taken,
+            evaluated,
+        });
     }
 
-    /// Records that the lines of `file` after `after_line` and before
-    /// `until_line` were skipped, if there are any.
+    /// Records the lines of `file` (a source file index, which `#line` may
+    /// have renamed) that a skip passed over: from byte `after`, or from
+    /// the line after it unless `at_line_start`, through the line before the
+    /// byte `until` that starts the directive ending the group, or through
+    /// the end of the file. Lines are physical, as an editor counts them.
     #[inline(never)]
     pub(in crate::translation_phases::preprocessing) fn trace_skipped(
         &mut self,
         file: u32,
-        after_line: u32,
-        until_line: u32,
+        (after, at_line_start): (usize, bool),
+        until: Option<usize>,
     ) {
-        if until_line > after_line + 1 {
+        let physical = self.context.physical_source_file(file);
+        let line = |offset: usize| self.context.physical_position(physical, offset);
+        let Some((start, _)) = line(after) else {
+            return;
+        };
+        let first_line = if at_line_start { start } else { start + 1 };
+        let last_line = match until {
+            | Some(until) => line(until).map(|(line, _)| line.saturating_sub(1)),
+            | None => {
+                let length = self.context.source_text(physical).map_or(0, str::len);
+                line(length).map(|(line, column)| if column == 1 { line - 1 } else { line })
+            },
+        };
+        if let Some(last_line) = last_line.filter(|&last| last >= first_line) {
             self.push_trace(TraceEvent::Skipped {
-                file,
-                first_line: after_line + 1,
-                last_line: until_line - 1,
+                file: physical,
+                first_line,
+                last_line,
             });
         }
     }
@@ -375,6 +470,21 @@ impl<'pp> Expander<'_, '_, 'pp, '_> {
         let mut invocations = self.tokenizer_stack.iter().filter_map(invocation);
         let (outermost, innermost) = (invocations.next()?, invocations.next_back());
         Some((outermost.0.clone(), innermost.unwrap_or(outermost).1))
+    }
+
+    /// Whether the token being read comes from an argument of the innermost
+    /// replacement, rather than from its replacement list.
+    fn reading_argument(&self) -> bool {
+        self.tokenizer_stack
+            .iter()
+            .rev()
+            .take_while(|frame| invocation(frame).is_none())
+            .any(|frame| {
+                matches!(
+                    frame.frame_type,
+                    TokenizerFrameType::FunctionLikeMacroArgument { .. }
+                )
+            })
     }
 
     /// How many macro replacements are being read.
