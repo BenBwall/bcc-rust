@@ -1148,8 +1148,6 @@ impl LiveViews {
     }
 }
 
-/// The compilation of `text` at `level`, if it succeeded, with the
-/// precomputed LLVM IR for a lesson.
 /// Why the compiler Worker gave no answer, for the page: a timeout, or a
 /// trap whose cause is known, says so itself.
 fn compiler_failure(error: String) -> String {
@@ -1165,6 +1163,8 @@ fn compiler_failure(error: String) -> String {
     }
 }
 
+/// The compilation of `text` at `level`, if it succeeded, with the
+/// precomputed LLVM IR for a lesson.
 fn compilation_of(compiled: &Compiled, text: &str, level: bool) -> Option<Compilation> {
     let llvm = demos::matching(text).and_then(|demo| {
         crate::pipeline::precomputed_llvm(demo.name.trim_end_matches(".c"), level)

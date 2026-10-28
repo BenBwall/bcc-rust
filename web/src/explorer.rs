@@ -631,16 +631,8 @@ mod tests {
         assert!(trace.truncated);
         assert_eq!(trace.expansions.len(), MAX_EXPANSIONS);
         let last = trace.expansions.last().unwrap();
-        assert!(
-            last.partial && last.range.line > 40_000,
-            "{}",
-            last.range.line
-        );
-        assert!(
-            trace.expansions[..MAX_EXPANSIONS - 1]
-                .iter()
-                .all(|e| !e.partial)
-        );
+        assert!(last.partial && last.range.line > 40_000, "{}", last.range.line);
+        assert!(trace.expansions[..MAX_EXPANSIONS - 1].iter().all(|e| !e.partial));
         assert!(trace.omitted_expansions > 40_000);
     }
 

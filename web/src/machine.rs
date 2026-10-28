@@ -37,6 +37,10 @@ use crate::{
     },
 };
 
+/// Why the abstract machine's Worker answers no compile request.
+const NOT_A_COMPILER: &str =
+    "The abstract machine's Worker does not compile; the compiler Worker does.";
+
 /// One engine session over the most recently loaded source, and the
 /// WebAssembly stepper's session over the most recently loaded module.
 #[derive(Default)]
@@ -67,10 +71,7 @@ impl Machine {
                 .wasm
                 .control(control)
                 .map(|snapshot| Answer::Wasm(Box::new(snapshot))),
-            | Command::Compile { .. } | Command::CompileWasm(_) => Err("The abstract machine's \
-                                                                        Worker does not compile; \
-                                                                        the compiler Worker does."
-                .into()),
+            | Command::Compile { .. } | Command::CompileWasm(_) => Err(NOT_A_COMPILER.into()),
         }
     }
 
