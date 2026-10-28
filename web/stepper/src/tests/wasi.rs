@@ -8,6 +8,7 @@ use super::{
 use crate::{
     Command,
     Effect,
+    Program,
     Session,
     Status,
     Stream,
@@ -181,4 +182,38 @@ fn unresolved_imports_trap_only_when_called() {
     };
     assert_eq!(trap.kind, crate::TrapKind::Unresolved);
     assert!(trap.message.contains("`env.puts`"), "{}", trap.message);
+}
+
+#[test]
+fn unimplemented_wasi_functions_answer_enosys() {
+    let mut module = Builder::new();
+    module.import(WASI, "path_open", &[I32, I32, I32], &[I32]);
+    module.memory(1, None);
+    module.func(
+        "_start",
+        &[],
+        &[I32],
+        &[],
+        "i32.const 0 i32.const 0 i32.const 0 call path_open",
+    );
+    let program = program(&module);
+    assert_eq!(program.unresolved, Vec::<String>::new());
+    let mut session = Session::new(program).unwrap();
+    session.run(Command::Continue, 100);
+    assert_eq!(
+        session.machine().status,
+        Status::Finished(vec![Value::I32(52)])
+    );
+    // One that returns nothing cannot answer an error number.
+    let mut module = Builder::new();
+    module.import(WASI, "proc_raise_later", &[I32], &[]);
+    module.func("_start", &[], &[], &[], "");
+    assert_eq!(
+        program_of(&module).unresolved,
+        ["wasi_snapshot_preview1.proc_raise_later"]
+    );
+}
+
+fn program_of(module: &Builder) -> Program {
+    Program::load(&module.build(), None).unwrap()
 }

@@ -54,6 +54,9 @@ pub enum WasiFunction {
     ClockResGet,
     RandomGet,
     SchedYield,
+    /// Any other preview 1 function that returns an error number: it
+    /// answers `ENOSYS`, as runtimes do for what they do not implement.
+    Unsupported,
 }
 
 impl WasiFunction {
@@ -79,7 +82,7 @@ impl WasiFunction {
             | "clock_res_get" => Self::ClockResGet,
             | "random_get" => Self::RandomGet,
             | "sched_yield" => Self::SchedYield,
-            | _ => return None,
+            | _ => Self::Unsupported,
         })
     }
 
@@ -105,7 +108,9 @@ impl WasiFunction {
             | Self::FdPrestatDirName => (&[I32, I32, I32], &[I32]),
             | Self::ProcExit => (&[I32], &[]),
             | Self::ClockTimeGet => (&[I32, I64, I32], &[I32]),
-            | Self::SchedYield => (&[], &[I32]),
+            // An unsupported function's parameters are whatever it imports
+            // (see `provides`); only its error number is fixed.
+            | Self::SchedYield | Self::Unsupported => (&[], &[I32]),
         };
         FuncType {
             params:  params.to_vec(),
@@ -116,7 +121,14 @@ impl WasiFunction {
 
 /// Whether the host provides `module.name` with type `ty`.
 pub fn provides(module: &str, name: &str, ty: Option<&FuncType>) -> bool {
-    WasiFunction::resolve(module, name).is_some_and(|function| ty == Some(&function.ty()))
+    let Some(ty) = ty else {
+        return false;
+    };
+    match WasiFunction::resolve(module, name) {
+        | Some(WasiFunction::Unsupported) => ty.results == [ValType::I32],
+        | Some(function) => *ty == function.ty(),
+        | None => false,
+    }
 }
 
 /// Which stream a piece of output went to.
@@ -164,6 +176,7 @@ impl Host {
     ///
     /// # Errors
     /// A bad pointer traps, as an out-of-bounds access would.
+    #[expect(clippy::too_many_lines, reason = "One arm per WASI function.")]
     pub fn call(
         &mut self,
         function: WasiFunction,
@@ -270,6 +283,11 @@ impl Host {
                     format!("filled {length} bytes from a fixed-seed generator"),
                 )
             },
+            | WasiFunction::Unsupported => (
+                ENOSYS,
+                "answered that it is not implemented: the stepper provides only a little of WASI"
+                    .to_owned(),
+            ),
             | WasiFunction::ProcExit | WasiFunction::SchedYield =>
                 (ENOSYS, "unreachable".to_owned()),
         };
