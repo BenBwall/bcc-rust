@@ -1,10 +1,12 @@
 /* <stdlib.h> conversions and utilities, <time.h>, and a small scanf for
-   wasm32-wasip1. C99: §7.20, pp. 306-324; §7.19.6.2, pp. 282-289.
+   wasm32-wasip1. C99: §7.20, pp. 306-324; §7.19.6.2, pp. 282-289. The
+   floating conversions are in floatscan.c.
 
-   strtod is exact for up to 19 significant digits with a decimal exponent
-   whose power of ten is exact in binary64 (|e| <= 22); otherwise it
-   scales by powers of ten and may differ from the correctly rounded value
-   in the last place. */
+   C23 reads a 0b or 0B prefix in strtol's base 0 and 2 and in scanf's %i.
+   As in glibc 2.38 and later, the C23 functions have their own names
+   (__isoc23_strtol, __isoc23_sscanf, ...), to which the headers redirect
+   under -std=c23 or gnu23 and with _GNU_SOURCE, so other programs keep
+   the C17 behaviour. */
 #include <ctype.h>
 #include <errno.h>
 #include <limits.h>
@@ -25,8 +27,10 @@ div_t div(int n, int d) { div_t r = {n / d, n % d}; return r; }
 ldiv_t ldiv(long n, long d) { ldiv_t r = {n / d, n % d}; return r; }
 lldiv_t lldiv(long long n, long long d) { lldiv_t r = {n / d, n % d}; return r; }
 
-/* Parses an integer: the magnitude, its sign, and how far it got. */
-static unsigned long long parse_unsigned(const char *s, char **end, int base, int *negative, int *overflow) {
+/* Parses an integer: the magnitude, its sign, and how far it got. With
+   binary set, base 0 and 2 also read a 0b prefix (C23). */
+static unsigned long long parse_unsigned(const char *s, char **end, int base, int binary, int *negative,
+                                         int *overflow) {
     const char *p = s;
     while (isspace((unsigned char)*p))
         p++;
@@ -37,6 +41,10 @@ static unsigned long long parse_unsigned(const char *s, char **end, int base, in
     if ((base == 0 || base == 16) && p[0] == '0' && (p[1] | 32) == 'x' && isxdigit((unsigned char)p[2])) {
         p += 2;
         base = 16;
+    } else if (binary && (base == 0 || base == 2) && p[0] == '0' && (p[1] | 32) == 'b' &&
+               (p[2] == '0' || p[2] == '1')) {
+        p += 2;
+        base = 2;
     } else if (base == 0) {
         base = *p == '0' ? 8 : 10;
     }
@@ -61,9 +69,9 @@ static unsigned long long parse_unsigned(const char *s, char **end, int base, in
     return value;
 }
 
-long long strtoll(const char *s, char **end, int base) {
+static long long to_signed(const char *s, char **end, int base, int binary) {
     int negative, overflow;
-    unsigned long long v = parse_unsigned(s, end, base, &negative, &overflow);
+    unsigned long long v = parse_unsigned(s, end, base, binary, &negative, &overflow);
     if (overflow || v > (negative ? (unsigned long long)LLONG_MAX + 1 : (unsigned long long)LLONG_MAX)) {
         errno = ERANGE;
         return negative ? LLONG_MIN : LLONG_MAX;
@@ -71,9 +79,9 @@ long long strtoll(const char *s, char **end, int base) {
     return negative ? (long long)(0 - v) : (long long)v;
 }
 
-unsigned long long strtoull(const char *s, char **end, int base) {
+static unsigned long long to_unsigned(const char *s, char **end, int base, int binary) {
     int negative, overflow;
-    unsigned long long v = parse_unsigned(s, end, base, &negative, &overflow);
+    unsigned long long v = parse_unsigned(s, end, base, binary, &negative, &overflow);
     if (overflow) {
         errno = ERANGE;
         return ULLONG_MAX;
@@ -81,8 +89,8 @@ unsigned long long strtoull(const char *s, char **end, int base) {
     return negative ? 0 - v : v;
 }
 
-long strtol(const char *s, char **end, int base) {
-    long long v = strtoll(s, end, base);
+static long to_long(const char *s, char **end, int base, int binary) {
+    long long v = to_signed(s, end, base, binary);
     if (v > LONG_MAX) {
         errno = ERANGE;
         return LONG_MAX;
@@ -94,9 +102,9 @@ long strtol(const char *s, char **end, int base) {
     return (long)v;
 }
 
-unsigned long strtoul(const char *s, char **end, int base) {
+static unsigned long to_unsigned_long(const char *s, char **end, int base, int binary) {
     int negative, overflow;
-    unsigned long long v = parse_unsigned(s, end, base, &negative, &overflow);
+    unsigned long long v = parse_unsigned(s, end, base, binary, &negative, &overflow);
     if (overflow || v > ULONG_MAX) {
         errno = ERANGE;
         return ULONG_MAX;
@@ -104,264 +112,18 @@ unsigned long strtoul(const char *s, char **end, int base) {
     return negative ? (unsigned long)(0 - v) : (unsigned long)v;
 }
 
+long long strtoll(const char *s, char **end, int base) { return to_signed(s, end, base, 0); }
+unsigned long long strtoull(const char *s, char **end, int base) { return to_unsigned(s, end, base, 0); }
+long strtol(const char *s, char **end, int base) { return to_long(s, end, base, 0); }
+unsigned long strtoul(const char *s, char **end, int base) { return to_unsigned_long(s, end, base, 0); }
+long long __isoc23_strtoll(const char *s, char **end, int base) { return to_signed(s, end, base, 1); }
+unsigned long long __isoc23_strtoull(const char *s, char **end, int base) { return to_unsigned(s, end, base, 1); }
+long __isoc23_strtol(const char *s, char **end, int base) { return to_long(s, end, base, 1); }
+unsigned long __isoc23_strtoul(const char *s, char **end, int base) { return to_unsigned_long(s, end, base, 1); }
+
 int atoi(const char *s) { return (int)strtol(s, 0, 10); }
 long atol(const char *s) { return strtol(s, 0, 10); }
 long long atoll(const char *s) { return strtoll(s, 0, 10); }
-
-/* The payload of a NaN whose n-char-sequence is [first, last): the
-   sequence read as an integer in base 0 when all of it is one, and 0
-   otherwise, as in glibc (an integer too large gives all ones). errno is
-   unchanged. C99 7.20.1.3p4. */
-static unsigned long long nan_payload(const char *first, const char *last) {
-    int saved = errno;
-    char *digits;
-    unsigned long long v = strtoull(first, &digits, 0);
-    errno = saved;
-    return digits == last ? v : 0;
-}
-
-/* The quiet NaN with a sign and the low bits of a payload. */
-static double nan_double(int negative, unsigned long long payload) {
-    union {
-        unsigned long long u;
-        double d;
-    } bits = {(negative ? 1ull << 63 : 0) | 0x7ff8000000000000ull | (payload & 0x7ffffffffffffull)};
-    return bits.d;
-}
-
-/* The quiet binary128 NaN (long double on wasm32) with a sign and a
-   payload, which its 111 bits below the quiet bit hold whole. */
-static long double nan_quad(int negative, unsigned long long payload) {
-    union {
-        unsigned long long words[2];
-        long double f;
-    } bits = {{payload, (negative ? 1ull << 63 : 0) | 0x7FFF800000000000ull}};
-    return bits.f;
-}
-
-/* Reads what follows "nan": an optional (n-char-sequence), whose payload
-   it stores, 0 without one. Returns the end of what it read. */
-static const char *nan_sequence(const char *p, unsigned long long *payload) {
-    *payload = 0;
-    if (*p != '(')
-        return p;
-    const char *q = p + 1;
-    while (isalnum((unsigned char)*q) || *q == '_')
-        q++;
-    if (*q != ')')
-        return p;
-    *payload = nan_payload(p + 1, q);
-    return q + 1;
-}
-
-static float nan_float(int negative, unsigned long long payload) {
-    union {
-        unsigned u;
-        float f;
-    } bits = {(negative ? 1u << 31 : 0) | 0x7fc00000u | (unsigned)(payload & 0x3fffffu)};
-    return bits.f;
-}
-
-static const double exact_powers[] = {1e0,  1e1,  1e2,  1e3,  1e4,  1e5,  1e6,  1e7,
-                                      1e8,  1e9,  1e10, 1e11, 1e12, 1e13, 1e14, 1e15,
-                                      1e16, 1e17, 1e18, 1e19, 1e20, 1e21, 1e22};
-
-double strtod(const char *s, char **end) {
-    const char *p = s;
-    while (isspace((unsigned char)*p))
-        p++;
-    int negative = 0;
-    if (*p == '+' || *p == '-')
-        negative = *p++ == '-';
-    double sign = negative ? -1.0 : 1.0;
-    if (!strncasecmp(p, "inf", 3)) {
-        p += 3;
-        if (!strncasecmp(p, "inity", 5))
-            p += 5;
-        if (end)
-            *end = (char *)p;
-        return sign * __builtin_inf();
-    }
-    if (!strncasecmp(p, "nan", 3)) {
-        unsigned long long payload;
-        p = nan_sequence(p + 3, &payload);
-        if (end)
-            *end = (char *)p;
-        return nan_double(negative, payload);
-    }
-    if (p[0] == '0' && (p[1] | 32) == 'x') {
-        /* Hexadecimal: exact up to 16 significant digits. */
-        const char *q = p + 2;
-        unsigned long long m = 0;
-        int exponent = 0, digits = 0, any = 0;
-        for (;; q++) {
-            int c = (unsigned char)*q;
-            if (!isxdigit(c))
-                break;
-            any = 1;
-            int d = isdigit(c) ? c - '0' : (c | 32) - 'a' + 10;
-            if (digits < 16) {
-                m = m * 16 + (unsigned)d;
-                if (m)
-                    digits++;
-            } else {
-                exponent += 4;
-            }
-        }
-        if (*q == '.') {
-            q++;
-            for (;; q++) {
-                int c = (unsigned char)*q;
-                if (!isxdigit(c))
-                    break;
-                any = 1;
-                int d = isdigit(c) ? c - '0' : (c | 32) - 'a' + 10;
-                if (digits < 16) {
-                    m = m * 16 + (unsigned)d;
-                    exponent -= 4;
-                    if (m)
-                        digits++;
-                }
-            }
-        }
-        if (!any) {
-            if (end)
-                *end = (char *)p + 1;
-            return sign * 0.0;
-        }
-        if ((*q | 32) == 'p') {
-            char *after;
-            long e = strtol(q + 1, &after, 10);
-            if (after != q + 1) {
-                exponent += (int)e;
-                q = after;
-            }
-        }
-        if (end)
-            *end = (char *)q;
-        double v = (double)m;
-        while (exponent > 0) {
-            v *= 2.0;
-            exponent--;
-        }
-        while (exponent < 0) {
-            v *= 0.5;
-            exponent++;
-        }
-        return sign * v;
-    }
-    unsigned long long m = 0;
-    int digits = 0, exponent = 0, any = 0;
-    for (; isdigit((unsigned char)*p); p++) {
-        any = 1;
-        if (digits < 19) {
-            m = m * 10 + (unsigned)(*p - '0');
-            if (m)
-                digits++;
-        } else {
-            exponent++;
-        }
-    }
-    if (*p == '.') {
-        p++;
-        for (; isdigit((unsigned char)*p); p++) {
-            any = 1;
-            if (digits < 19) {
-                m = m * 10 + (unsigned)(*p - '0');
-                exponent--;
-                if (m)
-                    digits++;
-            }
-        }
-    }
-    if (!any) {
-        if (end)
-            *end = (char *)s;
-        return 0.0;
-    }
-    if ((*p | 32) == 'e') {
-        char *after;
-        long e = strtol(p + 1, &after, 10);
-        if (after != p + 1 && isdigit((unsigned char)after[-1])) {
-            exponent += e > 100000 ? 100000 : e < -100000 ? -100000 : (int)e;
-            p = after;
-        }
-    }
-    if (end)
-        *end = (char *)p;
-    double v = (double)m;
-    if (m == 0)
-        return sign * 0.0;
-    if (exponent >= 0 && exponent <= 22 && m < (1ull << 53)) {
-        v *= exact_powers[exponent];
-    } else if (exponent < 0 && exponent >= -22 && m < (1ull << 53)) {
-        v /= exact_powers[-exponent];
-    } else {
-        while (exponent > 22) {
-            v *= 1e22;
-            exponent -= 22;
-        }
-        while (exponent < -22) {
-            v /= 1e22;
-            exponent += 22;
-        }
-        if (exponent >= 0)
-            v *= exact_powers[exponent];
-        else
-            v /= exact_powers[-exponent];
-    }
-    if (v == __builtin_inf() || v == 0.0)
-        errno = ERANGE;
-    return sign * v;
-}
-
-float strtof(const char *s, char **end) {
-    double v = strtod(s, end);
-    if (v != v) {
-        /* A NaN keeps its payload's low bits, as in glibc; converting the
-           double would keep its high ones. */
-        union {
-            double d;
-            unsigned long long u;
-        } wide = {v};
-        return nan_float(wide.u >> 63, wide.u);
-    }
-    return (float)v;
-}
-
-/* nan("n-char-sequence") is strtod("NAN(n-char-sequence)") (C99
-   7.12.11.2): a tag that is no n-char-sequence gives payload 0. */
-static unsigned long long tag_payload(const char *tag) {
-    const char *last = tag;
-    while (isalnum((unsigned char)*last) || *last == '_')
-        last++;
-    return *last ? 0 : nan_payload(tag, last);
-}
-
-double nan(const char *tag) { return nan_double(0, tag_payload(tag)); }
-float nanf(const char *tag) { return nan_float(0, tag_payload(tag)); }
-long double nanl(const char *tag) { return nan_quad(0, tag_payload(tag)); }
-
-/* strtold reads at double precision, except that a NaN keeps its whole
-   payload in binary128's low bits, as glibc's does where long double is
-   binary128. */
-long double strtold(const char *s, char **end) {
-    const char *p = s;
-    while (isspace((unsigned char)*p))
-        p++;
-    int negative = 0;
-    if (*p == '+' || *p == '-')
-        negative = *p++ == '-';
-    if (!strncasecmp(p, "nan", 3)) {
-        unsigned long long payload;
-        p = nan_sequence(p + 3, &payload);
-        if (end)
-            *end = (char *)p;
-        return nan_quad(negative, payload);
-    }
-    return strtod(s, end);
-}
-double atof(const char *s) { return strtod(s, 0); }
 
 static unsigned long long random_state = 1;
 
@@ -454,8 +216,10 @@ time_t time(time_t *timer) {
 
 double difftime(time_t a, time_t b) { return (double)(a - b); }
 
-/* scanf: whitespace, literal characters, %%, and %d %i %u %o %x %p %c %s
-   %[ %f %e %g %a %n with the hh, h, l, ll, j, z, t and L lengths and *. */
+/* scanf: whitespace, literal characters, %%, and %d %i %u %o %x %b %p %c
+   %s %[ %f %e %g %a %n with the hh, h, l, ll, j, z, t and L lengths and *.
+   %b (C23, and in glibc's every mode since 2.38) reads binary digits after
+   an optional 0b prefix. */
 struct source {
     const char *string;
     FILE *file;
@@ -498,7 +262,20 @@ static int base_digit(int c, int base) {
     return base == 16 && c >= 'a' && c <= 'f';
 }
 
-static int scan(struct source *in, const char *fmt, va_list ap) {
+/* A numeric field's characters, in local until they outgrow it. */
+struct field {
+    char *text;
+    int length;
+    int capacity;
+    char local[512];
+};
+
+static int append(struct field *field, int c);
+static void release(struct field *field);
+static int convert(const char *text, int n, int c, int length, int base, int binary, va_list *ap);
+
+/* The scanf family; with c23 set, %i reads a 0b prefix. */
+static int scan(struct source *in, const char *fmt, va_list ap, int c23) {
     int assigned = 0;
     for (; *fmt; fmt++) {
         if (isspace((unsigned char)*fmt)) {
@@ -572,7 +349,6 @@ static int scan(struct source *in, const char *fmt, va_list ap) {
             return assigned ? assigned : EOF;
         if (width == 0)
             width = c == 'c' ? 1 : INT_MAX;
-        char buffer[512];
         int n = 0;
         if (pointer && peek(in) == '(') {
             /* "(nil)", which printf writes for a null pointer, as glibc. */
@@ -645,18 +421,27 @@ static int scan(struct source *in, const char *fmt, va_list ap) {
            number (C99 7.19.6.2p9: the longest prefix of a matching input
            sequence), leaving the next one unread. If that prefix is not a
            whole number ("0x", "1e+", "infin"), the directive fails
-           (7.19.6.2p10), and the characters stay consumed. */
+           (7.19.6.2p10), and the characters stay consumed. A field has no
+           length limit, as in glibc: it moves to the heap when it outgrows
+           the stack buffer. */
         int floating = c == 'f' || c == 'e' || c == 'g' || c == 'a' || c == 'E' || c == 'G' || c == 'F' ||
                        c == 'A';
-        int limit = width < (int)sizeof buffer - 1 ? width : (int)sizeof buffer - 1;
-#define NEXT_IS(test) (n < limit && peek(in) != EOF && (test))
-#define TAKE()                          \
-    do {                                \
-        buffer[n++] = (char)peek(in);   \
-        take(in);                       \
+        struct field field;
+        field.text = field.local;
+        field.length = 0;
+        field.capacity = sizeof field.local;
+#define NEXT_IS(test) (field.length < width && peek(in) != EOF && (test))
+#define TAKE()                                       \
+    do {                                             \
+        if (!append(&field, peek(in)))               \
+            return assigned ? assigned : EOF;        \
+        take(in);                                    \
     } while (0)
         if (NEXT_IS(peek(in) == '+' || peek(in) == '-'))
             TAKE();
+        int base = c == 'd' || c == 'u' ? 10 : c == 'o' ? 8 : c == 'x' || c == 'X' ? 16 : c == 'b' ? 2 : 0;
+        /* %b, and %i in C23, read a 0b prefix (C23 7.23.6.2p12). */
+        int binary = c == 'b' || (c == 'i' && c23);
         if (floating) {
             int lead = peek(in) | 32;
             if (lead == 'i' || lead == 'n') {
@@ -704,77 +489,139 @@ static int scan(struct source *in, const char *fmt, va_list ap) {
                 }
             }
         } else {
-            int base = c == 'd' || c == 'u' ? 10 : c == 'o' ? 8 : c == 'x' || c == 'X' ? 16 : 0;
-            int digits = 0;
-            if ((base == 0 || base == 16) && NEXT_IS(peek(in) == '0')) {
+            int digits = 0, radix = base;
+            if ((radix == 0 || radix == 16 || radix == 2) && NEXT_IS(peek(in) == '0')) {
                 TAKE();
-                if (NEXT_IS((peek(in) | 32) == 'x')) {
-                    /* The prefix's 0 is no digit: "0x" alone fails. */
+                /* The prefix's 0 is no digit: "0x" alone fails. */
+                if (radix != 2 && NEXT_IS((peek(in) | 32) == 'x')) {
                     TAKE();
-                    base = 16;
+                    radix = 16;
+                } else if (binary && NEXT_IS((peek(in) | 32) == 'b')) {
+                    TAKE();
+                    radix = 2;
                 } else {
                     digits = 1;
-                    if (base == 0)
-                        base = 8;
+                    if (radix == 0)
+                        radix = 8;
                 }
             }
-            if (base == 0)
-                base = 10;
-            while (NEXT_IS(base_digit(peek(in), base))) {
+            if (radix == 0)
+                radix = 10;
+            while (NEXT_IS(base_digit(peek(in), radix))) {
                 TAKE();
                 digits++;
             }
-            if (!digits)
+            if (!digits) {
+                release(&field);
                 break;
+            }
         }
 #undef TAKE
 #undef NEXT_IS
-        buffer[n] = 0;
-        char *end;
-        if (floating) {
-            /* strtof for a float keeps a NaN's payload. */
-            double v = 0;
-            float narrow = 0;
-            if (length == 0)
-                narrow = strtof(buffer, &end);
-            else
-                v = strtod(buffer, &end);
-            if (n == 0 || end != buffer + n)
-                break;
-            if (!skip) {
-                if (length == 1)
-                    *va_arg(ap, double *) = v;
-                else if (length == 3)
-                    *va_arg(ap, long double *) = v;
-                else
-                    *va_arg(ap, float *) = narrow;
-                assigned++;
-            }
-            continue;
-        }
-        int base = c == 'd' || c == 'u' ? 10 : c == 'o' ? 8 : c == 'x' || c == 'X' ? 16 : 0;
-        unsigned long long v = strtoull(buffer, &end, base);
-        if (c == 'd' || c == 'i')
-            v = (unsigned long long)strtoll(buffer, &end, base);
-        if (end != buffer + n)
+        if (!append(&field, 0))
+            return assigned ? assigned : EOF;
+        int converted = field.length > 1 && convert(field.text, field.length - 1, c, length, base, binary,
+                                                    skip ? 0 : &ap);
+        release(&field);
+        if (!converted)
             break;
-        if (!skip) {
-            STORE_INTEGER(ap, length, v);
-            assigned++;
-        }
+        assigned += !skip;
     }
     return assigned;
 }
 
-int vsscanf(const char *s, const char *fmt, va_list ap) {
-    struct source in = {s, 0, -2, 0};
-    return scan(&in, fmt, ap);
+/* Converts a numeric field of n characters, which must all be part of the
+   number, and stores the value through the next argument of *ap unless ap
+   is null. Returns whether the field was a whole number. */
+static int convert(const char *text, int n, int c, int length, int base, int binary, va_list *ap) {
+    char *end;
+    if (c == 'f' || c == 'e' || c == 'g' || c == 'a' || c == 'E' || c == 'G' || c == 'F' || c == 'A') {
+        /* Each type has its own correctly rounded conversion, so a float
+           is not rounded twice and a long double keeps binary128's
+           precision; strtof also keeps a NaN's low payload bits. */
+        if (length == 1) {
+            double v = strtod(text, &end);
+            if (end != text + n)
+                return 0;
+            if (ap)
+                *va_arg(*ap, double *) = v;
+        } else if (length == 3) {
+            long double v = strtold(text, &end);
+            if (end != text + n)
+                return 0;
+            if (ap)
+                *va_arg(*ap, long double *) = v;
+        } else {
+            float v = strtof(text, &end);
+            if (end != text + n)
+                return 0;
+            if (ap)
+                *va_arg(*ap, float *) = v;
+        }
+        return 1;
+    }
+    unsigned long long v = c == 'd' || c == 'i' ? (unsigned long long)to_signed(text, &end, base, binary)
+                                                 : to_unsigned(text, &end, base, binary);
+    if (end != text + n)
+        return 0;
+    if (ap)
+        STORE_INTEGER(*ap, length, v);
+    return 1;
 }
+
+/* Appends c to a numeric field, moving it to the heap when it outgrows
+   its buffer. Fails only when memory runs out. */
+static int append(struct field *field, int c) {
+    if (field->length == field->capacity) {
+        int grown = field->capacity * 2;
+        char *text = field->text == field->local ? malloc(grown) : realloc(field->text, grown);
+        if (!text) {
+            release(field);
+            return 0;
+        }
+        if (field->text == field->local)
+            memcpy(text, field->local, field->length);
+        field->text = text;
+        field->capacity = grown;
+    }
+    field->text[field->length++] = (char)c;
+    return 1;
+}
+
+static void release(struct field *field) {
+    if (field->text != field->local)
+        free(field->text);
+}
+
+static int scan_string(const char *s, const char *fmt, va_list ap, int c23) {
+    struct source in = {s, 0, -2, 0};
+    return scan(&in, fmt, ap, c23);
+}
+
+/* Scans a stream and pushes back the character that ended the scan. */
+static int scan_stream(FILE *f, const char *fmt, va_list ap, int c23) {
+    struct source in = {0, f, -2, 0};
+    int n = scan(&in, fmt, ap, c23);
+    if (in.peeked >= 0)
+        ungetc(in.peeked, f);
+    return n;
+}
+
+int vsscanf(const char *s, const char *fmt, va_list ap) { return scan_string(s, fmt, ap, 0); }
+int __isoc23_vsscanf(const char *s, const char *fmt, va_list ap) { return scan_string(s, fmt, ap, 1); }
 
 int sscanf(const char *s, const char *fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
-    int n = vsscanf(s, fmt, ap);
+    int n = scan_string(s, fmt, ap, 0);
+    va_end(ap);
+    return n;
+}
+
+int __isoc23_sscanf(const char *s, const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    int n = scan_string(s, fmt, ap, 1);
     va_end(ap);
     return n;
 }
@@ -782,10 +629,15 @@ int sscanf(const char *s, const char *fmt, ...) {
 int fscanf(FILE *f, const char *fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
-    struct source in = {0, f, -2, 0};
-    int n = scan(&in, fmt, ap);
-    if (in.peeked >= 0)
-        ungetc(in.peeked, f);
+    int n = scan_stream(f, fmt, ap, 0);
+    va_end(ap);
+    return n;
+}
+
+int __isoc23_fscanf(FILE *f, const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    int n = scan_stream(f, fmt, ap, 1);
     va_end(ap);
     return n;
 }
@@ -793,10 +645,15 @@ int fscanf(FILE *f, const char *fmt, ...) {
 int scanf(const char *fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
-    struct source in = {0, stdin, -2, 0};
-    int n = scan(&in, fmt, ap);
-    if (in.peeked >= 0)
-        ungetc(in.peeked, stdin);
+    int n = scan_stream(stdin, fmt, ap, 0);
+    va_end(ap);
+    return n;
+}
+
+int __isoc23_scanf(const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    int n = scan_stream(stdin, fmt, ap, 1);
     va_end(ap);
     return n;
 }
@@ -804,3 +661,5 @@ int scanf(const char *fmt, ...) {
 intmax_t imaxabs(intmax_t j) { return j < 0 ? -j : j; }
 intmax_t strtoimax(const char *s, char **end, int base) { return strtoll(s, end, base); }
 uintmax_t strtoumax(const char *s, char **end, int base) { return strtoull(s, end, base); }
+intmax_t __isoc23_strtoimax(const char *s, char **end, int base) { return to_signed(s, end, base, 1); }
+uintmax_t __isoc23_strtoumax(const char *s, char **end, int base) { return to_unsigned(s, end, base, 1); }
