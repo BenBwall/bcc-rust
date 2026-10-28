@@ -423,6 +423,12 @@ impl<'tu> SemanticTranslationUnit<'tu> {
                                 ty = element;
                             },
                             | TypeKind::Nullptr => break "nullptr_t",
+                            | TypeKind::BitInt { width, signed } =>
+                                break crate::diagnostics::format_in!(
+                                    arena,
+                                    "{}_BitInt({width})",
+                                    if signed { "" } else { "unsigned " }
+                                ),
                             | TypeKind::Unknown | TypeKind::Unmodeled(_) => break "<unanalyzed>",
                             | TypeKind::Atomic(value) => {
                                 left.push(Part::Text("_Atomic("));

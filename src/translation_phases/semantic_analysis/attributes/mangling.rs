@@ -181,6 +181,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                             parts.push(Part::Type(result));
                         },
                         | TypeKind::Nullptr => output.push_str("Dn"),
+                        // Clang's `DB <width> _` and `DU <width> _`.
+                        | TypeKind::BitInt { width, signed } =>
+                            output.push_str(crate::diagnostics::format_in!(
+                                self.scratch,
+                                "{}{width}_",
+                                if signed { "DB" } else { "DU" }
+                            )),
                         | TypeKind::Atomic(inner) => {
                             output.push_str("U7_Atomic");
                             parts.push(Part::Type(inner));

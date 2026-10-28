@@ -232,7 +232,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 };
                 if let super::super::ObjectSize::Constant(size) = size {
                     let (bits, signed) = self.integer_type(result)?;
-                    info.integer = Some(Integer::int(i128::from(size)).cast(bits, signed));
+                    info.integer = Integer::int(i128::from(size)).convert(bits, signed);
                     info.ice = true;
                     info.constant = ConstantClass::Arithmetic;
                 }
@@ -269,7 +269,17 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         | _ => None,
                     }
                 };
-                let valid=destination.is_some_and(|ty| matches!(self.types.nodes[ty.index],TypeKind::Scalar(s) if s.integer() && s!=Scalar::Bool) && (predicate || !ty.qualifiers.contains(TypeQualifiers::CONST)) && scalar.is_none_or(|s|self.types.nodes[ty.index]==TypeKind::Scalar(s)));
+                // GCC and Clang accept a bit-precise destination too.
+                let valid = destination.is_some_and(|ty| {
+                    matches!(
+                        self.types.nodes[ty.index],
+                        TypeKind::Scalar(s) if s.integer() && s != Scalar::Bool
+                    ) || (matches!(self.types.nodes[ty.index], TypeKind::BitInt { .. })
+                        && scalar.is_none())
+                }) && destination.is_some_and(|ty| {
+                    (predicate || !ty.qualifiers.contains(TypeQualifiers::CONST))
+                        && scalar.is_none_or(|s| self.types.nodes[ty.index] == TypeKind::Scalar(s))
+                });
                 if !valid {
                     self.error(
                         SemanticErrorKind::InvalidArgumentType,
@@ -289,8 +299,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                                 crate::translation_phases::semantic_analysis::EffectContext::Value,
                             )
                             && let Some((a, b)) = a.integer.zip(b.integer)
+                            && !a.wide()
+                            && !b.wide()
+                            // A wider bit-precise destination is not folded.
+                            && let Some((bits, signed)) = self
+                                .integer_type(destination)
+                                .filter(|&(bits, _)| bits <= 128)
                         {
-                            let (bits, signed) = self.integer_type(destination)?;
                             let bits = operand.bit_field.unwrap_or(bits);
                             info.integer = Some(Integer::int(i128::from(constant_overflow(
                                 operation, a, b, bits, signed,
@@ -462,7 +477,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let info = self.expression_info(e);
         let value = info.integer.filter(|_| info.ice)?;
         let (bits, signed) = self.integer_type(ty)?;
-        Some(value.cast(bits, signed))
+        value.convert(bits, signed)
     }
 }
 

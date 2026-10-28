@@ -473,10 +473,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             if matches!(self.types.nodes[ty.index], TypeKind::Scalar(Scalar::Bool)) {
                 info.integer = Some(Integer::int(i128::from(value.truth())).cast(1, false));
             } else if let Some((bits, signed)) = self.integer_type(ty) {
-                info.integer = value
-                    .real
-                    .to_integer(signed, bits)
-                    .map(|bits_value| Integer::int(bits_value.cast_signed()).cast(bits, signed));
+                info.integer = value.real.to_integer(signed, bits).and_then(|bits_value| {
+                    Integer::int(bits_value.cast_signed()).convert(bits, signed)
+                });
             } else if self.arithmetic(ty) {
                 // A real operand's imaginary part is +0, whatever sign
                 // negating it gave the folded zero (C99 §6.3.1.7p1).

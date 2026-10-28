@@ -483,7 +483,9 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 })?;
             let operand = match self.repr(ty, source)? {
                 | Repr::Aggregate | Repr::Complex { .. } => Operand::Aggregate(value),
-                | _ => Operand::Value(value),
+                | _ if super::types::limb_argument(&self.unit.sema.types, ty) =>
+                    Operand::Value(self.load_limbs(value, ty, source)?),
+                | representation => Operand::Value(self.normalize(value, representation)),
             };
             items.push(Item { operand, ty });
         }

@@ -40,11 +40,16 @@ use crate::{
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum Repr {
     Void,
-    /// An integer type other than `_Bool`, with its C signedness.
+    /// An integer type other than `_Bool`, with its C signedness and its
+    /// width, which is its IR type's but for a bit-precise type narrower
+    /// than that type. Such a value is kept extended to its IR type from
+    /// its width, by its signedness ([`Repr::narrow`]).
     /// C99: §6.2.5 paragraphs 4-8, pp. 33-34; PDF pp. 45-46.
+    /// C23: §6.2.5 paragraphs 5-8, p. 39; PDF p. 52.
     Int {
         ty:     Type,
         signed: bool,
+        width:  u8,
     },
     /// `_Bool`: an `i8` holding 0 or 1.
     /// C99: §6.2.5 paragraph 2, p. 33; PDF p. 45.
@@ -89,6 +94,7 @@ pub(super) fn repr(types: &Types<'_>, mut ty: TypeId) -> Result<Repr, LoweringEr
         | TypeKind::Unmodeled(reason) => Err(LoweringErrorKind::UnmodeledType(reason)),
         | TypeKind::Scalar(scalar) => scalar_repr(types, scalar),
         | TypeKind::Pointer(_) | TypeKind::Nullptr => Ok(Repr::Pointer),
+        | TypeKind::BitInt { width, signed } => bit_int_repr(width, signed),
         | TypeKind::Array(element, _) =>
             if types.unanalyzed(element) {
                 Err(super::LoweringError::unanalyzed_kind(types, ty))
@@ -165,9 +171,26 @@ fn scalar_repr(types: &Types<'_>, scalar: Scalar) -> Result<Repr, LoweringErrorK
             Ok(Repr::Int {
                 ty: int_type(bits),
                 signed,
+                width: u8::try_from(int_type(bits).bits()).unwrap_or(u8::MAX),
             })
         },
     }
+}
+
+/// A bit-precise type of up to 128 bits is held in the IR integer type of
+/// its storage, the type its layout gives
+/// ([`crate::target::Layout`] of `bit_int_layout`); a wider one is not yet
+/// lowered.
+/// C23: §6.2.5 paragraphs 5-8, p. 39; PDF p. 52.
+fn bit_int_repr(width: u32, signed: bool) -> Result<Repr, LoweringErrorKind> {
+    let Some(width) = u8::try_from(width).ok().filter(|&width| width <= 128) else {
+        return Err(LoweringErrorKind::Unsupported(Construct::WideBitInt));
+    };
+    Ok(Repr::Int {
+        ty: int_type(u32::from(width)),
+        signed,
+        width,
+    })
 }
 
 /// The IR integer type of a C integer `bits` wide.
@@ -210,6 +233,17 @@ impl Repr {
         matches!(self, Self::Int { signed: true, .. })
     }
 
+    /// A bit-precise integer narrower than its IR type: the type, the
+    /// signedness and the width its values are extended from.
+    /// C23: §6.2.6.2 paragraphs 1-2, pp. 42-43; PDF pp. 55-56.
+    pub(super) const fn narrow(self) -> Option<(Type, bool, u32)> {
+        match self {
+            | Self::Int { ty, signed, width } if (width as u32) < ty.bits() =>
+                Some((ty, signed, width as u32)),
+            | _ => None,
+        }
+    }
+
     /// What a parameter or result of this representation records for ABI
     /// lowering: the signedness of an integer type narrower than `int`
     /// (an `i8` or `i16`), or that it is `_Bool`. Conventions differ in
@@ -220,6 +254,7 @@ impl Repr {
             | Self::Int {
                 ty: Type::I8 | Type::I16,
                 signed,
+                ..
             } => Some(if signed {
                 Extension::Signed
             } else {
@@ -229,6 +264,22 @@ impl Repr {
             | _ => None,
         }
     }
+}
+
+/// Whether a value of `ty` crosses a call as an aggregate: a bit-precise
+/// integer of 65 to 128 bits, on the x86-64 targets, whose calling
+/// conventions classify it as an array of 64-bit limbs (x86-64 psABI
+/// §3.2.3; Clang's `X86_64ABIInfo` and `WinX86_64ABIInfo`). The
+/// WebAssembly C ABI passes it as an `i128` (`bit_int.rs`).
+/// C23: §6.2.5 paragraphs 5-8, p. 39; PDF p. 52.
+pub(super) fn limb_argument(types: &Types<'_>, ty: TypeId) -> bool {
+    matches!(
+        types.kind(ty),
+        TypeKind::BitInt {
+            width: 65..=128,
+            ..
+        }
+    ) && types.target.record_passing == RecordPassing::Classified
 }
 
 /// The size and alignment of a complete object type; a variable length
@@ -371,6 +422,17 @@ fn flattened_layout<'s>(
                 | TypeKind::Unmodeled(reason) =>
                     return Err(LoweringErrorKind::UnmodeledType(reason)),
                 | TypeKind::Scalar(scalar) => scalar_leaves(types, scalar, offset, &mut scalars)?,
+                // A bit-precise integer of more than 64 bits is an array of
+                // 64-bit limbs to the calling conventions (x86-64 psABI
+                // §3.2.3).
+                | TypeKind::BitInt { width, .. } =>
+                    if width <= 64 {
+                        push_scalar(&mut scalars, offset, int_type(width))?;
+                    } else {
+                        for limb in 0..u64::from(width.div_ceil(64)) {
+                            push_scalar(&mut scalars, offset + limb * 8, Type::I64)?;
+                        }
+                    },
                 // An ILP32 pointer object is accessed as `i32` (`emit.rs`).
                 | TypeKind::Pointer(_) | TypeKind::Nullptr => push_scalar(
                     &mut scalars,
@@ -592,6 +654,8 @@ pub(super) fn object_layout<'s>(
 ) -> Result<AggregateLayout<'s>, LoweringErrorKind> {
     if matches!(repr(types, ty)?, Repr::Complex { .. }) {
         complex_layout(types, ty, scratch)
+    } else if matches!(types.kind(ty), TypeKind::BitInt { .. }) {
+        flattened_layout(types, ty, layout(types, ty)?, scratch)
     } else {
         aggregate_layout(types, ty, scratch)
     }

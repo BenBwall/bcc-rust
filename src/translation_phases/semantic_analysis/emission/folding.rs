@@ -473,7 +473,9 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             return Value::Integer(Integer::int(i128::from(integer.value != 0)).cast(8, false));
         }
         self.integer_type(ty).map_or(value, |(bits, signed)| {
-            Value::Integer(integer.cast(bits, signed))
+            integer
+                .convert(bits, signed)
+                .map_or(Value::Other, Value::Integer)
         })
     }
 
@@ -635,7 +637,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             | _ => {
                 let (bits, signed) = self.integer_type(ty)?;
                 match value {
-                    | Value::Integer(integer) => Some(Value::Integer(integer.cast(bits, signed))),
+                    | Value::Integer(integer) => integer.convert(bits, signed).map(Value::Integer),
                     | Value::Floating(floating) =>
                         floating_integer(floating, bits, signed).map(Value::Integer),
                     | _ => None,
@@ -2044,6 +2046,9 @@ fn not_a_number(value: LongDouble) -> bool {
 /// none when it does not fit, which is undefined.
 /// C99: §6.3.1.4 paragraph 1, p. 43; PDF p. 55.
 fn floating_integer(value: Floating, bits: u32, signed: bool) -> Option<Integer> {
+    if bits > 128 {
+        return None;
+    }
     let (negative, exponent, mantissa) = value.real.x87_parts()?;
     if exponent == 0x7FFF {
         return None;

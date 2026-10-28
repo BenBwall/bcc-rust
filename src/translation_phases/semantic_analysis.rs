@@ -1606,21 +1606,24 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 ));
             },
             | Work::Eval(expression) => self.evaluate(expression),
-            | Work::Unary(op, source) => {
+            | Work::Unary(op, source, ty) => {
                 let value = self.integers.pop().flatten();
-                let result = value.and_then(|v| v.unary(op));
+                let result = value
+                    .and_then(|v| v.unary(op))
+                    .and_then(|v| self.bit_int_result(v, ty));
                 if value.is_some() && result.is_none() {
                     self.exceptional_constant(source);
                 }
                 self.integers.push(result);
             },
-            | Work::Binary(op, source) => {
+            | Work::Binary(op, source, ty) => {
                 let right = self.integers.pop().flatten();
                 let left = self.integers.pop().flatten();
                 // Expression typing has already reported a sign-bit shift.
                 let result = left
                     .zip(right)
-                    .and_then(|(l, r)| l.binary(op, r).or_else(|| l.sign_bit_shift(op, r)));
+                    .and_then(|(l, r)| l.binary(op, r).or_else(|| l.sign_bit_shift(op, r)))
+                    .and_then(|v| self.bit_int_result(v, ty));
                 if left.is_some() && right.is_some() && result.is_none() {
                     self.exceptional_constant(source);
                 }
@@ -1636,7 +1639,8 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                             .push(Some(Integer::int(i128::from(l.value != 0))));
                     } else {
                         self.integers.push(left);
-                        self.work.push(Work::Binary(op, source));
+                        let int = self.types.scalar(Scalar::Int);
+                        self.work.push(Work::Binary(op, source, int));
                         self.work.push(Work::Eval(right));
                     }
                 } else {
@@ -1899,8 +1903,10 @@ enum Work<'tu, 's> {
     ),
     EnumeratorDone(usize, ArenaList<'tu, Enumerator<'tu>>, usize, usize, bool),
     Eval(&'tu Expression<'tu>),
-    Unary(UnaryOperator, SourceVectors),
-    Binary(BinaryOperator, SourceVectors),
+    /// An operator of an integer constant expression, with its result
+    /// type, to which a bit-precise result converts.
+    Unary(UnaryOperator, SourceVectors, TypeId),
+    Binary(BinaryOperator, SourceVectors, TypeId),
     Logical(BinaryOperator, &'tu Expression<'tu>, SourceVectors),
     Conditional(&'tu ConditionalExpression<'tu>),
     CastBase(&'tu Expression<'tu>, SourceVectors),

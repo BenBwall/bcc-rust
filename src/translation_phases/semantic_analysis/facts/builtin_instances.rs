@@ -181,12 +181,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         } else {
             None
         };
-        let integer = info.integer.map(|value| {
+        let integer = info.integer.and_then(|value| {
             if matches!(rule.constraint, ConstantConstraint::OriginalIntegerRange(_)) {
-                return value;
+                return Some(value);
             }
             self.integer_type(ty)
-                .map_or(value, |(bits, signed)| value.cast(bits, signed))
+                .map_or(Some(value), |(bits, signed)| value.convert(bits, signed))
         });
         let floating = self.converted_floating(info, ty);
         BuiltinOperand {

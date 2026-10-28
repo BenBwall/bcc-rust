@@ -80,7 +80,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 .integer
                 .zip(self.integer_type(size_type))
                 // C99 §6.3.1.3p2: fold the converted unsigned size_t value.
-                .and_then(|(value, (bits, signed))| value.cast(bits, signed).to_u64());
+                .and_then(|(value, (bits, signed))| value.convert(bits, signed)?.to_u64());
             let mut aligned = true;
             if let Some(&pointer) = args.get(1) {
                 let info = self.expression_info(pointer);
@@ -356,17 +356,6 @@ impl Analyzer<'_, '_, '_> {
         specifier: bool,
     ) -> TypeId {
         if self.types.unanalyzed(value) {
-            // Under GCC's rules a `_BitInt` keeps its width, which pointer
-            // casts read through `_Atomic`; its type stays unmodeled. Clang
-            // rejects an atomic `_BitInt`.
-            if self.context.configuration.pointer_cast_rules() == crate::configuration::RuleSet::Gcc
-                && matches!(
-                    self.types.nodes[value.index],
-                    TypeKind::Unmodeled(super::super::types::UnmodeledType::BitInt { .. })
-                )
-            {
-                return value;
-            }
             return self.types.unknown();
         }
         let invalid = !self.complete_object(value)
@@ -376,7 +365,11 @@ impl Analyzer<'_, '_, '_> {
             )
             || (specifier
                 && (!value.qualifiers.is_empty()
-                    || matches!(self.types.nodes[value.index], TypeKind::Atomic(_))));
+                    || matches!(self.types.nodes[value.index], TypeKind::Atomic(_))))
+            // Clang rejects an atomic `_BitInt` ("_Atomic cannot be applied
+            // to integer type"); GCC accepts it.
+            || (matches!(self.types.nodes[value.index], TypeKind::BitInt { .. })
+                && self.context.configuration.bit_int_rules() == crate::configuration::RuleSet::Clang);
         if invalid {
             self.error(SemanticErrorKind::InvalidAtomicType, source, None, None);
             self.types.unknown()

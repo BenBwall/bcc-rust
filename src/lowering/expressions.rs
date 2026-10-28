@@ -923,9 +923,11 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             },
             | (Operand::Truth(truth), Repr::Int { ty, .. }) =>
                 Operand::Value(self.extend(truth, false, ty)),
-            | (Operand::Value(value), Repr::Int { ty, signed }) => {
+            | (Operand::Value(value), Repr::Int { ty, signed, .. }) => {
                 let from = repr(types, item.ty).map_err(|kind| at(kind, source))?;
-                Operand::Value(match from {
+                // A narrow bit-precise destination keeps the low bits of
+                // its width, extended again (§6.3.1.3).
+                let converted = match from {
                     | Repr::Pointer => self.convert(Opcode::Ptrtoint, ty, value),
                     // A 16-bit floating value widens exactly first.
                     | Repr::Float { ty: half } if half.half_format().is_some() => {
@@ -947,7 +949,8 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                         self.convert(opcode, ty, value)
                     },
                     | _ => self.extend(value, from.signed(), ty),
-                })
+                };
+                Operand::Value(self.normalize(converted, target))
             },
             // A 16-bit type takes the truth value through `float`.
             | (Operand::Truth(truth), Repr::Float { ty }) if ty.half_format().is_some() => {
@@ -1666,6 +1669,16 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 )),
         };
         let value = self.binary_inst(opcode, flags, a, b);
+        // A narrow bit-precise result is extended again where the operation
+        // can reach the bits above its width; the others keep extended
+        // operands extended.
+        let value = if matches!(operator, B::Multiplication | B::Addition | B::Subtraction)
+            || operator == B::LeftShift
+        {
+            self.normalize(value, representation)
+        } else {
+            value
+        };
         Ok(Item {
             operand: Operand::Value(value),
             ty,
@@ -1770,18 +1783,22 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     return Ok(());
                 }
                 let zero = self.iconst(ty, 0);
-                let flags = if self.repr(info.ty, source)?.signed() {
+                let representation = self.repr(info.ty, source)?;
+                let flags = if representation.signed() {
                     self.signed_wrap()
                 } else {
                     InstFlags::empty()
                 };
-                Operand::Value(self.binary_inst(Opcode::Isub, flags, zero, value))
+                let negated = self.binary_inst(Opcode::Isub, flags, zero, value);
+                Operand::Value(self.normalize(negated, representation))
             },
             | U::BitwiseNot => {
                 let value = self.value(operand, source)?;
                 let ty = self.draft.value_type(value);
                 let ones = self.iconst(ty, -1);
-                Operand::Value(self.binary_inst(Opcode::Xor, InstFlags::empty(), value, ones))
+                let inverted = self.binary_inst(Opcode::Xor, InstFlags::empty(), value, ones);
+                let representation = self.repr(info.ty, source)?;
+                Operand::Value(self.normalize(inverted, representation))
             },
             | U::LogicalNot => match operand.operand {
                 | Operand::Value(value) if self.draft.value_type(value).is_float() => {
@@ -1903,11 +1920,16 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 };
                 Operand::Value(self.binary_inst(opcode, InstFlags::empty(), value, one))
             },
-            | Repr::Int { ty, signed } => {
+            | representation @ Repr::Int { ty, signed, width } => {
                 let one = self.iconst(ty, 1);
                 // Types narrower than int are promoted (§6.3.1.1p2), so their
-                // arithmetic cannot overflow; the conversion back wraps.
-                let flags = if signed && ty.bits() >= self.int_bits() && !atomic {
+                // arithmetic cannot overflow; the conversion back wraps. A
+                // narrow bit-precise type is not promoted: its IR type holds
+                // any step of its values, and its overflow is undefined.
+                let flags = if signed
+                    && (ty.bits() >= self.int_bits() || u32::from(width) < ty.bits())
+                    && !atomic
+                {
                     self.signed_wrap()
                 } else {
                     InstFlags::empty()
@@ -1917,7 +1939,8 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 } else {
                     Opcode::Isub
                 };
-                Operand::Value(self.binary_inst(opcode, flags, value, one))
+                let stepped = self.binary_inst(opcode, flags, value, one);
+                Operand::Value(self.normalize(stepped, representation))
             },
             | _ =>
                 return Err(LoweringError::missing(
@@ -2080,7 +2103,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             matches!(
                 repr(&self.unit.sema.types, item.ty),
                 Ok(Repr::Aggregate | Repr::Complex { .. })
-            )
+            ) || types::limb_argument(&self.unit.sema.types, item.ty)
         });
         let mut signature = self
             .unit
@@ -2113,6 +2136,9 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 self.materialize_complex(item, source)?
             } else if let Operand::Aggregate(copy) = item.operand {
                 copy
+            } else if types::limb_argument(&self.unit.sema.types, item.ty) {
+                let value = self.value(item, source)?;
+                self.materialize_limbs(value, item.ty, source)?
             } else {
                 self.value(item, source)?
             };
@@ -2197,8 +2223,15 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         let operand = match (result_object, value) {
             | (Some(object), _) if matches!(self.repr(info.ty, source)?, Repr::Complex { .. }) =>
                 self.load_complex(object, info.ty, source)?,
+            | (Some(object), _) if types::limb_argument(&self.unit.sema.types, info.ty) =>
+                Operand::Value(self.load_limbs(object, info.ty, source)?),
             | (Some(object), _) => Operand::Aggregate(object),
-            | (None, Some(value)) => Operand::Value(value),
+            // A narrow bit-precise result arrives with its padding bits
+            // unspecified, as Clang returns `_BitInt(33)` zero-extended.
+            | (None, Some(value)) => {
+                let representation = self.repr(info.ty, source)?;
+                Operand::Value(self.normalize(value, representation))
+            },
             | (None, None) => Operand::Void,
         };
         self.push_item(operand, info.ty);

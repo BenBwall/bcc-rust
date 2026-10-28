@@ -750,6 +750,12 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 self.store_complex(to, item, source)?;
                 None
             },
+            | Repr::Int { .. } if types::limb_argument(&self.unit.sema.types, self.result) => {
+                let to = self.draft.block_params(Draft::entry())[0];
+                let value = self.value(item, source)?;
+                self.store_limbs(value, to, self.result, source)?;
+                None
+            },
             | Repr::Aggregate => {
                 let Operand::Aggregate(from) = item.operand else {
                     return Err(LoweringError::missing(
@@ -1142,6 +1148,14 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
                 _ = lowerer.locals.insert(parameter, Local::Address(home));
                 continue;
             }
+            // A bit-precise argument's padding bits are unspecified, and
+            // one the convention passes in memory arrives as its address.
+            let value = if types::limb_argument(&lowerer.unit.sema.types, incoming) {
+                lowerer.load_limbs(value, incoming, parameter_source)?
+            } else {
+                let representation = lowerer.repr(incoming, parameter_source)?;
+                lowerer.normalize(value, representation)
+            };
             let argument = Item {
                 operand: Operand::Value(value),
                 ty:      incoming,

@@ -220,7 +220,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     .value_type()
                     .ok_or_else(|| LoweringError::missing("a read has no value type", source))?;
                 let flags = self.mem_flags(ty, source)?;
-                Operand::Value(self.inst(
+                let loaded = self.inst(
                     InstData::Load {
                         ty:    value_type,
                         flags: volatile(flags),
@@ -229,7 +229,11 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                         addr:  address,
                     },
                     value_type,
-                ))
+                );
+                // The padding bits of a narrow bit-precise object need not
+                // extend its value: GCC and Clang store them extended but
+                // read none of them, and Clang passes them unextended.
+                Operand::Value(self.normalize(loaded, representation))
             },
             | (Place::Function(_), _) =>
                 return Err(LoweringError::missing(
@@ -593,6 +597,38 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
             Opcode::Zext
         };
         self.convert(opcode, to, value)
+    }
+
+    /// A value of the representation `representation` extended again from
+    /// its width to its IR type, after an operation computed it in that
+    /// type: a bit-precise integer narrower than its IR type keeps the bits
+    /// above its width as copies of its sign bit, or zero if unsigned, so
+    /// that every operation of the IR type reads its value. This also wraps
+    /// an unsigned result modulo 2^width. Other values are unchanged.
+    /// C23: §6.2.6.2 paragraphs 1-2, pp. 42-43; PDF pp. 55-56; §6.2.5
+    /// paragraph 11, p. 40; PDF p. 53.
+    pub(super) fn normalize(&mut self, value: Value, representation: Repr) -> Value {
+        let Some((ty, signed, width)) = representation.narrow() else {
+            return value;
+        };
+        let spare = ty.bits() - width;
+        if let Some(constant) = self.draft.constant(value) {
+            let low = constant.cast_unsigned() & (u128::MAX >> (128 - width));
+            let extended = if signed && (low >> (width - 1)) & 1 == 1 {
+                (low | !(u128::MAX >> (128 - width))).cast_signed()
+            } else {
+                low.cast_signed()
+            };
+            return self.iconst(ty, extended);
+        }
+        if signed {
+            let count = self.iconst(ty, i128::from(spare));
+            let raised = self.binary_inst(Opcode::Shl, InstFlags::empty(), value, count);
+            self.binary_inst(Opcode::Ashr, InstFlags::empty(), raised, count)
+        } else {
+            let mask = self.iconst(ty, (u128::MAX >> (128 - width)).cast_signed());
+            self.binary_inst(Opcode::And, InstFlags::empty(), value, mask)
+        }
     }
 
     /// A constant of type `from` converted to `to`, as the IR prints it:

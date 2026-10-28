@@ -1824,13 +1824,12 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         {
             // C99 §6.3.1.2p1, p. 43; PDF p. 55: _Bool uses truth
             // conversion rather than truncating to its one-bit model.
-            self.bindings[index].value = Some(
+            self.bindings[index].value =
                 if matches!(self.types.nodes[ty.index], TypeKind::Scalar(Scalar::Bool)) {
-                    Integer::int(i128::from(value.value != 0)).cast(bits, signed)
+                    Some(Integer::int(i128::from(value.value != 0)).cast(bits, signed))
                 } else {
-                    value.cast(bits, signed)
-                },
-            );
+                    value.convert(bits, signed)
+                };
         }
     }
 

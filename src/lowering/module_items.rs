@@ -824,7 +824,10 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
         let result_representation = repr(types, result)?;
         let result = match result_representation {
             | Repr::Void => None,
-            | Repr::Aggregate | Repr::Complex { .. } => {
+            | representation
+                if matches!(representation, Repr::Aggregate | Repr::Complex { .. })
+                    || types::limb_argument(types, result) =>
+            {
                 params.push(Type::Ptr);
                 aggregates.push(AggregateParam {
                     index: 0,
@@ -836,7 +839,10 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
         };
         for parameter in parameters {
             match repr(types, parameter)? {
-                | Repr::Aggregate | Repr::Complex { .. } => {
+                | representation
+                    if matches!(representation, Repr::Aggregate | Repr::Complex { .. })
+                        || types::limb_argument(types, parameter) =>
+                {
                     let index = u32::try_from(params.len())
                         .map_err(|_| LoweringErrorKind::MissingFact("too many parameters"))?;
                     // Ordinary aggregates constrain only the caller-owned

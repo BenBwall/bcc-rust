@@ -283,8 +283,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     return;
                 }
                 let reason = match *extended {
-                    | super::ExtendedType::BitInt { .. } =>
-                        Some(UnmodeledType::BitInt { width: 0 }),
+                    | super::ExtendedType::BitInt { .. } => Some(UnmodeledType::BitInt),
                     | super::ExtendedType::Decimal32 => Some(UnmodeledType::Decimal32),
                     | super::ExtendedType::Decimal64 => Some(UnmodeledType::Decimal64),
                     | super::ExtendedType::Decimal128 => Some(UnmodeledType::Decimal128),
@@ -370,7 +369,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         errors_before: usize,
     ) {
         let width = self.checked_bit_int_width(width, signed, source, errors_before);
-        let ty = self.types.unmodeled(UnmodeledType::BitInt { width });
+        let ty = if width == 0 {
+            self.types.unmodeled(UnmodeledType::BitInt)
+        } else {
+            self.types.intern(TypeKind::BitInt { width, signed })
+        };
         self.values.push(ty);
     }
 
@@ -1113,12 +1116,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             // diagnosed; completion preserves it without dependent errors.
             if member.invalid {
                 tag.tainted.set(true);
-                tag.unmodeled.set(
-                    tag.unmodeled.get().or(self
-                        .types
-                        .unmodeled_type(member.ty)
-                        .map(UnmodeledType::anonymous)),
-                );
+                tag.unmodeled
+                    .set(tag.unmodeled.get().or(self.types.unmodeled_type(member.ty)));
                 output.push(member);
                 continue;
             }
@@ -1176,12 +1175,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     );
                 }
                 tag.tainted.set(true);
-                tag.unmodeled.set(
-                    tag.unmodeled.get().or(self
-                        .types
-                        .unmodeled_type(member.ty)
-                        .map(UnmodeledType::anonymous)),
-                );
+                tag.unmodeled
+                    .set(tag.unmodeled.get().or(self.types.unmodeled_type(member.ty)));
                 output.push(member);
                 continue;
             };

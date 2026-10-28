@@ -37,6 +37,10 @@ pub(crate) struct LoweringError {
 
 /// What went wrong.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[expect(
+    variant_size_differences,
+    reason = "A missing fact names itself with a static string; the other kinds are a byte or two."
+)]
 pub(crate) enum LoweringErrorKind {
     /// An earlier phase reported an error, so no code is generated.
     /// C99: §5.1.1.3 paragraph 1, p. 11; PDF p. 23.
@@ -95,6 +99,8 @@ pub(crate) enum Construct {
     /// An automatic object or compound literal of 4 GiB or more, beyond the
     /// IR's 32-bit stack slot sizes.
     LargeAutomaticObject,
+    /// A bit-precise integer type of more than 128 bits.
+    WideBitInt,
 }
 
 /// The errors of one translation unit, in the `'ir` arena.
@@ -158,6 +164,7 @@ impl Construct {
             | Self::SelectionDeclaration => "declarations in selection statements",
             | Self::Extension => "this extension",
             | Self::LargeAutomaticObject => "automatic objects of 4 GiB or more",
+            | Self::WideBitInt => "_BitInt types of more than 128 bits",
             | Self::CompoundLiteralStorage =>
                 "compound literals with static or thread storage duration",
         }

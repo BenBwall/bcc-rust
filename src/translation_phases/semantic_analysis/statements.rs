@@ -987,7 +987,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 && (self.context.configuration.gnu_extensions() || info.folded_address())))
         .then_some(info.integer)
         .flatten()
-        .map(|v| v.cast(bits, signed))
+        .and_then(|v| v.convert(bits, signed))
     }
 
     /// Sort once at switch exit rather than scanning preceding cases for each

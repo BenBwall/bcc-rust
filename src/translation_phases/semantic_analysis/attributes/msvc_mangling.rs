@@ -280,6 +280,24 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                             });
                             self.msvc_tag_name(&mut output, &mut names, tag);
                         },
+                        // Clang names `_BitInt(N)` as the structure template
+                        // `__clang::_BitInt<N>` (`_UBitInt` if unsigned).
+                        | TypeKind::BitInt { width, signed } => {
+                            output.push('U');
+                            let mut template = ArenaString::new_in(self.scratch);
+                            template.push_str(if signed {
+                                "?$_BitInt@$0"
+                            } else {
+                                "?$_UBitInt@$0"
+                            });
+                            number(&mut template, u64::from(width));
+                            let template = template.into_str();
+                            let id = self.context.string_cache.intern(template);
+                            source_name(&mut output, &mut names, id, template);
+                            let id = self.context.string_cache.intern("__clang");
+                            source_name(&mut output, &mut names, id, "__clang");
+                            output.push('@');
+                        },
                         | TypeKind::Atomic(inner) => work.push(Part::Vendor(
                             ty.unqualified().with_alignment(0),
                             inner,

@@ -306,13 +306,14 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 let truth = self.fcmp(FloatCC::Une, value, zero);
                 Operand::Value(self.extend(truth, false, Type::I8))
             },
-            | Repr::Int { ty, signed } => {
+            | Repr::Int { ty, signed, .. } => {
                 let opcode = if signed {
                     Opcode::Fptosi
                 } else {
                     Opcode::Fptoui
                 };
-                Operand::Value(self.convert(opcode, ty, value))
+                let value = self.convert(opcode, ty, value);
+                Operand::Value(self.normalize(value, target))
             },
             | Repr::Float { ty } =>
                 Operand::Value(self.float_from(value, Repr::Float { ty: Type::F32 }, ty, source)?),
