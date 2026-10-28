@@ -167,7 +167,7 @@ with exit status 1. The selector re-checks every case it handles (an
 panic), but the up-front check keeps refusals independent of selection order
 and lets the survey classify them. Stage 1 refused floats, `i128`, variadic
 definitions and dynamic stack allocation; **today** the check refuses only
-`i128` bit counts, byte swaps and `switch`es, `i128` positions Win64 never
+`i128` bit counts and byte swaps, `i128` positions Win64 never
 passes by value, structure results in register combinations neither
 convention defines, stack arguments aligned above 16,
 frames larger than 1 GiB, stack arguments (chiefly `byval` structures) of

@@ -5,8 +5,8 @@
 //!
 //! The back end (see `docs/design/native-backend.md`) compiles integer,
 //! pointer, `i128`, `f32`, `f64`, `f80` and `f128` code, variadic
-//! definitions and dynamic stack allocation. It refuses `i128` bit counts,
-//! byte swaps and `switch`es, `i128` values where Win64 passes them only by
+//! definitions and dynamic stack allocation. It refuses `i128` bit counts
+//! and byte swaps, `i128` values where Win64 passes them only by
 //! reference, structure results in register combinations other than the
 //! ones System V and Win64 define, stack arguments aligned above 16 bytes,
 //! stack argument areas whose offsets would leave a 32-bit displacement,
@@ -199,7 +199,6 @@ impl Checker<'_, '_> {
     /// callee's signature and the types of extra variadic arguments.
     fn instruction(&self, body: &Body<'_>, data: &InstData) -> Result<(), Construct> {
         let opcode = data.opcode();
-        let wide = |value| body.value_type(value) == Type::I128;
         match *data {
             | InstData::Binary { ty: Type::I1, .. }
                 if matches!(
@@ -211,7 +210,6 @@ impl Checker<'_, '_> {
                 ty: Type::I1 | Type::I128,
                 ..
             } if opcode.is_bit_unary() => Err(Construct::Opcode(opcode)),
-            | InstData::Switch { value, .. } if wide(value) => Err(Construct::WideSwitch),
             | InstData::Unary { .. } if opcode == Opcode::VaArg => Err(Construct::Opcode(opcode)),
             | InstData::Atomic { op, ty, align, .. } => atomic(op, ty, align.bytes()),
             | InstData::VaArgAggregate { .. }
@@ -365,8 +363,6 @@ pub(crate) enum Construct {
     /// Memory accesses of this type (`i1`).
     Type(Type),
     Opcode(Opcode),
-    /// A `switch` on an `i128`.
-    WideSwitch,
     /// A Win64 `i128` passed by value.
     WideByValue,
     /// A structure result returned in registers of this type.
@@ -405,7 +401,6 @@ impl fmt::Display for Unsupported<'_> {
             | Construct::Type(ty) => write!(f, "{ty} values")?,
             | Construct::Opcode(opcode) => write!(f, "the `{opcode}` instruction")?,
             | Construct::InlineAsm(reason) => write!(f, "inline assembly with {reason}")?,
-            | Construct::WideSwitch => write!(f, "a switch on an i128 value")?,
             | Construct::WideByValue => write!(f, "an i128 passed by value on Win64")?,
             | Construct::RegisterResult(ty) =>
                 write!(f, "a structure result returned in an {ty} register")?,

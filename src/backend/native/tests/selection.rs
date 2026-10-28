@@ -701,25 +701,6 @@ block2:
 fn unsupported_constructs_are_refused_with_their_function() {
     let message = refusal(
         "abi lowered
-function @s(i128) -> i32 external {
-block0(v0: i128):
-    switch v0, block1, [1: block2]
-block1:
-    v1 = iconst.i32 0
-    return v1
-block2:
-    v2 = iconst.i32 1
-    return v2
-}
-",
-        Target::LinuxGnu,
-    );
-    assert_eq!(
-        message,
-        "not yet supported by the native back end: a switch on an i128 value (in @s)"
-    );
-    let message = refusal(
-        "abi lowered
 function @g(i128) -> i128 external {
 block0(v0: i128):
     v1 = clz.i128 v0

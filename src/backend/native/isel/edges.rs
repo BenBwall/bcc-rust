@@ -12,7 +12,8 @@
 //! Efficiency", CGO 2009, Algorithm 1). Constant and address arguments are
 //! materialized last, since they read no register.
 //!
-//! A `switch` becomes a chain of compares, one block per case.
+//! A `switch` becomes a chain of compares, one block per case; on an
+//! `i128` each case compares the low half and then the high half.
 //!
 //! An `indirect_br` (GNU extension: GCC "Labels as Values") becomes
 //! `jmpq *reg`. Its edges cannot get blocks of their own, since the
@@ -41,6 +42,7 @@ use crate::{
             Operand,
             Reg,
             VReg,
+            Width,
         },
         support::Construct,
     },
@@ -300,6 +302,10 @@ impl Selector<'_, '_, '_> {
     fn switch(&mut self, value: Value, default: BlockCall, cases: crate::ir::CaseList) {
         let ty = self.ty(value);
         let body = self.body;
+        if ty == Type::I128 {
+            self.wide_switch(value, default, cases);
+            return;
+        }
         if let ValueKind::Const(bits) = self.kind(value) {
             let dest = body
                 .switch_cases(cases)
@@ -333,6 +339,66 @@ impl Selector<'_, '_, '_> {
                 taken,
                 not_taken: next,
             });
+            self.current = next;
+        }
+        let otherwise = self.edge_target(default, &mut pending);
+        self.emit(MInst::Jmp { target: otherwise });
+        self.fill_edges(&pending);
+    }
+}
+
+impl Selector<'_, '_, '_> {
+    /// A `switch` on an `i128`: per case, a compare of each half.
+    fn wide_switch(&mut self, value: Value, default: BlockCall, cases: crate::ir::CaseList) {
+        let body = self.body;
+        if let ValueKind::Wide(bits) = self.kind(value) {
+            let dest = body
+                .switch_cases(cases)
+                .find(|&(case, _)| case == bits)
+                .map_or(default, |(_, dest)| dest);
+            self.jump(dest);
+            return;
+        }
+        let (low, high) = self.pair(value);
+        let mut pending = ArenaVec::new_in(self.arena);
+        for (case, dest) in body.switch_cases(cases) {
+            let taken = self.edge_target(dest, &mut pending);
+            let next = self.func.block(self.arena);
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "The halves are split here."
+            )]
+            let halves = [(low, case as u64), (high, (case >> 64) as u64)];
+            for (index, (half, bits)) in halves.into_iter().enumerate() {
+                let rhs = match immediate(bits, Width::B64) {
+                    | Some(imm) => Operand::Imm(imm),
+                    | None => {
+                        let reg = self.vreg();
+                        self.constant(reg, bits, Type::I64);
+                        Operand::Reg(reg)
+                    },
+                };
+                self.emit(MInst::Cmp {
+                    width: Width::B64,
+                    lhs: half,
+                    rhs,
+                });
+                if index == 0 {
+                    let high_half = self.func.block(self.arena);
+                    self.emit(MInst::Jcc {
+                        cond:      Cond::Ne,
+                        taken:     next,
+                        not_taken: high_half,
+                    });
+                    self.current = high_half;
+                } else {
+                    self.emit(MInst::Jcc {
+                        cond: Cond::E,
+                        taken,
+                        not_taken: next,
+                    });
+                }
+            }
             self.current = next;
         }
         let otherwise = self.edge_target(default, &mut pending);

@@ -3322,16 +3322,30 @@ printf(\"%f %f %F\\n\",1e100,-0.0,1.0/0.0); return 0; }",
         assert_eq!(run.status.code(), Some(0));
         drop(std::fs::remove_file(&float));
 
+        // A `switch` on an `__int128` compares both halves of each case.
+        let wide = temporary("native-switch.exe");
+        let built = bcc(
+            "int pick(long long high, unsigned long long low) { switch ((__int128)((unsigned \
+             __int128)high << 64 | low)) { case 1: return 2; case (__int128)1 << 64: return 4; \
+             case -1: return 5; default: return 3; } }\nint main(void) { return pick(0, 1) != 2 \
+             || pick(1, 0) != 4 || pick(-1, -1) != 5 || pick(0, 7) != 3; }\n",
+            &[&target, "--backend=native", "-o", &path(&wide)],
+        );
+        assert!(built.status.success(), "{}", text(&built.stderr));
+        let run = run_native(&mut Command::new(&wide)).unwrap();
+        assert_eq!(run.status.code(), Some(0));
+        drop(std::fs::remove_file(&wide));
+
         // Unsupported code is refused before anything is written.
         let refused = bcc(
-            "int pick(__int128 x) { switch (x) { case 1: return 2; default: return 3; } }\nint \
-             main(void) { return pick(1) != 2; }\n",
+            "__int128 x;\nint main(void) { return (int)__atomic_fetch_max(&x, 1, 5); }\n",
             &[&target, "--backend=native", "-o", &path(&float)],
         );
         assert_eq!(refused.status.code(), Some(1));
         assert_eq!(
             text(&refused.stderr).trim(),
-            "error: not yet supported by the native back end: a switch on an i128 value (in @pick)"
+            "error: not yet supported by the native back end: an atomic `max` of i128 values (in \
+             @main)"
         );
         assert!(!float.exists());
     }
