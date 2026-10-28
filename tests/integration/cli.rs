@@ -643,6 +643,19 @@ mod tests {
             "{locations:?}"
         );
 
+        let semantic = run(&[
+            "--semantic-types",
+            "--syntax-locations",
+            "--input",
+            "int value;\n",
+        ]);
+        assert!(semantic.status.success());
+        assert!(
+            String::from_utf8_lossy(&semantic.stderr).contains("object value type=int")
+                && String::from_utf8_lossy(&semantic.stderr).contains("@1:5"),
+            "{semantic:?}"
+        );
+
         let raw = run(&["--raw-syntax", "--input", "int value;\n"]);
         assert!(raw.status.success());
         assert!(

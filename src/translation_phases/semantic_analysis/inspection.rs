@@ -5,7 +5,9 @@
 //!
 //! The format follows `--syntax-tree`: one item per line, nested by scope
 //! with two-space indentation, lowercase `key=value` fields and inapplicable
-//! fields omitted. A value other than a plain word is quoted.
+//! fields omitted. A value other than a plain word is quoted. With
+//! `--syntax-locations`, each declared name and expression ends with the
+//! `@line:column` of its source, as in the syntax tree.
 
 use std::fmt::Write as _;
 
@@ -30,6 +32,8 @@ use super::{
 use crate::{
     translation_phases::{
         Context,
+        GetPosition,
+        SourceVectors,
         parsing::declaration_syntax::TypeQualifiers,
     },
     util::bump::{
@@ -40,7 +44,12 @@ use crate::{
 };
 
 impl<'tu> SemanticTranslationUnit<'tu> {
-    pub(crate) fn inspect<'d>(&self, context: &Context<'tu>, arena: &'d Bump) -> &'d str {
+    pub(crate) fn inspect<'d>(
+        &self,
+        context: &Context<'tu>,
+        arena: &'d Bump,
+        show_locations: bool,
+    ) -> &'d str {
         let mut out = ArenaString::new_in(arena);
         let target = self.types.target;
         let _ = writeln!(
@@ -97,6 +106,14 @@ impl<'tu> SemanticTranslationUnit<'tu> {
                     | Item::Binding(binding) => {
                         indent(&mut out, depth + 1);
                         self.write_binding(binding, context, arena, &mut out);
+                        if show_locations {
+                            write_location(
+                                &mut out,
+                                self.bindings[binding].name.source_vectors,
+                                context,
+                            );
+                        }
+                        out.push('\n');
                     },
                 }
             }
@@ -154,6 +171,9 @@ impl<'tu> SemanticTranslationUnit<'tu> {
                 | ConstantClass::Arithmetic => out.push_str(" constant=arithmetic"),
                 | ConstantClass::Address => out.push_str(" constant=address"),
                 | ConstantClass::LabelDifference => out.push_str(" constant=label-difference"),
+            }
+            if show_locations {
+                write_location(&mut out, info.expression.source_vectors, context);
             }
             out.push('\n');
         }
@@ -316,7 +336,6 @@ impl<'tu> SemanticTranslationUnit<'tu> {
         {
             let _ = write!(out, " size={} align={}", layout.size, layout.align);
         }
-        out.push('\n');
     }
 
     /// A type spelling as a field value.
@@ -481,6 +500,30 @@ enum Part<'tu> {
 
 /// Deeper nesting is shown by a `[depth=N]` prefix rather than more spaces,
 /// as in syntax inspection, so output stays linear in the item count.
+/// Appends ` @line:column` for `source`, naming its file when that is not
+/// the main file, as `--syntax-tree --syntax-locations` does. Implicit
+/// entities such as `__func__` have no source and get nothing.
+fn write_location(out: &mut ArenaString<'_>, source: SourceVectors, context: &Context<'_>) {
+    if source.length() == 0 {
+        return;
+    }
+    let position = source.position(context);
+    match context.get_source_vectors(source).first() {
+        | Some(vector) if vector.source_file_index != 0 => {
+            let _ = write!(
+                out,
+                " @{}:{}:{}",
+                context.get_source_file(vector.source_file_index).display(),
+                position.line,
+                position.column
+            );
+        },
+        | _ => {
+            let _ = write!(out, " @{}:{}", position.line, position.column);
+        },
+    }
+}
+
 const MAXIMUM_INDENT: usize = 32;
 
 fn indent(out: &mut ArenaString<'_>, depth: usize) {

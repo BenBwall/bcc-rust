@@ -24,7 +24,7 @@ and `-fhosted` restores hosted, the later flag winning.
 The CLI accepts a C source file or an input string, runs preprocessing, the
 language parser, and semantic analysis, and prints diagnostics. Pass
 `--semantic-types` for resolved declarations and types, `--syntax-tree` for a stable,
-source-oriented tree, `--syntax-locations` to add locations, `--raw-syntax` for
+source-oriented tree, `--syntax-locations` to add locations to either, `--raw-syntax` for
 the raw Rust debug form of the tree, or `--tokens` for parser-facing
 preprocessing tokens. Normal operation does not dump internal storage. Every
 view, like every other mode, exits with status 1 when it reported an error
