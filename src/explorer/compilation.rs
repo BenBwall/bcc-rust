@@ -439,11 +439,10 @@ impl<'tu> Stages<'_, '_, 'tu> {
                 return Err(Failure::Calls(calls));
             }
             verify(&diagnosed.module)?;
-            let runtime = if target == Target::Wasm32Wasi {
-                wasm::runtime::compile(target, arena)
-                    .map_err(|text| Failure::Message(text.to_owned()))?
+            let runtime: &[Module<'_>] = if target == Target::Wasm32Wasi {
+                wasm::runtime::modules(target).map_err(|text| Failure::Message(text.to_owned()))?
             } else {
-                crate::util::bump::ArenaVec::new_in(arena)
+                &[]
             };
             let mut units = vec![&diagnosed.module];
             units.extend(runtime.iter());

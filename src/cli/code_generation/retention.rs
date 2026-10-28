@@ -267,8 +267,8 @@ fn wasm<'ir>(
             status: FAILURE_STATUS,
         });
     }
-    let runtime = if target == Target::Wasm32Wasi {
-        wasm::runtime::compile(target, arena).map_err(|text| {
+    let runtime: &[crate::ir::Module<'_>] = if target == Target::Wasm32Wasi {
+        wasm::runtime::modules(target).map_err(|text| {
             message(
                 arena,
                 format_args!("error: internal error: {text}"),
@@ -276,7 +276,7 @@ fn wasm<'ir>(
             )
         })?
     } else {
-        ArenaVec::new_in(arena)
+        &[]
     };
     let mut units = ArenaVec::with_capacity_in(1 + runtime.len(), arena);
     units.push(module);

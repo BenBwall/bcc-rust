@@ -14,9 +14,20 @@
 //! `clock_time_get`), so Node's `wasi` module, wasmtime or a browser
 //! shim runs the result. Files cannot be opened.
 //!
-//! [`compile`] compiles every runtime source into the caller's IR arena.
+//! [`modules`] compiles every runtime source once per thread and keeps the
+//! modules for the rest of the process in an arena that is never freed, so
+//! the explorer, which compiles many programs in one session, and a test
+//! process pay for the runtime once. The runtime's build depends only on
+//! its target: it is always optimized C17 with GNU extensions, whatever
+//! the program's language mode, optimization level or flags. Its sources
+//! are embedded in the binary, so the cache cannot outlive a change to
+//! them. In WebAssembly the kept arena is one region of linear memory,
+//! whose untouched part costs address space only (`util::vm`).
 
-use std::path::Path;
+use std::{
+    cell::OnceCell,
+    path::Path,
+};
 
 use crate::{
     configuration::{
@@ -68,6 +79,31 @@ pub(crate) const SOURCES: &[(&str, &str)] = &[
 
 /// The runtime's private headers.
 const HEADERS: &[(&str, &str)] = &[("wasi.h", include_str!("runtime/wasi.h"))];
+
+/// The runtime's modules for `target` (`wasm32-wasip1`), compiled on this
+/// thread's first call and kept for the rest of the process. A failure is
+/// kept too: it is a bug of bcc, reported with the source's diagnostics.
+/// Modules hold arena references that are not `Sync`, so each thread keeps
+/// its own copy.
+pub(crate) fn modules(target: Target) -> Result<&'static [Module<'static>], &'static str> {
+    thread_local! {
+        static WASI: OnceCell<Result<&'static [Module<'static>], &'static str>> =
+            const { OnceCell::new() };
+    }
+    if target != Target::Wasm32Wasi {
+        return Err("only the wasm32-wasip1 target links the bundled runtime");
+    }
+    WASI.with(|cached| {
+        *cached.get_or_init(|| {
+            #[expect(
+                clippy::disallowed_types,
+                reason = "The runtime's modules live for the process: their arena is leaked once                           per thread, never freed."
+            )]
+            let arena: &'static Bump = Box::leak(Box::new(Bump::new()));
+            compile(target, arena).map(|modules| &*modules.leak())
+        })
+    })
+}
 
 /// Compiles every runtime source for `target` into `arena`, optimized by
 /// bcc's pipeline. A source that fails to compile is a bug of bcc, reported

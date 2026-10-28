@@ -29,10 +29,7 @@ use crate::{
     },
     target::Target,
     translation_phases::Context,
-    util::bump::{
-        ArenaVec,
-        Bump,
-    },
+    util::bump::Bump,
 };
 
 /// Compiles `source` for `target`, optimized or not, into a linked module.
@@ -81,10 +78,10 @@ pub(crate) fn compile_with<T: Send>(
             (InlineCopies::Resolve, false),
         )
         .map_err(|error| format!("{error:?}"))?;
-        let runtime = if target == Target::Wasm32Wasi {
-            wasm::runtime::compile(target, &arena).map_err(str::to_owned)?
+        let runtime: &[crate::ir::Module<'_>] = if target == Target::Wasm32Wasi {
+            wasm::runtime::modules(target).map_err(str::to_owned)?
         } else {
-            ArenaVec::new_in(&arena)
+            &[]
         };
         let mut units = vec![&diagnosed.module];
         units.extend(runtime.iter());
@@ -392,4 +389,59 @@ fn unprototyped_calls_reach_prototyped_definitions() {
     let bytes = compile(source, Target::Wasm32Wasi, false).unwrap();
     let run = run("unprototyped", &bytes);
     assert_eq!(run.status, 9, "{}", run.stderr);
+}
+
+/// The runtime is compiled once per thread, and the kept modules link to
+/// the same module a fresh build of the runtime does.
+#[test]
+fn cached_runtime_matches_a_fresh_build() {
+    let first = wasm::runtime::modules(Target::Wasm32Wasi).unwrap();
+    let second = wasm::runtime::modules(Target::Wasm32Wasi).unwrap();
+    assert!(
+        std::ptr::eq(first, second),
+        "the second call reuses the modules"
+    );
+    _ = wasm::runtime::modules(Target::Wasm32Unknown).unwrap_err();
+    let source = "#include <stdio.h>\nint main(void) { printf(\"%d\\n\", 42); return 0; }\n";
+    let cached = compile(source, Target::Wasm32Wasi, false).unwrap();
+    let fresh = crate::test_support::on_compilation_stack(|| {
+        let arena = Bump::new();
+        let runtime = wasm::runtime::compile(Target::Wasm32Wasi, &arena).unwrap();
+        let program = compile_module(source, &arena);
+        let mut units = vec![&program];
+        units.extend(runtime.iter());
+        wasm::compile(&units, 1, Target::Wasm32Wasi, &arena)
+            .unwrap()
+            .bytes
+            .to_vec()
+    });
+    assert_eq!(cached, fresh);
+}
+
+/// `source` lowered for `wasm32-wasip1` into `arena`.
+fn compile_module<'ir>(source: &str, arena: &'ir Bump) -> crate::ir::Module<'ir> {
+    let configuration = CompilerConfiguration::default()
+        .with_target(Target::Wasm32Wasi)
+        .with_gnu_extensions(true);
+    let tu = Bump::new();
+    let mut context = Context::with_configuration(&tu, configuration);
+    let source = tu.alloc_str(source);
+    let search = HeaderSearch {
+        after: &[Path::new(WASI_DIRECTORY)],
+        ..HeaderSearch::default()
+    };
+    let unit = parse_translation_unit(&mut context, Path::new("program.c"), source, search);
+    let sema = analyze_translation_unit(&mut context, &unit);
+    assert!(sema.lowerable(&context));
+    lower_translation_unit_with_locals(
+        &context,
+        &unit,
+        &sema,
+        arena,
+        None,
+        Profile::PostAbi,
+        (InlineCopies::Resolve, false),
+    )
+    .unwrap()
+    .module
 }

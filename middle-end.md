@@ -2468,8 +2468,10 @@ calls `main` with as many of `argc` and `argv` as it takes.
 
 **Runtime** (`backend/wasm/runtime.rs`, `runtime/*.c`, headers in
 `src/headers/wasi/`, found through the embedded `<wasi-libc>` directory in
-the C library's place in the search). It is C compiled by bcc itself at
-every WASI link: startup and exit, `atexit`, `abort` (status 134),
+the C library's place in the search). It is C compiled by bcc itself, once
+per thread, and kept for the rest of the process in an arena that is never
+freed (`runtime::modules`; its build takes none of the program's flags, so
+the target is the whole key): startup and exit, `atexit`, `abort` (status 134),
 `malloc`/`calloc`/`realloc`/`free`/`aligned_alloc`, `<string.h>`,
 `<ctype.h>`, `<stdlib.h>` conversions, `qsort`, `bsearch`, `rand`,
 buffered `<stdio.h>` on descriptors 0-2 (stdout line-buffered, stderr
