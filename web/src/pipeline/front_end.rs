@@ -11,7 +11,10 @@ use serde::{
     Serialize,
 };
 
-use super::SourceSpan;
+use super::{
+    LineLinks,
+    SourceSpan,
+};
 
 /// One logical line: the physical lines phase 2 spliced into it and what
 /// phases 1 and 2 changed in it.
@@ -216,11 +219,12 @@ pub struct Conditional {
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Directive {
-    pub line:      usize,
-    pub presumed:  Option<String>,
+    pub line:     usize,
+    pub presumed: Option<String>,
     /// Its name, such as `pragma`.
-    pub name:      String,
-    pub directive: String,
+    pub name:     String,
+    /// The whole directive as written.
+    pub text:     String,
 }
 
 /// Where one line of the preprocessed text came from.
@@ -279,7 +283,7 @@ pub struct PreprocessedView {
     pub text:   String,
     /// Each line's source lines (index 0 unused): its own, or the
     /// `#include` that brought in a header's line.
-    pub links:  Vec<Option<(usize, usize)>>,
+    pub links:  LineLinks,
     /// Each line's gutter label: the source line it came from, empty for a
     /// line marker or a header's own line.
     pub labels: Vec<String>,
@@ -304,9 +308,9 @@ pub fn preprocessed_view(
     let label = |origin: &OutputLine| match origin {
         | OutputLine {
             input: true,
-            line: Some(line),
+            line: Some(number),
             ..
-        } => line.to_string(),
+        } => number.to_string(),
         | _ => String::new(),
     };
     let mut view = PreprocessedView {

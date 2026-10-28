@@ -967,7 +967,7 @@ impl State {
         let pipeline = self.mode.get() == Mode::Pipeline;
         if let Some(snapshot) = snapshot
             .as_ref()
-            .filter(|snapshot| !edited && !(pipeline && refused(snapshot)))
+            .filter(|snapshot| !(edited || pipeline && refused(snapshot)))
         {
             let fault = snapshot.event.category == "fault";
             if let Some(range) = snapshot.event.range {
@@ -1019,37 +1019,8 @@ impl State {
             });
         }
         let target = self.target_layer();
-        let hovered = self.hover_output.get();
-        let links = if pipeline && hovered > 0 {
-            let stage = self.stage.get();
-            let headers = self.headers.get();
-            self.compilation.with(|compilation| {
-                compilation
-                    .as_ref()
-                    .map(|compilation| {
-                        self.editor_text.with(|source| {
-                            let links = crate::pipeline::links(stage, compilation, source, headers);
-                            let mut marks: Vec<Decoration> = links
-                                .sources_for(hovered)
-                                .into_iter()
-                                .map(|line| Decoration::line(line, "link-line"))
-                                .collect();
-                            if let Some(range) = links.range_for(hovered) {
-                                marks.push(Decoration {
-                                    start_line: range.line,
-                                    start_column: range.column,
-                                    end_line: range.end_line,
-                                    end_column: range.end_column.max(range.column + 1),
-                                    class_name: Some("link-range".to_owned()),
-                                    z_index: 4,
-                                    ..Decoration::default()
-                                });
-                            }
-                            marks
-                        })
-                    })
-                    .unwrap_or_default()
-            })
+        let links = if pipeline {
+            self.hover_links()
         } else {
             Vec::new()
         };
@@ -1071,6 +1042,44 @@ impl State {
             ("stage", stage_marks),
             ("links", links),
         ]
+    }
+
+    /// The source lines (and the exact range, for a preprocessing token)
+    /// that the pipeline output line under the pointer came from.
+    fn hover_links(self) -> Vec<Decoration> {
+        let hovered = self.hover_output.get();
+        if hovered == 0 {
+            return Vec::new();
+        }
+        let stage = self.stage.get();
+        let headers = self.headers.get();
+        self.compilation.with(|compilation| {
+            compilation
+                .as_ref()
+                .map(|compilation| {
+                    self.editor_text.with(|source| {
+                        let links = crate::pipeline::links(stage, compilation, source, headers);
+                        let mut marks: Vec<Decoration> = links
+                            .sources_for(hovered)
+                            .into_iter()
+                            .map(|line| Decoration::line(line, "link-line"))
+                            .collect();
+                        if let Some(range) = links.range_for(hovered) {
+                            marks.push(Decoration {
+                                start_line: range.line,
+                                start_column: range.column,
+                                end_line: range.end_line,
+                                end_column: range.end_column.max(range.column + 1),
+                                class_name: Some("link-range".to_owned()),
+                                z_index: 4,
+                                ..Decoration::default()
+                            });
+                        }
+                        marks
+                    })
+                })
+                .unwrap_or_default()
+        })
     }
 
     /// The run target's mark, set by clicking a line number.

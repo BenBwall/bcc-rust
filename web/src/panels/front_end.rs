@@ -8,10 +8,10 @@ use leptos::prelude::*;
 use crate::{
     editor::Decoration,
     pipeline::{
-        Citation,
         Compilation,
         Expansion,
         Include,
+        Rule,
         SourceSpan,
         Stage,
     },
@@ -23,7 +23,7 @@ use crate::{
 pub fn StageClauses(stage: RwSignal<Stage>) -> impl IntoView {
     view! {
         <ul class="clauses stage-clauses" aria-label="C standard rules applied" hidden=move || stage.get().clauses().is_empty()>
-            {move || stage.get().clauses().iter().map(|clause: &Citation| view! {
+            {move || stage.get().clauses().iter().map(|clause: &Rule| view! {
                 <li class="clause">
                     <span class="clause-id" title=clause.citation>{format!("C99 §{}", clause.id)}</span>
                     <span class="clause-gloss"><strong class="clause-title">{clause.title}.</strong>" "{clause.gloss}</span>
@@ -74,15 +74,15 @@ fn lines_card(compilation: &Compilation, on_reveal: Callback<usize>) -> AnyView 
     let mut items: Vec<(&'static str, usize, String)> = Vec::new();
     let mut splices = 0;
     for line in &compilation.logical_lines {
-        let spliced = line
+        let joined = line
             .changes
             .iter()
             .filter(|change| change.kind == "splice")
             .count();
-        splices += spliced;
-        if spliced > 0 {
+        splices += joined;
+        if joined > 0 {
             let (first, last) = line.source;
-            let text = if spliced == 1 {
+            let text = if joined == 1 {
                 format!(
                     "Line {first} ends in a backslash, so phase 2 deleted it with the new-line \
                      and line {last} continues it."
@@ -181,6 +181,7 @@ fn tokens_card(compilation: &Compilation) -> AnyView {
     .into_any()
 }
 
+#[expect(clippy::too_many_lines, reason = "One section per kind of directive.")]
 fn preprocessor_card(compilation: &Compilation, on_reveal: Callback<usize>) -> AnyView {
     let trace = compilation.preprocessing.clone();
     let quiet = trace.expansions.is_empty() && trace.directives.is_empty();
@@ -241,7 +242,7 @@ fn preprocessor_card(compilation: &Compilation, on_reveal: Callback<usize>) -> A
                             <span class="phase-badge">{format!("#{}", directive.name)}</span>
                             {place(directive.line, on_reveal)}
                             <span class="phase-text">
-                                <code>{directive.directive.clone()}</code>
+                                <code>{directive.text.clone()}</code>
                                 {format!(" {}", directive_meaning(&directive.name))}
                                 {presumed(directive.presumed.as_deref())}
                             </span>
