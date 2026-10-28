@@ -458,6 +458,12 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
     /// Whether GCC folds `expression` to a constant as it parses it
     /// ([`semantic_analysis::folded_constant`]).
     pub(super) fn folded_constant(&self, expression: &'tu Expression<'tu>) -> bool {
-        semantic_analysis::folded_constant(expression, &|e| self.info(e).ok().copied())
+        let types = &self.unit.sema.types;
+        semantic_analysis::folded_constant(expression, &|e| self.info(e).ok().copied(), &|ty| {
+            match types.kind(types.non_atomic(ty)) {
+                | TypeKind::Scalar(scalar) => Some(scalar),
+                | _ => None,
+            }
+        })
     }
 }

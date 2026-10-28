@@ -315,7 +315,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             && self.half_format(operand.ty) != to
             && operand.floating().is_some()
             && !super::excess::excess_expression(operand.expression, &lookup)
-            && !super::excess::folded_constant(operand.expression, &lookup)
+            && !super::excess::folded_constant(operand.expression, &lookup, &|ty| match self
+                .types
+                .nodes[self.types.non_atomic(ty).index]
+            {
+                | TypeKind::Scalar(scalar) => Some(scalar),
+                | _ => None,
+            })
     }
 
     /// Whether `ty` is a complex floating type.

@@ -11,7 +11,11 @@
 //! §6.3.1.5 paragraph 2, p. 44; PDF p. 56. GCC: `EXCESS_PRECISION_EXPR` and
 //! `c_parser_cast_expression`.
 
-use super::ExpressionInfo;
+use super::{
+    ExpressionInfo,
+    Scalar,
+    TypeId,
+};
 use crate::translation_phases::{
     parsing::syntax::{
         BinaryOperator,
@@ -80,45 +84,97 @@ pub(crate) fn excess_expression<'tu>(
 }
 
 /// Whether GCC folds `expression`, a half value, to a constant as it parses
-/// it: a cast of a floating literal, of an integer constant expression, of
-/// a `?:` between such operands or of such a cast, or `__builtin_complex`
-/// of such casts, through parentheses, unary `+`, `__extension__` and the
-/// selections of `_Generic` and `__builtin_choose_expr`. A cast of a negated or
-/// computed floating operand, such as `(__bf16)-0x1p20`, is folded only later,
-/// and GCC converts it as a plain run-time value.
+/// it, so that its conversion to the other half type rounds. GCC's parser
+/// folds a cast exactly when its operand is already a constant node: a
+/// literal, an integer constant expression, a cast of a constant node, a
+/// `?:` with a constant condition whose selected operand is one,
+/// `__builtin_complex` of constant nodes, or an arithmetic constant
+/// expression narrowed to a standard floating type
+/// (`(float)(0x1p19 + 0x1p19)`), which `convert_to_real` folds. It leaves a
+/// negated or computed floating operand, as in `(__bf16)-0x1p20`, to be folded
+/// later and converts it as a plain run-time value. Parentheses, unary `+`,
+/// `__extension__` and the selections of `_Generic` and
+/// `__builtin_choose_expr` are transparent. `scalar` gives the scalar type a
+/// type names.
+/// GCC: `build_c_cast` and `convert_to_real`.
 pub(crate) fn folded_constant<'tu>(
     expression: &'tu Expression<'tu>,
     info: &dyn Fn(&'tu Expression<'tu>) -> Option<ExpressionInfo<'tu>>,
+    scalar: &dyn Fn(TypeId) -> Option<Scalar>,
 ) -> bool {
-    match strip(expression, info).kind {
+    let expression = strip(expression, info);
+    match expression.kind {
+        | E::Constant(_) => true,
         | E::Cast {
             operand_expression, ..
-        } => literal(operand_expression, info),
+        } =>
+            folded_constant(operand_expression, info, scalar)
+                || converted_arithmetic(expression, operand_expression, info, scalar),
+        | E::Conditional(conditional) => match info(conditional.condition_expression)
+            .filter(|condition| condition.ice)
+            .and_then(|condition| condition.integer)
+        {
+            | Some(condition) => folded_constant(
+                if condition.value == 0 {
+                    conditional.else_expression
+                } else {
+                    conditional.then_expression
+                },
+                info,
+                scalar,
+            ),
+            | None => false,
+        },
         // A builtin call that folds, `__builtin_complex`, folds as its
         // operands do.
         | E::Call { arguments, .. } =>
             info(expression).is_some_and(|info| info.floating().is_some())
                 && arguments
                     .iter()
-                    .all(|&argument| folded_constant(argument, info)),
-        | _ => false,
+                    .all(|&argument| folded_constant(argument, info, scalar)),
+        // An integer constant expression folds as GCC parses it.
+        | _ => info(expression).is_some_and(|info| info.ice && info.integer.is_some()),
     }
 }
 
-/// Whether GCC's parser holds `expression` as a literal constant.
-fn literal<'tu>(
-    expression: &'tu Expression<'tu>,
+/// Whether `cast` narrows an arithmetic constant expression to a standard
+/// floating type of less precision, which GCC's `convert_to_real` folds as
+/// it parses it; a widening conversion it leaves.
+fn converted_arithmetic<'tu>(
+    cast: &'tu Expression<'tu>,
+    operand: &'tu Expression<'tu>,
     info: &dyn Fn(&'tu Expression<'tu>) -> Option<ExpressionInfo<'tu>>,
+    scalar: &dyn Fn(TypeId) -> Option<Scalar>,
 ) -> bool {
-    let expression = strip(expression, info);
-    match expression.kind {
-        | E::Constant(_) => true,
-        // A cast of a folded constant folds too.
-        | E::Cast { .. } => folded_constant(expression, info),
-        | E::Conditional(conditional) =>
-            literal(conditional.then_expression, info) && literal(conditional.else_expression, info),
-        // An integer constant expression folds as GCC parses it.
-        | _ => info(expression).is_some_and(|info| info.ice && info.integer.is_some()),
+    let operand = strip(operand, info);
+    // The standard floating types' precisions on x86-64.
+    let precision = |s: Scalar| match s {
+        | Scalar::Float => Some(24),
+        | Scalar::Double => Some(53),
+        | Scalar::LongDouble => Some(64),
+        | Scalar::Float128 => Some(113),
+        | _ => None,
+    };
+    let arithmetic = matches!(
+        operand.kind,
+        E::Binary {
+            operator: BinaryOperator::Addition
+                | BinaryOperator::Subtraction
+                | BinaryOperator::Multiplication
+                | BinaryOperator::Division,
+            ..
+        }
+    );
+    if let (true, Some(cast), Some(operand)) = (arithmetic, info(cast), info(operand))
+        && (operand.floating().is_some() || operand.binary128().is_some())
+        && let (Some(to), Some(from)) = (
+            scalar(cast.ty).and_then(precision),
+            scalar(operand.ty).and_then(precision),
+        )
+    {
+        to < from
+    } else {
+        false
     }
 }
 

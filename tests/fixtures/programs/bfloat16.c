@@ -229,6 +229,14 @@ static void conversions(void) {
            (double)(long double)(_Float16)__builtin_choose_expr(1, (B)0x1p20Q, (B)0),
            (double)(long double)(_Float16)(B)(B)0x1p20Q,
            (double)(long double)(_Float16)_Generic(0, int: (B)-0x1p20Q));
+    /* GCC folds a cast whose operand is already a constant: the selected
+       operand of a constant ?:, arithmetic converted to float, and
+       __builtin_complex; not arithmetic itself. */
+    printf("parse operands %a %a %a %a\n",
+           (double)(long double)(_Float16)(B)(1 ? 0x1p20 : -0x1p20),
+           (double)(long double)(_Float16)(B)(float)(0x1p19 + 0x1p19),
+           (double)(long double)(_Float16)(B)(0x1p19 + 0x1p19),
+           (double)(long double)(B)(_Float16)__builtin_complex((_Float16)0x1.004p0, (_Float16)0));
 }
 
 /* small * small is 2^-140: a float subnormal, but zero as a __bf16. */

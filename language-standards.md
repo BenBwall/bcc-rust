@@ -1579,10 +1579,15 @@ store, pass or return it, and as an arm of a `?:` whose type is
 `_Complex _Float16` when neither arm is an excess-precision expression
 (an arithmetic operation or an `f16` constant, seen through parentheses,
 unary `+` and `-`, which are exact, the comma operator, `_Generic` and
-`__builtin_choose_expr`). GCC's parser folds a cast of a literal and rounds
-that conversion where its code does not: `(_Float16)(__bf16)0x1p20` is
-infinite, but `(_Float16)(__bf16)-0x1p20`, whose operand GCC folds only
-later, is `-0x1p20`. bcc follows each case (`semantic_analysis/excess.rs`);
+`__builtin_choose_expr`). GCC's parser folds a cast whose operand is
+already a constant node (a literal, an integer constant expression, a cast
+of a constant node, the selected operand of a `?:` with a constant
+condition, `__builtin_complex` of constant nodes, or arithmetic narrowed
+to a standard floating type) and rounds that conversion where its
+code does not: `(_Float16)(__bf16)0x1p20` is infinite, but
+`(_Float16)(__bf16)-0x1p20` and `(_Float16)(__bf16)(0x1p19 + 0x1p19)`,
+whose operands GCC folds only later, are `-0x1p20` and `0x1p20`. bcc
+follows each case (`semantic_analysis/excess.rs`);
 `scripts/generate_half_matrix.py` writes a program converting every pair
 of integer, real and complex types through `+`, `?:` and casts, with each
 compiler's output as the expectation (`tests/integration/half_precision.rs`). The ABI passes it as `_Float16`; it is never promoted through `...`.
