@@ -1,0 +1,25 @@
+warning: cast to 'void *' from smaller integer type [-Wint-to-void-pointer-cast]
+ --> sema-pointer-int-cast-system-clang.c:3:11
+  |
+3 |     (void)TO_POINTER(i);
+  |           ^^^^^^^^^^ the integer and pointer widths differ
+  |
+  = note: C99 §6.3.2.3p5-6: the result of converting between a pointer and an integer is implementation-defined and may not be representable
+
+warning: cast from 'void *' to smaller integer type [-Wvoid-pointer-to-int-cast]
+ --> sema-pointer-int-cast-system-clang.c:4:11
+  |
+4 |     (void)TO_INT(p);
+  |           ^^^^^^ the integer and pointer widths differ
+  |
+  = note: C99 §6.3.2.3p5-6: the result of converting between a pointer and an integer is implementation-defined and may not be representable
+
+warning: cast to 'void *' from smaller integer type [-Wint-to-void-pointer-cast]
+ --> sema-pointer-int-cast-system-clang.c:5:11
+  |
+5 |     (void)(void *)i;
+  |           ^^^^^^^^^ the integer and pointer widths differ
+  |
+  = note: C99 §6.3.2.3p5-6: the result of converting between a pointer and an integer is implementation-defined and may not be representable
+
+3 warnings generated.

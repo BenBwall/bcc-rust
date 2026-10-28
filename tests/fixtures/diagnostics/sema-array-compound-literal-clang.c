@@ -20,4 +20,5 @@ void f(int i) {
     int side_effect[2] = (int[2]){i++, 2};
     (void)automatic; (void)local_static; (void)automatic_larger; (void)side_effect;
 }
+struct flexible { int n; int a[]; } flexible = { 1, (int[2]){7, 8} };
 int following_valid;

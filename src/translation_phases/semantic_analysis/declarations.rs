@@ -283,7 +283,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     return;
                 }
                 let reason = match *extended {
-                    | super::ExtendedType::BitInt { .. } => Some(UnmodeledType::BitInt),
+                    | super::ExtendedType::BitInt { .. } =>
+                        Some(UnmodeledType::BitInt { width: 0 }),
                     | super::ExtendedType::Decimal32 => Some(UnmodeledType::Decimal32),
                     | super::ExtendedType::Decimal64 => Some(UnmodeledType::Decimal64),
                     | super::ExtendedType::Decimal128 => Some(UnmodeledType::Decimal128),
@@ -306,7 +307,6 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                             source,
                             self.semantic_errors,
                         ));
-                        self.work.push(Work::Eval(width));
                         self.work.push(Work::Expression(width));
                     },
                     | _ => {},
@@ -345,15 +345,18 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
-    /// Checks the width of `_BitInt(N)` once [`Work::Eval`] has evaluated
-    /// it: an integer constant expression, at least 2 for a signed type and
-    /// 1 for an unsigned one, and at most `BITINT_MAXWIDTH`. GCC compares
-    /// the value itself with its 65535 bits, so a width of 0 or less is not
-    /// positive. Clang reads the value's bits zero-extended from its type
-    /// and truncated to 64 bits (`BuildBitIntType`), so it takes
-    /// `(signed char)-1` as 255 bits and `-1` as too large, against its 2^23
-    /// bits. The MSVC and TCC identities follow Clang. A width already
-    /// diagnosed is not reported again.
+    /// Checks the width of `_BitInt(N)` once its expression is typed: an
+    /// integer constant expression, at least 2 for a signed type and 1 for
+    /// an unsigned one, and at most `BITINT_MAXWIDTH`. GCC compares the
+    /// value itself with its 65535 bits, so a width of 0 or less is not
+    /// positive, and folds nothing else. Clang reads the value's bits
+    /// zero-extended from its type and truncated to 64 bits
+    /// (`BuildBitIntType`), so it takes `(signed char)-1` as 255 bits and
+    /// `-1` as too large, against its 2^23 bits, and folds any arithmetic
+    /// constant. TCC and MSVC follow GCC, clang-cl Clang
+    /// ([`crate::configuration::CompilerConfiguration::bit_int_rules`]). A
+    /// width already diagnosed is not reported again, and a valid one
+    /// records its width in the type.
     /// C23: §6.7.3.1 paragraph 4, p. 104; PDF p. 117.
     pub(super) fn bit_int_width(
         &mut self,
@@ -365,10 +368,46 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         /// GCC's and Clang's `BITINT_MAXWIDTH` on x86-64.
         const GCC_MAXIMUM: i128 = 65535;
         const CLANG_MAXIMUM: u64 = 1 << 23;
-        let value = self.integers.pop().flatten();
         if self.semantic_errors != errors_before || self.unanalyzed_constant(width) {
             return;
         }
+        let gcc = self.context.configuration.bit_int_rules() == crate::configuration::RuleSet::Gcc;
+        let info = self.expression_info(width);
+        // Typing folds the width; it is an integer constant expression
+        // when no operand reads an object, even an unevaluated one.
+        let value = if info.ice && self.valid_ice_operands(width) {
+            info.integer
+        } else if !gcc
+            && info.constant == super::ConstantClass::Arithmetic
+            && !matches!(
+                info.folding,
+                super::expressions::ConstantFolding::Overflow
+                    | super::expressions::ConstantFolding::OverflowOperand
+                    | super::expressions::ConstantFolding::AtomicCast
+            )
+            && info.integer.is_some()
+            && self.integer_type(info.ty).is_some()
+        {
+            // Clang folds any other integer constant here, in every mode, as
+            // a GNU extension (`1 ? 8 : n`, `(int){8}`); GCC folds none.
+            if !self.tainted
+                && (self.context.configuration.extension_policy()
+                    != crate::configuration::ExtensionPolicy::Allow
+                    || self.context.configuration.diagnostic_requested(
+                        crate::configuration::DiagnosticGroup::GnuFoldingConstant,
+                    ))
+            {
+                self.error(
+                    SemanticErrorKind::FoldedIntegerConstant,
+                    width.source_vectors,
+                    None,
+                    None,
+                );
+            }
+            info.integer
+        } else {
+            None
+        };
         let Some(value) = value else {
             self.error(
                 SemanticErrorKind::InvalidConstant,
@@ -378,15 +417,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             );
             return;
         };
-        let kind = if matches!(
-            self.context.configuration.compiler_identity(),
-            crate::configuration::CompilerIdentity::Gcc
-        ) {
+        // The width as the identity's compiler reads it, if it is valid.
+        let width = if gcc {
             match value.to_i128() {
-                | Some(..=0) => Some(SemanticErrorKind::NonPositiveBitIntWidth),
-                | Some(1) if signed => Some(SemanticErrorKind::SignedBitIntWidth),
-                | Some(1..=GCC_MAXIMUM) => None,
-                | _ => Some(SemanticErrorKind::BitIntWidthTooLarge),
+                | Some(..=0) => Err(SemanticErrorKind::NonPositiveBitIntWidth),
+                | Some(1) if signed => Err(SemanticErrorKind::SignedBitIntWidth),
+                | Some(width @ 1..=GCC_MAXIMUM) =>
+                    u64::try_from(width).map_err(|_| SemanticErrorKind::BitIntWidthTooLarge),
+                | _ => Err(SemanticErrorKind::BitIntWidthTooLarge),
             }
         } else {
             let pattern = value.value.cast_unsigned() & (u128::MAX >> (128 - value.bits));
@@ -396,19 +434,37 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             )]
             let bits = pattern as u64;
             if bits < 1 + u64::from(signed) {
-                Some(if signed {
+                Err(if signed {
                     SemanticErrorKind::SignedBitIntWidth
                 } else {
                     SemanticErrorKind::NonPositiveBitIntWidth
                 })
             } else if bits > CLANG_MAXIMUM {
-                Some(SemanticErrorKind::BitIntWidthTooLarge)
+                Err(SemanticErrorKind::BitIntWidthTooLarge)
             } else {
-                None
+                Ok(bits)
             }
         };
-        if let Some(kind) = kind {
-            self.error(kind, source, None, None);
+        let width = match width {
+            | Ok(width) => width,
+            | Err(kind) => {
+                self.error(kind, source, None, None);
+                return;
+            },
+        };
+        // The specifier's type is still the value the width's analysis left
+        // on top; it now records the width.
+        if let Some(ty) = self.values.last_mut()
+            && self.types.nodes[ty.index] == TypeKind::Unmodeled(UnmodeledType::BitInt { width: 0 })
+            && let Ok(width) = u32::try_from(width)
+        {
+            *ty = self.types.unmodeled(UnmodeledType::BitInt { width });
+        }
+        if gcc {
+            // GCC reports the type before C23 once its width is valid, as
+            // `'_BitInt(8)'`; the keyword reports it for Clang.
+            self.context
+                .report_extension(crate::configuration::Feature::BitInt, "_BitInt", source);
         }
     }
 

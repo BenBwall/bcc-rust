@@ -125,6 +125,18 @@ fn automatic_arrays_and_qualifiers_differ_between_identities() {
             &[int_conversion],
             &[int_conversion],
         ),
+        // Only the object's own unknown bound completes from a literal; a
+        // flexible array member takes none.
+        (
+            "struct F { int n; int a[]; }; static struct F f = { 1, (int[2]){7, 8} };",
+            &[int_conversion],
+            &[int_conversion],
+        ),
+        (
+            "struct G { int n; char s[]; }; static struct G g = { 1, (char[3]){\"ab\"} };",
+            &[int_conversion],
+            &[int_conversion],
+        ),
     ] {
         for (identity, expected) in [
             (CompilerIdentity::Gcc, gcc),

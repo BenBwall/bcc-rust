@@ -214,6 +214,11 @@ pub(crate) enum SemanticErrorKind {
     /// value; the payload is the interned message.
     /// C99: §6.3.1.4 paragraph 1, p. 43; PDF p. 55.
     FloatOverflow(StringCacheId),
+    /// GCC's pedantic "overflow in constant expression": a static
+    /// initializer's floating value converted out of an integer type's
+    /// range, by a cast too, or arithmetic on one.
+    /// C99: §6.6 paragraph 4, p. 95; PDF p. 107.
+    PedanticOverflow,
     /// Clang's `-Wliteral-conversion`: a floating literal's implicit
     /// conversion to an integer type is out of range or changes its value;
     /// the payload is the interned message.
@@ -656,6 +661,7 @@ impl SemanticErrorKind {
             | Self::CallAttributeWarning => Some(DiagnosticGroup::AttributeWarning),
             | Self::ConstantConversion(_) => Some(DiagnosticGroup::ConstantConversion),
             | Self::FloatOverflow(_) => Some(DiagnosticGroup::Overflow),
+            | Self::PedanticOverflow => Some(DiagnosticGroup::PedanticOverflow),
             | Self::LiteralConversion(_) => Some(DiagnosticGroup::LiteralConversion),
             | Self::ExcessString => Some(DiagnosticGroup::ExcessInitializers),
             | _ => None,
@@ -757,7 +763,7 @@ impl SemanticErrorKind {
             | Self::InvalidFrameLevel => "expected an integer constant frame level",
             | Self::InvalidLongjmpValue => "expected the constant 1",
             | Self::ConstantConversion(_) => "the converted value differs",
-            | Self::FloatOverflow(_) | Self::LiteralConversion(_) =>
+            | Self::FloatOverflow(_) | Self::LiteralConversion(_) | Self::PedanticOverflow =>
                 "the value is not the integer's",
             | Self::ExcessString => "characters past the array's end are dropped",
             | Self::InvalidBuiltinAlignment => "expected a constant power-of-two alignment",
@@ -1005,6 +1011,8 @@ impl SemanticErrorKind {
                     | crate::configuration::DiagnosticGroup::ConstantPromotion
                     | crate::configuration::DiagnosticGroup::ConstantConversion
                     | crate::configuration::DiagnosticGroup::Overflow
+                    | crate::configuration::DiagnosticGroup::PedanticOverflow
+                    | crate::configuration::DiagnosticGroup::Conversion
                     | crate::configuration::DiagnosticGroup::LiteralConversion
                     | crate::configuration::DiagnosticGroup::ExcessInitializers => "warning-group diagnostic",
                 },
@@ -1032,6 +1040,11 @@ impl SemanticErrorKind {
                 "the frame level must be an integer constant",
                 "GNU extension: GCC requires the level of __builtin_frame_address and __builtin_return_address to be a constant unsigned integer",
             ),
+            | Self::PedanticOverflow => (
+                "overflow in constant expression",
+                "C99 §6.6p4: a constant expression evaluates to a value its type represents; GCC \
+                 folds an out-of-range conversion to the nearest bound",
+            ),
             | Self::FloatOverflow(_) | Self::LiteralConversion(_) => (
                 "floating value converted to an integer type changes",
                 "C99 §6.3.1.4p1: a floating value converts to an integer by truncation toward \
@@ -1039,7 +1052,7 @@ impl SemanticErrorKind {
                  nearest bound, or 0 for a NaN",
             ),
             | Self::ExcessString => (
-                "initializer-string for char array is too long",
+                "initializer-string is too long for its array",
                 "C99 §6.7.8p2 and p14: the string's characters initialize the array's elements; \
                  none may lie outside the array",
             ),
@@ -2128,6 +2141,7 @@ impl GetSeverity for SemanticError {
                 | SemanticErrorKind::PartialInitializerOverride
                 | SemanticErrorKind::ConstantConversion(_)
                 | SemanticErrorKind::FloatOverflow(_)
+                | SemanticErrorKind::PedanticOverflow
                 | SemanticErrorKind::LiteralConversion(_)
                 | SemanticErrorKind::ExcessString
                 | SemanticErrorKind::AttributeAfterDefinition

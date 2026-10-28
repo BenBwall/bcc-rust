@@ -102,4 +102,12 @@ error: an integer constant expression is required
    |
    = note: C99 §6.6p3 and p6: integer constant expressions restrict operators and operands
 
-12 errors and 1 warning generated.
+warning: expression is not an integer constant expression; folding it to a constant is a GNU extension [-Wgnu-folding-constant]
+  --> sema-bitint-width-clang.c:26:9
+   |
+26 | _BitInt(1 ? 8 : n) folded_conditional;
+   |         ^^^^^^^^^ folded integer constant expression
+   |
+   = note: C99 §6.6p6: an integer constant expression reads no object and converts no pointer
+
+12 errors and 2 warnings generated.

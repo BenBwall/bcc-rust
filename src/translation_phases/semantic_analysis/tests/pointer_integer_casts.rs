@@ -240,3 +240,42 @@ fn casts_in_static_initializers_follow_the_same_rules() {
         );
     }
 }
+
+#[test]
+fn bit_int_operands_count_with_their_width() {
+    // Both compilers compare a `_BitInt`'s width; GCC also a wider one.
+    for (identity, expected) in [
+        (
+            CompilerIdentity::Gcc,
+            vec![
+                G::IntToPointerCast,
+                G::PointerToIntCast,
+                G::PointerToIntCast,
+            ],
+        ),
+        (
+            CompilerIdentity::Clang,
+            vec![G::IntToVoidPointerCast, G::VoidPointerToIntCast],
+        ),
+    ] {
+        let mut found = Vec::new();
+        with_configuration(
+            "void f(int x, void *p) { (void)(void *)(_BitInt(32))x; (void)(_BitInt(32))p; \
+             (void)(void *)(_BitInt(64))x; (void)(_BitInt(128))p; }",
+            CompilerConfiguration::new(CStandard::C23, ExtensionPolicy::Allow)
+                .with_compiler_identity(identity),
+            |context, _| {
+                for error in context.take_pending_errors() {
+                    if let TranslationError::Semantic(SemanticError {
+                        kind: SemanticErrorKind::PointerConstraint(group),
+                        ..
+                    }) = error
+                    {
+                        found.push(group);
+                    }
+                }
+            },
+        );
+        assert_eq!(found, expected, "{identity:?}");
+    }
+}

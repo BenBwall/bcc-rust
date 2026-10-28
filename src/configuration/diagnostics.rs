@@ -62,10 +62,21 @@ impl CompilerConfiguration {
             | DiagnosticGroup::PointerToEnumCast | DiagnosticGroup::VoidPointerToIntCast =>
                 &[DiagnosticGroup::VoidPointerToEnumCast],
             | DiagnosticGroup::IntToPointerCast => &[DiagnosticGroup::IntToVoidPointerCast],
+            | DiagnosticGroup::Conversion => &[
+                DiagnosticGroup::NullConversion,
+                DiagnosticGroup::NonLiteralNullConversion,
+                DiagnosticGroup::PointerBoolConversion,
+                DiagnosticGroup::ConstantConversion,
+                DiagnosticGroup::LiteralConversion,
+            ],
             | _ => &[],
         };
         for &child in children {
             self.warning_options[child as usize].apply(option);
+        }
+        if group == DiagnosticGroup::Overflow {
+            self.warning_options[DiagnosticGroup::PedanticOverflow as usize]
+                .apply_to_pedantic(option);
         }
         if group == DiagnosticGroup::IncompatiblePointerTypes {
             self.warning_options[DiagnosticGroup::PointerQualifiers as usize].apply(option);
@@ -273,9 +284,18 @@ diagnostic_groups! {
     /// GCC: a floating constant converted out of an integer type's range in
     /// a static initializer.
     Overflow => Some("overflow"), Warning, false;
+    /// GCC's pedantic "overflow in constant expression" for a static
+    /// initializer: reported under `-pedantic`, an error under
+    /// `-pedantic-errors`, and controlled by `-Woverflow`'s options, which
+    /// disable it or set its severity but never enable it alone.
+    PedanticOverflow => Some("overflow"), Extension, true;
     /// Clang: a floating literal whose implicit conversion to an integer
     /// type is out of range or changes its value; `-Wconversion` holds it.
     LiteralConversion => Some("literal-conversion"), Warning, false;
+    /// Clang's `-Wconversion`, which reports nothing itself: the parent of
+    /// the conversion groups bcc models, which its `-W`, `-Wno-` and
+    /// `-Werror=` options reach.
+    Conversion => Some("conversion"), Ignored, false;
 }
 
 /// A group's severity when no option names it.
@@ -329,6 +349,17 @@ impl WarningSettings {
         error:             None,
         reenabled_warning: false,
     };
+
+    /// Applies a parent group's option to a child that only `-pedantic`
+    /// enables: disabling it, or setting its severity, but leaving whether
+    /// it reports to the extension policy otherwise.
+    fn apply_to_pedantic(&mut self, option: WarningOption) {
+        match option {
+            | WarningOption::Enable(false) => self.apply(option),
+            | WarningOption::Enable(true) => self.enabled = None,
+            | WarningOption::Error(error) => self.error = Some(error),
+        }
+    }
 
     fn apply(&mut self, option: WarningOption) {
         match option {

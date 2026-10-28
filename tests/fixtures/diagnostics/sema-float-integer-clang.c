@@ -19,4 +19,7 @@ void f(void) {
     (void)local;
     (void)automatic;
 }
+int compared = (int)1e10 == 2147483647;
+enum small { SMALL } enumerated = 1.5;
+_Atomic int atomic = 2.5;
 int following_valid;

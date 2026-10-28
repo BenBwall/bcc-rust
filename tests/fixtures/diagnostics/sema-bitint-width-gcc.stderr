@@ -126,4 +126,12 @@ error: an integer constant expression is required
    |
    = note: C99 §6.6p3 and p6: integer constant expressions restrict operators and operands
 
-16 errors generated.
+error: an integer constant expression is required
+  --> sema-bitint-width-gcc.c:28:9
+   |
+28 | _BitInt(1 ? 8 : n) folded_conditional;
+   |         ^^^^^^^^^ not an integer constant expression
+   |
+   = note: C99 §6.6p3 and p6: integer constant expressions restrict operators and operands
+
+17 errors generated.

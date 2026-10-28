@@ -1114,6 +1114,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let operand = self.resolve_function_value(operand, Some(target));
         let from = self.converted(operand);
         if self.types.unanalyzed(target) || self.types.unanalyzed(from) {
+            // A `_BitInt`, unmodeled otherwise, has the width a pointer
+            // cast warning compares.
+            self.pointer_integer_cast_warning(target, from, operand, e.source_vectors);
             let ty = self.types.recovery_type(&[target, from]);
             return Self::expression_result(e, ty);
         }

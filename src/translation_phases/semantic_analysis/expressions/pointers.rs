@@ -97,8 +97,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// (an address constant is one). Clang (`SemaCast.cpp`) warns only when
     /// the integer is narrower, toward a pointer only when the operand is no
     /// integer constant expression, and splits its groups by a `void *` and
-    /// by an enumeration destination; neither compiler warns for `_Bool`.
-    /// The MSVC and TCC identities follow Clang.
+    /// by an enumeration destination; neither compiler warns for `_Bool`. A
+    /// `_BitInt` counts with its width. GCC also withholds a cast spelled in
+    /// a system header's macro. TCC follows GCC; MSVC (whose C4311 and
+    /// C4312 warn for narrower integers) and clang-cl follow Clang
+    /// ([`crate::configuration::CompilerConfiguration::pointer_cast_rules`]).
     /// C99: §6.3.2.3 paragraphs 5-6, p. 47; PDF p. 59.
     pub(in crate::translation_phases::semantic_analysis) fn pointer_integer_cast_warning(
         &mut self,
@@ -108,14 +111,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         site: SourceVectors,
     ) {
         let pointer_bits = self.types.target.pointer.size * 8;
-        let gcc = matches!(
-            self.context.configuration.compiler_identity(),
-            crate::configuration::CompilerIdentity::Gcc
-        );
-        // The width of an integer type, and whether it is an enumeration.
+        let gcc =
+            self.context.configuration.pointer_cast_rules() == crate::configuration::RuleSet::Gcc;
+        // The width of an integer type, and whether it is an enumeration. A
+        // `_BitInt`'s checked width counts, though the type is unmodeled.
         let integer = |ty: TypeId| -> Option<(u64, bool)> {
             let ty = self.types.non_atomic(ty);
             let enumeration = match self.types.nodes[ty.index] {
+                | TypeKind::Unmodeled(super::super::types::UnmodeledType::BitInt { width })
+                    if width > 0 =>
+                    return Some((u64::from(width), false)),
                 | TypeKind::Scalar(Scalar::Bool) => return None,
                 | TypeKind::Tag(id) => self.types.tags[id].kind == TagKind::Enum,
                 | _ => false,
@@ -160,7 +165,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         } else {
             None
         };
-        if let Some(group) = group {
+        // GCC also withholds a cast written in a system header's macro
+        // expanded in user code, which Clang reports at the expansion.
+        if let Some(group) = group
+            && !(gcc
+                && site.length() != 0
+                && self
+                    .context
+                    .in_system_header(self.context.first_source_vector(site)))
+        {
             self.pointer_diagnostic(group, site);
         }
     }
@@ -192,7 +205,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// drops a fraction, or that converts to `_Bool` from a value other
     /// than 0 or 1. GCC reports only an out-of-range conversion, and only in
     /// a static initializer (`-Woverflow`, beside the static value it
-    /// folds); the MSVC and TCC identities follow Clang.
+    /// folds). Clang checks only a builtin integer type, not an enumeration
+    /// or an atomic type. clang-cl follows Clang, TCC and MSVC GCC
+    /// ([`crate::configuration::CompilerConfiguration::float_conversion_rules`]).
     /// C99: §6.3.1.4 paragraph 1, p. 43; PDF p. 55; §6.3.1.2 paragraph 1,
     /// p. 43; PDF p. 55.
     fn literal_conversion_warning(&mut self, target: TypeId, source: ExpressionInfo<'tu>) {
@@ -204,10 +219,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             },
             preprocessing::FloatTokenType,
         };
-        if matches!(
-            self.context.configuration.compiler_identity(),
-            crate::configuration::CompilerIdentity::Gcc
-        ) || self.integer_type(target).is_none()
+        // Clang checks builtin integer targets only, not an enumeration or
+        // an atomic type.
+        if self.context.configuration.float_conversion_rules() == crate::configuration::RuleSet::Gcc
+            || !matches!(self.types.nodes[target.index], TypeKind::Scalar(_))
+            || self.integer_type(target).is_none()
         {
             return;
         }

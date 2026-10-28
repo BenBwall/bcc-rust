@@ -38,8 +38,13 @@ fn diagnostics(
                         kind: SemanticErrorKind::LiteralConversion(_),
                         ..
                     }) => result.0.push(Kind::Literal),
-                    | TranslationError::Semantic(e) => result.0.push(Kind::Other(e.kind)),
+                    // GCC's pedantic report counts with the extensions.
+                    | TranslationError::Semantic(SemanticError {
+                        kind: SemanticErrorKind::PedanticOverflow,
+                        ..
+                    })
                     | TranslationError::Extension(_) => result.1 += 1,
+                    | TranslationError::Semantic(e) => result.0.push(Kind::Other(e.kind)),
                     | other => panic!("{source}: unexpected {other:?}"),
                 }
             }
@@ -96,6 +101,11 @@ fn each_identity_reports_its_own_conversions() {
         ),
         ("void g(int); void f(void) { g(1e10); }", &[], &[Literal], 0),
         ("int f(void) { return 2.5; }", &[], &[Literal], 0),
+        // Clang checks builtin integer types only.
+        ("enum E { A } x = 1.5;", &[], &[], 0),
+        ("_Atomic int x = 2.5;", &[], &[], 0),
+        // A comparison's result is a fresh constant to GCC.
+        ("int x = (int)1e10 == 2147483647;", &[], &[], 0),
         (
             "void f(void) { static int x = 1e10; (void)x; }",
             &[Overflow],
@@ -159,11 +169,11 @@ fn an_out_of_range_conversion_is_no_integer_constant_expression() {
             "_Static_assert((int)1e10 == 2147483647, \"\");",
             "struct { int b : (int)1e10; } x;",
         ] {
+            let found = diagnostics(source, identity, ExtensionPolicy::Allow).0;
             assert!(
-                diagnostics(source, identity, ExtensionPolicy::Allow)
-                    .0
-                    .contains(&Kind::Other(SemanticErrorKind::InvalidConstant)),
-                "{identity:?}: {source}"
+                found.contains(&Kind::Other(SemanticErrorKind::InvalidConstant))
+                    || found.contains(&Kind::Other(SemanticErrorKind::ConstantOverflow)),
+                "{identity:?}: {source}: {found:?}"
             );
         }
     }
@@ -187,8 +197,74 @@ fn conversion_groups_follow_their_options() {
     for (identity, group) in [
         (CompilerIdentity::Gcc, DiagnosticGroup::Overflow),
         (CompilerIdentity::Clang, DiagnosticGroup::LiteralConversion),
+        // `-Wconversion` holds Clang's group: `-Werror=conversion` reaches it.
+        (CompilerIdentity::Clang, DiagnosticGroup::Conversion),
     ] {
         assert_eq!(count(identity, group, WarningOption::Enable(false)), 0);
         assert_eq!(count(identity, group, WarningOption::Error(true)), 11);
+    }
+}
+
+#[test]
+fn overflow_options_control_gccs_pedantic_report() {
+    // The kinds and error count of `int x = 1e10;` under GCC's rules.
+    let run = |policy, options: &[(DiagnosticGroup, WarningOption)]| {
+        let mut result = (Vec::new(), 0);
+        with_configuration(
+            "int x = 1e10;",
+            options.iter().fold(
+                CompilerConfiguration::new(CStandard::C17, policy)
+                    .with_compiler_identity(CompilerIdentity::Gcc),
+                |configuration, &(group, option)| configuration.with_warning_option(group, option),
+            ),
+            |context, unit| {
+                for error in context.take_pending_errors() {
+                    if let TranslationError::Semantic(error) = error {
+                        result.0.push(error.kind);
+                    }
+                }
+                result.1 = unit.errors;
+            },
+        );
+        result
+    };
+    let overflow = |error| (DiagnosticGroup::Overflow, WarningOption::Error(error));
+    let disabled = (DiagnosticGroup::Overflow, WarningOption::Enable(false));
+    // Only `-pedantic` reports it; `-Wno-overflow` withdraws it, and
+    // `-Werror=overflow` makes it an error, as in GCC.
+    assert_eq!(run(ExtensionPolicy::Allow, &[overflow(true)]).0.len(), 1);
+    assert_eq!(run(ExtensionPolicy::Warn, &[]).0.len(), 2);
+    assert_eq!(
+        run(ExtensionPolicy::Warn, &[overflow(true)]),
+        (run(ExtensionPolicy::Warn, &[]).0, 2)
+    );
+    assert_eq!(run(ExtensionPolicy::Deny, &[]).1, 1);
+    assert_eq!(run(ExtensionPolicy::Deny, &[disabled]), (vec![], 0));
+    assert_eq!(run(ExtensionPolicy::Deny, &[overflow(false)]).1, 0);
+}
+
+#[test]
+fn gcc_finds_no_constant_in_an_overflowing_conversion() {
+    for (identity, expected) in [
+        (CompilerIdentity::Gcc, [0, 0, 0]),
+        // Clang's evaluator also folds `(int)1e10 + 1`, which bcc does not.
+        (CompilerIdentity::Clang, [1, 1, 0]),
+    ] {
+        let source = format!(
+            "_Static_assert(__builtin_constant_p((int)1e10) == {}, \"\"); \
+             _Static_assert(__builtin_constant_p((unsigned char)300.0) == {}, \"\"); \
+             _Static_assert(__builtin_constant_p((int)1e10 + 1) == {}, \"\");",
+            expected[0], expected[1], expected[2]
+        );
+        with_configuration(
+            &source,
+            CompilerConfiguration::new(CStandard::C17, ExtensionPolicy::Allow)
+                .with_gnu_extensions(true)
+                .with_compiler_identity(identity),
+            |context, unit| {
+                let errors = context.take_pending_errors();
+                assert_eq!(unit.errors, 0, "{identity:?}: {errors:?}");
+            },
+        );
     }
 }

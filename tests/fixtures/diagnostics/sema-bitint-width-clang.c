@@ -23,4 +23,5 @@ _BitInt(3 + 5) sum;
 _BitInt((char)300) folded;
 enum { W = 9 };
 _BitInt(W) enumerator;
+_BitInt(1 ? 8 : n) folded_conditional;
 int following_valid;

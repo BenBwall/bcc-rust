@@ -603,7 +603,6 @@ mode gate and policy diagnostics (`Imaginary` reports an unsupported type); a
 | OneVoidConditional | - | - | - | - | - | - | - | extension (GNU native) | semantic analysis |
 | ConstantCompoundLiteral | - | - | - | - | - | - | - | extension (GNU native) | sema, lowering |
 | ArrayCompoundLiteral | - | - | - | - | - | - | - | extension (GNU native) | sema, lowering |
-| OverflowingConstant | - | - | - | - | - | - | - | extension (GNU native) | sema |
 | ZeroLengthArrays | - | - | - | - | - | - | - | extension (GNU native) | parser |
 | Float128 | - | - | - | - | - | - | - | extension (GNU native) | parser/sema |
 | Int128 | - | - | - | - | - | - | - | extension (GNU native) | parser/sema |
@@ -702,9 +701,6 @@ The following vocabulary entries retain the established diagnostic contracts:
   which keeps the parser's `UnionCasts` report. A cast to another aggregate
   type stays invalid, the result is not an lvalue, and it is no constant
   initializer of a static object, as in GCC.
-- `OverflowingConstant` has GNU origin: a floating constant converted out
-  of an integer type's range in a static initializer, which only the GCC
-  identity reports under `-pedantic` ("overflow in constant expression").
 - `ArrayCompoundLiteral` has GNU origin: an array initialized by a compound
   literal of its type, as "Arrays initialized by array compound literals"
   below describes. Only the Clang identity reports it under `-pedantic`;
@@ -2292,7 +2288,21 @@ rejections.
 
 Each rule below was surveyed against GCC 15.2 and the bundled Clang 23 in
 C99, C17 and C23, GNU and ISO modes, with and without `-pedantic` and
-`-pedantic-errors`, and follows the selected `--compiler-identity`.
+`-pedantic-errors`, and follows the selected `--compiler-identity`. One
+`CompilerConfiguration` helper per rule (`RuleSet`) says which identity
+takes which side; neither TCC nor MSVC 19.33 was surveyed:
+
+| Rule | GCC side | Clang side |
+| --- | --- | --- |
+| pointer/integer cast warnings (`pointer_cast_rules`) | GCC, TCC | Clang, clang-cl, MSVC (C4311/C4312 warn for narrower integers) |
+| `_BitInt` widths (`bit_int_rules`) | GCC, TCC, MSVC | Clang, clang-cl |
+| array compound literals (`array_literal_rules`) | GCC, TCC, MSVC | Clang, clang-cl |
+| floating values out of an integer's range (`float_conversion_rules`) | GCC, TCC, MSVC | Clang, clang-cl |
+
+Neither TCC nor MSVC 19.33 has `_BitInt` or arrays initialized by compound
+literals. bcc's identities do not gate language features, which follow
+`-std`; so `_BitInt` is a reported C23 extension before C23, and an array
+compound literal keeps GCC's static-only rule with its pedantic report.
 
 ### `_BitInt` widths
 
@@ -2305,7 +2315,7 @@ read the value differently:
 | Width | GCC (`BITINT_MAXWIDTH` 65535) | Clang (`BITINT_MAXWIDTH` 2^23) |
 | --- | --- | --- |
 | not an integer constant expression (`int n; _BitInt(n)`, `_BitInt(2.0)`) | error | error |
-| `_BitInt((int){8})` | error | folded; `-Wgnu-folding-constant` under `-pedantic` |
+| `_BitInt((int){8})`, `_BitInt(1 ? 8 : n)`, `_BitInt(0 ? n : 8)` | error, in every mode | folded in every mode; `-Wgnu-folding-constant` under `-pedantic` |
 | `_BitInt(1)`, `signed _BitInt(1)` | error: at least 2 | error: at least 2 |
 | `_BitInt(0)` | error: not positive | error: at least 2 |
 | `unsigned _BitInt(0)` | error: not positive | error: at least 1 |
@@ -2362,9 +2372,10 @@ the nearest bound of the integer, or to 0 for a NaN, and store that:
 | --- | --- | --- |
 | stored value | the nearest bound; a bit-field saturates to its own width (`100.0` in an `int : 4` stores 7) | the nearest bound of the declared type, whose low bits a bit-field keeps (`100.0` stores 4) |
 | scalar static initializer | stored | refused by Clang's code generation ("cannot compile this static initializer yet"); bcc stores the value its evaluator computes, as Clang does inside braces |
-| bit-field of static storage | stored | error, "initializer element is not a compile-time constant" |
-| warning | `-Woverflow`, default on, for an implicit conversion of any floating constant in a static initializer only ("overflow in conversion from 'double' to 'int' changes value ...") | `-Wliteral-conversion`, default on and under `-Wconversion`, for an implicit conversion of a floating literal (possibly signed and parenthesized) anywhere: out of range ("... is undefined"), with a fraction dropped, -0 included (`int i = 2147483647.5;`, `int i = -0.0;`), or to `_Bool` from neither 0 nor 1 |
-| `-pedantic` | "overflow in constant expression" for every overflowing static element, explicit casts and arithmetic on them included (`(int)-1e10 / 2`); an error under `-pedantic-errors`. bcc reports it as `OverflowingConstant` under `[-Wpedantic]` | nothing more |
+| bit-field of static storage | stored | error, "initializer element is not a compile-time constant", once per initializer |
+| warning | `-Woverflow`, default on, for an implicit conversion of any floating constant in a static initializer only ("overflow in conversion from 'double' to 'int' changes value ...") | `-Wliteral-conversion`, default on and under `-Wconversion`, for an implicit conversion of a floating literal (possibly signed and parenthesized) to a builtin integer type (not an enumeration, not `_Atomic`) anywhere: out of range ("... is undefined"), with a fraction dropped, -0 included (`int i = 2147483647.5;`, `int i = -0.0;`), or to `_Bool` from neither 0 nor 1 |
+| `-pedantic` | "overflow in constant expression" `[-Woverflow]` for every overflowing static element, explicit casts and arithmetic on them included (`(int)-1e10 / 2`), but not a comparison's result (`(int)1e10 == 2147483647`); an error under `-pedantic-errors` | nothing more |
+| `__builtin_constant_p((int)1e10)` | 0 | 1 |
 
 The stored values match each compiler's object file on the interpreter,
 LLVM and the native back end
@@ -2377,7 +2388,16 @@ saturated value. A conversion in function code keeps its run-time
 evaluation. GCC's pedantic warning for signed integer overflow in a static
 initializer (`(int)1e10 + 1`) and Clang's `-Winteger-overflow` and
 `-Wbitfield-constant-conversion` are not reproduced; bcc still rejects the
-first. `Analyzer::saturated_float_cast` computes the value,
+first, and its `__builtin_constant_p((int)1e10 + 1)` is 0 where Clang's is 1.
+
+GCC's pedantic report is a pedantic child of `-Woverflow` (as GCC's
+`pedwarn` with `OPT_Woverflow` is): only `-pedantic` reports it, and
+`-Wno-overflow`, `-Werror=overflow` and `-Wno-error=overflow` disable it or
+set its severity, so `-pedantic-errors -Wno-overflow` accepts
+`static int a = 1e10;`. bcc's reporter folds a second error at one
+location into the first, so under `-pedantic -Werror=overflow` only the
+conversion error is printed there, though both count. `-Wconversion`'s
+parent group takes `-Werror=conversion` and `-Wno-error=conversion` too. `Analyzer::saturated_float_cast` computes the value,
 `Analyzer::static_float_conversion` stores it and warns for GCC, and
 `Analyzer::literal_conversion_warning` warns for Clang; the
 `sema-float-integer-{gcc,clang}` goldens and
@@ -2401,7 +2421,10 @@ possibly parenthesized, as if its braced list were written in its place
 A size or element-type mismatch (`char a[4] = (char[3]){"ab"}`, `char a[3]
 = (unsigned char[3]){"ab"}`) is an error in both. GCC's additional
 pedantic "array initialized from parenthesized string constant" for a
-member initialized by a string compound literal is not reproduced. A
+member initialized by a string compound literal is not reproduced. Only the
+object's own unknown bound completes from a literal: a flexible array
+member inside braces takes none (`struct F f = { 1, (int[2]){7, 8} }`),
+and both compilers reject it, as bcc does after `-Wint-conversion`. A
 static object takes the literal's bytes; an automatic one copies the
 literal's object.
 
@@ -2438,7 +2461,11 @@ a parent's `-W`, `-Wno-` or `-Werror=` applies to its children at its
 position on the command line, so `-Wno-int-to-void-pointer-cast
 -Werror=int-to-pointer-cast` makes both errors again. GCC has only the two
 parent groups, which control its warnings whatever the child options say.
-The MSVC and TCC identities follow Clang. The rules are in
+GCC also withholds the warning for a cast spelled in a macro defined in a
+system header (`-isystem`, `#pragma GCC system_header`), where Clang reports
+it at the user's expansion; each identity follows its compiler. The rules
+are in
 `Analyzer::pointer_integer_cast_warning`; the
-`sema-pointer-int-cast-{gcc,clang,options}` goldens and
+`sema-pointer-int-cast-{gcc,clang,options,system-gcc,system-clang}` goldens
+and
 `semantic_analysis/tests/pointer_integer_casts.rs` pin them.

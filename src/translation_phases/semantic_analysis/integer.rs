@@ -31,10 +31,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         use ExpressionType as E;
         let info = self.expression_info(expression);
         // An out-of-range conversion has a value only as an initializer.
-        if self.types.unanalyzed(info.ty)
-            || info.atomic_cast()
-            || info.folding == super::expressions::ConstantFolding::Overflow
-        {
+        if self.types.unanalyzed(info.ty) || info.atomic_cast() || info.folding.overflowed() {
             self.integers.push(None);
             return;
         }

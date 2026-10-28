@@ -163,6 +163,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         let mut flexible: Option<FlexibleExtent> = None;
         let mut count = 0;
         let before = self.semantic_errors;
+        self.initializer_checks += 1;
         let mut unmodeled = false;
         work.push(InitWork::Value(
             ty,
@@ -717,25 +718,30 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         let overflow = self.static_float_conversion(target, info, e, bit_width)
             || info.folding == ConstantFolding::Overflow;
         if overflow
-            && matches!(
-                self.context.configuration.compiler_identity(),
-                crate::configuration::CompilerIdentity::Gcc
-            )
+            && self.context.configuration.float_conversion_rules()
+                == crate::configuration::RuleSet::Gcc
         {
-            self.context.report_extension(
-                crate::configuration::Feature::OverflowingConstant,
-                "overflow in constant expression",
+            self.group_diagnostic(
+                crate::configuration::DiagnosticGroup::PedanticOverflow,
+                SemanticErrorKind::PedanticOverflow,
                 e.source_vectors,
+                None,
+                None,
             );
         } else if overflow && bit_field {
-            // Clang's evaluator gives up on the undefined conversion, and
-            // its code generation emits no bit-field without a value.
-            self.error(
-                SemanticErrorKind::NonConstantInitializer,
-                e.source_vectors,
-                None,
-                None,
-            );
+            // Clang's evaluator gives up on the undefined conversion, once
+            // per initializer, and its code generation emits no bit-field
+            // without a value.
+            if std::mem::replace(&mut self.bit_field_overflowed, self.initializer_checks)
+                != self.initializer_checks
+            {
+                self.error(
+                    SemanticErrorKind::NonConstantInitializer,
+                    e.source_vectors,
+                    None,
+                    None,
+                );
+            }
             return;
         }
         let address = info.constant == ConstantClass::Address
@@ -815,10 +821,8 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         if info.integer.is_some() || self.integer_type(info.ty).is_some() {
             return false;
         }
-        let gcc = matches!(
-            self.context.configuration.compiler_identity(),
-            crate::configuration::CompilerIdentity::Gcc
-        );
+        let gcc = self.context.configuration.float_conversion_rules()
+            == crate::configuration::RuleSet::Gcc;
         let Some((stored, true)) =
             self.saturated_float_cast(target, value, bit_width.filter(|_| gcc))
         else {
@@ -924,11 +928,9 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         site: &Site<'s>,
         static_storage: bool,
     ) -> Option<u64> {
-        let (literal, length) = self.matching_array_literal(target, e)?;
-        let gcc = matches!(
-            self.context.configuration.compiler_identity(),
-            crate::configuration::CompilerIdentity::Gcc
-        );
+        let (literal, length) = self.matching_array_literal(target, e, true)?;
+        let gcc =
+            self.context.configuration.array_literal_rules() == crate::configuration::RuleSet::Gcc;
         let side_effects = self.has_side_effects(literal);
         if gcc && !static_storage || !gcc && side_effects {
             // GCC wraps a literal with side effects, which is then no
@@ -964,12 +966,16 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
     /// requires array types compatible once each element type's qualifiers
     /// are dropped (`digest_init` compares main variants). Clang requires
     /// the same element type, and the same bound unless `target`'s is
-    /// unknown (`hasCompatibleArrayTypes`).
+    /// unknown (`hasCompatibleArrayTypes`). Only the `whole` object's
+    /// unknown bound completes from the literal: a flexible array member
+    /// inside braces is no array a literal initializes, and neither
+    /// compiler accepts one there.
     /// GNU extension: GCC manual, "Compound Literals".
     fn matching_array_literal(
         &mut self,
         target: TypeId,
         e: &'tu Expression<'tu>,
+        whole: bool,
     ) -> Option<(&'tu Expression<'tu>, u64)> {
         let TypeKind::Array(target_element, target_bound) = self.types.nodes[target.index] else {
             return None;
@@ -984,15 +990,14 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             return None;
         };
         let bounds = match target_bound {
-            | ArrayBound::Incomplete => true,
+            | ArrayBound::Incomplete => whole,
             | ArrayBound::Constant(target_length) => target_length == length,
             | _ => false,
         };
         let compatible = bounds
-            && if matches!(
-                self.context.configuration.compiler_identity(),
-                crate::configuration::CompilerIdentity::Gcc
-            ) {
+            && if self.context.configuration.array_literal_rules()
+                == crate::configuration::RuleSet::Gcc
+            {
                 let [a, b] = [target_element, element].map(|ty| self.element_main_variant(ty));
                 self.types.composite(a, b).is_some()
             } else {
@@ -1891,10 +1896,8 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         }
         // GCC: an array compound literal initializes an array element or
         // member whole, as it does the object (Clang only the object).
-        if matches!(
-            self.context.configuration.compiler_identity(),
-            crate::configuration::CompilerIdentity::Gcc
-        ) && self.matching_array_literal(target, e).is_some()
+        if self.context.configuration.array_literal_rules() == crate::configuration::RuleSet::Gcc
+            && self.matching_array_literal(target, e, false).is_some()
         {
             return true;
         }

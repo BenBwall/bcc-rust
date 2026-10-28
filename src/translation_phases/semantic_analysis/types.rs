@@ -486,7 +486,11 @@ pub(crate) struct TypeInterner<'tu, 's> {
 /// C99: §4p6, p. 7; PDF p. 19 (extensions must be identified accurately).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum UnmodeledType {
-    BitInt,
+    /// A `_BitInt(N)`, with its width once checked (0 before), which casts
+    /// to and from pointers read (`Analyzer::pointer_integer_cast_warning`).
+    BitInt {
+        width: u32,
+    },
     Constexpr,
     Decimal32,
     Decimal64,
@@ -500,7 +504,7 @@ pub(crate) enum UnmodeledType {
 impl UnmodeledType {
     pub(crate) const fn description(self) -> &'static str {
         match self {
-            | Self::BitInt => "_BitInt types",
+            | Self::BitInt { .. } => "_BitInt types",
             | Self::Constexpr => "constexpr objects",
             | Self::Decimal32 => "_Decimal32 types",
             | Self::Decimal64 => "_Decimal64 types",

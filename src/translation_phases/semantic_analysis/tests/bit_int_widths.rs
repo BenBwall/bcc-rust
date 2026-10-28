@@ -65,6 +65,10 @@ fn widths_follow_each_identity() {
         ),
         ("_BitInt(2.0)", Some(NotConstant), Some(NotConstant)),
         ("_BitInt(n)", Some(NotConstant), Some(NotConstant)),
+        // Clang folds an arithmetic constant that is no integer constant
+        // expression; GCC does not, in any mode.
+        ("_BitInt(1 ? 8 : n)", Some(NotConstant), None),
+        ("_BitInt(0 ? n : 8)", Some(NotConstant), None),
     ] {
         for (identity, expected) in [
             (CompilerIdentity::Gcc, gcc),
@@ -126,4 +130,31 @@ fn a_compound_literal_width_folds_only_for_clang() {
         ),
         []
     );
+}
+
+#[test]
+fn gcc_reports_the_type_before_c23_only_with_a_valid_width() {
+    // GCC names the type with its width ("ISO C does not support
+    // '_BitInt(8)' before C23"); Clang reports the keyword.
+    for (identity, valid, invalid) in [
+        (CompilerIdentity::Gcc, 1, 0),
+        (CompilerIdentity::Clang, 1, 1),
+    ] {
+        for (source, expected) in [("_BitInt(8) x;", valid), ("_BitInt(1) x;", invalid)] {
+            let mut extensions = 0;
+            with_configuration(
+                source,
+                CompilerConfiguration::new(CStandard::C17, ExtensionPolicy::Warn)
+                    .with_compiler_identity(identity),
+                |context, _| {
+                    extensions = context
+                        .take_pending_errors()
+                        .iter()
+                        .filter(|error| matches!(error, TranslationError::Extension(_)))
+                        .count();
+                },
+            );
+            assert_eq!(extensions, expected, "{identity:?}: {source}");
+        }
+    }
 }

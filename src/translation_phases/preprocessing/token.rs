@@ -870,9 +870,12 @@ impl KeywordTokenType {
                     configuration.accepts(Feature::ThreadLocal),
                     Some(Feature::ThreadLocal.origin()),
                 ),
+                // Under GCC's rules semantic analysis reports `_BitInt` with
+                // a valid width (`Analyzer::bit_int_width`).
                 | Self::BitInt => (
                     configuration.accepts(Feature::BitInt),
-                    Some(Feature::BitInt.origin()),
+                    (configuration.bit_int_rules() == crate::configuration::RuleSet::Clang)
+                        .then(|| Feature::BitInt.origin()),
                 ),
                 | Self::Decimal32 | Self::Decimal64 | Self::Decimal128 => (
                     configuration.accepts(Feature::DecimalTypes),

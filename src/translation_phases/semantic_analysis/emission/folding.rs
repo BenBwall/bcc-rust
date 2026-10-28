@@ -1445,6 +1445,14 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         if !scalar {
             return false;
         }
+        // GCC's folder marks an out-of-range floating conversion as an
+        // overflow, which is no constant to `__builtin_constant_p`, nor is
+        // arithmetic on it; Clang's evaluator keeps its saturated value.
+        if self.context.configuration.float_conversion_rules() == crate::configuration::RuleSet::Gcc
+            && self.expression_info(operand).folding.overflowed()
+        {
+            return false;
+        }
         // GCC's folder reads no compound literal: GCC answers zero for
         // `(int){1}`, even optimizing.
         if !self.context.configuration.folds_compound_literals()
