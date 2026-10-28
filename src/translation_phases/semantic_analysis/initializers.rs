@@ -34,6 +34,7 @@ use super::{
     Subobject,
     expressions::{
         ConstantClass,
+        ConstantFolding,
         ConversionKind,
     },
     integer::Integer,
@@ -61,6 +62,7 @@ use crate::{
             syntax::{
                 Expression,
                 ExpressionType,
+                UnaryOperator,
             },
         },
         preprocessing::{
@@ -232,6 +234,23 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                                 continue;
                             }
                             self.convert(e, target.unqualified(), ConversionKind::Assignment);
+                            // GNU: a static object's compound literal of its
+                            // type gives it the literal's bytes, so the plan
+                            // takes the literal from inside the wrappers GCC
+                            // folds away, fewer of them inside braces, where
+                            // Clang's evaluator still reads through them.
+                            let literal = if static_storage {
+                                let peel = if std::ptr::eq(init, initializer)
+                                    || self.context.configuration.folds_compound_literals()
+                                {
+                                    Peel::Whole
+                                } else {
+                                    Peel::Element
+                                };
+                                self.whole_compound_literal(target, e, peel)
+                            } else {
+                                None
+                            };
                             // C99 §6.7.8p13: a structure or union initialized
                             // by an expression of its type is copied whole, as
                             // is a static scalar's compound literal of its
@@ -239,20 +258,24 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                             if matches!(
                                 self.types.nodes[self.types.non_atomic(target).index],
                                 TypeKind::Tag(id) if self.types.tags[id].kind != TagKind::Enum
-                            ) || (static_storage
-                                && !bit_field
-                                && self.whole_compound_literal(target, e).is_some())
+                            ) || (literal.is_some() && !bit_field)
                             {
-                                plan.copy(e, destination, self.enclosing_unions(&site));
+                                plan.copy(
+                                    literal.unwrap_or(e),
+                                    destination,
+                                    self.enclosing_unions(&site),
+                                );
                             } else {
                                 plan.store(
-                                    e,
+                                    literal.unwrap_or(e),
                                     destination,
                                     site.bits,
                                     site.scalar_source.unwrap_or(e.source_vectors),
                                 );
                             }
-                            if static_storage && !self.check_static_compound_literal(target, e) {
+                            if let Some(literal) = literal {
+                                self.check_static_compound_literal(e, literal);
+                            } else if static_storage {
                                 self.check_static_initializer(target, info, e, bit_field);
                             }
                         },
@@ -736,40 +759,52 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         }
     }
 
-    /// Checks `e` as the initializer of a static object of type `target`
-    /// when it is a compound literal of that type, which GCC accepts as if
-    /// its braced list were written in its place (Clang only for a
-    /// structure or union), and returns whether it was. A scalar literal
-    /// counts only as the whole initializer: GCC rejects `(int){3} + 1`. Each
-    /// value the literal's plan stores is checked against its destination as
-    /// the static object's own would be. A literal in a block is an automatic
+    /// Checks the compound literal `literal`, which
+    /// [`Self::whole_compound_literal`] found in `e`, as the initializer of a
+    /// static object, which GCC and Clang accept as if its braced list were
+    /// written in its place. GCC reports it under `-pedantic` ("initializer
+    /// element is not constant"); Clang, whose evaluator reads the literal,
+    /// reports nothing, even under `-pedantic-errors`. Each value the
+    /// literal's plan stores is checked against its destination as the
+    /// static object's own would be. A literal in a block is an automatic
     /// object (§6.5.2.5p6), so neither it nor an array literal nested in it
     /// gives an address constant (§6.6p9).
     /// GNU extension: GCC manual, "Compound Literals"; C99 §6.6 paragraph
     /// 10, p. 96; PDF p. 108 permits other forms of constant expression;
     /// §6.5.2.5 paragraph 6, p. 75; PDF p. 87.
-    fn check_static_compound_literal(&mut self, target: TypeId, e: &'tu Expression<'tu>) -> bool {
-        let Some(initializer) = self.whole_compound_literal(target, e) else {
-            return false;
-        };
-        self.context.report_extension(
-            crate::configuration::Feature::ConstantCompoundLiteral,
-            "compound literal as a constant initializer",
-            e.source_vectors,
-        );
-        self.check_static_plan(initializer);
-        true
+    fn check_static_compound_literal(
+        &mut self,
+        e: &'tu Expression<'tu>,
+        literal: &'tu Expression<'tu>,
+    ) {
+        if !self.context.configuration.folds_compound_literals() {
+            self.context.report_extension(
+                crate::configuration::Feature::ConstantCompoundLiteral,
+                "compound literal as a constant initializer",
+                e.source_vectors,
+            );
+        }
+        if let ExpressionType::CompoundLiteral { initializer, .. } = literal.kind {
+            self.check_static_plan(initializer);
+        }
     }
 
-    /// The initializer of `e` when it is a (parenthesized) compound literal
-    /// that the object of type `target` copies: `target` is a structure or
-    /// union, or a scalar type compatible with the literal's, qualifiers
-    /// aside (GCC rejects `static double d = (int){3};`).
+    /// The compound literal whose bytes `e` gives an object of type
+    /// `target`: `e` is the literal, possibly parenthesized, and `target` is
+    /// a structure or union, or a scalar type compatible with the
+    /// literal's, qualifiers aside (GCC rejects `static double d =
+    /// (int){3};`). `peel` adds the wrappers GCC's folder removes before
+    /// it checks a static initializer; GCC folds no other operator away, so
+    /// `(int){3} + 1` and `(int)(double)(int){3}` are not literals here.
+    /// GNU extension: GCC manual, "Compound Literals"; C99 §6.5.3.2
+    /// paragraph 4, p. 79; PDF p. 91 (`*&`); §6.5.4 paragraph 4, p. 81;
+    /// PDF p. 93 (casts); §6.5.15 paragraph 4, p. 90; PDF p. 102 (`?:`).
     fn whole_compound_literal(
         &mut self,
         target: TypeId,
         mut e: &'tu Expression<'tu>,
-    ) -> Option<&'tu Initializer<'tu>> {
+        peel: Peel,
+    ) -> Option<&'tu Expression<'tu>> {
         let target = self.types.non_atomic(target);
         let record = matches!(
             self.types.nodes[target.index],
@@ -779,20 +814,157 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         if !record && !scalar {
             return None;
         }
-        let initializer = loop {
-            match e.kind {
-                | ExpressionType::Parenthesized { expression } => e = expression,
-                | ExpressionType::CompoundLiteral { initializer, .. } => break initializer,
+        loop {
+            e = match e.kind {
+                | ExpressionType::Parenthesized { expression } => expression,
+                | ExpressionType::CompoundLiteral { .. } => break,
+                | _ if peel == Peel::Parentheses => return None,
+                | ExpressionType::Unary {
+                    operator: UnaryOperator::Extension,
+                    operand_expression,
+                } => operand_expression,
+                | ExpressionType::Unary {
+                    operator: UnaryOperator::Indirection,
+                    operand_expression,
+                } => {
+                    let mut address = operand_expression;
+                    while let ExpressionType::Parenthesized { expression } = address.kind {
+                        address = expression;
+                    }
+                    let ExpressionType::Unary {
+                        operator: UnaryOperator::AddressOf,
+                        operand_expression,
+                    } = address.kind
+                    else {
+                        return None;
+                    };
+                    operand_expression
+                },
+                | _ if peel == Peel::Element => return None,
+                | ExpressionType::Cast {
+                    operand_expression, ..
+                } if self.round_trips(self.expression_info(e).ty, target) => operand_expression,
+                | ExpressionType::Conditional(c)
+                    if {
+                        let ty = self.types.non_atomic(self.expression_info(e).ty);
+                        self.types
+                            .composite(ty.unqualified(), target.unqualified())
+                            .is_some()
+                    } =>
+                {
+                    let condition = self.expression_info(c.condition_expression);
+                    if condition.constant != ConstantClass::Arithmetic {
+                        return None;
+                    }
+                    if Self::constant_truth(condition)? {
+                        c.then_expression
+                    } else {
+                        c.else_expression
+                    }
+                },
                 | _ => return None,
-            }
-        };
+            };
+        }
         if scalar {
             let literal = self.types.non_atomic(self.expression_info(e).ty);
             _ = self
                 .types
                 .composite(target.unqualified(), literal.unqualified())?;
         }
-        Some(initializer)
+        Some(e)
+    }
+
+    /// Whether converting each value of type `value` to `wide` and back
+    /// gives that value again, so that GCC's folder removes the pair of
+    /// conversions: compatible types, qualifiers aside; integer or pointer
+    /// types at least as wide (`_Bool` is one bit wide); or real floating
+    /// types whose precision and exponent range both cover `value`'s.
+    /// C99: §6.3.1.3 paragraph 1, p. 43; PDF p. 55; §6.3.1.5 paragraph 1,
+    /// p. 44; PDF p. 56; §6.3.2.3 paragraphs 5-6, p. 47; PDF p. 59.
+    fn round_trips(&mut self, wide: TypeId, value: TypeId) -> bool {
+        let [wide, value] = [wide, value].map(|ty| self.types.non_atomic(ty).unqualified());
+        if self.types.composite(wide, value).is_some() {
+            return true;
+        }
+        let width = |ty| {
+            if self.pointer_target(ty).is_some() {
+                Some(self.types.target.pointer.size * 8)
+            } else {
+                self.integer_type(ty).map(|(bits, _)| u64::from(bits))
+            }
+        };
+        if let (Some(wide), Some(value)) = (width(wide), width(value)) {
+            return wide >= value;
+        }
+        let format = |ty: TypeId| match self.types.nodes[ty.index] {
+            | TypeKind::Scalar(scalar) => self.floating_format(scalar),
+            | _ => None,
+        };
+        matches!(
+            (format(wide), format(value)),
+            (Some(wide), Some(value)) if wide.0 >= value.0 && wide.1 >= value.1
+        )
+    }
+
+    /// The significand digits and maximum exponent (`DBL_MANT_DIG` and
+    /// `DBL_MAX_EXP`) of a real floating type.
+    /// C99: §5.2.4.2.2 paragraphs 8-9, pp. 24-25; PDF pp. 36-37.
+    fn floating_format(&self, scalar: Scalar) -> Option<(u32, u32)> {
+        Some(match scalar.representation() {
+            | Scalar::Float16 => (11, 16),
+            | Scalar::Float => (24, 128),
+            | Scalar::Double => (53, 1024),
+            | Scalar::LongDouble if self.types.target.long_double_is_double() => (53, 1024),
+            | Scalar::LongDouble => (64, 16384),
+            | Scalar::Float128 => (113, 16384),
+            | _ => return None,
+        })
+    }
+
+    /// Gives a scalar compound literal of type `info.ty` the value its
+    /// initializer stores, converted to its type, where Clang's evaluator
+    /// reads it: an arithmetic, non-volatile literal whose one stored value
+    /// is an arithmetic constant folds into the expressions around it in
+    /// every mode, at file and block scope, so `(int){3} + 1` initializes a
+    /// static object and `enum { E = (int){3} }` folds as
+    /// `-Wgnu-folding-constant` reports. The literal stays an lvalue and is
+    /// no integer constant expression (§6.6p6). GCC folds no read of a
+    /// literal; [`Self::whole_compound_literal`] has the forms it accepts.
+    /// C99: §6.5.2.5 paragraph 4, p. 75; PDF p. 87 (the literal's value);
+    /// implementation latitude of §6.6 paragraph 10, p. 96; PDF p. 108.
+    pub(super) fn fold_compound_literal(
+        &mut self,
+        info: &mut super::ExpressionInfo<'tu>,
+        initializer: &'tu Initializer<'tu>,
+    ) {
+        let ty = info.ty;
+        if !self.context.configuration.folds_compound_literals()
+            || !self.arithmetic(ty)
+            || self.types.non_atomic(ty) != ty
+            || ty.qualifiers.contains(TypeQualifiers::VOLATILE)
+        {
+            return;
+        }
+        let Some(&plan) = self.initializers.plan(initializer) else {
+            return;
+        };
+        let [
+            InitOperation::Store {
+                value,
+                bit_field: None,
+                ..
+            },
+        ] = plan.operations
+        else {
+            return;
+        };
+        let value = self.expression_info(plan.values[value.0 as usize].expression);
+        if value.constant != ConstantClass::Arithmetic {
+            return;
+        }
+        self.fold_conversion(info, ty, value);
+        info.ice = false;
+        info.folding = ConstantFolding::CompoundLiteral;
     }
 
     /// Applies [`Self::check_static_initializer`] to every value the plan
@@ -819,8 +991,13 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     value, destination, ..
                 } => {
                     let e = plan.values[value.0 as usize].expression;
-                    if let Some(nested) = self.whole_compound_literal(destination.ty, e) {
-                        self.check_static_plan(nested);
+                    // A static plan already copies the literal itself; an
+                    // automatic one copies its expression as written.
+                    if let Some(nested) =
+                        self.whole_compound_literal(destination.ty, e, Peel::Parentheses)
+                        && let ExpressionType::CompoundLiteral { initializer, .. } = nested.kind
+                    {
+                        self.check_static_plan(initializer);
                     } else {
                         let info = self.expression_info(e);
                         self.check_static_initializer(destination.ty, info, e, false);
@@ -1643,3 +1820,21 @@ impl FlexibleExtent {
 /// element, so it may miss a warning but never invents one.
 /// GNU extension: GCC manual, "Designated Initializers".
 const RANGE_WRITES: u64 = 1 << 16;
+
+/// The wrappers around a compound literal that still let it give a static
+/// object its bytes, as GCC's folder removes them.
+/// GNU extension: GCC manual, "Compound Literals".
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Peel {
+    /// Parentheses only: a literal an automatic literal copies as written.
+    Parentheses,
+    /// Also `__extension__` and `*&`: an element of a braced list, where
+    /// GCC keeps casts and `?:` (`{ (int)(int){3} }` is not constant).
+    Element,
+    /// Also casts through types that keep every value of the object's
+    /// type (`(double)(double){0x1p20}`, `(int)(long)(int){3}`) and the
+    /// operand a `?:` with a constant condition selects, when the `?:` has
+    /// the object's type (`1 ? (short){3} : (short)4` is an `int`): an
+    /// initializer without braces.
+    Whole,
+}

@@ -1,0 +1,33 @@
+warning: expression is not an integer constant expression; folding it to a constant is a GNU extension [-Wgnu-folding-constant]
+ --> sema-static-compound-literal-clang.c:5:12
+  |
+5 | enum { E = (int){3} };
+  |            ^^^^^^^^ folded integer constant expression
+  |
+  = note: C99 §6.6p6: an integer constant expression reads no object and converts no pointer
+
+error: static-storage initializer requires a constant expression
+ --> sema-static-compound-literal-clang.c:6:28
+  |
+6 | static int read_volatile = (volatile int){3} + 1;
+  |                            ^^^^^^^^^^^^^^^^^^^^^ not a constant expression
+  |
+  = note: C99 §6.7.8p4: every expression in an initializer for an object of static storage duration is constant or a string literal
+
+error: static-storage initializer requires a constant expression
+ --> sema-static-compound-literal-clang.c:7:22
+  |
+7 | static int element = (int[]){1, 2}[1];
+  |                      ^^^^^^^^^^^^^^^^ not a constant expression
+  |
+  = note: C99 §6.7.8p4: every expression in an initializer for an object of static storage duration is constant or a string literal
+
+error: static-storage initializer requires a constant expression
+ --> sema-static-compound-literal-clang.c:8:32
+  |
+8 | void f(void) { static int *p = &(int){3}; (void)p; }
+  |                                ^^^^^^^^^ not a constant expression
+  |
+  = note: C99 §6.7.8p4: every expression in an initializer for an object of static storage duration is constant or a string literal
+
+3 errors and 1 warning generated.

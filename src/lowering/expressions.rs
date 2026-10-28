@@ -69,6 +69,7 @@ use crate::{
             SubobjectArgument,
             TypeId,
             TypeKind,
+            ValueCategory,
         },
     },
     util::bump::ArenaVec,
@@ -139,8 +140,16 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             self.push_item(Operand::Value(value), info.ty);
             return Ok(());
         }
+        // A folded floating value replaces a value's evaluation, never an
+        // lvalue's: a compound literal Clang reads (§6.6p10) is still an
+        // object whose address may be taken or that may be assigned.
+        let folded_value = !info.runtime_query
+            && !matches!(
+                info.category,
+                ValueCategory::Lvalue | ValueCategory::ModifiableLvalue
+            );
         // A folded binary128 constant has exact bits too.
-        if let Some(folded) = info.binary128().filter(|_| !info.runtime_query) {
+        if let Some(folded) = info.binary128().filter(|_| folded_value) {
             match repr(&self.unit.sema.types, info.ty) {
                 | Ok(Repr::Complex { component }) => {
                     let parts = [folded.real, folded.imag].map(|part| {
@@ -164,7 +173,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 | _ => {},
             }
         }
-        if let Some(folded) = info.floating().filter(|_| !info.runtime_query)
+        if let Some(folded) = info.floating().filter(|_| folded_value)
             && let Ok(Repr::Complex { component }) = repr(&self.unit.sema.types, info.ty)
         {
             let real = floats::constant_bits(&folded.real, component)
@@ -177,7 +186,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             return Ok(());
         }
         // A folded `_Float16` keeps the excess its consumer may read.
-        if let Some(folded) = info.floating().filter(|_| !info.runtime_query)
+        if let Some(folded) = info.floating().filter(|_| folded_value)
             && self.half(info.ty)
         {
             let operand = self.excess_constant(&folded.real, source)?;
@@ -185,7 +194,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             return Ok(());
         }
         // A folded floating constant has exact bits (§6.6 paragraph 8).
-        if let Some(folded) = info.floating().filter(|_| !info.runtime_query)
+        if let Some(folded) = info.floating().filter(|_| folded_value)
             && let Ok(Repr::Float { ty }) = repr(&self.unit.sema.types, info.ty)
         {
             let bits = floats::constant_bits(&folded.real, ty)

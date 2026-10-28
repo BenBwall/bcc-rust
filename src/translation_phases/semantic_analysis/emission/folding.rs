@@ -1469,7 +1469,8 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
     /// A comma whose left operand is an ordinary nonvolatile read, before an
     /// arithmetic constant: function code emits the read, and
     /// `llvm.is.constant` sees only the constant result. A pointer result is
-    /// never constant there. GNU extension: `__builtin_constant_p`;
+    /// never constant there, nor a value read from a compound literal,
+    /// which function code loads. GNU extension: `__builtin_constant_p`;
     /// C99 §6.5.17p2, p. 94; PDF p. 106.
     fn discarded_comma_constant(&mut self, mut operand: &'tu Expression<'tu>, depth: u32) -> bool {
         if depth >= DEPTH {
@@ -1491,6 +1492,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             && (self.discarded_comma_constant(right_expression, depth + 1) || {
                 let info = self.expression_info(right_expression);
                 info.constant == ConstantClass::Arithmetic
+                    && !info.folded_literal()
                     && (info.integer.is_some() || info.floating().is_some())
             })
     }

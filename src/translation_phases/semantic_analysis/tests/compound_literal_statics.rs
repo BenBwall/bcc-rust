@@ -1,22 +1,38 @@
-//! A compound literal of a static structure or union's own type as its
-//! initializer (GNU extension `ConstantCompoundLiteral`): accepted under the
-//! extension policy as GCC reports it with `-pedantic`, and only when every
-//! value the literal stores is a constant its destination accepts, as GCC
-//! and Clang require.
+//! A compound literal of a static object's own type as its initializer
+//! (GNU extension `ConstantCompoundLiteral`): accepted, inside the wrappers
+//! GCC's folder removes, when every value the literal stores is a constant
+//! its destination accepts, and reported under the extension policy as GCC
+//! reports it with `-pedantic`. Under the Clang identity a scalar literal's
+//! value also folds into any constant expression, as Clang's evaluator
+//! reads it, and nothing is reported.
 
 use super::*;
 use crate::configuration::{
     CStandard,
     CompilerConfiguration,
+    CompilerIdentity,
     ExtensionPolicy,
 };
 
-/// `(errors, extension diagnostics)` of `source` in C99 under `policy`.
+const IDENTITIES: [CompilerIdentity; 2] = [CompilerIdentity::Gcc, CompilerIdentity::Clang];
+
+/// `(errors, extension diagnostics)` of `source` in C99 under the GCC
+/// identity and `policy`.
 fn diagnostics(source: &str, policy: ExtensionPolicy) -> (Vec<SemanticErrorKind>, usize) {
+    diagnostics_as(source, CompilerIdentity::Gcc, policy)
+}
+
+/// `(errors, extension diagnostics)` of `source` in C99 under `identity`
+/// and `policy`.
+fn diagnostics_as(
+    source: &str,
+    identity: CompilerIdentity,
+    policy: ExtensionPolicy,
+) -> (Vec<SemanticErrorKind>, usize) {
     let mut result = (Vec::new(), 0);
     with_configuration(
         source,
-        CompilerConfiguration::new(CStandard::C99, policy),
+        CompilerConfiguration::new(CStandard::C99, policy).with_compiler_identity(identity),
         |context, _| {
             for error in context.take_pending_errors() {
                 match error {
@@ -74,10 +90,17 @@ fn constant_compound_literals_initialize_statics_as_an_extension() {
     // GCC: "initializer element is not constant [-Wpedantic]" for each
     // literal initializing a whole static object or subobject, an error
     // with -pedantic-errors. A nested literal is reported only at file
-    // scope, where its own initializer is static, as in GCC.
+    // scope, where its own initializer is static, as in GCC. Clang reports
+    // none, even with -pedantic-errors.
     assert_eq!(diagnostics(ACCEPTED, ExtensionPolicy::Allow), (vec![], 0));
     assert_eq!(diagnostics(ACCEPTED, ExtensionPolicy::Warn), (vec![], 10));
     assert_eq!(diagnostics(ACCEPTED, ExtensionPolicy::Deny), (vec![], 10));
+    for policy in [ExtensionPolicy::Warn, ExtensionPolicy::Deny] {
+        assert_eq!(
+            diagnostics_as(ACCEPTED, CompilerIdentity::Clang, policy),
+            (vec![], 0)
+        );
+    }
 }
 
 #[test]
@@ -127,11 +150,13 @@ fn compound_literal_statics_require_constant_values_for_each_destination() {
             SemanticErrorKind::NonConstantInitializer,
         ),
     ] {
-        assert_eq!(
-            diagnostics(source, ExtensionPolicy::Allow).0,
-            [expected],
-            "{source}"
-        );
+        for identity in IDENTITIES {
+            assert_eq!(
+                diagnostics_as(source, identity, ExtensionPolicy::Allow).0,
+                [expected],
+                "{identity:?}: {source}"
+            );
+        }
     }
 }
 
@@ -150,25 +175,43 @@ const SCALARS: &str = r"enum e { A, B };
 
 /// GCC accepts a scalar compound literal of the object's own type as the
 /// whole initializer of a static scalar, with the same `-Wpedantic`
-/// "initializer element is not constant"; Clang rejects it.
+/// "initializer element is not constant"; Clang accepts it silently.
 #[test]
 fn scalar_compound_literals_initialize_statics_of_their_type() {
     assert_eq!(diagnostics(SCALARS, ExtensionPolicy::Allow), (vec![], 0));
     assert_eq!(diagnostics(SCALARS, ExtensionPolicy::Warn), (vec![], 10));
     assert_eq!(diagnostics(SCALARS, ExtensionPolicy::Deny), (vec![], 10));
-    for source in [
-        // GCC: "initializer element is not constant" for each.
-        "static double d = (int){3};",
-        "static long l = (int){3};",
-        "static int x = (int){3} + 1;",
-        "void f(int n) { static int x = (int){n}; (void)x; }",
-        "void f(void) { static int *p = (int *){&(int){1}}; (void)p; }",
+    assert_eq!(
+        diagnostics_as(SCALARS, CompilerIdentity::Clang, ExtensionPolicy::Deny),
+        (vec![], 0)
+    );
+    for (source, clang) in [
+        // GCC: "initializer element is not constant" for each; Clang reads
+        // the literal's value.
+        ("static double d = (int){3};", true),
+        ("static long l = (int){3};", true),
+        ("static int x = (int){3} + 1;", true),
+        // Neither reads an automatic value or a volatile literal, nor takes
+        // an automatic literal's address as a constant.
+        ("void f(int n) { static int x = (int){n}; (void)x; }", false),
+        ("static int v = (volatile int){3} + 1;", false),
+        (
+            "void f(void) { static int *p = (int *){&(int){1}}; (void)p; }",
+            false,
+        ),
     ] {
-        assert_eq!(
-            diagnostics(source, ExtensionPolicy::Allow).0,
-            [SemanticErrorKind::NonConstantInitializer],
-            "{source}"
-        );
+        for identity in IDENTITIES {
+            let accepted = identity == CompilerIdentity::Clang && clang;
+            assert_eq!(
+                diagnostics_as(source, identity, ExtensionPolicy::Allow).0,
+                if accepted {
+                    &[][..]
+                } else {
+                    &[SemanticErrorKind::NonConstantInitializer]
+                },
+                "{identity:?}: {source}"
+            );
+        }
     }
     // An automatic scalar takes the literal's value as before, without a
     // diagnostic.
@@ -178,6 +221,152 @@ fn scalar_compound_literals_initialize_statics_of_their_type() {
             ExtensionPolicy::Deny
         ),
         (vec![], 0)
+    );
+}
+
+/// GCC's folder removes casts through types that keep every value of the
+/// object's type, `*&`, `__extension__` and the operand a constant `?:`
+/// selects before it checks a static initializer, so a literal inside them
+/// still gives the object its bytes; casts and `?:` only outside braces.
+/// Clang reads through all of them.
+#[test]
+fn literals_inside_the_wrappers_gcc_folds_away_initialize_statics() {
+    let source = r"struct s { int a; };
+    enum e { A, B };
+    static int g;
+    static double d = (double)((double){0x1p20});
+    static int i = (int)(long)(unsigned)(int){-3};
+    static float f = (float)(long double)(double)(float){1.5f};
+    static _Bool b = (_Bool)(int)(_Bool){2};
+    static enum e en = (enum e)(int)(enum e){B};
+    static int *p = (int *)(void *)(int *){&g};
+    static int *q = (int *)(long)(int *){&g};
+    static int c = (const int)(int){3};
+    static int deref = *(&((int){3}));
+    static int then = 1 ? (int){3} : g;
+    static int other = 0.0 ? 4 : (int){3};
+    static int nested = 1 ? (0 ? 5 : (int){3}) : 4;
+    static int ext = __extension__ (int){3};
+    static int elements[2] = { *&(int){1}, __extension__ ((int){2}) };
+    static struct s cast = (struct s)(struct s){1};
+    static struct s chosen = 1 ? (struct s){1} : (struct s){2};
+    static struct s through = *&(struct s){1};
+    void h(void) { static double local = (double)((double){0.5}); (void)local; }";
+    // One report per literal, and one more for each record cast to its own
+    // type, as GCC gives.
+    assert_eq!(diagnostics(source, ExtensionPolicy::Warn), (vec![], 20));
+    assert_eq!(
+        diagnostics_as(source, CompilerIdentity::Clang, ExtensionPolicy::Warn),
+        (vec![], 1)
+    );
+    for (source, clang) in [
+        // A cast GCC does not fold away: a narrower or other-class
+        // intermediate type, or another type than the literal's.
+        ("static int x = (int)(char)(int){300};", true),
+        ("static int x = (int)(double)(int){3};", true),
+        ("static int x = (int)(_Bool)(int){3};", true),
+        ("static long x = (long)(int){3};", true),
+        ("static int g; static char *x = (char *)(int *){&g};", false),
+        // A `?:` of another type than the object's, even one that keeps
+        // its values, or whose condition is no constant.
+        ("static char x = 1 ? (char){3} : 4;", true),
+        ("static int x = 1 ? (int){3} : 4L;", true),
+        ("int v; static int x = v ? (int){3} : 4;", false),
+        // Inside braces GCC keeps casts and `?:`.
+        ("static int x[1] = { (int)(int){3} };", true),
+        ("static int x = { 1 ? (int){3} : 0 };", true),
+        (
+            "struct s { int a; }; struct t { struct s s; }; static struct t x = { (struct \
+             s)(struct s){1} };",
+            true,
+        ),
+        (
+            "struct b { int x : 4; }; static struct b x = { (int)(int){3} };",
+            true,
+        ),
+    ] {
+        for identity in IDENTITIES {
+            let accepted = identity == CompilerIdentity::Clang && clang;
+            assert_eq!(
+                diagnostics_as(source, identity, ExtensionPolicy::Allow).0,
+                if accepted {
+                    &[][..]
+                } else {
+                    &[SemanticErrorKind::NonConstantInitializer]
+                },
+                "{identity:?}: {source}"
+            );
+        }
+    }
+}
+
+/// Clang's evaluator reads a non-volatile scalar compound literal whose
+/// initializer is constant inside any constant expression, at file and
+/// block scope and in every mode; an integer constant context folds it as
+/// `-Wgnu-folding-constant` reports. GCC folds none of these.
+#[test]
+fn clang_folds_scalar_compound_literal_values() {
+    let source = r"static int sum = (int){3} + 1;
+    static double product = 2 * (double){1.25};
+    static int truncated = (int)(double){37.9};
+    static int negated = -(int){39};
+    static int conditional = (int){1} ? 41 : 0;
+    static int braced = (int){{5}} * 2;
+    static _Complex double z = (_Complex double){1} * 2;
+    void f(void) { static int local = (int){54} + 1; (void)local; }";
+    assert_eq!(
+        diagnostics_as(source, CompilerIdentity::Clang, ExtensionPolicy::Deny),
+        (vec![], 0)
+    );
+    assert_eq!(
+        diagnostics(source, ExtensionPolicy::Allow).0,
+        [SemanticErrorKind::NonConstantInitializer; 8]
+    );
+    let integer_contexts = "enum { E = (int){3} + 1 }; _Static_assert((int){1}, \"\"); int f(int \
+                            x) { switch (x) { case (int){2}: return 1; } return 0; }";
+    assert_eq!(
+        diagnostics_as(
+            integer_contexts,
+            CompilerIdentity::Clang,
+            ExtensionPolicy::Allow
+        ),
+        (vec![], 0)
+    );
+    assert_eq!(
+        diagnostics_as(
+            integer_contexts,
+            CompilerIdentity::Clang,
+            ExtensionPolicy::Warn
+        ),
+        // `_Static_assert` is a C11 extension in C99.
+        (vec![SemanticErrorKind::FoldedIntegerConstant; 3], 1)
+    );
+    assert_eq!(
+        diagnostics(integer_contexts, ExtensionPolicy::Allow)
+            .0
+            .len(),
+        3
+    );
+    with_configuration(
+        "static int sum = (int){3} + 1; static double half = (double){1} / 2;",
+        CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Allow),
+        |context, s| {
+            assert_eq!(context.pending_error_count(), 0);
+            let folded: Vec<_> = s
+                .expressions
+                .iter()
+                .filter(|info| matches!(info.expression.kind, ExpressionType::Binary { .. }))
+                .map(|info| {
+                    (
+                        info.integer.map(|v| v.value),
+                        info.floating().map(|v| v.real),
+                    )
+                })
+                .collect();
+            assert_eq!(folded.len(), 2);
+            assert_eq!(folded[0].0, Some(4));
+            assert!(folded[1].1.is_some());
+        },
     );
 }
 

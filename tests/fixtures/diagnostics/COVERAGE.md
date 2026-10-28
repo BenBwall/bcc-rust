@@ -656,6 +656,7 @@ below; implicit functions use the existing shared extension diagnostic.
 | `ExcessInitializer` | [excess](sema2-excess.c) | Scalar/aggregate/array current-object exhaustion. |
 | `InvalidDesignator` | [designator](sema2-designator.c) | Existing members and in-range nonnegative ICE array indices. |
 | `NonConstantInitializer` | [static-initializer](sema2-static-initializer.c) | Static arithmetic/address constant eligibility. |
+| `NonConstantInitializer`, `FoldedIntegerConstant`, `Extension(ConstantCompoundLiteral)` | [GCC](sema-static-compound-literal-gcc.c), [Clang](sema-static-compound-literal-clang.c) | Compound literals in static initializers and integer constants under each identity: GCC's whole-literal wrappers and their pedantic report, Clang's folded literal values, and the forms both reject. |
 | `ConstantOverflow` | [static-overflow](sema2-static-overflow.c) | Shared exceptional constant evaluation in initializers. |
 | `Extension(ImplicitFunctionDeclaration)` | [implicit function](sema2-implicit-function.c) | Removed C89 function declaration policy in GNU99 pedantic mode. |
 

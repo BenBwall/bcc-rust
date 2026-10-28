@@ -1,0 +1,1 @@
+--compiler-identity=gcc -std=c17 -pedantic
