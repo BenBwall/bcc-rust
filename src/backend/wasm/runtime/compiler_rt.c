@@ -201,35 +201,59 @@ float __floattisf(ti_int a) {
     return unsigned_to_float(high_of((tu_int)a), low_of((tu_int)a));
 }
 
-/* A non-negative double's integer part as an unsigned 128-bit value;
-   out-of-range values saturate. */
-static tu_int double_to_unsigned(double x) {
-    if (!(x >= 1.0))
+/* Floating to integer conversions, exactly as compiler-rt's fp_fixint
+   and fp_fixuint compute them from the sign, the unbiased exponent and
+   the significand with its implicit bit: zero below 1 (and for any
+   negative value when unsigned), the integer's maximum or minimum once
+   the exponent reaches its width, and the shifted significand, wrapping
+   to the width, otherwise. */
+static tu_int fix_unsigned(int negative, int exponent, tu_int significand, int significand_bits, int width) {
+    if (negative || exponent < 0)
         return 0;
+    if (exponent >= width)
+        return width == 128 ? make(~0ull, ~0ull) : ((tu_int)1 << width) - 1;
+    return exponent < significand_bits ? significand >> (significand_bits - exponent)
+                                       : significand << (exponent - significand_bits);
+}
+
+static tu_int fix_signed(int negative, int exponent, tu_int significand, int significand_bits, int width) {
+    if (exponent < 0)
+        return 0;
+    tu_int max = width == 128 ? make(~0ull >> 1, ~0ull) : ((tu_int)1 << (width - 1)) - 1;
+    if (exponent >= width)
+        return negative ? negate(max) - 1 : max;
+    tu_int r = exponent < significand_bits ? significand >> (significand_bits - exponent)
+                                           : significand << (exponent - significand_bits);
+    return negative ? negate(r) : r;
+}
+
+/* A double's sign, unbiased exponent and significand. */
+static void double_parts(double x, int *negative, int *exponent, tu_int *significand) {
     union {
         double d;
         uint64_t u;
     } v = {x};
-    int exponent = (int)((v.u >> 52) & 0x7FF) - 1075;
-    uint64_t m = (v.u & ((1ull << 52) - 1)) | (1ull << 52);
-    if (exponent >= 128 - 53)
-        return make(~0ull, ~0ull);
-    if (exponent <= 0)
-        return make(0, m >> -exponent);
-    if (exponent >= 64)
-        return make(m << (exponent - 64), 0);
-    return make(exponent > 11 ? m >> (64 - exponent) : 0, m << exponent);
+    *negative = (int)(v.u >> 63);
+    *exponent = (int)((v.u >> 52) & 0x7FF) - 1023;
+    *significand = make(0, (v.u & ((1ull << 52) - 1)) | (1ull << 52));
 }
 
-tu_int __fixunsdfti(double x) { return double_to_unsigned(x); }
-tu_int __fixunssfti(float x) { return double_to_unsigned(x); }
+tu_int __fixunsdfti(double x) {
+    int negative, exponent;
+    tu_int significand;
+    double_parts(x, &negative, &exponent, &significand);
+    return fix_unsigned(negative, exponent, significand, 52, 128);
+}
 
 ti_int __fixdfti(double x) {
-    if (x < 0)
-        return (ti_int)negate(double_to_unsigned(-x));
-    return (ti_int)double_to_unsigned(x);
+    int negative, exponent;
+    tu_int significand;
+    double_parts(x, &negative, &exponent, &significand);
+    return (ti_int)fix_signed(negative, exponent, significand, 52, 128);
 }
 
+/* Every float is exactly a double, NaNs and infinities included. */
+tu_int __fixunssfti(float x) { return __fixunsdfti(x); }
 ti_int __fixsfti(float x) { return __fixdfti(x); }
 
 /* IEEE binary128, which long double is on wasm32: arithmetic, comparisons
@@ -595,64 +619,28 @@ float __trunctfsf2(long double a) {
     return v.f;
 }
 
-/* The integer part of a binary128 value's magnitude, saturating at the
-   `bits`-bit maximum, and its sign. */
-static tu_int q_integer(long double a, int *negative) {
+/* A binary128 value's sign, unbiased exponent and significand. */
+static void quad_parts(long double a, int *negative, int *exponent, tu_int *significand) {
     tu_int A = q_bits(a);
     *negative = (int)(high_of(A) >> 63);
-    tu_int absA = A & ~q_sign_bit();
-    if (absA > q_infinity())
-        return 0;
-    int exponent = (int)(absA >> Q_SIGNIFICAND_BITS) - Q_BIAS;
-    if (exponent < 0)
-        return 0;
-    if (exponent >= 127)
-        return make(~0ull, ~0ull);
-    tu_int significand = (absA & q_significand_mask()) | q_implicit();
-    return exponent >= Q_SIGNIFICAND_BITS ? significand << (exponent - Q_SIGNIFICAND_BITS)
-                                          : significand >> (Q_SIGNIFICAND_BITS - exponent);
+    *exponent = (int)((A & ~q_sign_bit()) >> Q_SIGNIFICAND_BITS) - Q_BIAS;
+    *significand = (A & q_significand_mask()) | q_implicit();
 }
 
-ti_int __fixtfti(long double a) {
-    int negative;
-    tu_int m = q_integer(a, &negative);
-    if (m > make(1ull << 63, 0) - (negative ? 0 : 1))
-        m = make(1ull << 63, 0) - (negative ? 0 : 1);
-    return (ti_int)(negative ? negate(m) : m);
-}
+#define QUAD_FIX(name, type, fix, width)                                            \
+    type name(long double a) {                                                      \
+        int negative, exponent;                                                     \
+        tu_int significand;                                                         \
+        quad_parts(a, &negative, &exponent, &significand);                          \
+        return (type)fix(negative, exponent, significand, Q_SIGNIFICAND_BITS, width); \
+    }
 
-tu_int __fixunstfti(long double a) {
-    int negative;
-    tu_int m = q_integer(a, &negative);
-    return negative ? 0 : m;
-}
-
-long long __fixtfdi(long double a) {
-    int negative;
-    tu_int m = q_integer(a, &negative);
-    tu_int limit = make(0, 1ull << 63) - (negative ? 0 : 1);
-    if (m > limit)
-        m = limit;
-    return negative ? (long long)(0 - low_of(m)) : (long long)low_of(m);
-}
-
-unsigned long long __fixunstfdi(long double a) {
-    int negative;
-    tu_int m = q_integer(a, &negative);
-    if (negative)
-        return 0;
-    return high_of(m) ? ~0ull : low_of(m);
-}
-
-int __fixtfsi(long double a) {
-    long long v = __fixtfdi(a);
-    return v > 2147483647 ? 2147483647 : v < -2147483647 - 1 ? -2147483647 - 1 : (int)v;
-}
-
-unsigned __fixunstfsi(long double a) {
-    unsigned long long v = __fixunstfdi(a);
-    return v > 0xFFFFFFFFu ? 0xFFFFFFFFu : (unsigned)v;
-}
+QUAD_FIX(__fixtfti, ti_int, fix_signed, 128)
+QUAD_FIX(__fixunstfti, tu_int, fix_unsigned, 128)
+QUAD_FIX(__fixtfdi, long long, fix_signed, 64)
+QUAD_FIX(__fixunstfdi, unsigned long long, fix_unsigned, 64)
+QUAD_FIX(__fixtfsi, int, fix_signed, 32)
+QUAD_FIX(__fixunstfsi, unsigned, fix_unsigned, 32)
 
 /* An unsigned 128-bit integer as binary128, rounded to nearest even. */
 static long double q_from_unsigned(tu_int m, int negative) {
