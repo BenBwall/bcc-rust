@@ -82,12 +82,16 @@ impl SourceChange {
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Preprocessing {
-    pub expansions:   Vec<Expansion>,
-    pub conditionals: Vec<Conditional>,
+    pub expansions:         Vec<Expansion>,
+    pub conditionals:       Vec<Conditional>,
     /// The lines of each skipped group, both inclusive.
-    pub skipped:      Vec<(usize, usize)>,
-    pub includes:     Vec<Include>,
-    pub definitions:  Vec<Definition>,
+    pub skipped:            Vec<(usize, usize)>,
+    pub includes:           Vec<Include>,
+    pub definitions:        Vec<Definition>,
+    /// Every directive executed in the source.
+    pub directives:         Vec<Directive>,
+    /// Expansions beyond the most the page receives.
+    pub omitted_expansions: usize,
 }
 
 /// A macro invocation in the source and what it became.
@@ -95,7 +99,11 @@ pub struct Preprocessing {
 #[serde(rename_all = "camelCase")]
 pub struct Expansion {
     pub range:      SourceSpan,
+    /// The place `#line` gives it, when that differs.
+    pub presumed:   Option<String>,
     pub invocation: String,
+    /// Whether a directive read it, as `#if` reads its condition.
+    pub directive:  bool,
     /// The tokens it produced; empty for one a directive read, such as the
     /// name in `#if VERBOSE`.
     pub result:     String,
@@ -106,8 +114,11 @@ pub struct Expansion {
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExpansionStep {
-    /// `replace`, `stringify` or `paste`.
+    /// `replace`, `builtin`, `stringify` or `paste`.
     pub kind:       String,
+    /// Whether the name came from an argument, replaced before it is
+    /// substituted.
+    pub prescan:    bool,
     pub macro_name: String,
     /// Replacements around a replaced name: 0 for the name in the source.
     pub depth:      usize,
@@ -123,6 +134,10 @@ impl ExpansionStep {
     pub fn describe(&self) -> String {
         match self.kind.as_str() {
             | "stringify" => format!("# made the string literal {}", self.result),
+            | "builtin" => format!(
+                "{} is predefined: it became {}",
+                self.macro_name, self.result
+            ),
             | "paste" => {
                 let operand = |text: &str| {
                     if text.is_empty() {
@@ -141,6 +156,10 @@ impl ExpansionStep {
                     .map_or_else(String::new, |o| operand(o));
                 format!("{left} ## {right} pasted into {}", operand(&self.result))
             },
+            | _ if self.arguments.is_empty() && self.prescan => format!(
+                "{} replaced in an argument, before it is substituted",
+                self.macro_name
+            ),
             | _ if self.arguments.is_empty() => format!("{} replaced", self.macro_name),
             | _ => {
                 let arguments: Vec<String> = self
@@ -154,7 +173,16 @@ impl ExpansionStep {
                         }
                     })
                     .collect();
-                format!("{} replaced with {}", self.macro_name, arguments.join(", "))
+                let place = if self.prescan {
+                    " in an argument, before it is substituted,"
+                } else {
+                    ""
+                };
+                format!(
+                    "{} replaced{place} with {}",
+                    self.macro_name,
+                    arguments.join(", ")
+                )
             },
         }
     }
@@ -165,8 +193,35 @@ impl ExpansionStep {
 #[serde(rename_all = "camelCase")]
 pub struct Conditional {
     pub line:      usize,
+    pub presumed:  Option<String>,
     pub directive: String,
     pub taken:     bool,
+    /// Whether its condition was evaluated: an arm after a kept group is
+    /// skipped without it.
+    pub evaluated: bool,
+}
+
+/// A directive executed in the source.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Directive {
+    pub line:      usize,
+    pub presumed:  Option<String>,
+    /// Its name, such as `pragma`.
+    pub name:      String,
+    pub directive: String,
+}
+
+/// Where one line of the preprocessed text came from.
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OutputLine {
+    /// Whether its text comes from the source rather than a header.
+    pub input:   bool,
+    /// The line of its file its text comes from, if it holds text.
+    pub line:    Option<usize>,
+    /// For a header's line, the source line whose `#include` brought it in.
+    pub include: Option<usize>,
 }
 
 /// An `#include` in the source.
@@ -207,21 +262,6 @@ pub fn line_labels(lines: &[LogicalLine]) -> Vec<String> {
         .collect()
 }
 
-/// A line marker, `# 12 "<input>" 2`: the line the next line has in a file,
-/// the file, and whether it enters (1) or returns to (2) it.
-fn line_marker(line: &str) -> Option<(usize, &str, Option<u8>)> {
-    let rest = line.strip_prefix("# ")?;
-    let (number, rest) = rest.split_once(' ')?;
-    let number = number.parse().ok()?;
-    let rest = rest.strip_prefix('"')?;
-    let (file, flags) = rest.split_once('"')?;
-    let flag = flags
-        .split_whitespace()
-        .next()
-        .and_then(|flag| flag.parse().ok());
-    Some((number, file, flag))
-}
-
 /// The preprocessed text as the view shows it.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PreprocessedView {
@@ -234,91 +274,61 @@ pub struct PreprocessedView {
     pub labels: Vec<String>,
 }
 
-/// The preprocessed text as the view shows it. With `fold`, every header
-/// the source includes is folded into one line that says what it held:
-/// header text is mostly declarations a lesson never reads, and the full
-/// text stays a switch away.
+/// The preprocessed text as the view shows it, given where each of its
+/// lines came from (`origins`, from the compiler). With `fold`, the lines
+/// each `#include` of the source brought in, line markers too, become one
+/// line that says what they held: header text is mostly declarations a
+/// lesson never reads, and the full text stays a switch away.
 pub fn preprocessed_view(
     text: &str,
-    source_lines: usize,
+    origins: &[OutputLine],
     includes: &[Include],
     fold: bool,
 ) -> PreprocessedView {
-    let links = preprocessed_lines(text, source_lines);
-    let label = |line: &str, link: Option<(usize, usize)>, in_header: bool| match link {
-        | Some((first, _)) if !in_header && line_marker(line).is_none() => first.to_string(),
+    let link = |origin: &OutputLine| match (origin.include, origin.line) {
+        | (Some(include), _) => Some((include, include)),
+        | (None, Some(line)) if origin.input => Some((line, line)),
+        | _ => None,
+    };
+    let label = |origin: &OutputLine| match origin {
+        | OutputLine {
+            input: true,
+            line: Some(line),
+            ..
+        } => line.to_string(),
         | _ => String::new(),
     };
-    if !fold {
-        let mut depth = 0usize;
-        let labels = text
-            .lines()
-            .enumerate()
-            .map(|(index, line)| {
-                match line_marker(line) {
-                    | Some((_, _, Some(1))) => depth += 1,
-                    | Some((_, _, Some(2))) => depth = depth.saturating_sub(1),
-                    | _ => {},
-                }
-                label(line, links.get(index + 1).copied().flatten(), depth > 0)
-            })
-            .collect();
-        return PreprocessedView {
-            text: text.to_owned(),
-            links,
-            labels,
-        };
-    }
-    let mut folded = String::new();
-    let mut folded_links = vec![None];
-    let mut labels = Vec::new();
-    let mut depth = 0usize;
-    let mut held = 0usize;
-    let mut found = includes.iter().filter(|include| include.found);
-    let mut current: Option<&Include> = None;
-    let mut include_link = None;
-    for (index, line) in text.lines().enumerate() {
-        let link = links.get(index + 1).copied().flatten();
-        let marker = line_marker(line);
-        match marker {
-            | Some((_, _, Some(1))) => {
-                if depth == 0 {
-                    current = found.next();
-                    held = 0;
-                    include_link = link;
-                }
-                depth += 1;
-                continue;
-            },
-            | Some((_, _, Some(2))) if depth > 0 => {
-                depth -= 1;
-                if depth == 0 {
-                    folded.push_str(&summary(current, held));
-                    folded.push('\n');
-                    folded_links.push(include_link);
-                    labels
-                        .push(include_link.map_or_else(String::new, |(line, _)| line.to_string()));
-                }
-                continue;
-            },
-            | _ => {},
-        }
-        if depth > 0 {
-            if marker.is_none() && !line.trim().is_empty() {
-                held += 1;
-            }
+    let mut view = PreprocessedView {
+        links: vec![None],
+        ..PreprocessedView::default()
+    };
+    let lines: Vec<&str> = text.lines().collect();
+    let mut index = 0;
+    while index < lines.len() {
+        let origin = origins.get(index).copied().unwrap_or_default();
+        let Some(include) = origin.include.filter(|_| fold) else {
+            view.text.push_str(lines[index]);
+            view.text.push('\n');
+            view.links.push(link(&origin));
+            view.labels.push(label(&origin));
+            index += 1;
             continue;
-        }
-        folded.push_str(line);
-        folded.push('\n');
-        folded_links.push(link);
-        labels.push(label(line, link, false));
+        };
+        // One `#include`'s lines, folded.
+        let end = (index..lines.len())
+            .find(|&at| origins.get(at).and_then(|origin| origin.include) != Some(include))
+            .unwrap_or(lines.len());
+        let held = (index..end)
+            .filter(|&at| origins[at].line.is_some() && !lines[at].trim().is_empty())
+            .count();
+        let header = includes.iter().find(|candidate| candidate.line == include);
+        view.text.push_str(&summary(header, held));
+        view.text.push('\n');
+        view.links.push(Some((include, include)));
+        view.labels.push(include.to_string());
+        index = end;
     }
-    PreprocessedView {
-        text: folded,
-        links: folded_links,
-        labels,
-    }
+    view
 }
 
 /// Whether `line` of the view is a folded header's summary.
@@ -352,65 +362,37 @@ fn summary(include: Option<&Include>, held: usize) -> String {
     }
 }
 
-/// For each line of the full preprocessed text (index 0 unused), the source
-/// lines it came from: its own line in the source, or for text from a
-/// header, the `#include` line that brought it in. A header's line markers
-/// link like its text.
-fn preprocessed_lines(text: &str, source_lines: usize) -> Vec<Option<(usize, usize)>> {
-    let input = crate::INPUT_NAME;
-    let mut lines = vec![None];
-    // The next line's place in the source, or `None` in a header, and the
-    // header lines waiting for the line their `#include` is on.
-    let mut next = Some(1usize);
-    let mut depth = 0usize;
-    let mut waiting = Vec::new();
-    for line in text.lines() {
-        let Some((number, file, flag)) = line_marker(line) else {
-            match next {
-                | Some(number) => {
-                    lines.push((number <= source_lines).then_some((number, number)));
-                    next = Some(number + 1);
-                },
-                | None => {
-                    waiting.push(lines.len());
-                    lines.push(None);
-                },
-            }
-            continue;
-        };
-        match flag {
-            | Some(1) => depth += 1,
-            | Some(2) => depth = depth.saturating_sub(1),
-            | _ => {},
-        }
-        if depth == 0 && file == input {
-            let link = if flag == Some(2) {
-                // Back from a header: the line before is its `#include`.
-                let include = number.saturating_sub(1).max(1);
-                for index in waiting.drain(..) {
-                    lines[index] = Some((include, include));
-                }
-                Some((include, include))
-            } else {
-                None
-            };
-            lines.push(link);
-            next = Some(number);
-        } else {
-            next = None;
-            waiting.push(lines.len());
-            lines.push(None);
-        }
-    }
-    lines
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    const TEXT: &str = "# 1 \"<input>\"\nint a;\n# 1 \"/bcc/stdint.h\" 1 3\ntypedef long \
-                        int64_t;\n\ntypedef int int32_t;\n# 3 \"<input>\" 2\nint b;\n";
+    /// Text as bcc writes it, and where each line came from.
+    const TEXT: &str = "# 1 \"<input>\"\nint a;\n# 1 \"/bcc/stdint.h\" 3\ntypedef long \
+                        int64_t;\n\ntypedef int int32_t;\n# 3 \"<input>\"\nint b;\n";
+
+    fn origins() -> Vec<OutputLine> {
+        let input = |line| OutputLine {
+            input: true,
+            line,
+            include: None,
+        };
+        let header = |line| OutputLine {
+            input: false,
+            line,
+            include: Some(2),
+        };
+        [
+            input(None),
+            input(Some(1)),
+            header(None),
+            header(Some(10)),
+            header(Some(11)),
+            header(Some(12)),
+            input(None),
+            input(Some(3)),
+        ]
+        .into()
+    }
 
     fn include() -> Include {
         Include {
@@ -425,29 +407,46 @@ mod tests {
 
     #[test]
     fn headers_fold_into_one_line_that_counts_their_declarations() {
-        let folded = preprocessed_view(TEXT, 3, &[include()], true).text;
+        let folded = preprocessed_view(TEXT, &origins(), &[include()], true).text;
         assert!(is_folded(folded.lines().nth(2).unwrap()));
         assert_eq!(
             folded,
             "# 1 \"<input>\"\nint a;\n/* <stdint.h>: 2 lines of declarations, folded (Show \
-             headers to read them) */\nint b;\n"
+             headers to read them) */\n# 3 \"<input>\"\nint b;\n"
         );
+        // A header that leaves only a line marker held only macros.
         let macros = preprocessed_view(
-            "# 1 \"<input>\"\n# 1 \"/l.h\" 1 3\n\n# 2 \"<input>\" 2\nx\n",
-            2,
+            "# 1 \"<input>\"\n# 1 \"/l.h\" 3\n# 2 \"<input>\"\nx\n",
+            &[
+                OutputLine {
+                    input: true,
+                    ..OutputLine::default()
+                },
+                OutputLine {
+                    include: Some(1),
+                    ..OutputLine::default()
+                },
+                OutputLine {
+                    input: true,
+                    ..OutputLine::default()
+                },
+                OutputLine {
+                    input:   true,
+                    line:    Some(2),
+                    include: None,
+                },
+            ],
             &[include()],
             true,
         )
         .text;
         assert!(macros.contains("only macro definitions"), "{macros}");
-        assert!(is_folded(macros.lines().nth(1).unwrap()), "{macros}");
     }
 
     #[test]
     fn preprocessed_lines_link_to_their_source_line_or_include() {
-        // The marker, `int a;`, the header's marker and lines (linked to its
-        // `#include`), the return marker, `int b;`.
-        let full = preprocessed_view(TEXT, 3, &[include()], false);
+        let full = preprocessed_view(TEXT, &origins(), &[include()], false);
+        assert_eq!(full.text, TEXT);
         assert_eq!(full.labels, ["", "1", "", "", "", "", "", "3"]);
         assert_eq!(
             full.links,
@@ -459,16 +458,16 @@ mod tests {
                 Some((2, 2)),
                 Some((2, 2)),
                 Some((2, 2)),
-                Some((2, 2)),
+                None,
                 Some((3, 3))
             ]
         );
-        let folded = preprocessed_view(TEXT, 3, &[include()], true);
+        let folded = preprocessed_view(TEXT, &origins(), &[include()], true);
         assert_eq!(
             folded.links,
-            [None, None, Some((1, 1)), Some((2, 2)), Some((3, 3))]
+            [None, None, Some((1, 1)), Some((2, 2)), None, Some((3, 3))]
         );
-        assert_eq!(folded.labels, ["", "1", "2", "3"]);
+        assert_eq!(folded.labels, ["", "1", "2", "", "3"]);
     }
 
     #[test]

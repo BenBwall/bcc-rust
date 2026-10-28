@@ -618,7 +618,7 @@
   .phase-card h5 + .phase-list { margin-top: 0; }
   .phase-item {
     --kind: var(--cat-evaluate);
-    display: grid; grid-template-columns: auto auto 1fr; align-items: baseline; gap: 4px 10px;
+    display: grid; grid-template-columns: auto auto minmax(0, 1fr); align-items: baseline; gap: 4px 10px;
     padding: 7px 10px; border-radius: var(--radius-s); background: var(--surface); border: 1px solid var(--border);
     font-size: 13.5px; line-height: 1.55; color: var(--text-2);
   }
@@ -627,9 +627,13 @@
   .phase-item[data-kind="UTF-8"], .phase-item[data-kind="crlf"] { --kind: var(--cat-lifetime); }
   .phase-item[data-kind="kept"] { --kind: var(--accent); }
   .phase-item[data-kind="skipped"] { --kind: var(--danger); }
+  .phase-item[data-kind="directive"] { --kind: var(--cat-lifetime); }
   .phase-badge { justify-self: start; padding: 1px 7px; border-radius: 5px; background: color-mix(in srgb, var(--kind) 14%, transparent); color: var(--kind); font: 650 11.5px var(--font-mono); white-space: nowrap; }
   .phase-place, .expansion .phase-place { padding: 0; border: 0; background: none; color: var(--accent); font: 500 12.5px var(--font-mono); white-space: nowrap; cursor: pointer; text-decoration: underline dotted; text-underline-offset: 3px; }
-  .phase-text code, .expansion code { font-size: 12.5px; }
+  .phase-text code, .expansion code { font-size: 12.5px; overflow-wrap: anywhere; }
+  .phase-text, .expansion-head > *, .step-text { min-width: 0; overflow-wrap: anywhere; }
+  .phase-card, .phase-list, .expansion-list, .expansion { min-width: 0; max-width: 100%; }
+  .presumed { color: var(--muted); font-size: 12.5px; }
   .kind-counts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; list-style: none; }
   .kind-count {
     --kind: var(--text-2);
@@ -646,7 +650,7 @@
   .kind-name { font-family: var(--font-mono); font-size: 12px; }
   .kind-number { font-weight: 700; color: var(--text); font-variant-numeric: tabular-nums; }
   .macro-chips { display: flex; flex-wrap: wrap; gap: 6px; }
-  .macro-chip { padding: 2px 8px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface); color: var(--cat-convert); font-size: 12.5px; }
+  .macro-chip { max-width: 100%; overflow-wrap: anywhere; padding: 2px 8px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface); color: var(--cat-convert); font-size: 12.5px; }
   .expansion-list { display: grid; gap: 6px; list-style: none; }
   .expansion { padding: 8px 10px; border-radius: var(--radius-s); background: var(--surface); border: 1px solid var(--border); }
   .expansion-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px 10px; }
@@ -661,6 +665,7 @@
   .expansion-step[data-depth="3"], .expansion-step[data-depth="4"] { padding-left: 42px; }
   .step-kind { flex: none; min-width: 52px; font: 650 11px var(--font-mono); color: var(--cat-convert); text-transform: uppercase; letter-spacing: .03em; }
   .expansion-step[data-kind="stringify"] .step-kind, .expansion-step[data-kind="paste"] .step-kind { color: var(--cat-lifetime); font-size: 12.5px; }
+  .expansion-step[data-kind="builtin"] .step-kind { color: var(--accent); }
   .step-text { font-family: var(--font-mono); font-size: 12.5px; overflow-wrap: anywhere; }
   .stage-output { margin-top: 14px; }
   .stage-output .code-editor { --editor-height: clamp(360px, calc(100vh - 420px), 620px); }

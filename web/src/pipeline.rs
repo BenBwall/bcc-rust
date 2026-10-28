@@ -17,10 +17,12 @@ mod front_end;
 pub use front_end::{
     Conditional,
     Definition,
+    Directive,
     Expansion,
     ExpansionStep,
     Include,
     LogicalLine,
+    OutputLine,
     Preprocessing,
     SourceChange,
     is_folded,
@@ -36,35 +38,38 @@ use serde::{
 #[serde(rename_all = "camelCase")]
 pub struct Compilation {
     /// The logical lines translation phases 1 and 2 leave, one per line.
-    pub logical:       Option<String>,
+    pub logical:            Option<String>,
     /// Each of those lines' physical lines and what changed in it.
-    pub logical_lines: Vec<LogicalLine>,
+    pub logical_lines:      Vec<LogicalLine>,
     /// Phase 3's preprocessing tokens and white space, one per line.
-    pub pp_tokens:     Option<String>,
+    pub pp_tokens:          Option<String>,
     /// Where each of those lines' entry is in the source.
-    pub pp_ranges:     Vec<SourceSpan>,
+    pub pp_ranges:          Vec<SourceSpan>,
     /// How many entries of each kind phase 3 made, in listing order.
-    pub pp_counts:     Vec<(String, usize)>,
+    pub pp_counts:          Vec<(String, usize)>,
     /// The comments phase 3 replaced by one space each.
-    pub pp_comments:   Vec<SourceSpan>,
-    /// The preprocessed text with its line markers, as `-E` prints it.
-    pub preprocessed:  Option<String>,
+    pub pp_comments:        Vec<SourceSpan>,
+    /// The text phase 4 leaves, with line markers, laid out as `-E` lays
+    /// it out.
+    pub preprocessed:       Option<String>,
+    /// Where each line of it came from.
+    pub preprocessed_lines: Vec<OutputLine>,
     /// What phase 4 did in the source.
-    pub preprocessing: Preprocessing,
-    pub tokens:        Option<String>,
-    pub syntax_tree:   Option<String>,
-    pub ir:            Option<String>,
-    pub ir_abi:        Option<String>,
+    pub preprocessing:      Preprocessing,
+    pub tokens:             Option<String>,
+    pub syntax_tree:        Option<String>,
+    pub ir:                 Option<String>,
+    pub ir_abi:             Option<String>,
     /// LLVM IR; only the native compiler produces it.
-    pub llvm:          Option<String>,
-    pub asm:           Option<String>,
+    pub llvm:               Option<String>,
+    pub asm:                Option<String>,
     /// Offset, encoded bytes and instruction, one line per instruction.
-    pub machine_code:  Option<String>,
+    pub machine_code:       Option<String>,
     /// The machine code's size in bytes.
-    pub code_bytes:    usize,
-    pub diagnostics:   Vec<CompileDiagnostic>,
+    pub code_bytes:         usize,
+    pub diagnostics:        Vec<CompileDiagnostic>,
     /// Which output lines each function definition became.
-    pub functions:     Vec<FunctionLines>,
+    pub functions:          Vec<FunctionLines>,
 }
 
 /// One of bcc's diagnostics, placed in the editor's coordinates.
@@ -370,8 +375,9 @@ impl Stage {
                  replaced by its definition, with a function-like macro's arguments substituted \
                  for its parameters. # makes an argument a string literal, ## pastes two tokens \
                  into one, and the result is rescanned for more macros, though never the one being \
-                 expanded. This is what bcc -E prints; a line marker such as # 3 \"file.c\" says \
-                 where the next line came from.",
+                 expanded. This is the text phase 4 leaves, laid out as bcc -E lays it out but \
+                 with adjacent string literals still apart: -E shows them already joined, which is \
+                 phase 6. A line marker such as # 3 \"file.c\" says where the next line came from.",
             | Self::Tokens =>
                 "Phases 5 to 7 finish the tokens. Escape sequences such as \\n in character \
                  constants and string literals become the characters they stand for (phase 5), \
@@ -650,7 +656,6 @@ impl Links {
 pub fn displayed(
     stage: Stage,
     compilation: &Compilation,
-    source: &str,
     headers: bool,
 ) -> Option<(String, Option<Vec<Option<(usize, usize)>>>)> {
     let output = compilation.output(stage)?;
@@ -659,7 +664,7 @@ pub fn displayed(
     }
     let view = front_end::preprocessed_view(
         output,
-        source.lines().count(),
+        &compilation.preprocessed_lines,
         &compilation.preprocessing.includes,
         !headers,
     );
@@ -669,13 +674,13 @@ pub fn displayed(
 /// The gutter labels of `stage`'s view: the physical lines of each logical
 /// line, and the source line of each preprocessed line. Other views number
 /// their lines.
-pub fn gutter(stage: Stage, compilation: &Compilation, source: &str, headers: bool) -> Vec<String> {
+pub fn gutter(stage: Stage, compilation: &Compilation, headers: bool) -> Vec<String> {
     match stage {
         | Stage::Lines => line_labels(&compilation.logical_lines),
         | Stage::Preprocessor => compilation.output(stage).map_or_else(Vec::new, |output| {
             front_end::preprocessed_view(
                 output,
-                source.lines().count(),
+                &compilation.preprocessed_lines,
                 &compilation.preprocessing.includes,
                 !headers,
             )
@@ -694,7 +699,7 @@ pub fn gutter(stage: Stage, compilation: &Compilation, source: &str, headers: bo
 /// compiler's line map links them per function; precomputed LLVM IR links
 /// to those functions by name.
 pub fn links(stage: Stage, compilation: &Compilation, source: &str, headers: bool) -> Links {
-    let Some((output, rewritten)) = displayed(stage, compilation, source, headers) else {
+    let Some((output, rewritten)) = displayed(stage, compilation, headers) else {
         return Links::default();
     };
     let exact = match stage {

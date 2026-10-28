@@ -183,10 +183,31 @@ fn tokens_card(compilation: &Compilation) -> AnyView {
 
 fn preprocessor_card(compilation: &Compilation, on_reveal: Callback<usize>) -> AnyView {
     let trace = compilation.preprocessing.clone();
-    let quiet = trace.expansions.is_empty()
-        && trace.conditionals.is_empty()
-        && trace.includes.is_empty()
-        && trace.definitions.is_empty();
+    let quiet = trace.expansions.is_empty() && trace.directives.is_empty();
+    // Directives the other lists do not cover, such as #pragma and #line.
+    let others: Vec<_> = trace
+        .directives
+        .iter()
+        .filter(|directive| {
+            !matches!(
+                directive.name.as_str(),
+                "define"
+                    | "undef"
+                    | "include"
+                    | "include_next"
+                    | "if"
+                    | "ifdef"
+                    | "ifndef"
+                    | "elif"
+                    | "elifdef"
+                    | "elifndef"
+                    | "else"
+                    | "endif"
+            )
+        })
+        .cloned()
+        .collect();
+    let omitted = trace.omitted_expansions;
     let defined: Vec<String> = trace
         .definitions
         .iter()
@@ -212,6 +233,22 @@ fn preprocessor_card(compilation: &Compilation, on_reveal: Callback<usize>) -> A
                     "This program has no directives and uses no macros, so the preprocessor passes its tokens on unchanged."
                 </p>
             })}
+            {(!others.is_empty()).then(|| view! {
+                <h5>"Other directives"</h5>
+                <ol class="phase-list">
+                    {others.into_iter().map(|directive| view! {
+                        <li class="phase-item" data-kind="directive">
+                            <span class="phase-badge">{format!("#{}", directive.name)}</span>
+                            {place(directive.line, on_reveal)}
+                            <span class="phase-text">
+                                <code>{directive.directive.clone()}</code>
+                                {format!(" {}", directive_meaning(&directive.name))}
+                                {presumed(directive.presumed.as_deref())}
+                            </span>
+                        </li>
+                    }).collect_view()}
+                </ol>
+            })}
             {(!trace.includes.is_empty()).then(|| view! {
                 <h5>"Headers"</h5>
                 <ol class="phase-list">
@@ -229,6 +266,9 @@ fn preprocessor_card(compilation: &Compilation, on_reveal: Callback<usize>) -> A
                 <ol class="expansion-list">
                     {trace.expansions.iter().map(|expansion| expansion_item(expansion, on_reveal)).collect_view()}
                 </ol>
+                {(omitted > 0).then(|| view! {
+                    <p class="phase-summary">{format!("… and {omitted} more expansions, not listed here.")}</p>
+                })}
             })}
             {(!trace.conditionals.is_empty()).then(|| {
                 let skipped = trace.skipped.clone();
@@ -240,17 +280,25 @@ fn preprocessor_card(compilation: &Compilation, on_reveal: Callback<usize>) -> A
                             // The group this directive opens is the lines
                             // after it, up to the next directive.
                             let dropped = skipped.iter().find(|(first, _)| *first == line + 1).copied();
-                            let outcome = match (conditional.taken, dropped) {
+                            let lines = match dropped {
+                                | Some((first, last)) if first == last => format!("line {first} is skipped"),
+                                | Some((first, last)) => format!("lines {first}–{last} are skipped"),
+                                | None => "its group is skipped".to_owned(),
+                            };
+                            let outcome = match (conditional.taken, conditional.evaluated) {
                                 | (true, _) => "its group is kept".to_owned(),
-                                | (false, Some((first, last))) if first == last => format!("line {first} is skipped"),
-                                | (false, Some((first, last))) => format!("lines {first}–{last} are skipped"),
-                                | (false, None) => "its group is skipped".to_owned(),
+                                | (false, true) => lines,
+                                | (false, false) => format!("not evaluated, since an earlier group was kept: {lines}"),
                             };
                             view! {
                                 <li class="phase-item" data-kind=if conditional.taken { "kept" } else { "skipped" }>
                                     <span class="phase-badge">{if conditional.taken { "kept" } else { "skipped" }}</span>
                                     {place(line, on_reveal)}
-                                    <span class="phase-text"><code>{conditional.directive.clone()}</code>{format!(": {outcome}.")}</span>
+                                    <span class="phase-text">
+                                        <code>{conditional.directive.clone()}</code>
+                                        {format!(": {outcome}.")}
+                                        {presumed(conditional.presumed.as_deref())}
+                                    </span>
                                 </li>
                             }
                         }).collect_view()}
@@ -260,6 +308,26 @@ fn preprocessor_card(compilation: &Compilation, on_reveal: Callback<usize>) -> A
         </section>
     }
     .into_any()
+}
+
+/// What a directive the other lists do not cover does, in a few words.
+fn directive_meaning(name: &str) -> &'static str {
+    match name {
+        | "pragma" => "gives bcc an implementation-defined instruction (C99 §6.10.6p1).",
+        | "line" => "renumbers the lines after it, and may rename the file (C99 §6.10.4p3).",
+        | "error" => "stops translation with a message (C99 §6.10.5p1).",
+        | "warning" => "prints a warning, as GCC and C23 allow.",
+        | "embed" => "puts a file's bytes in its place as integer constants (C23).",
+        | _ => "is executed and deleted, as every directive is (C99 §6.10p2).",
+    }
+}
+
+/// Where `#line` says a place is, when it differs from the physical one.
+fn presumed(place: Option<&str>) -> Option<impl IntoView + use<>> {
+    let place = place?.to_owned();
+    Some(view! {
+        <span class="presumed" title="The place a #line directive gives it">{format!(" (#line: {place})")}</span>
+    })
 }
 
 fn include_item(include: &Include, on_reveal: Callback<usize>) -> impl IntoView {
@@ -291,10 +359,10 @@ fn include_item(include: &Include, on_reveal: Callback<usize>) -> impl IntoView 
 
 fn expansion_item(expansion: &Expansion, on_reveal: Callback<usize>) -> impl IntoView {
     let line = expansion.range.line;
-    let result = if expansion.result.is_empty() {
-        "nothing in the output: a directive read it".to_owned()
-    } else {
-        expansion.result.clone()
+    let result = match (expansion.result.is_empty(), expansion.directive) {
+        | (false, _) => expansion.result.clone(),
+        | (true, true) => "nothing in the output: the directive on this line read it".to_owned(),
+        | (true, false) => "nothing: its replacement list is empty".to_owned(),
     };
     let steps = expansion.steps.clone();
     let detailed = steps.len() > 1
@@ -308,6 +376,7 @@ fn expansion_item(expansion: &Expansion, on_reveal: Callback<usize>) -> impl Int
                 <code class="expansion-from">{expansion.invocation.clone()}</code>
                 <span class="expansion-arrow" aria-label="becomes">"→"</span>
                 <code class="expansion-to" class:is-empty=expansion.result.is_empty()>{result}</code>
+                {presumed(expansion.presumed.as_deref())}
             </div>
             {detailed.then(|| view! {
                 <ol class="expansion-steps">
@@ -318,6 +387,8 @@ fn expansion_item(expansion: &Expansion, on_reveal: Callback<usize>) -> impl Int
                                 <span class="step-kind">{match step.kind.as_str() {
                                     | "stringify" => "#",
                                     | "paste" => "##",
+                                    | "builtin" => "predefined",
+                                    | _ if step.prescan => "prescan",
                                     | _ => "replace",
                                 }}</span>
                                 <span class="step-text">{step.describe()}</span>
@@ -378,13 +449,17 @@ pub fn source_marks(stage: Stage, compilation: &Compilation) -> Vec<Decoration> 
                 .expansions
                 .iter()
                 .map(|expansion| {
-                    let hover = if expansion.result.is_empty() {
-                        format!(
-                            "`{}` is expanded where a directive reads it.",
+                    let hover = match (expansion.result.is_empty(), expansion.directive) {
+                        | (false, _) =>
+                            format!("`{}` becomes `{}`", expansion.invocation, expansion.result),
+                        | (true, true) => format!(
+                            "`{}` is expanded for the directive on this line.",
                             expansion.invocation
-                        )
-                    } else {
-                        format!("`{}` becomes `{}`", expansion.invocation, expansion.result)
+                        ),
+                        | (true, false) => format!(
+                            "`{}` becomes nothing: its replacement list is empty.",
+                            expansion.invocation
+                        ),
                     };
                     span(&expansion.range, "src-macro", hover)
                 })

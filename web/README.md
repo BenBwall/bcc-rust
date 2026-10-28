@@ -183,20 +183,33 @@ reimplements none):
   bcc's lexer forms no header-name tokens; the `#include` handler reads the
   operand's tokens back as one name, and the listing says which. Hovering an
   entry boxes its exact range in the source.
-- **Preprocessor (phase 4)** shows what `bcc-rust -E` prints, from one
-  preprocessing run with the preprocessor's opt-in trace on (the same run
-  gives the Tokens stage's listing). Each header the source includes is
-  folded into one line saying what it held, with a switch to show it; the
-  gutter numbers each line with the source line it came from. A card lists
-  the headers, the macros defined, every expansion with its result and its
-  steps (each replacement with its arguments, each `#` and `##` and its
-  result, nested replacements indented), and each conditional directive with
-  the lines it skipped. In the source, invocations are underlined with their
-  expansion on hover, skipped lines are hatched, and conditionals carry a
-  kept or skipped mark. The browser build has no host headers: `#include`
-  finds only bcc's embedded freestanding headers (`<limits.h>`,
-  `<stdint.h>`, `<stddef.h>`, `<stdbool.h>`, …), so `<stdio.h>` is reported
-  as not found.
+- **Preprocessor (phase 4)** shows the text phase 4 leaves, from one
+  preprocessing run with the preprocessor's opt-in trace on: laid out as
+  `bcc-rust -E` lays it out (line markers included), but with each token
+  spelled as written and adjacent string literals still apart, since `-E`
+  shows them after phase 6 has joined them. The compiler says where each
+  output line came from, so each header the source includes is folded into
+  one line saying what it held (a switch shows it), its lines link to the
+  `#include`, and the gutter numbers each line with the source line it came
+  from. A card lists the headers, the macros defined, the other directives
+  executed (`#pragma`, `#line`, `#error`, …), every expansion with its result
+  and its steps (each replacement with its arguments, replacements made while
+  an argument is prescanned, predefined macros such as `__LINE__`, each `#`
+  and `##` and its result, nested replacements indented as a tree), and each
+  conditional directive with the lines it skipped, saying which arms were
+  not evaluated because an earlier group was kept. Places are physical, as
+  the editor counts them; where `#line` says otherwise, the card shows that
+  too. In the source, invocations are underlined with their expansion on
+  hover, skipped lines are hatched, and conditionals carry a kept or
+  skipped mark. The browser build has no host headers: `#include` finds only
+  bcc's embedded freestanding headers (`<limits.h>`, `<stdint.h>`,
+  `<stddef.h>`, `<stdbool.h>`, …), so `<stdio.h>` is reported as not found.
+- **Tokens (phases 5-7)** is the `--tokens` listing of a second, ordinary
+  preprocessing run.
+
+The page receives at most 20,000 phase-3 entries and 2,000 expansions and
+says how many more there were; source columns are mapped line by line, so a
+large source costs time in proportion to its size.
 
 The lesson "Before the compiler: the preprocessor" (`demos/macros.c`)
 exercises these stages and opens at the preprocessor. The abstract machine

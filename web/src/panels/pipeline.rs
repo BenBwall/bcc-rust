@@ -69,9 +69,7 @@ pub fn PipelineView(
         let headers = headers.get();
         shown.with(|compilation| {
             let compilation = compilation.as_ref()?;
-            source
-                .with(|source| displayed(stage, compilation, source, headers))
-                .map(|(text, _)| text)
+            displayed(stage, compilation, headers).map(|(text, _)| text)
         })
     });
     let text = Signal::derive(move || output.get().unwrap_or_default());
@@ -81,9 +79,9 @@ pub fn PipelineView(
         let stage = stage.get();
         let headers = headers.get();
         shown.with(|compilation| {
-            compilation.as_ref().map_or_else(Vec::new, |compilation| {
-                source.with(|source| gutter(stage, compilation, source, headers))
-            })
+            compilation
+                .as_ref()
+                .map_or_else(Vec::new, |compilation| gutter(stage, compilation, headers))
         })
     });
     let links_of = move |compilation: Memo<Option<Compilation>>| {
