@@ -2953,6 +2953,51 @@ mod tests {
         assert_eq!(stderr(&output), "");
     }
 
+    /// Clang reports every unused linker input, but no unused argument once
+    /// an error has occurred, a `-Werror` one included; `-Qunused-arguments`
+    /// silences both, and GCC refuses it.
+    #[test]
+    fn clang_stops_reporting_unused_arguments_after_an_error() {
+        let directory = Directory::new();
+        directory.write("a.c", "int a;\n");
+        let output = directory.bcc(
+            "--clang-mode",
+            &[
+                "-c", "a.c", "-o", "a.o", "-Werror", "-lm", "-Wl,x", "-L/tmp", "-s",
+            ],
+        );
+        assert_eq!(output.status.code(), Some(1));
+        assert_eq!(
+            stderr(&output),
+            "clang: error: -lm: 'linker' input unused \
+             [-Werror,-Wunused-command-line-argument]\nclang: error: -Wl,x: 'linker' input unused \
+             [-Werror,-Wunused-command-line-argument]\n"
+        );
+        for options in [
+            &[
+                "-Qunused-arguments",
+                "-c",
+                "a.c",
+                "-o",
+                "a.o",
+                "-lm",
+                "-L/tmp",
+                "-s",
+            ][..],
+            &["-Qunused-arguments", "-fsyntax-only", "-c", "a.c"],
+        ] {
+            let output = directory.bcc("--clang-mode", options);
+            succeeds(&output);
+            assert_eq!(stderr(&output), "", "{options:?}");
+        }
+        let output = directory.bcc("--gcc-mode", &["-Qunused-arguments", "-c", "a.c"]);
+        assert_eq!(output.status.code(), Some(1));
+        assert_eq!(
+            stderr(&output),
+            "gcc: error: unrecognized command-line option '-Qunused-arguments'\n"
+        );
+    }
+
     /// The common symbols an object file defines, by `nm`'s `C` letter.
     fn common_symbols(object: &Path) -> Option<Vec<String>> {
         let listing = Command::new("nm").arg(object).output().ok()?;

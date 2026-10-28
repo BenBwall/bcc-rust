@@ -296,8 +296,8 @@ struct State<'a> {
     /// The kind of input the `-x` language in effect makes a file, or
     /// `None` to decide by its extension.
     language:        Option<InputKind>,
-    /// The `-w` and `-W` options, in order, which decide how Clang reports
-    /// an argument it leaves unused.
+    /// The `-w`, `-W` and `-Qunused-arguments` options, in order, which
+    /// decide how Clang reports an argument it leaves unused.
     warning_options: Vec<String>,
     verbose:         bool,
     dry_run:         bool,
@@ -472,6 +472,10 @@ impl State<'_> {
                 self.stages.push(stage);
                 self.positions.push((self.position, Unused::Stage(stage)));
             },
+            // Clang's `-Qunused-arguments` reports no argument or input as
+            // unused, whatever the warning options say.
+            | "-Qunused-arguments" if self.compiler == Compiler::Clang =>
+                self.warning_options.push(text.into()),
             | "-fsyntax-only" => {
                 self.syntax_only = true;
                 self.positions.push((self.position, Unused::SyntaxOnly));
@@ -701,6 +705,11 @@ impl State<'_> {
                 | _ => None,
             })
             .collect();
+        // Clang reports the arguments it leaves unused only when no error
+        // has occurred, a `-Werror` one about an unused input included.
+        if self.errors != 0 {
+            return;
+        }
         for message in messages {
             self.unused(format_args!(
                 "argument unused during compilation: '{message}'"
@@ -740,13 +749,17 @@ impl State<'_> {
     }
 
     /// Reports an argument Clang leaves unused, as its
-    /// `-Wunused-command-line-argument` warning: suppressed by `-w` or
-    /// `-Wno-unused-command-line-argument`, an error under `-Werror` or
+    /// `-Wunused-command-line-argument` warning: suppressed by `-w`,
+    /// `-Qunused-arguments` or `-Wno-unused-command-line-argument`, an
+    /// error under `-Werror` or
     /// `-Werror=unused-command-line-argument`.
     fn unused(&mut self, message: std::fmt::Arguments<'_>) {
         const GROUP: &str = "unused-command-line-argument";
         if self.compiler != Compiler::Clang
-            || self.warning_options.iter().any(|option| option == "-w")
+            || self
+                .warning_options
+                .iter()
+                .any(|option| matches!(option.as_str(), "-w" | "-Qunused-arguments"))
         {
             return;
         }
