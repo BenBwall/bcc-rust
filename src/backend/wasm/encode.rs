@@ -53,7 +53,8 @@ pub(crate) struct Encoded<'a> {
     pub(crate) bytes:   ArenaVec<'a, u8>,
     pub(crate) entries: ArenaVec<'a, SourceEntry>,
     /// Each defined function's code, as `[start, end)` byte offsets from
-    /// the module's start, by defined-function position.
+    /// the module's start, by defined-function position: from its first
+    /// instruction (after the locals vector) to just past its final `end`.
     pub(crate) bodies:  ArenaVec<'a, (u32, u32)>,
     /// The offset of every instruction, in the order of the functions'
     /// code, marks left out.
@@ -183,6 +184,8 @@ pub(crate) fn encode<'a>(module: &WasmModule<'_>, arena: &'a Bump) -> Encoded<'a
             body.push(local.code());
             index += run;
         }
+        // The code starts after the locals vector.
+        let code_start = body.len();
         for &instr in function.code {
             if let Instr::Mark { block, inst, line } = instr {
                 marks.push((body.len(), block, inst, line));
@@ -207,7 +210,7 @@ pub(crate) fn encode<'a>(module: &WasmModule<'_>, arena: &'a Bump) -> Encoded<'a
             });
         }
         offsets.extend(function_offsets.iter().map(|&at| u32_of(start + at)));
-        bodies.push((u32_of(start), u32_of(code.len())));
+        bodies.push((u32_of(start + code_start), u32_of(code.len())));
     }
     // The code section's header precedes its contents in the module.
     let header = out.len() + 1 + leb_len(code.len() as u64);

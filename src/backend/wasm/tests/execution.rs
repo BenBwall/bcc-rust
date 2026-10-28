@@ -334,6 +334,18 @@ fn offsets_text_lines_and_source_map_agree() {
                         .any(|&(_, start, end)| (start..end).contains(&offset))
                 );
             }
+            // Each function's range starts at its first instruction, after
+            // the locals, and ends at its final `end`.
+            for &(name, start, end) in &compiled.bodies {
+                let first = compiled
+                    .offsets
+                    .iter()
+                    .copied()
+                    .filter(|offset| (start..end).contains(offset))
+                    .min();
+                assert_eq!(first, Some(start), "{name}");
+                assert_eq!(compiled.bytes[end as usize - 1], 0x0B, "{name}");
+            }
             (
                 compiled.bytes.to_vec(),
                 text,
