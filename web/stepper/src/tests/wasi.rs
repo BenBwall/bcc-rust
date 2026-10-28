@@ -217,3 +217,85 @@ fn unimplemented_wasi_functions_answer_enosys() {
 fn program_of(module: &Builder) -> Program {
     Program::load(&module.build(), None).unwrap()
 }
+
+/// Run `_start`, whose body is `code`, with WASI function `name` of the
+/// given signature imported and one page of memory holding "ABCD" at 0.
+fn run_wasi(name: &str, params: &[crate::ValType], code: &str) -> Session {
+    let mut module = Builder::new();
+    module.import(WASI, name, params, &[I32]);
+    module.memory(1, None).data(Some(0), b"ABCD");
+    module.func("_start", &[], &[I32], &[], code);
+    run(&module)
+}
+
+#[test]
+fn fd_write_copies_its_output_before_storing_the_count() {
+    // The count goes to address 0, over the buffer it writes: the output
+    // is the buffer as it was, then the count replaces it.
+    let session = run_wasi(
+        "fd_write",
+        &[I32, I32, I32, I32],
+        "i32.const 16 i32.const 0 i32.store i32.const 20 i32.const 4 i32.store
+         i32.const 1 i32.const 16 i32.const 1 i32.const 0 call fd_write",
+    );
+    let machine = session.machine();
+    assert_eq!(machine.status, Status::Finished(vec![Value::I32(0)]));
+    assert_eq!(machine.host.output, [(Stream::Stdout, b"ABCD".to_vec())]);
+    assert_eq!(
+        &machine.memory.as_ref().unwrap().bytes[..4],
+        4_u32.to_le_bytes()
+    );
+    // A count that cannot be stored traps before anything is written.
+    let session = run_wasi(
+        "fd_write",
+        &[I32, I32, I32, I32],
+        "i32.const 16 i32.const 0 i32.store i32.const 20 i32.const 4 i32.store
+         i32.const 1 i32.const 16 i32.const 1 i32.const 65534 call fd_write",
+    );
+    let machine = session.machine();
+    assert!(
+        matches!(&machine.status, Status::Trapped(trap) if trap.kind == crate::TrapKind::MemoryOutOfBounds),
+        "{:?}",
+        machine.status
+    );
+    assert_eq!(machine.host.output, []);
+}
+
+#[test]
+fn wasi_outputs_are_checked_before_any_is_written() {
+    // An fdstat at the very top of the address space: a trap, not an
+    // overflow.
+    let session = run_wasi(
+        "fd_fdstat_get",
+        &[I32, I32],
+        "i32.const 1 i32.const -8 call fd_fdstat_get",
+    );
+    assert!(
+        matches!(&session.machine().status, Status::Trapped(trap) if trap.kind == crate::TrapKind::MemoryOutOfBounds),
+        "{:?}",
+        session.machine().status
+    );
+    // args_get with a valid pointer slot but a buffer past the end leaves
+    // the slot untouched.
+    let session = run_wasi(
+        "args_get",
+        &[I32, I32],
+        "i32.const 0 i32.const 65532 call args_get",
+    );
+    let machine = session.machine();
+    assert!(
+        matches!(machine.status, Status::Trapped(_)),
+        "{:?}",
+        machine.status
+    );
+    assert_eq!(&machine.memory.as_ref().unwrap().bytes[..4], b"ABCD");
+    // fd_fdstat_get in bounds writes all 24 bytes.
+    let session = run_wasi(
+        "fd_fdstat_get",
+        &[I32, I32],
+        "i32.const 1 i32.const 32 call fd_fdstat_get",
+    );
+    let memory = &session.machine().memory.as_ref().unwrap().bytes;
+    assert_eq!(memory[32], 2, "a character device");
+    assert_eq!(&memory[40..56], [0xFF; 16], "all rights");
+}

@@ -63,11 +63,17 @@ impl Memory {
     /// is in bounds.
     fn range(&self, base: i32, offset: u32, size: u32) -> Result<(u64, usize), Trap> {
         let address = u64::from(base as u32) + u64::from(offset);
-        self.check(address, u64::from(size))?;
+        self.check_range(address, u64::from(size))?;
         Ok((address, address as usize))
     }
 
-    fn check(&self, address: u64, size: u64) -> Result<(), Trap> {
+    /// Whether the `size` bytes at `address` are in bounds, for a host
+    /// function to check before it writes anything.
+    pub(crate) fn check(&self, address: u32, size: u32) -> Result<(), Trap> {
+        self.check_range(u64::from(address), u64::from(size))
+    }
+
+    fn check_range(&self, address: u64, size: u64) -> Result<(), Trap> {
         if address + size > self.bytes.len() as u64 {
             return Err(Trap::new(
                 TrapKind::MemoryOutOfBounds,
@@ -131,8 +137,8 @@ impl Memory {
 
     /// `memory.copy`, which may overlap.
     pub(crate) fn copy(&mut self, destination: u32, source: u32, length: u32) -> Result<(), Trap> {
-        self.check(u64::from(source), u64::from(length))?;
-        self.check(u64::from(destination), u64::from(length))?;
+        self.check_range(u64::from(source), u64::from(length))?;
+        self.check_range(u64::from(destination), u64::from(length))?;
         let source = source as usize;
         self.bytes_mut()
             .copy_within(source..source + length as usize, destination as usize);
@@ -140,28 +146,28 @@ impl Memory {
     }
 
     pub(crate) fn fill(&mut self, destination: u32, value: u8, length: u32) -> Result<(), Trap> {
-        self.check(u64::from(destination), u64::from(length))?;
+        self.check_range(u64::from(destination), u64::from(length))?;
         let start = destination as usize;
         self.bytes_mut()[start..start + length as usize].fill(value);
         Ok(())
     }
 
     pub(crate) fn write(&mut self, destination: u32, bytes: &[u8]) -> Result<(), Trap> {
-        self.check(u64::from(destination), bytes.len() as u64)?;
+        self.check_range(u64::from(destination), bytes.len() as u64)?;
         let start = destination as usize;
         self.bytes_mut()[start..start + bytes.len()].copy_from_slice(bytes);
         Ok(())
     }
 
     pub(crate) fn read(&self, address: u32, length: u32) -> Result<&[u8], Trap> {
-        self.check(u64::from(address), u64::from(length))?;
+        self.check_range(u64::from(address), u64::from(length))?;
         let start = address as usize;
         Ok(&self.bytes[start..start + length as usize])
     }
 
     /// `length` writable bytes at `address`, if they are in bounds.
     pub(crate) fn slice_mut(&mut self, address: u32, length: u32) -> Result<&mut [u8], Trap> {
-        self.check(u64::from(address), u64::from(length))?;
+        self.check_range(u64::from(address), u64::from(length))?;
         let start = address as usize;
         Ok(&mut self.bytes_mut()[start..start + length as usize])
     }

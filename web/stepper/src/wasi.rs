@@ -7,6 +7,10 @@
 //! count and a fixed seed, so every run of a program is the same. Anything
 //! else answers `ENOSYS`, or `EBADF` for file descriptors other than 0-2,
 //! which is how wasi-libc learns there are no preopened directories.
+//!
+//! Each function checks every place it writes before writing any, so a bad
+//! pointer traps without a partial result, and reads its inputs before it
+//! writes its outputs, since the program may make them overlap.
 
 use crate::{
     exec::{
@@ -222,11 +226,12 @@ impl Host {
             | WasiFunction::FdFdstatGet => {
                 let fd = int(0);
                 if fd <= 2 {
-                    // filetype 2 is a character device; all rights.
-                    let at = int(1);
-                    memory.write(at, &[2, 0, 0, 0, 0, 0, 0, 0])?;
-                    memory.set_u64(at + 8, u64::MAX)?;
-                    memory.set_u64(at + 16, u64::MAX)?;
+                    // filetype 2 is a character device, no flags; all
+                    // rights, base and inheriting. One write of the whole
+                    // 24-byte fdstat, so it is bounds checked as a unit.
+                    let mut fdstat = [0xFF; 24];
+                    fdstat[..8].copy_from_slice(&[2, 0, 0, 0, 0, 0, 0, 0]);
+                    memory.write(int(1), &fdstat)?;
                     (
                         SUCCESS,
                         format!("described file descriptor {fd} as a terminal"),
@@ -238,19 +243,25 @@ impl Host {
             | WasiFunction::FdPrestatGet | WasiFunction::FdPrestatDirName =>
                 (EBADF, format!("there is no preopened directory {}", int(0))),
             | WasiFunction::ArgsSizesGet => {
+                memory.check(int(0), 4)?;
+                memory.check(int(1), 4)?;
                 memory.set_u32(int(0), 1)?;
                 memory.set_u32(int(1), PROGRAM.len() as u32 + 1)?;
                 (SUCCESS, format!("reported one argument, \"{PROGRAM}\""))
             },
             | WasiFunction::ArgsGet => {
                 let (pointers, buffer) = (int(0), int(1));
-                memory.set_u32(pointers, buffer)?;
                 let mut name = PROGRAM.as_bytes().to_vec();
                 name.push(0);
+                memory.check(pointers, 4)?;
+                memory.check(buffer, name.len() as u32)?;
+                memory.set_u32(pointers, buffer)?;
                 memory.write(buffer, &name)?;
                 (SUCCESS, format!("wrote the argument \"{PROGRAM}\""))
             },
             | WasiFunction::EnvironSizesGet => {
+                memory.check(int(0), 4)?;
+                memory.check(int(1), 4)?;
                 memory.set_u32(int(0), 0)?;
                 memory.set_u32(int(1), 0)?;
                 (SUCCESS, "reported an empty environment".to_owned())
@@ -332,10 +343,13 @@ impl Host {
         let Ok(total) = u32::try_from(total) else {
             return Ok((EINVAL, "refused an fd_write of more than 4 GiB".to_owned()));
         };
-        memory.set_u32(written_at, total)?;
+        // The count may share bytes with a buffer: check where it goes,
+        // copy the output, and only then store it.
+        memory.check(written_at, 4)?;
         for (base, length) in buffers {
             self.append(stream, memory.read(base, length)?);
         }
+        memory.set_u32(written_at, total)?;
         let name = if stream == Stream::Stdout {
             "standard output"
         } else {
