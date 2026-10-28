@@ -42,9 +42,13 @@ impl Target {
     /// Appends GCC's characteristics macros of `_Float16` and `__bf16`,
     /// which it defines whenever the types exist, apart from the other
     /// interchange types.
-    pub(crate) fn write_half_float_macros(out: &mut impl Write) {
-        HALF.write(out);
-        BFLOAT.write(out);
+    pub(crate) fn write_half_float_macros(self, out: &mut impl Write) {
+        if self.float16_type() {
+            HALF.write(out);
+        }
+        if self.bfloat16_type() {
+            BFLOAT.write(out);
+        }
     }
 }
 

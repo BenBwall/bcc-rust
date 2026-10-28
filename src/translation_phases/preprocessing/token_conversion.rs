@@ -1240,10 +1240,17 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
         } else {
             &normalized
         };
+        // A target without the type has no suffix for it either: the pinned
+        // Clang calls `1.5f16` an invalid suffix on WebAssembly.
+        let target = self.context.configuration.target();
         if self.context.configuration.accepts(Feature::Float16)
             && let Some((format, length)) = half_suffix(contents)
-            && (format == HalfFormat::Binary16
-                || self.context.configuration.compiler_identity() == CompilerIdentity::Gcc)
+            && match format {
+                | HalfFormat::Binary16 => target.float16_type(),
+                | HalfFormat::BFloat16 =>
+                    target.bfloat16_type()
+                        && self.context.configuration.compiler_identity() == CompilerIdentity::Gcc,
+            }
         {
             let mut quad = ArenaString::new_in(self.scratch);
             quad.push_str(&contents[..contents.len() - 1 - length]);

@@ -995,7 +995,7 @@ pub(super) fn with_identity_macros<'a>(
             }
         }
         if identity == CompilerIdentity::Gcc {
-            crate::target::Target::write_half_float_macros(&mut out);
+            configuration.target().write_half_float_macros(&mut out);
         }
     }
     _ = write!(

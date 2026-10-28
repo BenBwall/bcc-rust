@@ -70,4 +70,12 @@ impl Target {
     pub(crate) const fn float16_type(self) -> bool {
         !self.is_wasm()
     }
+
+    /// Whether source may name `__bf16`. The pinned Clang rejects it on the
+    /// WebAssembly targets ("__bf16 is not supported on this target"), and
+    /// so does bcc; `__fp16`, a storage-only type, stays available there.
+    /// Clang Language Extensions, "Half-Precision Floating Point".
+    pub(crate) const fn bfloat16_type(self) -> bool {
+        !self.is_wasm()
+    }
 }
