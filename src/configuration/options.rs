@@ -236,38 +236,34 @@ impl CompilerConfiguration {
 
     /// Whether every `_Float16` value is evaluated to the range and
     /// precision of `float` and rounded only by a conversion to `_Float16`,
-    /// as GCC evaluates it on x86-64; otherwise only chains of arithmetic
+    /// as GCC evaluates it on x86-64, under GCC's rules (only GCC's identity
+    /// among those has `_Float16`); otherwise only chains of arithmetic
     /// operators keep the excess, as Clang evaluates it. Semantic analysis
     /// documents both rules (`Analyzer::half_in_float`).
     /// C99: §5.2.4.2.2 paragraph 7, p. 24; PDF p. 36 (evaluation formats).
     pub(crate) const fn half_in_float(self) -> bool {
-        matches!(self.identity, super::CompilerIdentity::Gcc)
+        matches!(self.identity.rules(), super::RuleSet::Gcc)
     }
 
     /// Whether constant expressions read compound literals as Clang's
     /// evaluator does: a scalar literal's value folds into the expressions
     /// around it (`(int){3} + 1` initializes a static object), and a literal
     /// initializing a static object is no extension to report. GCC's folder
-    /// reads neither and reports the latter under `-pedantic`; the MSVC and
-    /// TCC identities follow GCC's stricter rules.
+    /// reads neither and reports the latter under `-pedantic`. The identity
+    /// policy gives the MSVC and TCC identities GCC's stricter rules.
     /// C99: §6.6 paragraph 10, p. 96; PDF p. 108 (other constant forms).
     pub(crate) const fn folds_compound_literals(self) -> bool {
-        matches!(
-            self.identity,
-            super::CompilerIdentity::Clang | super::CompilerIdentity::ClangCl
-        )
+        matches!(self.identity.rules(), super::RuleSet::Clang)
     }
 
     /// GCC's rules (TCC's too) or Clang's (MSVC's and clang-cl's too) for
     /// a cast between a pointer and an integer of another width: GCC warns
     /// for any other width, Clang for a narrower integer only, as MSVC's
-    /// C4311 and C4312 do.
+    /// C4311 and C4312 do, so MSVC takes the identity policy's
+    /// MS-compatible rules.
     /// C99: §6.3.2.3 paragraphs 5-6, p. 47; PDF p. 59.
     pub(crate) const fn pointer_cast_rules(self) -> super::RuleSet {
-        match self.identity {
-            | super::CompilerIdentity::Gcc | super::CompilerIdentity::Tcc => super::RuleSet::Gcc,
-            | _ => super::RuleSet::Clang,
-        }
+        self.identity.ms_compatible_rules()
     }
 
     /// GCC's rules (TCC's and MSVC's too) or Clang's (clang-cl's too) for
@@ -277,7 +273,7 @@ impl CompilerConfiguration {
     /// an extension before C23.
     /// C23: §6.7.3.1 paragraph 4, p. 104; PDF p. 117.
     pub(crate) const fn bit_int_rules(self) -> super::RuleSet {
-        self.gcc_family()
+        self.identity.rules()
     }
 
     /// `BITINT_MAXWIDTH`, the widest `_BitInt` the rules of
@@ -305,7 +301,7 @@ impl CompilerConfiguration {
     /// extension of static objects.
     /// GNU extension: GCC manual, "Compound Literals".
     pub(crate) const fn array_literal_rules(self) -> super::RuleSet {
-        self.gcc_family()
+        self.identity.rules()
     }
 
     /// GCC's rules (TCC's and MSVC's too) or Clang's (clang-cl's too) for a
@@ -315,15 +311,7 @@ impl CompilerConfiguration {
     /// `-Wliteral-conversion` and evaluator.
     /// C99: §6.3.1.4 paragraph 1, p. 43; PDF p. 55.
     pub(crate) const fn float_conversion_rules(self) -> super::RuleSet {
-        self.gcc_family()
-    }
-
-    const fn gcc_family(self) -> super::RuleSet {
-        match self.identity {
-            | super::CompilerIdentity::Clang | super::CompilerIdentity::ClangCl =>
-                super::RuleSet::Clang,
-            | _ => super::RuleSet::Gcc,
-        }
+        self.identity.rules()
     }
 
     /// Selects the compiler the identity macros claim, and with it whether

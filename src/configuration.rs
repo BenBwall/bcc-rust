@@ -26,7 +26,7 @@
 //! is recorded in language-standards.md.
 
 // Language choices
-pub(crate) mod identity;
+mod identity;
 mod language;
 
 // Feature policy
@@ -45,6 +45,7 @@ pub(crate) use features::{
     Feature,
     FeatureOrigin,
 };
+pub(crate) use identity::RuleSet;
 pub(crate) use language::{
     CStandard,
     CompilerIdentity,
@@ -55,7 +56,6 @@ pub(crate) use language::{
     MsvcFeature,
     PreprocessingOption,
     RelaxedFloatingPoint,
-    RuleSet,
 };
 
 impl CompilerConfiguration {

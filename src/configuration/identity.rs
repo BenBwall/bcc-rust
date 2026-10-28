@@ -20,10 +20,10 @@ impl CompilerIdentity {
     /// rules, which reject or report more, are the closer model. A rule
     /// where `cl` is known to match Clang uses
     /// [`Self::ms_compatible_rules`] instead.
-    pub(crate) const fn rules(self) -> RuleFamily {
+    pub(crate) const fn rules(self) -> RuleSet {
         match self {
-            | Self::Clang | Self::ClangCl => RuleFamily::Clang,
-            | Self::Gcc | Self::Tcc | Self::Msvc => RuleFamily::Gcc,
+            | Self::Clang | Self::ClangCl => RuleSet::Clang,
+            | Self::Gcc | Self::Tcc | Self::Msvc => RuleSet::Gcc,
         }
     }
 
@@ -31,25 +31,18 @@ impl CompilerIdentity {
     /// MS-compatible mode, which clang-cl models it with (MSVC's documented
     /// warnings C4311 and C4312, for instance, report only a cast to or
     /// from a narrower integer, as Clang's do): Clang's for MSVC too.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "#174's pointer cast rule adopts it; the policy names it now"
-        )
-    )]
-    pub(crate) const fn ms_compatible_rules(self) -> RuleFamily {
+    pub(crate) const fn ms_compatible_rules(self) -> RuleSet {
         match self {
-            | Self::Msvc => RuleFamily::Clang,
+            | Self::Msvc => RuleSet::Clang,
             | _ => self.rules(),
         }
     }
 }
 
-/// The two compilers whose differing rules bcc models, of which
-/// [`CompilerIdentity::rules`] chooses one.
+/// Whose rules a behaviour follows where GCC and Clang differ and bcc
+/// models both, as [`CompilerIdentity::rules`] chooses them.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
-pub(crate) enum RuleFamily {
+pub(crate) enum RuleSet {
     Gcc,
     Clang,
 }

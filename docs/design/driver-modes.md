@@ -570,25 +570,24 @@ family of rules:
 | `msvc` | GCC's, or Clang's where `cl` is known to behave as Clang's MS-compatible mode models it | `cl` lacks most of the GNU and C23 extensions Clang accepts silently, so GCC's rules, which reject or report more, are the closer model; where `cl`'s behaviour is documented or surveyed and matches clang-cl's, Clang's are exact |
 
 `CompilerIdentity::rules` (`src/configuration/identity.rs`) gives the
-family, and `CompilerIdentity::ms_compatible_rules` the family for a rule
-where `cl` is known to match Clang; a rule chosen per identity calls one of
-them rather than matching on identities. The rules chosen so far:
+`RuleSet`, and `CompilerIdentity::ms_compatible_rules` the one for a rule
+where `cl` is known to match Clang; each rule's `CompilerConfiguration`
+helper calls one of them rather than matching on identities:
 
-| Rule | GCC's rules | Clang's rules |
+| Rule (helper) | GCC's rules | Clang's rules |
 | --- | --- | --- |
 | Compound literals in static initializers fold and go unreported (`folds_compound_literals`, #170) | GCC, TCC, MSVC | Clang, clang-cl |
 | `_Float16` evaluates in `float` (`half_in_float`, #163) | GCC (TCC and MSVC have no `_Float16`) | Clang, clang-cl |
-| `-MG` lists a missing `<...>` header under `-MM`; `-H` names a header beside the main file `./a.h` | GCC, TCC, MSVC | Clang, clang-cl |
-| `_BitInt` widths, array compound literals, out-of-range floating conversions (#174) | GCC, TCC, MSVC | Clang, clang-cl |
-| Pointer/integer cast warnings (#174; `cl`'s C4311 and C4312 warn only for a narrower integer) | GCC, TCC | Clang, clang-cl, MSVC (`ms_compatible_rules`) |
+| `_BitInt` widths, array compound literals, out-of-range floating conversions (`bit_int_rules`, `array_literal_rules`, `float_conversion_rules`, #174) | GCC, TCC, MSVC | Clang, clang-cl |
+| Pointer/integer cast warnings (`pointer_cast_rules`, #174; `cl`'s C4311 and C4312 warn only for a narrower integer) | GCC, TCC | Clang, clang-cl, MSVC (`ms_compatible_rules`) |
+| `-MG` lists a missing `<...>` header under `-MM`; `-H` names a header beside the main file `./a.h` (the driver) | GCC, TCC, MSVC | Clang, clang-cl |
 
-The first two predate the helpers and compare identities directly with the
-same result; they and #174's per-rule helpers are to call the central ones
-once both are on `main`. A rule that compares with `CompilerIdentity::Gcc`
-alone is equivalent where the feature it governs exists only under GCC's
-identity (the `_Float16` pedantic reports). Neither TCC's nor `cl`'s
-behaviour was surveyed for these rules: there is no TCC or MSVC on the
-machines that produced them, and Microsoft documents too little of `cl`'s.
+A rule that compares with `CompilerIdentity::Gcc` alone is equivalent where
+the feature it governs exists only under GCC's identity among those that
+follow GCC's rules (the `_Float16` pedantic reports in the lexer and
+parser). Neither TCC's nor `cl`'s behaviour was surveyed for these rules:
+there is no TCC or MSVC on the machines that produced them, and Microsoft
+documents too little of `cl`'s.
 
 ## Decisions
 

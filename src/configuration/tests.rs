@@ -203,22 +203,13 @@ fn feature_lists_name_every_variant_in_order() {
 /// policy agree with it.
 #[test]
 fn identities_follow_the_rule_families() {
-    use super::identity::RuleFamily;
     let base = CompilerConfiguration::new(CStandard::C17, ExtensionPolicy::Allow);
     for (identity, rules, ms_compatible) in [
-        (
-            CompilerIdentity::Clang,
-            RuleFamily::Clang,
-            RuleFamily::Clang,
-        ),
-        (CompilerIdentity::Gcc, RuleFamily::Gcc, RuleFamily::Gcc),
-        (CompilerIdentity::Msvc, RuleFamily::Gcc, RuleFamily::Clang),
-        (
-            CompilerIdentity::ClangCl,
-            RuleFamily::Clang,
-            RuleFamily::Clang,
-        ),
-        (CompilerIdentity::Tcc, RuleFamily::Gcc, RuleFamily::Gcc),
+        (CompilerIdentity::Clang, RuleSet::Clang, RuleSet::Clang),
+        (CompilerIdentity::Gcc, RuleSet::Gcc, RuleSet::Gcc),
+        (CompilerIdentity::Msvc, RuleSet::Gcc, RuleSet::Clang),
+        (CompilerIdentity::ClangCl, RuleSet::Clang, RuleSet::Clang),
+        (CompilerIdentity::Tcc, RuleSet::Gcc, RuleSet::Gcc),
     ] {
         assert_eq!(identity.rules(), rules, "{identity:?}");
         assert_eq!(
@@ -229,13 +220,13 @@ fn identities_follow_the_rule_families() {
         let configuration = base.with_compiler_identity(identity);
         assert_eq!(
             configuration.folds_compound_literals(),
-            rules == RuleFamily::Clang,
+            rules == RuleSet::Clang,
             "{identity:?}"
         );
         if configuration.half_precision_types() {
             assert_eq!(
                 configuration.half_in_float(),
-                rules == RuleFamily::Gcc,
+                rules == RuleSet::Gcc,
                 "{identity:?}"
             );
         }

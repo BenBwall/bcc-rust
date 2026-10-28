@@ -31,7 +31,7 @@ use super::{
     output_or_stem,
 };
 use crate::{
-    configuration::identity::RuleFamily,
+    configuration::RuleSet,
     headers::HeaderSearch,
     translation_phases::Context,
     util::bump::{
@@ -139,7 +139,7 @@ pub(super) fn write(
     // A header `-MG` took to be generated is listed as written, in the
     // order it was included; GCC's `-MM` leaves out a `<...>` one, which
     // Clang's lists.
-    let gcc = context.configuration.compiler_identity().rules() == RuleFamily::Gcc;
+    let gcc = context.configuration.compiler_identity().rules() == RuleSet::Gcc;
     let mut files = ArenaVec::new_in(&arena);
     files.extend(context.opened_source_files().filter(|&(index, _)| {
         request.files == DependencyFiles::All || !context.has_system_header_part(index)
@@ -210,7 +210,7 @@ pub(super) fn show_includes(context: &Context<'_>) {
 pub(super) fn header_tree(context: &Context<'_>) {
     let arena = Bump::new();
     let mut text = ArenaString::new_in(&arena);
-    let clang = context.configuration.compiler_identity().rules() == RuleFamily::Clang;
+    let clang = context.configuration.compiler_identity().rules() == RuleSet::Clang;
     for entry in context.include_entries.iter().flatten() {
         for _ in 0..entry.depth {
             text.push('.');
