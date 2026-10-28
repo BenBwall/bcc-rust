@@ -3,8 +3,10 @@
 //! IR keeps no source locations, so this is the granularity the outputs
 //! support: a function's header through its closing line in each text.
 //! Source lines are the editor's, physical lines of the input that `#line`
-//! does not change, and a function is found in each output under the
-//! assembler name it is emitted with, which `__asm__("name")` can change.
+//! does not change; a function that a macro expansion begins starts at the
+//! invocation, not in the macro's definition. A function is found in each
+//! output under the assembler name it is emitted with, which
+//! `__asm__("name")` can change.
 
 #![expect(
     clippy::disallowed_types,
@@ -18,6 +20,7 @@ use super::{
 };
 use crate::translation_phases::{
     Context,
+    SourceVector,
     parsing::{
         ExternalDeclaration,
         ParsedTranslationUnit,
@@ -55,23 +58,34 @@ pub(super) fn map<'tu>(
             .find(|record| std::ptr::eq(record.syntax, *definition))
             .and_then(|record| sema.symbol_name(record.binding?, context))
             .unwrap_or(name);
-        let mut lines = context
-            .get_source_vectors(definition.source_vectors)
-            .iter()
-            .filter(|vector| {
-                let physical = context.physical_source_file(vector.source_file_index);
-                context.get_source_file(physical).as_os_str() == input
-            })
-            .filter_map(|vector| {
-                context.physical_position(vector.source_file_index, vector.index as usize)
-            })
-            .map(|(line, _)| line);
-        let Some(first) = lines.next() else {
+        let in_input = |file: u32| {
+            context
+                .get_source_file(context.physical_source_file(file))
+                .as_os_str()
+                == input
+        };
+        let line = |vector: &SourceVector| {
+            context
+                .physical_position(vector.source_file_index, vector.index as usize)
+                .map(|(line, _)| line)
+        };
+        // A definition starts where its first token is in the file: a macro
+        // that expands to its first tokens starts it at the invocation.
+        if definition.source_vectors.length() == 0 {
+            continue;
+        }
+        let first = context.file_vector(definition.source_vectors);
+        let Some(start) = line(first).filter(|_| in_input(first.source_file_index)) else {
             continue;
         };
-        let (start, end) = lines.fold((first, first), |(start, end), line| {
-            (start.min(line), end.max(line))
-        });
+        // The tokens of the macros it expands are spelled in their
+        // definitions, which come before it, so they never raise its end.
+        let end = context
+            .get_source_vectors(definition.source_vectors)
+            .iter()
+            .filter(|vector| in_input(vector.source_file_index))
+            .filter_map(line)
+            .fold(start, u32::max);
         mappings.push(ExplorerLineMapping {
             function: name.to_owned(),
             source:   ExplorerLineRange { start, end },

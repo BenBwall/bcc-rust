@@ -61,12 +61,16 @@ impl Expander<'_, '_, '_, '_> {
                 self.trace_produced(token);
             }
             if let Some(result) = self.map_preprocessor_token(token) {
-                if matches!(self.output_purpose, OutputPurpose::Parsing)
-                    && let Some(site) = self.expansion_end()
-                {
-                    self.context
-                        .record_expansion_end(result.source_vectors, site);
-                    if let Some(start) = self.expansion_start() {
+                if matches!(self.output_purpose, OutputPurpose::Parsing) {
+                    if let Some(site) = self.expansion_end() {
+                        self.context
+                            .record_expansion_end(result.source_vectors, site);
+                    }
+                    // Every token an expansion produces, its arguments'
+                    // included, belongs to the outermost invocation, as in
+                    // Clang's expansion locations.
+                    if let Some(start) = self.outermost_invocation() {
+                        let start = start.clone();
                         self.context
                             .record_expansion_start(result.source_vectors, start);
                     }

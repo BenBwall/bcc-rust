@@ -453,6 +453,45 @@ fn offsets_text_lines_and_source_map_agree() {
     );
 }
 
+/// Code a macro expands to has the line of the outermost invocation, never
+/// one inside the `#define`, as Clang's `-g` line tables give it, also for
+/// an argument spelled in another macro's definition (`NESTED`).
+#[test]
+fn macro_expansions_have_the_lines_of_their_invocations() {
+    let source = r"#define SWAP(a, b) do {   \
+        int t = (a);      \
+        (a) = (b);        \
+        (b) = t;          \
+    } while (0)
+#define INC(x) ((x) + 1)
+#define TWICE(y) INC(INC(y))
+#define NESTED INC(seven)
+int seven = 7;
+int f(int p, int q) {
+    if (p > q) {
+        SWAP(p, q);
+    }
+    int r = TWICE(p);
+    int s = INC(
+        q);
+    int u = NESTED;
+    return r + s + u;
+}
+";
+    assert_eq!(source.lines().nth(11), Some("        SWAP(p, q);"));
+    let lines = compile_with(source, Target::Wasm32Unknown, false, |compiled| {
+        let mut lines: Vec<u32> = compiled.entries.iter().map(|entry| entry.line).collect();
+        lines.sort_unstable();
+        lines.dedup();
+        lines
+    })
+    .unwrap();
+    // Line 0 is the prologue; every other line is one of `f`'s own. bcc
+    // gives a statement or expression the line its first token is on, so
+    // `INC(\n q)` is line 15 as `((\n q) + 1)` would be.
+    assert_eq!(lines, [0, 11, 12, 14, 15, 17, 18], "{lines:?}");
+}
+
 /// Symbols keep their underscores in the text, since `_` is an `idchar`
 /// (WebAssembly 2.0 §6.3.5); only characters outside that set are escaped.
 #[test]
