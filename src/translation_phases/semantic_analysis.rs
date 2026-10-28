@@ -451,14 +451,14 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     false,
                     // C99 §6.7.5.2p2: function declarations cannot have
                     // variably modified types; do not recover return bounds.
-                    // Clang recovers a block-scope static array's bounds,
-                    // not a static pointer's.
+                    // Clang recovers bounds only where the type could not
+                    // be variably modified: a block-scope static pointer to
+                    // an array keeps its bounds, an extern one does not.
                     functions::function_derivation(d, self.scratch).is_none()
                         && (self.scope == 0
-                            || (matches!(
-                                spec.storage_class,
-                                Some(StorageClass::Static | StorageClass::Extern)
-                            ) && !self.declares_pointer(d))),
+                            || spec.storage_class == Some(StorageClass::Extern)
+                            || (spec.storage_class == Some(StorageClass::Static)
+                                && !self.declares_pointer(d))),
                 ));
             },
             | Work::Bind(d, s, initialized, bound_start) => {

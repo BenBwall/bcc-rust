@@ -356,6 +356,16 @@ fn block_static_pointers_to_arrays_keep_variable_bounds() {
             true,
         ),
         ("static char (*q)[(int){3}];", true),
+        // An extern object cannot have a variably modified type, so Clang
+        // folds its pointer's bound.
+        (
+            "static char x[4]; int f(void) { extern char (*q)[&x[3] - &x[0]]; return sizeof *q; }",
+            true,
+        ),
+        (
+            "int f(void) { extern char (*q)[(int){3}]; return sizeof *q; }",
+            true,
+        ),
     ] {
         assert_eq!(
             diagnostics_as(source, CompilerIdentity::Clang, ExtensionPolicy::Warn).0,
@@ -373,12 +383,39 @@ fn block_static_pointers_to_arrays_keep_variable_bounds() {
 /// optimizing; Clang's reads a scalar one.
 #[test]
 fn constant_queries_of_compound_literals_follow_each_compiler() {
-    let source = "enum { E = __builtin_constant_p((int){1}) + 2 * __builtin_constant_p((int){1} ? \
-                  2 : 3) + 4 * __builtin_constant_p(sizeof (int){1}) };";
-    for (identity, expected) in [(CompilerIdentity::Gcc, 4), (CompilerIdentity::Clang, 7)] {
+    // Each query's value, weighted by a power of two. Operands that are
+    // never evaluated (a `_Generic` controlling expression, the operand
+    // `?:`, `&&`, `||` or `__builtin_choose_expr` skips) read no literal.
+    let queries = [
+        ("(int){1}", false),
+        ("(int){1} ? 2 : 3", false),
+        ("sizeof (int){1}", true),
+        ("_Generic((int){1}, int: 1, default: 2)", true),
+        ("0 && (int){1}", true),
+        ("1 ? 2 : (int){3}", true),
+        ("1 || (int){1}", true),
+        ("__builtin_choose_expr(1, 4, (int){3})", true),
+    ];
+    let sum = queries
+        .iter()
+        .enumerate()
+        .map(|(i, (query, _))| format!("{} * __builtin_constant_p({query})", 1 << i))
+        .collect::<Vec<_>>()
+        .join(" + ");
+    let source = format!("enum {{ E = {sum} }};");
+    let gcc: i128 = queries
+        .iter()
+        .enumerate()
+        .filter(|(_, (_, gcc))| *gcc)
+        .map(|(i, _)| 1 << i)
+        .sum();
+    for (identity, expected) in [
+        (CompilerIdentity::Gcc, gcc),
+        (CompilerIdentity::Clang, 0xFF),
+    ] {
         with_configuration(
-            source,
-            CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Allow)
+            &source,
+            CompilerConfiguration::new(CStandard::C11, ExtensionPolicy::Allow)
                 .with_compiler_identity(identity),
             |context, s| {
                 assert_eq!(context.pending_error_count(), 0, "{identity:?}");
@@ -390,6 +427,120 @@ fn constant_queries_of_compound_literals_follow_each_compiler() {
                     .map(|value| value.value);
                 assert_eq!(value, Some(expected), "{identity:?}");
             },
+        );
+    }
+}
+
+/// GCC removes a pair of conversions only around a literal whose type is
+/// exactly the type of the outermost cast or `?:`: a cast takes its
+/// type's main variant, which a literal named by a typedef or written with
+/// qualifiers does not have, and an enumeration is not its compatible
+/// integer type. Without a cast, the literal's type need only be
+/// compatible with the object's.
+#[test]
+fn gcc_folds_conversion_pairs_only_around_a_literal_of_the_casts_own_type() {
+    let prelude = "typedef int I; typedef long L; typedef enum { Q0 } Q; enum Neg { NA = -1, NB \
+                   }; typedef struct S { int a; } T; static int g;";
+    for (source, gcc) in [
+        ("static int x = (I)(long)(int){3};", true),
+        ("static I x = (int)(int){3};", true),
+        ("static int x = (int)(L)(int){3};", true),
+        ("static int x = (I){3};", true),
+        ("static int x = (const int){3};", true),
+        ("static const int x = (int)(long)(int){3};", true),
+        ("static int x = (const int)(const long)(int){3};", true),
+        ("static enum Neg x = (enum Neg)(enum Neg){NA};", true),
+        ("static int x = (enum Neg)(long)(enum Neg){NA};", true),
+        ("static int *const x = (int *)(int *){&g};", true),
+        ("static int x = (int)(1 ? (int)(long)(int){3} : 0);", true),
+        ("static I x = (int)(long)(I){3};", false),
+        ("static int x = (int)(I){3};", false),
+        ("static I x = (I)(I){3};", false),
+        ("static int x = (int)(const int){3};", false),
+        ("static int x = (int)(long)(const int){3};", false),
+        (
+            "static const int x = (const int)(long)(const int){3};",
+            false,
+        ),
+        ("static double x = (double)(const double){1};", false),
+        ("static int *x = (int *)(int *const){&g};", false),
+        ("static int x = (int)(_Atomic int){3};", false),
+        ("static int x = (int)(enum Neg){NA};", false),
+        ("static int x = (int)(long)(enum Neg){NA};", false),
+        ("static enum Neg x = (int)(enum Neg){NA};", false),
+        ("static Q x = (Q)(Q){Q0};", false),
+        ("static struct S s = (struct S)(T){1};", false),
+        ("static int x = 1 ? (I){3} : 0;", false),
+        ("static int x = 1 ? (const int){3} : 0;", false),
+        ("static int x = 1 ? (enum Neg){NA} : NB;", false),
+        ("static int x = (int)_Generic(0, int: (I){3});", false),
+    ] {
+        let source = format!("{prelude} {source}");
+        assert_eq!(
+            diagnostics_as(&source, CompilerIdentity::Gcc, ExtensionPolicy::Allow).0,
+            if gcc {
+                &[][..]
+            } else {
+                &[SemanticErrorKind::NonConstantInitializer]
+            },
+            "{source}"
+        );
+    }
+    // Clang's evaluator reads through each of them but the atomic one.
+    for source in [
+        "static int x = (int)(I){3};",
+        "static int x = (int)(enum Neg){NA};",
+        "static Q x = (Q)(Q){Q0};",
+        "static int x = 1 ? (const int){3} : 0;",
+    ] {
+        let source = format!("{prelude} {source}");
+        assert_eq!(
+            diagnostics_as(&source, CompilerIdentity::Clang, ExtensionPolicy::Allow).0,
+            [],
+            "{source}"
+        );
+    }
+    assert_eq!(
+        diagnostics_as(
+            &format!("{prelude} static int x = (int)(_Atomic int){{3}};"),
+            CompilerIdentity::Clang,
+            ExtensionPolicy::Allow
+        )
+        .0,
+        [SemanticErrorKind::NonConstantInitializer]
+    );
+}
+
+/// Inside braces GCC takes a scalar literal of any arithmetic type and
+/// converts the value its own initializer gives it to the element's type;
+/// as the whole initializer, a literal of another type stays non-constant.
+#[test]
+fn gcc_converts_arithmetic_literals_of_other_types_inside_braces() {
+    let source = r"struct b { int x : 4; };
+    static double a[2] = { (int){1}, (char){300} };
+    static int b[1] = { (double){2.5} };
+    static _Float16 h[1] = { (__bf16){0.1} };
+    static __bf16 k[1] = { *&(_Float16){0.1} };
+    static struct b bits = { (double){2.5} };
+    void f(void) { static long l[1] = { (_Bool){2} }; (void)l; }";
+    for identity in IDENTITIES {
+        assert_eq!(
+            diagnostics_as(source, identity, ExtensionPolicy::Allow).0,
+            [],
+            "{identity:?}"
+        );
+    }
+    // One report per literal, and two for `_Float16` before C23.
+    assert_eq!(diagnostics(source, ExtensionPolicy::Warn), (vec![], 9));
+    for source in [
+        "static double d = (int){3};",
+        "void f(int v) { static double a[1] = { (int){v} }; (void)a; }",
+        "static int a[1] = { (int)(double){2.5} };",
+    ] {
+        assert_eq!(
+            diagnostics(source, ExtensionPolicy::Allow).0,
+            [SemanticErrorKind::NonConstantInitializer],
+            "{source}"
         );
     }
 }

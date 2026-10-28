@@ -240,17 +240,10 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                             // takes the literal from inside the wrappers GCC
                             // folds away, fewer of them inside braces, where
                             // Clang's evaluator still reads through them.
-                            let literal = if static_storage {
-                                let peel = if std::ptr::eq(init, initializer)
-                                    || self.context.configuration.folds_compound_literals()
-                                {
-                                    Peel::Whole
-                                } else {
-                                    Peel::Element
-                                };
-                                self.whole_compound_literal(target, e, peel)
+                            let (literal, converted) = if static_storage {
+                                self.static_literal(target, e, std::ptr::eq(init, initializer))
                             } else {
-                                None
+                                (None, None)
                             };
                             // C99 §6.7.8p13: a structure or union initialized
                             // by an expression of its type is copied whole, as
@@ -268,13 +261,13 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                                 );
                             } else {
                                 plan.store(
-                                    literal.unwrap_or(e),
+                                    literal.or(converted).unwrap_or(e),
                                     destination,
                                     site.bits,
                                     site.scalar_source.unwrap_or(e.source_vectors),
                                 );
                             }
-                            if let Some(literal) = literal {
+                            if let Some(literal) = literal.or(converted) {
                                 self.check_static_compound_literal(e, literal);
                             } else if static_storage {
                                 self.check_static_initializer(target, info, e, bit_field);
@@ -760,6 +753,33 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         }
     }
 
+    /// The compound literal whose bytes `e` gives a static object or
+    /// element of type `target`, and else the arithmetic literal of another
+    /// type whose value GCC converts to an element's type. The initializer
+    /// is `whole` when it is the object's own, without braces; inside
+    /// braces GCC peels fewer wrappers, where Clang's evaluator still reads
+    /// through them.
+    /// GNU extension: GCC manual, "Compound Literals".
+    fn static_literal(
+        &mut self,
+        target: TypeId,
+        e: &'tu Expression<'tu>,
+        whole: bool,
+    ) -> (Option<&'tu Expression<'tu>>, Option<&'tu Expression<'tu>>) {
+        let peel = if whole || self.context.configuration.folds_compound_literals() {
+            Peel::Whole
+        } else {
+            Peel::Element
+        };
+        let literal = self.whole_compound_literal(target, e, peel);
+        let converted = if whole || literal.is_some() {
+            None
+        } else {
+            self.converted_element_literal(target, e)
+        };
+        (literal, converted)
+    }
+
     /// Checks the compound literal `literal`, which
     /// [`Self::whole_compound_literal`] found in `e`, as the initializer of a
     /// static object, which GCC and Clang accept as if its braced list were
@@ -804,9 +824,36 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
     fn whole_compound_literal(
         &mut self,
         target: TypeId,
-        mut e: &'tu Expression<'tu>,
+        e: &'tu Expression<'tu>,
         peel: Peel,
     ) -> Option<&'tu Expression<'tu>> {
+        let target = self.types.non_atomic(target);
+        let record = matches!(
+            self.types.nodes[target.index],
+            TypeKind::Tag(id) if self.types.tags[id].kind != TagKind::Enum
+        );
+        let (e, reference) = self.peel_compound_literal(target, e, peel)?;
+        let literal = self.expression_info(e).ty;
+        let fits = record || self.compatible_value(literal, target);
+        let fits = match reference {
+            // Clang reads an atomic literal only as a whole initializer.
+            | Some(_) if self.context.configuration.folds_compound_literals() =>
+                fits && self.types.non_atomic(literal) == literal,
+            | Some(reference) => self.exact_literal_type(e) && literal.index == reference.index,
+            | None => fits,
+        };
+        fits.then_some(e)
+    }
+
+    /// The compound literal inside the wrappers `peel` allows around `e`,
+    /// the initializer of an object of type `target`, and the reference
+    /// type of the outermost cast or `?:` among them, if any.
+    fn peel_compound_literal(
+        &mut self,
+        target: TypeId,
+        mut e: &'tu Expression<'tu>,
+        peel: Peel,
+    ) -> Option<(&'tu Expression<'tu>, Option<TypeId>)> {
         let target = self.types.non_atomic(target);
         let record = matches!(
             self.types.nodes[target.index],
@@ -816,10 +863,14 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         if !record && !scalar {
             return None;
         }
-        // GCC folds a cast away only inside one of the object's own type,
-        // since it never folds the implicit conversion to that type; Clang's
-        // evaluator reads through that conversion too.
-        let mut outermost = true;
+        // GCC folds a pair of conversions away only where the literal has
+        // exactly the type of the outermost cast or `?:` around it, its
+        // reference type, which must be the object's own type, qualifiers
+        // aside: it never folds the implicit conversion to the object's
+        // type. Clang's evaluator reads through any conversion that keeps
+        // the value.
+        let clang = self.context.configuration.folds_compound_literals();
+        let mut reference: Option<TypeId> = None;
         loop {
             e = match e.kind {
                 | ExpressionType::Parenthesized { expression } => expression,
@@ -853,20 +904,25 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 | _ if peel == Peel::Element => return None,
                 | ExpressionType::Cast {
                     operand_expression, ..
-                } if {
+                } => {
                     let ty = self.expression_info(e).ty;
-                    if std::mem::take(&mut outermost)
-                        && !self.context.configuration.folds_compound_literals()
-                    {
-                        self.compatible_value(ty, target)
-                    } else {
-                        self.round_trips(ty, target)
+                    let peeled = match reference {
+                        | Some(reference) => self.round_trips(ty, reference),
+                        | None if clang => self.round_trips(ty, target),
+                        | None => self.compatible_value(ty, target),
+                    };
+                    if !peeled {
+                        return None;
                     }
-                } =>
-                    operand_expression,
-                | ExpressionType::Conditional(c)
-                    if self.compatible_value(self.expression_info(e).ty, target) =>
-                {
+                    _ = reference.get_or_insert(ty);
+                    operand_expression
+                },
+                | ExpressionType::Conditional(c) => {
+                    let ty = self.expression_info(e).ty;
+                    if !self.compatible_value(ty, reference.unwrap_or(target)) {
+                        return None;
+                    }
+                    _ = reference.get_or_insert(ty);
                     let condition = self.expression_info(c.condition_expression);
                     if condition.constant != ConstantClass::Arithmetic {
                         return None;
@@ -880,10 +936,24 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 | _ => return None,
             };
         }
-        if scalar && !self.compatible_value(self.expression_info(e).ty, target) {
-            return None;
-        }
-        Some(e)
+        Some((e, reference))
+    }
+
+    /// Whether the compound literal `literal` has a type GCC's folder
+    /// treats as one cast's: written without a typedef name, qualifiers or
+    /// `_Atomic`, so that it is the main variant of its type.
+    /// GNU extension: GCC manual, "Compound Literals"; C99 §6.7.7
+    /// paragraph 3, p. 123; PDF p. 135 (a typedef name only names a type).
+    fn exact_literal_type(&self, literal: &'tu Expression<'tu>) -> bool {
+        let ExpressionType::CompoundLiteral { type_name, .. } = literal.kind else {
+            return false;
+        };
+        let ty = self.expression_info(literal).ty;
+        !matches!(
+            type_name.declaration_specifiers.type_specifiers,
+            super::super::parsing::declaration_syntax::TypeSpecifiers::TypedefName(_)
+        ) && ty.qualifiers.is_empty()
+            && !matches!(self.types.nodes[ty.index], TypeKind::Atomic(_))
     }
 
     /// Whether values of types `a` and `b` have compatible types, atomic
@@ -971,15 +1041,31 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         initializer: &'tu Initializer<'tu>,
     ) {
         let ty = info.ty;
-        if !self.context.configuration.folds_compound_literals()
-            || !self.arithmetic(ty)
-            || self.types.non_atomic(ty) != ty
-            || ty.qualifiers.contains(TypeQualifiers::VOLATILE)
+        if self.context.configuration.folds_compound_literals()
+            && !ty.qualifiers.contains(TypeQualifiers::VOLATILE)
+            && self.literal_value(info, initializer)
         {
-            return;
+            info.folding = ConstantFolding::CompoundLiteral;
+        }
+    }
+
+    /// Gives `info`, an arithmetic, non-atomic compound literal's record,
+    /// the value its initializer stores converted to its type, and returns
+    /// whether that value is an arithmetic constant; the literal stays no
+    /// integer constant expression.
+    /// C99: §6.5.2.5 paragraph 4, p. 75; PDF p. 87; §6.7.8 paragraph 11,
+    /// p. 126; PDF p. 138.
+    fn literal_value(
+        &mut self,
+        info: &mut super::ExpressionInfo<'tu>,
+        initializer: &'tu Initializer<'tu>,
+    ) -> bool {
+        let ty = info.ty;
+        if !self.arithmetic(ty) || self.types.non_atomic(ty) != ty {
+            return false;
         }
         let Some(&plan) = self.initializers.plan(initializer) else {
-            return;
+            return false;
         };
         let value = match plan.operations {
             | [
@@ -997,14 +1083,48 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 zero.constant = ConstantClass::Arithmetic;
                 zero
             },
-            | _ => return,
+            | _ => return false,
         };
         if value.constant != ConstantClass::Arithmetic {
-            return;
+            return false;
         }
         self.fold_conversion(info, ty, value);
         info.ice = false;
-        info.folding = ConstantFolding::CompoundLiteral;
+        info.constant == ConstantClass::Arithmetic
+    }
+
+    /// The arithmetic compound literal of another type than `target`'s
+    /// that GCC accepts as an element of a static object's braced list,
+    /// inside the wrappers [`Peel::Element`] allows: GCC takes the value
+    /// the literal's own initializer gives it and converts that to the
+    /// element's type (`static double a[1] = { (int){1} };`), unlike a
+    /// whole initializer; Clang's evaluator converts it too, also through
+    /// `*&`. The literal's record gets that value, which lowering stores as
+    /// the element's.
+    /// GNU extension: GCC manual, "Compound Literals"; C99 §6.7.8
+    /// paragraph 11, p. 126; PDF p. 138.
+    fn converted_element_literal(
+        &mut self,
+        target: TypeId,
+        e: &'tu Expression<'tu>,
+    ) -> Option<&'tu Expression<'tu>> {
+        if !self.arithmetic(target) {
+            return None;
+        }
+        let (literal, None) = self.peel_compound_literal(target, e, Peel::Element)? else {
+            return None;
+        };
+        let ExpressionType::CompoundLiteral { initializer, .. } = literal.kind else {
+            return None;
+        };
+        let key = std::ptr::from_ref(literal).addr();
+        let &index = self.expression_indices.get(&key)?;
+        let mut info = self.expressions[index];
+        if !self.literal_value(&mut info, initializer) {
+            return None;
+        }
+        self.expressions[index] = info;
+        Some(literal)
     }
 
     /// Applies [`Self::check_static_initializer`] to every value the plan

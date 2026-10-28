@@ -714,8 +714,17 @@ The following vocabulary entries retain the established diagnostic contracts:
   type with a constant condition selects. GCC never folds away the
   implicit conversion to the object's type, so `static int x =
   (unsigned)(int){3};` and `static float f = (double)(float){1};` stay
-  non-constant. Lowering copies the bytes of the literal's own
-  initializer. Under the GCC identity Warn/Deny report "'compound literal
+  non-constant. A cast takes its type's main variant (GCC's
+  `build_c_cast`), and a pair of conversions folds away only to an operand
+  of exactly that type, so inside a cast or `?:` the literal must have
+  exactly the outermost one's type: written without a typedef name,
+  qualifiers or `_Atomic`, and not an enumeration where the cast is its
+  integer type (`(int)(I){3}`, `(int)(const int){3}` and `(int)(enum
+  E){A}` stay non-constant). Without a cast the literal's type need only
+  be compatible with the object's. Lowering copies the bytes of the
+  literal's own initializer. Inside braces GCC takes the value of a bare
+  arithmetic literal of any type and converts it to the element's type
+  (`static double a[1] = { (int){1} };`), so bcc stores that value. Under the GCC identity Warn/Deny report "'compound literal
   as a constant initializer' is a GNU extension" where GCC says
   "initializer element is not constant [-Wpedantic]"; Clang reports
   nothing, even with `-pedantic-errors`, so the Clang identity does not
@@ -2186,11 +2195,15 @@ then convert it to the object's type too (`(unsigned)(int){-1}` for an
 `int`), and the conversions it passes through must keep every value, as
 Clang's evaluator converts through them. Function code still loads the
 literal, as Clang emits it, so `__builtin_constant_p((g, (int){1}))` stays 0
-there; under the GCC identity any query of a literal is 0, as GCC answers
-even optimizing. A block-scope static pointer to an array keeps a bound
-Clang does not fold, a compound literal's or an address difference's, as a
-variable bound without a diagnostic; Clang folds only a static object's own
-array bounds there. A file-scope literal has static storage and a
+there. Under the GCC identity a query whose evaluated operands read a
+literal is 0, as GCC answers even optimizing; operands that are never
+evaluated (a `_Generic` controlling expression, `sizeof`, and the operand a
+constant `?:`, `&&`, `||` or `__builtin_choose_expr` skips) do not count, so
+`__builtin_constant_p(1 ? 2 : (int){3})` is 1. A block-scope static pointer
+to an array keeps a bound Clang does not fold, a compound literal's or an
+address difference's, as a variable bound without a diagnostic; Clang folds
+only where the type could not be variably modified: a static object's own
+array bounds, and every bound of an extern object's type. A file-scope literal has static storage and a
 block-scope one automatic storage (C99 §6.5.2.5p6), so only the former's
 address is an address constant (§6.6p9), under both identities.
 
@@ -2218,6 +2231,22 @@ These cases remain different from the compiler each identity claims:
 - C23 `constexpr` compound literals (`(constexpr int){3}`), which GCC 15
   accepts in integer constant expressions and the bundled Clang does not
   parse, stay unmodeled with `constexpr` objects: lowering refuses them.
+- GCC folds a `?:` before the casts around it, so `static int x = (int)(1
+  ? (long)(int){3} : 0L);` is constant for GCC; bcc requires the `?:` to
+  have the object's type and rejects it.
+- A block-scope static object whose member is a pointer to an array with a
+  literal bound (`static struct { char (*p)[(int){3}]; } s;`) and a static
+  array of pointers to such arrays (`static char (*a[2])[(int){3}];`): GCC
+  accepts both (the first with a `-Wpedantic` warning) and Clang folds the
+  first with `-Wgnu-folding-constant` and accepts the second silently; the
+  GCC identity rejects both as variably modified statics, and the Clang
+  identity warns about the second too.
+- Inside braces only an arithmetic literal converts to another element
+  type; a pointer literal of another pointer type (`{ (int *){&g} }` for a
+  `const int *`) stays rejected under both identities, and under the Clang
+  identity a pointer literal under a qualifying cast (`static const int *x
+  = (const int *)(int *){&g};`) too. Clang's `-Wenum-conversion` for
+  `(enum B)(enum A){A0}` is not reproduced.
 - GCC prints a `-Wpedantic` warning before its error for a literal inside
   braces within a cast; bcc prints the error alone. Clang's
   `-Wconstant-conversion` and overflow warnings for a literal's

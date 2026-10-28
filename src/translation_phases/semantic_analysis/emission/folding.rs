@@ -81,6 +81,7 @@ use crate::{
             },
         },
         preprocessing::{
+            KeywordTokenType,
             LiteralEncoding,
             StringTokenType,
         },
@@ -1499,10 +1500,20 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             })
     }
 
-    /// Whether `operand` holds a compound literal outside `sizeof` and
-    /// `_Alignof`. GNU extension: GCC manual, "Other Builtins",
-    /// `__builtin_constant_p`; C99 §6.5.2.5 paragraph 4, p. 75; PDF p. 87.
+    /// Whether evaluating `operand` reads a compound literal: the operands
+    /// `sizeof`, `_Alignof` and a `_Generic` controlling expression never
+    /// evaluate, nor do the operand of `?:`, `&&`, `||` or
+    /// `__builtin_choose_expr` that a constant condition skips. GNU
+    /// extension: GCC manual, "Other Builtins", `__builtin_constant_p`;
+    /// C99 §6.5.2.5 paragraph 4, p. 75; PDF p. 87; §6.5.13-§6.5.15,
+    /// pp. 89-90; PDF pp. 101-102.
     fn reads_compound_literal(&self, operand: &'tu Expression<'tu>) -> bool {
+        let truth = |e: &'tu Expression<'tu>| {
+            let info = self.expression_info(e);
+            (info.constant == ConstantClass::Arithmetic)
+                .then(|| Self::constant_truth(info))
+                .flatten()
+        };
         let mut work = ArenaVec::new_in(self.scratch);
         work.push(operand);
         while let Some(expression) = work.pop() {
@@ -1512,6 +1523,34 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 | ExpressionType::SizeofType(_)
                 | ExpressionType::AlignofExpr(_)
                 | ExpressionType::AlignofType(_) => {},
+                | ExpressionType::Generic(_) => {
+                    if let Some(selected) = self.expression_info(expression).selected_expression {
+                        work.push(selected);
+                    }
+                },
+                | ExpressionType::Builtin(builtin)
+                    if builtin.keyword == KeywordTokenType::BuiltinChooseExpr =>
+                    if let Some(selected) = self.expression_info(expression).selected_expression {
+                        work.push(selected);
+                    },
+                | ExpressionType::Conditional(c) => {
+                    work.push(c.condition_expression);
+                    match truth(c.condition_expression) {
+                        | Some(true) => work.push(c.then_expression),
+                        | Some(false) => work.push(c.else_expression),
+                        | None => work.extend([c.then_expression, c.else_expression]),
+                    }
+                },
+                | ExpressionType::Binary {
+                    operator: operator @ (BinaryOperator::LogicalAnd | BinaryOperator::LogicalOr),
+                    left_expression,
+                    right_expression,
+                } => {
+                    work.push(left_expression);
+                    if truth(left_expression) != Some(operator == BinaryOperator::LogicalOr) {
+                        work.push(right_expression);
+                    }
+                },
                 | _ => super::labels::expression_children(self.scratch, expression, |child| {
                     work.push(child);
                 }),

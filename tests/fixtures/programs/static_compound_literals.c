@@ -26,6 +26,11 @@ static struct pair through = *&(struct pair){17, 18};
 static struct pair chosen = 1.0 ? (struct pair){19, 20} : (struct pair){0, 0};
 static int elements[3] = { (int){21}, ((int){22}), *&(int){23} };
 static struct { int x : 4; unsigned y : 3; } bits = { (int){-2}, (unsigned){5} };
+// Inside braces a literal of another arithmetic type converts its value.
+static double converted_elements[2] = { (int){1}, (char){300} };
+static int truncated_element[1] = { (double){2.5} };
+static __bf16 brain_element[1] = { *&(_Float16){0.1} };
+static struct { int x : 4; } converted_bits = { (double){-2.5} };
 
 // The half-precision types, through the conversions GCC folds away: it
 // keeps (_Float16)(__bf16) unrounded, as both are 16 bits wide, and its
@@ -126,6 +131,17 @@ int main(void) {
     printf("%a %a %a %a %d\n", (double)half_product, (double)mixed_halves,
            (double)storage_half, (double)storage_product, empty_braces);
 #endif
+    printf("%a %a %d %a %d\n", converted_elements[0], converted_elements[1],
+           truncated_element[0], (double)brain_element[0], converted_bits.x);
+    // GCC's __builtin_constant_p reads no compound literal that is
+    // evaluated; Clang's reads a scalar one.
+    printf("%d %d %d %d %d %d %d\n", __builtin_constant_p((int){1}),
+           __builtin_constant_p((int){1} ? 2 : 3),
+           __builtin_constant_p(_Generic((int){1}, int: 1, default: 2)),
+           __builtin_constant_p(0 && (int){1}),
+           __builtin_constant_p(1 ? 2 : (int){3}),
+           __builtin_constant_p(1 || (int){1}),
+           __builtin_constant_p(__builtin_choose_expr(1, 4, (int){3})));
     printf("%d\n", local());
     return 0;
 }
