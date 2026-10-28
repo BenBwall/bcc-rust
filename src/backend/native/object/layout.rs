@@ -385,6 +385,7 @@ impl<'a> Object<'a> {
             kind: 0,
             visibility: 0,
             alias: None,
+            common: false,
         });
         _ = self.names.insert(name, id);
         id

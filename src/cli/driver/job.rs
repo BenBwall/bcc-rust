@@ -41,6 +41,7 @@ use crate::{
     translation_phases::Context,
     util::bump::{
         ArenaString,
+        ArenaVec,
         Bump,
     },
 };
@@ -124,8 +125,17 @@ pub(super) fn compile(
         resource: directories.resource,
         after:    tu.alloc_slice_fill_iter(directories.after.iter().map(AsRef::as_ref)),
     };
+    if args.driver.verbose {
+        dependencies::print_search(&search);
+    }
     let mut context = Context::with_configuration(&tu, args.configuration());
     context.library_builtins = args.library_builtins(&tu);
+    context.code_assumptions = args.code_assumptions();
+    if args.driver.header_tree || args.driver.show_includes {
+        context.include_entries = Some(ArenaVec::new_in(&tu));
+    }
+    context.missing_headers_generated =
+        args.driver.generated_dependencies && matches!(job, Job::Scan);
     // GCC passes no preprocessing options to `-fpreprocessed` input.
     if matches!(source, Source::Preprocessed(_)) {
         context.preprocessed_input = true;
@@ -144,6 +154,9 @@ pub(super) fn compile(
     )?;
     if let Some(dependencies) = dependencies {
         dependencies::write(&context, args, &dependencies)?;
+    }
+    if args.driver.header_tree {
+        dependencies::header_tree(&context);
     }
     if args.driver.show_includes {
         dependencies::show_includes(&context);
@@ -275,7 +288,10 @@ fn report_unreadable(args: &Cli, path: &Path, error: &io::Error, arena: &Bump) {
         | Format::Clang | Format::Msvc | Format::MsvcClassic | Format::MsvcCaret => report_stderr(
             format_args!("error: error reading '{path}': {reason}\n1 error generated."),
         ),
-        | Format::Tcc => report_stderr(format_args!("tcc: error: file '{path}' not found")),
+        | Format::Tcc => report_stderr(format_args!(
+            "{}: error: file '{path}' not found",
+            args.driver.driver_name.as_deref().unwrap_or("tcc")
+        )),
     }
 }
 

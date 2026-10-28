@@ -249,6 +249,8 @@ fn lower_unit<'tu, 'ir>(
         } else {
             crate::configuration::LibraryBuiltins::None
         });
+    unit.module
+        .set_null_pointer_is_valid(context.code_assumptions.null_pointer_is_valid);
     let plain_inline = options.plain_inline && unit.lower_plain_inline_bodies();
     let functions = unit.declare_items(syntax, &mut errors);
     let mut function_sources = ArenaVec::new_in(arena);

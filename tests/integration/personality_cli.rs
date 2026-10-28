@@ -1090,8 +1090,8 @@ mod tests {
             ),
             (
                 "--clang-mode",
-                "-fno-delete-null-pointer-checks",
-                "clang: error: '-fno-delete-null-pointer-checks' is not supported",
+                "-frounding-math",
+                "clang: error: '-frounding-math' is not supported",
             ),
             (
                 "--tcc-mode",
@@ -1933,12 +1933,12 @@ mod tests {
                 .stderr(std::process::Stdio::piped())
                 .spawn()
                 .unwrap();
-            child
-                .stdin
-                .take()
-                .unwrap()
-                .write_all(b"int from_stdin;\n")
-                .unwrap();
+            // A driver that refuses standard input exits without reading
+            // it, which may close the pipe before this write.
+            let written = child.stdin.take().unwrap().write_all(b"int from_stdin;\n");
+            if let Err(error) = written {
+                assert_eq!(error.kind(), std::io::ErrorKind::BrokenPipe, "{error}");
+            }
             child.wait_with_output().unwrap()
         };
         for mode in ["--gcc-mode", "--clang-mode"] {
@@ -2406,5 +2406,954 @@ mod tests {
             "{}",
             stderr(&output)
         );
+    }
+
+    /// Messages from bcc's own driver name the driver as the compiler does:
+    /// `gcc: warning: ...`, `tcc: ...`, `cl : Command line warning : ...`,
+    /// and the name the driver was run as; bcc's own command line names
+    /// none.
+    #[test]
+    fn driver_messages_name_the_driver() {
+        let directory = Directory::new();
+        directory.write("a.c", "int a;\n");
+        directory.write("b.o", "");
+        let message = "b.o: linker input file unused because linking not done\n";
+        for (mode, prefix) in [
+            ("--gcc-mode", "gcc: warning: "),
+            ("--tcc-mode", "tcc: warning: "),
+            ("", "warning: "),
+        ] {
+            let output = directory.bcc(mode, &["-c", "a.c", "b.o"]);
+            succeeds(&output);
+            assert_eq!(stderr(&output), format!("{prefix}{message}"), "{mode}");
+        }
+        // TCC words `-o` with `-c` and several inputs itself.
+        directory.write("b.c", "int b;\n");
+        let output = directory.bcc("--tcc-mode", &["-c", "a.c", "b.c", "-o", "x.o"]);
+        assert_eq!(output.status.code(), Some(1));
+        assert_eq!(
+            stderr(&output),
+            "tcc: error: cannot specify output file with -c many files\n"
+        );
+        // `cl`'s form has no invented code. Without the Windows SDK's
+        // libraries the link fails in bcc's driver.
+        directory.write("m.c", "int main(void) { return 0; }\n");
+        for (mode, prefix) in [
+            (
+                "--msvc-mode",
+                "cl : Command line error : cannot build `m.exe`: ",
+            ),
+            ("--clang-cl-mode", "clang-cl: error: cannot build `m.exe`: "),
+        ] {
+            let output = directory.bcc(mode, &["/nologo", "m.c"]);
+            if !output.status.success() {
+                assert!(stderr(&output).starts_with(prefix), "{}", stderr(&output));
+            }
+        }
+        // Run under another name, the driver uses that name.
+        let gcc = directory.path("x86_64-linux-gnu-gcc");
+        if std::os::unix::fs::symlink(env!("CARGO_BIN_EXE_bcc-rust"), &gcc).is_ok() {
+            let output = Command::new(&gcc)
+                .args(["-c", "a.c", "b.o"])
+                .current_dir(&directory.0)
+                .output()
+                .unwrap();
+            succeeds(&output);
+            assert_eq!(
+                stderr(&output),
+                format!("x86_64-linux-gnu-gcc: warning: {message}")
+            );
+        }
+    }
+
+    /// Clang reports the linker options and the options of the link that a
+    /// command line which does not link leaves unused, the linker inputs
+    /// first and in order with the input files, then the other unused
+    /// arguments in order; GCC reports neither.
+    #[test]
+    fn clang_reports_unused_link_options() {
+        let directory = Directory::new();
+        directory.write("a.c", "int a;\n");
+        directory.write("b.o", "");
+        let output = directory.bcc(
+            "--clang-mode",
+            &[
+                "-c",
+                "a.c",
+                "-shared-libgcc",
+                "-T",
+                "x.ld",
+                "-u",
+                "sym",
+                "-L",
+                "/a",
+                "-Xlinker",
+                "-y",
+                "-l",
+                "m",
+                "b.o",
+                "-z",
+                "now",
+                "-Wl,-a,-b",
+                "-s",
+            ],
+        );
+        succeeds(&output);
+        let unused =
+            |what: &str| format!("clang: warning: {what} [-Wunused-command-line-argument]\n");
+        let expected: String = [
+            "-Xlinker -y: 'linker' input unused",
+            "-lm: 'linker' input unused",
+            "b.o: 'linker' input unused",
+            "-z now: 'linker' input unused",
+            "-Wl,-a,-b: 'linker' input unused",
+            "argument unused during compilation: '-shared-libgcc'",
+            "argument unused during compilation: '-T x.ld'",
+            "argument unused during compilation: '-u sym'",
+            "argument unused during compilation: '-L/a'",
+            "argument unused during compilation: '-s'",
+        ]
+        .into_iter()
+        .map(unused)
+        .collect();
+        assert_eq!(stderr(&output), expected);
+        // `-fsyntax-only` leaves the stage unused; `-E` leaves
+        // `-fsyntax-only` unused, in order with the link's options.
+        let output = directory.bcc("--clang-mode", &["-L/tmp", "-fsyntax-only", "-c", "a.c"]);
+        succeeds(&output);
+        assert_eq!(
+            stderr(&output),
+            [
+                "argument unused during compilation: '-L/tmp'",
+                "argument unused during compilation: '-c'",
+            ]
+            .into_iter()
+            .map(unused)
+            .collect::<String>()
+        );
+        let output = directory.bcc(
+            "--clang-mode",
+            &["-fsyntax-only", "-L/tmp", "-E", "a.c", "-o", "a.i", "-lm"],
+        );
+        succeeds(&output);
+        assert_eq!(
+            stderr(&output),
+            [
+                "-lm: 'linker' input unused",
+                "argument unused during compilation: '-fsyntax-only'",
+                "argument unused during compilation: '-L/tmp'",
+            ]
+            .into_iter()
+            .map(unused)
+            .collect::<String>()
+        );
+        // `-Werror` makes the first one an error.
+        let output = directory.bcc("--clang-mode", &["-c", "-lm", "a.c", "-Werror"]);
+        assert_eq!(output.status.code(), Some(1));
+        assert_eq!(
+            stderr(&output),
+            "clang: error: -lm: 'linker' input unused [-Werror,-Wunused-command-line-argument]\n"
+        );
+        // A command line that links uses them all, and GCC reports none.
+        let output = directory.bcc("--gcc-mode", &["-c", "a.c", "-lm", "-L/tmp", "-Wl,-x"]);
+        succeeds(&output);
+        assert_eq!(stderr(&output), "");
+    }
+
+    /// TCC skips a `#!` line that starts a file, so a script such as
+    /// `#!/usr/bin/tcc -run` runs; GCC rejects the line.
+    #[test]
+    fn tcc_skips_a_script_line() {
+        let directory = Directory::new();
+        directory.write(
+            "script.c",
+            "#!/usr/bin/tcc -run\n#include <stdio.h>\nint main(int argc, char **argv) {\n  \
+             printf(\"%d %s\\n\", argc, argv[1]);\n  return 3;\n}\n",
+        );
+        let output = directory.bcc("--tcc-mode", &["-run", "script.c", "one"]);
+        assert_eq!(output.status.code(), Some(3), "{}", stderr(&output));
+        assert_eq!(stdout(&output), "2 one\n");
+        assert_eq!(stderr(&output), "");
+        // Only at the start of the file.
+        directory.write("late.c", "int x;\n#!/usr/bin/tcc -run\n");
+        let output = directory.bcc("--tcc-mode", &["-c", "late.c"]);
+        assert!(stderr(&output).contains("late.c:2:"), "{}", stderr(&output));
+        let output = directory.bcc("--gcc-mode", &["-c", "script.c"]);
+        assert!(
+            stderr(&output).contains("script.c:1:"),
+            "{}",
+            stderr(&output)
+        );
+    }
+
+    /// `-###` prints each step as GCC and Clang print a subprocess, naming
+    /// the running bcc, which runs it in process; `-v` prints each step
+    /// before running it, and bcc's driver then prints its header search
+    /// and the commands it runs, the bundled clang's link among them.
+    #[test]
+    fn verbose_and_dry_run_print_the_commands() {
+        let directory = Directory::new();
+        directory.write("a.c", "int main(void) { return 0; }\n");
+        directory.write("b.c", "int b;\n");
+        let exe = std::fs::canonicalize(env!("CARGO_BIN_EXE_bcc-rust")).unwrap();
+        let line = |options: &str| format!(" \"{}\" {options}\n", exe.display());
+        let output = directory.bcc("--clang-mode", &["-###", "-c", "a.c"]);
+        succeeds(&output);
+        assert!(
+            stderr(&output).ends_with(&line(
+                "\"--compiler-identity=clang\" \"--diagnostic-format=clang\" \
+                 \"--target=x86_64-unknown-linux-gnu\" \"--driver-name=clang\" \"a.c\" \"-c\""
+            )),
+            "{}",
+            stderr(&output)
+        );
+        assert!(!directory.path("a.o").exists());
+        let output = directory.bcc("--gcc-mode", &["-v", "-c", "a.c"]);
+        succeeds(&output);
+        let text = stderr(&output);
+        assert!(text.starts_with("Target: x86_64-linux-gnu\n"), "{text}");
+        // GCC's `-v` quotes nothing, its `-###` only what the shell needs.
+        assert!(
+            text.contains(&format!(
+                " {} -v --compiler-identity=gcc --diagnostic-format=gcc \
+                 --target=x86_64-unknown-linux-gnu --driver-name=gcc a.c -c\n",
+                exe.display()
+            )),
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                "#include \"...\" search starts here:\n#include <...> search starts here:\n"
+            ),
+            "{text}"
+        );
+        assert!(text.ends_with("End of search list.\n"), "{text}");
+        assert!(directory.path("a.o").exists());
+        // bcc's own `-v` prints the commands it runs.
+        if cfg!(all(target_os = "linux", target_env = "gnu")) {
+            let output = directory.bcc("", &["-v", "a.c", "b.c", "-o", "ab"]);
+            succeeds(&output);
+            let text = stderr(&output);
+            let clang = text
+                .lines()
+                .find(|printed| printed.contains("\"-fuse-ld=lld\""))
+                .unwrap_or_else(|| panic!("{text}"));
+            assert!(clang.starts_with(" \""), "{clang}");
+            assert!(clang.contains("\"-o\" \"ab\""), "{clang}");
+        }
+    }
+
+    /// `-H` prints each header an `#include` enters, after a dot per level
+    /// of nesting, and leaves out an inclusion whose include guard is
+    /// already defined, as GCC and Clang do; Clang names a header beside
+    /// the main file `./a.h`. `cl /showIncludes` indents by the nesting.
+    #[test]
+    fn header_tree_follows_each_compiler() {
+        let directory = Directory::new();
+        directory.write(
+            "guarded.h",
+            "/* c */\n#ifndef G\n#define G\n#include \"b.h\"\n#endif\n",
+        );
+        directory.write("defined.h", "#if !defined(D)\n#define D\n#endif\n\n");
+        directory.write("open.h", "#ifndef O\n#define O\n#endif\nint o;\n");
+        directory.write("b.h", "");
+        directory.write(
+            "h.c",
+            "#include \"guarded.h\"\n#include \"guarded.h\"\n#include \"defined.h\"\n#include \
+             \"defined.h\"\n#include \"open.h\"\n#include \"open.h\"\n#include \"b.h\"\n",
+        );
+        let output = directory.bcc("--gcc-mode", &["-H", "-fsyntax-only", "h.c"]);
+        succeeds(&output);
+        assert_eq!(
+            stderr(&output),
+            ". guarded.h\n.. b.h\n. defined.h\n. open.h\n. open.h\n. b.h\n"
+        );
+        let output = directory.bcc("--clang-mode", &["-H", "-fsyntax-only", "h.c"]);
+        succeeds(&output);
+        assert_eq!(
+            stderr(&output),
+            ". ./guarded.h\n.. ./b.h\n. ./defined.h\n. ./open.h\n. ./open.h\n. ./b.h\n"
+        );
+        let output = directory.bcc("--msvc-mode", &["/nologo", "/Zs", "/showIncludes", "h.c"]);
+        succeeds(&output);
+        assert_eq!(
+            stderr(&output),
+            "Note: including file: guarded.h\nNote: including file:  b.h\nNote: including file: \
+             defined.h\nNote: including file: open.h\nNote: including file: open.h\nNote: \
+             including file: b.h\n"
+        );
+    }
+
+    /// `-MG` takes a header that cannot be found to be generated: the
+    /// `-M` and `-MM` rules list it as written, in order, without an error.
+    /// GCC's `-MM` leaves out a `<...>` one; Clang lists it. Without `-M`
+    /// or `-MM` each compiler refuses it.
+    #[test]
+    fn missing_headers_are_generated_under_mg() {
+        let directory = Directory::new();
+        directory.write("a.h", "#include \"b.h\"\n");
+        directory.write("b.h", "int b;\n");
+        directory.write(
+            "g.c",
+            "#include \"gen.h\"\n#include <missing/sys.h>\n#include \"a.h\"\nint y;\n",
+        );
+        for (mode, option, expected) in [
+            ("--gcc-mode", "-M", "g.o: g.c gen.h missing/sys.h a.h b.h\n"),
+            ("--gcc-mode", "-MM", "g.o: g.c gen.h a.h b.h\n"),
+            (
+                "--clang-mode",
+                "-M",
+                "g.o: g.c gen.h missing/sys.h a.h b.h\n",
+            ),
+            (
+                "--clang-mode",
+                "-MM",
+                "g.o: g.c gen.h missing/sys.h a.h b.h\n",
+            ),
+        ] {
+            let output = directory.bcc(mode, &[option, "-MG", "g.c"]);
+            succeeds(&output);
+            assert_eq!(stdout(&output), expected, "{mode} {option}");
+            assert_eq!(stderr(&output), "", "{mode} {option}");
+        }
+        for (mode, expected) in [
+            (
+                "--gcc-mode",
+                "gcc: error: '-MG' may only be used with '-M' or '-MM'\n",
+            ),
+            (
+                "--clang-mode",
+                "clang: error: option '-MG' requires '-M' or '-MM'\n",
+            ),
+        ] {
+            let output = directory.bcc(mode, &["-MD", "-MG", "-c", "g.c"]);
+            assert_eq!(output.status.code(), Some(1));
+            assert_eq!(stderr(&output), expected, "{mode}");
+        }
+        // Without `-MG` the missing header is an error.
+        let output = directory.bcc("--gcc-mode", &["-M", "g.c"]);
+        assert_eq!(output.status.code(), Some(1));
+    }
+
+    /// C23's `<float.h>` additions (`FLT_NORM_MAX`, `FLT_SNAN`, `INFINITY`,
+    /// `NAN`), with GCC's `FLT_IS_IEC_60559` family and
+    /// `__STDC_VERSION_FLOAT_H__` for the GCC identity; Clang's header also
+    /// gives them outside strict ISO modes, GCC's only in C23. The values
+    /// are GCC 15's and the pinned Clang's, with `<math.h>` before or after.
+    #[test]
+    fn c23_float_h_follows_each_compiler() {
+        let directory = Directory::new();
+        let program = "#include <stdio.h>\nint main(void) {\n  printf(\"%a %a %La %d %d %d \
+                       %d\\n\", FLT_NORM_MAX, DBL_NORM_MAX, LDBL_NORM_MAX, isnan(FLT_SNAN), \
+                       isnan(LDBL_SNAN), isinf(INFINITY), isnan(NAN));\n#ifdef FLT_IS_IEC_60559\n  \
+                       printf(\"%d %d %d %ld\\n\", FLT_IS_IEC_60559, DBL_IS_IEC_60559, \
+                       LDBL_IS_IEC_60559, (long)__STDC_VERSION_FLOAT_H__);\n#endif\n  return \
+                       0;\n}\n";
+        directory.write(
+            "first.c",
+            &format!("#include <float.h>\n#include <math.h>\n{program}"),
+        );
+        directory.write(
+            "last.c",
+            &format!("#include <math.h>\n#include <float.h>\n{program}"),
+        );
+        let values = "0x1.fffffep+127 0x1.fffffffffffffp+1023 0xf.fffffffffffffffp+16380 1 1 1 1\n";
+        if cfg!(all(target_os = "linux", target_env = "gnu")) {
+            for (mode, expected) in [
+                ("--gcc-mode", format!("{values}1 1 1 202311\n")),
+                ("--clang-mode", values.to_owned()),
+            ] {
+                for source in ["first.c", "last.c"] {
+                    let output =
+                        directory.bcc(mode, &["-std=c23", "-Wall", "-Werror", source, "-o", "f"]);
+                    succeeds(&output);
+                    let run = Command::new(directory.path("f")).output().unwrap();
+                    assert_eq!(stdout(&run), expected, "{mode} {source}");
+                }
+            }
+        }
+        let float_macros = |mode: &str, standard: &str| {
+            directory.write("float.c", "#include <float.h>\n");
+            let output = directory.bcc(mode, &[standard, "-E", "-dM", "float.c"]);
+            succeeds(&output);
+            stdout(&output)
+        };
+        for (mode, standard, defined) in [
+            ("--gcc-mode", "-std=gnu17", false),
+            ("--gcc-mode", "-std=c23", true),
+            ("--clang-mode", "-std=gnu17", true),
+            ("--clang-mode", "-std=c17", false),
+            ("--clang-mode", "-std=c23", true),
+        ] {
+            let listing = float_macros(mode, standard);
+            for name in ["FLT_SNAN", "LDBL_NORM_MAX", "INFINITY", "NAN"] {
+                assert_eq!(
+                    defines(&listing, name).is_some(),
+                    defined,
+                    "{mode} {standard} {name}"
+                );
+            }
+            assert_eq!(
+                defines(&listing, "FLT_IS_IEC_60559").is_some(),
+                defined && mode == "--gcc-mode",
+                "{mode} {standard}"
+            );
+        }
+        // C99's DECIMAL_DIG and C11's FLT_TRUE_MIN, which Clang's header
+        // gives in GNU89 too.
+        for (mode, defined) in [("--gcc-mode", false), ("--clang-mode", true)] {
+            let listing = float_macros(mode, "-std=gnu89");
+            assert_eq!(
+                defines(&listing, "DECIMAL_DIG").is_some(),
+                defined,
+                "{mode}"
+            );
+            assert_eq!(
+                defines(&listing, "FLT_TRUE_MIN").is_some(),
+                defined,
+                "{mode}"
+            );
+            assert!(defines(&listing, "FLT_EVAL_METHOD").is_none(), "{mode}");
+        }
+    }
+
+    /// `-fno-delete-null-pointer-checks` marks every function
+    /// `null_pointer_is_valid`, as Clang does, so LLVM keeps a null check
+    /// after a dereference; `-fwrapv-pointer` and `-fno-strict-overflow`
+    /// drop `inbounds` from pointer arithmetic, so it wraps; the last flag
+    /// of each pair wins, and every personality passes them on.
+    #[test]
+    fn pointer_assumptions_reach_llvm() {
+        let directory = Directory::new();
+        directory.write(
+            "p.c",
+            "int f(int *p) { int x = *p; if (!p) return -1; return x; }\nchar *h(char *p, long n) \
+             { return p + n; }\n",
+        );
+        let llvm = |options: &[&str]| {
+            let mut args = vec!["--emit=llvm"];
+            args.extend(options);
+            args.push("p.c");
+            let output = directory.bcc("", &args);
+            succeeds(&output);
+            stdout(&output)
+        };
+        let plain = llvm(&[]);
+        assert!(!plain.contains("null_pointer_is_valid"), "{plain}");
+        assert!(plain.contains("getelementptr inbounds i8"), "{plain}");
+        let null = llvm(&["-fno-delete-null-pointer-checks"]);
+        assert!(
+            null.contains("attributes #0 = { null_pointer_is_valid }"),
+            "{null}"
+        );
+        let restored = llvm(&[
+            "-fno-delete-null-pointer-checks",
+            "-fdelete-null-pointer-checks",
+        ]);
+        assert!(!restored.contains("null_pointer_is_valid"), "{restored}");
+        for options in [&["-fwrapv-pointer"][..], &["-fno-strict-overflow"]] {
+            let wrapping = llvm(options);
+            assert!(
+                wrapping.contains("getelementptr i8"),
+                "{options:?}: {wrapping}"
+            );
+            assert!(!wrapping.contains("inbounds"), "{options:?}: {wrapping}");
+        }
+        let strict = llvm(&["-fno-strict-overflow", "-fstrict-overflow"]);
+        assert!(strict.contains("getelementptr inbounds i8"), "{strict}");
+        // `-fno-strict-overflow` implies `-fwrapv`, as in GCC.
+        directory.write("w.c", "int w(int a) { return a + 1; }\n");
+        let output = directory.bcc("", &["--emit=llvm", "-fno-strict-overflow", "w.c"]);
+        succeeds(&output);
+        assert!(!stdout(&output).contains("add nsw"), "{}", stdout(&output));
+        for mode in ["--gcc-mode", "--clang-mode", "--tcc-mode"] {
+            let output = directory.bcc(
+                mode,
+                &[
+                    "-c",
+                    "-fno-delete-null-pointer-checks",
+                    "-fwrapv-pointer",
+                    "-fno-strict-overflow",
+                    "p.c",
+                ],
+            );
+            succeeds(&output);
+            assert_eq!(stderr(&output), "", "{mode}");
+        }
+    }
+
+    /// `-fcommon` makes an external tentative definition a common symbol on
+    /// the LLVM and native back ends, so two units' `int x;` link, and one
+    /// links with GCC's `-fcommon` objects, an initialized definition
+    /// winning; without it (the default, as in GCC 10 and Clang 11) they
+    /// clash. Thread-local objects and objects in a section stay ordinary
+    /// definitions, as in Clang.
+    #[test]
+    fn common_symbols_link_as_gcc_links_them() {
+        if !cfg!(all(target_os = "linux", target_env = "gnu")) {
+            return;
+        }
+        let directory = Directory::new();
+        directory.write(
+            "a.c",
+            "int x;\nint arr[10];\n__thread int t;\n__attribute__((section(\".mysec\"))) int \
+             sec;\nint get(void) { return x + arr[2] + t + sec; }\n",
+        );
+        directory.write(
+            "b.c",
+            "#include <stdio.h>\nint x;\nint arr[10];\nint get(void);\nint main(void) {\n  arr[2] \
+             = 5;\n  printf(\"%d\\n\", get());\n  return 0;\n}\n",
+        );
+        directory.write("init.c", "int x = 7;\nint arr[20];\n");
+        for backend in ["--backend=llvm", "--backend=native"] {
+            for (source, object) in [("a.c", "a.o"), ("b.c", "b.o")] {
+                let output = directory.bcc("", &[backend, "-fcommon", "-c", source, "-o", object]);
+                succeeds(&output);
+            }
+            let symbols = Command::new("nm").arg(directory.path("a.o")).output();
+            if let Ok(symbols) = symbols {
+                let symbols = stdout(&symbols);
+                for common in [" C x\n", " C arr\n"] {
+                    assert!(symbols.contains(common), "{backend}: {symbols}");
+                }
+                assert!(!symbols.contains(" C t\n"), "{backend}: {symbols}");
+                assert!(!symbols.contains(" C sec\n"), "{backend}: {symbols}");
+            }
+            let output = directory.bcc("", &["a.o", "b.o", "-o", "ab"]);
+            succeeds(&output);
+            let run = Command::new(directory.path("ab")).output().unwrap();
+            assert_eq!(stdout(&run), "5\n", "{backend}");
+            if Command::new("gcc").arg("--version").output().is_ok() {
+                let gcc = Command::new("gcc")
+                    .args(["-fcommon", "-c", "init.c", "-o", "init.o"])
+                    .current_dir(&directory.0)
+                    .status()
+                    .unwrap();
+                assert!(gcc.success());
+                let output = directory.bcc("", &["a.o", "b.o", "init.o", "-o", "abi"]);
+                succeeds(&output);
+                let run = Command::new(directory.path("abi")).output().unwrap();
+                assert_eq!(stdout(&run), "12\n", "{backend}");
+            }
+        }
+        // `-fno-common`, the default, defines `x` in each unit.
+        for (source, object) in [("a.c", "a.o"), ("b.c", "b.o")] {
+            let output =
+                directory.bcc("", &["-fcommon", "-fno-common", "-c", source, "-o", object]);
+            succeeds(&output);
+        }
+        let output = directory.bcc("", &["a.o", "b.o", "-o", "ab"]);
+        assert_eq!(output.status.code(), Some(1));
+        assert!(
+            stderr(&output).contains("duplicate symbol: x"),
+            "{}",
+            stderr(&output)
+        );
+        // The personalities pass both on.
+        let output = directory.bcc("--gcc-mode", &["-fcommon", "a.c", "b.c", "-o", "gab"]);
+        succeeds(&output);
+        assert_eq!(stderr(&output), "");
+    }
+
+    /// GCC's `-###` quotes a word only when it has a character other than a
+    /// letter, digit, `_`, `/`, `-` or `.`, escaping `"`, `\` and `$`.
+    #[test]
+    fn gcc_dry_run_quotes_as_gcc_does() {
+        let directory = Directory::new();
+        directory.write("a b.c", "int a;\n");
+        let output = directory.bcc(
+            "--gcc-mode",
+            &["-###", "-c", "a b.c", "-DX=\"y z\"", "-o", "o$.o"],
+        );
+        succeeds(&output);
+        let text = stderr(&output);
+        assert!(
+            text.ends_with(
+                " \"--compiler-identity=gcc\" \"--diagnostic-format=gcc\" \
+                 \"--target=x86_64-unknown-linux-gnu\" \"--driver-name=gcc\" \"a b.c\" -D \
+                 \"X=\\\"y z\\\"\" -c \"--output=o\\$.o\"\n"
+            ),
+            "{text}"
+        );
+    }
+
+    /// Clang reports every unused linker input, but no unused argument once
+    /// an error has occurred, a `-Werror` one included; `-Qunused-arguments`
+    /// silences both, and GCC refuses it.
+    #[test]
+    fn clang_stops_reporting_unused_arguments_after_an_error() {
+        let directory = Directory::new();
+        directory.write("a.c", "int a;\n");
+        let output = directory.bcc(
+            "--clang-mode",
+            &[
+                "-c", "a.c", "-o", "a.o", "-Werror", "-lm", "-Wl,x", "-L/tmp", "-s",
+            ],
+        );
+        assert_eq!(output.status.code(), Some(1));
+        assert_eq!(
+            stderr(&output),
+            "clang: error: -lm: 'linker' input unused \
+             [-Werror,-Wunused-command-line-argument]\nclang: error: -Wl,x: 'linker' input unused \
+             [-Werror,-Wunused-command-line-argument]\n"
+        );
+        for options in [
+            &[
+                "-Qunused-arguments",
+                "-c",
+                "a.c",
+                "-o",
+                "a.o",
+                "-lm",
+                "-L/tmp",
+                "-s",
+            ][..],
+            &["-Qunused-arguments", "-fsyntax-only", "-c", "a.c"],
+        ] {
+            let output = directory.bcc("--clang-mode", options);
+            succeeds(&output);
+            assert_eq!(stderr(&output), "", "{options:?}");
+        }
+        // `-Werror=` and `-Wno-error=` name the driver's warning group, which
+        // Clang knows, so they are no unknown warning options.
+        let output = directory.bcc(
+            "--clang-mode",
+            &[
+                "-Werror",
+                "-Werror=unused-command-line-argument",
+                "-c",
+                "a.c",
+                "-o",
+                "a.o",
+            ],
+        );
+        succeeds(&output);
+        assert_eq!(stderr(&output), "");
+        let output = directory.bcc(
+            "--clang-mode",
+            &[
+                "-Werror",
+                "-Wno-error=unused-command-line-argument",
+                "-c",
+                "a.c",
+                "-lm",
+            ],
+        );
+        succeeds(&output);
+        assert_eq!(
+            stderr(&output),
+            "clang: warning: -lm: 'linker' input unused [-Wunused-command-line-argument]\n"
+        );
+        let output = directory.bcc("--gcc-mode", &["-Qunused-arguments", "-c", "a.c"]);
+        assert_eq!(output.status.code(), Some(1));
+        assert_eq!(
+            stderr(&output),
+            "gcc: error: unrecognized command-line option '-Qunused-arguments'\n"
+        );
+    }
+
+    /// Clang begins every path it reaches from a main file in the working
+    /// directory through its includers' directories with `./`, in `-H`
+    /// and clang-cl's `/showIncludes`; a header found through `-I` keeps
+    /// its directory's spelling.
+    #[test]
+    fn clang_names_working_directory_headers_with_dot() {
+        let directory = Directory::new();
+        std::fs::create_dir(directory.path("sub")).unwrap();
+        std::fs::create_dir(directory.path("inc")).unwrap();
+        directory.write(
+            "m.c",
+            "#include \"sub/s.h\"\n#include \"a.h\"\n#include \"inc/i.h\"\n#include <j.h>\n",
+        );
+        directory.write("sub/s.h", "#include \"../d.h\"\n#include \"t.h\"\n");
+        directory.write("sub/t.h", "int t;\n");
+        directory.write("d.h", "int d;\n");
+        directory.write("a.h", "int a;\n");
+        directory.write("inc/i.h", "#include \"k.h\"\n");
+        directory.write("inc/k.h", "int k;\n");
+        directory.write("inc/j.h", "int j;\n");
+        let output = directory.bcc("--clang-mode", &["-H", "-fsyntax-only", "-Iinc", "m.c"]);
+        succeeds(&output);
+        assert_eq!(
+            stderr(&output),
+            ". ./sub/s.h\n.. ./sub/../d.h\n.. ./sub/t.h\n. ./a.h\n. ./inc/i.h\n.. ./inc/k.h\n. \
+             inc/j.h\n"
+        );
+        let output = directory.bcc("--gcc-mode", &["-H", "-fsyntax-only", "-Iinc", "m.c"]);
+        succeeds(&output);
+        assert_eq!(
+            stderr(&output),
+            ". sub/s.h\n.. sub/../d.h\n.. sub/t.h\n. a.h\n. inc/i.h\n.. inc/k.h\n. inc/j.h\n"
+        );
+        let output = directory.bcc(
+            "--clang-cl-mode",
+            &["/nologo", "/Zs", "/showIncludes", "/Iinc", "m.c"],
+        );
+        succeeds(&output);
+        assert!(
+            stderr(&output).starts_with(
+                "Note: including file: ./sub/s.h\nNote: including file:  ./sub/../d.h\n"
+            ),
+            "{}",
+            stderr(&output)
+        );
+    }
+
+    /// The common symbols an object file defines, by `nm`'s `C` letter.
+    fn common_symbols(object: &Path) -> Option<Vec<String>> {
+        let listing = Command::new("nm").arg(object).output().ok()?;
+        Some(
+            stdout(&listing)
+                .lines()
+                .filter_map(|line| {
+                    let mut words = line.split_whitespace().rev();
+                    let name = words.next()?;
+                    (words.next()? == "C").then(|| name.to_owned())
+                })
+                .collect(),
+        )
+    }
+
+    /// A `const` tentative definition is common, and so not constant, as in
+    /// Clang; GNU `common` makes an object common under `-fno-common` and
+    /// `nocommon` keeps one a definition under `-fcommon`, and `common` on
+    /// any declaration wins over `nocommon` without a warning, as in Clang
+    /// (`nocommon` on an `extern` declaration still counts), on both back
+    /// ends.
+    #[test]
+    fn common_attributes_and_constant_objects() {
+        if !cfg!(all(target_os = "linux", target_env = "gnu")) {
+            return;
+        }
+        let directory = Directory::new();
+        directory.write(
+            "c.c",
+            "const int cint;\n__attribute__((common)) int ca;\n__attribute__((nocommon)) int \
+             na;\n__attribute__((nocommon)) int last;\n__attribute__((common)) int last;\nint \
+             pa;\nint __attribute__((common, nocommon)) at_cn;\nint __attribute__((nocommon, \
+             common)) at_nc;\nint redecl1 __attribute__((common));\nint redecl1 \
+             __attribute__((nocommon));\nextern int redecl3 __attribute__((nocommon));\nint \
+             redecl3;\n",
+        );
+        for backend in ["--backend=llvm", "--backend=native"] {
+            for (flag, expected) in [
+                (
+                    "-fcommon",
+                    &["cint", "ca", "last", "pa", "at_cn", "at_nc", "redecl1"][..],
+                ),
+                ("-fno-common", &["ca", "last", "at_cn", "at_nc", "redecl1"]),
+            ] {
+                let output = directory.bcc("", &[backend, flag, "-c", "c.c", "-o", "c.o"]);
+                succeeds(&output);
+                assert_eq!(stderr(&output), "", "{backend} {flag}");
+                let Some(mut symbols) = common_symbols(&directory.path("c.o")) else {
+                    return;
+                };
+                symbols.sort();
+                let mut expected = expected.to_vec();
+                expected.sort_unstable();
+                assert_eq!(symbols, expected, "{backend} {flag}");
+            }
+        }
+    }
+
+    /// On the Windows targets common symbols are COFF communal symbols
+    /// (section 0, the size as the value), as Clang emits them: on MinGW
+    /// every tentative definition, with `-aligncomm` above a byte and a
+    /// `dllexport` one exported; on the MSVC target not one whose alignment
+    /// its declaration, typedef, record or a member requires, since the
+    /// linker aligns a communal symbol by its size alone.
+    #[test]
+    fn coff_common_symbols_follow_clang() {
+        let directory = Directory::new();
+        directory.write(
+            "w.c",
+            "struct B { char q[64]; } __attribute__((aligned(64))) b64;\ntypedef int ai16 \
+             __attribute__((aligned(16)));\nai16 ai;\ntypedef long long al8 \
+             __attribute__((aligned(8)));\nal8 aarr[4];\nstruct F { int x \
+             __attribute__((aligned(8))); } f;\nstruct G { ai16 y; } g;\nstruct H { struct F f; } \
+             h;\nstruct K { struct B b; } k;\n__declspec(dllexport) int dexp;\nchar onebyte;\nint \
+             plain;\n__attribute__((aligned(16))) int own;\ntypedef float v16 \
+             __attribute__((vector_size(64)));\nv16 vec64;\ntypedef float v8 \
+             __attribute__((vector_size(32)));\nv8 vec32;\nstruct SV { v16 x; } sv;\nv16 \
+             varr[2];\nshort s2;\nchar c3[3];\n",
+        );
+        let communal = |object: &Path| -> Option<Vec<String>> {
+            let listing = Command::new("objdump")
+                .arg("-t")
+                .arg(object)
+                .output()
+                .ok()?;
+            if !listing.status.success() {
+                return None;
+            }
+            let mut names: Vec<String> = stdout(&listing)
+                .lines()
+                .filter(|line| line.contains("(sec  0)") && line.contains("(scl   2)"))
+                .filter_map(|line| line.split_whitespace().last().map(str::to_owned))
+                .filter(|name| !name.starts_with('_') && !name.starts_with('.'))
+                .collect();
+            names.sort();
+            Some(names)
+        };
+        let directives = |object: &Path| -> String {
+            Command::new("objdump")
+                .args(["-s", "-j", ".drectve"])
+                .arg(object)
+                .output()
+                .map(|output| {
+                    stdout(&output)
+                        .lines()
+                        .filter(|line| line.starts_with(' '))
+                        .map(|line| line.get(43..).unwrap_or(""))
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        for (target, expected) in [
+            (
+                "x86_64-w64-windows-gnu",
+                &[
+                    "aarr", "ai", "b64", "c3", "dexp", "f", "g", "h", "k", "onebyte", "own",
+                    "plain", "s2", "sv", "varr", "vec32", "vec64",
+                ][..],
+            ),
+            // A 32-byte vector stays common there; a 64-byte one does not.
+            (
+                "x86_64-pc-windows-msvc",
+                &["c3", "dexp", "h", "onebyte", "plain", "s2", "vec32"],
+            ),
+        ] {
+            for backend in ["--backend=llvm", "--backend=native"] {
+                let output = directory.bcc(
+                    "",
+                    &[
+                        &format!("--target={target}"),
+                        backend,
+                        "-fms-extensions",
+                        "-fcommon",
+                        "-c",
+                        "w.c",
+                        "-o",
+                        "w.obj",
+                    ],
+                );
+                succeeds(&output);
+                let Some(names) = communal(&directory.path("w.obj")) else {
+                    return;
+                };
+                assert_eq!(names, expected, "{target} {backend}");
+                // Microsoft's linker aligns a communal symbol by its size,
+                // so it is rounded up to the alignment there, as LLVM does.
+                let size = if target.ends_with("msvc") { "4" } else { "" };
+                let listing = Command::new("objdump")
+                    .arg("-t")
+                    .arg(directory.path("w.obj"))
+                    .output()
+                    .unwrap();
+                for name in ["s2", "c3"] {
+                    let line = stdout(&listing)
+                        .lines()
+                        .find(|line| line.ends_with(&format!(" {name}")))
+                        .map(str::to_owned)
+                        .unwrap_or_default();
+                    let expected = match (name, size) {
+                        | ("s2", "") => "0x0000000000000002",
+                        | ("c3", "") => "0x0000000000000003",
+                        | _ => "0x0000000000000004",
+                    };
+                    assert!(line.contains(expected), "{target} {backend}: {line}");
+                }
+                let drectve = directives(&directory.path("w.obj"));
+                if target.ends_with("gnu") {
+                    assert!(
+                        drectve.contains("-export:dexp,data"),
+                        "{backend}: {drectve}"
+                    );
+                    assert!(drectve.contains("-aligncomm:"), "{backend}: {drectve}");
+                    assert!(!drectve.contains("onebyte"), "{backend}: {drectve}");
+                } else {
+                    assert!(
+                        drectve.contains("/EXPORT:dexp,DATA"),
+                        "{backend}: {drectve}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Where `long double` is binary128 (WebAssembly), its NaN and infinity
+    /// builtins fold to binary128 encodings, as Clang folds them, so C23's
+    /// `LDBL_SNAN` initializes a static object.
+    #[test]
+    fn long_double_constants_follow_the_format() {
+        let directory = Directory::new();
+        directory.write(
+            "l.c",
+            "long double s = __builtin_nansl(\"\");\nlong double p = \
+             __builtin_nansl(\"0x7\");\nlong double q = __builtin_nanl(\"\");\nlong double i = \
+             __builtin_infl();\nlong double h = __builtin_huge_vall();\n",
+        );
+        for (target, expected) in [
+            (
+                "wasm32-unknown-unknown",
+                [
+                    "0000000000000000000000000040ff7f",
+                    "0700000000000000000000000000ff7f",
+                    "0000000000000000000000000080ff7f",
+                    "0000000000000000000000000000ff7f",
+                    "0000000000000000000000000000ff7f",
+                ],
+            ),
+            (
+                "x86_64-unknown-linux-gnu",
+                [
+                    "00000000000000a0ff7f000000000000",
+                    "0700000000000080ff7f000000000000",
+                    "00000000000000c0ff7f000000000000",
+                    "0000000000000080ff7f000000000000",
+                    "0000000000000080ff7f000000000000",
+                ],
+            ),
+        ] {
+            let output = directory.bcc("", &[&format!("--target={target}"), "--emit=ir", "l.c"]);
+            succeeds(&output);
+            let ir = stdout(&output);
+            for (name, bytes) in ["s", "p", "q", "i", "h"].into_iter().zip(expected) {
+                assert!(
+                    ir.contains(&format!(
+                        "global @{name} external size 16, align 16 = bytes \"{bytes}\""
+                    )),
+                    "{target} {name}: {ir}"
+                );
+            }
+        }
+    }
+
+    /// GCC's `CR_DECIMAL_DIG` comes with the IEC 60559 extension macros
+    /// under its identity; Clang's header has none.
+    #[test]
+    fn cr_decimal_dig_follows_gcc() {
+        let directory = Directory::new();
+        directory.write("float.c", "#include <float.h>\n");
+        for (mode, defined) in [("--gcc-mode", true), ("--clang-mode", false)] {
+            for want in [
+                "-D__STDC_WANT_IEC_60559_EXT__",
+                "-D__STDC_WANT_IEC_60559_BFP_EXT__",
+            ] {
+                let output = directory.bcc(mode, &[want, "-E", "-dM", "float.c"]);
+                succeeds(&output);
+                assert_eq!(
+                    defines(&stdout(&output), "CR_DECIMAL_DIG").as_deref(),
+                    defined.then_some("__UINTMAX_MAX__"),
+                    "{mode} {want}"
+                );
+            }
+            let output = directory.bcc(mode, &["-E", "-dM", "float.c"]);
+            assert!(
+                defines(&stdout(&output), "CR_DECIMAL_DIG").is_none(),
+                "{mode}"
+            );
+        }
     }
 }

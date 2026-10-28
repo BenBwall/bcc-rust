@@ -11,7 +11,6 @@ use std::{
         OsStr,
         OsString,
     },
-    fmt::Write as _,
     path::Path,
 };
 
@@ -70,9 +69,13 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         verbose: false,
         dry_run: false,
         machine: Vec::new(),
+        position: 0,
+        positions: Vec::new(),
+        linker_words: Vec::new(),
     };
     let mut arguments = invocation.arguments.iter().map(OsString::as_os_str);
     while let Some(argument) = arguments.next() {
+        state.position += 1;
         if let Some(query) = state.argument(argument, &mut arguments) {
             return Ok(query);
         }
@@ -100,6 +103,7 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         .into(),
     );
     common.push(format!("--target={}", target.triple()).into());
+    common.push(format!("--driver-name={}", invocation.name).into());
     if invocation.name.ends_with("c89") {
         common.push("-std=c89".into());
     } else if invocation.name.ends_with("c99") {
@@ -178,15 +182,24 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         temporary,
         ..Plan::default()
     };
+    // GCC quotes `-###`'s words only where the shell needs it and `-v`'s
+    // not at all; Clang quotes every word.
+    let style = |dry_run: bool| {
+        use crate::backend::llvm::CommandStyle;
+        match (personality, dry_run) {
+            | (Personality::Gcc, true) => CommandStyle::GccDryRun,
+            | (Personality::Gcc, false) => CommandStyle::GccVerbose,
+            | _ => CommandStyle::Clang,
+        }
+    };
+    // `-v` prints each step before running it, and bcc's driver then
+    // prints the commands it runs and its header search, as GCC's and
+    // Clang's subprocesses do; `-###` prints the steps alone.
     if state.verbose || state.dry_run {
         let mut text = version::verbose(personality, target);
         if state.dry_run {
             for bcc in &steps {
-                text.push_str(" \"bcc\"");
-                for argument in &bcc[1..] {
-                    _ = write!(text, " \"{}\"", argument.to_string_lossy());
-                }
-                text.push('\n');
+                text.push_str(&super::command_line(bcc, style(true)));
             }
         }
         plan.steps.push(Step::Print { text, stderr: true });
@@ -202,7 +215,16 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         }
         return Err(MainError::Reported(1));
     }
-    plan.steps.extend(steps.into_iter().map(Step::Bcc));
+    for mut bcc in steps {
+        if state.verbose {
+            bcc.insert(1, "-v".into());
+            plan.steps.push(Step::Print {
+                text:   super::command_line(&bcc, style(false)),
+                stderr: true,
+            });
+        }
+        plan.steps.push(Step::Bcc(bcc));
+    }
     Ok(plan)
 }
 
@@ -284,14 +306,35 @@ struct State<'a> {
     /// The kind of input the `-x` language in effect makes a file, or
     /// `None` to decide by its extension.
     language:        Option<InputKind>,
-    /// The `-w` and `-W` options, in order, which decide how Clang reports
-    /// an argument it leaves unused.
+    /// The `-w`, `-W` and `-Qunused-arguments` options, in order, which
+    /// decide how Clang reports an argument it leaves unused.
     warning_options: Vec<String>,
     verbose:         bool,
     dry_run:         bool,
     /// The known `-m` options bcc does not implement, judged once the
     /// target is known, since `--target` may come after them.
     machine:         Vec<String>,
+    /// The position on the command line of the argument being read.
+    position:        usize,
+    /// The arguments Clang may report as unused, with their positions and
+    /// as Clang spells them: the stage options, `-fsyntax-only`, and the
+    /// options that only the link uses (`-L/usr/lib`, `-T x.ld`, `-s`).
+    positions:       Vec<(usize, Unused)>,
+    /// The linker inputs that are options (`-lm`, `-Wl,...`,
+    /// `-Xlinker ARG`, `-z now`), as Clang spells them, each with its index
+    /// in [`State::out`], which orders them among the input files.
+    linker_words:    Vec<(usize, String)>,
+}
+
+/// An argument Clang reports as unused when the command line does not use
+/// it.
+enum Unused {
+    /// A stage option (`-c`), unused under `-fsyntax-only`.
+    Stage(&'static str),
+    /// `-fsyntax-only`, unused under `-E`, `-M` or `-MM`.
+    SyntaxOnly,
+    /// An option only the link uses.
+    Link(String),
 }
 
 /// Options bcc reads in GCC's spelling, which take their operand as the next
@@ -315,7 +358,7 @@ const OPERAND_OPTIONS: [&str; 15] = [
 ];
 
 /// Options bcc reads in GCC's spelling and that take no operand.
-const PLAIN_OPTIONS: [&str; 27] = [
+const PLAIN_OPTIONS: [&str; 29] = [
     "-w",
     "-pedantic",
     "-pedantic-errors",
@@ -336,6 +379,8 @@ const PLAIN_OPTIONS: [&str; 27] = [
     "-MD",
     "-MMD",
     "-MP",
+    "-MG",
+    "-H",
     "-nostdlibinc",
     "-nobuiltininc",
     "-ffreestanding",
@@ -345,11 +390,24 @@ const PLAIN_OPTIONS: [&str; 27] = [
     "-fms-extensions",
 ];
 
+/// The [`PLAIN_OPTIONS`] only the link uses, which Clang reports as unused
+/// when the command line does not link. It uses `-static`, `-pthread`,
+/// `-nostdlib` and `-nodefaultlibs` in every stage.
+const LINK_ONLY_OPTIONS: [&str; 7] = [
+    "-shared",
+    "-pie",
+    "-no-pie",
+    "-rdynamic",
+    "-nostartfiles",
+    "-static-libgcc",
+    "-shared-libgcc",
+];
+
 /// GCC options that need no translation and cannot change the program bcc
 /// builds: driver conveniences and reports.
 /// `-g*` (debug information, which bcc does not emit) and the `-f` and `-m`
 /// options in `unimplemented.rs` are ignored too.
-const IGNORED_OPTIONS: [&str; 5] = ["-pipe", "-save-temps", "-Q", "-H", "-time"];
+const IGNORED_OPTIONS: [&str; 4] = ["-pipe", "-save-temps", "-Q", "-time"];
 
 impl State<'_> {
     /// Translates one argument, reading its operand from `rest`. Returns
@@ -413,17 +471,31 @@ impl State<'_> {
                 return Some(Plan::print(help(personality, &self.invocation.name))),
             | "-v" => self.verbose = true,
             | "-###" => self.dry_run = true,
-            | "-c" | "-S" | "-E" | "-M" | "-MM" => self.stages.push(match text {
-                | "-c" => "-c",
-                | "-S" => "-S",
-                | "-E" => "-E",
-                | "-M" => "-M",
-                | _ => "-MM",
-            }),
-            | "-fsyntax-only" => self.syntax_only = true,
+            | "-c" | "-S" | "-E" | "-M" | "-MM" => {
+                let stage = match text {
+                    | "-c" => "-c",
+                    | "-S" => "-S",
+                    | "-E" => "-E",
+                    | "-M" => "-M",
+                    | _ => "-MM",
+                };
+                self.stages.push(stage);
+                self.positions.push((self.position, Unused::Stage(stage)));
+            },
+            // Clang's `-Qunused-arguments` reports no argument or input as
+            // unused, whatever the warning options say.
+            | "-Qunused-arguments" if self.compiler == Compiler::Clang =>
+                self.warning_options.push(text.into()),
+            | "-fsyntax-only" => {
+                self.syntax_only = true;
+                self.positions.push((self.position, Unused::SyntaxOnly));
+            },
             | "-ansi" => self.out.push("-std=c89".into()),
             | "-nostdinc" => self.out.push("--nostdinc".into()),
-            | "-s" => self.out.push("-Wl,-s".into()),
+            | "-s" => {
+                self.link_only(text.into());
+                self.out.push("-Wl,-s".into());
+            },
             | "-Ofast" => self.unsupported(
                 text,
                 "it implies -ffast-math; bcc keeps IEEE semantics and does not define \
@@ -484,6 +556,20 @@ impl State<'_> {
     /// which reports it and goes on with the others, as bcc's driver does.
     fn check_inputs(&mut self) {
         let clang = self.compiler == Compiler::Clang;
+        // `-MG` lists missing headers only in the rules `-M` and `-MM`
+        // write instead of the output.
+        if self.out.iter().any(|option| option == "-MG")
+            && !self
+                .stages
+                .iter()
+                .any(|stage| matches!(*stage, "-M" | "-MM"))
+        {
+            if clang {
+                self.error(format_args!("option '-MG' requires '-M' or '-MM'"));
+            } else {
+                self.error(format_args!("'-MG' may only be used with '-M' or '-MM'"));
+            }
+        }
         if clang {
             for input in &mut self.inputs {
                 if input.path != "-" && std::fs::metadata(&input.path).is_err() {
@@ -550,21 +636,12 @@ impl State<'_> {
     fn jobs(&mut self) -> Vec<Job> {
         let clang = self.compiler == Compiler::Clang;
         let preprocesses = self.preprocesses();
-        if self.syntax_only && preprocesses {
-            self.unused(format_args!(
-                "argument unused during compilation: '-fsyntax-only'"
-            ));
+        let syntax_only_unused = self.syntax_only && preprocesses;
+        if syntax_only_unused {
             self.syntax_only = false;
         }
-        if clang && (self.syntax_only || !self.stages.is_empty()) {
-            let syntax_only = self.syntax_only;
-            self.warn_unused_inputs(|kind| match kind {
-                | InputKind::Link => Some("linker"),
-                | InputKind::Assembly {
-                    preprocessed: false,
-                } if syntax_only => Some("assembler"),
-                | _ => None,
-            });
+        if clang {
+            self.warn_unused(syntax_only_unused);
         }
         if !self.syntax_only {
             // Clang runs nothing when it left every input unused.
@@ -585,13 +662,7 @@ impl State<'_> {
                 outputs: Outputs::Default,
             });
         }
-        if clang {
-            for stage in self.stages.clone() {
-                self.unused(format_args!(
-                    "argument unused during compilation: '{stage}'"
-                ));
-            }
-        } else if !self.stages.contains(&"-S") && self.has(Inputs::Assembly) {
+        if !clang && !self.stages.contains(&"-S") && self.has(Inputs::Assembly) {
             // GCC assembles them unless `-S` stops before the assembler,
             // keeping the objects only for `-c`.
             jobs.push(Job {
@@ -614,35 +685,91 @@ impl State<'_> {
             .any(|input| !input.dropped && inputs.take(input))
     }
 
+    /// Warns as Clang does about the arguments a command line that does not
+    /// link leaves unused: first, in order, the inputs and linker options
+    /// it does not use (`a.o: 'linker' input unused`, `-lm: 'linker' input
+    /// unused`), which it drops; then, in order, the other arguments
+    /// (`argument unused during compilation: '-c'`): the stage options
+    /// under `-fsyntax-only`, `-fsyntax-only` itself when `syntax_only`
+    /// (a preprocessing stage overrides it), and the options of the link.
+    fn warn_unused(&mut self, syntax_only: bool) {
+        let links = self.stages.is_empty() && !self.syntax_only;
+        if !links {
+            let assembly_unused = self.syntax_only;
+            self.warn_unused_inputs(links, |kind| match kind {
+                | InputKind::Link => Some("linker"),
+                | InputKind::Assembly {
+                    preprocessed: false,
+                } if assembly_unused => Some("assembler"),
+                | _ => None,
+            });
+        }
+        let stages_unused = self.syntax_only;
+        let messages: Vec<String> = self
+            .positions
+            .iter()
+            .filter_map(|(_, unused)| match unused {
+                | Unused::Stage(stage) if stages_unused => Some((*stage).to_owned()),
+                | Unused::SyntaxOnly if syntax_only => Some("-fsyntax-only".to_owned()),
+                | Unused::Link(option) if !links => Some(option.clone()),
+                | _ => None,
+            })
+            .collect();
+        // Clang reports the arguments it leaves unused only when no error
+        // has occurred, a `-Werror` one about an unused input included.
+        if self.errors != 0 {
+            return;
+        }
+        for message in messages {
+            self.unused(format_args!(
+                "argument unused during compilation: '{message}'"
+            ));
+        }
+    }
+
     /// Warns, in order, as Clang does, that the inputs of the kinds `unused`
-    /// names are unused (`a.o: 'linker' input unused`), and drops them.
-    fn warn_unused_inputs(&mut self, unused: impl Fn(InputKind) -> Option<&'static str>) {
-        let names: Vec<(OsString, &str)> = self
+    /// names are unused (`a.o: 'linker' input unused`), and drops them, and
+    /// unless the command line `links`, that its linker options are.
+    fn warn_unused_inputs(
+        &mut self,
+        links: bool,
+        unused: impl Fn(InputKind) -> Option<&'static str>,
+    ) {
+        let mut names: Vec<(usize, String, &str)> = self
             .inputs
             .iter_mut()
             .filter(|input| !input.dropped)
             .filter_map(|input| {
                 let what = unused(input.kind)?;
                 input.dropped = true;
-                Some((input.path.clone(), what))
+                Some((input.at, input.path.to_string_lossy().into_owned(), what))
             })
             .collect();
-        for (name, what) in names {
-            self.unused(format_args!(
-                "{}: '{what}' input unused",
-                name.to_string_lossy()
-            ));
+        if !links {
+            names.extend(
+                self.linker_words
+                    .iter()
+                    .map(|(at, word)| (*at, word.clone(), "linker")),
+            );
+            names.sort_by_key(|(at, ..)| *at);
+        }
+        for (_, name, what) in names {
+            self.unused(format_args!("{name}: '{what}' input unused"));
         }
     }
 
     /// Reports an argument Clang leaves unused, as its
-    /// `-Wunused-command-line-argument` warning: suppressed by `-w` or
-    /// `-Wno-unused-command-line-argument`, an error under `-Werror` or
+    /// `-Wunused-command-line-argument` warning: suppressed by `-w`,
+    /// `-Qunused-arguments` or `-Wno-unused-command-line-argument`, an
+    /// error under `-Werror` or
     /// `-Werror=unused-command-line-argument`.
     fn unused(&mut self, message: std::fmt::Arguments<'_>) {
         const GROUP: &str = "unused-command-line-argument";
         if self.compiler != Compiler::Clang
-            || self.warning_options.iter().any(|option| option == "-w")
+            || self
+                .warning_options
+                .iter()
+                .any(|option| matches!(option.as_str(), "-w" | "-Qunused-arguments"))
         {
             return;
         }
@@ -677,6 +804,19 @@ impl State<'_> {
             self.invocation
                 .warning(format_args!("{message} [-W{GROUP}]"));
         }
+    }
+
+    /// Records a linker option Clang reports as an unused linker input
+    /// when the command line does not link, before it is added to
+    /// [`State::out`].
+    fn linker_word(&mut self, spelling: String) {
+        self.linker_words.push((self.out.len(), spelling));
+    }
+
+    /// Records an option only the link uses, which Clang reports as unused
+    /// when the command line does not link.
+    fn link_only(&mut self, spelling: String) {
+        self.positions.push((self.position, Unused::Link(spelling)));
     }
 
     /// The option and its operand, joined or the next argument, of an
@@ -765,19 +905,27 @@ impl State<'_> {
                 "bcc has no Clang frontend options",
             ),
             | "-imacros" => self.unsupported(option, "bcc does not implement -imacros"),
-            | "-T" | "-u" | "-z" | "-e" | "--entry" => self.out.push(
-                format!(
-                    "-Wl,{},{lossy}",
-                    match option {
-                        | "--entry" => "-e",
-                        | other => other,
-                    }
-                )
-                .into(),
-            ),
+            | "-T" | "-u" | "-z" | "-e" | "--entry" => {
+                let option = match option {
+                    | "--entry" => "-e",
+                    | other => other,
+                };
+                // Clang reads `-z` and `-e` as linker inputs, and `-T` and
+                // `-u` as options of the link.
+                if matches!(option, "-T" | "-u") {
+                    self.link_only(format!("{option} {lossy}"));
+                } else {
+                    self.linker_word(format!("{option} {lossy}"));
+                }
+                self.out.push(format!("-Wl,{option},{lossy}").into());
+            },
             | _ => {
-                if option == "-x" {
-                    self.language = kind_of_language(&lossy);
+                match option {
+                    | "-x" => self.language = kind_of_language(&lossy),
+                    | "-l" => self.linker_word(format!("-l{lossy}")),
+                    | "-Xlinker" => self.linker_word(format!("-Xlinker {lossy}")),
+                    | "-L" => self.link_only(format!("-L{lossy}")),
+                    | _ => {},
                 }
                 self.out.push(option.into());
                 self.out.push(operand.into());
@@ -794,6 +942,11 @@ impl State<'_> {
                     .any(|prefix| text.starts_with(prefix)))
         {
             self.warning_options.push(text.into());
+        }
+        if text.starts_with("-Wl,") {
+            self.linker_word(text.into());
+        } else if LINK_ONLY_OPTIONS.contains(&text) {
+            self.link_only(text.into());
         }
         if PLAIN_OPTIONS.contains(&text)
             || text.starts_with("-std=")
@@ -850,7 +1003,12 @@ impl State<'_> {
             self.machine.push(text.into());
             return;
         }
-        let known = knows(self.compiler, text);
+        // `-Werror=NAME` and `-Wno-error=NAME` name the warning `-WNAME`.
+        let known = knows(self.compiler, text)
+            || text
+                .strip_prefix("-Werror=")
+                .or_else(|| text.strip_prefix("-Wno-error="))
+                .is_some_and(|name| knows(self.compiler, &format!("-W{name}")));
         if text.starts_with("-W") {
             // GCC ignores an unknown `-Wno-` option; Clang warns about an
             // unknown warning option, which bcc's own parser does.

@@ -59,7 +59,10 @@ use super::{
     language_features,
 };
 use crate::{
-    configuration::Feature,
+    configuration::{
+        CompilerIdentity,
+        Feature,
+    },
     translation_phases::preprocessor_tokenizer::{
         PreprocessorToken,
         PreprocessorTokenType,
@@ -76,7 +79,8 @@ impl Expander<'_, '_, '_, '_> {
     /// meaning; it is diagnosed and skipped, as GCC and Clang do.
     /// `# new-line` is the null directive (§6.10.7 paragraph 1, p. 160; PDF
     /// p. 172). Already preprocessed input takes only the directives GCC's
-    /// `-fpreprocessed` reads; that mode is an extension.
+    /// `-fpreprocessed` reads; that mode is an extension, as is TCC's
+    /// script line.
     pub(super) fn parse_directive(&mut self, token: PreprocessorToken) {
         if !self.last_was_newline {
             self.context.preprocessor_error(PreprocessorError {
@@ -118,6 +122,12 @@ impl Expander<'_, '_, '_, '_> {
             // A GNU line marker, as preprocessed output spells `#line`.
             | PreprocessorTokenType::Number => {
                 self.parse_line_marker(directive);
+                return;
+            },
+            // TCC skips a `#!` line that starts a file, so a C source can be
+            // a script (`#!/usr/bin/tcc -run`).
+            | PreprocessorTokenType::ExclamationMark if self.starts_tcc_script(token) => {
+                self.skip_until_newline();
                 return;
             },
             | _ => {
@@ -232,5 +242,14 @@ impl Expander<'_, '_, '_, '_> {
                 self.skip_until_newline();
             },
         }
+    }
+
+    /// Whether the `#` token starts its file under the TCC identity, which
+    /// reads a following `!` as a script line to skip (`tccpp.c`,
+    /// `preprocess`). TCC extension; GCC and Clang reject the line as a
+    /// non-directive.
+    fn starts_tcc_script(&self, hash: PreprocessorToken) -> bool {
+        self.context.configuration.compiler_identity() == CompilerIdentity::Tcc
+            && self.context.first_source_vector(hash.source_vectors).index == 0
     }
 }

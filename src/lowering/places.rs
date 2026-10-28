@@ -564,14 +564,19 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
     }
 
     /// `base` plus `offset` bytes, staying within the object it points into
-    /// (§6.5.6p8).
+    /// (§6.5.6p8), or wrapping around under `-fwrapv-pointer`.
     pub(super) fn ptr_add(&mut self, base: Value, offset: Value) -> Value {
+        let flags = if self.unit.context.code_assumptions.wrapv_pointer {
+            InstFlags::empty()
+        } else {
+            InstFlags::INBOUNDS
+        };
         self.inst(
             InstData::Binary {
                 opcode: Opcode::PtrAdd,
-                ty:     Type::Ptr,
-                flags:  InstFlags::INBOUNDS,
-                args:   [base, offset],
+                ty: Type::Ptr,
+                flags,
+                args: [base, offset],
             },
             Type::Ptr,
         )

@@ -150,6 +150,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     None,
                 ),
                 | Rule::SelectAny => self.select_any_attribute(subject, attribute),
+                | Rule::Common(common) => self.common_attribute(subject, attribute, common),
                 | Rule::DllImport => self.dll_attribute(subject, attribute, DllStorage::Import),
                 | Rule::DllExport => self.dll_attribute(subject, attribute, DllStorage::Export),
                 | Rule::NoInline => self.inline_attribute(subject, attribute, Inlining::Never),
@@ -358,6 +359,33 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 None,
                 None,
             ),
+        }
+    }
+
+    /// GCC `common` and `nocommon` on an object with external linkage decide
+    /// whether its tentative definition is a common symbol, which lowering
+    /// reads: `common` on any of its declarations wins, silently, as in
+    /// Clang (GCC instead warns and keeps the attribute it met first).
+    /// Elsewhere they are ignored with a warning.
+    /// GNU extension: GCC manual, "Common Variable Attributes".
+    fn common_attribute(
+        &mut self,
+        subject: Subject,
+        attribute: WrittenAttribute<'_>,
+        common: bool,
+    ) {
+        if !self.no_arguments(attribute) {
+            return;
+        }
+        match subject {
+            | Subject::Object { binding, .. }
+                if self.bindings[binding].linkage == Linkage::External =>
+            {
+                let entity = self.entity_of(binding);
+                let attributes = self.attributes.entity(entity);
+                attributes.common = Some(common || attributes.common == Some(true));
+            },
+            | _ => self.ignored(attribute),
         }
     }
 

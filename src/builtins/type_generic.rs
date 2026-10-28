@@ -57,8 +57,12 @@ pub(super) const BUILTINS: &[BuiltinDescriptor] = &[
         O::ChooseExpr,
         3,
     ),
-    // GCC's signaling NaN of type double, folded like `__builtin_nan`.
+    // GCC's and Clang's signaling NaNs of type double, float and long
+    // double, folded like `__builtin_nan`; C23's `<float.h>` spells
+    // `DBL_SNAN`, `FLT_SNAN` and `LDBL_SNAN` with them.
     math128(Id::Nans, "__builtin_nans", S::Double, 1, true, false),
+    math128(Id::Nansf, "__builtin_nansf", S::Float, 1, true, false),
+    math128(Id::Nansl, "__builtin_nansl", S::LongDouble, 1, true, false),
     // GCC's signaling NaNs of the interchange and extended types.
     interchange_math128(Id::Nansf32, "__builtin_nansf32", S::Float32),
     interchange_math128(Id::Nansf32x, "__builtin_nansf32x", S::Float32x),

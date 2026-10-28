@@ -196,3 +196,39 @@ fn feature_lists_name_every_variant_in_order() {
     }
     assert_eq!(MsvcFeature::ALL.last(), Some(&MsvcFeature::VaArgs));
 }
+
+/// The identity policy: GCC and TCC follow GCC's rules and Clang and
+/// clang-cl Clang's; MSVC follows GCC's, or Clang's where `cl` is known to
+/// match Clang's model of it. The rules chosen per identity before the
+/// policy agree with it.
+#[test]
+fn identities_follow_the_rule_families() {
+    let base = CompilerConfiguration::new(CStandard::C17, ExtensionPolicy::Allow);
+    for (identity, rules, ms_compatible) in [
+        (CompilerIdentity::Clang, RuleSet::Clang, RuleSet::Clang),
+        (CompilerIdentity::Gcc, RuleSet::Gcc, RuleSet::Gcc),
+        (CompilerIdentity::Msvc, RuleSet::Gcc, RuleSet::Clang),
+        (CompilerIdentity::ClangCl, RuleSet::Clang, RuleSet::Clang),
+        (CompilerIdentity::Tcc, RuleSet::Gcc, RuleSet::Gcc),
+    ] {
+        assert_eq!(identity.rules(), rules, "{identity:?}");
+        assert_eq!(
+            identity.ms_compatible_rules(),
+            ms_compatible,
+            "{identity:?}"
+        );
+        let configuration = base.with_compiler_identity(identity);
+        assert_eq!(
+            configuration.folds_compound_literals(),
+            rules == RuleSet::Clang,
+            "{identity:?}"
+        );
+        if configuration.half_precision_types() {
+            assert_eq!(
+                configuration.half_in_float(),
+                rules == RuleSet::Gcc,
+                "{identity:?}"
+            );
+        }
+    }
+}

@@ -193,10 +193,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let mut result = Self::expression_result(e, result_type);
         if constant {
             result.constant = ConstantClass::Arithmetic;
-            if scalar == Scalar::Float128 {
+            if self.binary128_type(result_type) {
                 // GCC folds these, and `__builtin_nanf128` takes the tag's
                 // payload as `nanf128` does (C99 §7.12.11.2p2, p. 237;
-                // PDF p. 249).
+                // PDF p. 249). `__builtin_nansl` gives a binary128 NaN
+                // where `long double` is binary128 (WebAssembly).
                 let payload = super::builtins::nan_payload_wide(tag.unwrap_or("").as_bytes());
                 let operand = |index: usize| {
                     arguments

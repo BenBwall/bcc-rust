@@ -129,8 +129,12 @@ pub(super) fn write<'a>(object: &Object<'a>) -> Result<ArenaVec<'a, u8>> {
                 string(&mut names, symbol.name)?,
                 (binding << 4) | symbol.kind,
                 symbol.visibility,
-                u16::try_from(symbol.section.map_or(0, |s| section_indices[s]))
-                    .map_err(|_| Error("too many sections"))?,
+                if symbol.common {
+                    SHN_COMMON
+                } else {
+                    u16::try_from(symbol.section.map_or(0, |s| section_indices[s]))
+                        .map_err(|_| Error("too many sections"))?
+                },
                 symbol.value,
                 symbol.size,
             );
@@ -299,3 +303,7 @@ fn pad(out: &mut ArenaVec<'_, u8>, align: u64) -> Result<()> {
     out.resize(size, 0);
     Ok(())
 }
+
+/// The section index of a common symbol (ELF gABI, "Sections", special
+/// section indexes).
+const SHN_COMMON: u16 = 0xFFF2;
