@@ -155,7 +155,38 @@ def operands(ty):
         result.append((f"{ty.tag}#{index}.const", None, constant(ty, value), value))
         if ty.half and value > 0:
             result.append((f"{ty.tag}#{index}.excess", None, f"({name} + zero_{ty.tag})", value))
+        if ty.half and value > 0 and index < 2:
+            result += constant_shapes(ty, index, value)
     return result
+
+
+def constant_shapes(ty, index, value):
+    """Folded constants of the half type `ty` in the shapes whose folding
+    GCC's parser decides differently: a `?:` with a constant condition and
+    a negated unselected operand, a cast of narrowed and of widened
+    arithmetic, a computed operand, a nested cast and `__builtin_complex`
+    beneath a cast."""
+    literal, half = hexfloat(value, ""), hexfloat(value / 2, "")
+    spelling = ty.spelling
+    if ty.kind == "complex":
+        part = "_Float16"
+        shapes = {
+            "builtin": f"__builtin_complex(({part}){literal}, ({part}){hexfloat(Fraction(1, 2), '')})",
+            "nested": f"(({spelling})({part}){literal})",
+        }
+    else:
+        shapes = {
+            "cond": f"(({spelling})(1 ? {literal} : -{literal}))",
+            "sum": f"(({spelling})(float)({half} + {half}))",
+            "wide": f"(({spelling})(long double)({half} + {half}))",
+            "prod": f"(({spelling})({literal} * 1))",
+            "nested": f"(({spelling})({spelling}){literal})",
+        }
+        # Only a value _Float16 holds: its infinity would make a conversion
+        # to an integer undefined.
+        if value <= 65504:
+            shapes["builtin"] = f"(({spelling})__builtin_complex((_Float16){literal}, (_Float16)0))"
+    return [(f"{ty.tag}#{index}.{shape}", None, expression, value) for shape, expression in shapes.items()]
 
 
 def representable(ty, value):
