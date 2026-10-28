@@ -195,10 +195,15 @@ LLVM and the interpreter), `-fno-strict-overflow` (both, as in GCC),
 LLVM drop a later null check; bcc's own optimizer never drops one),
 `-fcommon` (an external tentative definition the unit leaves tentative is
 a common symbol, LLVM `common` or the native back end's `.comm`, which its
-ELF and COFF writers encode, with MinGW's `-aligncomm`; as in Clang, not
-for thread-local objects, objects in a section or with DLL storage, or
-explicitly aligned objects on the MSVC target; bcc's objects then link
-with GCC's `-fcommon` objects, an initialized definition winning),
+ELF and COFF writers encode, with MinGW's `-aligncomm` above a byte; GNU
+`common` asks for one under `-fno-common` and `nocommon` keeps an object a
+definition, the last written winning. As in Clang, a common symbol is
+never constant, `dllexport` exports it, and it is not made for a
+thread-local object, an imported one or one in a section, nor on the MSVC
+target for one whose alignment its declaration, its typedef, its
+`aligned` record type or a member of that record requires, since that
+linker aligns a communal symbol by its size; bcc's objects then link with
+GCC's `-fcommon` objects, an initialized definition winning),
 `-fpack-struct=N` and `cl /ZpN` (the packing before any `#pragma pack`),
 `-fpack-struct` alone (every structure packed, the pragmas ignored with
 GCC's warning), the options that give up part of IEC 60559 semantics
@@ -343,18 +348,21 @@ after those, in command-line order, come the arguments only the link reads
 `-s`, `-shared`, `-pie`, `-rdynamic`, `-nostartfiles`), with the stage
 options and `-fsyntax-only` the stage leaves unused. These warnings follow
 the warning options, as Clang's
-`-Wunused-command-line-argument` does: `-w` or
+`-Wunused-command-line-argument` does: `-w`, `-Qunused-arguments` or
 `-Wno-unused-command-line-argument` silences them, and `-Werror` or
 `-Werror=unused-command-line-argument` makes them errors (`[-Werror,...]`,
 exit status 1) unless `-Wno-error=unused-command-line-argument` exempts
-them; `-Weverything` turns on only the warnings no option has set, so it
+them, after which, as in Clang, the unused linker inputs are still
+reported but no unused argument is; `-Weverything` turns on only the warnings no option has set, so it
 does not undo `-Wno-unused-command-line-argument` or `-Wno-everything`. After a source that fails to compile, Clang compiles the others, as
 GCC does.
 
-`-v`, `-###`, `-H` and `-MG` work as for GCC, with Clang's forms: `-H`
-names a header beside a main file in the working directory `./a.h`, `-MM
--MG` lists a missing `<...>` header too, and `-MG` without `-M` or `-MM`
-is `clang: error: option '-MG' requires '-M' or '-MM'`.
+`-v`, `-###`, `-H` and `-MG` work as for GCC, with Clang's forms: `-v`
+and `-###` quote every word; `-H`, like clang-cl's `/showIncludes`, begins
+every path it reaches from a main file in the working directory through
+its includers' directories with `./` (`./a.h`, `./sub/../b.h`); `-MM -MG`
+lists a missing `<...>` header too; and `-MG` without `-M` or `-MM` is
+`clang: error: option '-MG' requires '-M' or '-MM'`.
 
 **Identity.** bcc's default: the pinned Clang 23.1.1 and the GCC 4.2.1 Clang
 claims. `--version` prints `clang version 23.1.1 (bcc 0.1.0, ...)` with the
@@ -580,7 +588,7 @@ helper calls one of them rather than matching on identities:
 | `_Float16` evaluates in `float` (`half_in_float`, #163) | GCC (TCC and MSVC have no `_Float16`) | Clang, clang-cl |
 | `_BitInt` widths, array compound literals, out-of-range floating conversions (`bit_int_rules`, `array_literal_rules`, `float_conversion_rules`, #174) | GCC, TCC, MSVC | Clang, clang-cl |
 | Pointer/integer cast warnings (`pointer_cast_rules`, #174; `cl`'s C4311 and C4312 warn only for a narrower integer) | GCC, TCC | Clang, clang-cl, MSVC (`ms_compatible_rules`) |
-| `-MG` lists a missing `<...>` header under `-MM`; `-H` names a header beside the main file `./a.h` (the driver) | GCC, TCC, MSVC | Clang, clang-cl |
+| `-MG` lists a missing `<...>` header under `-MM`; `-H` and `/showIncludes` name a header reached from the working directory `./a.h` (the driver) | GCC, TCC, MSVC | Clang, clang-cl |
 
 A rule that compares with `CompilerIdentity::Gcc` alone is equivalent where
 the feature it governs exists only under GCC's identity among those that
@@ -646,7 +654,8 @@ Besides those above:
   list it either.
 - `<float.h>` defines every name GCC 15's and the pinned Clang's define in
   each mode, C23's `FLT_NORM_MAX`, `FLT_SNAN`, `INFINITY` and `NAN` and
-  GCC's `FLT_IS_IEC_60559` among them, except GCC's decimal floating
+  GCC's `FLT_IS_IEC_60559` and, under the IEC 60559 extension macros,
+  `CR_DECIMAL_DIG` among them, except GCC's decimal floating
   `DEC32_*`, `DEC64_*` and `DEC128_*` names in C23 (bcc has no decimal
   types) and `FLT16_SNAN`, whose `__builtin_nansf16` bcc lacks.
 - `<tgmath.h>` gives a `_FloatN` argument the function of the standard type
@@ -666,9 +675,10 @@ Besides those above:
 - `-v` and `-###` print the commands bcc runs, not GCC's or Clang's: each
   step is a bcc command line that bcc runs in process, named by the path
   of the running bcc, then, under `-v`, the bundled clang's assembly and
-  link commands. There is no `cc1`, `as` or `collect2` line, no
-  `COLLECT_GCC_OPTIONS`, and GCC's commands are quoted as Clang quotes
-  them. The header search lists every configured directory, without the
+  link commands. There is no `cc1`, `as` or `collect2` line and no
+  `COLLECT_GCC_OPTIONS`; GCC's `-###` quotes the words with characters
+  other than letters, digits, `_`, `/`, `-` and `.`, and its `-v` none, as
+  GCC does. The header search lists every configured directory, without the
   embedded resource headers, which are no directory on disk.
 - clang-cl's `/o` (a deprecated `/Fe` or `/Fo`), `/imsvc` and the
   `/winsysroot` family are not implemented; they draw the unknown-option
