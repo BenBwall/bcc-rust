@@ -34,13 +34,21 @@ impl WasmBackEnd for Precompiled {
             lines:    None,
             producer: "clang -O0 -g, precompiled".into(),
             command:  format!(
-                "$ clang --target=wasm32 -nostdlib -O0 -g -Wl,--no-entry -Wl,--export-all {} -o {}",
+                "$ clang {LESSON_FLAGS} {} -o {}",
                 demo.name,
                 demo.name.replace(".c", ".wasm")
             ),
         })
     }
 }
+
+/// The flags `web/wasm/generate.sh` compiles the lessons with; each
+/// module records them, with its source, in a `bcc.lesson` custom section.
+pub const LESSON_FLAGS: &str =
+    "--target=wasm32-unknown-unknown -nostdlib -O0 -g -Wl,--no-entry -Wl,--export-all";
+
+/// The custom section that records how a lesson module was built.
+pub const LESSON_SECTION: &str = "bcc.lesson";
 
 /// Why edited source has no module yet.
 pub const UNAVAILABLE: &str = "bcc's WebAssembly back end is not part of this build yet, so the \

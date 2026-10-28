@@ -247,8 +247,9 @@ CLANG=path/to/wasi-sdk/bin/clang sh web/wasm/generate.sh           # rewrite
 CLANG=path/to/wasi-sdk/bin/clang sh web/wasm/generate.sh --check   # compare only
 ```
 
-The site's tests check that each module still matches its lesson (its
-functions and the lines its code comes from). Edited source has no module
+Each module records the flags and the exact source it was built from in a
+`bcc.lesson` custom section, and the site's tests compare that with the
+lessons, so a stale module fails CI, which has no wasm32 clang. Edited source has no module
 yet, and the view says so.
 
 bcc's back end plugs in as a second `WasmBackEnd` that compiles in the

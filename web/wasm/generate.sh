@@ -14,22 +14,49 @@
 # call no library functions), and with every function exported so the
 # stepper finds `main`. `-ffile-prefix-map` keeps the build directory out of
 # the debug information, so the output does not depend on the checkout.
+#
+# Each module ends with a `bcc.lesson` custom section holding FLAGS, a
+# newline, and the lesson's source, which the site's tests compare with the
+# lessons (web/src/wasm/lessons.rs), so a stale module fails CI without a
+# wasm32 clang.
 set -eu
 : "${CLANG:?set CLANG to a clang that targets wasm32 (for example wasi-sdk's)}"
+# Keep in step with LESSON_FLAGS in web/src/wasm/lessons.rs.
+FLAGS='--target=wasm32-unknown-unknown -nostdlib -O0 -g -Wl,--no-entry -Wl,--export-all'
 check=false
 [ "${1:-}" = --check ] && check=true
 cd "$(dirname "$0")"
+
+# Write $1 as an unsigned LEB128.
+leb() {
+    n=$1
+    while :; do
+        byte=$((n % 128))
+        n=$((n / 128))
+        [ "$n" -gt 0 ] && byte=$((byte + 128))
+        printf "\\$(printf '%03o' "$byte")"
+        [ "$n" -gt 0 ] || break
+    done
+}
+
 status=0
 scratch=$(mktemp -d)
 for source in ../demos/*.c; do
     name=$(basename "$source" .c)
     (
         cd ../demos
-        "$CLANG" --target=wasm32-unknown-unknown -nostdlib -O0 -g \
-            -ffile-prefix-map="$PWD"=. \
-            -Wl,--no-entry -Wl,--export-all \
-            "$name.c" -o "$scratch/$name.wasm"
+        # shellcheck disable=SC2086 # FLAGS holds several arguments.
+        "$CLANG" $FLAGS -ffile-prefix-map="$PWD"=. "$name.c" -o "$scratch/$name.wasm"
     )
+    { printf '%s\n' "$FLAGS"; cat "$source"; } > "$scratch/$name.lesson"
+    size=$(wc -c < "$scratch/$name.lesson")
+    {
+        printf '\000'
+        leb $((1 + 10 + size))
+        leb 10
+        printf 'bcc.lesson'
+        cat "$scratch/$name.lesson"
+    } >> "$scratch/$name.wasm"
     if $check; then
         if ! cmp -s "$scratch/$name.wasm" "$name.wasm"; then
             echo "web/wasm/$name.wasm is out of date" >&2

@@ -780,17 +780,27 @@ mod tests {
         assert!(error.contains("unexpected end of the module"), "{error}");
     }
 
-    /// The precompiled modules must come from the lessons' current source:
-    /// every function a lesson defines is in its module, and every C line
-    /// the module's DWARF names holds code. `web/wasm/generate.sh --check`
+    /// The precompiled modules must come from the lessons' current source,
+    /// built with the current flags: each records both in its `bcc.lesson`
+    /// section. Every function a lesson defines is in its module, and every
+    /// C line its DWARF names holds code. `web/wasm/generate.sh --check`
     /// compares the bytes exactly, given a wasm32 clang.
     #[test]
     fn the_precompiled_modules_match_the_lessons() {
         for demo in &DEMOS {
+            let module = Precompiled.compile(demo.source).unwrap();
+            let loaded = Program::load(&module.bytes, None).unwrap();
+            let recorded = loaded
+                .module
+                .custom(crate::wasm::LESSON_SECTION)
+                .unwrap_or_else(|| panic!("{}: no bcc.lesson section", demo.name));
+            assert!(
+                recorded == format!("{}\n{}", crate::wasm::LESSON_FLAGS, demo.source).as_bytes(),
+                "{} was built from other source or flags; run web/wasm/generate.sh",
+                demo.name
+            );
             let mut worker = WasmWorker::default();
-            let program = worker
-                .load(Precompiled.compile(demo.source).unwrap())
-                .unwrap();
+            let program = worker.load(module).unwrap();
             let lines: Vec<&str> = demo.source.lines().collect();
             for line in program.lines.iter().filter_map(|line| line.source) {
                 let text = lines[line as usize - 1].trim();

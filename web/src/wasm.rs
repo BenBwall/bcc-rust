@@ -23,6 +23,8 @@ mod snapshot;
 pub mod worker;
 
 pub use lessons::{
+    LESSON_FLAGS,
+    LESSON_SECTION,
     Precompiled,
     WasmBackEnd,
 };
