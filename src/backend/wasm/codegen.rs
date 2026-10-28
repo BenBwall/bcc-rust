@@ -289,26 +289,29 @@ impl Codegen<'_, '_, '_, '_, '_> {
         index
     }
 
-    /// A scratch local of type `ty` distinct from the `skip` others
-    /// already handed out for the current instruction.
+    /// Scratch local number `skip` of type `ty`, distinct from the others
+    /// of that type an instruction asks for with another `skip`. The
+    /// locals before it are created first, so asking for number 1 before
+    /// number 0 does not hand the same local out twice.
     fn temp(&mut self, ty: ValType, skip: usize) -> u32 {
-        let found = self
-            .temps
-            .iter()
-            .filter(|(temp_ty, _)| *temp_ty == ty)
-            .nth(skip)
-            .map(|&(_, local)| local);
-        if let Some(local) = found {
-            return local;
+        loop {
+            let found = self
+                .temps
+                .iter()
+                .filter(|(temp_ty, _)| *temp_ty == ty)
+                .nth(skip)
+                .map(|&(_, local)| local);
+            if let Some(local) = found {
+                return local;
+            }
+            let mut name = ArenaString::new_in(self.arena);
+            _ = core::fmt::Write::write_fmt(
+                &mut name,
+                format_args!("t{}.{}", self.temps.len(), ty.name()),
+            );
+            let local = self.local(ty, &name);
+            self.temps.push((ty, local));
         }
-        let mut name = ArenaString::new_in(self.arena);
-        _ = core::fmt::Write::write_fmt(
-            &mut name,
-            format_args!("t{}.{}", self.temps.len(), ty.name()),
-        );
-        let local = self.local(ty, &name);
-        self.temps.push((ty, local));
-        local
     }
 
     /// Records a construct the back end cannot translate; translation

@@ -77,7 +77,7 @@ int main(void) {
     ARITHMETIC(ac, 50, 1.5)
     ARITHMETIC(auc, 100, 0.5f)
     ARITHMETIC(as, -300, 2.25)
-    ARITHMETIC(aul, 4000000000ul, 0.5)
+    ARITHMETIC(aul, 2000000000ul, 0.5)
     UPDATE(ab, 0, ab += 0.5, "ab += 0.5");
     UPDATE(ab, 1, ab -= 0.5, "ab -= 0.5");
     UPDATE(ab, 1, ab *= 0.25, "ab *= 0.25");

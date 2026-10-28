@@ -28,6 +28,13 @@ static void show_f(const char *what, const char *type, double result, double sto
 static void show_l(const char *what, const char *type, long double result, long double stored) {
 #if LDBL_MANT_DIG == 64
     printf("%s: %s %La %La\n", what, type, result, stored);
+#elif LDBL_MANT_DIG == 113
+    /* binary128, as on wasm32: the encodings, which not every printf
+       prints exactly. */
+    unsigned long long r[2], s[2];
+    memcpy(r, &result, sizeof r);
+    memcpy(s, &stored, sizeof s);
+    printf("%s: %s %016llx%016llx %016llx%016llx\n", what, type, r[1], r[0], s[1], s[0]);
 #else
     printf("%s: %s %a %a\n", what, type, (double)result, (double)stored);
 #endif

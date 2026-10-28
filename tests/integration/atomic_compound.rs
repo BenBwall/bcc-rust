@@ -6,7 +6,8 @@
 //! or the host GCC: the two keep a half's excess `float` precision in
 //! different places. `atomic_compound_integers.c` (integer and pointer
 //! objects) prints what GCC prints under every identity, because the bundled
-//! Clang miscompiles it.
+//! Clang miscompiles it, and also built for `wasm32-wasip1`, whose ILP32
+//! data model it avoids depending on.
 
 #[cfg(test)]
 #[expect(
@@ -60,6 +61,57 @@ mod tests {
         };
         for (identity, _) in IDENTITIES {
             matches_on_every_back_end(identity, "atomic_compound_integers.c", &[], &expected);
+            matches_on_wasm(identity, "atomic_compound_integers.c", &expected);
+        }
+    }
+
+    /// The fixture built for `wasm32-wasip1`, unoptimized and with both
+    /// optimizers, prints `expected` under Node's WASI; without `node` on
+    /// the path this is skipped.
+    fn matches_on_wasm(identity: &str, name: &str, expected: &str) {
+        if !Command::new("node")
+            .arg("--version")
+            .output()
+            .is_ok_and(|output| output.status.success())
+        {
+            eprintln!("skipping wasm32: node is not on the path");
+            return;
+        }
+        let source = fixture(name);
+        let runner = Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts/wasm/run.mjs");
+        for flags in [&["-O0"][..], &["-O2"], &["--opt=bcc"]] {
+            let module = temporary("atomic.wasm");
+            let built = bcc(&[
+                &[
+                    identity,
+                    "--target=wasm32-wasip1",
+                    &source,
+                    "-o",
+                    module.to_str().unwrap(),
+                ][..],
+                flags,
+            ]
+            .concat());
+            assert!(
+                built.status.success(),
+                "{identity} wasm32 {flags:?}: {}",
+                text(&built.stderr)
+            );
+            let run = run_native(
+                Command::new("node")
+                    .arg("--no-warnings")
+                    .arg(&runner)
+                    .arg(&module),
+            )
+            .unwrap();
+            assert_eq!(
+                run.status.code(),
+                Some(0),
+                "{identity} wasm32 {flags:?}: {}",
+                text(&run.stderr)
+            );
+            assert_eq!(text(&run.stdout), expected, "{identity} wasm32 {flags:?}");
+            std::fs::remove_file(module).unwrap();
         }
     }
 
