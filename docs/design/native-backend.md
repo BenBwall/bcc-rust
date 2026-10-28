@@ -507,7 +507,10 @@ nothing recurses.
    destination then holds the symbolic address `b + i × s`, stale once `b`
    or `i` is redefined, which the instruction using `d(r)` for `d(b, i, s)`
    must find in `r`), and states meet by intersection at joins
-   until a fixed point. Then identity copies go, a copy followed by an
+   until a fixed point. Facts about values the program no longer reads
+   (by the program's own liveness) are dropped as they die, which changes
+   no verdict but keeps the state as small as the live set, so checking a
+   long function takes linear time. Then identity copies go, a copy followed by an
    addition (or a `lea` followed by one) becomes one `lea` where the flags
    are dead, a copy straight back after a copy goes, blocks holding only a
    `jmp` are threaded away, and a `jmp` to a block of at most eight
