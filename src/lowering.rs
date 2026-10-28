@@ -565,8 +565,9 @@ struct FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
     /// The arms of GCC's conditionals, by address, and whether either arm
     /// of each is evaluated with excess precision (`half.rs`).
     conditional_arms:   ArenaVec<'s, (usize, bool)>,
-    /// Whether the conversions being applied belong to such an arm.
-    excess_arm:         bool,
+    /// Whether the conversions being applied belong to an arm of a GCC
+    /// conditional neither of whose arms keeps excess precision.
+    plain_arm:          bool,
     initializer_values: ArenaVec<'s, Item>,
     /// The guaranteed alignment of each known backing address.
     alignments:         ArenaMap<'s, crate::ir::Value, crate::ir::Align>,

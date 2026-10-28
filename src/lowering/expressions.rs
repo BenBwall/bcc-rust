@@ -651,7 +651,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             .iter()
             .find(|(arm, _)| *arm == address)
             .map(|&(_, excess)| excess);
-        self.excess_arm = arm == Some(true);
+        self.plain_arm = arm == Some(false);
         for conversion in self.conversions(expression).iter().skip(skip) {
             if self.unit.sema.types.unanalyzed(conversion.ty) {
                 return Err(LoweringError::unanalyzed(
@@ -725,7 +725,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     self.transparent_union(item, conversion.ty, source)?,
             };
         }
-        self.excess_arm = false;
+        self.plain_arm = false;
         // A plain constant arm of a conditional without an excess arm is
         // rounded, as GCC folds its conversion to the result type.
         if arm == Some(false) && self.widened_constant(item) {
@@ -777,9 +777,10 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         if let Some(widened) = self.widen_plain(item, to) {
             return Ok(widened);
         }
-        // GCC rounds a widened value converted to `_Complex _Float16`, which
-        // only a `?:` arm undergoes, unless an arm keeps excess precision.
-        let item = if self.complex_half(to) && self.widened(item) && !self.excess_arm {
+        // GCC rounds a widened value converted to `_Complex _Float16` as an
+        // arm of a `?:` neither of whose arms keeps excess precision; a cast
+        // leaves it.
+        let item = if self.complex_half(to) && self.widened(item) && self.plain_arm {
             self.settle(item)
         } else {
             item

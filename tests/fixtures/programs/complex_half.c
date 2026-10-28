@@ -63,6 +63,8 @@ static void contexts(void) {
         /* __real__ of a real excess is that excess. */
         printf("real of real %a %a\n", (double)__real__ (__real__ (one ? a * a : a)),
                (double)__real__ (h * h));
+        /* A cast to the complex type keeps GCC's widened value. */
+        printf("complex cast %a\n", (double)__real__ ((C)(H)wide));
     }
     printf("comma %08x\n", cb((0, X) * a));
     printf("real operands %08x %08x %08x\n", cb(a * h * h), cb(h * h * a), cb(a + h * h));
