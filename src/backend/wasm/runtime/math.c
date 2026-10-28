@@ -85,6 +85,57 @@ float fminf(float x, float y) { return (float)fmin(x, y); }
 float fmaxf(float x, float y) { return (float)fmax(x, y); }
 double fdim(double x, double y) { return x > y ? x - y : 0.0; }
 
+/* The representable neighbour of x toward y: one step of the bit pattern
+   as an integer, away from zero when x and y agree in sign and x is the
+   smaller magnitude, toward zero otherwise, and the smallest subnormal of
+   y's sign from a zero. Overflow to infinity and a subnormal or zero
+   result from a nonzero x set ERANGE, as glibc does. C99 7.12.11.3. */
+double nextafter(double x, double y) {
+    if (x != x || y != y)
+        return x + y;
+    if (x == y)
+        return y;
+    union {
+        double d;
+        unsigned long long u;
+    } v = {x};
+    if (x == 0.0) {
+        v.u = (signbit(y) ? 1ull << 63 : 0) | 1;
+        return v.d;
+    }
+    if ((x < y) == (x > 0.0))
+        v.u++;
+    else
+        v.u--;
+    unsigned exponent = (unsigned)(v.u >> 52) & 0x7ffu;
+    if (exponent == 0x7ffu || exponent == 0)
+        errno = ERANGE;
+    return v.d;
+}
+
+float nextafterf(float x, float y) {
+    if (x != x || y != y)
+        return x + y;
+    if (x == y)
+        return y;
+    union {
+        float f;
+        unsigned u;
+    } v = {x};
+    if (x == 0.0f) {
+        v.u = (signbit(y) ? 1u << 31 : 0) | 1;
+        return v.f;
+    }
+    if ((x < y) == (x > 0.0f))
+        v.u++;
+    else
+        v.u--;
+    unsigned exponent = (v.u >> 23) & 0xffu;
+    if (exponent == 0xffu || exponent == 0)
+        errno = ERANGE;
+    return v.f;
+}
+
 /* fmod is exact: the remainder of the aligned significands by repeated
    subtraction, one bit at a time. */
 double fmod(double x, double y) {

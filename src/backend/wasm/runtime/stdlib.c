@@ -130,16 +130,28 @@ double strtod(const char *s, char **end) {
     }
     if (!strncasecmp(p, "nan", 3)) {
         p += 3;
+        unsigned long long payload = 0;
         if (*p == '(') {
             const char *q = p + 1;
             while (isalnum((unsigned char)*q) || *q == '_')
                 q++;
-            if (*q == ')')
+            if (*q == ')') {
+                /* The payload is the sequence read as an integer in base
+                   0 when all of it is one, as in glibc. */
+                char *digits;
+                unsigned long long v = strtoull(p + 1, &digits, 0);
+                if (digits == q)
+                    payload = v;
                 p = q + 1;
+            }
         }
         if (end)
             *end = (char *)p;
-        return sign * __builtin_nan("");
+        union {
+            unsigned long long u;
+            double d;
+        } bits = {(negative ? 1ull << 63 : 0) | 0x7ff8000000000000ull | (payload & 0x7ffffffffffffull)};
+        return bits.d;
     }
     if (p[0] == '0' && (p[1] | 32) == 'x') {
         /* Hexadecimal: exact up to 16 significant digits. */
@@ -267,7 +279,47 @@ double strtod(const char *s, char **end) {
     return sign * v;
 }
 
-float strtof(const char *s, char **end) { return (float)strtod(s, end); }
+float strtof(const char *s, char **end) {
+    double v = strtod(s, end);
+    if (v != v) {
+        /* A NaN keeps its payload's low bits, as in glibc; converting the
+           double would keep its high ones. */
+        union {
+            double d;
+            unsigned long long u;
+        } wide = {v};
+        union {
+            unsigned u;
+            float f;
+        } narrow = {(unsigned)(wide.u >> 32 & 0x80000000u) | 0x7fc00000u | (unsigned)(wide.u & 0x3fffffu)};
+        return narrow.f;
+    }
+    return (float)v;
+}
+
+/* nan("n-char-sequence") is strtod("NAN(n-char-sequence)"), C99
+   7.12.11.2; text receives that string. */
+static void nan_text(char *text, size_t size, const char *tag) {
+    size_t length = strlen(tag);
+    if (length > size - 6)
+        length = 0;
+    memcpy(text, "nan(", 4);
+    memcpy(text + 4, tag, length);
+    text[4 + length] = ')';
+    text[5 + length] = 0;
+}
+
+double nan(const char *tag) {
+    char text[80];
+    nan_text(text, sizeof text, tag);
+    return strtod(text, 0);
+}
+
+float nanf(const char *tag) {
+    char text[80];
+    nan_text(text, sizeof text, tag);
+    return strtof(text, 0);
+}
 long double strtold(const char *s, char **end) { return strtod(s, end); }
 double atof(const char *s) { return strtod(s, 0); }
 
