@@ -182,6 +182,16 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         temporary,
         ..Plan::default()
     };
+    // GCC quotes `-###`'s words only where the shell needs it and `-v`'s
+    // not at all; Clang quotes every word.
+    let style = |dry_run: bool| {
+        use crate::backend::llvm::CommandStyle;
+        match (personality, dry_run) {
+            | (Personality::Gcc, true) => CommandStyle::GccDryRun,
+            | (Personality::Gcc, false) => CommandStyle::GccVerbose,
+            | _ => CommandStyle::Clang,
+        }
+    };
     // `-v` prints each step before running it, and bcc's driver then
     // prints the commands it runs and its header search, as GCC's and
     // Clang's subprocesses do; `-###` prints the steps alone.
@@ -189,7 +199,7 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         let mut text = version::verbose(personality, target);
         if state.dry_run {
             for bcc in &steps {
-                text.push_str(&super::command_line(bcc));
+                text.push_str(&super::command_line(bcc, style(true)));
             }
         }
         plan.steps.push(Step::Print { text, stderr: true });
@@ -209,7 +219,7 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         if state.verbose {
             bcc.insert(1, "-v".into());
             plan.steps.push(Step::Print {
-                text:   super::command_line(&bcc),
+                text:   super::command_line(&bcc, style(false)),
                 stderr: true,
             });
         }

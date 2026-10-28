@@ -2612,10 +2612,12 @@ mod tests {
         succeeds(&output);
         let text = stderr(&output);
         assert!(text.starts_with("Target: x86_64-linux-gnu\n"), "{text}");
+        // GCC's `-v` quotes nothing, its `-###` only what the shell needs.
         assert!(
-            text.contains(&line(
-                "\"-v\" \"--compiler-identity=gcc\" \"--diagnostic-format=gcc\" \
-                 \"--target=x86_64-unknown-linux-gnu\" \"--driver-name=gcc\" \"a.c\" \"-c\""
+            text.contains(&format!(
+                " {} -v --compiler-identity=gcc --diagnostic-format=gcc \
+                 --target=x86_64-unknown-linux-gnu --driver-name=gcc a.c -c\n",
+                exe.display()
             )),
             "{text}"
         );
@@ -2951,6 +2953,28 @@ mod tests {
         let output = directory.bcc("--gcc-mode", &["-fcommon", "a.c", "b.c", "-o", "gab"]);
         succeeds(&output);
         assert_eq!(stderr(&output), "");
+    }
+
+    /// GCC's `-###` quotes a word only when it has a character other than a
+    /// letter, digit, `_`, `/`, `-` or `.`, escaping `"`, `\` and `$`.
+    #[test]
+    fn gcc_dry_run_quotes_as_gcc_does() {
+        let directory = Directory::new();
+        directory.write("a b.c", "int a;\n");
+        let output = directory.bcc(
+            "--gcc-mode",
+            &["-###", "-c", "a b.c", "-DX=\"y z\"", "-o", "o$.o"],
+        );
+        succeeds(&output);
+        let text = stderr(&output);
+        assert!(
+            text.ends_with(
+                " \"--compiler-identity=gcc\" \"--diagnostic-format=gcc\" \
+                 \"--target=x86_64-unknown-linux-gnu\" \"--driver-name=gcc\" \"a b.c\" -D \
+                 \"X=\\\"y z\\\"\" -c \"--output=o\\$.o\"\n"
+            ),
+            "{text}"
+        );
     }
 
     /// Clang reports every unused linker input, but no unused argument once

@@ -18,7 +18,7 @@ use std::{
         Output,
     },
     sync::atomic::{
-        AtomicBool,
+        AtomicU8,
         AtomicU64,
         Ordering,
     },
@@ -85,22 +85,43 @@ pub(crate) fn compile_module_checked(
     }
 }
 
-/// Whether the toolchain prints each command it runs to stderr first, as
-/// Clang's `-v` does.
-static PRINT_COMMANDS: AtomicBool = AtomicBool::new(false);
+/// How the toolchain prints each command it runs to stderr first, for the
+/// driver's `-v`: [`CommandStyle`] as a number, or 0 for not at all.
+static PRINT_COMMANDS: AtomicU8 = AtomicU8::new(0);
 
-/// Makes the toolchain print each command it runs before running it, for
-/// the driver's `-v`.
-pub(crate) fn print_commands(enabled: bool) {
-    PRINT_COMMANDS.store(enabled, Ordering::Relaxed);
+/// How a compiler driver spells the commands it runs.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(u8)]
+pub(crate) enum CommandStyle {
+    /// Clang's `-v` and `-###`: every word quoted, with `"`, `\` and `$`
+    /// escaped by a backslash.
+    Clang = 1,
+    /// GCC's `-###`: a word with a character other than a letter, digit,
+    /// `_`, `/`, `-` or `.` quoted as Clang quotes it, the others bare.
+    GccDryRun = 2,
+    /// GCC's `-v`: every word bare.
+    GccVerbose = 3,
+}
+
+/// Makes the toolchain print each command it runs, in `style`, before
+/// running it, for the driver's `-v`; `None` prints nothing.
+pub(crate) fn print_commands(style: Option<CommandStyle>) {
+    PRINT_COMMANDS.store(style.map_or(0, |style| style as u8), Ordering::Relaxed);
 }
 
 /// Runs `command` to completion, first printing it when
 /// [`print_commands`] asked for that.
 fn run(command: &mut Command) -> io::Result<Output> {
-    if PRINT_COMMANDS.load(Ordering::Relaxed) {
+    let style = match PRINT_COMMANDS.load(Ordering::Relaxed) {
+        | 1 => Some(CommandStyle::Clang),
+        | 2 => Some(CommandStyle::GccDryRun),
+        | 3 => Some(CommandStyle::GccVerbose),
+        | _ => None,
+    };
+    if let Some(style) = style {
         drop(write_command(
             &mut io::stderr().lock(),
+            style,
             command.get_program(),
             command.get_args(),
         ));
@@ -108,17 +129,31 @@ fn run(command: &mut Command) -> io::Result<Output> {
     command.output()
 }
 
-/// Writes a command as Clang's `-v` and `-###` print one: a space before
-/// each word, each word quoted, and `"`, `\` and `$` within it escaped
-/// with a backslash; then a newline.
+/// Writes a command as a compiler driver's `-v` or `-###` prints one, in
+/// `style`: a space before each word, then a newline. GCC's rule is
+/// `gcc.cc`'s `execute`.
 pub(crate) fn write_command<'a>(
     out: &mut impl io::Write,
+    style: CommandStyle,
     program: &'a OsStr,
     arguments: impl IntoIterator<Item = &'a OsStr>,
 ) -> io::Result<()> {
     for word in std::iter::once(program).chain(arguments) {
+        let bytes = word.as_encoded_bytes();
+        let quoted = match style {
+            | CommandStyle::Clang => true,
+            | CommandStyle::GccDryRun => !bytes.iter().all(|byte| {
+                byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'/' | b'-' | b'.')
+            }),
+            | CommandStyle::GccVerbose => false,
+        };
+        if !quoted {
+            out.write_all(b" ")?;
+            out.write_all(bytes)?;
+            continue;
+        }
         out.write_all(b" \"")?;
-        for byte in word.as_encoded_bytes() {
+        for byte in bytes {
             if matches!(byte, b'"' | b'\\' | b'$') {
                 out.write_all(b"\\")?;
             }
