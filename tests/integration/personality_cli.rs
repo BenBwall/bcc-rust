@@ -3145,4 +3145,31 @@ mod tests {
             }
         }
     }
+
+    /// GCC's `CR_DECIMAL_DIG` comes with the IEC 60559 extension macros
+    /// under its identity; Clang's header has none.
+    #[test]
+    fn cr_decimal_dig_follows_gcc() {
+        let directory = Directory::new();
+        directory.write("float.c", "#include <float.h>\n");
+        for (mode, defined) in [("--gcc-mode", true), ("--clang-mode", false)] {
+            for want in [
+                "-D__STDC_WANT_IEC_60559_EXT__",
+                "-D__STDC_WANT_IEC_60559_BFP_EXT__",
+            ] {
+                let output = directory.bcc(mode, &[want, "-E", "-dM", "float.c"]);
+                succeeds(&output);
+                assert_eq!(
+                    defines(&stdout(&output), "CR_DECIMAL_DIG").as_deref(),
+                    defined.then_some("__UINTMAX_MAX__"),
+                    "{mode} {want}"
+                );
+            }
+            let output = directory.bcc(mode, &["-E", "-dM", "float.c"]);
+            assert!(
+                defines(&stdout(&output), "CR_DECIMAL_DIG").is_none(),
+                "{mode}"
+            );
+        }
+    }
 }

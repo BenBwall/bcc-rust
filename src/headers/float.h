@@ -135,6 +135,13 @@
 #endif
 #endif
 #undef __BCC_FLOAT_ALL
+/* C23 §5.2.5.3.3 paragraph 21 and §F.5 (N3220, pp. 25, 517): the decimal
+   digits that convert correctly rounded, which GCC's header gives under
+   the IEC 60559 extension macros; Clang's has none. */
+#if defined(__FLT_IS_IEC_60559__) && \
+    (defined(__STDC_WANT_IEC_60559_BFP_EXT__) || defined(__STDC_WANT_IEC_60559_EXT__))
+#define CR_DECIMAL_DIG __UINTMAX_MAX__
+#endif
 /* ISO/IEC TS 18661-3 (C23 Annex H.11): the _FloatN and _FloatNx
    characteristics, as GCC's <float.h> defines them for the types whose
    __FLTN_MANT_DIG__ the compiler predefines (_Float16 for the GCC and
