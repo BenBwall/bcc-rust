@@ -29,12 +29,33 @@
    TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
    SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-   The FreeBSD and fdlibm routines carry Sun's notice:
+   The FreeBSD routines keep their own notices:
 
+   e_rem_pio2.c, s_sin.c, s_cos.c and s_tan.c:
    ====================================================
    Copyright (C) 1993 by Sun Microsystems, Inc. All rights reserved.
 
    Developed at SunPro, a Sun Microsystems, Inc. business.
+   Permission to use, copy, modify, and distribute this
+   software is freely granted, provided that this notice
+   is preserved.
+   ====================================================
+   e_rem_pio2.c: Optimized by Bruce D. Evans.
+
+   k_rem_pio2.c, k_sin.c and k_cos.c:
+   ====================================================
+   Copyright (C) 1993 by Sun Microsystems, Inc. All rights reserved.
+
+   Developed at SunSoft, a Sun Microsystems, Inc. business.
+   Permission to use, copy, modify, and distribute this
+   software is freely granted, provided that this notice
+   is preserved.
+   ====================================================
+
+   k_tan.c:
+   ====================================================
+   Copyright 2004 Sun Microsystems, Inc.  All Rights Reserved.
+
    Permission to use, copy, modify, and distribute this
    software is freely granted, provided that this notice
    is preserved.
