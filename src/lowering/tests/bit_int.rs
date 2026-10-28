@@ -60,6 +60,7 @@ fn bit_ints_wider_than_128_bits_are_refused() {
         "int f(int i) { return (int)(_BitInt(129))i; }",
         "struct S { _BitInt(200) x; }; extern struct S s; int f(void) { return s.x; }",
         "_BitInt(129) g(_BitInt(129) a); int h(void) { g(0); return 0; }",
+        "int f(void) { switch ((_BitInt(200))1) { case 1: return 1; default: return 0; } }",
     ] {
         let errors = lower(source).expect_err("refused");
         assert!(

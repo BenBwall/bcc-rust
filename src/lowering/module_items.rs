@@ -1674,8 +1674,13 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
         if let Some(value) = value {
             let value = match representation {
                 | Repr::Bool => i128::from(value != 0),
+                // A narrow bit-precise object stores its padding bits
+                // extended from its width, as GCC and Clang do.
                 | Repr::Int { .. } | Repr::Pointer => {
-                    let bits = u32::try_from(size * 8).map_err(|_| unsupported())?;
+                    let bits = match representation.narrow() {
+                        | Some((_, _, width)) => width,
+                        | None => u32::try_from(size * 8).map_err(|_| unsupported())?,
+                    };
                     Integer::int(value)
                         .cast(bits, representation.signed())
                         .value
@@ -2212,8 +2217,9 @@ fn string_form(literal: StringTokenType) -> (LiteralId, u8) {
 /// converts to directly, so an `unsigned __int128` takes values from 2^127
 /// up (C99 §6.3.1.4 paragraph 1, p. 43; PDF p. 55).
 fn integer_destination(representation: Repr) -> (u32, bool) {
-    (
-        representation.value_type().map_or(128, Type::bits),
-        representation.signed(),
-    )
+    let width = match representation.narrow() {
+        | Some((_, _, width)) => width,
+        | None => representation.value_type().map_or(128, Type::bits),
+    };
+    (width, representation.signed())
 }

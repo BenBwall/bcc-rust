@@ -1494,10 +1494,11 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         ty: TypeId,
         source: SourceVectors,
     ) -> Result<Item, LoweringError> {
+        let representation = self.repr(ty, source)?;
         if matches!(
             operator,
             BinaryOperator::Addition | BinaryOperator::Subtraction
-        ) && matches!(self.repr(ty, source)?, Repr::Int { .. })
+        ) && matches!(representation, Repr::Int { .. })
         {
             let a = self.value(left, source)?;
             let b = self.value(right, source)?;
@@ -1506,8 +1507,10 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             } else {
                 Opcode::Isub
             };
+            // A narrow bit-precise sum wraps at its width.
+            let value = self.binary_inst(op, InstFlags::empty(), a, b);
             return Ok(Item {
-                operand: Operand::Value(self.binary_inst(op, InstFlags::empty(), a, b)),
+                operand: Operand::Value(self.normalize(value, representation)),
                 ty,
             });
         }

@@ -203,9 +203,12 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 ))
             },
             | types::Repr::Float { ty } => Operand::Value(self.convert(Opcode::Bitcast, ty, bits)),
-            | _ => {
+            // A narrow bit-precise object's padding bits need not extend
+            // its value (`FunctionLowerer::normalize`).
+            | representation => {
                 let result_ty = self.value_type(ty, source)?;
-                Operand::Value(self.extend(bits, false, result_ty))
+                let value = self.extend(bits, false, result_ty);
+                Operand::Value(self.normalize(value, representation))
             },
         };
         Ok(Item { operand, ty })
