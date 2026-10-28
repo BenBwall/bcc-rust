@@ -147,7 +147,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                             let place = self.recursive_expression(left_expression, false)?;
                             self.operands.push(place);
                             self.read_for_update(left_expression)?;
-                            let old = self.pop();
+                            let old = self.pop_excess();
                             self.operands.extend_from_slice(&[right, place, old]);
                             self.finish(expression)?;
                             self.pop()

@@ -60,5 +60,32 @@ int main(void) {
     ah = (HALF)2048;
     for (int i = 0; i < 4; ++i) ah++;
     printf("increments %a\n", (double)ah);
+    /* Integer objects with a half operand: both compilers convert the
+       object straight to `float`, compute there and convert the result
+       straight back, so 2047 and 4097 do not round to a half first. */
+    static volatile HALF three = (HALF)3.0;
+    static int pi;
+    static _Atomic int ai;
+    static _Atomic unsigned char auc;
+    static _Atomic _Bool ab;
+#define INTEGER(obj, init, op, rhs)                                         \
+    obj = init; printf(#obj " = " #init ", " #obj " " #op " " #rhs ": %d", obj op rhs); \
+    printf(" %d\n", obj);
+#define EVERY_INTEGER(obj)                                                  \
+    INTEGER(obj, 2047, +=, vh) INTEGER(obj, 4097, -=, vh)                   \
+    INTEGER(obj, 2047, *=, vh) INTEGER(obj, 4097, *=, vh)                   \
+    INTEGER(obj, 2047, /=, three) INTEGER(obj, -4097, /=, three)
+    EVERY_INTEGER(pi)
+    INTEGER(ai, 2047, *=, vh) INTEGER(ai, 4097, *=, vh)
+    INTEGER(ai, 2047, /=, three)
+    INTEGER(auc, 200, *=, vh) INTEGER(ab, 1, *=, vh)
+#ifndef __clang__
+    /* Clang 23 computes an atomic integer's `+=` and `-=` of a floating
+       operand in the integer type, and converts a negative atomic integer
+       to `float` as an unsigned one. */
+    INTEGER(ai, 2047, +=, vh) INTEGER(ai, 4097, -=, vh)
+    INTEGER(ai, -4097, /=, three)
+    INTEGER(auc, 200, -=, vh) INTEGER(ab, 0, +=, vh)
+#endif
     return 0;
 }

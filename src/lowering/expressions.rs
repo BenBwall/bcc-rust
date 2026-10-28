@@ -479,7 +479,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 left_expression,
                 ..
             } if let Some(operation) = compound_operator(operator) => {
-                let left = self.pop();
+                let left = self.pop_excess();
                 let place = self.pop();
                 let right = self.pop_excess();
                 let operation_type = info.operation_type.ok_or_else(|| {
@@ -500,14 +500,14 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                         let old = this.convert_observed(left_expression, old)?;
                         let result =
                             this.atomic_binary(operation, old, right, operation_type, source)?;
-                        let converted = this.convert_value(result, back, source)?;
+                        let converted = this.convert_back(result, back, source)?;
                         Ok(this.settle(converted))
                     })?;
                     self.push_item(stored.operand, info.ty);
                     return Ok(());
                 }
                 let result = self.binary(operation, left, right, operation_type, source)?;
-                let converted = self.convert_value(result, back, source)?;
+                let converted = self.convert_back(result, back, source)?;
                 let stored = self.write(place, converted, source)?;
                 self.push_item(stored.operand, info.ty);
             },
@@ -654,11 +654,12 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         expression: &'tu Expression<'tu>,
     ) -> Result<(), LoweringError> {
         let place = self.operands.last().expect("the place is on the stack");
-        if matches!(self.unit.sema.types.kind(place.ty), TypeKind::Atomic(_)) {
-            let loads = self.lvalue_conversions(expression);
-            return self.convert_recorded_part(expression, 0, loads);
-        }
-        self.convert_recorded(expression, 0)
+        let take = if matches!(self.unit.sema.types.kind(place.ty), TypeKind::Atomic(_)) {
+            self.lvalue_conversions(expression)
+        } else {
+            usize::MAX
+        };
+        self.convert_recorded_part(expression, 0, take, true)
     }
 
     /// The value `old`, loaded from atomic operand `expression`, after the
@@ -671,8 +672,27 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
     ) -> Result<Item, LoweringError> {
         let loads = self.lvalue_conversions(expression);
         self.operands.push(old);
-        self.convert_recorded_part(expression, loads, usize::MAX)?;
-        Ok(self.pop())
+        self.convert_recorded_part(expression, loads, usize::MAX, true)?;
+        Ok(self.pop_excess())
+    }
+
+    /// Converts the result of a compound assignment's operation back to the
+    /// left operand's type `back`. A half computation's `float` excess
+    /// converts to an integer left operand directly, for both compilers:
+    /// Clang's `EmitCompoundAssignLValue` computes in the promotion type
+    /// from an operand converted straight to it, as GCC keeps the excess.
+    /// C99: §6.5.16.2 paragraph 3, p. 93; PDF p. 105.
+    fn convert_back(
+        &mut self,
+        result: Item,
+        back: TypeId,
+        source: SourceVectors,
+    ) -> Result<Item, LoweringError> {
+        if matches!(result.operand, Operand::Excess(_)) && self.half(back).is_none() {
+            let target = self.repr(back, source)?;
+            return self.convert_excess(result, back, target, source);
+        }
+        self.convert_value(result, back, source)
     }
 
     /// The number of lvalue conversions that lead the conversions recorded
@@ -691,16 +711,19 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         expression: &'tu Expression<'tu>,
         skip: usize,
     ) -> Result<(), LoweringError> {
-        self.convert_recorded_part(expression, skip, usize::MAX)
+        self.convert_recorded_part(expression, skip, usize::MAX, false)
     }
 
     /// Applies `take` of the conversions recorded on `expression`, from the
-    /// `skip`th, to the operand on top of the stack.
+    /// `skip`th, to the operand on top of the stack. The operand an
+    /// `update` reads converts from an integer to a half computation type
+    /// straight to `float`, for both compilers (`convert_back`).
     fn convert_recorded_part(
         &mut self,
         expression: &'tu Expression<'tu>,
         skip: usize,
         take: usize,
+        update: bool,
     ) -> Result<(), LoweringError> {
         let source = expression.source_vectors;
         let mut item = self.pop_excess();
@@ -764,7 +787,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     }
                 },
                 | ConversionKind::Arithmetic
-                    if self.half_in_float()
+                    if (self.half_in_float() || update)
                         && self.half(conversion.ty).is_some()
                         && matches!(self.repr(item.ty, source)?, Repr::Int { .. } | Repr::Bool) =>
                 {

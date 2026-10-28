@@ -889,7 +889,8 @@ operand once. The loop loads and compares the object's own representation:
 each attempt converts the observed value to the computation type, operates,
 and converts the result back (C11 §6.5.16.2p3), so `_Atomic float` `+=` a
 `double` adds in `double` and `_Atomic int` `-=` `0.5` subtracts in `double`.
-The bundled Clang 23
+An integer object with a half operand converts straight to `float` and back
+under both identities, atomic or not, as GCC and Clang do. The bundled Clang 23
 miscompiles atomic integer objects updated by floating operands (it computes
 `+=` and `-=` in the integer type and treats narrow or negative signed values
 as unsigned in its loop), so `tests/fixtures/programs/atomic_compound_integers.c`
