@@ -183,3 +183,28 @@ fn bit_int_maxwidth_follows_the_identity() {
         );
     }
 }
+
+#[test]
+fn webassembly_takes_clangs_128_bits() {
+    for identity in [CompilerIdentity::Gcc, CompilerIdentity::Clang] {
+        let mut result = Vec::new();
+        with_configuration(
+            "_Static_assert(__BITINT_MAXWIDTH__ == 128, \"\"); _BitInt(128) a; _BitInt(129) b;",
+            CompilerConfiguration::new(CStandard::C23, ExtensionPolicy::Allow)
+                .with_compiler_identity(identity)
+                .with_target(crate::target::Target::Wasm32Wasi),
+            |context, _| {
+                for error in context.take_pending_errors() {
+                    if let TranslationError::Semantic(error) = error {
+                        result.push(error.kind);
+                    }
+                }
+            },
+        );
+        assert_eq!(
+            result,
+            [SemanticErrorKind::BitIntWidthTooLarge],
+            "{identity:?}"
+        );
+    }
+}

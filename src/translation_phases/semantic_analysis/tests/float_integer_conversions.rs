@@ -106,6 +106,12 @@ fn each_identity_reports_its_own_conversions() {
         ("_Atomic int x = 2.5;", &[], &[], 0),
         // A comparison's result is a fresh constant to GCC.
         ("int x = (int)1e10 == 2147483647;", &[], &[], 0),
+        // Nor is the operand `?:` does not select, its condition, or a
+        // conversion to `_Bool`; the selected operand is.
+        ("int x = (int)1e10 ? 1 : 2;", &[], &[], 0),
+        ("int x = 1 ? 3 : (int)1e10;", &[], &[], 0),
+        ("int x = (_Bool)(int)1e10;", &[], &[], 0),
+        ("int x = 1 ? (int)1e10 : 3;", &[], &[], 1),
         (
             "void f(void) { static int x = 1e10; (void)x; }",
             &[Overflow],
@@ -264,6 +270,23 @@ fn gcc_finds_no_constant_in_an_overflowing_conversion() {
             |context, unit| {
                 let errors = context.take_pending_errors();
                 assert_eq!(unit.errors, 0, "{identity:?}: {errors:?}");
+            },
+        );
+    }
+}
+
+#[test]
+fn gccs_conversion_options_leave_clangs_groups_alone() {
+    // GCC's `-Wconversion` holds no `-Wpointer-bool-conversion`.
+    for (identity, errors) in [(CompilerIdentity::Gcc, 0), (CompilerIdentity::Clang, 1)] {
+        with_configuration(
+            "int a[2]; int f(void) { return a ? 1 : 0; }",
+            CompilerConfiguration::new(CStandard::C17, ExtensionPolicy::Allow)
+                .with_compiler_identity(identity)
+                .with_warning_option(DiagnosticGroup::Conversion, WarningOption::Error(true)),
+            |context, unit| {
+                drop(context.take_pending_errors());
+                assert_eq!(unit.errors, errors, "{identity:?}");
             },
         );
     }

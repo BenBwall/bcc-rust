@@ -1750,8 +1750,8 @@ impl SemanticErrorKind {
             ),
             | Self::BitIntWidthTooLarge => (
                 "_BitInt width exceeds BITINT_MAXWIDTH",
-                "C23 §6.7.3.1p4: N is at most BITINT_MAXWIDTH, which is 65535 for GCC and 8388608 \
-                 for Clang",
+                "C23 §6.7.3.1p4: N is at most BITINT_MAXWIDTH: 65535 for GCC and 8388608 for Clang \
+                 on x86-64, 128 on WebAssembly",
             ),
             | Self::NamedZeroWidthBitField => (
                 "named bit-field has zero width",

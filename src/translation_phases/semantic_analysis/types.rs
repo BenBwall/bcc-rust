@@ -395,7 +395,7 @@ impl<'tu, 's> TypeInterner<'tu, 's> {
     /// C99: §5.1.1.3p1, p. 11; PDF p. 23 (diagnostic identification).
     pub(crate) fn recovery_type(&mut self, operands: &[TypeId]) -> TypeId {
         match operands.iter().find_map(|&ty| self.unmodeled_type(ty)) {
-            | Some(reason) => self.unmodeled(reason),
+            | Some(reason) => self.unmodeled(reason.anonymous()),
             | None => self.unknown(),
         }
     }
@@ -502,6 +502,15 @@ pub(crate) enum UnmodeledType {
 }
 
 impl UnmodeledType {
+    /// The reason without a `_BitInt`'s width, which a record or an
+    /// expression built on one does not have.
+    pub(crate) const fn anonymous(self) -> Self {
+        match self {
+            | Self::BitInt { .. } => Self::BitInt { width: 0 },
+            | reason => reason,
+        }
+    }
+
     pub(crate) const fn description(self) -> &'static str {
         match self {
             | Self::BitInt { .. } => "_BitInt types",

@@ -116,6 +116,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         // The width of an integer type, and whether it is an enumeration. A
         // `_BitInt`'s checked width counts, though the type is unmodeled.
         let integer = |ty: TypeId| -> Option<(u64, bool)> {
+            // Clang's integral types exclude an atomic one, which a cast's
+            // value keeps (`(char *)(_Atomic int)i`); GCC drops it.
+            if !gcc && matches!(self.types.nodes[ty.index], TypeKind::Atomic(_)) {
+                return None;
+            }
             let ty = self.types.non_atomic(ty);
             let enumeration = match self.types.nodes[ty.index] {
                 | TypeKind::Unmodeled(super::super::types::UnmodeledType::BitInt { width })
@@ -133,7 +138,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         {
             // Even an unevaluated operand that is no constant (`1 ? 2 : i`)
             // keeps the cast from being an integer constant expression.
-            let ice = operand.ice && self.valid_ice_operands(operand.expression);
+            let ice = operand.ice && self.valid_ice_operands(operand.expression)
+                || self.bit_int_constant(operand.expression);
             if gcc {
                 let constant = ice || self.casts_address_constant(operand.expression);
                 (bits != pointer_bits && !enumeration && !constant)
@@ -176,6 +182,33 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         {
             self.pointer_diagnostic(group, site);
         }
+    }
+
+    /// Whether `expression` casts an integer constant expression to a
+    /// `_BitInt` (`(_BitInt(32))3`), possibly through further such casts:
+    /// an integer constant expression to both compilers, though the type is
+    /// unmodeled.
+    /// C99: §6.6 paragraph 6, p. 95; PDF p. 107.
+    fn bit_int_constant(&mut self, mut expression: &'tu super::Expression<'tu>) -> bool {
+        use crate::translation_phases::parsing::syntax::ExpressionType as E;
+        let mut cast = false;
+        loop {
+            match expression.kind {
+                | E::Parenthesized { expression: inner } => expression = inner,
+                | E::Cast {
+                    operand_expression, ..
+                } if matches!(
+                    self.types.nodes[self.expression_info(expression).ty.index],
+                    TypeKind::Unmodeled(super::super::types::UnmodeledType::BitInt { .. })
+                ) =>
+                {
+                    cast = true;
+                    expression = operand_expression;
+                },
+                | _ => break,
+            }
+        }
+        cast && self.expression_info(expression).ice && self.valid_ice_operands(expression)
     }
 
     /// Whether `expression` is an address constant, possibly inside casts,

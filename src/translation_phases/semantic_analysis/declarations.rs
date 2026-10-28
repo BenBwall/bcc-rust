@@ -295,7 +295,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     | Some(reason) => self.types.unmodeled(reason),
                     | None => self.types.unknown(),
                 };
-                self.values.push(ty);
+                // A `_BitInt`'s type, with its width, follows the width's
+                // check (`Analyzer::bit_int_width`).
+                if !matches!(*extended, super::ExtendedType::BitInt { .. }) {
+                    self.values.push(ty);
+                }
                 match *extended {
                     | super::ExtendedType::Atomic(name) =>
                         self.syntax_operand(super::SyntaxOperand::Type(name)),
@@ -355,8 +359,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// `-1` as too large, against its 2^23 bits, and folds any arithmetic
     /// constant. TCC and MSVC follow GCC, clang-cl Clang
     /// ([`crate::configuration::CompilerConfiguration::bit_int_rules`]). A
-    /// width already diagnosed is not reported again, and a valid one
-    /// records its width in the type.
+    /// width already diagnosed is not reported again. The specifier's type,
+    /// which records a valid width (0 for an invalid one), is pushed here.
     /// C23: §6.7.3.1 paragraph 4, p. 104; PDF p. 117.
     pub(super) fn bit_int_width(
         &mut self,
@@ -365,11 +369,22 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         source: SourceVectors,
         errors_before: usize,
     ) {
-        /// GCC's and Clang's `BITINT_MAXWIDTH` on x86-64.
-        const GCC_MAXIMUM: i128 = 65535;
-        const CLANG_MAXIMUM: u64 = 1 << 23;
+        let width = self.checked_bit_int_width(width, signed, source, errors_before);
+        let ty = self.types.unmodeled(UnmodeledType::BitInt { width });
+        self.values.push(ty);
+    }
+
+    /// The width [`Self::bit_int_width`] checks, or 0 if it is invalid.
+    fn checked_bit_int_width(
+        &mut self,
+        width: &'tu super::Expression<'tu>,
+        signed: bool,
+        source: SourceVectors,
+        errors_before: usize,
+    ) -> u32 {
+        let maximum = self.context.configuration.bit_int_max_width();
         if self.semantic_errors != errors_before || self.unanalyzed_constant(width) {
-            return;
+            return 0;
         }
         let gcc = self.context.configuration.bit_int_rules() == crate::configuration::RuleSet::Gcc;
         let info = self.expression_info(width);
@@ -415,14 +430,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 None,
                 None,
             );
-            return;
+            return 0;
         };
         // The width as the identity's compiler reads it, if it is valid.
         let width = if gcc {
             match value.to_i128() {
                 | Some(..=0) => Err(SemanticErrorKind::NonPositiveBitIntWidth),
                 | Some(1) if signed => Err(SemanticErrorKind::SignedBitIntWidth),
-                | Some(width @ 1..=GCC_MAXIMUM) =>
+                | Some(width @ 1..) if width <= i128::from(maximum) =>
                     u64::try_from(width).map_err(|_| SemanticErrorKind::BitIntWidthTooLarge),
                 | _ => Err(SemanticErrorKind::BitIntWidthTooLarge),
             }
@@ -439,7 +454,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 } else {
                     SemanticErrorKind::NonPositiveBitIntWidth
                 })
-            } else if bits > CLANG_MAXIMUM {
+            } else if bits > maximum {
                 Err(SemanticErrorKind::BitIntWidthTooLarge)
             } else {
                 Ok(bits)
@@ -449,23 +464,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | Ok(width) => width,
             | Err(kind) => {
                 self.error(kind, source, None, None);
-                return;
+                return 0;
             },
         };
-        // The specifier's type is still the value the width's analysis left
-        // on top; it now records the width.
-        if let Some(ty) = self.values.last_mut()
-            && self.types.nodes[ty.index] == TypeKind::Unmodeled(UnmodeledType::BitInt { width: 0 })
-            && let Ok(width) = u32::try_from(width)
-        {
-            *ty = self.types.unmodeled(UnmodeledType::BitInt { width });
-        }
         if gcc {
             // GCC reports the type before C23 once its width is valid, as
             // `'_BitInt(8)'`; the keyword reports it for Clang.
             self.context
                 .report_extension(crate::configuration::Feature::BitInt, "_BitInt", source);
         }
+        u32::try_from(width).unwrap_or(0)
     }
 
     /// Declarator suffixes derive from the base inward, then grouped children.
@@ -1105,8 +1113,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             // diagnosed; completion preserves it without dependent errors.
             if member.invalid {
                 tag.tainted.set(true);
-                tag.unmodeled
-                    .set(tag.unmodeled.get().or(self.types.unmodeled_type(member.ty)));
+                tag.unmodeled.set(
+                    tag.unmodeled.get().or(self
+                        .types
+                        .unmodeled_type(member.ty)
+                        .map(UnmodeledType::anonymous)),
+                );
                 output.push(member);
                 continue;
             }
@@ -1164,8 +1176,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     );
                 }
                 tag.tainted.set(true);
-                tag.unmodeled
-                    .set(tag.unmodeled.get().or(self.types.unmodeled_type(member.ty)));
+                tag.unmodeled.set(
+                    tag.unmodeled.get().or(self
+                        .types
+                        .unmodeled_type(member.ty)
+                        .map(UnmodeledType::anonymous)),
+                );
                 output.push(member);
                 continue;
             };

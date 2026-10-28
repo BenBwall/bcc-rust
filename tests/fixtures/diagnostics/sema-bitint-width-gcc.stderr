@@ -76,7 +76,7 @@ error: _BitInt width exceeds BITINT_MAXWIDTH
 14 | _BitInt(65536) above_gcc_maximum;
    | ^^^^^^^^^^^^^^ invalid _BitInt width
    |
-   = note: C23 §6.7.3.1p4: N is at most BITINT_MAXWIDTH, which is 65535 for GCC and 8388608 for Clang
+   = note: C23 §6.7.3.1p4: N is at most BITINT_MAXWIDTH: 65535 for GCC and 8388608 for Clang on x86-64, 128 on WebAssembly
 
 error: _BitInt width exceeds BITINT_MAXWIDTH
   --> sema-bitint-width-gcc.c:15:1
@@ -84,7 +84,7 @@ error: _BitInt width exceeds BITINT_MAXWIDTH
 15 | _BitInt(4294967298LL) wide;
    | ^^^^^^^^^^^^^^^^^^^^^ invalid _BitInt width
    |
-   = note: C23 §6.7.3.1p4: N is at most BITINT_MAXWIDTH, which is 65535 for GCC and 8388608 for Clang
+   = note: C23 §6.7.3.1p4: N is at most BITINT_MAXWIDTH: 65535 for GCC and 8388608 for Clang on x86-64, 128 on WebAssembly
 
 error: signed _BitInt width is less than 2
   --> sema-bitint-width-gcc.c:16:1

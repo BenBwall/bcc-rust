@@ -1091,10 +1091,7 @@ pub(super) fn with_identity_macros<'a>(
     _ = writeln!(
         out,
         "#define __BITINT_MAXWIDTH__ {}",
-        match configuration.bit_int_rules() {
-            | crate::configuration::RuleSet::Gcc => 65535,
-            | crate::configuration::RuleSet::Clang => 8_388_608,
-        }
+        configuration.bit_int_max_width()
     );
     out.push_str(identity_claim(identity));
     // MinGW-w64 targets spell `__declspec(a)` as a GNU attribute, unless

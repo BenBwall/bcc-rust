@@ -280,6 +280,23 @@ impl CompilerConfiguration {
         self.gcc_family()
     }
 
+    /// `BITINT_MAXWIDTH`, the widest `_BitInt` the rules of
+    /// [`Self::bit_int_rules`] accept: 65535 bits for GCC on x86-64 and
+    /// 2^23 for Clang, which takes 128 on WebAssembly, where no GCC exists.
+    /// C23: §5.2.5.3.2 paragraph 1, pp. 22-23; PDF pp. 35-36.
+    pub(crate) fn bit_int_max_width(self) -> u64 {
+        if matches!(
+            self.target(),
+            crate::target::Target::Wasm32Unknown | crate::target::Target::Wasm32Wasi
+        ) {
+            128
+        } else if self.bit_int_rules() == super::RuleSet::Gcc {
+            65535
+        } else {
+            1 << 23
+        }
+    }
+
     /// GCC's rules (TCC's and MSVC's too) or Clang's (clang-cl's too) for
     /// an array initialized by an array compound literal: static storage
     /// and compatible element main variants, also inside braces; or any

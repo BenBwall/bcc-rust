@@ -2337,14 +2337,20 @@ analysis; Clang reports the keyword (`-Wbit-int-extension`, bcc's
 
 `__BITINT_MAXWIDTH__` is predefined in every mode and `<limits.h>` defines
 `BITINT_MAXWIDTH` from C23, as 65535 under GCC's rules and 8388608 under
-Clang's. The frozen Clang target tables keep excluding the macro, which is
+Clang's on x86-64, and as Clang's 128 on WebAssembly, which GCC does not
+target (`CompilerConfiguration::bit_int_max_width`). The frozen Clang target tables keep excluding the macro, which is
 defined beside the identity macros instead.
 
 `_BitInt` types themselves stay unmodeled, so lowering still refuses them,
-but a checked type records its width. A cast between it and a pointer
-takes the pointer-cast warnings below (`(void *)(_BitInt(32))x`,
-`(_BitInt(32))p`), as both compilers report; an operand like
-`(_BitInt(32))1` is not treated as constant, as it is for Clang. The check
+but a checked type records its width, which a declaration, a member (each
+its own), a parameter, a cast to the type and, under GCC's rules, an
+`_Atomic` one keep. A cast between it and a pointer takes the pointer-cast
+warnings below (`(void *)(_BitInt(32))x`, `(_BitInt(32))p`), as both
+compilers report; a constant cast to a `_BitInt` (`(_BitInt(32))3`) is an
+integer constant expression there. `sizeof` of a `_BitInt` stays
+unanalyzed, so a width that contains one
+(`_BitInt(sizeof(_BitInt(16)) * 65536)`, which GCC rejects, or `* 0`, which
+Clang rejects) is not range-checked. The check
 is `Analyzer::bit_int_width`; the `sema-bitint-width-{gcc,clang}` goldens
 and `semantic_analysis/tests/bit_int_widths.rs` pin it.
 
@@ -2388,7 +2394,7 @@ the nearest bound of the integer, or to 0 for a NaN, and store that:
 | scalar static initializer | stored | refused by Clang's code generation ("cannot compile this static initializer yet"); bcc stores the value its evaluator computes, as Clang does inside braces |
 | bit-field of static storage | stored | error, "initializer element is not a compile-time constant", once per initializer |
 | warning | `-Woverflow`, default on, for an implicit conversion of any floating constant in a static initializer only ("overflow in conversion from 'double' to 'int' changes value ...") | `-Wliteral-conversion`, default on and under `-Wconversion`, for an implicit conversion of a floating literal (possibly signed and parenthesized) to a builtin integer type (not an enumeration, not `_Atomic`) anywhere: out of range ("... is undefined"), with a fraction dropped, -0 included (`int i = 2147483647.5;`, `int i = -0.0;`), or to `_Bool` from neither 0 nor 1 |
-| `-pedantic` | "overflow in constant expression" `[-Woverflow]` for every overflowing static element, explicit casts and arithmetic on them included (`(int)-1e10 / 2`), but not a comparison's result (`(int)1e10 == 2147483647`); an error under `-pedantic-errors` | nothing more |
+| `-pedantic` | "overflow in constant expression" `[-Woverflow]` for every overflowing static element, explicit casts and arithmetic on them included (`(int)-1e10 / 2`) and the operand `?:` selects, but not a comparison's result (`(int)1e10 == 2147483647`), a `?:` condition or unselected operand, or a conversion to `_Bool`; an error under `-pedantic-errors` | nothing more |
 | `__builtin_constant_p((int)1e10)` | 0 | 1 |
 
 The stored values match each compiler's object file on the interpreter,
@@ -2410,8 +2416,11 @@ GCC's pedantic report is a pedantic child of `-Woverflow` (as GCC's
 set its severity, so `-pedantic-errors -Wno-overflow` accepts
 `static int a = 1e10;`. bcc's reporter folds a second error at one
 location into the first, so under `-pedantic -Werror=overflow` only the
-conversion error is printed there, though both count. `-Wconversion`'s
-parent group takes `-Werror=conversion` and `-Wno-error=conversion` too. `Analyzer::saturated_float_cast` computes the value,
+conversion error is printed there, though both count. Under Clang's rules
+`-Wconversion`'s parent group takes `-Werror=conversion` and
+`-Wno-error=conversion` too, for the groups without options of their own;
+GCC's `-Wconversion` holds none of Clang's groups, so under GCC's rules it
+leaves them (`-Wpointer-bool-conversion` included) alone. `Analyzer::saturated_float_cast` computes the value,
 `Analyzer::static_float_conversion` stores it and warns for GCC, and
 `Analyzer::literal_conversion_warning` warns for Clang; the
 `sema-float-integer-{gcc,clang}` goldens and

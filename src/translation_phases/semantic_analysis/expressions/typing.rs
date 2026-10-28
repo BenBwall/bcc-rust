@@ -980,6 +980,27 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     /// C99: §6.5.2.3p1-4, pp. 72-73; PDF pp. 84-85.
+    /// The type of `member` of the unanalyzed `record`: the recovery type,
+    /// unless the record names the member directly with a `_BitInt`, whose
+    /// width a pointer cast warning reads.
+    /// C99: §6.5.2.3 paragraph 3, p. 73; PDF p. 85.
+    fn unanalyzed_member_type(&mut self, record: TypeId, member: Identifier) -> TypeId {
+        if let TypeKind::Tag(id) = self.types.nodes[self.types.non_atomic(record).index]
+            && let Some(field) = self.types.tags[id]
+                .members
+                .get()
+                .iter()
+                .find(|field| field.name.is_some_and(|name| name.name == member.name))
+            && matches!(
+                self.types.nodes[field.ty.index],
+                TypeKind::Unmodeled(super::super::types::UnmodeledType::BitInt { .. })
+            )
+        {
+            return field.ty;
+        }
+        self.types.recovery_type(&[record])
+    }
+
     pub(super) fn type_member(
         &mut self,
         e: &'tu Expression<'tu>,
@@ -988,7 +1009,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         indirect: bool,
     ) -> ExpressionInfo<'tu> {
         if self.types.unanalyzed(base.ty) {
-            let ty = self.types.recovery_type(&[base.ty]);
+            let ty = self.unanalyzed_member_type(base.ty, member);
             return Self::expression_result(e, ty);
         }
         let mut ty = base.ty;
@@ -999,14 +1020,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             };
             // An unanalyzed pointee may be a record; its members are unknown.
             if self.types.unanalyzed(target) {
-                let ty = self.types.recovery_type(&[target]);
+                let ty = self.unanalyzed_member_type(target, member);
                 return Self::expression_result(e, ty);
             }
             ty = target;
         }
         // C99 §6.5.2.3p2: defer the record constraint for an unmodeled target.
         if self.types.unanalyzed(ty) {
-            let ty = self.types.recovery_type(&[ty]);
+            let ty = self.unanalyzed_member_type(ty, member);
             return Self::expression_result(e, ty);
         }
         let TypeKind::Tag(id) = self.types.nodes[ty.index] else {
@@ -1117,7 +1138,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             // A `_BitInt`, unmodeled otherwise, has the width a pointer
             // cast warning compares.
             self.pointer_integer_cast_warning(target, from, operand, e.source_vectors);
-            let ty = self.types.recovery_type(&[target, from]);
+            // A cast to a `_BitInt` has the width it names.
+            let ty = if matches!(
+                self.types.nodes[target.index],
+                TypeKind::Unmodeled(super::super::types::UnmodeledType::BitInt { .. })
+            ) {
+                target.unqualified()
+            } else {
+                self.types.recovery_type(&[target, from])
+            };
             return Self::expression_result(e, ty);
         }
         // GNU: a structure or union cast to its own type is its value, an

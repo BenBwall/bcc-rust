@@ -356,6 +356,17 @@ impl Analyzer<'_, '_, '_> {
         specifier: bool,
     ) -> TypeId {
         if self.types.unanalyzed(value) {
+            // Under GCC's rules a `_BitInt` keeps its width, which pointer
+            // casts read through `_Atomic`; its type stays unmodeled. Clang
+            // rejects an atomic `_BitInt`.
+            if self.context.configuration.pointer_cast_rules() == crate::configuration::RuleSet::Gcc
+                && matches!(
+                    self.types.nodes[value.index],
+                    TypeKind::Unmodeled(super::super::types::UnmodeledType::BitInt { .. })
+                )
+            {
+                return value;
+            }
             return self.types.unknown();
         }
         let invalid = !self.complete_object(value)

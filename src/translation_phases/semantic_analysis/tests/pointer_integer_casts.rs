@@ -279,3 +279,31 @@ fn bit_int_operands_count_with_their_width() {
         assert_eq!(found, expected, "{identity:?}");
     }
 }
+
+#[test]
+fn bit_int_members_and_constants_keep_their_own_width() {
+    // Each member keeps its own width, and a constant cast to a `_BitInt`
+    // is an integer constant expression to both compilers.
+    for identity in [CompilerIdentity::Gcc, CompilerIdentity::Clang] {
+        let mut found = Vec::new();
+        with_configuration(
+            "struct T { _BitInt(16) m; _BitInt(64) w; } t; enum { Z = 5 }; void f(void) { \
+             (void)(char *)t.w; (void)(char *)t.m; (void)(char *)(_BitInt(32))3; (void)(char \
+             *)(unsigned _BitInt(8))-1; (void)(char *)(_BitInt(32))Z; }",
+            CompilerConfiguration::new(CStandard::C23, ExtensionPolicy::Allow)
+                .with_compiler_identity(identity),
+            |context, _| {
+                for error in context.take_pending_errors() {
+                    if let TranslationError::Semantic(SemanticError {
+                        kind: SemanticErrorKind::PointerConstraint(group),
+                        ..
+                    }) = error
+                    {
+                        found.push(group);
+                    }
+                }
+            },
+        );
+        assert_eq!(found, [G::IntToPointerCast], "{identity:?}");
+    }
+}

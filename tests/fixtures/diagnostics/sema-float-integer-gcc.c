@@ -22,4 +22,7 @@ void f(void) {
 int compared = (int)1e10 == 2147483647;
 enum small { SMALL } enumerated = 1.5;
 _Atomic int atomic = 2.5;
+int unselected_condition = (int)1e10 ? 1 : 2;
+int unselected_operand = 1 ? 3 : (int)1e10;
+int converted_truth = (_Bool)(int)1e10;
 int following_valid;

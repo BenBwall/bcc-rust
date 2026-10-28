@@ -62,13 +62,6 @@ impl CompilerConfiguration {
             | DiagnosticGroup::PointerToEnumCast | DiagnosticGroup::VoidPointerToIntCast =>
                 &[DiagnosticGroup::VoidPointerToEnumCast],
             | DiagnosticGroup::IntToPointerCast => &[DiagnosticGroup::IntToVoidPointerCast],
-            | DiagnosticGroup::Conversion => &[
-                DiagnosticGroup::NullConversion,
-                DiagnosticGroup::NonLiteralNullConversion,
-                DiagnosticGroup::PointerBoolConversion,
-                DiagnosticGroup::ConstantConversion,
-                DiagnosticGroup::LiteralConversion,
-            ],
             | _ => &[],
         };
         for &child in children {
@@ -126,7 +119,16 @@ impl CompilerConfiguration {
     /// default errors, just as Clang does.
     /// C99: §5.1.1.3p1, p. 11; PDF p. 23 permits warning diagnostics.
     pub(crate) fn diagnostic_severity(self, group: DiagnosticGroup) -> Option<ErrorSeverity> {
-        let option = self.warning_options[group as usize];
+        let mut option = self.warning_options[group as usize];
+        // Clang's `-Wconversion` holds these groups; a child without an
+        // option of its own takes the parent's. GCC's `-Wconversion` holds
+        // none of Clang's groups, so its options leave them alone.
+        if option == WarningSettings::DEFAULT
+            && group.converts()
+            && self.float_conversion_rules() == super::RuleSet::Clang
+        {
+            option = self.warning_options[DiagnosticGroup::Conversion as usize];
+        }
         if !option.enabled.unwrap_or(
             group.enabled_by_default()
                 || (group.default() == GroupDefault::Extension
@@ -292,9 +294,10 @@ diagnostic_groups! {
     /// Clang: a floating literal whose implicit conversion to an integer
     /// type is out of range or changes its value; `-Wconversion` holds it.
     LiteralConversion => Some("literal-conversion"), Warning, false;
-    /// Clang's `-Wconversion`, which reports nothing itself: the parent of
-    /// the conversion groups bcc models, which its `-W`, `-Wno-` and
-    /// `-Werror=` options reach.
+    /// Clang's `-Wconversion`, which reports nothing itself: under Clang's
+    /// rules the parent of the conversion groups bcc models
+    /// (`DiagnosticGroup::converts`), which take its `-W`, `-Wno-` and
+    /// `-Werror=` options unless they have their own.
     Conversion => Some("conversion"), Ignored, false;
 }
 
@@ -308,6 +311,18 @@ enum GroupDefault {
 }
 
 impl DiagnosticGroup {
+    /// Whether Clang's `-Wconversion` holds this group.
+    const fn converts(self) -> bool {
+        matches!(
+            self,
+            Self::NullConversion
+                | Self::NonLiteralNullConversion
+                | Self::PointerBoolConversion
+                | Self::ConstantConversion
+                | Self::LiteralConversion
+        )
+    }
+
     pub(crate) fn parse(name: &str) -> Option<Self> {
         Self::ALL
             .iter()

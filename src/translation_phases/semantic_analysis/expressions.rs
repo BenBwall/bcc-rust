@@ -609,37 +609,53 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | _ => [None; 3],
         };
         let operands = operands.map(|operand| operand.map(|o| self.expression_info(o)));
-        // GCC's overflow mark follows arithmetic, not a comparison or a
-        // logical operator, whose result is a fresh constant, though
-        // still no integer constant expression.
-        let arithmetic = match e.kind {
-            | E::Binary { operator, .. } => matches!(
-                operator,
-                BinaryOperator::Multiplication
-                    | BinaryOperator::Division
-                    | BinaryOperator::Modulo
-                    | BinaryOperator::Addition
-                    | BinaryOperator::Subtraction
-                    | BinaryOperator::LeftShift
-                    | BinaryOperator::RightShift
-                    | BinaryOperator::BitwiseAnd
-                    | BinaryOperator::BitwiseXor
-                    | BinaryOperator::BitwiseOr
-            ),
-            | E::Unary { operator, .. } => operator != UnaryOperator::LogicalNot,
-            | _ => true,
+        // GCC's overflow mark follows arithmetic and the operand `?:`
+        // selects, not a comparison, a logical operator or a conversion to
+        // `_Bool`, whose result is a fresh constant, though still no integer
+        // constant expression.
+        let marked = |operand: Option<ExpressionInfo<'tu>>| {
+            operand.is_some_and(|o| o.folding == ConstantFolding::Overflow && o.integer.is_some())
         };
-        let overflowed = |folding: ConstantFolding| {
-            operands
-                .iter()
-                .flatten()
-                .any(|o| o.folding == folding && o.integer.is_some())
+        let carried = match e.kind {
+            | E::Binary { operator, .. } =>
+                matches!(
+                    operator,
+                    BinaryOperator::Multiplication
+                        | BinaryOperator::Division
+                        | BinaryOperator::Modulo
+                        | BinaryOperator::Addition
+                        | BinaryOperator::Subtraction
+                        | BinaryOperator::LeftShift
+                        | BinaryOperator::RightShift
+                        | BinaryOperator::BitwiseAnd
+                        | BinaryOperator::BitwiseXor
+                        | BinaryOperator::BitwiseOr
+                ) && (marked(operands[0]) || marked(operands[1])),
+            | E::Unary { operator, .. } =>
+                operator != UnaryOperator::LogicalNot && marked(operands[0]),
+            | E::Cast { .. } =>
+                !matches!(
+                    self.types.nodes[self.types.non_atomic(info.ty).index],
+                    TypeKind::Scalar(Scalar::Bool)
+                ) && marked(operands[0]),
+            | E::Conditional(_) | E::OmittedConditional(_) => {
+                let truth = operands[0].and_then(|o| o.integer).map(|v| v.value != 0);
+                match (truth, e.kind) {
+                    | (Some(true), E::OmittedConditional(_)) => marked(operands[0]),
+                    | (Some(true), _) => marked(operands[1]),
+                    | (Some(false), _) => marked(operands[2]),
+                    | (None, _) => false,
+                }
+            },
+            | _ => false,
         };
         if info.integer.is_some()
-            && (overflowed(ConstantFolding::Overflow)
-                || overflowed(ConstantFolding::OverflowOperand))
+            && operands
+                .iter()
+                .flatten()
+                .any(|o| o.folding.overflowed() && o.integer.is_some())
         {
-            info.folding = if arithmetic && overflowed(ConstantFolding::Overflow) {
+            info.folding = if carried {
                 ConstantFolding::Overflow
             } else {
                 ConstantFolding::OverflowOperand

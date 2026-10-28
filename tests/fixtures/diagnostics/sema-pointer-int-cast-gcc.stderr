@@ -62,4 +62,12 @@ warning: cast from pointer to integer of different size [-Wpointer-to-int-cast]
    |
    = note: C99 §6.3.2.3p5-6: the result of converting between a pointer and an integer is implementation-defined and may not be representable
 
-8 warnings generated.
+warning: cast to pointer from integer of different size [-Wint-to-pointer-cast]
+  --> sema-pointer-int-cast-gcc.c:22:11
+   |
+22 |     (void)(char *)bits.narrow;
+   |           ^^^^^^^^^^^^^^^^^^^ the integer and pointer widths differ
+   |
+   = note: C99 §6.3.2.3p5-6: the result of converting between a pointer and an integer is implementation-defined and may not be representable
+
+9 warnings generated.

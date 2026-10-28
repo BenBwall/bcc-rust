@@ -17,4 +17,10 @@ void g(int i, char c, _Bool b, enum E e, __int128 q, void *p, char *cp) {
     (void)(_Bool)p;
     (void)(long)p;
 }
+struct bits { _BitInt(16) narrow; _BitInt(64) wide; } bits;
+void bit_ints(void) {
+    (void)(char *)bits.narrow;
+    (void)(char *)bits.wide;
+    (void)(char *)(_BitInt(32))3;
+}
 int following_valid;
