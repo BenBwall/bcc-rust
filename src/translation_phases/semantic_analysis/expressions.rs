@@ -249,6 +249,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     | FloatTokenType::Float64x(_) => Scalar::Float64x,
                     | FloatTokenType::Float16(_) => Scalar::Float16,
                     | FloatTokenType::BFloat16(_) => Scalar::BFloat16,
+                    | FloatTokenType::ImaginaryFloat16(_) => Scalar::Float16.complex_type(),
+                    | FloatTokenType::ImaginaryFloat32(_) => Scalar::ComplexFloat32,
+                    | FloatTokenType::ImaginaryFloat64(_) => Scalar::ComplexFloat64,
+                    | FloatTokenType::ImaginaryFloat32x(_) => Scalar::ComplexFloat32x,
+                    | FloatTokenType::ImaginaryFloat64x(_) => Scalar::ComplexFloat64x,
                     | _ => {
                         self.retain_expression(info);
                         return;
@@ -270,17 +275,29 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     | _ => LongDouble::ZERO,
                 })));
                 info.set_floating(match value {
-                    | FloatTokenType::ImaginaryFloat(value) => Some(Floating {
+                    | FloatTokenType::ImaginaryFloat(value)
+                    | FloatTokenType::ImaginaryFloat32(value) => Some(Floating {
                         real: LongDouble::ZERO,
                         imag: LongDouble::from_double(f64::from(value)),
                     }),
-                    | FloatTokenType::ImaginaryDouble(value) => Some(Floating {
+                    | FloatTokenType::ImaginaryDouble(value)
+                    | FloatTokenType::ImaginaryFloat64(value)
+                    | FloatTokenType::ImaginaryFloat32x(value) => Some(Floating {
                         real: LongDouble::ZERO,
                         imag: LongDouble::from_double(value.get()),
                     }),
-                    | FloatTokenType::ImaginaryLongDouble(value) => Some(Floating {
+                    | FloatTokenType::ImaginaryLongDouble(value)
+                    | FloatTokenType::ImaginaryFloat64x(value) => Some(Floating {
                         real: LongDouble::ZERO,
                         imag: value,
+                    }),
+                    // The imaginary part has the value a real `f16`
+                    // constant has, excess precision included.
+                    | FloatTokenType::ImaginaryFloat16(value) => Some(Floating {
+                        real: LongDouble::ZERO,
+                        imag: LongDouble::from_double(f64::from(
+                            self.half_constant(value, HalfFormat::Binary16),
+                        )),
                     }),
                     | _ => info.floating(),
                 });

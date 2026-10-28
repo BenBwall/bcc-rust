@@ -744,7 +744,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         super::super::preprocessing::FloatTokenType::ImaginaryFloat(_)
                         | super::super::preprocessing::FloatTokenType::ImaginaryDouble(_)
                         | super::super::preprocessing::FloatTokenType::ImaginaryLongDouble(_)
-                        | super::super::preprocessing::FloatTokenType::ImaginaryLongDouble128(_),
+                        | super::super::preprocessing::FloatTokenType::ImaginaryLongDouble128(_)
+                        | super::super::preprocessing::FloatTokenType::ImaginaryFloat16(_)
+                        | super::super::preprocessing::FloatTokenType::ImaginaryFloat32(_)
+                        | super::super::preprocessing::FloatTokenType::ImaginaryFloat64(_)
+                        | super::super::preprocessing::FloatTokenType::ImaginaryFloat32x(_)
+                        | super::super::preprocessing::FloatTokenType::ImaginaryFloat64x(_),
                     ),
                 )
                 | ExpressionType::Countof(_)

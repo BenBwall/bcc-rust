@@ -341,6 +341,17 @@ pub(crate) enum FloatTokenType {
     /// A `bf16` constant, a GCC extension (GCC manual, "Half-Precision
     /// Floating Point").
     BFloat16(HalfConstant),
+    /// GNU imaginary interchange and extended constants (`1.0f16i`,
+    /// `1.0if32x`), of the complex type of their real component's, which
+    /// keeps that component's value; an `f128` one is
+    /// [`Self::ImaginaryFloat128`].
+    /// GNU extension: GCC manual, "Complex Numbers"; C23: §H.5.2
+    /// paragraph 2, p. 560; PDF p. 573.
+    ImaginaryFloat16(HalfConstant),
+    ImaginaryFloat32(f32),
+    ImaginaryFloat64(Packed<f64>),
+    ImaginaryFloat32x(Packed<f64>),
+    ImaginaryFloat64x(LongDouble),
 }
 
 /// A `_Float16` or `__bf16` constant: its 16-bit encoding, and its value
@@ -509,6 +520,11 @@ impl FloatTokenType {
             | Self::Float64x(_) => "_Float64x",
             | Self::Float16(_) => "_Float16",
             | Self::BFloat16(_) => "__bf16",
+            | Self::ImaginaryFloat16(_) => "_Float16 _Complex",
+            | Self::ImaginaryFloat32(_) => "_Float32 _Complex",
+            | Self::ImaginaryFloat64(_) => "_Float64 _Complex",
+            | Self::ImaginaryFloat32x(_) => "_Float32x _Complex",
+            | Self::ImaginaryFloat64x(_) => "_Float64x _Complex",
         }
     }
 }
@@ -1296,11 +1312,17 @@ impl Display for FloatTokenType {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         match self {
             | Self::Float(v) | Self::Float32(v) => write!(f, "{v}"),
-            | Self::ImaginaryFloat(v) => write!(f, "{v}i"),
+            | Self::ImaginaryFloat(v) | Self::ImaginaryFloat32(v) => write!(f, "{v}i"),
             | Self::Double(v) | Self::Float64(v) | Self::Float32x(v) => write!(f, "{v}"),
-            | Self::ImaginaryDouble(v) => write!(f, "{v}i"),
+            | Self::ImaginaryDouble(v) | Self::ImaginaryFloat64(v) | Self::ImaginaryFloat32x(v) =>
+                write!(f, "{v}i"),
             | Self::LongDouble(v) | Self::Float64x(v) => write!(f, "{v}"),
-            | Self::ImaginaryLongDouble(v) => write!(f, "{v}i"),
+            | Self::ImaginaryLongDouble(v) | Self::ImaginaryFloat64x(v) => write!(f, "{v}i"),
+            | Self::ImaginaryFloat16(v) => write!(
+                f,
+                "{}i",
+                crate::half_precision::HalfFormat::Binary16.widen(v.bits)
+            ),
             | Self::Float128(v) | Self::LongDouble128(v) => write!(f, "{v}"),
             | Self::ImaginaryFloat128(v) | Self::ImaginaryLongDouble128(v) => write!(f, "{v}i"),
             | Self::Float16(v) => write!(

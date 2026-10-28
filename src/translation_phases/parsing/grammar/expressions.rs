@@ -396,6 +396,10 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                             | FloatTokenType::Float64(_)
                             | FloatTokenType::Float32x(_)
                             | FloatTokenType::Float64x(_)
+                            | FloatTokenType::ImaginaryFloat32(_)
+                            | FloatTokenType::ImaginaryFloat64(_)
+                            | FloatTokenType::ImaginaryFloat32x(_)
+                            | FloatTokenType::ImaginaryFloat64x(_)
                     )
                 {
                     self.extension(
@@ -406,9 +410,11 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                 }
                 // GCC reports the suffix before C23 under `-pedantic`; Clang
                 // does not.
-                if matches!(value, FloatTokenType::Float16(_))
-                    && self.context.configuration.compiler_identity()
-                        == crate::configuration::CompilerIdentity::Gcc
+                if matches!(
+                    value,
+                    FloatTokenType::Float16(_) | FloatTokenType::ImaginaryFloat16(_)
+                ) && self.context.configuration.compiler_identity()
+                    == crate::configuration::CompilerIdentity::Gcc
                 {
                     self.extension(Feature::Float16, "_Float16 floating constant suffix", token);
                 }

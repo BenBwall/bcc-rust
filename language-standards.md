@@ -1543,9 +1543,10 @@ nonzero value). The resource `<float.h>` defines GCC's TS 18661-3 names
 `__FLTN_MANT_DIG__` is predefined, as GCC's header does; a test checks
 `FLT128_*` and `_Float128` arithmetic against GCC 15's output. Limits: the
 resource `<tgmath.h>` takes the types with the standard type's functions and
-result types (above), and refuses `_Float128`; GNU vector element types,
-imaginary `_FloatN` constants such as `1.0f32i`, and `__builtin_*f128` math
-beyond the existing primitives remain unsupported. `_Float16`, `__bf16`
+result types (above), and refuses `_Float128`; GNU vector element types and
+`__builtin_*f128` math beyond the existing primitives remain unsupported.
+Imaginary `_FloatN` constants such as `1.0f32i` are described under
+[Imaginary interchange constants](#imaginary-interchange-constants). `_Float16`, `__bf16`
 and `__fp16` follow in
 [Half-precision floating types](#half-precision-floating-types-2026-10-27).
 
@@ -1644,8 +1645,9 @@ type name" follows from that.
 Verified against GCC 15 and the pinned Clang on every back end
 (`tests/integration/half_precision.rs`: `bfloat16.c`, `complex_half.c`,
 `storage_half.c` and the ABI link tests). Limits: GCC's `__builtin_*f16`
-constant builtins, `FLT16_SNAN`, and imaginary `f16i` constants are
-absent.
+constant builtins and `FLT16_SNAN` are absent; imaginary `f16i`
+constants are described under
+[Imaginary interchange constants](#imaginary-interchange-constants).
 
 ### Known GCC-identity folding deviations
 
@@ -2321,6 +2323,32 @@ does for `_BitInt(k)` and enumerators and GCC does not; that predates this
 check and is shared with enumerators and array bounds. The check is
 `Analyzer::bit_int_width`; the `sema-bitint-width-{gcc,clang}` goldens and
 `semantic_analysis/tests/bit_int_widths.rs` pin it.
+
+### Imaginary interchange constants
+
+An imaginary suffix (`i`, `I`, `j` or `J`) combines with an interchange
+suffix in either order (`1.0f16i`, `1.0if16`, `0x1p0jF16`), as with the
+standard suffixes (`ImaginaryConstants`). The constant has the complex type
+of its real component's, and its imaginary part has the value a real
+constant of that suffix has:
+
+| Suffix | GCC | Clang |
+| --- | --- | --- |
+| `f16` | `_Complex _Float16`, its part in `float`'s precision (`__imag__ 0.1f16i` is `0x1.99999ap-4`) | `_Complex _Float16`, its part rounded to `_Float16` (`0x1.998p-4`) outside chains of arithmetic operators |
+| `f32`, `f64`, `f32x`, `f64x`, `f128` | `_Complex _FloatN`/`_FloatNx` | invalid suffix, as for the real constants |
+| `bf16` | a complex `__bf16` without a name | invalid suffix |
+
+bcc has no complex `__bf16` type (#164 rejects `_Complex __bf16`), so it
+still rejects `1.0bf16i` under the GCC identity. Under `-pedantic` the
+constants report the imaginary extension (GCC: "imaginary constants are a
+C2Y feature or GCC extension", Clang: `-Wc2y-extensions`) and, under GCC
+before C23, the suffix. Arithmetic, conversions and storage use the
+existing complex `_Float16` lowering of #164, with each identity's excess
+precision. `tests/fixtures/programs/imaginary_interchange_constants.c`
+compares the values with each compiler on the interpreter, LLVM and the
+native back end; `preprocessing/tests/language_modes.rs`,
+`semantic_analysis/tests/imaginary_constants.rs` and the
+`sema-imaginary-interchange-{gcc,clang}` goldens cover the forms.
 
 ### Floating values converted out of an integer's range
 

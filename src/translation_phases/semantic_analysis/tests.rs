@@ -31,6 +31,7 @@ mod float128;
 mod float_integer_conversions;
 mod fortify;
 mod half_precision;
+mod imaginary_constants;
 mod initializer_plans;
 mod int128;
 mod interchange_floats;

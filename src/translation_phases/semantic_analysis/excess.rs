@@ -74,7 +74,9 @@ pub(crate) fn excess_expression<'tu>(
                         | BinaryOperator::Division
                 ),
             | E::Constant(Constant::Float(
-                FloatTokenType::Float16(_) | FloatTokenType::BFloat16(_),
+                FloatTokenType::Float16(_)
+                | FloatTokenType::BFloat16(_)
+                | FloatTokenType::ImaginaryFloat16(_),
             )) => return true,
             | E::Conditional(conditional) =>
                 return excess_expression(conditional.then_expression, info)

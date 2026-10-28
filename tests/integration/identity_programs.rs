@@ -46,6 +46,13 @@ mod tests {
         matches_the_claimed_compiler("float_integer_initializers.c");
     }
 
+    /// Imaginary interchange constants, with each compiler's excess
+    /// precision for `_Float16`.
+    #[test]
+    fn imaginary_interchange_constants_match_the_claimed_compiler() {
+        matches_the_claimed_compiler("imaginary_interchange_constants.c");
+    }
+
     /// Each identity's value of `fixture` matches its compiler's build,
     /// interpreted before and after optimization and built through LLVM
     /// and the native back end.
