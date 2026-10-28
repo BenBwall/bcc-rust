@@ -42,13 +42,16 @@ required-features = ["ssr"]
 [features]
 hydrate = ["leptos/hydrate", "dep:console_error_panic_hook"]
 ssr = ["leptos/ssr"]
-worker = ["dep:bcc-rust", "bcc-rust/abstract-machine", "dep:console_error_panic_hook"]
+worker = ["dep:bcc-rust", "bcc-rust/abstract-machine", "dep:bcc-wasm-stepper", "dep:console_error_panic_hook"]
 compiler = ["dep:bcc-rust", "bcc-rust/explorer", "dep:console_error_panic_hook"]
 
 [dependencies]
 # Never the native compiler or LLVM: `worker` enables the abstract machine and
 # `compiler` the pure-Rust compiler behind `bcc_rust::explorer`.
 bcc-rust = { path = "..", default-features = false, optional = true }
+# The WebAssembly stepper, which the engine Worker runs beside the abstract
+# machine.
+bcc-wasm-stepper = { path = "stepper", optional = true }
 console_error_panic_hook = { version = "0.1", optional = true }
 futures-channel = "0.3"
 gloo-timers = { version = "0.3", features = ["futures"] }

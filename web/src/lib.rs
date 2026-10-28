@@ -33,6 +33,7 @@ mod panels;
 mod pipeline;
 pub mod protocol;
 mod snapshot;
+pub mod wasm;
 
 pub use app::App;
 pub use editor::EDITOR_META;

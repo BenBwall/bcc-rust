@@ -200,6 +200,39 @@ const syntaxTree = {
   },
 };
 
+// The WebAssembly text format as the stepper lists it: one instruction per
+// line, `;; label = @1` comments on blocks and `(;@1;)` on branches.
+const wat = {
+  defaultToken: '',
+  brackets: [{ open: '(', close: ')', token: 'delimiter.parenthesis' }],
+  keywords: [
+    'module', 'func', 'param', 'result', 'local', 'type', 'import', 'export', 'memory', 'table',
+    'global', 'data', 'elem', 'start', 'mut', 'declare', 'funcref', 'externref',
+  ],
+  control: [
+    'block', 'loop', 'if', 'else', 'end', 'br', 'br_if', 'br_table', 'return', 'call',
+    'call_indirect', 'drop', 'select', 'unreachable', 'nop',
+  ],
+  tokenizer: {
+    root: [
+      [/;;.*$/, 'comment'],
+      [/\(;[^;]*;\)/, 'comment'],
+      [/"([^"\\]|\\.)*"/, 'string'],
+      [/(call)(\s+)(\$[\w.$]+)/, ['keyword.instruction', '', 'function']],
+      [/(func)(\s+)(\$[\w.$]+)/, ['keyword', '', 'function']],
+      [/\$__stack_pointer\b/, 'variable.slot'],
+      [/\$[\w.$]+/, 'variable'],
+      [/\b(i32|i64|f32|f64)\.[a-z0-9_]+/, 'keyword.instruction'],
+      [/\b(memory|local|global|table|ref|data|elem)\.[a-z_]+/, 'keyword.instruction'],
+      [/\b(i32|i64|f32|f64|v128)\b/, 'type'],
+      [/\b(offset|align)(=)/, ['keyword', 'operator']],
+      [/[a-z_][\w.]*/, { cases: { '@control': 'keyword.instruction', '@keywords': 'keyword', '@default': 'identifier' } }],
+      [/-?(0x[0-9a-fA-F]+|\d+(\.\d*)?([eE][-+]?\d+)?|inf|nan(:0x[0-9a-fA-F]+)?)/, 'number'],
+      [/[()]/, '@brackets'],
+    ],
+  },
+};
+
 export function registerLanguages(monaco) {
   const languages = {
     c,
@@ -209,6 +242,7 @@ export function registerLanguages(monaco) {
     objdump,
     tokens,
     'syntax-tree': syntaxTree,
+    wat,
   };
   for (const [id, grammar] of Object.entries(languages)) {
     monaco.languages.register({ id });
@@ -229,6 +263,10 @@ export function registerLanguages(monaco) {
       { open: '(', close: ')' },
       { open: '[', close: ']' },
     ],
+  });
+  monaco.languages.setLanguageConfiguration('wat', {
+    comments: { lineComment: ';;', blockComment: ['(;', ';)'] },
+    brackets: [['(', ')']],
   });
   for (const id of ['bcc-ir', 'llvm']) {
     monaco.languages.setLanguageConfiguration(id, {

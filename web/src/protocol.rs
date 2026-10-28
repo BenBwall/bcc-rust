@@ -11,6 +11,12 @@ use serde::{
 use crate::{
     pipeline::Compilation,
     snapshot::Snapshot,
+    wasm::{
+        WasmControl,
+        WasmModule,
+        WasmProgram,
+        WasmSnapshot,
+    },
 };
 
 /// A page-to-Worker request; the Worker answers each with [`Reply::Done`].
@@ -31,6 +37,12 @@ pub enum Command {
     /// answered by the compiler Worker with [`Answer::Compiled`] (see
     /// `explorer.rs`).
     Compile { source: String, optimize: bool },
+    /// Load a WebAssembly module into the abstract machine Worker's stepper
+    /// (see `wasm.rs`), replacing the previous one; answered with
+    /// [`Answer::WasmLoaded`].
+    WasmLoad(WasmModule),
+    /// Step the loaded module; answered with [`Answer::Wasm`].
+    Wasm(WasmControl),
 }
 
 /// A Worker's answer to one request.
@@ -38,6 +50,8 @@ pub enum Command {
 pub enum Answer {
     Snapshot(Box<Snapshot>),
     Compiled(Box<Compilation>),
+    WasmLoaded(Box<WasmProgram>),
+    Wasm(Box<WasmSnapshot>),
 }
 
 /// A Worker-to-page message.
