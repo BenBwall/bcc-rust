@@ -48,11 +48,23 @@ pub(crate) fn compile_with<T: Send>(
     optimize: bool,
     with: impl FnOnce(&wasm::Compiled<'_>) -> T + Send,
 ) -> Result<T, String> {
+    let configuration = CompilerConfiguration::default()
+        .with_target(target)
+        .with_gnu_extensions(true);
+    compile_configured(source, configuration, optimize, with)
+}
+
+/// Compiles `source` under `configuration` (whose target it uses), optimized
+/// or not, and hands the compiled module to `with`.
+pub(crate) fn compile_configured<T: Send>(
+    source: &str,
+    configuration: CompilerConfiguration,
+    optimize: bool,
+    with: impl FnOnce(&wasm::Compiled<'_>) -> T + Send,
+) -> Result<T, String> {
+    let target = configuration.target();
     crate::test_support::on_compilation_stack(|| {
-        let configuration = CompilerConfiguration::default()
-            .with_target(target)
-            .with_gnu_extensions(true)
-            .with_optimization((optimize, false));
+        let configuration = configuration.with_optimization((optimize, false));
         let tu = Bump::new();
         let mut context = Context::with_configuration(&tu, configuration);
         let source = tu.alloc_str(source);

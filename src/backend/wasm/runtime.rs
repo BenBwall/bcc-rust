@@ -6,7 +6,8 @@
 //!
 //! The library covers program startup and exit (`_start`, `exit`,
 //! `atexit`, `abort`), `malloc` and friends, `<string.h>`, `<ctype.h>`,
-//! the conversions and utilities of `<stdlib.h>`, buffered `<stdio.h>`
+//! the conversions (`strtod` and its kin correctly rounded, in
+//! `floatscan.c`) and utilities of `<stdlib.h>`, buffered `<stdio.h>`
 //! streams on file descriptors 0-2 with the full `printf` family (exact
 //! floating conversions) and a small `scanf`, and the rounding functions of
 //! `<math.h>`. It talks to the host only through WASI preview 1 imports
@@ -73,6 +74,7 @@ pub(crate) const SOURCES: &[(&str, &str)] = &[
     ("stdio.c", include_str!("runtime/stdio.c")),
     ("string.c", include_str!("runtime/string.c")),
     ("stdlib.c", include_str!("runtime/stdlib.c")),
+    ("floatscan.c", include_str!("runtime/floatscan.c")),
     ("math.c", include_str!("runtime/math.c")),
     ("trig.c", include_str!("runtime/trig.c")),
     ("compiler_rt.c", include_str!("runtime/compiler_rt.c")),
