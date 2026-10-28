@@ -612,8 +612,11 @@ static void format_fixed(struct sink *sink, struct spec *s, struct floating *f, 
             integer_digits++;
         }
     }
+    /* Only `stored` fraction digits are in the buffer; the rest of the
+       precision (all zeros for every binary64 value) is written as
+       padding, never copied. */
     int extra_zeros = precision - stored;
-    int fraction = precision;
+    int fraction = stored;
     if (strip && !(s->flags & ALT)) {
         extra_zeros = 0;
         while (fraction > 0 && digits[integer_digits + fraction - 1] == '0')
@@ -630,7 +633,7 @@ static void format_fixed(struct sink *sink, struct spec *s, struct floating *f, 
     /* Assemble integer digits, the point and the fraction in place. */
     char *body = digits;
     size_t body_len = (size_t)integer_digits;
-    int point = fraction > 0 || (s->flags & ALT);
+    int point = fraction > 0 || extra_zeros > 0 || (s->flags & ALT);
     if (point) {
         memmove(body + integer_digits + 1, body + integer_digits, (size_t)fraction);
         body[integer_digits] = '.';
@@ -737,7 +740,10 @@ static void format_exponent(struct sink *sink, struct spec *s, struct floating *
         exponent = significant(f, digits, count);
     }
     int fraction = count - 1;
+    /* A precision beyond the buffer is padded with zeros. */
+    int extra_zeros = precision - fraction;
     if (strip && !(s->flags & ALT)) {
+        extra_zeros = 0;
         while (fraction > 0 && digits[fraction] == '0')
             fraction--;
     }
@@ -752,11 +758,12 @@ static void format_exponent(struct sink *sink, struct spec *s, struct floating *
     char *body = digits - 1;
     body[0] = digits[0];
     size_t body_len = 1;
-    if (fraction > 0 || (s->flags & ALT)) {
+    if (fraction > 0 || extra_zeros > 0 || (s->flags & ALT)) {
         body[1] = '.';
         body_len = 2 + (size_t)fraction;
     }
-    field(sink, s, prefix, prefix_len, 0, body, body_len, exponent_suffix(upper ? 'E' : 'e', exponent, 2), 0);
+    field(sink, s, prefix, prefix_len, 0, body, body_len, exponent_suffix(upper ? 'E' : 'e', exponent, 2),
+          extra_zeros);
 }
 
 /* %g: %e or %f by the decimal exponent, trailing zeros removed. */
@@ -867,8 +874,7 @@ static void format_hex(struct sink *sink, struct spec *s, struct floating *f, in
     body_len += (size_t)count;
     (void)hi;
     field(sink, s, prefix, prefix_len, 0, body, body_len, exponent_suffix(upper ? 'P' : 'p', exponent, 1),
-          0);
-    (void)zeros;
+          zeros);
 }
 
 static void format_float(struct sink *sink, struct spec *s, struct floating *f) {
