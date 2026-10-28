@@ -365,6 +365,16 @@ pub(crate) enum SemanticErrorKind {
     InvalidBitFieldWidth,
     /// C99: §6.7.2.1p3, p. 101; PDF p. 113.
     NamedZeroWidthBitField,
+    /// GCC: a `_BitInt` width that is zero or negative; Clang: an
+    /// `unsigned _BitInt` width below 1.
+    /// C23: §6.7.3.1 paragraph 4, p. 104; PDF p. 117.
+    NonPositiveBitIntWidth,
+    /// A signed `_BitInt` width below 2.
+    /// C23: §6.7.3.1 paragraph 4, p. 104; PDF p. 117.
+    SignedBitIntWidth,
+    /// A `_BitInt` width above `BITINT_MAXWIDTH`.
+    /// C23: §6.7.3.1 paragraph 4, p. 104; PDF p. 117.
+    BitIntWidthTooLarge,
     /// C99: §6.7.5.2p1; §6.7.5.3p2 and p10, pp. 116-119; PDF pp. 128-131.
     InvalidParameter,
     /// C99: §6.7p7, p. 98; PDF p. 110.
@@ -787,6 +797,9 @@ impl SemanticErrorKind {
             | Self::DuplicateMember => "member declared again here",
             | Self::InvalidBitFieldType => "not an integer type",
             | Self::InvalidBitFieldWidth => "invalid width",
+            | Self::NonPositiveBitIntWidth
+            | Self::SignedBitIntWidth
+            | Self::BitIntWidthTooLarge => "invalid _BitInt width",
             | Self::NamedZeroWidthBitField => "named zero-width bit-field",
             | Self::InvalidParameter => "invalid parameter declaration",
             | Self::IncompleteObject => "incomplete type",
@@ -1666,6 +1679,20 @@ impl SemanticErrorKind {
                 "bit-field width is negative or exceeds its type",
                 "C99 §6.7.2.1p3: the width is a nonnegative integer constant expression no wider \
                  than the bit-field's type",
+            ),
+            | Self::NonPositiveBitIntWidth => (
+                "_BitInt width is not positive",
+                "C23 §6.7.3.1p4: the width N of a _BitInt is an integer constant expression of at \
+                 least 1 for unsigned _BitInt",
+            ),
+            | Self::SignedBitIntWidth => (
+                "signed _BitInt width is less than 2",
+                "C23 §6.7.3.1p4: the width N of a signed _BitInt is at least 2",
+            ),
+            | Self::BitIntWidthTooLarge => (
+                "_BitInt width exceeds BITINT_MAXWIDTH",
+                "C23 §6.7.3.1p4: N is at most BITINT_MAXWIDTH, which is 65535 for GCC and 8388608 \
+                 for Clang",
             ),
             | Self::NamedZeroWidthBitField => (
                 "named bit-field has zero width",

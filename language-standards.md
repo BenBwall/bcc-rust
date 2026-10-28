@@ -2266,11 +2266,9 @@ These cases remain different from the compiler each identity claims:
 
 Problems found while surveying that have nothing to do with literal reads
 (see "Semantic analysis gaps" below for those since fixed) remain open:
-`_BitInt` widths are not checked at all (`_BitInt((int){8})` and `int n;
-_BitInt(n) x;` are accepted, GCC rejects both), `static char c[3] =
-(char[3]){"ab"};` is rejected though GCC and Clang accept it, and an
-out-of-range floating value converted to an integer in a static
-initializer is refused (`static unsigned char u = 300.7;`).
+`static char c[3] = (char[3]){"ab"};` is rejected though GCC and Clang
+accept it, and an out-of-range floating value converted to an integer in a
+static initializer is refused (`static unsigned char u = 300.7;`).
 
 `tests/fixtures/programs/static_compound_literals.c` runs every accepted
 form, the half-precision ones and their excess precision included, on the
@@ -2287,6 +2285,36 @@ rejections.
 Each rule below was surveyed against GCC 15.2 and the bundled Clang 23 in
 C99, C17 and C23, GNU and ISO modes, with and without `-pedantic` and
 `-pedantic-errors`, and follows the selected `--compiler-identity`.
+
+### `_BitInt` widths
+
+The width N of `_BitInt(N)` is an integer constant expression of at least 2
+(1 for `unsigned _BitInt`) and at most `BITINT_MAXWIDTH` (C23 §6.7.3.1p4).
+Both compilers check it wherever the type is named: declarations,
+typedefs, members, casts, compound literals, `sizeof` and `_Generic`. They
+read the value differently:
+
+| Width | GCC (`BITINT_MAXWIDTH` 65535) | Clang (`BITINT_MAXWIDTH` 2^23) |
+| --- | --- | --- |
+| not an integer constant expression (`int n; _BitInt(n)`, `_BitInt(2.0)`) | error | error |
+| `_BitInt((int){8})` | error | folded; `-Wgnu-folding-constant` under `-pedantic` |
+| `_BitInt(1)`, `signed _BitInt(1)` | error: at least 2 | error: at least 2 |
+| `_BitInt(0)` | error: not positive | error: at least 2 |
+| `unsigned _BitInt(0)` | error: not positive | error: at least 1 |
+| `_BitInt(-1)` | error: not positive | error: too large (the `int`'s 32 bits read unsigned) |
+| `_BitInt((signed char)-1)`, `_BitInt((short)-2)` | error: not positive | 255 and 65534 bits |
+| `_BitInt(65536)` | error: too large | accepted |
+| `_BitInt(8388609)`, `_BitInt(4294967298LL)` | error: too large | error: too large |
+
+Clang zero-extends the value from its type and keeps the low 64 bits
+(`BuildBitIntType`), which the identity reproduces; the MSVC and TCC
+identities follow Clang. `_BitInt` types themselves stay unmodeled, so
+lowering still refuses them. In GNU modes bcc folds a read of a `static
+const int` wherever an integer constant expression is required, which Clang
+does for `_BitInt(k)` and enumerators and GCC does not; that predates this
+check and is shared with enumerators and array bounds. The check is
+`Analyzer::bit_int_width`; the `sema-bitint-width-{gcc,clang}` goldens and
+`semantic_analysis/tests/bit_int_widths.rs` pin it.
 
 ### Casts between pointers and integers of another width
 

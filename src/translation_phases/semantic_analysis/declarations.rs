@@ -299,8 +299,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     | super::ExtendedType::Atomic(name) =>
                         self.syntax_operand(super::SyntaxOperand::Type(name)),
                     | super::ExtendedType::Typeof { operand, .. } => self.syntax_operand(operand),
-                    | super::ExtendedType::BitInt { width, .. } =>
-                        self.work.push(Work::Expression(width)),
+                    | super::ExtendedType::BitInt { width, signedness } => {
+                        self.work.push(Work::BitIntWidth(
+                            width,
+                            signedness != Some(false),
+                            source,
+                            self.semantic_errors,
+                        ));
+                        self.work.push(Work::Eval(width));
+                        self.work.push(Work::Expression(width));
+                    },
                     | _ => {},
                 }
             },
@@ -334,6 +342,73 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 self.syntax_operand(operand);
             }
             extension = item.next;
+        }
+    }
+
+    /// Checks the width of `_BitInt(N)` once [`Work::Eval`] has evaluated
+    /// it: an integer constant expression, at least 2 for a signed type and
+    /// 1 for an unsigned one, and at most `BITINT_MAXWIDTH`. GCC compares
+    /// the value itself with its 65535 bits, so a width of 0 or less is not
+    /// positive. Clang reads the value's bits zero-extended from its type
+    /// and truncated to 64 bits (`BuildBitIntType`), so it takes
+    /// `(signed char)-1` as 255 bits and `-1` as too large, against its 2^23
+    /// bits. The MSVC and TCC identities follow Clang. A width already
+    /// diagnosed is not reported again.
+    /// C23: §6.7.3.1 paragraph 4, p. 104; PDF p. 117.
+    pub(super) fn bit_int_width(
+        &mut self,
+        width: &'tu super::Expression<'tu>,
+        signed: bool,
+        source: SourceVectors,
+        errors_before: usize,
+    ) {
+        /// GCC's and Clang's `BITINT_MAXWIDTH` on x86-64.
+        const GCC_MAXIMUM: i128 = 65535;
+        const CLANG_MAXIMUM: u64 = 1 << 23;
+        let value = self.integers.pop().flatten();
+        if self.semantic_errors != errors_before || self.unanalyzed_constant(width) {
+            return;
+        }
+        let Some(value) = value else {
+            self.error(
+                SemanticErrorKind::InvalidConstant,
+                width.source_vectors,
+                None,
+                None,
+            );
+            return;
+        };
+        let kind = if matches!(
+            self.context.configuration.compiler_identity(),
+            crate::configuration::CompilerIdentity::Gcc
+        ) {
+            match value.to_i128() {
+                | Some(..=0) => Some(SemanticErrorKind::NonPositiveBitIntWidth),
+                | Some(1) if signed => Some(SemanticErrorKind::SignedBitIntWidth),
+                | Some(1..=GCC_MAXIMUM) => None,
+                | _ => Some(SemanticErrorKind::BitIntWidthTooLarge),
+            }
+        } else {
+            let pattern = value.value.cast_unsigned() & (u128::MAX >> (128 - value.bits));
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "Clang reads the low 64 bits of a wider width."
+            )]
+            let bits = pattern as u64;
+            if bits < 1 + u64::from(signed) {
+                Some(if signed {
+                    SemanticErrorKind::SignedBitIntWidth
+                } else {
+                    SemanticErrorKind::NonPositiveBitIntWidth
+                })
+            } else if bits > CLANG_MAXIMUM {
+                Some(SemanticErrorKind::BitIntWidthTooLarge)
+            } else {
+                None
+            }
+        };
+        if let Some(kind) = kind {
+            self.error(kind, source, None, None);
         }
     }
 

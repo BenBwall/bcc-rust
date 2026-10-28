@@ -354,6 +354,8 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             | Work::DiscardType => {
                 _ = self.values.pop();
             },
+            | Work::BitIntWidth(width, signed, source, errors_before) =>
+                self.bit_int_width(width, signed, source, errors_before),
             | Work::UnknownType(reason) => {
                 _ = self.take_type();
                 let ty = self.types.unmodeled(reason);
@@ -1808,6 +1810,10 @@ enum Work<'tu, 's> {
     VectorAttributesDone(Option<&'tu SpecifierExtension<'tu>>, bool),
     VectorDeclaratorAttributes(ArenaList<'tu, DirectDeclarator<'tu>>),
     UnknownType(UnmodeledType),
+    /// Checks a `_BitInt` width once [`Work::Eval`] has evaluated it: the
+    /// width, whether the type is signed, the specifier's source and the
+    /// error count before the width was analyzed.
+    BitIntWidth(&'tu Expression<'tu>, bool, SourceVectors, usize),
     Spec(TypeSpecifiers<'tu>, TypeQualifiers, SourceVectors, bool),
     SpecDone(TypeSpecifiers<'tu>, TypeQualifiers, SourceVectors, bool),
     Qualify(TypeQualifiers, SourceVectors),
