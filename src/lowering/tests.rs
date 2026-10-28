@@ -7,6 +7,7 @@
 
 mod argument_pack;
 mod assembly;
+mod bit_int;
 mod call_diagnostics;
 mod complex;
 mod correspondence;
