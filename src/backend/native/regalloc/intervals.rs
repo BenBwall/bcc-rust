@@ -164,39 +164,85 @@ impl<'a> Interval<'a> {
         }
     }
 
-    /// Adds `other`'s ranges and uses, which must not overlap these.
-    pub(super) fn absorb(&mut self, other: &Self, arena: &'a Bump) {
-        let mut ranges = ArenaVec::with_capacity_in(self.ranges.len() + other.ranges.len(), arena);
-        let (mut left, mut right) = (0, 0);
-        while left < self.ranges.len() || right < other.ranges.len() {
-            let take_left = right == other.ranges.len()
-                || (left < self.ranges.len() && self.ranges[left].0 < other.ranges[right].0);
-            let range = if take_left {
-                left += 1;
-                self.ranges[left - 1]
-            } else {
-                right += 1;
-                other.ranges[right - 1]
-            };
-            push_range(&mut ranges, range);
-        }
-        self.ranges = ranges;
-        let mut uses = ArenaVec::with_capacity_in(self.uses.len() + other.uses.len(), arena);
-        uses.extend_from_slice(&self.uses);
-        uses.extend_from_slice(&other.uses);
-        uses.sort_unstable();
-        uses.dedup();
-        self.uses = uses;
-        let mut weak = ArenaVec::with_capacity_in(self.weak.len() + other.weak.len(), arena);
-        weak.extend_from_slice(&self.weak);
-        weak.extend_from_slice(&other.weak);
-        weak.sort_unstable();
-        weak.dedup();
-        self.weak = weak;
+    /// Adds `other`'s ranges and uses, which must not overlap these. The
+    /// lists come out as if all of both were merged, ranges that touch
+    /// joined and positions deduplicated; once these lists are (`merged`,
+    /// after the first join), only their part from just before `other`'s
+    /// first element is rebuilt, so joining a short interval to the end of
+    /// a long one, as a chain of block-argument copies does, costs the
+    /// short one.
+    pub(super) fn absorb(&mut self, other: &Self, merged: bool, arena: &'a Bump) {
+        merge(
+            &mut self.ranges,
+            &other.ranges,
+            merged,
+            |&(start, _)| start,
+            push_range,
+            arena,
+        );
+        let push_new = |list: &mut ArenaVec<'_, u32>, position| {
+            if list.last() != Some(&position) {
+                list.push(position);
+            }
+        };
+        merge(
+            &mut self.uses,
+            &other.uses,
+            merged,
+            |&at| at,
+            push_new,
+            arena,
+        );
+        merge(
+            &mut self.weak,
+            &other.weak,
+            merged,
+            |&at| at,
+            push_new,
+            arena,
+        );
         if self.hint.is_none() {
             self.hint = other.hint;
         }
     }
+}
+
+/// Merges the sorted `other` into the sorted `list` by `key`, adding each
+/// element with `push`. Unless `merged` says `list` already went through
+/// `push`, all of it is rebuilt; otherwise only from the element before
+/// the first that sorts after `other`'s first, which `push` would leave as
+/// they are.
+fn merge<'a, T: Copy>(
+    list: &mut ArenaVec<'a, T>,
+    other: &[T],
+    merged: bool,
+    key: impl Fn(&T) -> u32,
+    push: impl Fn(&mut ArenaVec<'a, T>, T),
+    arena: &'a Bump,
+) {
+    let start = match other.first() {
+        | Some(first) if merged => list
+            .partition_point(|item| key(item) < key(first))
+            .saturating_sub(1),
+        | None if merged => return,
+        | _ => 0,
+    };
+    let mut tail = ArenaVec::with_capacity_in(list.len() - start + other.len(), arena);
+    let (mut left, mut right) = (start, 0);
+    while left < list.len() || right < other.len() {
+        let take_left =
+            right == other.len() || (left < list.len() && key(&list[left]) < key(&other[right]));
+        let item = if take_left {
+            left += 1;
+            list[left - 1]
+        } else {
+            right += 1;
+            other[right - 1]
+        };
+        push(&mut tail, item);
+    }
+    list.truncate(start);
+    list.extend_from_slice(&tail);
 }
 
 /// Appends `range` to sorted `ranges`, joining it to the last one when they
@@ -245,5 +291,32 @@ impl FixedRanges<'_> {
         from: u32,
     ) -> Option<u32> {
         next_intersection(&self.ranges[register.index()], ranges, from)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ir::Entity;
+
+    /// An interval of `vreg` over `ranges`, with no uses.
+    fn interval<'a>(vreg: usize, ranges: &[Range], arena: &'a Bump) -> Interval<'a> {
+        let mut interval = Interval::new(VReg::new(vreg), RegClass::Gpr, arena);
+        interval.ranges.extend_from_slice(ranges);
+        interval
+    }
+
+    #[test]
+    fn absorbing_joins_ranges_that_touch() {
+        let arena = Bump::new();
+        for merged in [false, true] {
+            // The joined interval starts where the representative's last
+            // range ends, and ends where its next one would start.
+            let mut rep = interval(0, &[(0, 4), (10, 20)], &arena);
+            rep.absorb(&interval(1, &[(20, 30)], &arena), merged, &arena);
+            assert_eq!(&rep.ranges[..], &[(0, 4), (10, 30)], "merged: {merged}");
+            rep.absorb(&interval(2, &[(6, 10)], &arena), true, &arena);
+            assert_eq!(&rep.ranges[..], &[(0, 4), (6, 30)], "merged: {merged}");
+        }
     }
 }

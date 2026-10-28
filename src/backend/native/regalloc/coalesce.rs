@@ -65,6 +65,9 @@ pub(super) fn coalesce<'a>(
     candidates.sort_by_key(|&(depth, ..)| std::cmp::Reverse(depth));
     let mut parent = ArenaVec::with_capacity_in(intervals.len(), arena);
     parent.extend((0..intervals.len()).map(VReg::new));
+    // Whether each representative has absorbed another register.
+    let mut merged = ArenaVec::with_capacity_in(intervals.len(), arena);
+    merged.resize(intervals.len(), false);
     for &(_, dst, src) in &candidates {
         let (left, right) = (find(&mut parent, dst), find(&mut parent, src));
         if left == right
@@ -84,7 +87,8 @@ pub(super) fn coalesce<'a>(
             &mut intervals[join.index()],
             Interval::new(join, class, arena),
         );
-        intervals[keep.index()].absorb(&joined, arena);
+        intervals[keep.index()].absorb(&joined, merged[keep.index()], arena);
+        merged[keep.index()] = true;
         parent[join.index()] = keep;
     }
     for index in 0..parent.len() {
@@ -109,7 +113,13 @@ fn find(parent: &mut [VReg], vreg: VReg) -> VReg {
     root
 }
 
-/// Whether two intervals are live at a common position.
+/// Whether two intervals are live at a common position. The search starts
+/// where the later one does, so a short interval tests against a long one
+/// in time for the ranges they share, not for all of the long one's.
 fn overlaps(left: &Interval<'_>, right: &Interval<'_>) -> bool {
-    !left.is_empty() && !right.is_empty() && left.next_intersection(&right.ranges, 0).is_some()
+    !left.is_empty()
+        && !right.is_empty()
+        && left
+            .next_intersection(&right.ranges, left.start().max(right.start()))
+            .is_some()
 }

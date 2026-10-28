@@ -1,10 +1,10 @@
 //! Where the WebAssembly view's modules come from.
 //!
 //! [`WasmBackEnd`] is the seam: anything that can turn C source into a
-//! module, with or without a source-line map. [`Precompiled`] is the only
-//! implementation until bcc's WebAssembly back end lands: the bundled
-//! lessons, compiled by clang at `-O0 -g` (`web/wasm/generate.sh`), whose
-//! DWARF the stepper reads for line numbers.
+//! module, with or without a source-line map. [`Precompiled`] holds the
+//! bundled lessons, compiled by clang at `-O0 -g` (`web/wasm/generate.sh`),
+//! whose DWARF the stepper reads for line numbers; `bcc.rs` compiles any
+//! source live.
 
 use super::WasmModule;
 use crate::demos;
@@ -38,6 +38,7 @@ impl WasmBackEnd for Precompiled {
                 demo.name,
                 demo.name.replace(".c", ".wasm")
             ),
+            text:     None,
         })
     }
 }
@@ -50,11 +51,9 @@ pub const LESSON_FLAGS: &str =
 /// The custom section that records how a lesson module was built.
 pub const LESSON_SECTION: &str = "bcc.lesson";
 
-/// Why edited source has no module yet.
-pub const UNAVAILABLE: &str = "bcc's WebAssembly back end is not part of this build yet, so the \
-                               WebAssembly view can show only the bundled lessons, which clang \
-                               compiled ahead of time. Pick a lesson, or step through your edits \
-                               on the abstract machine.";
+/// Why there is no precompiled module: only the lessons have one.
+pub const UNAVAILABLE: &str =
+    "Only the bundled lessons have a module that clang compiled ahead of time.";
 
 /// Each lesson's module, by its file name in `web/demos/`.
 const MODULES: [(&str, &[u8]); 8] = [

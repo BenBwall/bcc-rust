@@ -3,7 +3,8 @@
 // tokens, the preprocessed text and its macro expansions, which tracing
 // leaves unchanged) and compiles C to tokens, a syntax tree, IR, assembly
 // and machine code, or for WASI to a module that runs under Node's WASI,
-// and that the deepest nesting the default limit admits fits the stack while
+// that the site's lessons compile to WebAssembly modules that run, and
+// that the deepest nesting the default limit admits fits the stack while
 // deeper nesting ends with a diagnostic.
 //
 // Usage, from this directory:
@@ -254,6 +255,30 @@ for (const optimize of [false, true]) {
   assert.equal(status, 73);
   assert.match(report, /^  \(func \$main /m);
   if (!optimize) assert.doesNotMatch(report, /^== positions 0$/m);
+}
+
+// The site's lessons, compiled as its WebAssembly view compiles them
+// (wasm32-wasip1, -O0) and run in V8, pass what main returns to proc_exit
+// (Node's WASI returns all 32 bits). The two with undefined behavior read
+// never-written shadow stack memory, which is still zero. Their text names
+// functions plainly, as the view shows them.
+const lessons = {
+  "bounds.c": 0,
+  "indeterminate.c": 1,
+  "macros.c": 11,
+  "objects.c": 15,
+  "overflow.c": -2147483647,
+  "pointers.c": 17,
+  "promotion.c": 255,
+  "recursion.c": 24,
+};
+for (const [name, expected] of Object.entries(lessons)) {
+  const source = readFileSync(new URL(`../../web/demos/${name}`, import.meta.url), "utf8");
+  const { report, status, stdout } = await compileAndRunWasm(source, false);
+  assert.equal(status, expected, name);
+  assert.equal(stdout, "", name);
+  assert.match(report, /^  \(func \$_start /m, name);
+  assert.doesNotMatch(report, /^== positions 0$/m, name);
 }
 
 const errors = compile("int main(void) { return 1 +; }\n");

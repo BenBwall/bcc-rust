@@ -71,6 +71,7 @@ pub fn App() -> impl IntoView {
     Effect::new(move |previous: Option<()>| {
         if previous.is_none() {
             state.theme.set(initial_theme());
+            state.wasm.restore_choice();
         }
     });
     Effect::new(move || {
@@ -135,6 +136,7 @@ pub fn App() -> impl IntoView {
                                         wasm=state.wasm
                                         stale=Signal::derive(move || state.editor_text.with(|text| state.wasm.stale(text)))
                                         on_jump=Callback::new(move |step| state.wasm.jump(state, step))
+                                        on_choose=Callback::new(move |compiler| state.wasm.choose(state, compiler))
                                     />
                                 </Show>
                             }
@@ -652,20 +654,7 @@ impl State {
                     if !compiler.connected() {
                         self.compiler.set_value(None);
                     }
-                    result.map_err(|error| {
-                        // A timeout, or a trap whose cause is known, says so
-                        // itself.
-                        if error == engine::COMPILER.timed_out()
-                            || error == engine::COMPILER.stopped()
-                            || error == engine::OUT_OF_MEMORY
-                            || error == engine::TOO_DEEP
-                            || error.starts_with(engine::INTERNAL_ERROR)
-                        {
-                            error
-                        } else {
-                            format!("bcc's in-browser compiler crashed ({error}).")
-                        }
-                    })
+                    result.map_err(compiler_failure)
                 },
                 | Err(error) => Err(error),
             };
@@ -881,6 +870,8 @@ impl State {
         if let Some(engine) = self.engine.try_update_value(Option::take).flatten() {
             engine.dispose("Rust engine stopped.");
         }
+        // The next engine has no WebAssembly module loaded.
+        self.wasm.engine_stopped();
         self.has_engine.set(false);
     }
 
@@ -1156,6 +1147,21 @@ impl LiveViews {
             other_level: Memo::new(move |_| at_level(!optimize.get())),
             markers,
         }
+    }
+}
+
+/// Why the compiler Worker gave no answer, for the page: a timeout, or a
+/// trap whose cause is known, says so itself.
+fn compiler_failure(error: String) -> String {
+    if error == engine::COMPILER.timed_out()
+        || error == engine::COMPILER.stopped()
+        || error == engine::OUT_OF_MEMORY
+        || error == engine::TOO_DEEP
+        || error.starts_with(engine::INTERNAL_ERROR)
+    {
+        error
+    } else {
+        format!("bcc's in-browser compiler crashed ({error}).")
     }
 }
 
@@ -1747,8 +1753,8 @@ fn About() -> impl IntoView {
                     <p>
                         "The compiler pipeline runs bcc itself, compiled to WebAssembly, in your browser. Only LLVM IR \
                          comes from the native bcc build: the browser build has no LLVM, so it is shown for the \
-                         bundled lessons only. Until bcc's own WebAssembly back end lands, the WebAssembly view steps \
-                         the lessons as clang compiled them. "
+                         bundled lessons only. The WebAssembly view steps what bcc compiles in your browser; for a \
+                         lesson, it can also step the module Clang (wasi-sdk) built ahead of time, to compare. "
                         <a href=README_URL>"Read the full notes"</a>"."
                     </p>
                 </article>

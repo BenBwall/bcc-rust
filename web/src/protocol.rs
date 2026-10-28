@@ -43,6 +43,9 @@ pub enum Command {
     WasmLoad(WasmModule),
     /// Step the loaded module; answered with [`Answer::Wasm`].
     Wasm(WasmControl),
+    /// Compile `source` to WebAssembly with bcc; answered by the compiler
+    /// Worker with [`Answer::CompiledWasm`] (see `wasm/bcc.rs`).
+    CompileWasm(String),
 }
 
 /// A Worker's answer to one request.
@@ -52,6 +55,8 @@ pub enum Answer {
     Compiled(Box<Compilation>),
     WasmLoaded(Box<WasmProgram>),
     Wasm(Box<WasmSnapshot>),
+    /// bcc's module, or its diagnostics when it refuses the program.
+    CompiledWasm(Box<Result<WasmModule, String>>),
 }
 
 /// A Worker-to-page message.

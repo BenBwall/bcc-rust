@@ -26,8 +26,11 @@ them. Visitors pick a lesson (a small C program) and see it three ways:
   the IR and machine stages, whose output keeps no source locations), and
   the reverse.
 
-- **WebAssembly.** The program compiled to WebAssembly, executed one
-  instruction at a time by a WebAssembly interpreter written in Rust. The
+- **WebAssembly.** The program compiled to WebAssembly by bcc, in the
+  browser, executed one
+  instruction at a time by a WebAssembly interpreter written in Rust. For a
+  lesson, the module Clang (wasi-sdk) built ahead of time is a switch away,
+  to compare the two compilers' code. The
   C source and the module's text format sit one above the other, with the C
   line running, the instruction just executed and the next one marked; the
   operand stack, locals, call stack, the blocks a branch can reach, globals
@@ -293,9 +296,12 @@ other modules' imports unresolved: calling one traps. It is deterministic,
 so Back re-executes from the nearest checkpoint (one every 1,024
 instructions, thinned as a run grows). Linear memory is copied on write,
 so a checkpoint shares unchanged memory, and the checkpoints together keep
-at most 64 MiB. One session runs at most 50
+at most 64 MiB. The two most recent copies at multiples of 32,768
+instructions are kept apart from that budget, so stepping back near the
+current instruction re-executes at most 65,536 instructions even in a
+program whose memory alone fills the budget. One session runs at most 50
 million instructions, one request at most 2 million, and memory may grow to
-16 MiB.
+64 MiB.
 
 Controls: **Step** (`→` or `j`) executes one instruction; **Over** (`o`)
 runs a call to its return; **Out** (`u`) runs until the current function
@@ -306,12 +312,41 @@ number in the listing to set a breakpoint, or in the C source to set a run
 target. Hover either side to find the lines the other made.
 
 Where modules come from is behind the `WasmBackEnd` trait in `src/wasm/`:
-C source in, a `WasmModule` (the binary and, optionally, the C line of each
-instruction) out. Until bcc has a WebAssembly back end, the only
-implementation is `Precompiled`: the lessons, compiled by clang at `-O0 -g`
-into `web/wasm/`, whose DWARF line tables the stepper reads. The
-repository's pinned LLVM targets x86-64 only, so regenerate them with a
-clang that targets wasm32, such as wasi-sdk's:
+C source in, a `WasmModule` out: the binary, optionally the C line of each
+instruction (`WasmLine { offset, line, column }`; a row covers its
+instruction and those after it up to the next row's offset, and line 0 is
+code with no C line), and optionally the compiler's own text format. There
+are two:
+
+- `Bcc` (`src/wasm/bcc.rs`) runs in the compiler Worker:
+  `bcc_rust::explorer::compile` for `wasm32-wasip1` at `-O0`, as
+  `bcc-rust program.c --target=wasm32-wasip1 -std=c17 -O0` would. Each
+  source-map position becomes a line row (bcc records no columns, so the
+  column is 0, and a prologue's line is 0), and bcc's `.wat`, with the line
+  of every instruction (`ExplorerWasm::instructions`) and each function's
+  range (`functions`), becomes the listing, in place of the stepper's own
+  printout. The engine Worker places each step, call frame and block in it
+  by module offset. bcc's module is a WASI command: `$_start`, which bcc's
+  bundled C library adds, calls `main` and passes its result to
+  `proc_exit`. When bcc refuses a program for WebAssembly (`setjmp`,
+  `_Float16`, …), the view shows its diagnostics.
+- `Precompiled` serves the lessons, compiled by clang at `-O0 -g` into
+  `web/wasm/`, whose DWARF line tables the stepper reads.
+
+The view steps bcc's module unless the learner switches to Clang's, which
+only the lessons have; the browser's local storage keeps that choice for
+later visits. A lesson falls back to Clang's module, saying why, when bcc
+has none to step: bcc refused the program (its diagnostics are shown), the
+program is more than bcc can compile in the browser (it fills one of the
+compiler's fixed memory regions or nests too deeply), the browser stopped
+the compilation (a timeout or a stopped Worker: **Compile again** retries),
+or the stepper cannot load bcc's module (one needing more than its 64 MiB
+of memory). Each is tried once, so a failure is shown, not retried in a
+loop. After the engine Worker restarts, the module is loaded into the new
+one without compiling again. Edited source is compiled by bcc when it runs (**Run
+edited code**). The repository's pinned LLVM targets x86-64 only, so
+regenerate the Clang modules with a clang that targets wasm32, such as
+wasi-sdk's:
 
 ```sh
 CLANG=path/to/wasi-sdk/bin/clang sh web/wasm/generate.sh           # rewrite
@@ -320,53 +355,7 @@ CLANG=path/to/wasi-sdk/bin/clang sh web/wasm/generate.sh --check   # compare onl
 
 Each module records the flags and the exact source it was built from in a
 `bcc.lesson` custom section, and the site's tests compare that with the
-lessons, so a stale module fails CI, which has no wasm32 clang. Edited source has no module
-yet, and the view says so.
-
-bcc's back end plugs in as a second `WasmBackEnd` that compiles in the
-compiler Worker: `bcc_rust::explorer::compile` for a `wasm32` target, then
-the module's binary as `WasmModule::bytes` and, for each instruction
-position the back end records, its module offset and C line as a `WasmLine
-{ offset, line, column }`. A row covers its instruction and those after it
-up to the next row's offset; line 0 is code with no C line. The stepper
-prints its own listing from the binary, so it needs neither the back end's
-text nor a text-to-offset map.
-
-`stepper/examples/listing.rs` prints a module's listing with each
-instruction's offset and C line:
-
-```sh
-cargo run --manifest-path web/Cargo.toml -p bcc-wasm-stepper --example listing -- web/wasm/recursion.wasm
-```
-
-## Model limitations
-
-The engine is an **independent bounded C subset evaluator written in Rust**,
-not bcc's syntax/semantic frontend, LLVM backend or IR interpreter. It supports
-signed 32-bit `int` and signed 8-bit plain `char` locals (as on x86-64), `int
-*`, fixed int arrays, int-returning named functions, int and int-pointer
-parameters, block locals, `if`/`else`, `while`, `for`, `return`, assignments,
-arithmetic and comparisons, address-of, dereference, subscripts, and
-standalone increments. Calls must be a whole initializer, assignment right-hand
-side, return expression, or expression statement.
-
-Indeterminate reads stop with a clearly labeled **policy stop**; the engine
-does not claim every indeterminate read is undefined. Signed overflow,
-division by zero, out-of-bounds access, null indirection and use after a
-lifetime ends stop as detected undefined behavior with a citation.
-
-No preprocessing, globals, library I/O, floating point, casts, structs,
-pointers to char, dynamic allocation or function pointers. Unsupported source
-is rejected explicitly. Operands are evaluated left to right (a chosen
-policy); stores commit atomically; nested side effects are rejected, so
-unsequenced-modification checks are not needed. Automatic objects appear when
-their declaration is reached, though C99 begins their lifetime on entry to the
-block; the narration says so. A completed run does not certify freedom from
-undefined behavior.
-
-Engine limits are explicit terminal diagnostics: 2,048 steps, 32 frames, 128
-objects, 512 integer cells, 1,024 operands, 64 nesting levels, 8,192 compiled
-operations and an 8 MiB trace-retention budget.
+lessons, so a stale module fails CI, which has no wasm32 clang.
 
 ## Files
 
@@ -379,7 +368,7 @@ source marks in `panels/front_end.rs`. `editor.rs` mounts Monaco, and
 `highlight.rs` colours the prerendered fallback. `app/wasm.rs` holds the
 WebAssembly view's page state and controls, `panels/wasm.rs` (with
 `panels/wasm/`) draws it, and `wasm.rs` (with `wasm/`) defines its data, the
-`WasmBackEnd` seam, and, in the engine Worker, the stepper session
+`WasmBackEnd` seam with bcc's back end (`wasm/bcc.rs`, compiler Worker), and, in the engine Worker, the stepper session
 (`wasm/worker.rs`) and the narration (`wasm/narration.rs`). The interpreter
 itself is `stepper/`, mapped in its `src/lib.rs`. `palette.rs` assigns each
 variable its colour. `snapshot.rs` defines what the page presents, `demos.rs`
@@ -403,12 +392,16 @@ waiting frames; diagnostics and recovery; UTF-16 columns; colouring; every
 lesson compiling live at both levels; placed compiler diagnostics and the
 stop explanation; the machine-code listing; the LLVM IR's sync with the
 lessons; the source-to-output links, the folded headers and gutter labels of
-the front-end stages, and the optimizer comparison; and prerendering; and
-every lesson stepped through its WebAssembly with a placed, narrated state at
-each instruction. `RUSTFLAGS= cargo test -p bcc-wasm-stepper` runs the
-interpreter's tests: each instruction family against the specification's
-values, control flow, traps, memory bounds, decoding and validation, the
-stepping commands, the WASI host, and the lesson modules. The engine's own
+the front-end stages, and the optimizer comparison; prerendering; every
+lesson stepped through its WebAssembly with a placed, narrated state at each
+instruction; and every lesson compiled by bcc for `wasm32-wasip1`, stepped
+through bcc's own text to the exit status Clang's module returns, the
+conversion of bcc's output, its diagnostics for a program it refuses, and the
+choice between the two compilers. `RUSTFLAGS= cargo test -p bcc-wasm-stepper`
+runs the interpreter's tests: each instruction family against the
+specification's values, control flow, traps, memory bounds, decoding and
+validation, the stepping commands, the WASI host, and the lesson modules. The
+engine's own
 tests run from the repository root with `cargo test --lib --no-default-features
 --features abstract-machine abstract_machine`. Generated artifacts belong in
 ignored `web/target/`, `web/dist/` and `web/editor/{node_modules,dist,fonts}/`.
