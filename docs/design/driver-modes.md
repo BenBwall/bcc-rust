@@ -490,6 +490,55 @@ the C sources before it.
 `__STDC_VERSION__ 199901L` by default. glibc's headers take their portable
 paths. TCC's diagnostics are `file:line: error: message`.
 
+## Identity policy
+
+`--compiler-identity=gcc|clang|msvc|clang-cl|tcc`, which each personality
+sets, decides two kinds of thing by different rules.
+
+**What an identity claims follows its own compiler.** The predefined
+macros, the version, and which types and keywords exist are those of the
+compiler named: `_Float16` and `__bf16` are types for GCC, Clang and
+clang-cl but not for `cl` or TCC, `__fp16` for the Clang identities alone,
+the `_FloatN` keywords for GCC alone, and TCC's `#!` script line for TCC
+alone. Code matches on the identity for these. Language features follow
+`-std`, not the identity: under MSVC, which lacks `_BitInt`, the type is
+still a C23 feature that is reported as an extension before C23.
+
+**Behaviour bcc models only for GCC and Clang follows one of them.** Where
+the two differ in a rule bcc implements both ways (a constant-folding
+rule, a warning's conditions, the evaluation format of `_Float16`, whether
+an extension is reported under `-pedantic`), each identity takes one
+family of rules:
+
+| Identity | Rules | Why |
+| --- | --- | --- |
+| `gcc` | GCC's | |
+| `tcc` | GCC's | TCC implements a subset of GCC's GNU dialect |
+| `clang` | Clang's | |
+| `clang-cl` | Clang's | it is Clang |
+| `msvc` | GCC's, or Clang's where `cl` is known to behave as Clang's MS-compatible mode models it | `cl` lacks most of the GNU and C23 extensions Clang accepts silently, so GCC's rules, which reject or report more, are the closer model; where `cl`'s behaviour is documented or surveyed and matches clang-cl's, Clang's are exact |
+
+`CompilerIdentity::rules` (`src/configuration/identity.rs`) gives the
+family, and `CompilerIdentity::ms_compatible_rules` the family for a rule
+where `cl` is known to match Clang; a rule chosen per identity calls one of
+them rather than matching on identities. The rules chosen so far:
+
+| Rule | GCC's rules | Clang's rules |
+| --- | --- | --- |
+| Compound literals in static initializers fold and go unreported (`folds_compound_literals`, #170) | GCC, TCC, MSVC | Clang, clang-cl |
+| `_Float16` evaluates in `float` (`half_in_float`, #163) | GCC (TCC and MSVC have no `_Float16`) | Clang, clang-cl |
+| `-MG` lists a missing `<...>` header under `-MM`; `-H` names a header beside the main file `./a.h` | GCC, TCC, MSVC | Clang, clang-cl |
+| `_BitInt` widths, array compound literals, out-of-range floating conversions (#174) | GCC, TCC, MSVC | Clang, clang-cl |
+| Pointer/integer cast warnings (#174; `cl`'s C4311 and C4312 warn only for a narrower integer) | GCC, TCC | Clang, clang-cl, MSVC (`ms_compatible_rules`) |
+
+The first two predate the helpers and compare identities directly with the
+same result; they and #174's per-rule helpers are to call the central ones
+once both are on `main`. A rule that compares with `CompilerIdentity::Gcc`
+alone is equivalent where the feature it governs exists only under GCC's
+identity (the `_Float16` pedantic reports). Neither TCC's nor `cl`'s
+behaviour was surveyed for these rules: there is no TCC or MSVC on the
+machines that produced them, and Microsoft documents too little of `cl`'s.
+
 ## Decisions
 
 - **Translate, don't reimplement.** A personality produces bcc command lines,
