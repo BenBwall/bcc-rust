@@ -217,6 +217,10 @@ pub const MAX_PP_ENTRIES: usize = 20_000;
 /// The most expansions the page receives, for the same reason.
 pub const MAX_EXPANSIONS: usize = 2_000;
 
+/// The most steps the page receives for one expansion; a macro that
+/// expands enormously can take tens of thousands.
+pub const MAX_STEPS: usize = 500;
+
 /// Phase 3's entries as a listing, one per line: where each starts, its
 /// kind, its spelling, and what is notable about it, up to
 /// [`MAX_PP_ENTRIES`] of them and then a line saying how many more there
@@ -317,24 +321,27 @@ fn preprocessing(trace: &ExplorerPreprocessing, columns: &Columns) -> Preprocess
         .collect();
     Preprocessing {
         omitted_expansions: in_source.len().saturating_sub(MAX_EXPANSIONS),
+        truncated:          trace.truncated,
         expansions:         in_source
             .into_iter()
             .take(MAX_EXPANSIONS)
             .map(|expansion| Expansion {
-                range:      SourceSpan {
+                range:         SourceSpan {
                     line:       expansion.line as usize,
                     column:     columns.utf16(expansion.line as usize, expansion.column as usize),
                     end_line:   expansion.end_line as usize,
                     end_column: columns
                         .utf16(expansion.end_line as usize, expansion.end_column as usize),
                 },
-                presumed:   expansion.presumed.clone(),
-                invocation: expansion.invocation.clone(),
-                directive:  expansion.directive,
-                result:     expansion.result.clone(),
-                steps:      expansion
+                presumed:      expansion.presumed.clone(),
+                invocation:    expansion.invocation.clone(),
+                directive:     expansion.directive,
+                result:        expansion.result.clone(),
+                omitted_steps: expansion.steps.len().saturating_sub(MAX_STEPS),
+                steps:         expansion
                     .steps
                     .iter()
+                    .take(MAX_STEPS)
                     .map(|step| ExpansionStep {
                         parent:     step.parent.map(|parent| parent as usize),
                         kind:       step.kind.clone(),
@@ -583,6 +590,20 @@ mod tests {
         assert_eq!(trace.expansions[0].invocation, "__LINE__");
         assert_eq!(trace.expansions[0].result, "2");
         assert_eq!(trace.directives[0].name, "pragma");
+    }
+
+    #[test]
+    fn an_enormous_expansion_sends_its_first_steps() {
+        // 11,111 replacements in one expansion, of 30,000 elements.
+        let source = "#define A 0,0,0,\n#define B A A A A A A A A A A\n#define C B B B B B B B B \
+                      B B\n#define D C C C C C C C C C C\n#define E D D D D D D D D D D\nint a[] \
+                      = {E 0};\n";
+        let compilation = compile(source, false);
+        let trace = &compilation.preprocessing;
+        assert!(trace.truncated);
+        let expansion = &trace.expansions[0];
+        assert_eq!(expansion.steps.len(), MAX_STEPS);
+        assert!(expansion.omitted_steps > 0);
     }
 
     #[test]

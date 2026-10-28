@@ -282,6 +282,10 @@ pub struct ExplorerPreprocessing {
     /// Every directive that was executed, in order; those in skipped groups
     /// were not.
     pub directives:   Vec<ExplorerDirective>,
+    /// Whether phase 4 did more than this records: the trace stops after a
+    /// fixed number of events, which only a macro expansion that multiplies
+    /// its input reaches.
+    pub truncated:    bool,
 }
 
 /// One replacement of a macro name in a file, and everything it set off.

@@ -329,7 +329,7 @@ pub(crate) const REGION_BYTES: usize = 1024 * 1024 * 1024;
 pub(crate) const REGION_BYTES: usize = 16 * 1024 * 1024;
 
 /// WebAssembly's reservation, a real allocation from linear memory. A
-/// compilation the explorer accepts (`explorer::MAX_SOURCE_BYTES`) holds
+/// compilation the explorer accepts (`explorer::WASM_MAX_SOURCE_BYTES`) holds
 /// at most a few dozen regions at once, so they fit in linear memory with
 /// room to spare, and each fits the explorer's largest inputs many times.
 #[cfg(all(not(miri), target_family = "wasm"))]

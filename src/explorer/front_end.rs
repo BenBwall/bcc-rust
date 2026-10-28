@@ -619,6 +619,7 @@ impl<'c, 'tu> Trace<'c, 'tu> {
                 }
                 self.step(outermost, step);
             },
+            | TraceEvent::Truncated => self.output.truncated = true,
             | TraceEvent::Directive { name, at } => {
                 let (file, line, presumed) = self.place(at);
                 self.output.directives.push(ExplorerDirective {

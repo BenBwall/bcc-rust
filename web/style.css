@@ -670,6 +670,7 @@
   .expansion-step[data-kind="stringify"] .step-kind, .expansion-step[data-kind="paste"] .step-kind { color: var(--cat-lifetime); font-size: 12.5px; }
   .expansion-step[data-kind="builtin"] .step-kind { color: var(--accent); }
   .step-text { font-family: var(--font-mono); font-size: 12.5px; overflow-wrap: anywhere; }
+  .expansion-more { color: var(--muted); font-size: 12.5px; font-style: italic; }
   .stage-output { margin-top: 14px; }
   .stage-output .code-editor { --editor-height: clamp(360px, calc(100vh - 420px), 620px); }
   .stage-missing { margin-top: 14px; padding: 16px; border: 1px dashed var(--border-strong); border-radius: var(--radius-m); color: var(--text-2); }

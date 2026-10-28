@@ -21,8 +21,14 @@ use web_sys::{
 };
 
 fn main() {
-    console_error_panic_hook::set_once();
     let scope: DedicatedWorkerGlobalScope = js_sys::global().unchecked_into();
+    // A panic ends the module with a trap, which tells the page nothing; send
+    // the message first, and keep it in the console.
+    let panics = scope.clone();
+    std::panic::set_hook(Box::new(move |info| {
+        console_error_panic_hook::hook(info);
+        post(&panics, &Reply::Panicked(info.to_string()));
+    }));
     let replies = scope.clone();
     let on_message = Closure::<dyn FnMut(MessageEvent)>::new(move |event: MessageEvent| {
         // The proxy only sends valid requests; anything else times out there.

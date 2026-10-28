@@ -356,6 +356,8 @@ fn LiveStatus(
         match live.get() {
             | LiveCompile::Loading => ("busy", "Loading the compiler…"),
             | LiveCompile::Compiling => ("busy", "Compiling…"),
+            | LiveCompile::Failed(error) if error.starts_with(crate::pipeline::TOO_LARGE) =>
+                ("failed", "Too large to compile here"),
             | LiveCompile::Failed(_) => ("failed", "Compiler stopped"),
             | LiveCompile::Compiled => ("live", "Compiled live in your browser"),
             | LiveCompile::Idle => ("idle", "Not compiled yet"),
@@ -544,11 +546,11 @@ fn missing(
                     abstract machine never waits for it."
                 .to_owned(),
         | LiveCompile::Compiling => return "Compiling this program in your browser…".to_owned(),
+        // Refused before compiling: nothing stopped.
+        | LiveCompile::Failed(error) if error.starts_with(crate::pipeline::TOO_LARGE) =>
+            return error.clone(),
         | LiveCompile::Failed(error) =>
-            return format!(
-                "{error} Programs that nest very deeply or expand a macro enormously can exhaust \
-                 the in-browser compiler. The page starts a fresh compiler for your next edit."
-            ),
+            return format!("{error} The page starts a fresh compiler for your next edit."),
         | LiveCompile::Compiled | LiveCompile::Idle => {},
     }
     match compilation {
@@ -602,6 +604,23 @@ mod tests {
         assert!(missing(Stage::Ir, false, None, &LiveCompile::Loading).contains("Loading"));
         // Edited source has no LLVM IR, compiled or not.
         assert!(missing(Stage::Llvm, false, None, &LiveCompile::Compiled).contains("no LLVM"));
+        // A program the page refused was never compiled, so nothing stopped.
+        let refusal = crate::pipeline::too_large(&"x".repeat(70 * 1024)).unwrap();
+        let refused = missing(
+            Stage::Ir,
+            false,
+            None,
+            &LiveCompile::Failed(refusal.clone()),
+        );
+        assert_eq!(refused, refusal);
+        let memory = missing(
+            Stage::Ir,
+            false,
+            None,
+            &LiveCompile::Failed(crate::engine::OUT_OF_MEMORY.to_owned()),
+        );
+        assert!(memory.starts_with("bcc ran out of memory"), "{memory}");
+        assert!(memory.contains("fresh compiler"), "{memory}");
     }
 
     #[test]

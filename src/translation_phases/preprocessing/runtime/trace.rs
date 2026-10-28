@@ -160,6 +160,8 @@ pub(crate) enum TraceEvent<'pp> {
         first_line: u32,
         last_line:  u32,
     },
+    /// The trace stopped here: it holds [`MAX_TRACE_EVENTS`] events.
+    Truncated,
     /// `#include` named a header, which was found as `file` or not at all.
     /// C99: §6.10.2 paragraphs 2-4, pp. 149-150; PDF pp. 161-162.
     Included {
@@ -172,6 +174,12 @@ pub(crate) enum TraceEvent<'pp> {
         file:      Option<u32>,
     },
 }
+
+/// The most events a trace records. The trace lives in the preprocessing
+/// arena, beside the files and macros, and a macro expansion that multiplies
+/// its input can make any number of events, so the trace stops before it
+/// could fill that arena (one fixed region in WebAssembly).
+pub(crate) const MAX_TRACE_EVENTS: usize = 50_000;
 
 impl<'pp> Preprocessor<'_, 'pp> {
     /// Starts recording a trace; call it before preprocessing.
@@ -195,7 +203,12 @@ impl<'pp> Expander<'_, '_, 'pp, '_> {
     /// their call sites, so an untraced run only tests it.
     #[inline(always)]
     pub(in crate::translation_phases::preprocessing) fn tracing(&self) -> bool {
-        self.state.trace.is_some()
+        // Once truncated, the trace records nothing more, so nothing more is
+        // spelled or allocated for it.
+        self.state
+            .trace
+            .as_ref()
+            .is_some_and(|trace| trace.len() <= MAX_TRACE_EVENTS)
     }
 
     #[inline(never)]
@@ -508,9 +521,16 @@ impl<'pp> Expander<'_, '_, 'pp, '_> {
         u32::try_from(depth).unwrap_or(u32::MAX)
     }
 
+    /// Records `event`, unless the trace already holds
+    /// [`MAX_TRACE_EVENTS`]; the first event past that is recorded as
+    /// [`TraceEvent::Truncated`].
     fn push_trace(&mut self, event: TraceEvent<'pp>) {
         if let Some(trace) = &mut self.state.trace {
-            trace.push(event);
+            match trace.len().cmp(&MAX_TRACE_EVENTS) {
+                | std::cmp::Ordering::Less => trace.push(event),
+                | std::cmp::Ordering::Equal => trace.push(TraceEvent::Truncated),
+                | std::cmp::Ordering::Greater => {},
+            }
         }
     }
 }

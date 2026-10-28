@@ -789,6 +789,27 @@ mod tests {
     }
 
     #[test]
+    fn a_macro_that_multiplies_its_input_truncates_the_trace() {
+        // 30,000 initializer elements from five lines: each produces trace
+        // events, which stop at a fixed number instead of filling the
+        // preprocessing arena (one fixed region in WebAssembly).
+        let source = "#define A 0,0,0,\n#define B A A A A A A A A A A\n#define C B B B B B B B B \
+                      B B\n#define D C C C C C C C C C C\n#define E D D D D D D D D D D\nint a[] \
+                      = {E 0};\n";
+        let output = compile(source, &options(false));
+        assert!(
+            output.diagnostics.iter().all(|d| d.severity != "error"),
+            "{:#?}",
+            output.diagnostics
+        );
+        let trace = output.preprocessing.unwrap();
+        assert!(trace.truncated);
+        assert_eq!(trace.expansions.len(), 1);
+        // The output is whole: every element is there.
+        assert_eq!(output.preprocessed.unwrap().matches('0').count(), 30_001);
+    }
+
+    #[test]
     fn each_skipped_group_is_traced_with_its_own_lines() {
         let source = "#if 0\na\n#elif 0\nb\n#elif 1\nc\n#else\nd\n#endif\n";
         let trace = compile(source, &options(false)).preprocessing.unwrap();

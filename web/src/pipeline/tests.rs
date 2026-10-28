@@ -145,3 +145,51 @@ fn the_optimizer_comparison_names_what_changed() {
         Vec::<String>::new()
     );
 }
+
+#[test]
+fn the_page_refuses_programs_larger_than_the_compiler_takes() {
+    assert_eq!(too_large(&"x".repeat(MAX_COMPILE_BYTES)), None);
+    let refusal = too_large(&"x".repeat(MAX_COMPILE_BYTES + 1)).expect("one byte too many");
+    assert!(refusal.starts_with(TOO_LARGE), "{refusal}");
+    assert!(
+        refusal.contains("65 KiB") && refusal.contains("at most 64 KiB"),
+        "{refusal}"
+    );
+}
+
+#[test]
+#[cfg(feature = "compiler")]
+fn the_page_limit_is_the_in_browser_compilers() {
+    assert_eq!(MAX_COMPILE_BYTES, bcc_rust::explorer::WASM_MAX_SOURCE_BYTES);
+}
+
+#[test]
+fn a_trap_is_reported_by_its_cause() {
+    use crate::engine::{
+        INTERNAL_ERROR,
+        OUT_OF_MEMORY,
+        TOO_DEEP,
+        trap_reason,
+    };
+    // A panic's message comes first; the trap after it says nothing more.
+    assert_eq!(
+        trap_reason(
+            "Uncaught RuntimeError: unreachable",
+            Some("index out of bounds")
+        ),
+        format!("{INTERNAL_ERROR}index out of bounds")
+    );
+    // Rust reaches `unreachable` without a panic when an allocation fails.
+    assert_eq!(
+        trap_reason("Uncaught RuntimeError: unreachable", None),
+        OUT_OF_MEMORY
+    );
+    assert_eq!(
+        trap_reason(
+            "Uncaught RangeError: Maximum call stack size exceeded",
+            None
+        ),
+        TOO_DEEP
+    );
+    assert_eq!(trap_reason("Something else", None), "Something else");
+}

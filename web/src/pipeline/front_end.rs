@@ -92,22 +92,27 @@ pub struct Preprocessing {
     pub directives:         Vec<Directive>,
     /// Expansions beyond the most the page receives.
     pub omitted_expansions: usize,
+    /// Whether the compiler's record of phase 4 stopped early, as it does
+    /// for a macro expansion that multiplies its input.
+    pub truncated:          bool,
 }
 
 /// A macro invocation in the source and what it became.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Expansion {
-    pub range:      SourceSpan,
+    pub range:         SourceSpan,
     /// The place `#line` gives it, when that differs.
-    pub presumed:   Option<String>,
-    pub invocation: String,
+    pub presumed:      Option<String>,
+    pub invocation:    String,
     /// Whether a directive read it, as `#if` reads its condition.
-    pub directive:  bool,
+    pub directive:     bool,
     /// The tokens it produced; empty for one a directive read, such as the
     /// name in `#if VERBOSE`.
-    pub result:     String,
-    pub steps:      Vec<ExpansionStep>,
+    pub result:        String,
+    pub steps:         Vec<ExpansionStep>,
+    /// Steps beyond the most the page receives.
+    pub omitted_steps: usize,
 }
 
 /// One replacement, `#` or `##` of an expansion.

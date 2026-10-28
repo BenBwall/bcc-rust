@@ -241,11 +241,26 @@ How live compilation runs:
   the previous one, so typing does not make it flicker. The last eight
   compilations are kept, so switching level or going back to a lesson is
   instant.
-- **Bounded.** The explorer refuses more than 1 MiB of source and stops at
-  500 levels of nesting with a diagnostic. A compilation that takes over 10
-  seconds terminates the compiler Worker, as does a trap (an exhausted
-  stack or memory region leaves the Wasm instance unusable). The view says the
-  compiler stopped, and the next edit starts a fresh one.
+- **Bounded.** The page compiles at most 64 KiB of source and says so for a
+  larger program without loading the compiler; the explorer itself refuses
+  more in WebAssembly (`WASM_MAX_SOURCE_BYTES`; 1 MiB on a native host). In
+  the browser each of the compiler's arenas is one fixed 32 MiB region of
+  linear memory, and filling one ends the module with a trap. Measured on
+  programs of one dense shape each (many short declarations, one long line
+  of them, many declarators, a long initializer, a long sum, many small
+  functions, many macro invocations, many locals, one long string, many
+  comments), 64 KiB compiles them all within the page's ten seconds, while
+  96 KiB of initializer elements fills the parser's arena and 512 KiB fills
+  one arena or another in every shape but comments. The explorer stops at
+  500 levels of nesting with a diagnostic, and its trace of phase 4 stops
+  after 50,000 steps (the card says so), so a macro that expands enormously
+  cannot fill the preprocessor's arena through it. A compilation that takes
+  over 10 seconds terminates the compiler Worker, as does a trap, which
+  leaves the Wasm instance unusable. The view says why: a Rust panic sends
+  its message before the trap; a trap without one is a failed allocation, an
+  arena that filled ("bcc ran out of memory …"); an overflow of the
+  engine's call stack means the program nests too deeply. The next edit
+  starts a fresh compiler.
 - **Diagnostics.** Errors and warnings are Monaco markers in the source, with
   the message on hover, and a list under the stage with each message's place
   (click it to show the line), the part of the compiler that reported it, and

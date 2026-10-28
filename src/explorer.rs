@@ -112,12 +112,28 @@ pub fn compile(source: &str, options: &ExplorerOptions) -> ExplorerOutput {
     compilation::compile(source, options)
 }
 
-/// The most source text, with the in-memory headers, the explorer compiles.
-/// It keeps every arena of a compilation far inside the fixed regions a
-/// WebAssembly build allocates (`util::vm::REGION_BYTES`), so ordinary input
-/// cannot exhaust them; only a macro expansion that multiplies its input
-/// many thousandfold can, which ends the module with a trap.
-pub const MAX_SOURCE_BYTES: usize = 1 << 20;
+/// The most source text, with the in-memory headers, the explorer compiles:
+/// [`WASM_MAX_SOURCE_BYTES`] in WebAssembly, and 1 MiB on a native host,
+/// whose arenas reserve far more address space.
+pub const MAX_SOURCE_BYTES: usize = if cfg!(target_family = "wasm") {
+    WASM_MAX_SOURCE_BYTES
+} else {
+    1 << 20
+};
+
+/// The most source text the explorer compiles in WebAssembly. There each
+/// arena is one fixed region of linear memory (`util::vm::REGION_BYTES`, 32
+/// MiB), and a compilation that fills one ends the module with a trap, so
+/// the limit leaves every arena room for ordinary programs. Measured with
+/// the release build on programs of one dense shape each (many short
+/// declarations, one long line of them, many declarators, a long
+/// initializer, a long sum, many small functions, many macro invocations,
+/// many locals, one long string, many comments), 64 KiB compiles them all
+/// within the page's ten seconds; 96 KiB of initializer elements already
+/// fills the parser's arena, and 512 KiB fills one arena or another in
+/// every shape but comments. Only a macro expansion that multiplies its
+/// input many thousandfold can still fill one below the limit.
+pub const WASM_MAX_SOURCE_BYTES: usize = 64 * 1024;
 
 /// The nesting limit the explorer applies without a native host's reserved
 /// compilation stack. WebAssembly recursion is bounded twice: by the

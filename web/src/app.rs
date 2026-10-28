@@ -624,6 +624,13 @@ impl State {
         let Some(key) = self.next_compilation() else {
             return;
         };
+        // Larger source than the in-browser compiler takes is refused here,
+        // without loading it.
+        if let Some(refusal) = crate::pipeline::too_large(&key.0) {
+            self.compiled
+                .update(|compiled| compiled.push((key, Err(refusal))));
+            return;
+        }
         self.in_flight.set(Some(key.clone()));
         spawn_local(async move {
             let result = match self.compiler().await {
@@ -646,8 +653,13 @@ impl State {
                         self.compiler.set_value(None);
                     }
                     result.map_err(|error| {
+                        // A timeout, or a trap whose cause is known, says so
+                        // itself.
                         if error == engine::COMPILER.timed_out()
                             || error == engine::COMPILER.stopped()
+                            || error == engine::OUT_OF_MEMORY
+                            || error == engine::TOO_DEEP
+                            || error.starts_with(engine::INTERNAL_ERROR)
                         {
                             error
                         } else {

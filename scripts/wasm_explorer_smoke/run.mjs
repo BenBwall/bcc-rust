@@ -59,6 +59,46 @@ assert.match(macros, /^GLUE\(count, er\) -> counter$/m, macros);
 assert.match(macros, /^SQUARE\(1 \+ 2\) -> \(\(1 \+ 2\) \* \(1 \+ 2\)\)$/m, macros);
 assert.match(macros, /^== preprocessed\n# 1 "<input>"\n[^]*^int counter = \(\(1 \+/m, macros);
 
+// Programs up to the WebAssembly limit compile without filling an arena,
+// in each dense shape, and a larger one is refused with a diagnostic rather
+// than a trap. Each fixed region is 32 MiB; these sizes are what fits.
+const LIMIT = 64 * 1024;
+const fill = (unit, head = "", tail = "\n") =>
+  head + unit.repeat(Math.floor((LIMIT - 64 - head.length - tail.length) / unit.length)) + tail;
+for (const [name, source] of Object.entries({
+  declarations: fill("int x;\n", "", ""),
+  line: fill("int x;"),
+  initializer: fill("0,", "int x[] = {", "};\n"),
+  sum: fill(" + 1", "int y = 0", ";\n"),
+  macros: (() => {
+    let text = "#define X(a) ((a) + 1)\n";
+    for (let i = 0; text.length < LIMIT - 64; i++) text += `int v${i} = X(${i});\n`;
+    return text.slice(0, text.lastIndexOf("\n", LIMIT - 64) + 1);
+  })(),
+})) {
+  const started = Date.now();
+  const report = compile(source);
+  assert.doesNotMatch(report, /== diagnostic error/, `${name}: ${report.slice(0, 400)}`);
+  assert.match(report, /^== asm$/m, name);
+  assert.ok(Date.now() - started < 10000, `${name} took ${Date.now() - started} ms`);
+}
+const tooLarge = compile("int x;\n".repeat(LIMIT / 7 + 1));
+assert.match(tooLarge, /== diagnostic error\nerror: the explorer compiles at most 65536 bytes of source/, tooLarge.slice(0, 400));
+assert.doesNotMatch(tooLarge, /== tokens/);
+
+// A macro expansion that multiplies its input stops the phase-4 trace
+// rather than filling the preprocessing arena.
+const blowUp = compile(`#define A 0,0,0,
+#define B A A A A A A A A A A
+#define C B B B B B B B B B B
+#define D C C C C C C C C C C
+#define E D D D D D D D D D D
+int a[] = {E 0};
+`);
+assert.doesNotMatch(blowUp, /== diagnostic error/, blowUp.slice(0, 400));
+assert.match(blowUp, /^== trace truncated$/m);
+assert.match(blowUp, /^== asm$/m);
+
 const errors = compile("int main(void) { return 1 +; }\n");
 assert.match(errors, /== diagnostic error\nerror: expected an expression/);
 assert.doesNotMatch(errors, /== ir\n/);
@@ -66,7 +106,8 @@ assert.doesNotMatch(errors, /== ir\n/);
 // Nesting deeper than the default limit is a diagnostic, and nesting just
 // inside it fits the default 1 MiB stack in every shape that recurses deeply.
 const nested = (depth) => `int x = ${"(".repeat(depth)}1${")".repeat(depth)};\n`;
-const deep = compile(nested(100000));
+// Within the size limit, far past the nesting one.
+const deep = compile(nested(20000));
 assert.match(deep, /== diagnostic error\nerror: .*nest/, deep.slice(0, 400));
 for (const shape of [
   `int main(void) { return ${"- ".repeat(490)}1; }\n`,

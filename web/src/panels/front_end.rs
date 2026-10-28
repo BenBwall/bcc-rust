@@ -269,6 +269,12 @@ fn preprocessor_card(compilation: &Compilation, on_reveal: Callback<usize>) -> A
                 {(omitted > 0).then(|| view! {
                     <p class="phase-summary">{format!("… and {omitted} more expansions, not listed here.")}</p>
                 })}
+                {trace.truncated.then(|| view! {
+                    <p class="phase-summary">
+                        "A macro here expands so much that bcc stopped recording after 50,000 steps: \
+                         the lists above end there, while the output is complete."
+                    </p>
+                })}
             })}
             {(!trace.conditionals.is_empty()).then(|| {
                 let skipped = trace.skipped.clone();
@@ -357,14 +363,36 @@ fn include_item(include: &Include, on_reveal: Callback<usize>) -> impl IntoView 
     }
 }
 
+/// The most steps the card lists for one expansion.
+const SHOWN_STEPS: usize = 40;
+
+/// The most characters of an invocation or result the card shows; the
+/// output view below has the whole text.
+const SHOWN_CHARACTERS: usize = 600;
+
+/// `text`, cut after [`SHOWN_CHARACTERS`] with a note of how much more there
+/// is.
+fn shortened(text: &str) -> String {
+    match text.char_indices().nth(SHOWN_CHARACTERS) {
+        | Some((cut, _)) => format!(
+            "{} … ({} more characters)",
+            &text[..cut],
+            text[cut..].chars().count()
+        ),
+        | None => text.to_owned(),
+    }
+}
+
 fn expansion_item(expansion: &Expansion, on_reveal: Callback<usize>) -> impl IntoView {
     let line = expansion.range.line;
     let result = match (expansion.result.is_empty(), expansion.directive) {
-        | (false, _) => expansion.result.clone(),
+        | (false, _) => shortened(&expansion.result),
         | (true, true) => "nothing in the output: the directive on this line read it".to_owned(),
         | (true, false) => "nothing: its replacement list is empty".to_owned(),
     };
-    let steps = expansion.steps.clone();
+    // The card lists the first steps; the rest would make it endless.
+    let more = expansion.steps.len().saturating_sub(SHOWN_STEPS) + expansion.omitted_steps;
+    let steps: Vec<_> = expansion.steps.iter().take(SHOWN_STEPS).cloned().collect();
     let detailed = steps.len() > 1
         || steps
             .first()
@@ -373,7 +401,7 @@ fn expansion_item(expansion: &Expansion, on_reveal: Callback<usize>) -> impl Int
         <li class="expansion">
             <div class="expansion-head">
                 {place(line, on_reveal)}
-                <code class="expansion-from">{expansion.invocation.clone()}</code>
+                <code class="expansion-from">{shortened(&expansion.invocation)}</code>
                 <span class="expansion-arrow" aria-label="becomes">"→"</span>
                 <code class="expansion-to" class:is-empty=expansion.result.is_empty()>{result}</code>
                 {presumed(expansion.presumed.as_deref())}
@@ -395,6 +423,9 @@ fn expansion_item(expansion: &Expansion, on_reveal: Callback<usize>) -> impl Int
                             </li>
                         }
                     }).collect_view()}
+                    {(more > 0).then(|| view! {
+                        <li class="expansion-step expansion-more">{format!("… and {more} more steps")}</li>
+                    })}
                 </ol>
             })}
         </li>

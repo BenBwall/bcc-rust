@@ -64,4 +64,7 @@ pub enum Reply {
         id:     u32,
         result: Result<Answer, String>,
     },
+    /// The Worker's Rust code panicked, with this message. Its module traps
+    /// right after, so the page reports the message rather than the trap.
+    Panicked(String),
 }

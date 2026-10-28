@@ -33,6 +33,32 @@ use serde::{
     Serialize,
 };
 
+/// The most source text the page compiles, in bytes: the in-browser
+/// compiler's limit (`bcc_rust::explorer::WASM_MAX_SOURCE_BYTES`). There
+/// each of the compiler's arenas is one fixed 32 MiB region of memory, and
+/// 64 KiB of any ordinary program fits them, compiling within the page's
+/// ten seconds.
+pub const MAX_COMPILE_BYTES: usize = 64 * 1024;
+
+/// How the page's refusal of a program larger than [`MAX_COMPILE_BYTES`]
+/// begins.
+pub const TOO_LARGE: &str = "Too large for the in-browser compiler: ";
+
+/// Why the page does not compile `source`, if it is larger than
+/// [`MAX_COMPILE_BYTES`].
+pub fn too_large(source: &str) -> Option<String> {
+    (source.len() > MAX_COMPILE_BYTES).then(|| {
+        format!(
+            "{TOO_LARGE}this program is {} KiB, and bcc's in-browser compiler takes at most {} \
+             KiB of source, so the page did not compile it. Each of the compiler's memory arenas \
+             is a fixed region in the browser, and larger programs can fill one. Make the program \
+             smaller, or compile it with the native bcc.",
+            source.len().div_ceil(1024),
+            MAX_COMPILE_BYTES / 1024
+        )
+    })
+}
+
 /// bcc's output for one program, one field per stage.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]

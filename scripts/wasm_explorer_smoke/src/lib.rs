@@ -55,6 +55,9 @@ pub unsafe extern "C" fn smoke_compile(
         _ = writeln!(report, "== pp-tokens {}", tokens.len());
     }
     if let Some(trace) = &output.preprocessing {
+        if trace.truncated {
+            _ = writeln!(report, "== trace truncated");
+        }
         _ = writeln!(report, "== expansions");
         for expansion in trace.expansions.iter().filter(|expansion| expansion.file == "<input>") {
             _ = writeln!(report, "{} -> {}", expansion.invocation, expansion.result);
