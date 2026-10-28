@@ -71,6 +71,7 @@ pub fn App() -> impl IntoView {
     Effect::new(move |previous: Option<()>| {
         if previous.is_none() {
             state.theme.set(initial_theme());
+            state.wasm.restore_choice();
         }
     });
     Effect::new(move || {

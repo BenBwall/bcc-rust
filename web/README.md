@@ -298,7 +298,7 @@ instructions, thinned as a run grows). Linear memory is copied on write,
 so a checkpoint shares unchanged memory, and the checkpoints together keep
 at most 64 MiB. One session runs at most 50
 million instructions, one request at most 2 million, and memory may grow to
-16 MiB.
+64 MiB.
 
 Controls: **Step** (`→` or `j`) executes one instruction; **Over** (`o`)
 runs a call to its return; **Out** (`u`) runs until the current function
@@ -331,8 +331,13 @@ are two:
   `web/wasm/`, whose DWARF line tables the stepper reads.
 
 The view steps bcc's module unless the learner switches to Clang's, which
-only the lessons have; a lesson bcc refuses falls back to Clang's with bcc's
-diagnostic shown. Edited source is compiled by bcc when it runs (**Run
+only the lessons have; the browser's local storage keeps that choice for
+later visits. A lesson falls back to Clang's module, saying why, when bcc
+has none to step: bcc refused the program (its diagnostics are shown), the
+browser stopped the compilation (a timeout or out of memory: **Compile
+again** retries), or the stepper cannot load bcc's module (one needing more
+than its 64 MiB of memory). Each is tried once, so a failure is shown, not
+retried in a loop. Edited source is compiled by bcc when it runs (**Run
 edited code**). The repository's pinned LLVM targets x86-64 only, so
 regenerate the Clang modules with a clang that targets wasm32, such as
 wasi-sdk's:

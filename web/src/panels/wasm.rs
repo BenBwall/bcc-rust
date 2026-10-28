@@ -30,15 +30,20 @@ pub fn WasmView(
     on_choose: Callback<Compiler>,
 ) -> impl IntoView {
     let shown = move || wasm.program.with(Option::is_some);
+    let problem = move || wasm.bcc_problem();
+    let retry = move || problem().is_some_and(|problem| problem.retry);
     view! {
         <section class="wasm-view" aria-labelledby="wasm-title">
             <h2 id="wasm-title" class="sr-only">"WebAssembly"</h2>
             <div class="stage-missing wasm-unavailable" hidden=move || shown() || wasm.unavailable.with(Option::is_none)>
                 <p class="wasm-unavailable-title">"No WebAssembly module for this program"</p>
                 <p>{move || wasm.unavailable.get().unwrap_or_default()}</p>
-                <pre class="wasm-diagnostic" hidden=move || wasm.refusal().is_none()>
-                    {move || wasm.refusal().unwrap_or_default()}
+                <pre class="wasm-diagnostic" class:is-prose=move || problem().is_some_and(|problem| problem.prose) hidden=move || problem().is_none()>
+                    {move || problem().map(|problem| problem.detail).unwrap_or_default()}
                 </pre>
+                <button type="button" class="button small" hidden=move || !retry() disabled=move || wasm.locked_tracked() on:click=move |_| on_choose.run(Compiler::Bcc)>
+                    "Compile again"
+                </button>
             </div>
             <p class="edit-hint" hidden=move || !stale.get() || !shown()>
                 "You changed the program. This view still steps the module compiled from the source it started with: choose Run edited code to compile your edits with bcc and step them."
@@ -66,13 +71,19 @@ pub fn WasmView(
 }
 
 /// Who compiled the module and what that means, the switch between bcc and
-/// clang when a lesson has both, and bcc's diagnostics when it refused the
-/// program and clang's module stands in.
+/// clang when a lesson has both, and why bcc's module is missing when
+/// clang's stands in.
 #[component]
 fn Provenance(wasm: WasmState, on_choose: Callback<Compiler>) -> impl IntoView {
     let compiler = move || wasm.compiler();
-    let both = move || wasm.choice.with(|choice| choice.available().len() > 1);
-    let fell_back = move || compiler() == Some(Compiler::Clang) && wasm.refusal().is_some();
+    let both = move || wasm.choice.with(|choice| choice.offered().len() > 1);
+    let problem = move || {
+        wasm.choice.with(|choice| {
+            (choice.compiler == Some(Compiler::Clang) && choice.preferred == Compiler::Bcc)
+                .then(|| choice.bcc_problem())
+                .flatten()
+        })
+    };
     let command = move || {
         wasm.program.with(|program| {
             program
@@ -129,9 +140,13 @@ fn Provenance(wasm: WasmState, on_choose: Callback<Compiler>) -> impl IntoView {
                      makes its own choices. bcc's module also starts in `$_start`, which its small C library adds.",
                 ))}
             </p>
-            <div class="wasm-fallback" hidden=move || !fell_back()>
-                <p>"bcc can't compile this program to WebAssembly, so you are stepping Clang's module instead. bcc said:"</p>
-                <pre class="wasm-diagnostic">{move || wasm.refusal().unwrap_or_default()}</pre>
+            <div class="wasm-fallback" hidden=move || problem().is_none()>
+                <p>{move || problem().map(|problem| problem.headline).unwrap_or_default()}</p>
+                <pre class="wasm-diagnostic" class:is-prose=move || problem().is_some_and(|problem| problem.prose)>{move || problem().map(|problem| problem.detail).unwrap_or_default()}</pre>
+                <p>"You are stepping Clang's module instead."</p>
+                <button type="button" class="button small" hidden=move || !problem().is_some_and(|problem| problem.retry) disabled=move || wasm.locked_tracked() on:click=move |_| on_choose.run(Compiler::Bcc)>
+                    "Compile again with bcc"
+                </button>
             </div>
             <code class="wasm-command">{command}</code>
         </article>

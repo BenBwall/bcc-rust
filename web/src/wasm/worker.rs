@@ -1086,6 +1086,29 @@ int main(int argc, char **argv) {
         );
     }
 
+    /// Beginners write big static arrays. The review's 20 MiB one (338
+    /// pages) now runs; one past the stepper's 64 MiB is refused when it
+    /// loads, with the limit in plain words, which the page shows once.
+    #[cfg(feature = "compiler")]
+    #[test]
+    fn big_static_arrays_run_up_to_the_steppers_memory_limit() {
+        use crate::wasm::Bcc;
+        let fits = "static char big[20 << 20];\nint main(void) {\n    big[5] = 1;\n    return \
+                    big[5];\n}\n";
+        let (program, end) = run_to_end(Bcc.compile(fits).unwrap());
+        assert_eq!(end.exit, Some(1), "{:?}", end.narration);
+        assert!(end.memory.pages >= 338, "{}", end.memory.pages);
+        assert_eq!(program.unresolved, Vec::<String>::new());
+        let too_big = fits.replace("20 << 20", "70 << 20");
+        let error = WasmWorker::default()
+            .load(Bcc.compile(&too_big).unwrap())
+            .unwrap_err();
+        assert!(
+            error.contains("at most 64 MiB") && error.contains("largest arrays smaller"),
+            "{error}"
+        );
+    }
+
     /// Next line from `$_start`, which has no C line, reaches `main`'s first
     /// line, and the start narration says what `$_start` is.
     #[cfg(feature = "compiler")]
