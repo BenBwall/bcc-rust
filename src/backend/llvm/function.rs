@@ -414,6 +414,7 @@ impl<'id, 'm> BodyBuilder<'_, 'id, 'm, '_> {
                 value
             },
             | InstData::Unary { ty, arg, .. } => {
+                let from = self.body.value_type(arg);
                 let arg = self.value(arg)?;
                 match opcode {
                     | Opcode::Clz | Opcode::ClzDefined | Opcode::Ctz | Opcode::CtzDefined => {
@@ -447,6 +448,27 @@ impl<'id, 'm> BodyBuilder<'_, 'id, 'm, '_> {
                     | Opcode::VaStart =>
                         self.intrinsic("llvm.va_start", &[arg], &[api.ty(Type::Ptr)]),
                     | Opcode::VaEnd => self.intrinsic("llvm.va_end", &[arg], &[api.ty(Type::Ptr)]),
+                    // The IR rounds an integer or a wide float to `bf16` once,
+                    // as libgcc's `__floattibf` and `__truncdfbf2` do. LLVM
+                    // rounds an integer conversion to `float` first, and
+                    // folds `fptrunc (sitofp x)` into one when the middle
+                    // type holds `x` exactly, so these call libgcc.
+                    | Opcode::Sitofp | Opcode::Uitofp if ty == Type::BF16 && from == Type::I128 => {
+                        let name = if opcode == Opcode::Sitofp {
+                            c"__floattibf"
+                        } else {
+                            c"__floatuntibf"
+                        };
+                        api.runtime_call(name, Type::BF16, &[Type::I128], &[arg])
+                    },
+                    | Opcode::Fptrunc if ty == Type::BF16 && from != Type::F32 => {
+                        let name = match from {
+                            | Type::F64 => c"__truncdfbf2",
+                            | Type::F80 => c"__truncxfbf2",
+                            | _ => c"__trunctfbf2",
+                        };
+                        api.runtime_call(name, Type::BF16, &[from], &[arg])
+                    },
                     | _ => api.cast(cast_opcode(opcode), arg, api.ty(ty)),
                 }
             },

@@ -535,7 +535,7 @@ impl Selector<'_, '_, '_> {
             }
             for (offset, ty, register) in result_registers(registers) {
                 let dst = mem.offset(offset);
-                if ty == Type::F16 {
+                if ty.half_format().is_some() {
                     self.half_store(Reg::Phys(register), dst);
                 } else if ty.is_float() {
                     self.emit(MInst::XStore {

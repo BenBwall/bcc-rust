@@ -59,6 +59,8 @@ impl Parser<'_, '_, '_> {
                 | KeywordTokenType::Float32x
                 | KeywordTokenType::Float64x
                 | KeywordTokenType::Float16
+                | KeywordTokenType::BFloat16
+                | KeywordTokenType::Fp16
                 | KeywordTokenType::Int8
                 | KeywordTokenType::Int16
                 | KeywordTokenType::Int32
@@ -133,6 +135,8 @@ impl Parser<'_, '_, '_> {
                 | KeywordTokenType::Float32x
                 | KeywordTokenType::Float64x
                 | KeywordTokenType::Float16
+                | KeywordTokenType::BFloat16
+                | KeywordTokenType::Fp16
                 | KeywordTokenType::Int8
                 | KeywordTokenType::Int16
                 | KeywordTokenType::Int32

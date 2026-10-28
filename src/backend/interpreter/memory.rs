@@ -199,7 +199,7 @@ impl<'a> Memory<'a> {
             .fold(0_u128, |bits, cell| (bits << 8) | u128::from(cell.byte));
         Ok(match ty {
             | Type::I1 if bits > 1 => RuntimeValue::Poison,
-            | Type::F16 => RuntimeValue::F16(truncate_u16(bits)),
+            | Type::F16 | Type::BF16 => RuntimeValue::half(ty, truncate_u16(bits)),
             | Type::F32 => RuntimeValue::F32(f32::from_bits(truncate_u32(bits))),
             | Type::F64 => RuntimeValue::F64(f64::from_bits(truncate_u64(bits))),
             | Type::F80 => RuntimeValue::F80(X87::from_bits(bits)),
@@ -242,7 +242,7 @@ impl<'a> Memory<'a> {
                 return Ok(());
             },
             | RuntimeValue::Int(bits) | RuntimeValue::F128(bits) => (bits, None),
-            | RuntimeValue::F16(bits) => (u128::from(bits), None),
+            | RuntimeValue::F16(bits) | RuntimeValue::BF16(bits) => (u128::from(bits), None),
             | RuntimeValue::F32(value) => (u128::from(value.to_bits()), None),
             | RuntimeValue::F64(value) => (u128::from(value.to_bits()), None),
             | RuntimeValue::F80(value) => (value.to_bits(), None),

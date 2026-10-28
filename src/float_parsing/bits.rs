@@ -52,6 +52,7 @@ pub(crate) fn constant_parts(
 ) -> Option<u128> {
     let (mantissa_bits, exponent_bits) = match ty {
         | Type::F16 => (10, 5),
+        | Type::BF16 => (7, 8),
         | Type::F32 => (23, 8),
         | Type::F64 => (52, 11),
         | Type::F80 => {
@@ -110,6 +111,7 @@ pub(crate) fn from_unsigned(value: u128, ty: Type) -> Option<u128> {
 fn from_magnitude(sign: bool, magnitude: u128, ty: Type) -> Option<u128> {
     let (mantissa_bits, exponent_bits) = match ty {
         | Type::F16 => (10, 5),
+        | Type::BF16 => (7, 8),
         | Type::F32 => (23, 8),
         | Type::F64 => (52, 11),
         | Type::F80 => return Some(x87_from_magnitude(sign, magnitude)),
@@ -165,6 +167,7 @@ pub(crate) fn to_integer(value: &LongDouble, width: u32, signed: bool) -> Option
 pub(crate) fn binary128_bits(value: Binary128, ty: Type) -> Option<u128> {
     Some(match ty {
         | Type::F16 => u128::from(HalfFormat::Binary16.round_binary128(value)),
+        | Type::BF16 => u128::from(HalfFormat::BFloat16.round_binary128(value)),
         | Type::F32 => u128::from(value.to_f32().to_bits()),
         | Type::F64 => u128::from(value.to_f64().to_bits()),
         | Type::F80 => value.to_x87().to_bits(),

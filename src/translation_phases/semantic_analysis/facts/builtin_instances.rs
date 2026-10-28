@@ -188,9 +188,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             self.integer_type(ty)
                 .map_or(value, |(bits, signed)| value.cast(bits, signed))
         });
-        let floating = self
-            .floating_value(info)
-            .and_then(|value| self.round_floating(value, ty));
+        let floating = self.converted_floating(info, ty);
         BuiltinOperand {
             expression: Some(expression),
             ty,

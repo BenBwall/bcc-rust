@@ -55,6 +55,22 @@ impl<'a> Liveness<'a> {
 
     /// One dataflow solution for the current instructions.
     fn dataflow(func: &MFunction<'_>, arena: &'a Bump) -> Self {
+        Self::of_program(
+            func,
+            func.blocks.iter().map(|block| &block.insts[..]),
+            arena,
+        )
+    }
+
+    /// The dataflow solution for `program`, one instruction list per block
+    /// of `func`, whose terminators give the control flow. The checker
+    /// solves it for the virtual-register program it compares the
+    /// rewritten `func` against.
+    pub(super) fn of_program<'i>(
+        func: &MFunction<'_>,
+        program: impl Iterator<Item = &'i [MInst]>,
+        arena: &'a Bump,
+    ) -> Self {
         let blocks = func.blocks.len();
         let words = func.vreg_count().div_ceil(64).max(1);
         let zeroed = |len: usize| {
@@ -68,14 +84,14 @@ impl<'a> Liveness<'a> {
         let mut live_out = zeroed(blocks * words);
         let mut first = ArenaVec::with_capacity_in(blocks, arena);
         let mut count = 0_u32;
-        for (block, data) in func.blocks.iter().enumerate() {
+        for (block, insts) in program.enumerate() {
             first.push(count);
-            count += u32::try_from(data.insts.len()).expect("instruction numbers fit u32");
+            count += u32::try_from(insts.len()).expect("instruction numbers fit u32");
             let (uses, defs) = (
                 &mut uses[block * words..(block + 1) * words],
                 &mut defs[block * words..(block + 1) * words],
             );
-            for inst in &data.insts {
+            for inst in insts {
                 let mut inst = *inst;
                 inst.visit_registers(|reg, role| {
                     if let Reg::Virt(vreg) = *reg
@@ -170,7 +186,7 @@ impl<'a> Liveness<'a> {
     }
 
     /// The live-out set of `block`.
-    fn out(&self, block: usize) -> &[u64] {
+    pub(super) fn out(&self, block: usize) -> &[u64] {
         &self.live_out[block * self.words..(block + 1) * self.words]
     }
 
@@ -352,7 +368,7 @@ impl<'a> Liveness<'a> {
 
 /// Updates `live` backward across one instruction: its definitions die,
 /// its uses become live.
-fn transfer(inst: &mut MInst, live: &mut [u64]) {
+pub(super) fn transfer(inst: &mut MInst, live: &mut [u64]) {
     inst.visit_registers(|reg, role| {
         if let Reg::Virt(vreg) = *reg
             && role == Role::Def

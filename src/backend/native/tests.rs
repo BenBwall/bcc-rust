@@ -128,13 +128,14 @@ fn with_allocation<R>(
 }
 
 /// Selects and allocates `function`, lets `corrupt` change the allocation,
-/// then rewrites the function and runs the allocation checker on it.
+/// then rewrites the function and runs the allocation checker on it; on
+/// success, the size of the checker's largest state.
 fn check_corrupted(
     ir: &str,
     function: &str,
     target: Target,
     corrupt: impl FnOnce(&MFunction<'_>, &mut Allocation<'_>),
-) -> Result<(), Box<CheckError>> {
+) -> Result<usize, Box<CheckError>> {
     let arena = Bump::new();
     let module = parse_module(&arena, ir).unwrap_or_else(|error| panic!("{error}\n{ir}"));
     let Some(crate::ir::Symbol::Function(id)) = module.symbol(function) else {

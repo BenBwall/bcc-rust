@@ -280,6 +280,7 @@ impl Checker<'_, '_> {
                                 | Type::I64
                                 | Type::Ptr
                                 | Type::F16
+                                | Type::BF16
                                 | Type::F32
                                 | Type::F64
                         ) {
