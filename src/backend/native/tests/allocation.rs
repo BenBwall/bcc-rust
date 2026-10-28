@@ -11,6 +11,7 @@ use super::{
     function_text,
     spilled,
     with_allocation,
+    with_selection,
 };
 use crate::{
     backend::native::{
@@ -30,6 +31,7 @@ use crate::{
             Width,
         },
         regalloc::{
+            self,
             CheckError,
             ErrorKind,
             INSERTED,
@@ -305,6 +307,85 @@ fn the_checker_s_state_does_not_grow_with_the_function() {
         assert!(
             long <= short,
             "{target:?}: the largest state grew from {short} facts to {long}"
+        );
+    }
+}
+
+/// `statements` copies of `if (x > i) s += h(s, i); else t = h(t, i);` as
+/// a function of three blocks per statement, in each of which only `x`,
+/// `s` and `t` are live, while the function's registers grow with its
+/// length.
+fn branch_per_statement(statements: usize) -> String {
+    let mut ir = String::from(
+        "abi lowered
+function @h(i32, i32) -> i32 external
+function @f(i32) -> i32 external {
+block0(v0: i32):
+    v1 = iconst.i32 0
+    v2 = iconst.i32 1
+    jump block1(v1, v2)
+",
+    );
+    let mut next = 3;
+    let mut fresh = || {
+        next += 1;
+        next - 1
+    };
+    for statement in 0..statements {
+        let (join, then, other, after) = (
+            3 * statement + 1,
+            3 * statement + 2,
+            3 * statement + 3,
+            3 * statement + 4,
+        );
+        let (s, t, bound, test) = (fresh(), fresh(), fresh(), fresh());
+        writeln!(ir, "block{join}(v{s}: i32, v{t}: i32):").unwrap();
+        writeln!(ir, "    v{bound} = iconst.i32 {statement}").unwrap();
+        writeln!(ir, "    v{test} = icmp.i32 sgt v0, v{bound}").unwrap();
+        writeln!(ir, "    brif v{test}, block{then}, block{other}").unwrap();
+        let (constant, result, sum) = (fresh(), fresh(), fresh());
+        writeln!(ir, "block{then}:").unwrap();
+        writeln!(ir, "    v{constant} = iconst.i32 {statement}").unwrap();
+        writeln!(ir, "    v{result} = call @h(v{s}, v{constant})").unwrap();
+        writeln!(ir, "    v{sum} = iadd.i32 v{s}, v{result}").unwrap();
+        writeln!(ir, "    jump block{after}(v{sum}, v{t})").unwrap();
+        let (constant, result) = (fresh(), fresh());
+        writeln!(ir, "block{other}:").unwrap();
+        writeln!(ir, "    v{constant} = iconst.i32 {statement}").unwrap();
+        writeln!(ir, "    v{result} = call @h(v{t}, v{constant})").unwrap();
+        writeln!(ir, "    jump block{after}(v{s}, v{result})").unwrap();
+    }
+    let (s, t, sum) = (fresh(), fresh(), fresh());
+    writeln!(
+        ir,
+        "block{}(v{s}: i32, v{t}: i32):\n    v{sum} = iadd.i32 v{s}, v{t}\n    return v{sum}\n}}",
+        3 * statements + 1
+    )
+    .unwrap();
+    ir
+}
+
+#[test]
+fn liveness_grows_with_the_live_sets_not_blocks_times_registers() {
+    // Each statement adds three blocks and a dozen registers but keeps
+    // the live sets the same, so the sets' storage and the work to solve
+    // them must grow in proportion to the statements. Sets with a bit per
+    // register in every block would take 16 times as much per statement
+    // at 256 statements as at 16.
+    for target in [Target::LinuxGnu, Target::WindowsGnu] {
+        let size = |statements| {
+            with_selection(
+                &branch_per_statement(statements),
+                "f",
+                target,
+                |_, mut func, scratch| regalloc::liveness_size(&mut func, scratch),
+            )
+        };
+        let ((short_stored, short_steps), (long_stored, long_steps)) = (size(16), size(256));
+        assert!(
+            long_stored <= 16 * short_stored && long_steps <= 16 * short_steps,
+            "{target:?}: from 16 to 256 statements the live-in sets grew from {short_stored} to \
+             {long_stored} registers and the work from {short_steps} to {long_steps} steps"
         );
     }
 }

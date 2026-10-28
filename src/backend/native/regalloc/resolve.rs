@@ -18,10 +18,7 @@ use super::{
         Interval,
         Loc,
     },
-    liveness::{
-        Liveness,
-        members,
-    },
+    liveness::Liveness,
 };
 use crate::{
     backend::native::mir::{
@@ -140,14 +137,14 @@ pub(super) fn resolve<'a>(
         for successor in func.successors(MBlock::new(block)) {
             edge += 1;
             let start = liveness.block_start(successor.index());
-            members(liveness.live_in(successor.index()), |vreg| {
+            for &vreg in liveness.live_in(successor.index()) {
                 let vreg = allocation.rep[vreg.index()];
                 if seen[vreg.index()] == edge {
-                    return;
+                    continue;
                 }
                 seen[vreg.index()] = edge;
                 if allocation.location(vreg, end) == allocation.location(vreg, start) {
-                    return;
+                    continue;
                 }
                 let (at, index, phase) = if predecessors[successor.index()] == 1 {
                     (successor.index(), 0, 0)
@@ -166,7 +163,7 @@ pub(super) fn resolve<'a>(
                     src: end,
                     dst: start,
                 });
-            });
+            }
         }
     }
     allocation

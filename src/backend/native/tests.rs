@@ -97,13 +97,13 @@ fn function_text<'a>(text: &'a str, name: &str) -> &'a str {
     &rest[..end]
 }
 
-/// Selects and allocates `function` of a textual module and hands the
-/// allocated machine function to `then`.
-fn with_allocation<R>(
+/// Selects `function` of a textual module and hands the machine function,
+/// and the arena it lives in, to `then`.
+fn with_selection<R>(
     ir: &str,
     function: &str,
     target: Target,
-    then: impl FnOnce(&Module<'_>, &MFunction<'_>, &Allocation<'_>) -> R,
+    then: impl for<'s> FnOnce(&Module<'_>, MFunction<'s>, &'s Bump) -> R,
 ) -> R {
     let arena = Bump::new();
     let module = parse_module(&arena, ir).unwrap_or_else(|error| panic!("{error}\n{ir}"));
@@ -113,7 +113,7 @@ fn with_allocation<R>(
     let definition = module.function(id);
     let body = definition.body.as_ref().expect("a defined function");
     let scratch = Bump::new();
-    let mut func = isel::select(
+    let func = isel::select(
         &module,
         definition,
         body,
@@ -123,8 +123,21 @@ fn with_allocation<R>(
         &scratch,
     )
     .unwrap();
-    let allocation = regalloc::allocate(&mut func, CallConv::of(target), &scratch);
-    then(&module, &func, &allocation)
+    then(&module, func, &scratch)
+}
+
+/// Selects and allocates `function` of a textual module and hands the
+/// allocated machine function to `then`.
+fn with_allocation<R>(
+    ir: &str,
+    function: &str,
+    target: Target,
+    then: impl FnOnce(&Module<'_>, &MFunction<'_>, &Allocation<'_>) -> R,
+) -> R {
+    with_selection(ir, function, target, |module, mut func, scratch| {
+        let allocation = regalloc::allocate(&mut func, CallConv::of(target), scratch);
+        then(module, &func, &allocation)
+    })
 }
 
 /// Selects and allocates `function`, lets `corrupt` change the allocation,
@@ -136,27 +149,11 @@ fn check_corrupted(
     target: Target,
     corrupt: impl FnOnce(&MFunction<'_>, &mut Allocation<'_>),
 ) -> Result<usize, Box<CheckError>> {
-    let arena = Bump::new();
-    let module = parse_module(&arena, ir).unwrap_or_else(|error| panic!("{error}\n{ir}"));
-    let Some(crate::ir::Symbol::Function(id)) = module.symbol(function) else {
-        panic!("no function {function}");
-    };
-    let definition = module.function(id);
-    let body = definition.body.as_ref().expect("a defined function");
-    let scratch = Bump::new();
-    let mut func = isel::select(
-        &module,
-        definition,
-        body,
-        target,
-        crate::target::TlsModel::default(),
-        module.returns_twice_escapes(),
-        &scratch,
-    )
-    .unwrap();
-    let mut allocation = regalloc::allocate(&mut func, CallConv::of(target), &scratch);
-    corrupt(&func, &mut allocation);
-    regalloc::rewrite_checked(&mut func, &allocation, &scratch).map_err(|error| Box::new(*error))
+    with_selection(ir, function, target, |_, mut func, scratch| {
+        let mut allocation = regalloc::allocate(&mut func, CallConv::of(target), scratch);
+        corrupt(&func, &mut allocation);
+        regalloc::rewrite_checked(&mut func, &allocation, scratch).map_err(|error| Box::new(*error))
+    })
 }
 
 /// Puts every virtual register of `func` in its own spill slot for its

@@ -5,16 +5,16 @@
 //!
 //! Instruction `i` (numbered in block layout order) reads at position `2i`
 //! and writes at `2i+1`, so a value that dies at an instruction may share a
-//! register with one it defines. Liveness is backward dataflow over the
-//! blocks; each virtual register's interval is the set of positions where
-//! its value is needed, with holes where it is not. Each physical register
-//! gets the ranges where a precolored value lives in it (an argument
-//! between its `mov` and the `call`, `%rax` between a `call` and the copy
-//! of its result) and a point at each clobber. An interval may hold a
-//! register only where it meets none of that register's fixed ranges, so a
-//! value live across a call, which meets every caller-saved clobber, is
-//! split around the call or lands in a callee-saved register, without a
-//! special case.
+//! register with one it defines. Liveness is solved backward over the
+//! blocks, one register at a time; each virtual register's interval is the
+//! set of positions where its value is needed, with holes where it is not.
+//! Each physical register gets the ranges where a precolored value lives in
+//! it (an argument between its `mov` and the `call`, `%rax` between a
+//! `call` and the copy of its result) and a point at each clobber. An
+//! interval may hold a register only where it meets none of that
+//! register's fixed ranges, so a value live across a call, which meets
+//! every caller-saved clobber, is split around the call or lands in a
+//! callee-saved register, without a special case.
 //!
 //! In order:
 //!
@@ -157,6 +157,16 @@ pub(crate) fn allocate<'a>(
     resolve::resolve(func, &liveness, &scan.intervals, rep, fallbacks, arena)
 }
 
+/// The size of the liveness allocation solves for `func` (after splitting
+/// its critical edges and removing dead instructions): the registers its
+/// live-in sets hold together, and the steps the solution took.
+#[cfg(test)]
+pub(crate) fn liveness_size<'a>(func: &mut MFunction<'a>, arena: &'a Bump) -> (usize, usize) {
+    edges::split_critical_edges(func, arena);
+    let liveness = Liveness::compute(func, arena);
+    (liveness.stored(), liveness.steps())
+}
+
 /// Where each virtual register lives at each position, and the moves the
 /// rewrite inserts between its locations.
 pub(crate) struct Allocation<'a> {
@@ -280,9 +290,9 @@ fn mark_unsplittable(
     for block in &func.blocks {
         if let Some(&MInst::JmpIndirect { dests, .. }) = block.insts.last() {
             for &target in &func.indirect[dests as usize] {
-                liveness::members(liveness.live_in(target.index()), |vreg: VReg| {
+                for &vreg in liveness.live_in(target.index()) {
                     intervals[rep[vreg.index()].index()].unsplittable = true;
-                });
+                }
             }
         }
     }

@@ -100,7 +100,7 @@ can later enable v2/v3 forms.
           │ per function, in a scratch arena reset between functions:
           │   instruction selection   IR → machine IR over virtual registers;
           │                           block parameters → parallel copies
-          │   liveness, intervals     iterative dataflow; ranges with holes
+          │   liveness, intervals     sparse live-in sets; ranges with holes
           │   register allocation     coalescing, linear scan with splitting
           │   rewrite                 physical registers, moves; checker
           │                           (debug), `lea` peepholes, loop rotation
@@ -442,12 +442,23 @@ nothing recurses.
    the value it defines (x86 reads all inputs before writing outputs). Moves
    the allocator inserts go *between* instructions, so intervals are split
    only at even positions.
-3. **Liveness and dead code.** Per-block use/def bit sets, then backward
-   iterative dataflow (`live_in = use ∪ (live_out − def)`) until nothing
-   changes, in `u64` words in the function arena. A backward walk removes
-   pure instructions whose results are dead, and arithmetic whose results
-   and flags are (the `mov`/`add` of a `ptr_add` a load folded), repeating
-   until nothing changes.
+3. **Liveness and dead code.** Each block's live-in set is a sorted list
+   of the vregs live into it, solved one vreg at a time: from each block
+   that reads the vreg before writing it, a backward walk over the
+   predecessors marks it live into every block it reaches and stops at
+   the blocks that write it (the path exploration of Brandner et al.,
+   "Computing Liveness Sets for SSA-Form Programs", INRIA RR-7503, 2011,
+   which needs no SSA form when it stops at every definition). That is
+   the least solution of `live_in = use ∪ (live_out − def)`, `live_out =
+   ∪ live_in(successor)`, which iterative dataflow reaches, in time and
+   space linear in the instructions plus the total size of the live sets,
+   with no fixed-point iteration. Live-out sets are not stored: a walk
+   over a block gathers its successors' live-in sets into a sparse set
+   (Briggs and Torczon, LOPLAS 1993) whose clearing costs its members,
+   not the function's vregs. A backward walk removes pure instructions
+   whose results are dead, and arithmetic whose results and flags are (the
+   `mov`/`add` of a `ptr_add` a load folded), repeating until nothing
+   changes.
 4. **Intervals.** Each vreg's interval is a sorted list of half-open ranges
    with lifetime holes, built backward over the blocks (Wimmer and Franz,
    CGO 2010, `BuildIntervals`), plus the positions where an instruction
@@ -510,14 +521,14 @@ nothing recurses.
    until a fixed point. Facts about values the program no longer reads
    (by the program's own liveness) are dropped as they die, which changes
    no verdict but keeps the state as small as the live set, so checking
-   is linear in the function's length for a bounded live set; its
-   liveness costs what the allocator's does (see "Still open" below). Then identity copies go, a copy followed by an
-   addition (or a `lea` followed by one) becomes one `lea` where the flags
-   are dead, a copy straight back after a copy goes, blocks holding only a
-   `jmp` are threaded away, and a `jmp` to a block of at most eight
-   instructions that ends in a conditional branch takes a copy of it when
-   the copy's branch can fall through or take a loop's back edge (loop
-   rotation: the back edge tests the condition itself).
+   is linear in the function's length for a bounded live set, and its
+   liveness is the allocator's sparse one. Then identity copies go, a copy
+   followed by an addition (or a `lea` followed by one) becomes one `lea`
+   where the flags are dead, a copy straight back after a copy goes,
+   blocks holding only a `jmp` are threaded away, and a `jmp` to a block
+   of at most eight instructions that ends in a conditional branch takes
+   a copy of it when the copy's branch can fall through or take a loop's
+   back edge (loop rotation: the back edge tests the condition itself).
 
 Allocation order: caller-saved registers first (no save cost) — `%rax %rcx
 %rdx %rsi %rdi %r8 %r9` on System V, `%rax %rcx %rdx %r8 %r9` on Win64 — then
@@ -561,16 +572,6 @@ Still open behind the same interface:
   them; with memory operands and splitting it is rare.
 - *Value-based coalescing* of copies whose intervals overlap while both hold
   the same value.
-- *Sparse liveness.* The live sets are bit sets with a bit per virtual
-  register of the function in every block, so the dataflow (the
-  allocator's, and in debug builds the checker's) costs blocks × virtual
-  registers / 64 words in time and memory. A long function of many small
-  blocks, such as one `if`/`else` around a call per statement, grows
-  faster than its length: 1600, 3200 and 6400 such statements take 0.13,
-  0.29 and 0.69 s in a release build and peak at 100, 228 and 659 MB, and
-  25,600 exhaust 11 GB. Sets of live intervals per block, or a liveness
-  over SSA values whose sets hold only the values live there, would bound
-  it by the live set.
 - *`regalloc2`.* The `regalloc2` crate (Cranelift's allocator) was evaluated
   against the arena rules: it allocates its working state from the global
   allocator, takes its input through a trait over `Vec`-backed structures and
