@@ -1,12 +1,14 @@
 //! The workbench's insight panels. In abstract-machine mode: the narration of
 //! the last step, the expression tree being evaluated, and the memory diagram.
-//! In pipeline mode: the compiler's output stage by stage. Engine data is
+//! In pipeline mode: the compiler's output stage by stage. In WebAssembly
+//! mode: the module's listing and the stepper's state. Engine data is
 //! always rendered as text nodes, never as HTML.
 
 mod memory;
 mod narration;
 mod pipeline;
 mod tree;
+mod wasm;
 
 use leptos::prelude::*;
 pub use memory::Memory;
@@ -16,6 +18,10 @@ pub use pipeline::{
     PipelineView,
 };
 pub use tree::TreeView;
+pub use wasm::{
+    WasmListing,
+    WasmView,
+};
 
 /// `text` with each `` `code` `` span rendered as `<code>`.
 fn rich_text(text: &str) -> AnyView {

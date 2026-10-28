@@ -1,0 +1,31 @@
+[package]
+name = "bcc-wasm-stepper"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99.0"
+description = "A steppable WebAssembly interpreter for the bcc site's WebAssembly view"
+license-file = "../../LICENSE"
+publish = false
+
+[lib]
+name = "wasm_stepper"
+
+# No dependencies: the site's engine Worker links this crate, and its tests
+# build their modules with the encoder in src/tests/builder.rs.
+[dependencies]
+
+[lints.rust]
+unsafe_code = "forbid"
+unused_qualifications = "warn"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+must_use_candidate = "allow"
+# WebAssembly's integers are bit patterns that each instruction reads as
+# signed or unsigned, at 32 or 64 bits: the interpreter converts between
+# widths and signedness with `as` by definition, wrapping and truncating
+# exactly as the specification says.
+cast_possible_truncation = "allow"
+cast_possible_wrap = "allow"
+cast_precision_loss = "allow"
+cast_sign_loss = "allow"

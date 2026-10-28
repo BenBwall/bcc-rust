@@ -44,6 +44,12 @@ use crate::{
         Request,
     },
     snapshot::Snapshot,
+    wasm::{
+        WasmControl,
+        WasmModule,
+        WasmProgram,
+        WasmSnapshot,
+    },
 };
 
 /// Which Worker to start, and how to talk about it.
@@ -149,14 +155,30 @@ impl Engine {
     pub async fn load(&self, source: &str) -> Result<Snapshot, String> {
         match self.request(Command::Load(source.to_owned())).await? {
             | Answer::Snapshot(snapshot) => Ok(*snapshot),
-            | Answer::Compiled(_) => Err(UNEXPECTED.into()),
+            | _ => Err(UNEXPECTED.into()),
         }
     }
 
     pub async fn step(&self) -> Result<Snapshot, String> {
         match self.request(Command::Step).await? {
             | Answer::Snapshot(snapshot) => Ok(*snapshot),
-            | Answer::Compiled(_) => Err(UNEXPECTED.into()),
+            | _ => Err(UNEXPECTED.into()),
+        }
+    }
+
+    /// Load a WebAssembly module into the machine Worker's stepper.
+    pub async fn wasm_load(&self, module: WasmModule) -> Result<WasmProgram, String> {
+        match self.request(Command::WasmLoad(module)).await? {
+            | Answer::WasmLoaded(program) => Ok(*program),
+            | _ => Err(UNEXPECTED.into()),
+        }
+    }
+
+    /// Step the loaded WebAssembly module.
+    pub async fn wasm(&self, control: WasmControl) -> Result<WasmSnapshot, String> {
+        match self.request(Command::Wasm(control)).await? {
+            | Answer::Wasm(snapshot) => Ok(*snapshot),
+            | _ => Err(UNEXPECTED.into()),
         }
     }
 
@@ -169,7 +191,7 @@ impl Engine {
         };
         match self.request(command).await? {
             | Answer::Compiled(compilation) => Ok(*compilation),
-            | Answer::Snapshot(_) => Err(UNEXPECTED.into()),
+            | _ => Err(UNEXPECTED.into()),
         }
     }
 

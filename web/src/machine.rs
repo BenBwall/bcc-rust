@@ -37,11 +37,13 @@ use crate::{
     },
 };
 
-/// One engine session over the most recently loaded source.
+/// One engine session over the most recently loaded source, and the
+/// WebAssembly stepper's session over the most recently loaded module.
 #[derive(Default)]
 pub struct Machine {
     session: Option<Session>,
     source:  String,
+    wasm:    crate::wasm::worker::WasmWorker,
 }
 
 impl Machine {
@@ -57,6 +59,14 @@ impl Machine {
             | Command::Step => self
                 .step()
                 .map(|snapshot| Answer::Snapshot(Box::new(snapshot))),
+            | Command::WasmLoad(module) => self
+                .wasm
+                .load(module)
+                .map(|program| Answer::WasmLoaded(Box::new(program))),
+            | Command::Wasm(control) => self
+                .wasm
+                .control(control)
+                .map(|snapshot| Answer::Wasm(Box::new(snapshot))),
             | Command::Compile { .. } => Err("The abstract machine's Worker does not compile; \
                                               the compiler Worker does."
                 .into()),
