@@ -214,6 +214,19 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 info.set_binary128(Some(Binary128Value::real(value)));
                 info.constant = ConstantClass::Arithmetic;
             },
+            | E::Constant(Constant::Float(FloatTokenType::LongDouble128(value))) => {
+                info.ty = self.types.scalar(Scalar::LongDouble);
+                info.set_binary128(Some(Binary128Value::real(value)));
+                info.constant = ConstantClass::Arithmetic;
+            },
+            | E::Constant(Constant::Float(FloatTokenType::ImaginaryLongDouble128(value))) => {
+                info.ty = self.types.scalar(Scalar::ComplexLongDouble);
+                info.set_binary128(Some(Binary128Value {
+                    real: crate::binary128::Binary128::zero(false),
+                    imag: value,
+                }));
+                info.constant = ConstantClass::Arithmetic;
+            },
             | E::Constant(Constant::Float(FloatTokenType::ImaginaryFloat128(value))) => {
                 info.ty = self.types.scalar(Scalar::ComplexFloat128);
                 info.set_binary128(Some(Binary128Value {

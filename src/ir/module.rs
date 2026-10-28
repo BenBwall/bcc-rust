@@ -370,6 +370,18 @@ impl<'ir> Module<'ir> {
         self.triple
     }
 
+    /// The bytes a pointer takes in memory: four on the ILP32 WebAssembly
+    /// target, eight on every other. The IR's `ptr` values are opaque;
+    /// lowering accesses pointer objects of an ILP32 module as `i32` (see
+    /// `lowering/emit.rs`), so only relocations and back ends read this.
+    pub(crate) fn pointer_bytes(&self) -> u64 {
+        if self.triple.starts_with("wasm32") {
+            4
+        } else {
+            8
+        }
+    }
+
     pub(crate) fn data_layout(&self) -> &'ir str {
         self.data_layout
     }
@@ -824,15 +836,22 @@ bitflags! {
         const FLEXIBLE = 1 << 1;
         /// A top-level complex scalar, rather than a record of two reals.
         const COMPLEX = 1 << 2;
+        /// A structure or union whose one non-empty member, through nested
+        /// records and one-element arrays, is a scalar as large as it is,
+        /// as Clang's `isSingleElementStruct` finds it: the WebAssembly C
+        /// ABI passes it as that scalar. Lowering records it for the
+        /// targets whose convention asks (`TargetLayout::record_passing`).
+        const SINGLE_ELEMENT = 1 << 3;
     }
 }
 
 impl AggregateFlags {
     /// Each flag with its textual name, in printing order.
-    pub(crate) const NAMES: [(Self, &'static str); 3] = [
+    pub(crate) const NAMES: [(Self, &'static str); 4] = [
         (Self::UNALIGNED, "unaligned"),
         (Self::FLEXIBLE, "flexible"),
         (Self::COMPLEX, "complex"),
+        (Self::SINGLE_ELEMENT, "single_element"),
     ];
 }
 
@@ -1154,11 +1173,12 @@ pub(crate) struct Relocation {
 }
 
 impl Relocation {
-    /// How many bytes of the global the relocation writes.
-    pub(crate) const fn size(&self) -> u64 {
+    /// How many bytes of the global the relocation writes, where an address
+    /// takes `pointer` bytes ([`Module::pointer_bytes`]).
+    pub(crate) const fn size(&self, pointer: u64) -> u64 {
         match self.target {
             | RelocationTarget::LabelDifference { width, .. } => width.bytes() as u64,
-            | RelocationTarget::Symbol(_) | RelocationTarget::Label { .. } => 8,
+            | RelocationTarget::Symbol(_) | RelocationTarget::Label { .. } => pointer,
         }
     }
 }
@@ -1166,9 +1186,10 @@ impl Relocation {
 /// What a relocation's bytes hold.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum RelocationTarget {
-    /// The address of a function or global: eight bytes.
+    /// The address of a function or global: a pointer, eight bytes or four
+    /// on WebAssembly.
     Symbol(Symbol),
-    /// The address of the block `label` names in `func`: eight bytes. A
+    /// The address of the block `label` names in `func`: a pointer. A
     /// static table of label addresses for computed `goto`.
     /// GNU extension: GCC "Labels as Values".
     Label { func: FuncId, label: BlockLabel },

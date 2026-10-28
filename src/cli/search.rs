@@ -61,7 +61,9 @@ impl CliHeaderSearch {
 /// Linux and the directory exists, and `usr/include`. Without a sysroot the
 /// root is the host's own, but only when bcc runs on the Linux host it
 /// compiles for; any other target is a cross target, which stays hermetic
-/// until `--sysroot`, `-isystem` or `-idirafter` names its library.
+/// until `--sysroot`, `-isystem` or `-idirafter` names its library. The
+/// WASI target's library is bcc's own, in the embedded
+/// [`WASI_DIRECTORY`](crate::headers::WASI_DIRECTORY).
 #[expect(
     clippy::disallowed_types,
     clippy::disallowed_methods,
@@ -69,6 +71,10 @@ impl CliHeaderSearch {
     reason = "Startup owns the directories beside clap's arguments as `PathBuf`s."
 )]
 fn library_directories(target: Target, sysroot: Option<&Path>) -> Vec<PathBuf> {
+    // WASI's C library is bcc's own, embedded beside the resource headers.
+    if target == Target::Wasm32Wasi && sysroot.is_none() {
+        return vec![PathBuf::from(crate::headers::WASI_DIRECTORY)];
+    }
     let root = match sysroot {
         | Some(sysroot) => sysroot,
         | None if is_host(target) => Path::new("/"),
@@ -192,7 +198,10 @@ const fn is_host(target: Target) -> bool {
         && match target {
             | Target::LinuxGnu => cfg!(target_env = "gnu"),
             | Target::LinuxMusl => cfg!(target_env = "musl"),
-            | Target::WindowsGnu | Target::WindowsMsvc => false,
+            | Target::WindowsGnu
+            | Target::WindowsMsvc
+            | Target::Wasm32Unknown
+            | Target::Wasm32Wasi => false,
         }
 }
 

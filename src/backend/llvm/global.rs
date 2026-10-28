@@ -132,7 +132,7 @@ fn pieces<'m>(
     let sorted = arena.alloc_slice_copy(relocations);
     sorted.sort_unstable_by_key(|relocation| relocation.offset);
     for pair in sorted.windows(2) {
-        if pair[0].offset + pair[0].size() > pair[1].offset {
+        if pair[0].offset + pair[0].size(8) > pair[1].offset {
             return Err(EmitError::OverlappingRelocations {
                 global: name,
                 first:  pair[0].offset,
@@ -147,7 +147,7 @@ fn pieces<'m>(
             visit(Piece::Bytes(&bytes[start..offset]));
         }
         visit(Piece::Pointer(relocation));
-        start = offset + usize::try_from(relocation.size()).map_err(|_| std::fmt::Error)?;
+        start = offset + usize::try_from(relocation.size(8)).map_err(|_| std::fmt::Error)?;
     }
     if start < bytes.len() {
         visit(Piece::Bytes(&bytes[start..]));

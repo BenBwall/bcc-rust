@@ -33,7 +33,7 @@ pub(super) fn map<'tu>(
     sema: &SemanticTranslationUnit<'tu>,
     context: &Context<'tu>,
     input: &str,
-    [ir, ir_abi, asm]: [Option<&str>; 3],
+    [ir, ir_abi, asm, wasm]: [Option<&str>; 4],
 ) -> Vec<ExplorerLineMapping> {
     let mut mappings = Vec::new();
     for declaration in unit.external_declarations() {
@@ -78,6 +78,7 @@ pub(super) fn map<'tu>(
             ir:       ir.and_then(|text| ir_function(text, symbol)),
             ir_abi:   ir_abi.and_then(|text| ir_function(text, symbol)),
             asm:      asm.and_then(|text| asm_function(text, symbol)),
+            wasm:     wasm.and_then(|text| wasm_function(text, symbol)),
         });
     }
     mappings
@@ -107,6 +108,18 @@ fn asm_function(text: &str, name: &str) -> Option<ExplorerLineRange> {
         }) || line == ".seh_endproc"
     };
     range(text, label, end)
+}
+
+/// A function's lines in the WebAssembly text: from `(func $name` to the
+/// line that closes it, `  )`.
+fn wasm_function(text: &str, name: &str) -> Option<ExplorerLineRange> {
+    let header = |line: &str| {
+        line.trim_start()
+            .strip_prefix("(func $")
+            .and_then(|rest| rest.strip_prefix(name))
+            .is_some_and(|rest| rest.starts_with(' '))
+    };
+    range(text, header, |line| line == "  )")
 }
 
 /// The 1-based lines from the first that `start` accepts to the next that

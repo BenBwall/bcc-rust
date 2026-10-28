@@ -6,19 +6,50 @@
 // Usage, from this directory:
 //   cargo build --release --target wasm32-unknown-unknown
 //   node run.mjs target/wasm32-unknown-unknown/release/wasm_explorer_smoke.wasm
-import { readFileSync } from "node:fs";
+import { closeSync, mkdtempSync, openSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { WASI } from "node:wasi";
 import assert from "node:assert/strict";
 
 const { instance } = await WebAssembly.instantiate(readFileSync(process.argv[2]));
-const { memory, smoke_alloc, smoke_compile } = instance.exports;
+const { memory, smoke_alloc, smoke_compile, smoke_compile_wasm } = instance.exports;
 
-function compile(source, { optimize = false, depth = 0 } = {}) {
+function read(report) {
+  const length = new DataView(memory.buffer).getUint32(report, true);
+  return new TextDecoder().decode(new Uint8Array(memory.buffer, report + 4, length));
+}
+
+function place(source) {
   const bytes = new TextEncoder().encode(source);
   const pointer = smoke_alloc(bytes.length);
   new Uint8Array(memory.buffer, pointer, bytes.length).set(bytes);
-  const report = smoke_compile(pointer, bytes.length, optimize ? 1 : 0, depth);
-  const length = new DataView(memory.buffer).getUint32(report, true);
-  return new TextDecoder().decode(new Uint8Array(memory.buffer, report + 4, length));
+  return [pointer, bytes.length];
+}
+
+function compile(source, { optimize = false, depth = 0 } = {}) {
+  const [pointer, length] = place(source);
+  return read(smoke_compile(pointer, length, optimize ? 1 : 0, depth));
+}
+
+// The explorer's WebAssembly back end, run in the browser's own engine: the
+// module it compiles for WASI runs under Node's WASI, its stdout captured.
+async function compileAndRunWasm(source, optimize) {
+  const [pointer, length] = place(source);
+  const report = read(smoke_compile_wasm(pointer, length, optimize ? 1 : 0));
+  assert.doesNotMatch(report, /== diagnostic error/, report.slice(0, 2000));
+  const hex = report.slice(report.indexOf("== binary\n") + 10).trim();
+  const binary = Uint8Array.from(hex.match(/../g), (pair) => parseInt(pair, 16));
+  assert.ok(WebAssembly.validate(binary), "the module validates");
+  const directory = mkdtempSync(join(tmpdir(), "bcc-wasm-smoke-"));
+  const stdout = openSync(join(directory, "stdout"), "w");
+  const wasi = new WASI({ version: "preview1", args: ["program"], env: {}, stdout, returnOnExit: true });
+  const { instance: program } = await WebAssembly.instantiate(binary, {
+    wasi_snapshot_preview1: wasi.wasiImport,
+  });
+  const status = wasi.start(program);
+  closeSync(stdout);
+  return { report, status, stdout: readFileSync(join(directory, "stdout"), "utf8") };
 }
 
 const program = `#include <stdint.h>
@@ -42,6 +73,27 @@ for (const optimize of [false, true]) {
   assert.match(report, /^== machine-code main$/m);
   assert.match(report, /retq$/m);
   if (optimize) console.log(report.slice(report.indexOf("== ir\n")));
+}
+
+const wasmProgram = `#include <stdio.h>
+#include <stdlib.h>
+struct point { int x, y; };
+static struct point add(struct point a, struct point b) { return (struct point){a.x + b.x, a.y + b.y}; }
+int main(void) {
+    struct point p = add((struct point){1, 2}, (struct point){30, 40});
+    char *text = malloc(32);
+    snprintf(text, 32, "%d,%d %.3f", p.x, p.y, 2.0 / 3);
+    puts(text);
+    free(text);
+    return p.x + p.y;
+}
+`;
+for (const optimize of [false, true]) {
+  const { report, status, stdout } = await compileAndRunWasm(wasmProgram, optimize);
+  assert.equal(stdout, "31,42 0.667\n");
+  assert.equal(status, 73);
+  assert.match(report, /^  \(func \$main /m);
+  if (!optimize) assert.doesNotMatch(report, /^== positions 0$/m);
 }
 
 const errors = compile("int main(void) { return 1 +; }\n");

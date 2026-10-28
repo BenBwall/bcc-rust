@@ -195,7 +195,8 @@ pub(crate) fn defines(module: &Module<'_>, symbol: Symbol) -> bool {
 /// and "dllexport, dllimport".
 pub(crate) fn through_stub(module: &Module<'_>, target: Target, symbol: Symbol) -> bool {
     match target {
-        | Target::LinuxGnu | Target::LinuxMusl => false,
+        | Target::LinuxGnu | Target::LinuxMusl | Target::Wasm32Unknown | Target::Wasm32Wasi =>
+            false,
         | Target::WindowsMsvc => imported(module, symbol) || weak_declaration(module, symbol),
         | Target::WindowsGnu =>
             imported(module, symbol)
@@ -264,6 +265,9 @@ fn emit<'m>(
             module:    module.triple(),
             requested: target.triple(),
         });
+    }
+    if target.is_wasm() {
+        return Err(NativeError::WasmTarget);
     }
     if matches!(target, Target::LinuxGnu | Target::LinuxMusl)
         && matches!(code.relocation(target), Relocation::Pic(_))
@@ -344,6 +348,13 @@ pub(crate) enum NativeError<'m> {
          --backend=llvm"
     )]
     SharedLibraryCode,
+    /// The native back end generates x86-64 code; WebAssembly targets need
+    /// the WebAssembly back end.
+    #[error(
+        "the native back end generates x86-64 code; WebAssembly targets use the WebAssembly back \
+         end"
+    )]
+    WasmTarget,
     /// `--native-object` encodes only the emitter's own listing; file-scope
     /// assembly is arbitrary assembler input. Without the flag such a module
     /// is assembled, on every target.

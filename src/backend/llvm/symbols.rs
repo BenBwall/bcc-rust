@@ -304,7 +304,8 @@ pub(super) fn special_arrays<'id>(
     }
     if !used.is_empty() {
         let name = match target {
-            | Target::LinuxGnu | Target::LinuxMusl => c"llvm.compiler.used",
+            | Target::LinuxGnu | Target::LinuxMusl | Target::Wasm32Unknown | Target::Wasm32Wasi =>
+                c"llvm.compiler.used",
             | Target::WindowsGnu | Target::WindowsMsvc => c"llvm.used",
         };
         let array = api.global(name, api.array(ptr, used.len() as u64));

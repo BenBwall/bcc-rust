@@ -40,6 +40,9 @@ impl CodeOptions {
             | Target::LinuxGnu | Target::LinuxMusl =>
                 self.relocation.unwrap_or(Relocation::Pie(PicLevel::Big)),
             | Target::WindowsGnu | Target::WindowsMsvc => Relocation::Pic(PicLevel::Big),
+            // WebAssembly code addresses linear memory and the function
+            // table directly; Clang defines no `__PIC__` there by default.
+            | Target::Wasm32Unknown | Target::Wasm32Wasi => Relocation::Static,
         }
     }
 

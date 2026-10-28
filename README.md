@@ -41,6 +41,8 @@ bcc-rust x.c --target=x86_64-w64-windows-gnu -o x.exe [--llvm-opt=O2]
 bcc-rust x.c --target=x86_64-w64-windows-gnu -c -o x.o
 bcc-rust x.c --target=x86_64-w64-windows-gnu --backend=native -o x.exe
 bcc-rust x.c --target=x86_64-unknown-linux-gnu --backend=native --emit=asm
+bcc-rust x.c --target=wasm32-wasip1 -o x.wasm     # WebAssembly (WASI)
+bcc-rust x.c --target=wasm32-unknown-unknown --emit=wat
 bcc-rust lib.c -fPIC -shared -o libx.so   # a shared library (Linux)
 bcc-rust -c a.c b.c                    # a.o and b.o, as GCC names them
 bcc-rust -S a.c                        # a.s, LLVM's assembly
@@ -493,9 +495,15 @@ and the MSVC runtime), and `<stddef.h>` and `<stdarg.h>` answer the partial
 them `<built-in>/name.h`.
 
 Select the C ABI with `--target`: `x86_64-unknown-linux-gnu` (default),
-`x86_64-unknown-linux-musl`, `x86_64-w64-windows-gnu`, or
-`x86_64-pc-windows-msvc`. MinGW also accepts `x86_64-w64-mingw32` and
-`x86_64-pc-windows-gnu`. The selected ABI controls long widths, long-double
+`x86_64-unknown-linux-musl`, `x86_64-w64-windows-gnu`,
+`x86_64-pc-windows-msvc`, `wasm32-wasip1` or `wasm32-unknown-unknown`.
+MinGW also accepts `x86_64-w64-mingw32` and `x86_64-pc-windows-gnu`, and
+WASI `wasm32-wasi`. The `wasm32` targets compile with bcc's own WebAssembly
+back end: `bcc-rust x.c --target=wasm32-wasip1 -o x.wasm` writes a WASI
+command module linked with bcc's bundled C library (whose headers are
+embedded as `<wasi-libc>/name.h`), which `node --no-warnings
+scripts/wasm/run.mjs x.wasm` runs, and `--emit=wat` prints its text
+(`middle-end.md`, "WebAssembly back end"). The selected ABI controls long widths, long-double
 precision, wide literals, record bit-fields, stdarg types and the
 target-description and OS/ABI macros, in all language modes and independently
 of the compiler host and language-extension flags. Compiler identity is a
