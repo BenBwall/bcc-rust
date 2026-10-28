@@ -48,6 +48,11 @@ pub struct WasmState {
     /// Why there is no program to show.
     pub unavailable:  RwSignal<Option<String>>,
     pub busy:         RwSignal<bool>,
+    /// A module is being loaded.
+    loading:          RwSignal<bool>,
+    /// Counts loads, so a run or an answer that began with an earlier
+    /// program is dropped rather than applied to the new one.
+    generation:       RwSignal<u64>,
     pub running:      RwSignal<bool>,
     pub pausing:      RwSignal<bool>,
     /// Module offsets with breakpoints.
@@ -68,6 +73,8 @@ impl WasmState {
             trail:        RwSignal::new(Vec::new()),
             unavailable:  RwSignal::new(None),
             busy:         RwSignal::new(false),
+            loading:      RwSignal::new(false),
+            generation:   RwSignal::new(0),
             running:      RwSignal::new(false),
             pausing:      RwSignal::new(false),
             breakpoints:  RwSignal::new(Vec::new()),
@@ -84,12 +91,15 @@ impl WasmState {
         if self
             .loaded
             .with_untracked(|loaded| loaded.as_ref() == Some(&source))
-            || self.busy.get_untracked()
+            || self.loading.get_untracked()
             || !state.has_engine.get_untracked()
         {
             return;
         }
-        self.busy.set(true);
+        // A run of the previous program stops, and answers still on their
+        // way for it are dropped.
+        self.generation.update(|generation| *generation += 1);
+        self.loading.set(true);
         spawn_local(async move {
             let result = async {
                 let module = Precompiled.compile(&source)?;
@@ -112,16 +122,21 @@ impl WasmState {
                     self.unavailable.set(Some(error));
                 },
             }
-            self.busy.set(false);
+            self.loading.set(false);
             // The program may have changed while this one loaded.
             self.ensure_loaded(state);
         });
     }
 
     /// Send `control` to the Worker and show the answer.
+    /// Send `control` to the Worker and show the answer, unless another
+    /// program was loaded meanwhile.
     async fn request(self, state: State, control: WasmControl) -> Result<(), String> {
+        let generation = self.generation.get_untracked();
         let snapshot = state.engine()?.wasm(control).await?;
-        self.show(state, snapshot);
+        if self.generation.get_untracked() == generation {
+            self.show(state, snapshot);
+        }
         Ok(())
     }
 
@@ -233,9 +248,14 @@ impl WasmState {
         let by_line = self
             .program
             .with_untracked(|program| program.as_ref().is_some_and(|program| program.has_lines));
+        let generation = self.generation.get_untracked();
         spawn_local(async move {
             let mut taken = 0;
-            while !self.pausing.get_untracked() && self.can_step_untracked() && taken < RUN_LIMIT {
+            while !self.pausing.get_untracked()
+                && self.generation.get_untracked() == generation
+                && self.can_step_untracked()
+                && taken < RUN_LIMIT
+            {
                 let run = if by_line {
                     WasmRun::NextLine
                 } else {
@@ -296,11 +316,11 @@ impl WasmState {
     }
 
     pub fn locked(self) -> bool {
-        self.busy.get_untracked() || self.running.get_untracked()
+        self.busy.get_untracked() || self.running.get_untracked() || self.loading.get_untracked()
     }
 
     pub fn locked_tracked(self) -> bool {
-        self.busy.get() || self.running.get()
+        self.busy.get() || self.running.get() || self.loading.get()
     }
 
     pub fn can_step(self) -> bool {
@@ -485,7 +505,7 @@ pub(super) fn WasmTransport(state: State, hidden: Signal<bool>) -> impl IntoView
                 class="button"
                 title=move || if wasm.running.get() { "Pause (R)" } else { "Run line by line until the program ends or reaches a breakpoint (R)" }
                 aria-pressed=move || wasm.running.get().to_string()
-                disabled=move || wasm.busy.get() || (wasm.running.get() && wasm.pausing.get()) || (!wasm.running.get() && !wasm.can_step())
+                disabled=move || wasm.busy.get() || wasm.loading.get() || (wasm.running.get() && wasm.pausing.get()) || (!wasm.running.get() && !wasm.can_step())
                 on:click=move |_| wasm.toggle_run(state)
             >
                 {move || if wasm.running.get() {
