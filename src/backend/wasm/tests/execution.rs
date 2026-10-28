@@ -146,12 +146,24 @@ pub(crate) fn run(name: &str, bytes: &[u8]) -> Run {
 
 /// Runs a WASI module under Node with `input` on its standard input.
 pub(crate) fn run_with_input(name: &str, bytes: &[u8], input: &[u8]) -> Run {
+    run_with_arguments(name, bytes, input, &[])
+}
+
+/// Runs a WASI module under Node with `input` on its standard input and
+/// `arguments` after its path in `argv`.
+pub(crate) fn run_with_arguments(
+    name: &str,
+    bytes: &[u8],
+    input: &[u8],
+    arguments: &[&str],
+) -> Run {
     let path = scratch_path(name);
     std::fs::write(&path, bytes).unwrap();
     let mut child = Command::new("node")
         .arg("--no-warnings")
         .arg(runner())
         .arg(&path)
+        .args(arguments)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
