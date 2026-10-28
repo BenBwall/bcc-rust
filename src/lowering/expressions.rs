@@ -677,20 +677,28 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
     }
 
     /// Converts the result of a compound assignment's operation back to the
-    /// left operand's type `back`. A half computation's `float` excess
-    /// converts to an integer left operand directly, for both compilers:
-    /// Clang's `EmitCompoundAssignLValue` computes in the promotion type
-    /// from an operand converted straight to it, as GCC keeps the excess.
-    /// C99: §6.5.16.2 paragraph 3, p. 93; PDF p. 105.
+    /// left operand's type `back`. A half computation's `float` excess, real
+    /// or a `_Complex _Float16` one's `float` parts, converts to an integer
+    /// left operand directly, for both compilers: Clang's
+    /// `EmitCompoundAssignLValue` computes in the promotion type from an
+    /// operand converted straight to it, as GCC keeps the excess. A complex
+    /// result's real part converts (§6.3.1.7p1).
+    /// C99: §6.5.16.2 paragraph 3, p. 93; PDF p. 105; §6.3.1.7 paragraph 1,
+    /// p. 44; PDF p. 56.
     fn convert_back(
         &mut self,
         result: Item,
         back: TypeId,
         source: SourceVectors,
     ) -> Result<Item, LoweringError> {
-        if matches!(result.operand, Operand::Excess(_)) && self.half(back).is_none() {
-            let target = self.repr(back, source)?;
-            return self.convert_excess(result, back, target, source);
+        if self.half(back).is_none() && !self.complex_half(back) {
+            if matches!(result.operand, Operand::Excess(_)) {
+                let target = self.repr(back, source)?;
+                return self.convert_excess(result, back, target, source);
+            }
+            if self.complex_excess(result).is_some() {
+                return self.convert_complex(result, back, source);
+            }
         }
         self.convert_value(result, back, source)
     }

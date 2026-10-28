@@ -87,5 +87,37 @@ int main(void) {
     INTEGER(ai, -4097, /=, three)
     INTEGER(auc, 200, -=, vh) INTEGER(ab, 0, +=, vh)
 #endif
+#ifdef __FLT16_MAX__
+    /* A `_Complex _Float16` operand: an integer object converts straight to
+       `float`, the operation runs in `float _Complex` and the real part
+       converts straight back, so 2049 and 70001 neither round to a half
+       nor overflow it. */
+    static volatile _Complex _Float16 z3 = 3, zi = 2 + 1.0fi;
+    static volatile _Complex _Float16 zs = 0.3f + 0.7fi, zb = 3.0f - 2.0fi;
+    static long long pll;
+    static _Atomic long long all;
+    static _Complex _Float16 z;
+    static _Atomic _Float16 ah16;
+#define COMPLEX(obj, init, op, rhs)                                         \
+    obj = init; printf(#obj " = " #init ", " #obj " " #op " " #rhs ": %lld", \
+                       (long long)(obj op rhs));                            \
+    printf(" %lld\n", (long long)obj);
+#define EVERY_COMPLEX(obj, init)                                            \
+    COMPLEX(obj, init, +=, zi) COMPLEX(obj, init, -=, zi)                   \
+    COMPLEX(obj, init, *=, z3) COMPLEX(obj, init, *=, zs)                   \
+    COMPLEX(obj, init, *=, zi) COMPLEX(obj, init, /=, z3)                   \
+    COMPLEX(obj, init, /=, zb)
+    EVERY_COMPLEX(pi, 2049) EVERY_COMPLEX(pi, -4097) EVERY_COMPLEX(pi, 70001)
+    EVERY_COMPLEX(pll, 70001) EVERY_COMPLEX(ai, 2049) EVERY_COMPLEX(ai, 70001)
+    EVERY_COMPLEX(all, 70001) EVERY_COMPLEX(auc, 60) EVERY_COMPLEX(ab, 1)
+    /* Half objects with a complex operand, and a complex object with an
+       integer or half operand, which each compiler converts its own way. */
+    ah16 = 1.5; printf("ah16 *= zs: %a", (double)(ah16 *= zs)); printf(" %a\n", (double)ah16);
+    ah16 = 2049; printf("ah16 -= zi: %a", (double)(ah16 -= zi)); printf(" %a\n", (double)ah16);
+    static volatile int v2049 = 2049;
+    z = zs; z *= v2049; printf("z *= v2049: %a %a\n", (double)__real__ z, (double)__imag__ z);
+    z = zs; z += v2049; printf("z += v2049: %a %a\n", (double)__real__ z, (double)__imag__ z);
+    z = zi; z /= zs; printf("z /= zs: %a %a\n", (double)__real__ z, (double)__imag__ z);
+#endif
     return 0;
 }
