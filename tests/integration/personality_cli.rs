@@ -2539,4 +2539,30 @@ mod tests {
         succeeds(&output);
         assert_eq!(stderr(&output), "");
     }
+
+    /// TCC skips a `#!` line that starts a file, so a script such as
+    /// `#!/usr/bin/tcc -run` runs; GCC rejects the line.
+    #[test]
+    fn tcc_skips_a_script_line() {
+        let directory = Directory::new();
+        directory.write(
+            "script.c",
+            "#!/usr/bin/tcc -run\n#include <stdio.h>\nint main(int argc, char **argv) {\n  \
+             printf(\"%d %s\\n\", argc, argv[1]);\n  return 3;\n}\n",
+        );
+        let output = directory.bcc("--tcc-mode", &["-run", "script.c", "one"]);
+        assert_eq!(output.status.code(), Some(3), "{}", stderr(&output));
+        assert_eq!(stdout(&output), "2 one\n");
+        assert_eq!(stderr(&output), "");
+        // Only at the start of the file.
+        directory.write("late.c", "int x;\n#!/usr/bin/tcc -run\n");
+        let output = directory.bcc("--tcc-mode", &["-c", "late.c"]);
+        assert!(stderr(&output).contains("late.c:2:"), "{}", stderr(&output));
+        let output = directory.bcc("--gcc-mode", &["-c", "script.c"]);
+        assert!(
+            stderr(&output).contains("script.c:1:"),
+            "{}",
+            stderr(&output)
+        );
+    }
 }
