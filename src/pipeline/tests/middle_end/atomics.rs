@@ -174,6 +174,28 @@ int main(void) {
 }"#,
     ),
     (
+        "floating_compound",
+        r"
+_Atomic float f = 1.5f;
+_Atomic double d = 0.1;
+_Atomic long double l = 0.5L;
+_Atomic int i = 7;
+_Atomic short s = -300;
+_Atomic _Bool b;
+int main(void) {
+    volatile double tenth = 0.1;
+    if ((f += tenth) != 1.6f || f != 1.6f) return 1;
+    f = 1.75f; if ((f *= 3) != 5.25f || f-- != 5.25f || f != 4.25f) return 2;
+    if ((d -= tenth) != 0.0 || ++d != 1.0) return 3;
+    if ((l /= 4) != 0.125L || l != 0.125L) return 4;
+    if ((i -= 0.5) != 6 || (i *= 2.5f) != 15 || (i /= 0.5L) != 30) return 5;
+    if ((s *= 2.25) != -675 || s != -675) return 6;
+    if ((b += 0.5) != 1 || (b -= 0.25) != 1) return 7;
+    if (sizeof(f += 1.0) != sizeof(float) || sizeof(i += 1.0) != sizeof(int)) return 8;
+    return 0;
+}",
+    ),
+    (
         "barriers_and_evaluation",
         r"
 int x=3, count, order;
@@ -487,5 +509,112 @@ fn atomic_warning_recovery_never_builds_illegal_memory_orders() {
                 }
             },
         );
+    }
+}
+
+/// A compound assignment or increment of an atomic floating object, or of
+/// an atomic integer by a floating operand, loads the object and loops on a
+/// compare-exchange of the object's own width, with no plain access to it,
+/// at every stage and under both identities; LLVM and the native back end
+/// keep the loop (C11 §6.5.16.2p3). The loop used to start from the value
+/// widened to the computation type, which bitcast `f64` to `i32`.
+#[test]
+fn atomic_floating_updates_compare_exchange_the_object_width() {
+    use crate::{
+        configuration::CompilerIdentity,
+        ir::{
+            AtomicOp,
+            InstData,
+            Type,
+        },
+    };
+    let cases = [
+        ("_Atomic float x; void f(double d) { x += d; }", Type::I32),
+        ("_Atomic float x; void f(void) { x--; }", Type::I32),
+        ("_Atomic double x; void f(void) { x /= 3; }", Type::I64),
+        (
+            "_Atomic long double x; void f(void) { x *= 0.5; }",
+            Type::I128,
+        ),
+        (
+            "_Atomic __float128 x; void f(void) { x -= 1.0; }",
+            Type::I128,
+        ),
+        ("_Atomic _Float16 x; void f(float g) { x *= g; }", Type::I16),
+        ("_Atomic __bf16 x; void f(void) { ++x; }", Type::I16),
+        ("_Atomic int x; void f(void) { x -= 0.5; }", Type::I32),
+        ("_Atomic char x; void f(_Float16 h) { x *= h; }", Type::I8),
+    ];
+    for identity in [CompilerIdentity::Clang, CompilerIdentity::Gcc] {
+        let configuration = CompilerConfiguration::default()
+            .with_target(Target::LinuxGnu)
+            .with_gnu_extensions(true)
+            .with_compiler_identity(identity);
+        for (source, width) in cases {
+            for (optimize, profile) in STAGES {
+                with_configured_module(
+                    source,
+                    Target::LinuxGnu,
+                    optimize,
+                    profile,
+                    configuration,
+                    |module, target| {
+                        let (_, function) = module
+                            .functions()
+                            .find(|(_, function)| function.body.is_some())
+                            .expect("f has a body");
+                        let body = function.body.as_ref().unwrap();
+                        let instructions: Vec<_> = body
+                            .blocks()
+                            .flat_map(|block| body.block_insts(block).iter().copied())
+                            .collect();
+                        let object: Vec<_> = instructions
+                            .iter()
+                            .filter(|&&inst| matches!(body.inst(inst), InstData::GlobalAddr { .. }))
+                            .filter_map(|&inst| body.inst_result(inst))
+                            .collect();
+                        let atomics: Vec<_> = instructions
+                            .iter()
+                            .filter_map(|&inst| match *body.inst(inst) {
+                                | InstData::Atomic { op, ty, .. } => Some((op, ty)),
+                                | InstData::Load { addr, .. } => {
+                                    assert!(!object.contains(&addr), "{source}\n{module}");
+                                    None
+                                },
+                                | InstData::Store { args, .. } => {
+                                    assert!(!object.contains(&args[1]), "{source}\n{module}");
+                                    None
+                                },
+                                | _ => None,
+                            })
+                            .collect();
+                        assert_eq!(
+                            atomics,
+                            [(AtomicOp::Load, width), (AtomicOp::CompareExchange, width)],
+                            "{identity:?} {source}\n{module}"
+                        );
+                        if profile != Profile::PostAbi {
+                            return;
+                        }
+                        let mut llvm = String::new();
+                        crate::backend::llvm::emit_module(module, target, &mut llvm).unwrap();
+                        let bits = width.bits();
+                        assert!(
+                            llvm.contains(&format!("cmpxchg ptr @x, i{bits} ")),
+                            "{source}\n{llvm}"
+                        );
+                        let mut assembly = String::new();
+                        crate::backend::native::emit_assembly(module, target, &mut assembly)
+                            .unwrap_or_else(|error| panic!("{error}\n{module}"));
+                        let exchange = if bits == 128 {
+                            "__atomic_compare_exchange_16"
+                        } else {
+                            "\tlock cmpxchg"
+                        };
+                        assert!(assembly.contains(exchange), "{source}\n{assembly}");
+                    },
+                );
+            }
+        }
     }
 }

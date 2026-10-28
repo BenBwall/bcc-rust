@@ -885,7 +885,18 @@ Some consumers therefore still inspect syntax in those families. See
 `_Atomic` objects use memory storage. Ordinary reads and writes are sequentially
 consistent atomic operations; compound assignments and increments retry a
 compare-exchange against the observed value, evaluating the lvalue and right
-operand once. `<stdatomic.h>`, the modeled `__c11_atomic_*`, `__atomic_*` and
+operand once. The loop loads and compares the object's own representation:
+each attempt converts the observed value to the computation type, operates,
+and converts the result back (C11 §6.5.16.2p3), so `_Atomic float` `+=` a
+`double` adds in `double` and `_Atomic int` `-=` `0.5` subtracts in `double`.
+An integer object with a `_Float16`, `__bf16` or `_Complex _Float16` operand
+converts straight to `float`, the operation runs in `float` or `float _Complex`,
+and the result (its real part, for a complex one) converts straight back, under
+both identities, atomic or not, as GCC and Clang do. The bundled Clang 23
+miscompiles atomic integer objects updated by floating operands (it computes
+`+=` and `-=` in the integer type and treats narrow or negative signed values
+as unsigned in its loop), so `tests/fixtures/programs/atomic_compound_integers.c`
+takes GCC 15 as the reference for every identity. `<stdatomic.h>`, the modeled `__c11_atomic_*`, `__atomic_*` and
 `__sync_*` spellings share the builtin registry. Compare-exchange updates the
 expected buffer only on failure; weak operations may use a strong instruction.
 Pointer fetch offsets follow each family: C11 scales by the element size, while

@@ -509,6 +509,46 @@ fn unprototyped_calls_reach_prototyped_definitions() {
     assert_eq!(run.status, 9, "{}", run.stderr);
 }
 
+/// Atomic read-modify-writes of every lock-free width, emulated with plain
+/// accesses, read and write the object: a 32-bit one used to keep its
+/// address and the old value in the same scratch local, so `x += 2` on an
+/// `_Atomic int` or `_Atomic float` stored nothing.
+#[test]
+fn atomic_read_modify_writes_update_their_object() {
+    if !node_available() {
+        eprintln!("note: node is not on the path; skipping the WebAssembly atomics test");
+        return;
+    }
+    let source = r"
+_Atomic signed char c = 100;
+_Atomic short s = -300;
+_Atomic int i = 7;
+_Atomic long long ll = 1LL << 40;
+_Atomic float f = 1.5f;
+_Atomic double d = 0.5;
+_Atomic long double l = 0.5L;
+int plain = 5;
+int main(void) {
+    if ((i += 2) != 9 || i != 9 || i++ != 9 || --i != 9) return 1;
+    if ((i -= 0.5) != 8 || (i *= 2.5f) != 20 || i != 20) return 2;
+    if ((c += 27) != 127 || (s *= 2.25) != -675 || (ll -= 1.0) != (1LL << 40) - 1) return 3;
+    if ((f += 0.25) != 1.75f || f-- != 1.75f || f != 0.75f) return 4;
+    if ((d *= 3) != 1.5 || (l /= 4) != 0.125L) return 5;
+    if (__atomic_exchange_n(&plain, 6, 5) != 5 || plain != 6) return 6;
+    int expected = 6;
+    if (!__atomic_compare_exchange_n(&plain, &expected, 8, 0, 5, 5) || plain != 8) return 7;
+    if (__atomic_compare_exchange_n(&plain, &expected, 9, 0, 5, 5) || expected != 8) return 8;
+    if (__atomic_fetch_add(&plain, 4, 5) != 8 || __atomic_fetch_and(&plain, 6, 5) != 12) return 9;
+    if (__atomic_fetch_or(&plain, 1, 5) != 4 || __atomic_fetch_xor(&plain, 7, 5) != 5) return 10;
+    return plain == 2 ? 0 : 11;
+}";
+    for optimize in [false, true] {
+        let bytes = compile(source, Target::Wasm32Wasi, optimize).unwrap();
+        let run = run("atomics", &bytes);
+        assert_eq!(run.status, 0, "optimize {optimize}: {}", run.stderr);
+    }
+}
+
 /// The runtime is compiled once per thread, and the kept modules link to
 /// the same module a fresh build of the runtime does.
 #[test]

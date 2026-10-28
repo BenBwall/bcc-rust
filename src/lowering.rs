@@ -507,7 +507,7 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
             | Task::ReadForUpdate(expression) => {
                 let place = *self.operands.last().expect("the place is on the stack");
                 self.operands.push(place);
-                self.convert_recorded(expression, 0)
+                self.read_for_update(expression)
             },
             | Task::Discard => {
                 _ = self.pop_excess();

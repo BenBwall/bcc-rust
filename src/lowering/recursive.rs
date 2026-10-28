@@ -146,8 +146,8 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                             let right = self.recursive_expression(right_expression, true)?;
                             let place = self.recursive_expression(left_expression, false)?;
                             self.operands.push(place);
-                            self.convert_recorded(left_expression, 0)?;
-                            let old = self.pop();
+                            self.read_for_update(left_expression)?;
+                            let old = self.pop_excess();
                             self.operands.extend_from_slice(&[right, place, old]);
                             self.finish(expression)?;
                             self.pop()
@@ -188,7 +188,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                             | UnaryOperator::PostDecrement
                     ) {
                         self.operands.push(operand);
-                        self.convert_recorded(operand_expression, 0)?;
+                        self.read_for_update(operand_expression)?;
                     }
                     self.finish(expression)?;
                     self.pop()
