@@ -660,9 +660,12 @@
   .expansion-to.is-empty { color: var(--muted); background: none; font-family: var(--font-sans); font-style: italic; }
   .expansion-steps { display: grid; gap: 3px; margin: 8px 0 0 4px; padding-left: 12px; border-left: 2px solid var(--border); list-style: none; }
   .expansion-step { display: flex; align-items: baseline; gap: 8px; font-size: 13px; color: var(--text-2); }
-  .expansion-step[data-depth="1"] { padding-left: 14px; }
-  .expansion-step[data-depth="2"] { padding-left: 28px; }
-  .expansion-step[data-depth="3"], .expansion-step[data-depth="4"] { padding-left: 42px; }
+  /* Each step sits under the replacement it happened in. */
+  .expansion-step { --depth: 0; position: relative; padding-left: calc(var(--depth) * 16px); }
+  .expansion-step:not([style*="--depth: 0"])::before {
+    content: ""; position: absolute; left: calc(var(--depth) * 16px - 11px); top: 0.15em; width: 7px; height: 0.65em;
+    border-left: 1px solid var(--border-strong); border-bottom: 1px solid var(--border-strong); border-bottom-left-radius: 3px;
+  }
   .step-kind { flex: none; min-width: 52px; font: 650 11px var(--font-mono); color: var(--cat-convert); text-transform: uppercase; letter-spacing: .03em; }
   .expansion-step[data-kind="stringify"] .step-kind, .expansion-step[data-kind="paste"] .step-kind { color: var(--cat-lifetime); font-size: 12.5px; }
   .expansion-step[data-kind="builtin"] .step-kind { color: var(--accent); }

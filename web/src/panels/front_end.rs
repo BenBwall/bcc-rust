@@ -381,9 +381,9 @@ fn expansion_item(expansion: &Expansion, on_reveal: Callback<usize>) -> impl Int
             {detailed.then(|| view! {
                 <ol class="expansion-steps">
                     {steps.into_iter().map(|step| {
-                        let depth = step.depth.min(4).to_string();
+                        let depth = format!("--depth: {}", step.depth.min(8));
                         view! {
-                            <li class="expansion-step" data-kind=step.kind.clone() data-depth=depth>
+                            <li class="expansion-step" data-kind=step.kind.clone() style=depth>
                                 <span class="step-kind">{match step.kind.as_str() {
                                     | "stringify" => "#",
                                     | "paste" => "##",

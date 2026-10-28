@@ -120,8 +120,11 @@ pub struct ExpansionStep {
     /// substituted.
     pub prescan:    bool,
     pub macro_name: String,
-    /// Replacements around a replaced name: 0 for the name in the source.
+    /// How deep in the tree of replacements the step is: 0 for the name in
+    /// the source.
     pub depth:      usize,
+    /// The step, among the expansion's, that this one happened in.
+    pub parent:     Option<usize>,
     /// Each parameter and its argument, as written.
     pub arguments:  Vec<(String, String)>,
     /// `##`'s operands; empty for a placemarker.

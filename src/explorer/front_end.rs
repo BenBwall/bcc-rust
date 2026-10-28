@@ -22,6 +22,7 @@
 )]
 
 use std::{
+    cell::Cell,
     fmt::Write as _,
     ops::Range,
     path::Path,
@@ -59,7 +60,6 @@ use crate::{
         TextOptions,
         TextWriter,
         describe_token,
-        preprocess_with_diagnostics,
         with_preprocessor,
         would_paste,
     },
@@ -154,7 +154,19 @@ fn logical_lines(source: &str, trigraphs: bool) -> Vec<ExplorerLogicalLine> {
         let first = physical.line(original(start, false));
         let last =
             physical.line(original(end.min(text.len()), true).min(source.len().saturating_sub(1)));
-        let column = |clean: usize| count(&text[start..clean]) + 1;
+        // Columns count on from the last one asked for, which keeps a long
+        // line with many changes linear; the two passes below each ask in
+        // order.
+        let counted = Cell::new((start, 1));
+        let column = |clean: usize| {
+            let (from, column) = match counted.get() {
+                | (from, column) if from <= clean => (from, column),
+                | _ => (start, 1),
+            };
+            let column = column + count(&text[from..clean]);
+            counted.set((clean, column));
+            column
+        };
         let mut changes = Vec::new();
         while let Some(&&(at, from, kind)) = remaining.peek() {
             if at > end {
@@ -345,7 +357,19 @@ fn phase_four(
     let tu = Bump::new();
     let source = tu.alloc_str(source);
     let mut context = new_context(&tu, configuration, options);
-    let (items, (preprocessing, header_names)) = with_preprocessor(
+    // The preprocessor opens the source under this name, as this index.
+    let main_file = context.intern_source_file(Path::new(INPUT));
+    let text_arena = Bump::new();
+    let text_options = TextOptions {
+        as_written: true,
+        ..TextOptions::default()
+    };
+    let mut writer = TextWriter::new(&text_arena, text_options, main_file);
+    let mut pragmas = Pragmas::default();
+    let mut lines = OutputLines::default();
+    // Each token is written as it is read, with its provenance still live,
+    // so a large source keeps no token array.
+    let (preprocessing, header_names) = with_preprocessor(
         &mut context,
         Path::new(INPUT),
         source,
@@ -353,29 +377,17 @@ fn phase_four(
         |mut preprocessor, context, _pp| {
             preprocessor.record_trace();
             preprocessor.keep_strings_apart();
-            let mut items = Vec::new();
-            preprocessor.for_each_iterator_item_read_at(context, |context, mut token, at| {
-                token.source_vectors = context.retain_token_source(token.source_vectors);
-                items.push((token, at));
+            let mut ordinal = 0;
+            preprocessor.for_each_iterator_item_read_at(context, |context, token, at| {
+                pragmas.write_before(context, ordinal, &mut writer);
+                ordinal += 1;
+                let root = at.as_ref().and_then(|at| at.root);
+                let place = writer.token(context, token, at);
+                lines.written(&writer.text, context, main_file, place, root);
             });
-            (items, Trace::new(context).read(preprocessor.trace()))
+            Trace::new(context).read(preprocessor.trace())
         },
     );
-    let text_arena = Bump::new();
-    let main_file = context.intern_source_file(Path::new(INPUT));
-    let options = TextOptions {
-        as_written: true,
-        ..TextOptions::default()
-    };
-    let mut writer = TextWriter::new(&text_arena, options, main_file);
-    let mut pragmas = Pragmas::default();
-    let mut lines = OutputLines::default();
-    for (ordinal, (token, at)) in items.into_iter().enumerate() {
-        pragmas.write_before(&context, ordinal, &mut writer);
-        let root = at.as_ref().and_then(|at| at.root);
-        let place = writer.token(&context, token, at);
-        lines.written(&writer.text, &context, main_file, place, root);
-    }
     pragmas.write_before(&context, usize::MAX, &mut writer);
     writer.finish();
     lines.written(&writer.text, &context, main_file, None, None);
@@ -394,6 +406,8 @@ struct OutputLines {
     lines:   Vec<ExplorerOutputLine>,
     /// Where the line being written starts.
     start:   usize,
+    /// How much of the text was searched for new-lines.
+    scanned: usize,
     /// Where that line's first token came from.
     current: Option<ExplorerOutputLine>,
 }
@@ -406,6 +420,10 @@ impl OutputLines {
     /// token. A line between two tokens' lines takes the next token's file:
     /// a blank one counts back from that token's line, and a line marker or
     /// pragma has no line.
+    ///
+    /// Files are told apart by their physical identity, which `#line` does
+    /// not change, and only the text written since the last call is
+    /// searched, so a long line costs one pass.
     fn written(
         &mut self,
         text: &str,
@@ -414,28 +432,28 @@ impl OutputLines {
         place: Option<(u32, usize)>,
         root: Option<(u32, SourcePosition)>,
     ) {
+        let main_file = context.physical_source_file(main_file);
         let token = place.and_then(|(file, offset)| {
-            let (line, _) = context.physical_position(file, offset)?;
-            let file = context
-                .get_source_file(context.physical_source_file(file))
-                .display()
-                .to_string();
+            let line = Positions::line(context, file, offset)?;
+            let physical = context.physical_source_file(file);
             let include = root
-                .filter(|(root, _)| *root == main_file && file != INPUT)
+                .filter(|(root, _)| {
+                    physical != main_file && context.physical_source_file(*root) == main_file
+                })
                 // The main file's reader stands at the end of the
                 // `#include` line, before its new-line.
-                .and_then(|(root, position)| context.physical_position(root, position.index))
-                .map(|(line, _)| line);
+                .and_then(|(root, position)| Positions::line(context, root, position.index));
             Some(ExplorerOutputLine {
-                file,
+                file: context.get_source_file(physical).display().to_string(),
                 line: Some(line),
                 include,
             })
         });
-        let ends: Vec<usize> = text[self.start..]
+        let ends: Vec<usize> = text[self.scanned..]
             .match_indices('\n')
-            .map(|(index, _)| self.start + index)
+            .map(|(index, _)| self.scanned + index)
             .collect();
+        self.scanned = text.len();
         if ends.is_empty() {
             if self.current.is_none() {
                 self.current = token;
@@ -472,30 +490,33 @@ impl OutputLines {
 }
 
 /// The `--tokens` listing of phases 5-7, without the diagnostics it
-/// interleaves.
+/// interleaves. Each token is described as it is read, so a large source
+/// keeps no token array: in WebAssembly a region holds one.
 fn tokens(source: &str, configuration: CompilerConfiguration, options: &ExplorerOptions) -> String {
     let tu = Bump::new();
     let source = tu.alloc_str(source);
     let mut context = new_context(&tu, configuration, options);
-    let items = with_preprocessor(
+    let mut text = String::new();
+    let mut scratch = Bump::new();
+    with_preprocessor(
         &mut context,
         Path::new(INPUT),
         source,
         header_search(&tu, options),
-        |preprocessor, context, _pp| preprocess_with_diagnostics(preprocessor, context),
+        |mut preprocessor, context, _pp| {
+            preprocessor.for_each_iterator_item(context, |context, token| {
+                scratch.reset();
+                _ = writeln!(text, "{}", describe_token(token, context, &scratch));
+            });
+        },
     );
-    let mut text = String::new();
-    let mut scratch = Bump::new();
-    for token in items.into_iter().flatten() {
-        scratch.reset();
-        _ = writeln!(text, "{}", describe_token(token, &context, &scratch));
-    }
     text
 }
 
 /// Turns the phase-4 trace into the explorer's account of it.
 struct Trace<'c, 'tu> {
     context:      &'c Context<'tu>,
+    positions:    Positions,
     output:       ExplorerPreprocessing,
     /// Each expansion's invocation place and how its result ends.
     keys:         Vec<((u32, u32), ResultEnd)>,
@@ -506,6 +527,7 @@ impl<'c, 'tu> Trace<'c, 'tu> {
     fn new(context: &'c Context<'tu>) -> Self {
         Self {
             context,
+            positions: Positions::default(),
             output: ExplorerPreprocessing::default(),
             keys: Vec::new(),
             header_names: Vec::new(),
@@ -557,6 +579,7 @@ impl<'c, 'tu> Trace<'c, 'tu> {
                     prescan: *prescan,
                     macro_name: self.spell(*name).to_owned(),
                     depth: *depth,
+                    parent: None,
                     arguments,
                     operands: Vec::new(),
                     result: String::new(),
@@ -567,6 +590,8 @@ impl<'c, 'tu> Trace<'c, 'tu> {
                 name,
                 at,
                 expansion,
+                depth,
+                prescan,
                 result,
                 directive,
             } => {
@@ -575,9 +600,10 @@ impl<'c, 'tu> Trace<'c, 'tu> {
                     .unwrap_or_default();
                 let step = ExplorerExpansionStep {
                     kind:       "builtin".to_owned(),
-                    prescan:    false,
+                    prescan:    *prescan,
                     macro_name: self.spell(*name).to_owned(),
-                    depth:      u32::from(expansion.is_some()),
+                    depth:      *depth,
+                    parent:     None,
                     arguments:  Vec::new(),
                     operands:   Vec::new(),
                     result:     result.clone(),
@@ -605,6 +631,7 @@ impl<'c, 'tu> Trace<'c, 'tu> {
             },
             | TraceEvent::Stringified {
                 expansion,
+                depth,
                 macro_name,
                 result,
             } => {
@@ -612,7 +639,8 @@ impl<'c, 'tu> Trace<'c, 'tu> {
                     kind:       "stringify".to_owned(),
                     prescan:    false,
                     macro_name: self.spell(*macro_name).to_owned(),
-                    depth:      0,
+                    depth:      *depth,
+                    parent:     None,
                     arguments:  Vec::new(),
                     operands:   Vec::new(),
                     result:     self.spell(*result).to_owned(),
@@ -621,6 +649,7 @@ impl<'c, 'tu> Trace<'c, 'tu> {
             },
             | TraceEvent::Pasted {
                 expansion,
+                depth,
                 macro_name,
                 left,
                 right,
@@ -630,7 +659,8 @@ impl<'c, 'tu> Trace<'c, 'tu> {
                     kind:       "paste".to_owned(),
                     prescan:    false,
                     macro_name: self.spell(*macro_name).to_owned(),
-                    depth:      0,
+                    depth:      *depth,
+                    parent:     None,
                     arguments:  Vec::new(),
                     operands:   [self.spell(*left).to_owned(), self.spell(*right).to_owned()]
                         .into(),
@@ -712,8 +742,8 @@ impl<'c, 'tu> Trace<'c, 'tu> {
         let (file, line, presumed) = self.place(expansion);
         let column = self.column(expansion);
         let (end_line, end_column) = self
-            .context
-            .physical_position(end.source_file_index, end.end())
+            .positions
+            .position(self.context, end.source_file_index, end.end())
             .filter(|_| end.source_file_index == expansion.source_file_index)
             .unwrap_or((line, column));
         self.output.expansions.push(ExplorerExpansion {
@@ -743,10 +773,24 @@ impl<'c, 'tu> Trace<'c, 'tu> {
     }
 
     /// Adds `step` to the expansion at `expansion`, the latest one there.
-    fn step(&mut self, expansion: &SourceVector, step: ExplorerExpansionStep) {
-        if let Some(index) = self.expansion(expansion) {
-            self.output.expansions[index].steps.push(step);
-        }
+    ///
+    /// Its parent is the replacement it happened in: the latest step one
+    /// level up. Replacement frames form a stack, so the frame being read
+    /// at each level is the one pushed there last.
+    fn step(&mut self, expansion: &SourceVector, mut step: ExplorerExpansionStep) {
+        let Some(index) = self.expansion(expansion) else {
+            return;
+        };
+        let steps = &mut self.output.expansions[index].steps;
+        let levels = &mut self.keys[index].1.levels;
+        let depth = step.depth as usize;
+        step.parent = depth
+            .checked_sub(1)
+            .and_then(|up| levels.get(up))
+            .and_then(|&parent| u32::try_from(parent).ok());
+        levels.truncate(depth);
+        levels.push(steps.len());
+        steps.push(step);
     }
 
     /// Appends a token to the expansion's result, spaced as `-E` spaces it.
@@ -762,7 +806,7 @@ impl<'c, 'tu> Trace<'c, 'tu> {
         };
         let spelling = self.spell(spelling);
         let first = spelling.bytes().next();
-        let ResultEnd { end, last } = &mut self.keys[index].1;
+        let ResultEnd { end, last, .. } = &mut self.keys[index].1;
         let result = &mut self.output.expansions[index].result;
         if !result.is_empty() {
             let space = match (*end, spelled) {
@@ -814,10 +858,12 @@ impl<'c, 'tu> Trace<'c, 'tu> {
     /// The physical file name and line of `vector`, and the place `#line`
     /// gives it as `file:line` when that differs.
     fn place(&self, vector: &SourceVector) -> (String, u32, Option<String>) {
-        let line = self
-            .context
-            .physical_position(vector.source_file_index, vector.index as usize)
-            .map_or(vector.line, |(line, _)| line);
+        let line = Positions::line(
+            self.context,
+            vector.source_file_index,
+            vector.index as usize,
+        )
+        .unwrap_or(vector.line);
         let file = self.file_name(vector.source_file_index);
         let named = self
             .context
@@ -831,8 +877,12 @@ impl<'c, 'tu> Trace<'c, 'tu> {
 
     /// The physical character column of `vector`.
     fn column(&self, vector: &SourceVector) -> u32 {
-        self.context
-            .physical_position(vector.source_file_index, vector.index as usize)
+        self.positions
+            .position(
+                self.context,
+                vector.source_file_index,
+                vector.index as usize,
+            )
             .map_or(vector.column, |(_, column)| column)
     }
 
@@ -865,9 +915,12 @@ impl<'c, 'tu> Trace<'c, 'tu> {
 #[derive(Default)]
 struct ResultEnd {
     /// The last token's file, the byte offset just past it, and its line.
-    end:  Option<(u32, usize, u32)>,
+    end:    Option<(u32, usize, u32)>,
     /// The first and last bytes of its spelling.
-    last: (Option<u8>, Option<u8>),
+    last:   (Option<u8>, Option<u8>),
+    /// The index of the latest step at each depth, for the next step's
+    /// parent.
+    levels: Vec<usize>,
 }
 
 /// The identity of an invocation place.
@@ -880,6 +933,9 @@ fn key(vector: &SourceVector) -> (u32, u32) {
 struct Physical<'a> {
     source: &'a str,
     starts: Vec<usize>,
+    /// The last place found: its line start, byte offset and column, to
+    /// count on from on the same line.
+    last:   Cell<(usize, usize, u32)>,
 }
 
 impl<'a> Physical<'a> {
@@ -896,7 +952,11 @@ impl<'a> Physical<'a> {
                     .map(|(index, _)| index + 1),
             )
             .collect();
-        Self { source, starts }
+        Self {
+            source,
+            starts,
+            last: Cell::new((0, 0, 1)),
+        }
     }
 
     /// The 1-based line of byte `offset`.
@@ -909,10 +969,69 @@ impl<'a> Physical<'a> {
         let line = self.line(offset);
         let start = self.starts[line as usize - 1];
         let offset = offset.min(self.source.len());
-        (
-            line,
-            count(self.source.get(start..offset).unwrap_or_default()) + 1,
-        )
+        let (from, column) = match self.last.get() {
+            | (last_start, last_offset, column) if last_start == start && last_offset <= offset =>
+                (last_offset, column),
+            | _ => (start, 1),
+        };
+        let column = column + count(self.source.get(from..offset).unwrap_or_default());
+        self.last.set((start, offset, column));
+        (line, column)
+    }
+}
+
+/// Physical lines and columns of byte offsets in time proportional to the
+/// text read: a line by binary search over its file's line starts, and a
+/// column by counting on from the last one found on the same line, since
+/// the explorer asks for places in reading order. A long line costs one
+/// pass, not one pass per token.
+#[derive(Default)]
+struct Positions {
+    /// The last column found: its physical file, line start, byte offset
+    /// and column.
+    last: Cell<Option<(u32, usize, usize, u32)>>,
+}
+
+impl Positions {
+    /// The physical file behind `file`, its text, and the 1-based line of
+    /// `offset` with where that line starts.
+    fn locate<'c>(
+        context: &'c Context<'_>,
+        file: u32,
+        offset: usize,
+    ) -> Option<(u32, &'c str, usize, usize, u32)> {
+        let physical = context.physical_source_file(file);
+        let text = context.source_text(physical)?;
+        let starts = context.source_line_starts(physical)?;
+        let offset = offset.min(text.len());
+        let line = starts.partition_point(|&start| start <= offset).max(1);
+        Some((
+            physical,
+            text,
+            starts[line - 1],
+            offset,
+            u32::try_from(line).unwrap_or(u32::MAX),
+        ))
+    }
+
+    /// The 1-based physical line of byte `offset` of `file`, which `#line`
+    /// may have renamed.
+    fn line(context: &Context<'_>, file: u32, offset: usize) -> Option<u32> {
+        Self::locate(context, file, offset).map(|(.., line)| line)
+    }
+
+    /// The 1-based physical line and character column of byte `offset`.
+    fn position(&self, context: &Context<'_>, file: u32, offset: usize) -> Option<(u32, u32)> {
+        let (physical, text, start, offset, line) = Self::locate(context, file, offset)?;
+        let (from, column) = match self.last.get() {
+            | Some((last_file, last_start, last_offset, column))
+                if last_file == physical && last_start == start && last_offset <= offset =>
+                (last_offset, column),
+            | _ => (start, 1),
+        };
+        let column = column + count(text.get(from..offset).unwrap_or_default());
+        self.last.set(Some((physical, start, offset, column)));
+        Some((line, column))
     }
 }
 

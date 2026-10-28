@@ -168,6 +168,7 @@ fn span(range: ExplorerLineRange) -> (usize, usize) {
 
 /// A logical line's physical lines and changes, in UTF-16 columns.
 fn logical_line(line: &ExplorerLogicalLine, columns: &Columns) -> LogicalLine {
+    let in_line = Columns::new(&line.text);
     LogicalLine {
         source:  span(line.source),
         changes: line
@@ -180,7 +181,7 @@ fn logical_line(line: &ExplorerLogicalLine, columns: &Columns) -> LogicalLine {
                 let length = if change.kind == "splice" { 1 } else { length };
                 SourceChange {
                     kind:        change.kind.clone(),
-                    column:      utf16_in(&line.text, change.column as usize),
+                    column:      in_line.utf16(1, change.column as usize),
                     source:      SourceSpan {
                         line:       change.line as usize,
                         column:     at(change.source_column),
@@ -335,6 +336,7 @@ fn preprocessing(trace: &ExplorerPreprocessing, columns: &Columns) -> Preprocess
                     .steps
                     .iter()
                     .map(|step| ExpansionStep {
+                        parent:     step.parent.map(|parent| parent as usize),
                         kind:       step.kind.clone(),
                         prescan:    step.prescan,
                         macro_name: step.macro_name.clone(),
@@ -526,19 +528,6 @@ impl Columns {
     }
 }
 
-/// The 1-based UTF-16 column of 1-based character `column` in `text`, one
-/// line.
-fn utf16_in(text: &str, column: usize) -> usize {
-    let before = column.saturating_sub(1);
-    let characters = text.chars().count();
-    text.chars()
-        .take(before)
-        .map(char::len_utf16)
-        .sum::<usize>()
-        + before.saturating_sub(characters)
-        + 1
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -553,7 +542,7 @@ mod tests {
         assert_eq!(columns.utf16(2, 9), 10);
         assert_eq!(columns.utf16(2, 30), 31);
         assert_eq!(columns.utf16(9, 4), 4);
-        assert_eq!(utf16_in("é𝔸x", 3), 4);
+        assert_eq!(Columns::new("é𝔸x").utf16(1, 3), 4);
     }
 
     #[test]
@@ -594,6 +583,20 @@ mod tests {
         assert_eq!(trace.expansions[0].invocation, "__LINE__");
         assert_eq!(trace.expansions[0].result, "2");
         assert_eq!(trace.directives[0].name, "pragma");
+    }
+
+    #[test]
+    fn a_long_line_maps_in_linear_time() {
+        // One line of 288 KB, which took 6 s in the browser when each
+        // entry recounted the line.
+        let source = "int x;".repeat(48_000) + "\n";
+        let started = std::time::Instant::now();
+        let compilation = compile(&source, false);
+        let elapsed = started.elapsed();
+        let last = compilation.pp_ranges.last().unwrap();
+        assert_eq!(last.line, 1);
+        assert!(compilation.preprocessed.is_some());
+        assert!(elapsed.as_secs() < 30, "{elapsed:?}");
     }
 
     #[test]

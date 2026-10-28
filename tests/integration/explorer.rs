@@ -695,6 +695,100 @@ mod tests {
     }
 
     #[test]
+    fn every_step_sits_under_the_replacement_it_happened_in() {
+        let trace = trace_of(
+            "#define CAT_(x,y) x##y\n#define CAT(x,y) CAT_(x,y)\n#define A(x) x+x\n#define B(x) \
+             A(x)\n#define BUILTIN() __LINE__\nint a=A(B(BUILTIN()));\nint CAT(x, y)=2;\n",
+        );
+        let tree = |index: usize| -> Vec<(String, u32, Option<u32>)> {
+            trace.expansions[index]
+                .steps
+                .iter()
+                .map(|step| {
+                    (
+                        format!("{} {}", step.kind, step.macro_name),
+                        step.depth,
+                        step.parent,
+                    )
+                })
+                .collect()
+        };
+        let owned = |steps: &[(&str, u32, Option<u32>)]| -> Vec<(String, u32, Option<u32>)> {
+            steps
+                .iter()
+                .map(|&(step, depth, parent)| (step.to_owned(), depth, parent))
+                .collect()
+        };
+        // `__LINE__` is replaced inside BUILTIN's replacement list, which
+        // B's argument prescan reads inside A's.
+        assert_eq!(
+            tree(0),
+            owned(&[
+                ("replace A", 0, None),
+                ("replace B", 1, Some(0)),
+                ("replace BUILTIN", 2, Some(1)),
+                ("builtin __LINE__", 3, Some(2)),
+                ("replace A", 2, Some(1)),
+            ])
+        );
+        assert_eq!(trace.expansions[0].result, "6+6+6+6");
+        // The `##` is CAT_'s, not CAT's.
+        assert_eq!(
+            tree(1),
+            owned(&[
+                ("replace CAT", 0, None),
+                ("replace CAT_", 1, Some(0)),
+                ("paste CAT_", 2, Some(1)),
+            ])
+        );
+    }
+
+    #[test]
+    fn header_lines_name_their_include_after_a_line_directive() {
+        for source in [
+            "#line 1000 \"fake.c\"\n#include <stdint.h>\nint32_t x = INT8_MAX;\n",
+            // stdatomic.h includes further headers of its own.
+            "#line 1000 \"fake.c\"\n#include <stdatomic.h>\natomic_int x;\n",
+        ] {
+            let output = compile(source, &options(false));
+            let text = output.preprocessed.unwrap();
+            let lines = output.preprocessed_lines.unwrap();
+            let mut from_header = 0;
+            for (line, place) in text.lines().zip(&lines) {
+                if place.file != "<input>" {
+                    from_header += 1;
+                    assert_eq!(place.include, Some(2), "{line}: {place:#?}\n{text}");
+                }
+            }
+            assert!(from_header > 0, "{text}");
+        }
+    }
+
+    #[test]
+    fn a_long_line_maps_in_linear_time() {
+        // One line of 288 KB: every token used to recount the line.
+        let source = "int x;".repeat(48_000) + "\n";
+        let started = std::time::Instant::now();
+        let output = compile(&source, &options(false));
+        let elapsed = started.elapsed();
+        let tokens = output.pp_tokens.unwrap();
+        let last = tokens
+            .iter()
+            .rev()
+            .find(|token| token.kind == "punctuator")
+            .unwrap();
+        assert_eq!(
+            (last.line, last.column, last.end_column),
+            (1, 288_000, 288_001)
+        );
+        let lines = output.preprocessed_lines.unwrap();
+        assert!(lines.iter().any(|line| line.line == Some(1)));
+        // The whole compilation in a debug build takes a few seconds; the
+        // quadratic mapping took minutes.
+        assert!(elapsed.as_secs() < 30, "{elapsed:?}");
+    }
+
+    #[test]
     fn each_skipped_group_is_traced_with_its_own_lines() {
         let source = "#if 0\na\n#elif 0\nb\n#elif 1\nc\n#else\nd\n#endif\n";
         let trace = compile(source, &options(false)).preprocessing.unwrap();

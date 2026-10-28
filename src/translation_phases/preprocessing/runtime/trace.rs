@@ -96,6 +96,10 @@ pub(crate) enum TraceEvent<'pp> {
         at:        SourceVector,
         /// The outermost invocation around it, if it was read inside one.
         expansion: Option<SourceVector>,
+        /// How many replacements were being read around it.
+        depth:     u32,
+        /// Whether it was read from an argument being prescanned.
+        prescan:   bool,
         /// The token it became, if it became one token.
         result:    Option<StringCacheId>,
         directive: bool,
@@ -110,6 +114,9 @@ pub(crate) enum TraceEvent<'pp> {
     /// C99: §6.10.3.2 paragraph 2, p. 153; PDF p. 165.
     Stringified {
         expansion:  SourceVector,
+        /// How many replacements are being read: the `#` belongs to the
+        /// innermost, one level up.
+        depth:      u32,
         /// The macro whose replacement list holds the `#`.
         macro_name: StringCacheId,
         result:     StringCacheId,
@@ -118,6 +125,8 @@ pub(crate) enum TraceEvent<'pp> {
     /// C99: §6.10.3.3 paragraphs 2-3, p. 154; PDF p. 166.
     Pasted {
         expansion:  SourceVector,
+        /// As for [`TraceEvent::Stringified`].
+        depth:      u32,
         macro_name: StringCacheId,
         left:       StringCacheId,
         right:      StringCacheId,
@@ -300,10 +309,14 @@ impl<'pp> Expander<'_, '_, 'pp, '_> {
         let name = token.identifier_id(self.context);
         let expansion = self.replacement().map(|(outermost, _)| outermost);
         let directive = self.state.in_directive;
+        let depth = self.replacement_depth();
+        let prescan = self.reading_argument();
         self.push_trace(TraceEvent::Builtin {
             name,
             at,
             expansion,
+            depth,
+            prescan,
             result: result.map(|token| token.contents),
             directive,
         });
@@ -332,6 +345,7 @@ impl<'pp> Expander<'_, '_, 'pp, '_> {
         if let Some((expansion, macro_name)) = self.replacement() {
             self.push_trace(TraceEvent::Stringified {
                 expansion,
+                depth: self.replacement_depth(),
                 macro_name,
                 result: result.contents,
             });
@@ -348,6 +362,7 @@ impl<'pp> Expander<'_, '_, 'pp, '_> {
         if let Some((expansion, macro_name)) = self.replacement() {
             self.push_trace(TraceEvent::Pasted {
                 expansion,
+                depth: self.replacement_depth(),
                 macro_name,
                 left: left.contents,
                 right: right.contents,

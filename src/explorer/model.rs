@@ -328,9 +328,13 @@ pub struct ExplorerExpansionStep {
     pub prescan:    bool,
     /// The macro replaced, or whose replacement list holds the operator.
     pub macro_name: String,
-    /// How many replacements enclose a replaced name: 0 for the name in the
-    /// source, 1 for a name in its replacement list, and so on.
+    /// How deep in the tree of replacements the step is: 0 for the name in
+    /// the source, 1 for a step in its replacement or its arguments, and so
+    /// on.
     pub depth:      u32,
+    /// The index, among the expansion's steps, of the replacement this step
+    /// happened in: the innermost one being read. `None` at depth 0.
+    pub parent:     Option<u32>,
     /// For a function-like macro, its parameters and their arguments.
     pub arguments:  Vec<ExplorerArgument>,
     /// For `##`, its operands, empty for a placemarker.
