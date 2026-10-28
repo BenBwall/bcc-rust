@@ -382,6 +382,30 @@ static void take(struct source *in) {
     in->count++;
 }
 
+/* Stores an integer conversion's value, or %n's count, in the object its
+   length modifier names. */
+#define STORE_INTEGER(ap, length, value)                         \
+    do {                                                         \
+        if ((length) == 2)                                       \
+            *va_arg(ap, long long *) = (long long)(value);       \
+        else if ((length) == 1)                                  \
+            *va_arg(ap, long *) = (long)(value);                 \
+        else if ((length) == -1)                                 \
+            *va_arg(ap, short *) = (short)(value);               \
+        else if ((length) == -2)                                 \
+            *va_arg(ap, signed char *) = (signed char)(value);   \
+        else                                                     \
+            *va_arg(ap, int *) = (int)(value);                   \
+    } while (0)
+
+/* Whether c is a digit of base. */
+static int base_digit(int c, int base) {
+    if (c >= '0' && c <= '9')
+        return c - '0' < base;
+    c |= 32;
+    return base == 16 && c >= 'a' && c <= 'f';
+}
+
 static int scan(struct source *in, const char *fmt, va_list ap) {
     int assigned = 0;
     for (; *fmt; fmt++) {
@@ -431,7 +455,7 @@ static int scan(struct source *in, const char *fmt, va_list ap) {
         char c = *fmt;
         if (c == 'n') {
             if (!skip)
-                *va_arg(ap, int *) = in->count;
+                STORE_INTEGER(ap, length, in->count);
             continue;
         }
         if (c != 'c' && c != '[') {
@@ -495,19 +519,71 @@ static int scan(struct source *in, const char *fmt, va_list ap) {
             assigned += !skip;
             continue;
         }
-        /* Numbers: gather the longest plausible prefix, then convert. */
-        int floating = c == 'f' || c == 'e' || c == 'g' || c == 'a' || c == 'E' || c == 'G' || c == 'F';
+        /* Numbers: consume exactly the characters that can continue the
+           number (C99 7.19.6.2p9: the longest prefix of a matching input
+           sequence), leaving the next one unread. */
+        int floating = c == 'f' || c == 'e' || c == 'g' || c == 'a' || c == 'E' || c == 'G' || c == 'F' ||
+                       c == 'A';
         int limit = width < (int)sizeof buffer - 1 ? width : (int)sizeof buffer - 1;
-        while (n < limit && peek(in) != EOF) {
-            int ch = peek(in);
-            int ok = isalnum(ch) || ch == '+' || ch == '-' || (floating && ch == '.');
-            if (ok && (ch == '+' || ch == '-') && n > 0 && (buffer[n - 1] | 32) != 'e' && (buffer[n - 1] | 32) != 'p')
-                ok = 0;
-            if (!ok)
-                break;
-            buffer[n++] = (char)ch;
-            take(in);
+#define NEXT_IS(test) (n < limit && peek(in) != EOF && (test))
+#define TAKE()                          \
+    do {                                \
+        buffer[n++] = (char)peek(in);   \
+        take(in);                       \
+    } while (0)
+        if (NEXT_IS(peek(in) == '+' || peek(in) == '-'))
+            TAKE();
+        if (floating) {
+            int lead = peek(in) | 32;
+            if (lead == 'i' || lead == 'n') {
+                const char *word = lead == 'i' ? "infinity" : "nan";
+                for (int k = 0; word[k] && NEXT_IS((peek(in) | 32) == word[k]); k++)
+                    TAKE();
+            } else {
+                int hex = 0, digits = 0;
+                if (NEXT_IS(peek(in) == '0')) {
+                    TAKE();
+                    digits = 1;
+                    if (NEXT_IS((peek(in) | 32) == 'x')) {
+                        TAKE();
+                        hex = 1;
+                    }
+                }
+                while (NEXT_IS(base_digit(peek(in), hex ? 16 : 10))) {
+                    TAKE();
+                    digits++;
+                }
+                if (NEXT_IS(peek(in) == '.')) {
+                    TAKE();
+                    while (NEXT_IS(base_digit(peek(in), hex ? 16 : 10))) {
+                        TAKE();
+                        digits++;
+                    }
+                }
+                if (digits && NEXT_IS((peek(in) | 32) == (hex ? 'p' : 'e'))) {
+                    TAKE();
+                    if (NEXT_IS(peek(in) == '+' || peek(in) == '-'))
+                        TAKE();
+                    while (NEXT_IS(peek(in) >= '0' && peek(in) <= '9'))
+                        TAKE();
+                }
+            }
+        } else {
+            int base = c == 'd' || c == 'u' ? 10 : c == 'o' ? 8 : c == 'x' || c == 'X' ? 16 : 0;
+            if ((base == 0 || base == 16) && NEXT_IS(peek(in) == '0')) {
+                TAKE();
+                if (NEXT_IS((peek(in) | 32) == 'x'))
+                    TAKE();
+                else if (base == 0)
+                    base = 8;
+            }
+            if (base == 0)
+                base = 10;
+            while (NEXT_IS(base_digit(peek(in), base)))
+                TAKE();
         }
+#undef TAKE
+#undef NEXT_IS
         buffer[n] = 0;
         char *end;
         if (floating) {
@@ -532,16 +608,7 @@ static int scan(struct source *in, const char *fmt, va_list ap) {
         if (end == buffer)
             break;
         if (!skip) {
-            if (length == 2)
-                *va_arg(ap, long long *) = (long long)v;
-            else if (length == 1)
-                *va_arg(ap, long *) = (long)v;
-            else if (length == -1)
-                *va_arg(ap, short *) = (short)v;
-            else if (length == -2)
-                *va_arg(ap, signed char *) = (signed char)v;
-            else
-                *va_arg(ap, int *) = (int)v;
+            STORE_INTEGER(ap, length, v);
             assigned++;
         }
     }
