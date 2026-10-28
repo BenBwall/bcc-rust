@@ -140,11 +140,11 @@ assert.match(blowUp, /^== trace truncated$/m);
 assert.match(blowUp, /^== asm$/m);
 
 // Tracing never makes a program fail that compiles without it: deeply
-// nested arguments cost the trace a bounded spelling each. 410 levels is
-// the most the preprocessor itself takes here: from about 420 its own
-// argument capture, which copies what is left of each nested argument,
-// fills the expansion arena, with or without the trace.
-for (const depth of [400, 410]) {
+// nested arguments cost the trace a bounded spelling each. A call nested in
+// an argument shares that argument's tokens rather than copying what is
+// left of it, so 2,000 levels fit the expansion arena, where copying
+// filled it from about 420.
+for (const depth of [400, 410, 2000]) {
   const nestedCalls = compile(`#define F(x) x\nint x=${"F(".repeat(depth)}1${")".repeat(depth)};\n`);
   assert.doesNotMatch(nestedCalls, /== diagnostic error/, nestedCalls.slice(0, 400));
   assert.match(nestedCalls, /^int x= *1 *;$/m, `${depth}`);
@@ -199,7 +199,7 @@ for (const [name, source, truncated, expansions] of [
   ["a header not found", `#include "missing.h"\nint x;\n`, false],
   ["a header included after the trace stops",
     `#include <stddef.h>\n${tens("0,0,0,")}int a[] = {E4 0};\n#include <stdint.h>\nint32_t z;\n`, true],
-  ["nested calls", `#define F(x) x\nint x=${"F(".repeat(410)}1${")".repeat(410)};\n`, false],
+  ["nested calls", `#define F(x) x\nint x=${"F(".repeat(2000)}1${")".repeat(2000)};\n`, false],
 ]) {
   const started = Date.now();
   const traced = compile(source);
