@@ -24,6 +24,9 @@ pub(crate) struct TargetLayout {
     /// Whether `long double` is IEEE binary128 rather than what its layout
     /// implies; see [`TargetLayout::long_double_is_binary128`].
     pub(crate) long_double_format: LongDoubleFormat,
+    /// What lowering records about a structure or union for the calling
+    /// convention.
+    pub(crate) record_passing:     RecordPassing,
 }
 
 impl TargetLayout {
@@ -112,6 +115,7 @@ impl TargetLayout {
         layout.scalars[Scalar::Long as usize] = Some(Layout { size: 4, align: 4 });
         layout.scalars[Scalar::UnsignedLong as usize] = Some(Layout { size: 4, align: 4 });
         layout.long_double_format = LongDoubleFormat::Binary128;
+        layout.record_passing = RecordPassing::SingleElement;
         layout
     };
     pub(crate) const LP64: Self = Self {
@@ -180,6 +184,7 @@ impl TargetLayout {
         ptrdiff_t:          Scalar::Long,
         wchar_t:            Scalar::Int,
         long_double_format: LongDoubleFormat::Layout,
+        record_passing:     RecordPassing::Classified,
     };
 }
 
@@ -192,6 +197,17 @@ pub(crate) enum LongDoubleFormat {
     Layout,
     /// IEEE binary128 (WebAssembly).
     Binary128,
+}
+
+/// What a calling convention needs to know about a structure or union
+/// besides its size, alignment and flattened scalars.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RecordPassing {
+    /// The scalars suffice (System V and Microsoft x64 classification).
+    Classified,
+    /// Also whether it is a single-element record, which the WebAssembly C
+    /// ABI passes as its element (`AggregateFlags::SINGLE_ELEMENT`).
+    SingleElement,
 }
 
 /// Distinct fundamental types, even when representation is identical.

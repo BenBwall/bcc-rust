@@ -2424,9 +2424,16 @@ the caller's frame, each at its alignment in slots of at least four bytes
 (aggregates other than single-element ones by address), whose address is
 passed after the fixed parameters; `va_arg` walks a `char *` cursor. An
 `i128` or `f128` result is returned through an address passed first, as
-LLVM demotes it. Single-element detection reads the flattened scalars, so a
-lone named bit-field (`struct { int x : 3; }`, an `i32` in Clang) is passed
-indirectly.
+LLVM demotes it. Lowering decides single elements as Clang's
+`isSingleElementStruct` does, from the C types, and records the verdict as
+the aggregate flag `single_element` for this target only
+(`TargetLayout::record_passing`): unnamed and zero-width bit-fields, empty
+records and zero-length arrays are skipped, one-element arrays and nested
+records are looked through, a lone named bit-field counts as its declared
+type (`struct { int x : 3; }` travels as an `i32`), and two members, a
+complex value or padding make the record indirect, so `union { int a; int
+b; }` is passed by reference. `src/backend/wasm/tests/abi.rs` compares 27
+shapes with the bundled Clang.
 
 **Code generation.** Each SSA value gets a local (`i128` and `f128` two
 `i64` locals); constants and addresses of globals, functions, slots and

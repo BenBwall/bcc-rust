@@ -48,6 +48,7 @@ pub(crate) use code_options::{
 };
 pub(crate) use model::{
     Layout,
+    RecordPassing,
     Scalar,
     TargetLayout,
 };

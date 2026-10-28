@@ -836,15 +836,22 @@ bitflags! {
         const FLEXIBLE = 1 << 1;
         /// A top-level complex scalar, rather than a record of two reals.
         const COMPLEX = 1 << 2;
+        /// A structure or union whose one non-empty member, through nested
+        /// records and one-element arrays, is a scalar as large as it is,
+        /// as Clang's `isSingleElementStruct` finds it: the WebAssembly C
+        /// ABI passes it as that scalar. Lowering records it for the
+        /// targets whose convention asks (`TargetLayout::record_passing`).
+        const SINGLE_ELEMENT = 1 << 3;
     }
 }
 
 impl AggregateFlags {
     /// Each flag with its textual name, in printing order.
-    pub(crate) const NAMES: [(Self, &'static str); 3] = [
+    pub(crate) const NAMES: [(Self, &'static str); 4] = [
         (Self::UNALIGNED, "unaligned"),
         (Self::FLEXIBLE, "flexible"),
         (Self::COMPLEX, "complex"),
+        (Self::SINGLE_ELEMENT, "single_element"),
     ];
 }
 

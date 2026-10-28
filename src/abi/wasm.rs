@@ -22,10 +22,6 @@
 //! and Clang's `WebAssemblyABIInfo`
 //! (`clang/lib/CodeGen/Targets/WebAssembly.cpp`) with `emitVoidPtrVAArg` for
 //! `va_arg`.
-//!
-//! bcc reads single-element shapes from the aggregate's flattened scalars,
-//! which record a named bit-field by the bytes its bits reach; Clang
-//! passes `struct { int x : 3; }` as an `i32`, bcc indirectly.
 
 use super::{
     AbiErrorKind,
@@ -83,21 +79,31 @@ pub(super) fn result(layout: AggregateLayout<'_>) -> ResultPlan<'_> {
     }
 }
 
-/// The scalar type of a structure or union whose one scalar covers it
-/// entirely, as Clang's `isSingleElementStruct` finds it, or `None`.
-/// Complex values and aggregates with a flexible array member are never
-/// single elements.
+/// The scalar a single-element structure or union travels as, or `None`.
+/// Lowering decides single elements as Clang's `isSingleElementStruct`
+/// does and records the verdict ([`AggregateFlags::SINGLE_ELEMENT`]): the
+/// element is the record's one scalar when one covers it, and otherwise a
+/// bit-field, which travels as the integer of its declared type, as large
+/// as the record (Clang passes `struct { int x : 3; }` as an `i32`).
 pub(super) fn single_element(layout: AggregateLayout<'_>) -> Option<Type> {
-    if layout
-        .flags
-        .intersects(AggregateFlags::COMPLEX | AggregateFlags::FLEXIBLE)
+    if !layout.flags.contains(AggregateFlags::SINGLE_ELEMENT)
+        || layout
+            .flags
+            .intersects(AggregateFlags::COMPLEX | AggregateFlags::FLEXIBLE)
     {
         return None;
     }
     match layout.scalars {
         | [scalar] if scalar.offset == 0 && u64::from(scalar.ty.bytes()) == layout.size =>
             Some(scalar.ty),
-        | _ => None,
+        | _ => match layout.size {
+            | 1 => Some(Type::I8),
+            | 2 => Some(Type::I16),
+            | 4 => Some(Type::I32),
+            | 8 => Some(Type::I64),
+            | 16 => Some(Type::I128),
+            | _ => None,
+        },
     }
 }
 

@@ -18,6 +18,7 @@ use crate::{
     },
     target::{
         Layout,
+        RecordPassing,
         Scalar,
         Target,
     },
@@ -432,6 +433,11 @@ fn flattened_layout<'s>(
             }
         }
     }
+    if types.target.record_passing == RecordPassing::SingleElement
+        && single_element(types, ty, scratch)?
+    {
+        flags |= AggregateFlags::SINGLE_ELEMENT;
+    }
     Ok(AggregateLayout {
         size: whole.size,
         align: align(whole),
@@ -439,6 +445,95 @@ fn flattened_layout<'s>(
         scalars: scratch.alloc_slice_copy(&scalars),
         first: None,
     })
+}
+
+/// Whether `ty` is a structure or union whose one non-empty member, looking
+/// through one-element arrays and nested records, is a scalar (a pointer,
+/// an enumeration, a real arithmetic type or a bit-field's declared type)
+/// with the size of every record on the way, as Clang's
+/// `isSingleElementStruct` decides. A member is empty if it is an unnamed
+/// bit-field, an array with a zero bound, or a record of empty members;
+/// a complex value, a longer array or a flexible array member ends the
+/// search.
+/// Clang `isSingleElementStruct` and `isEmptyField` in
+/// `clang/lib/CodeGen/ABIInfoImpl.cpp`; C99 §6.7.2.1 paragraphs 9-16,
+/// pp. 102-103; PDF pp. 114-115.
+fn single_element(
+    types: &Types<'_>,
+    ty: TypeId,
+    scratch: &Bump,
+) -> Result<bool, LoweringErrorKind> {
+    let mut record = ty;
+    let mut sizes = ArenaVec::new_in(scratch);
+    loop {
+        let Some(tag) = types.tag(record).filter(|tag| tag.kind != TagKind::Enum) else {
+            return Ok(false);
+        };
+        if tag.contains_flexible.get() {
+            return Ok(false);
+        }
+        sizes.push(layout(types, record)?.size);
+        let mut found = None;
+        for member in tag.members.get() {
+            if member.invalid || (member.width.is_some() && member.name.is_none()) {
+                continue;
+            }
+            let mut element = types.non_atomic(member.ty);
+            if empty_member(types, element, scratch) {
+                continue;
+            }
+            if found.is_some() {
+                return Ok(false);
+            }
+            while let TypeKind::Array(inner, ArrayBound::Constant(1)) = types.kind(element) {
+                element = types.non_atomic(inner);
+            }
+            found = Some(element);
+        }
+        let Some(element) = found else {
+            return Ok(false);
+        };
+        match types.kind(element) {
+            | TypeKind::Tag(_)
+                if types
+                    .tag(element)
+                    .is_some_and(|tag| tag.kind != TagKind::Enum) =>
+                record = element,
+            | TypeKind::Scalar(scalar) if scalar.complex() => return Ok(false),
+            | TypeKind::Scalar(_) | TypeKind::Pointer(_) | TypeKind::Nullptr | TypeKind::Tag(_) => {
+                let size = layout(types, element)?.size;
+                return Ok(sizes.iter().all(|&record| record == size));
+            },
+            | _ => return Ok(false),
+        }
+    }
+}
+
+/// Whether a member of type `ty` is empty for Clang's single-element rule:
+/// an array with a zero bound at any level, or a record whose members are
+/// all empty.
+fn empty_member(types: &Types<'_>, ty: TypeId, scratch: &Bump) -> bool {
+    let mut pending = ArenaVec::new_in(scratch);
+    pending.push(ty);
+    'members: while let Some(mut ty) = pending.pop() {
+        while let TypeKind::Array(element, bound) = types.kind(ty) {
+            if matches!(bound, ArrayBound::Constant(0)) {
+                // This member is empty; the others still decide.
+                continue 'members;
+            }
+            ty = types.non_atomic(element);
+        }
+        let Some(tag) = types.tag(ty).filter(|tag| tag.kind != TagKind::Enum) else {
+            return false;
+        };
+        for member in tag.members.get() {
+            if member.invalid || (member.width.is_some() && member.name.is_none()) {
+                continue;
+            }
+            pending.push(types.non_atomic(member.ty));
+        }
+    }
+    true
 }
 
 /// A complex scalar's two components, retaining its scalar ABI identity.
