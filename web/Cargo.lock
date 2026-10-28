@@ -125,10 +125,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "bcc-wasm-stepper"
+version = "0.1.0"
+
+[[package]]
 name = "bcc-web"
 version = "0.1.0"
 dependencies = [
  "bcc-rust",
+ "bcc-wasm-stepper",
  "console_error_panic_hook",
  "futures-channel",
  "gloo-timers",

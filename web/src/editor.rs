@@ -34,6 +34,12 @@ pub struct Decoration {
     pub class_name:   Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub glyph_class:  Option<String>,
+    /// A class for the narrow strip between the line numbers and the text.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub margin_class: Option<String>,
+    /// A class for the line number.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub number_class: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hover:        Option<String>,
     /// Text drawn before the range without being part of the code, such as

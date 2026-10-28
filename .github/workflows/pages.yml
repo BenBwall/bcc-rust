@@ -77,9 +77,9 @@ jobs:
           curl -sSfLO "https://github.com/trunk-rs/trunk/releases/download/v$TRUNK_VERSION/$archive"
           echo "$TRUNK_SHA256  $archive" | sha256sum -c -
           tar -xzf "$archive" -C "$HOME/.cargo/bin"
-      # The engine's own tests, and the site's (which run the engine and the
-      # in-browser compiler over every lesson and check the precomputed LLVM
-      # IR matches the lessons).
+      # The engine's own tests, and the site's (which run the engine, the
+      # in-browser compiler and the WebAssembly stepper over every lesson and
+      # check the precomputed LLVM IR and WebAssembly match the lessons).
       # RUSTFLAGS= keeps the repository's LLVM linker flags
       # (.cargo/config.toml) away from these host builds, as for prerender.
       - name: Test the abstract machine
@@ -87,6 +87,10 @@ jobs:
         run: RUSTFLAGS= cargo test --lib --no-default-features --features abstract-machine abstract_machine
       - name: Test the site
         run: RUSTFLAGS= cargo test --features ssr,worker,compiler
+      # The WebAssembly interpreter behind the site's WebAssembly view, with
+      # the lesson modules clang built (web/wasm).
+      - name: Test the WebAssembly stepper
+        run: RUSTFLAGS= cargo test -p bcc-wasm-stepper
       # build.sh bundles the editor (npm ci, then esbuild), then runs Trunk,
       # which downloads the wasm-bindgen and wasm-opt versions it needs.
       - name: Build

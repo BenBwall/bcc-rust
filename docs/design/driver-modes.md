@@ -321,7 +321,8 @@ target, thread model and installed directory, as Clang does.
 
 **Command line.** Options start with `/` or `-` and are case-sensitive.
 Most take their value joined (`/Fefoo.exe`, `/Ifoo`, `/Fo:out.obj`); `/I`,
-`/D`, `/U` and `/FI` also take the next argument. `/DNAME#VALUE` defines NAME
+`/D`, `/U` and `/FI` also take the next argument, and so do `/Fe:`, `/Fo:`
+and `/Fi:` alone (`/Fo: out.obj`). `/DNAME#VALUE` defines NAME
 as VALUE. `cl` compiles each source to an object named after it (`a.c` to
 `a.obj`) and keeps it, then links an executable named after the first source
 (`a.exe`) unless `/c` is given. `/Fo` and `/Fe` name a file, or a directory
@@ -334,7 +335,11 @@ whose extension `cl` does not know (Microsoft documents `.c`, `.cxx`,
 assumed to be an object, with `cl : Command line warning D9024 :
 unrecognized source file type 'x', object file assumed`, and under `/c`
 every input for the linker draws `cl : Command line warning D9027 : source
-file 'x' ignored`. `cl` compiles every source even after one fails, reports
+file 'x' ignored`. `cl` runs only on Windows, where a path does not start
+with `/`; on other hosts the personality reads paths as clang-cl does (see
+"Paths that start with `/`" below), so `cl /c /tmp/a.c /Fo/tmp/a.obj`
+compiles `/tmp/a.c`, and `/bogus` there is an input of unknown type (D9024)
+rather than an unknown option. `cl` compiles every source even after one fails, reports
 a missing one with `c1: fatal error C1083: Cannot open source file:
 'missing.c': No such file or directory` after printing its name, skips the
 link, and exits with status 2, as it does after any error.
@@ -397,21 +402,66 @@ read the version and `for x64` from it.
 
 clang-cl reads `cl`'s options and also Clang's (`-fsomething`, `-Wfoo`,
 `/clang:` options). The personality reads `cl`'s, passes an unknown `-`
-option to bcc (which reads most Clang options), and warns about an unknown
-`/` option as clang-cl does (`unknown argument ignored in clang-cl`). Like
+option to bcc (which reads most Clang options), and reads an argument that
+starts with `/` and names no option as an input, as clang-cl does on every
+host (see below); it warns, with clang-cl's `unknown argument ignored in
+clang-cl`, about a `cl` option clang-cl knows and bcc does not, and about
+the bare Clang options clang-cl ignores. Like
 clang-cl it reads the `/clang:` options after all the others, wherever they
 stand, so `/clang:-fsigned-char /J` leaves `char` signed, and ignores a
 bare `-fsigned-char` or `-funsigned-char` with the same warning. The
 identity keeps the Clang macros and drops the GNU ones, as clang-cl does. It
 prints no banner and no source names. As Clang's driver does, it refuses a
 missing source before compiling any (`clang-cl: error: no such file or
-directory: 'missing.c'`), warns that a stage before linking leaves an input
+directory: 'missing.c'`; also an input for the linker whose name starts
+with `/`, with `; did you mean '/Brepro'?` when an option is one edit
+away), warns that a stage before linking leaves an input
 for the linker unused (`clang-cl: warning: x: 'linker' input unused
 [-Wunused-command-line-argument]`), stops at the first source that fails to
 compile, and exits with status 1 after an error. It reads `-` as standard
 input, which `/E` preprocesses as C and which compiles only when `/Tc`
 names its language (`clang-cl: error: use /Tc or /Tp to set input type for
 standard input` otherwise).
+
+### Paths that start with `/`
+
+A `cl` option and a Unix path both start with `/`. clang-cl's option parser
+(LLVM's `OptTable`) matches an argument against its options first and reads
+one that starts with `/` and matches none as an input file, on every host;
+it does not check that the file exists until it diagnoses missing inputs.
+The personalities follow it, deciding with the options the pinned Clang's
+clang-cl knows (`personality/options/clang-cl.list`, frozen from its
+`Options.td` by `scripts/update_driver_options.py --options-td`):
+
+- A flag matches only its whole name and an option with a value by the
+  name the argument starts with, so `/tmp/a.c`, `/home/me/a.c`,
+  `/nologox` and `/analyzeme.c` are inputs, while `/nologo` stays the
+  option even if a file of that name exists. This is decided before bcc
+  reads the option, so none of its own spellings reads a path; the `cl`
+  personality alone also keeps the `cl` options clang-cl does not know
+  (`/Zf`, `/Qpar-`, `/Qspectre-`, `/analyze` and `/analyze:...`).
+- A path that starts with an option taking a joined value is that option,
+  as in clang-cl: `/Users/me/a.c` is `/U` with `sers/me/a.c`, `/Data/a.c`
+  `/D`, and `/workspace/a.c` `/w`. `--` ends the options: every argument
+  after it is an input (`clang-cl /c -- /Users/me/a.c`). A name after it
+  that starts with `-` reaches bcc's own command line as `./-a.c`; clang-cl
+  passes it on unchanged, and its front end reads it as an option.
+- Options with paths read them joined or, where clang-cl does, from the
+  next argument: `/Fo/tmp/out/`, `/Fo: /tmp/a.obj`, `/I/usr/include`,
+  `/I /usr/include`, `/Fe/tmp/a.exe`, `/Fa/tmp/a.asm`, `/Fi/tmp/a.i`. The
+  bare name of an option clang-cl reads with its value in the next
+  argument takes that argument, also where bcc ignores the option or does
+  not know it (`/Fp: /tmp/a.pch`, `/imsvc /usr/include`), so it is no
+  input. `/Fo` takes its value joined only: in `/Fo /tmp/a.obj`, as in
+  clang-cl, `/tmp/a.obj` is an input.
+- A missing input is reported as each compiler reports one: clang-cl's
+  `no such file or directory: '/tmp/missing.c'`, also for an input for the
+  linker that starts with `/` (a mistyped option: `/Brepo` draws `; did you
+  mean '/Brepro'?`), and `cl`'s fatal error C1083 for a source, or warnings
+  D9024 and D9027 for any other input.
+
+`cl` on Windows keeps its own reading: an unknown `/` option draws warning
+D9002, and `--` is an unknown option too.
 
 ## TCC
 
@@ -509,6 +559,12 @@ Besides those above:
   host without them only `/c`, `/E`, `/P` and `/Fa` work.
 - `-v` prints the version lines but not the commands GCC runs; `-###`
   prints the bcc command line instead of GCC's subprocesses.
+- clang-cl's `/o` (a deprecated `/Fe` or `/Fo`), `/imsvc` and the
+  `/winsysroot` family are not implemented; they draw the unknown-option
+  warning, so `/opt/a.c`, which clang-cl reads as `/o`, is ignored with it
+  rather than compiled. Use `-- /opt/a.c`.
+- clang-cl's suggestion for a missing input considers its `cl` options,
+  not the Clang options it also takes, which start with `-` only.
 - `/showIncludes` prints `Note: including file: PATH` for every header but
   does not indent nested ones; `/sourceDependencies`, `-H` and `-MG` are not
   implemented.

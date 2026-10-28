@@ -45,7 +45,7 @@ export function setTheme(theme) {
 
 /**
  * Create an editor in `host`. `options`: `value`, `language` (`c`, `bcc-ir`,
- * `llvm`, `asm`, `objdump` or `plaintext`), `readOnly`, `ariaLabel`, `theme`.
+ * `llvm`, `asm`, `objdump`, `wat` or `plaintext`), `readOnly`, `ariaLabel`, `theme`.
  */
 export function createEditor(host, options) {
   return new Editor(host, options);
@@ -72,8 +72,12 @@ class Editor {
       minimap: { enabled: false },
       scrollBeyondLastLine: false,
       renderLineHighlight: options.readOnly ? 'none' : 'line',
+      // Clicking a read-only view's line number selects the line; keep the
+      // spaces of the selection blank.
+      renderWhitespace: options.readOnly ? 'none' : 'selection',
       glyphMargin: !options.readOnly,
-      lineNumbersMinChars: 3,
+      // The WebAssembly listing runs to hundreds of lines.
+      lineNumbersMinChars: options.language === 'wat' ? 4 : 3,
       lineDecorationsWidth: 10,
       folding: !!options.readOnly,
       smoothScrolling: true,
@@ -188,8 +192,9 @@ class Editor {
    * Replace the decoration layer `layer` with `items`: each has 1-based
    * `startLine`, `startColumn`, `endLine`, `endColumn` (columns may be 0 for
    * whole-line marks), and any of `inlineClass`, `lineClass`, `marginClass`,
-   * `glyphClass`, `hover` (Markdown), and `before` with `beforeClass`: text
-   * drawn before the range that is not part of the code.
+   * `numberClass` (the line number), `glyphClass`, `hover` (Markdown), and
+   * `before` with `beforeClass`: text drawn before the range that is not
+   * part of the code.
    */
   setDecorations(layer, items) {
     const decorations = items.map((item) => ({
@@ -205,6 +210,7 @@ class Editor {
         inlineClassNameAffectsLetterSpacing: false,
         className: item.className || undefined,
         linesDecorationsClassName: item.marginClass || undefined,
+        lineNumberClassName: item.numberClass || undefined,
         glyphMarginClassName: item.glyphClass || undefined,
         hoverMessage: item.hover ? { value: item.hover } : undefined,
         before: item.before
