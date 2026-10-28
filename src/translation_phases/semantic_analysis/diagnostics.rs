@@ -161,25 +161,27 @@ impl Analyzer<'_, '_, '_> {
 
     /// Whether `expression` failed to fold because an operand has a
     /// bit-precise type wider than the constant model: some arithmetic
-    /// constant in it of such a type has no folded value
-    /// ([`super::Integer::convert`]). A context that requires a constant
-    /// reports [`Self::wide_constant`] for it instead of its own error.
+    /// constant in it has no folded value though it has such a type or
+    /// such an operand ([`super::Integer::convert`]). A context that
+    /// requires a constant reports [`Self::wide_constant`] for it instead
+    /// of its own error.
     /// C23: §6.6 paragraph 6, p. 95; PDF p. 108.
     pub(super) fn wide_unfolded(&self, expression: &Expression<'_>) -> bool {
+        let info = |expression: &Expression<'_>| {
+            self.expression_indices
+                .get(&std::ptr::from_ref(expression).addr())
+                .map(|&index| &self.expressions[index])
+        };
+        let wide = |expression: &Expression<'_>| {
+            info(expression).is_some_and(|info| {
+                self.integer_type(info.ty)
+                    .is_some_and(|(bits, _)| bits > 128)
+            })
+        };
         let mut pending = ArenaVec::new_in(self.scratch);
         pending.push(expression);
         while let Some(expression) = pending.pop() {
-            if let Some(&index) = self
-                .expression_indices
-                .get(&std::ptr::from_ref(expression).addr())
-                && self.expressions[index].constant == ConstantClass::Arithmetic
-                && self.expressions[index].integer.is_none()
-                && self
-                    .integer_type(self.expressions[index].ty)
-                    .is_some_and(|(bits, _)| bits > 128)
-            {
-                return true;
-            }
+            let mut operands = ArenaVec::new_in(self.scratch);
             match expression.kind {
                 | ExpressionType::Parenthesized { expression }
                 | ExpressionType::Unary {
@@ -189,16 +191,23 @@ impl Analyzer<'_, '_, '_> {
                 | ExpressionType::Cast {
                     operand_expression: expression,
                     ..
-                } => pending.push(expression),
+                } => operands.push(expression),
                 | ExpressionType::Binary {
                     left_expression,
                     right_expression,
                     ..
-                } => pending.extend([left_expression, right_expression]),
+                } => operands.extend([left_expression, right_expression]),
                 | ExpressionType::Conditional(c) | ExpressionType::OmittedConditional(c) =>
-                    pending.extend([c.condition_expression, c.then_expression, c.else_expression]),
+                    operands.extend([c.condition_expression, c.then_expression, c.else_expression]),
                 | _ => {},
             }
+            if info(expression).is_some_and(|info| {
+                info.constant == ConstantClass::Arithmetic && info.integer.is_none()
+            }) && (wide(expression) || operands.iter().any(|&operand| wide(operand)))
+            {
+                return true;
+            }
+            pending.extend(operands);
         }
         false
     }

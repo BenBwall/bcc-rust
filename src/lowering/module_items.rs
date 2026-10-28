@@ -1617,8 +1617,8 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
                 | _ if let Some(value) = info.binary128() =>
                     floats::binary128_bits(value.real, component),
                 | (Some(value), _) => floats::constant_bits(&value.real, component),
-                | (_, Some(value)) if value.signed => floats::from_integer(value.value, component),
-                | (_, Some(value)) => floats::from_unsigned(value.value as u128, component),
+                | (_, Some(value)) =>
+                    floats::from_bit_precise(value.value, value.bits, value.signed, component),
                 | _ => None,
             }
             .ok_or_else(unsupported)?;
@@ -1647,11 +1647,7 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
                     floats::binary128_bits(folded.real, float),
                 | (Some(folded), _) => floats::constant_bits(&folded.real, float),
                 | (None, Some(value)) =>
-                    if value.signed {
-                        floats::from_integer(value.value, float)
-                    } else {
-                        floats::from_unsigned(u128::from_le_bytes(value.value.to_le_bytes()), float)
-                    },
+                    floats::from_bit_precise(value.value, value.bits, value.signed, float),
                 | (None, None) => None,
             }
             .ok_or_else(unsupported)?;

@@ -1666,19 +1666,25 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             },
             | Work::Conditional(c) =>
                 if let Some(value) = self.integers.pop().flatten() {
-                    if let Some((bits, signed)) = self.conditional_model(c) {
-                        self.work.push(Work::ConvertInteger(bits, signed));
-                    }
-                    self.work.push(Work::Eval(if value.value != 0 {
+                    let selected = if value.value != 0 {
                         c.then_expression
                     } else {
                         c.else_expression
-                    }));
+                    };
+                    if let Some((bits, signed)) = self.conditional_model(c) {
+                        self.work
+                            .push(Work::ConvertInteger(bits, signed, selected.source_vectors));
+                    }
+                    self.work.push(Work::Eval(selected));
                 } else {
                     self.integers.push(None);
                 },
-            | Work::ConvertInteger(bits, signed) => {
+            | Work::ConvertInteger(bits, signed, source) => {
                 let value = self.integers.pop().flatten();
+                // An arm whose conversion a wide pattern cannot hold.
+                if value.is_some_and(|v| v.convert(bits, signed).is_none()) {
+                    self.wide_constant(source);
+                }
                 self.integers
                     .push(value.and_then(|v| v.convert(bits, signed)));
             },
@@ -1939,7 +1945,7 @@ enum Work<'tu, 's> {
     Conditional(&'tu ConditionalExpression<'tu>),
     CastBase(&'tu Expression<'tu>, SourceVectors),
     CastDone(TypeId, SourceVectors),
-    ConvertInteger(u32, bool),
+    ConvertInteger(u32, bool, SourceVectors),
     SizeofDone(bool, SourceVectors),
     Atomic(SourceVectors),
     TypeofDone(&'tu ExtendedType<'tu>),

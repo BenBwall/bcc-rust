@@ -432,15 +432,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             });
         }
         let integer = info.integer?;
-        let magnitude = if integer.signed {
-            integer.value.unsigned_abs()
-        } else {
-            integer.value.cast_unsigned()
-        };
-        Some(Binary128Value::real(Binary128::from_integer(
-            integer.signed && integer.value < 0,
-            magnitude,
-        )))
+        // A wide unsigned pattern with bit 127 set stands for 2^N - k.
+        let bits = crate::float_parsing::bits::from_bit_precise(
+            integer.value,
+            integer.bits,
+            integer.signed,
+            crate::ir::Type::F128,
+        )?;
+        Some(Binary128Value::real(Binary128::from_bits(bits)))
     }
 
     /// Records `operand`'s arithmetic constant converted to `ty` in `info`
@@ -649,11 +648,7 @@ pub(super) fn integer_value(integer: Integer, ty: crate::ir::Type) -> Option<Lon
         float_parsing::bits,
         ir::Type,
     };
-    let bits = if integer.signed {
-        bits::from_integer(integer.value, ty)?
-    } else {
-        bits::from_unsigned(integer.value.cast_unsigned(), ty)?
-    };
+    let bits = bits::from_bit_precise(integer.value, integer.bits, integer.signed, ty)?;
     let narrow = |bits: u128| u32::try_from(bits).ok();
     Some(match ty {
         | Type::F16 | Type::BF16 => {

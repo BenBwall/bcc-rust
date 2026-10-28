@@ -1,0 +1,43 @@
+/* _BitInt constants wider than 128 bits that the 128-bit pattern model
+ * cannot hold: each line is one assertion bcc refuses as not yet
+ * supported; GCC 15 and Clang fold every one to true. */
+_Static_assert((unsigned long long)((unsigned __int128)((((unsigned _BitInt(256))(~(unsigned __int128)0)) - (~(unsigned _BitInt(200))5)) / ((unsigned _BitInt(100))((unsigned _BitInt(150))2))) >> 64) == 9223372036854775808ULL, "");
+_Static_assert(((_BitInt(300))((((unsigned _BitInt(256))(~(unsigned __int128)0)) - (~(unsigned _BitInt(200))5)) / ((unsigned _BitInt(100))((unsigned _BitInt(150))2))) > (_BitInt(300))((__int128)1 << 126)) == 1, "");
+_Static_assert((((unsigned _BitInt(200))(~(unsigned __int128)0)) < 0) == 0, "");
+_Static_assert((((unsigned _BitInt(200))(~(unsigned __int128)0)) == (unsigned _BitInt(200))(__int128)((unsigned _BitInt(200))(~(unsigned __int128)0))) == 0, "");
+_Static_assert(((_BitInt(300))((~(unsigned _BitInt(129))0) % ((unsigned _BitInt(200))((((__int128)3)<<64)+5))) < 0) == 0, "");
+_Static_assert(((_BitInt(300))((unsigned _BitInt(256))((((_BitInt(200))2147483647) & ((unsigned _BitInt(256))-1)) - ((~(unsigned _BitInt(150))0) << ((_BitInt(150))127)))) < 0) == 0, "");
+_Static_assert(((((((_BitInt(129))128) != ((unsigned _BitInt(150))0xFFFFFFFFu)) * ((_BitInt(129))((_BitInt(150))((__int128)1<<126)))) * ((_BitInt(200))(-((__int128)1<<64)))) < 0) == 1, "");
+_Static_assert(((((_BitInt(200))(~(unsigned __int128)0)) ? ((_BitInt(129))7) : ((_BitInt(200))(__int128)(((unsigned __int128)1<<127)-1))) < 0) == 0, "");
+_Static_assert((unsigned long long)((((~(unsigned _BitInt(129))5) - ((_BitInt(200))(-((__int128)1<<64)))) & (((_BitInt(200))2147483647) >= ((unsigned _BitInt(150))((__int128)1<<126)))) ^ ((((unsigned _BitInt(256))((((__int128)3)<<64)+5)) && ((_BitInt(150))3)) == ((_BitInt(129))(-((__int128)1<<64))))) == 0ULL, "");
+_Static_assert((unsigned long long)(((_BitInt(129))-1) * ((_BitInt(200))(~(unsigned __int128)0))) == 1ULL, "");
+_Static_assert(((((_BitInt(200))100) & (((unsigned _BitInt(129))(-(__int128)(((unsigned __int128)1<<127)-1)-1)) + (((_BitInt(200))0) >= ((unsigned _BitInt(256))3)))) == (_BitInt(200))(__int128)(((_BitInt(200))100) & (((unsigned _BitInt(129))(-(__int128)(((unsigned __int128)1<<127)-1)-1)) + (((_BitInt(200))0) >= ((unsigned _BitInt(256))3))))) == 1, "");
+_Static_assert(((_BitInt(300))(((unsigned _BitInt(129))(-0x7fffffffffffffffLL-1)) + ((_BitInt(200))(~(unsigned __int128)0))) > (_BitInt(300))((__int128)1 << 126)) == 1, "");
+_Static_assert((((~(unsigned _BitInt(200))1) & (~(unsigned _BitInt(150))2)) == (unsigned _BitInt(200))(__int128)((~(unsigned _BitInt(200))1) & (~(unsigned _BitInt(150))2))) == 0, "");
+_Static_assert(((_BitInt(300))(((((unsigned _BitInt(129))(-(__int128)(((unsigned __int128)1<<127)-1)-1)) | ((_BitInt(129))1)) >> ((unsigned _BitInt(129))3)) >> ((int)0)) > (_BitInt(300))((__int128)1 << 126)) == 0, "");
+_Static_assert(((((unsigned _BitInt(129))(((__int128)1<<100)+12345)) << ((int)127)) == (unsigned _BitInt(129))(__int128)(((unsigned _BitInt(129))(((__int128)1<<100)+12345)) << ((int)127))) == 0, "");
+_Static_assert(((_BitInt(300))(((_BitInt(200))0xFFFFFFFFu) * ((unsigned _BitInt(200))(((__int128)1<<100)+12345))) < 0) == 0, "");
+_Static_assert((unsigned long long)((unsigned __int128)(((unsigned _BitInt(129))((((__int128)3)<<64)+5)) & ((unsigned __int128)-3)) >> 64) == 3ULL, "");
+_Static_assert(((((!((unsigned _BitInt(256))(-((__int128)1<<90)-7))) <= (-((_BitInt(150))5))) >= ((((unsigned _BitInt(256))2147483647) >= ((_BitInt(200))0xFFFFFFFFu)) % ((unsigned _BitInt(200))(-((__int128)1<<64))))) < 0) == 0, "");
+_Static_assert((unsigned long long)((((_BitInt(150))7) << ((int)100)) << ((unsigned long long)31)) == 0ULL, "");
+_Static_assert((unsigned long long)((unsigned __int128)(((unsigned _BitInt(150))(__int128)(((unsigned __int128)1<<127)-1)) ? (~(unsigned _BitInt(129))0) : ((_BitInt(200))(-((__int128)1<<64)))) >> 64) == 18446744073709551615ULL, "");
+_Static_assert(((_BitInt(300))(-((unsigned _BitInt(200))(((__int128)1<<100)+12345))) < 0) == 0, "");
+_Static_assert(((_BitInt(300))((unsigned _BitInt(200))(~(_BitInt(129))5)) < 0) == 0, "");
+_Static_assert(((_BitInt(300))((unsigned _BitInt(150))(-((__int128)1<<64))) > (_BitInt(300))((__int128)1 << 126)) == 1, "");
+_Static_assert(((_BitInt(300))((~(unsigned _BitInt(256))2) % ((unsigned _BitInt(256))3)) > (_BitInt(300))((__int128)1 << 126)) == 0, "");
+_Static_assert(((-((unsigned _BitInt(256))(-(__int128)(((unsigned __int128)1<<127)-1)-1))) == (unsigned _BitInt(256))(__int128)(-((unsigned _BitInt(256))(-(__int128)(((unsigned __int128)1<<127)-1)-1)))) == 0, "");
+_Static_assert(((_BitInt(300))(-((unsigned _BitInt(256))(-(__int128)(((unsigned __int128)1<<127)-1)-1))) > (_BitInt(300))((__int128)1 << 126)) == 1, "");
+_Static_assert((((((unsigned _BitInt(129))(-((__int128)1<<90)-7)) != ((unsigned _BitInt(256))0xffffffffffffffffULL)) % ((~(_BitInt(129))2) > ((unsigned _BitInt(150))((((__int128)3)<<64)+5)))) < 0) == 0, "");
+_Static_assert(((((-((unsigned _BitInt(256))3)) == ((~(unsigned _BitInt(200))0) | ((unsigned _BitInt(200))7))) ? (((int)(~(_BitInt(150))1)) > (-((unsigned _BitInt(100))((__int128)1<<126)))) : ((_BitInt(150))(-((__int128)1<<90)-7))) == (_BitInt(150))(__int128)(((-((unsigned _BitInt(256))3)) == ((~(unsigned _BitInt(200))0) | ((unsigned _BitInt(200))7))) ? (((int)(~(_BitInt(150))1)) > (-((unsigned _BitInt(100))((__int128)1<<126)))) : ((_BitInt(150))(-((__int128)1<<90)-7)))) == 1, "");
+_Static_assert(((((_BitInt(200))5) - (~(unsigned _BitInt(129))0)) == (_BitInt(200))(__int128)(((_BitInt(200))5) - (~(unsigned _BitInt(129))0))) == 0, "");
+_Static_assert((unsigned long long)(((unsigned _BitInt(150))((unsigned _BitInt(256))((unsigned __int128)1<<127))) <= ((_BitInt(129))(-((__int128)1<<64)))) == 1ULL, "");
+_Static_assert((((~(unsigned _BitInt(129))5) * ((_BitInt(200))3)) == (_BitInt(200))(__int128)((~(unsigned _BitInt(129))5) * ((_BitInt(200))3))) == 0, "");
+_Static_assert((((((_BitInt(200))(~(unsigned __int128)0)) ? ((_BitInt(129))0xFFFFFFFFu) : ((_BitInt(150))0)) ? ((_BitInt(150))((unsigned _BitInt(150))(__int128)(((unsigned __int128)1<<127)-1))) : (-((unsigned _BitInt(129))7))) < 0) == 0, "");
+_Static_assert((unsigned long long)((unsigned __int128)(((unsigned _BitInt(129))((__int128)1<<126)) & ((unsigned _BitInt(150))(~(unsigned __int128)0))) >> 64) == 4611686018427387904ULL, "");
+_Static_assert(((_BitInt(300))((-((unsigned _BitInt(200))100)) - (((unsigned _BitInt(200))(__int128)(((unsigned __int128)1<<127)-1)) / ((unsigned _BitInt(200))2147483647))) < 0) == 0, "");
+_Static_assert(((_BitInt(300))((unsigned _BitInt(129))((~(unsigned _BitInt(150))5) == ((_BitInt(200))0xFFFFFFFFu))) < 0) == 0, "");
+_Static_assert(((((unsigned _BitInt(129))(-((__int128)1<<90)-7)) ? (((unsigned _BitInt(256))(-0x7fffffffffffffffLL-1)) % ((_BitInt(150))(__int128)(((unsigned __int128)1<<127)-1))) : ((unsigned _BitInt(150))(~(unsigned __int128)0))) < 0) == 0, "");
+_Static_assert(((_BitInt(300))(((unsigned _BitInt(256))0) ? ((unsigned _BitInt(256))5) : ((unsigned _BitInt(129))-100)) > (_BitInt(300))((__int128)1 << 126)) == 1, "");
+_Static_assert(((((unsigned _BitInt(129))(-0x7fffffffffffffffLL-1)) / ((_BitInt(200))((((__int128)3)<<64)+5))) < 0) == 0, "");
+_Static_assert(((_BitInt(300))((unsigned _BitInt(129))(~(((_BitInt(150))((unsigned __int128)1<<127)) - ((int)-1)))) < 0) == 0, "");
+_Static_assert((((((~(unsigned _BitInt(200))0) ? ((_BitInt(200))(((__int128)1<<100)+12345)) : ((unsigned _BitInt(150))(-((__int128)1<<90)-7))) ^ (~(_BitInt(200))2)) / (~(((unsigned _BitInt(256))(-0x7fffffffffffffffLL-1)) - ((unsigned _BitInt(200))1)))) == (unsigned _BitInt(256))(__int128)((((~(unsigned _BitInt(200))0) ? ((_BitInt(200))(((__int128)1<<100)+12345)) : ((unsigned _BitInt(150))(-((__int128)1<<90)-7))) ^ (~(_BitInt(200))2)) / (~(((unsigned _BitInt(256))(-0x7fffffffffffffffLL-1)) - ((unsigned _BitInt(200))1))))) == 0, "");

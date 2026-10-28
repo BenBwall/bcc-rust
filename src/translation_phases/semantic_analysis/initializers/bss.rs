@@ -385,11 +385,7 @@ fn scalar<'tu>(
             bits::constant_bits(&value.real, float)?
         } else {
             let value = integer?;
-            if value.signed {
-                bits::from_integer(value.value, float)?
-            } else {
-                bits::from_unsigned(value.value as u128, float)?
-            }
+            bits::from_bit_precise(value.value, value.bits, value.signed, float)?
         };
         let component = if complex { width / 2 } else { width };
         image.bits(start, component, real)?;

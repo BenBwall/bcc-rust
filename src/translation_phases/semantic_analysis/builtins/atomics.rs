@@ -142,15 +142,22 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             TypeKind::Scalar(s) if matches!(s.representation(), Scalar::Float | Scalar::Double)
         );
         let modifying = operation != O::Load;
-        // Clang refuses a `_BitInt` object in the `__atomic` value builtins,
-        // and in the `__sync` builtins unless its width is a power of two;
-        // GCC accepts it.
+        // Both compilers refuse a `__sync` builtin on a `_BitInt` of more
+        // than 16 bytes. Clang also refuses one in the `__atomic` value
+        // builtins, and in the `__sync` builtins unless its width is a power
+        // of two; GCC accepts those.
+        let clang =
+            self.context.configuration.bit_int_rules() == crate::configuration::RuleSet::Clang;
         if let TypeKind::BitInt { width, .. } = self.types.nodes[value.index]
-            && self.context.configuration.bit_int_rules() == crate::configuration::RuleSet::Clang
             && let Some(kind) = match builtin.family {
-                | Family::Gnu if !matches!(operation, O::TestSet | O::Clear) =>
+                | Family::Sync if width > 128 => Some(if clang {
+                    SemanticErrorKind::AtomicOperandBytes
+                } else {
+                    SemanticErrorKind::InvalidAtomicOperand
+                }),
+                | Family::Gnu if clang && !matches!(operation, O::TestSet | O::Clear) =>
                     Some(SemanticErrorKind::AtomicBuiltinBitInt),
-                | Family::Sync if !width.is_power_of_two() =>
+                | Family::Sync if clang && !width.is_power_of_two() =>
                     Some(SemanticErrorKind::AtomicOperandSize),
                 | _ => None,
             }

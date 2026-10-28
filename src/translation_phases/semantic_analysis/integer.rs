@@ -1034,9 +1034,10 @@ impl Integer {
     /// model's 128 bits. There a value stands for its two's-complement
     /// pattern sign-extended from bit 127 to the type's width: every value
     /// of a signed type converts, as does a nonnegative value of an unsigned
-    /// type of at most 127 bits or a value of a wide type; an unsigned
-    /// 128-bit value with its top bit set, whose zero extension that pattern
-    /// cannot stand for, is not folded. Arithmetic on wide values folds
+    /// type of at most 127 bits, or a value of a wide type converted to a
+    /// type no wider; an unsigned value whose pattern has bit 127 set,
+    /// converted to a wider type, is zero-extended, which no such pattern
+    /// stands for, and is not folded. Arithmetic on wide values folds
     /// where its result keeps the pattern ([`Self::wide_binary`]).
     /// C99: §6.3.1.3p1-3, p. 43; PDF p. 55.
     /// C23: §6.2.5 paragraph 8, p. 39; PDF p. 52.
@@ -1044,7 +1045,10 @@ impl Integer {
         if bits <= 128 {
             return Some(self.cast(bits, signed));
         }
-        (self.bits > 128 || self.signed || self.value >= 0).then_some(Self {
+        // A negative pattern of an unsigned type stands for 2^width - k,
+        // whose zero extension to a wider type no sign-extended pattern
+        // holds; within its width or narrower, it truncates as a pattern.
+        (self.signed || self.value >= 0 || (self.bits > 128 && bits <= self.bits)).then_some(Self {
             value: self.value,
             bits,
             signed,

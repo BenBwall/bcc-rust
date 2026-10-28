@@ -423,14 +423,20 @@ pub(crate) enum SemanticErrorKind {
     InvalidAtomicOperand,
     /// Clang: an `__atomic` builtin other than `__atomic_test_and_set` and
     /// `__atomic_clear` on a `_BitInt` object, which GCC accepts.
-    /// Clang extension: `err_atomic_builtin_bit_int_prohibit` in
-    /// `DiagnosticSemaKinds.td`.
+    /// Clang extension: the error "argument to atomic builtin of type
+    /// '`_BitInt`' is not supported".
     AtomicBuiltinBitInt,
     /// Clang: a `__sync` builtin on a `_BitInt` whose width is not a power
     /// of two, which GCC accepts.
-    /// Clang extension: `err_atomic_builtin_pointer_size` in
-    /// `DiagnosticSemaKinds.td`.
+    /// Clang extension: the error "atomic memory operand must have a
+    /// power-of-two size".
     AtomicOperandSize,
+    /// Clang: a `__sync` builtin on an object of more than 16 bytes, as a
+    /// `_BitInt` above 128 bits is; GCC refuses it too ("operand type ...
+    /// is incompatible").
+    /// Clang extension: the error "address argument to atomic builtin must
+    /// be a pointer to 1,2,4,8 or 16 byte type".
+    AtomicOperandBytes,
     /// Clang diagnoses invalid constant orders as warnings.
     /// GNU extension: GCC manual, "__atomic Builtins".
     /// <https://gcc.gnu.org/onlinedocs/gcc/_005f_005fatomic-Builtins.html>
@@ -899,6 +905,7 @@ impl SemanticErrorKind {
             | Self::InvalidAtomicOperand => "invalid atomic builtin operand",
             | Self::AtomicBuiltinBitInt => "a _BitInt object",
             | Self::AtomicOperandSize => "not a power-of-two size",
+            | Self::AtomicOperandBytes => "more than 16 bytes",
             | Self::InvalidAtomicOrder => "invalid memory order",
             | Self::InvalidAtomicFailureOrder => "invalid failure memory order",
             | Self::AtomicBufferQualifiers => "pointer conversion discards qualifiers",
@@ -1112,6 +1119,10 @@ impl SemanticErrorKind {
                 "argument to atomic builtin of type '_BitInt' is not supported",
                 "Clang's __atomic builtins refuse bit-precise integers, except \
                  __atomic_test_and_set and __atomic_clear; GCC accepts them",
+            ),
+            | Self::AtomicOperandBytes => (
+                "address argument to atomic builtin must be a pointer to 1,2,4,8 or 16 byte type",
+                "the __sync builtins operate on objects of at most 16 bytes, in Clang and GCC",
             ),
             | Self::AtomicOperandSize => (
                 "atomic memory operand must have a power-of-two size",

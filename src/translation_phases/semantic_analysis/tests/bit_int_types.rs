@@ -384,3 +384,82 @@ fn holds_on_x86_64(source: &str) {
         );
     }
 }
+
+#[test]
+fn generated_wide_constants_fold_to_their_exact_values() {
+    // Each assertion holds in GCC 15 and Clang; a wrong folded value fails
+    // it.
+    holds_on_x86_64(include_str!(
+        "../../../../tests/fixtures/semantic/bit_int_wide_folded.c"
+    ));
+    // These the pattern model cannot hold: each is refused, none folds to
+    // a wrong value.
+    for identity in [CompilerIdentity::Gcc, CompilerIdentity::Clang] {
+        let errors = kinds(
+            include_str!("../../../../tests/fixtures/semantic/bit_int_wide_refused.c"),
+            identity,
+            crate::target::Target::LinuxGnu,
+        );
+        assert!(errors.len() >= 40, "{identity:?}: {errors:?}");
+        assert!(
+            errors
+                .iter()
+                .all(|&kind| kind == SemanticErrorKind::UnsupportedWideConstant),
+            "{identity:?}: {errors:?}"
+        );
+    }
+}
+
+#[test]
+fn a_wide_unsigned_pattern_zero_extends() {
+    // `(unsigned _BitInt(150))-1` is 2^150 - 1: converted to a wider type
+    // it zero-extends, which no sign-extended 128-bit pattern holds, so it
+    // is refused rather than folded as -1 (GCC and Clang give E=1, g=0).
+    for source in [
+        "typedef unsigned _BitInt(150) u150; enum { E = (_BitInt(200))(u150)-1 > 0 };",
+        "typedef unsigned _BitInt(150) u150; static const int g = (unsigned _BitInt(256))(u150)-1 \
+         == (unsigned _BitInt(256))-1;",
+    ] {
+        for identity in [CompilerIdentity::Gcc, CompilerIdentity::Clang] {
+            assert_eq!(
+                kinds(source, identity, crate::target::Target::LinuxGnu),
+                [SemanticErrorKind::UnsupportedWideConstant],
+                "{identity:?}: {source}"
+            );
+        }
+    }
+    // Within its own width, or narrower, the pattern still folds.
+    holds_on_x86_64(
+        "_Static_assert((unsigned _BitInt(150))-1 > 0, \"\");\n_Static_assert((unsigned long \
+         long)(unsigned _BitInt(150))-1 == -1ULL, \
+         \"\");\n_Static_assert((_BitInt(200))(_BitInt(150))-1 < 0, \"\");",
+    );
+}
+
+#[test]
+fn sync_builtins_refuse_a_bit_int_above_16_bytes() {
+    for width in [200, 256, 512] {
+        let source = format!(
+            "unsigned _BitInt({width}) p; int f(void) {{ return (int)__sync_fetch_and_add(&p, 1); \
+             }}"
+        );
+        assert_eq!(
+            kinds(
+                &source,
+                CompilerIdentity::Clang,
+                crate::target::Target::LinuxGnu
+            ),
+            [SemanticErrorKind::AtomicOperandBytes],
+            "{source}"
+        );
+        assert_eq!(
+            kinds(
+                &source,
+                CompilerIdentity::Gcc,
+                crate::target::Target::LinuxGnu
+            ),
+            [SemanticErrorKind::InvalidAtomicOperand],
+            "{source}"
+        );
+    }
+}
