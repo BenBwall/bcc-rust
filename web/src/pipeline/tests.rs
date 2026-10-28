@@ -46,6 +46,50 @@ fn links_token_and_syntax_lines_to_source_lines() {
     let exact = links(Stage::SyntaxTree, &tree, "", false);
     assert_eq!(exact.outputs_for(7), [1, 3]);
     assert_eq!(exact.sources_for(2), Vec::<usize>::new());
+    let semantic = Compilation {
+        semantic_types: Some(
+            "scope 0 file
+  function main type=\"int (void)\" linkage=external @1:5
+  scope 1 function
+    object total type=int duration=automatic size=4 align=4 @2:9
+    object __func__ type=\"const char [5]\" duration=static size=5 align=1
+expression 0 type=int category=rvalue value=0 ice constant=arithmetic @2:17"
+                .into(),
+        ),
+        ..Compilation::default()
+    };
+    let exact = links(Stage::SemanticTypes, &semantic, "", false);
+    assert_eq!(exact.outputs_for(2), [4, 6]);
+    assert_eq!(
+        exact.sources_for(5),
+        Vec::<usize>::new(),
+        "__func__ has no source"
+    );
+}
+
+#[cfg(feature = "compiler")]
+#[test]
+fn every_lesson_shows_its_declarations_after_semantic_analysis() {
+    for demo in &DEMOS {
+        let compilation = crate::explorer::compile(demo.source, false);
+        let semantic = compilation
+            .output(Stage::SemanticTypes)
+            .expect("semantic analysis ran");
+        assert!(
+            semantic
+                .lines()
+                .any(|line| line.trim_start().starts_with("function main ")),
+            "{}: {semantic}",
+            demo.name
+        );
+        assert!(
+            semantic
+                .lines()
+                .any(|line| line.trim_start().starts_with("expression ") && line.contains(" @")),
+            "{}: expressions carry their source locations",
+            demo.name
+        );
+    }
 }
 
 #[test]

@@ -226,6 +226,28 @@ const syntaxTree = {
   },
 };
 
+// The semantic view (`--semantic-types --syntax-locations`): scopes, then
+// `object total type=int duration=automatic size=4 align=4 @8:9`, then
+// `expression 3 type=int category=rvalue` and `convert expression 3 …`.
+const semanticTypes = {
+  defaultToken: '',
+  tokenizer: {
+    root: [
+      [/@\d+:\d+/, 'comment.address'],
+      [/^(target)(\s+)(\S+)/, ['keyword', '', 'type']],
+      [/^(\s*)(object|function|parameter|typedef|enumerator|member)(\s+)([\w$]+)/, ['', 'keyword', '', 'function']],
+      [/^(\s*)(scope)(\s+)(\d+)(\s+)([a-z-]+)/, ['', 'keyword', '', 'number', '', 'label']],
+      [/^\s*(convert expression|expression|tag|target|type-name)\b/, 'keyword'],
+      [/\b(type|operation)(=)("[^"]*"|[\w$]+)/, ['variable.slot', 'operator', 'type']],
+      [/\b(binding)(=)([\w$]+)/, ['variable.slot', 'operator', 'variable']],
+      [/\b(category|kind|duration|linkage|constant)(=)([a-z-]+)/, ['variable.slot', 'operator', 'label']],
+      [/\b([a-z-]+)(=)/, ['variable.slot', 'operator']],
+      [/"[^"]*"/, 'string'],
+      [/-?\b\d+\b/, 'number'],
+    ],
+  },
+};
+
 // The WebAssembly text format as the stepper lists it: one instruction per
 // line, `;; label = @1` comments on blocks and `(;@1;)` on branches.
 const wat = {
@@ -269,6 +291,7 @@ export function registerLanguages(monaco) {
     tokens,
     'pp-tokens': ppTokens,
     'syntax-tree': syntaxTree,
+    'semantic-types': semanticTypes,
     wat,
   };
   for (const [id, grammar] of Object.entries(languages)) {

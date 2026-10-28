@@ -519,10 +519,11 @@
 
   /* Pipeline */
   .pipeline { display: flex; flex-direction: column; gap: 16px; }
-  /* Ten stages in two rows of five: the front end, then the middle and
-     back ends, each under the headings of its parts. */
+  /* Eleven stages in two rows: the six of the front end, then the five of
+     the middle and back ends, each under the headings of its parts. */
   .stage-strip { display: flex; flex-direction: column; gap: 12px; }
   .stage-row { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); column-gap: 14px; row-gap: 7px; }
+  .stage-row:first-child { grid-template-columns: repeat(6, minmax(0, 1fr)); }
   .stage-group-label {
     --phase: var(--cat-evaluate);
     grid-column: 1 / -1; display: flex; align-items: center; gap: 8px;
@@ -899,7 +900,7 @@
     .stage-item:not(:last-child)::after { right: -9px; }
   }
   @media (max-width: 640px) {
-    .stage-row { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .stage-row, .stage-row:first-child { grid-template-columns: repeat(3, minmax(0, 1fr)); }
     .stage-group-label[data-phase="Middle end"], .stage-group-label[data-phase="Back end"] { grid-column: auto / span 3; }
     .stage-group-label[data-phase="Back end"] { grid-row: 3; }
     .stage-row:last-child .stage-item:nth-of-type(n + 4) { grid-row: 4; }
