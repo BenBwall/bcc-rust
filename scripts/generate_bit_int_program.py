@@ -499,6 +499,20 @@ static void extras(void) {
         printf("%d %d %d\n", SHIFTED, WRAPPED, (int)folded);
     }
 
+#if __BITINT_MAXWIDTH__ > 128
+    {
+        /* Constants of a wider type fold where 128 bits hold the result. */
+        enum {
+            SUM = (int)((_BitInt(200))1 + 1), PRODUCT = (int)((_BitInt(200))-5 * 7),
+            MASKED = (int)(((unsigned _BitInt(200))0 - 3) & 0xff),
+            ORDER = ((unsigned _BitInt(200))-1 > (unsigned _BitInt(200))5) + ((_BitInt(200))-1 < 0),
+            SHIFTED = (int)((_BitInt(200))1 << 100 >> 98), QUOTIENT = (int)((_BitInt(200))100 / -7)
+        };
+        static long long folded = (_BitInt(200))1000000000000LL * 3 + 1;
+        printf("wide %d %d %d %d %d %d %lld\n", SUM, PRODUCT, MASKED, ORDER, SHIFTED, QUOTIENT, folded);
+    }
+#endif
+
     printf("bit-fields\n");
     struct fields s = {0};
     volatile int k = 1;

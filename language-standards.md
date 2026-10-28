@@ -2382,28 +2382,46 @@ Semantics follow C23:
   `unsigned _BitInt(1)`; §6.4.4.2p6); the lexer reads at most 64 bits of
   magnitude. Folding computes at the type's width: an unsigned result wraps
   modulo 2^N and a signed one outside the type's range overflowed and is no
-  constant, except that a left shift of a nonnegative value into (not
-  past) the sign bit folds to its two's-complement result, as for `int`
-  (`(_BitInt(8))1 << 7` is -128 in both compilers). Values of widths above
-  128 bits, beyond the 128-bit constant model (`Integer`), fold only
-  through conversions: a constant converts to a wider type when its
-  two's-complement pattern is the sign extension of 128 bits. Arithmetic on
-  them is left to run time, and where a constant is required (an
-  enumerator, a case label, a static assertion or initializer) it is
-  refused with "not yet supported: folding arithmetic on _BitInt types of
-  more than 128 bits" (`UnsupportedWideConstant`), which both compilers
-  fold.
+  constant. A shift checks its count and result against N, not against
+  the `int` a narrow operand computes in: a count of N or more and a signed
+  result past the sign bit are undefined and no constant (`(_BitInt(31))3
+  << 30`, which both compilers warn "requires 33 bits", and
+  `(unsigned _BitInt(8))1 << 8`, which Clang folds to 0x80 and GCC to 0,
+  are refused as `1u << 32` is), while a nonnegative value shifted into
+  (not past) the sign bit folds to its two's-complement result, as for
+  `int` (`(_BitInt(8))1 << 7` is -128 in both compilers). Values of widths
+  above 128 bits exceed the 128-bit constant model (`Integer`), which
+  holds such a value as its 128-bit pattern sign-extended to N bits: every
+  signed value converts, and so does an unsigned one below 2^127 or one of
+  another wide type. Arithmetic folds whenever `__int128` arithmetic on the
+  patterns does not overflow, which gives the exact result modulo 2^N:
+  `+`, `-`, `*`, the bitwise operators, `~`, unary `-`, comparisons, a
+  division or remainder of signed values (or of unsigned ones below 2^127),
+  and shifts whose result stays in the pattern. Where a constant is
+  required, a result the pattern cannot hold is refused with "not yet
+  supported: folding this _BitInt constant of more than 128 bits"
+  (`UnsupportedWideConstant`): an unsigned 128-bit value with its top bit
+  set converted to a wider type (`(unsigned _BitInt(129))(unsigned
+  __int128)-1`), a huge unsigned value divided or shifted right, a shift
+  past bit 127. Both compilers fold these. The error replaces the generic
+  one of every context: enumerators, case labels, array bounds (a variable
+  length array at block scope), bit-field widths, `_Alignas`, static
+  assertions and initializers, and `__builtin_choose_expr`.
 - **Bit-fields** take a `_BitInt` of at most its width; the record lays the
   field out in storage units of the declared type, as both compilers do.
 - **Overflow builtins** accept bit-precise operands and results and check
   the result's width N.
 - **Atomics.** Clang rejects `_Atomic _BitInt(N)` ("_Atomic cannot be
-  applied to integer type") and the `__atomic` and `__sync` builtins on a
-  `_BitInt` object ("argument to atomic builtin of type '_BitInt' is not
-  supported"), and so does the Clang identity; GCC accepts both, and its
-  results wrap at the width. GCC also accepts an `_Atomic` object in the
-  `__atomic` builtins, which bcc refuses under every identity, for every
-  type, as Clang does.
+  applied to integer type"), the `__atomic` builtins on a `_BitInt`
+  object except `__atomic_test_and_set` and `__atomic_clear` ("argument to
+  atomic builtin of type '_BitInt' is not supported"), and the `__sync`
+  builtins unless N is a power of two ("atomic memory operand must have a
+  power-of-two size"); the Clang identity does the same, with Clang's
+  wording. GCC accepts all of them, and its results wrap at the width.
+  Two refusals predate `_BitInt` and hold for every type under every
+  identity: an `_Atomic` object in the `__atomic` builtins, which GCC
+  accepts and Clang refuses, and `__atomic_clear` on an object other than
+  `_Bool` or a character type, which both accept (storing one byte).
 - **`_Generic` of a bit-field.** GCC types the bit-field `_BitInt(40) a : 10`
   as `_BitInt(10)` for `_Generic`; bcc, like Clang, keeps `_BitInt(40)`.
 
