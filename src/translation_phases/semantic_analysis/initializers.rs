@@ -66,6 +66,7 @@ use crate::{
             },
         },
         preprocessing::{
+            KeywordTokenType,
             LiteralEncoding,
             StringTokenType,
         },
@@ -795,7 +796,8 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
     /// literal's, qualifiers aside (GCC rejects `static double d =
     /// (int){3};`). `peel` adds the wrappers GCC's folder removes before
     /// it checks a static initializer; GCC folds no other operator away, so
-    /// `(int){3} + 1` and `(int)(double)(int){3}` are not literals here.
+    /// `(int){3} + 1`, `(int)(double)(int){3}` and `(unsigned)(int){3}` for
+    /// an `int` are not literals here.
     /// GNU extension: GCC manual, "Compound Literals"; C99 §6.5.3.2
     /// paragraph 4, p. 79; PDF p. 91 (`*&`); §6.5.4 paragraph 4, p. 81;
     /// PDF p. 93 (casts); §6.5.15 paragraph 4, p. 90; PDF p. 102 (`?:`).
@@ -814,6 +816,10 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         if !record && !scalar {
             return None;
         }
+        // GCC folds a cast away only inside one of the object's own type,
+        // since it never folds the implicit conversion to that type; Clang's
+        // evaluator reads through that conversion too.
+        let mut outermost = true;
         loop {
             e = match e.kind {
                 | ExpressionType::Parenthesized { expression } => expression,
@@ -823,6 +829,10 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     operator: UnaryOperator::Extension,
                     operand_expression,
                 } => operand_expression,
+                | ExpressionType::Generic(_) => self.expression_info(e).selected_expression?,
+                | ExpressionType::Builtin(builtin)
+                    if builtin.keyword == KeywordTokenType::BuiltinChooseExpr =>
+                    self.expression_info(e).selected_expression?,
                 | ExpressionType::Unary {
                     operator: UnaryOperator::Indirection,
                     operand_expression,
@@ -843,14 +853,19 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 | _ if peel == Peel::Element => return None,
                 | ExpressionType::Cast {
                     operand_expression, ..
-                } if self.round_trips(self.expression_info(e).ty, target) => operand_expression,
+                } if {
+                    let ty = self.expression_info(e).ty;
+                    if std::mem::take(&mut outermost)
+                        && !self.context.configuration.folds_compound_literals()
+                    {
+                        self.compatible_value(ty, target)
+                    } else {
+                        self.round_trips(ty, target)
+                    }
+                } =>
+                    operand_expression,
                 | ExpressionType::Conditional(c)
-                    if {
-                        let ty = self.types.non_atomic(self.expression_info(e).ty);
-                        self.types
-                            .composite(ty.unqualified(), target.unqualified())
-                            .is_some()
-                    } =>
+                    if self.compatible_value(self.expression_info(e).ty, target) =>
                 {
                     let condition = self.expression_info(c.condition_expression);
                     if condition.constant != ConstantClass::Arithmetic {
@@ -865,27 +880,35 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 | _ => return None,
             };
         }
-        if scalar {
-            let literal = self.types.non_atomic(self.expression_info(e).ty);
-            _ = self
-                .types
-                .composite(target.unqualified(), literal.unqualified())?;
+        if scalar && !self.compatible_value(self.expression_info(e).ty, target) {
+            return None;
         }
         Some(e)
     }
 
-    /// Whether converting each value of type `value` to `wide` and back
-    /// gives that value again, so that GCC's folder removes the pair of
-    /// conversions: compatible types, qualifiers aside; integer or pointer
-    /// types at least as wide (`_Bool` is one bit wide); or real floating
-    /// types whose precision and exponent range both cover `value`'s.
+    /// Whether values of types `a` and `b` have compatible types, atomic
+    /// and other qualifiers aside.
+    /// C99: §6.2.7 paragraph 1, p. 37; PDF p. 49.
+    fn compatible_value(&mut self, a: TypeId, b: TypeId) -> bool {
+        let [a, b] = [a, b].map(|ty| self.types.non_atomic(ty).unqualified());
+        self.types.composite(a, b).is_some()
+    }
+
+    /// Whether GCC's folder removes the pair of conversions of a value of
+    /// type `value` to `wide` and back, which keeps the value: compatible
+    /// types, qualifiers aside; integer or pointer types at least as wide
+    /// (`_Bool` is one bit wide); or real floating types at least as wide.
+    /// GCC compares the floating types' precision in bits, so it also
+    /// removes `(_Float16)(__bf16)`, whose value it then keeps unrounded;
+    /// under the Clang identity, whose evaluator converts through `wide`,
+    /// `wide`'s significand and exponent range must cover `value`'s.
     /// C99: §6.3.1.3 paragraph 1, p. 43; PDF p. 55; §6.3.1.5 paragraph 1,
     /// p. 44; PDF p. 56; §6.3.2.3 paragraphs 5-6, p. 47; PDF p. 59.
     fn round_trips(&mut self, wide: TypeId, value: TypeId) -> bool {
-        let [wide, value] = [wide, value].map(|ty| self.types.non_atomic(ty).unqualified());
-        if self.types.composite(wide, value).is_some() {
+        if self.compatible_value(wide, value) {
             return true;
         }
+        let [wide, value] = [wide, value].map(|ty| self.types.non_atomic(ty).unqualified());
         let width = |ty| {
             if self.pointer_target(ty).is_some() {
                 Some(self.types.target.pointer.size * 8)
@@ -900,23 +923,33 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             | TypeKind::Scalar(scalar) => self.floating_format(scalar),
             | _ => None,
         };
-        matches!(
-            (format(wide), format(value)),
-            (Some(wide), Some(value)) if wide.0 >= value.0 && wide.1 >= value.1
-        )
+        let (Some(wide), Some(value)) = (format(wide), format(value)) else {
+            return false;
+        };
+        if self.context.configuration.folds_compound_literals() {
+            wide.digits >= value.digits && wide.max_exponent >= value.max_exponent
+        } else {
+            wide.bits >= value.bits
+        }
     }
 
-    /// The significand digits and maximum exponent (`DBL_MANT_DIG` and
-    /// `DBL_MAX_EXP`) of a real floating type.
+    /// The format of a real floating type.
     /// C99: §5.2.4.2.2 paragraphs 8-9, pp. 24-25; PDF pp. 36-37.
-    fn floating_format(&self, scalar: Scalar) -> Option<(u32, u32)> {
+    fn floating_format(&self, scalar: Scalar) -> Option<FloatingFormat> {
+        let format = |digits, max_exponent, bits| FloatingFormat {
+            digits,
+            max_exponent,
+            bits,
+        };
         Some(match scalar.representation() {
-            | Scalar::Float16 => (11, 16),
-            | Scalar::Float => (24, 128),
-            | Scalar::Double => (53, 1024),
-            | Scalar::LongDouble if self.types.target.long_double_is_double() => (53, 1024),
-            | Scalar::LongDouble => (64, 16384),
-            | Scalar::Float128 => (113, 16384),
+            | Scalar::Float16 | Scalar::Fp16 => format(11, 16, 16),
+            | Scalar::BFloat16 => format(8, 128, 16),
+            | Scalar::Float => format(24, 128, 32),
+            | Scalar::Double => format(53, 1024, 64),
+            | Scalar::LongDouble if self.types.target.long_double_is_double() =>
+                format(53, 1024, 64),
+            | Scalar::LongDouble => format(64, 16384, 80),
+            | Scalar::Float128 => format(113, 16384, 128),
             | _ => return None,
         })
     }
@@ -948,17 +981,24 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         let Some(&plan) = self.initializers.plan(initializer) else {
             return;
         };
-        let [
-            InitOperation::Store {
-                value,
-                bit_field: None,
-                ..
+        let value = match plan.operations {
+            | [
+                InitOperation::Store {
+                    value,
+                    bit_field: None,
+                    ..
+                },
+            ] => self.expression_info(plan.values[value.0 as usize].expression),
+            // C23 (N3220) §6.7.11p11: an empty initializer gives zero.
+            | [InitOperation::EmptyScalar { .. }] => {
+                let mut zero =
+                    Self::expression_result(info.expression, self.types.scalar(Scalar::Int));
+                zero.integer = Some(Integer::int(0));
+                zero.constant = ConstantClass::Arithmetic;
+                zero
             },
-        ] = plan.operations
-        else {
-            return;
+            | _ => return,
         };
-        let value = self.expression_info(plan.values[value.0 as usize].expression);
         if value.constant != ConstantClass::Arithmetic {
             return;
         }
@@ -1828,13 +1868,26 @@ const RANGE_WRITES: u64 = 1 << 16;
 enum Peel {
     /// Parentheses only: a literal an automatic literal copies as written.
     Parentheses,
-    /// Also `__extension__` and `*&`: an element of a braced list, where
+    /// Also `__extension__`, `*&` and the operand `_Generic` or
+    /// `__builtin_choose_expr` selects: an element of a braced list, where
     /// GCC keeps casts and `?:` (`{ (int)(int){3} }` is not constant).
     Element,
-    /// Also casts through types that keep every value of the object's
-    /// type (`(double)(double){0x1p20}`, `(int)(long)(int){3}`) and the
-    /// operand a `?:` with a constant condition selects, when the `?:` has
-    /// the object's type (`1 ? (short){3} : (short)4` is an `int`): an
-    /// initializer without braces.
+    /// Also an outermost cast to the object's own type, casts inside it
+    /// through types that keep every value of that type
+    /// (`(double)(double){0x1p20}`, `(int)(long)(int){3}`, but not
+    /// `(double)(float){1}` for a `float`), and the operand a `?:` of the
+    /// object's type with a constant condition selects (`1 ? (short){3} :
+    /// (short)4` is an `int`): an initializer without braces.
     Whole,
+}
+
+/// The characteristics of a real floating format that decide whether a
+/// conversion through it keeps a value: `DBL_MANT_DIG`, `DBL_MAX_EXP` and,
+/// as GCC compares them, the precision in bits.
+/// C99: §5.2.4.2.2 paragraphs 8-9, pp. 24-25; PDF pp. 36-37.
+#[derive(Clone, Copy)]
+struct FloatingFormat {
+    digits:       u32,
+    max_exponent: u32,
+    bits:         u32,
 }

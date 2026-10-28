@@ -267,6 +267,19 @@ fn literals_inside_the_wrappers_gcc_folds_away_initialize_statics() {
         ("static int x = (int)(_Bool)(int){3};", true),
         ("static long x = (long)(int){3};", true),
         ("static int g; static char *x = (char *)(int *){&g};", false),
+        (
+            "static __float128 x = (__float128)(long double)(__float128){1};",
+            true,
+        ),
+        // An outermost cast to another type than the object's: GCC never
+        // folds the implicit conversion to the object's type away, though
+        // the value would survive it. Clang's evaluator reads through it.
+        ("static int x = (unsigned)(int){-1};", true),
+        ("static float x = (double)(float){1};", true),
+        ("static int *x = (void *)(int *){0};", true),
+        ("static _Bool x = (int)(_Bool){1};", true),
+        ("static _Float16 x = (float)(_Float16){0.1};", true),
+        ("static int x = (long)(int){3};", true),
         // A `?:` of another type than the object's, even one that keeps
         // its values, or whose condition is no constant.
         ("static char x = 1 ? (char){3} : 4;", true),
@@ -300,6 +313,87 @@ fn literals_inside_the_wrappers_gcc_folds_away_initialize_statics() {
     }
 }
 
+/// GCC's folder also removes the operand `_Generic` and
+/// `__builtin_choose_expr` select, inside braces too, and compares floating
+/// types by their width in bits, so `(_Float16)(__bf16)` and `(long
+/// double)(__float128)` pairs fold away.
+#[test]
+fn gcc_folds_selections_and_equally_wide_floating_pairs_away() {
+    let source = r"struct s { int a; };
+    static int generic = _Generic(0, int: (int){3});
+    static int braced[1] = { _Generic(0, int: (int){3}) };
+    static int chosen = __builtin_choose_expr(1, (int){3}, 0);
+    static int cast = (int)(long)_Generic(0, int: (int){3});
+    static struct s record = _Generic(0, int: (struct s){1});
+    static _Float16 halves = (_Float16)(__bf16)(_Float16){0.1};
+    static __bf16 brains = (__bf16)(_Float16)(__bf16){0.1};
+    static long double wide = (long double)(__float128)(long double){0.1L};";
+    for identity in IDENTITIES {
+        assert_eq!(
+            diagnostics_as(source, identity, ExtensionPolicy::Allow).0,
+            [],
+            "{identity:?}"
+        );
+    }
+}
+
+/// A static pointer to an array in a block keeps a variable bound that
+/// Clang folds nowhere, unlike a static array's own bound, which it folds
+/// with `-Wgnu-folding-constant`.
+#[test]
+fn block_static_pointers_to_arrays_keep_variable_bounds() {
+    for (source, folded) in [
+        (
+            "int f(void) { static char (*p)[(int){3}]; return sizeof *p; }",
+            false,
+        ),
+        (
+            "static char x[4]; int f(void) { static char (*p)[&x[3] - &x[0]]; return sizeof *p; }",
+            false,
+        ),
+        (
+            "int f(void) { static char a[(int){3}]; return sizeof a; }",
+            true,
+        ),
+        ("static char (*q)[(int){3}];", true),
+    ] {
+        assert_eq!(
+            diagnostics_as(source, CompilerIdentity::Clang, ExtensionPolicy::Warn).0,
+            if folded {
+                &[SemanticErrorKind::FoldedArrayBound][..]
+            } else {
+                &[]
+            },
+            "{source}"
+        );
+    }
+}
+
+/// GCC's `__builtin_constant_p` reads no compound literal, even
+/// optimizing; Clang's reads a scalar one.
+#[test]
+fn constant_queries_of_compound_literals_follow_each_compiler() {
+    let source = "enum { E = __builtin_constant_p((int){1}) + 2 * __builtin_constant_p((int){1} ? \
+                  2 : 3) + 4 * __builtin_constant_p(sizeof (int){1}) };";
+    for (identity, expected) in [(CompilerIdentity::Gcc, 4), (CompilerIdentity::Clang, 7)] {
+        with_configuration(
+            source,
+            CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Allow)
+                .with_compiler_identity(identity),
+            |context, s| {
+                assert_eq!(context.pending_error_count(), 0, "{identity:?}");
+                let value = s
+                    .bindings
+                    .iter()
+                    .find(|binding| context.string_cache.at(binding.name.name) == "E")
+                    .and_then(|binding| binding.value)
+                    .map(|value| value.value);
+                assert_eq!(value, Some(expected), "{identity:?}");
+            },
+        );
+    }
+}
+
 /// Clang's evaluator reads a non-volatile scalar compound literal whose
 /// initializer is constant inside any constant expression, at file and
 /// block scope and in every mode; an integer constant context folds it as
@@ -322,6 +416,24 @@ fn clang_folds_scalar_compound_literal_values() {
         diagnostics(source, ExtensionPolicy::Allow).0,
         [SemanticErrorKind::NonConstantInitializer; 8]
     );
+    // C23 (N3220) §6.7.11p11: an empty initializer gives zero.
+    for (identity, expected) in [
+        (CompilerIdentity::Clang, &[][..]),
+        (
+            CompilerIdentity::Gcc,
+            &[SemanticErrorKind::NonConstantInitializer],
+        ),
+    ] {
+        assert_eq!(
+            diagnostics_as(
+                "static int empty = (int){} + 1;",
+                identity,
+                ExtensionPolicy::Allow
+            )
+            .0,
+            expected
+        );
+    }
     let integer_contexts = "enum { E = (int){3} + 1 }; _Static_assert((int){1}, \"\"); int f(int \
                             x) { switch (x) { case (int){2}: return 1; } return 0; }";
     assert_eq!(

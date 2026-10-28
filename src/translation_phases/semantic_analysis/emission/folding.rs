@@ -1444,6 +1444,13 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         if !scalar {
             return false;
         }
+        // GCC's folder reads no compound literal: GCC answers zero for
+        // `(int){1}`, even optimizing.
+        if !self.context.configuration.folds_compound_literals()
+            && self.reads_compound_literal(operand)
+        {
+            return false;
+        }
         // Nested queries are integer constant expressions, including under
         // arithmetic, casts and selected wrappers. Their semantic value is
         // available here even when control evaluation deliberately stays
@@ -1490,6 +1497,27 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     && !info.folded_literal()
                     && (info.integer.is_some() || info.floating().is_some())
             })
+    }
+
+    /// Whether `operand` holds a compound literal outside `sizeof` and
+    /// `_Alignof`. GNU extension: GCC manual, "Other Builtins",
+    /// `__builtin_constant_p`; C99 §6.5.2.5 paragraph 4, p. 75; PDF p. 87.
+    fn reads_compound_literal(&self, operand: &'tu Expression<'tu>) -> bool {
+        let mut work = ArenaVec::new_in(self.scratch);
+        work.push(operand);
+        while let Some(expression) = work.pop() {
+            match expression.kind {
+                | ExpressionType::CompoundLiteral { .. } => return true,
+                | ExpressionType::SizeofExpr(_)
+                | ExpressionType::SizeofType(_)
+                | ExpressionType::AlignofExpr(_)
+                | ExpressionType::AlignofType(_) => {},
+                | _ => super::labels::expression_children(self.scratch, expression, |child| {
+                    work.push(child);
+                }),
+            }
+        }
+        false
     }
 
     /// Whether evaluating `operand` reads through a non-`const` array

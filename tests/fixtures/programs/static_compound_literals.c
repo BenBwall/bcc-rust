@@ -27,6 +27,20 @@ static struct pair chosen = 1.0 ? (struct pair){19, 20} : (struct pair){0, 0};
 static int elements[3] = { (int){21}, ((int){22}), *&(int){23} };
 static struct { int x : 4; unsigned y : 3; } bits = { (int){-2}, (unsigned){5} };
 
+// The half-precision types, through the conversions GCC folds away: it
+// keeps (_Float16)(__bf16) unrounded, as both are 16 bits wide, and its
+// literal's initializer keeps float's excess until the literal's type.
+static __bf16 brain = (__bf16){0.1};
+static _Float16 half = (_Float16){0.1};
+static _Float16 half_excess = (_Float16){0.1f16 * 3 + 0.2f16};
+static __bf16 brain_excess = (__bf16){(__bf16)0.1 * 3};
+static _Complex _Float16 complex_half = (_Complex _Float16){1.5};
+static _Float16 half_pair = (_Float16)(__bf16)(_Float16){0.1};
+static __bf16 brain_through_float = (__bf16)(float)(__bf16){0.3};
+static int generic = _Generic(0, int: (int){56});
+static double chosen_value = __builtin_choose_expr(1, (double){57.5}, 0);
+static _Float16 generic_half = _Generic(0, int: (_Float16){0.7});
+
 // File-scope literals have static storage, so their addresses are address
 // constants (C99 6.5.2.5p6 and 6.6p9).
 static int *scalar_address = &(int){24};
@@ -50,7 +64,21 @@ static int conditional = (int){1} ? 41 : 0;
 static int folded[] = { (int){42} * 2, (short){43}, (int)(int){44} };
 enum { FOLDED = (int){45} + 1 };
 static char bound[(int){3}];
+static _Float16 half_product = (_Float16){0.1} * 3;
+static float mixed_halves = (_Float16){0.1} + (__bf16){0.1};
+static __fp16 storage_half = (__fp16){0.1};
+static float storage_product = (__fp16){0.1} * 3;
+static int empty_braces = (int){} + 1;
 #endif
+
+static float halves(void) {
+    _Float16 product = (_Float16){0.1} * 3;
+    __bf16 brain_product = (__bf16){0.1} * 3;
+    float mixed = (_Float16){0.1} * (_Float16){3} + (__bf16){0.2};
+    _Float16 *object = &(_Float16){0.5};
+    *object *= 3;
+    return (float)product + (float)brain_product + mixed + (float)*object;
+}
 
 static int local(void) {
     static int kept = (int){50};
@@ -88,6 +116,15 @@ int main(void) {
            negated, narrowed, (double)from_int, conditional);
     printf("%d %d %d %d %d\n", folded[0], folded[1], folded[2], FOLDED,
            (int)sizeof bound);
+#endif
+    printf("%a %a %a %a %a %a\n", (double)brain, (double)half,
+           (double)half_excess, (double)brain_excess,
+           (double)__real__ complex_half, (double)half_pair);
+    printf("%a %d %a %a %a\n", (double)brain_through_float, generic,
+           chosen_value, (double)generic_half, (double)halves());
+#ifdef __clang__
+    printf("%a %a %a %a %d\n", (double)half_product, (double)mixed_halves,
+           (double)storage_half, (double)storage_product, empty_braces);
 #endif
     printf("%d\n", local());
     return 0;

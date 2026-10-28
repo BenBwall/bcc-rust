@@ -706,10 +706,15 @@ The following vocabulary entries retain the established diagnostic contracts:
   constant its destination accepts: a structure or union, or a scalar of a
   compatible type, qualifiers aside (`static int x = (int){3};`). As GCC's
   folder removes them, the literal may sit inside parentheses,
-  `__extension__` and `*&` and, outside braces, inside casts through types
-  that keep every value of the object's type (`(double)((double){0x1p20})`,
-  `(int)(long)(unsigned)(int){3}`) and the operand a `?:` of the object's
-  type with a constant condition selects. Lowering copies the bytes of the literal's own
+  `__extension__`, `*&` and the operand `_Generic` or
+  `__builtin_choose_expr` selects and, outside braces, inside an outermost
+  cast to the object's own type, casts within it through types that keep
+  every value of that type (`(double)((double){0x1p20})`,
+  `(int)(long)(unsigned)(int){3}`), and the operand a `?:` of the object's
+  type with a constant condition selects. GCC never folds away the
+  implicit conversion to the object's type, so `static int x =
+  (unsigned)(int){3};` and `static float f = (double)(float){1};` stay
+  non-constant. Lowering copies the bytes of the literal's own
   initializer. Under the GCC identity Warn/Deny report "'compound literal
   as a constant initializer' is a GNU extension" where GCC says
   "initializer element is not constant [-Wpedantic]"; Clang reports
@@ -2152,26 +2157,48 @@ GCC 15.2 and the bundled Clang 23.1.1 in C99 through C23, with and without
 | --- | --- | --- |
 | `(T){v}`, `(struct S){...}`, at file or block scope | `-Wpedantic` | silent |
 | `(double)((double){v})`, `(int)(long)(int){v}`, `*&(T){v}`, `1 ? (T){v} : x` | `-Wpedantic` | silent |
+| `_Generic(0, int: (T){v})`, `__builtin_choose_expr(1, (T){v}, 0)`, also in braces | `-Wpedantic` | silent |
+| `(_Float16)(__bf16)(_Float16){0.1}` (kept unrounded by GCC), `(long double)(__float128)(long double){v}` | `-Wpedantic` | silent |
 | `{ (int)(int){v} }`, `{ 1 ? (int){v} : 0 }` (inside braces) | error | silent |
-| `(int){3} + 1`, `(int)(double){2.5}`, `static double d = (int){3};` | error | silent |
-| `(int)(double)(int){3}`, `(int)(char)(int){300}` | error | silent |
+| `(int){3} + 1`, `(int)(double){2.5}`, `static double d = (int){3};`, C23 `(int){} + 1` | error | silent |
+| `(int)(double)(int){3}`, `(int)(char)(int){300}`, `(__float128)(long double)(__float128){v}` | error | silent |
+| `static int x = (unsigned)(int){3};`, `static float f = (double)(float){1};` | error | silent |
 | `enum { E = (int){3} };`, `case (int){3}:`, `char a[(int){3}];` at file scope | error | `-Wgnu-folding-constant` |
+| `static char (*p)[(int){3}];` in a block | variable bound | variable bound |
 | `&(T){v}`, `(T[]){...}`, `&(T[]){...}[1]`, `&(struct S){...}.m` at file scope | silent | silent |
 | `&(T){v}`, `(T[]){...}` in a block-scope `static` initializer | error | error |
 | `(volatile int){3} + 1`, `(int[]){1, 2}[1]`, `*(int[]){1}` | error | error |
+| `__builtin_constant_p((int){1})` | 0 | 1 |
 
 The GCC identity accepts the literal only as the whole initializer, inside
-the wrappers listed under `ConstantCompoundLiteral` above. Under the Clang
-identity (and clang-cl) a non-volatile scalar arithmetic literal whose
-initializer is an arithmetic constant also folds into any constant
+the wrappers listed under `ConstantCompoundLiteral` above. GCC's folder
+compares floating types by their precision in bits, so it removes a
+conversion pair through an equally wide format that cannot hold every value
+(`__bf16` for `_Float16`) and keeps the literal's value unrounded; bcc copies
+the literal's bytes the same way. Under the Clang identity (and clang-cl) a
+non-volatile scalar arithmetic literal whose initializer is an arithmetic
+constant, or the empty initializer, also folds into any constant
 expression, at file and block scope and in every mode, as Clang's evaluator
 reads it: it is an arithmetic constant, never an integer constant expression,
 so integer contexts accept it as the folded pointer constants above,
-reported under `-Wgnu-folding-constant`. Function code still loads the
+reported under `-Wgnu-folding-constant`. A cast around a whole literal may
+then convert it to the object's type too (`(unsigned)(int){-1}` for an
+`int`), and the conversions it passes through must keep every value, as
+Clang's evaluator converts through them. Function code still loads the
 literal, as Clang emits it, so `__builtin_constant_p((g, (int){1}))` stays 0
-there. A file-scope literal has static
-storage and a block-scope one automatic storage (C99 §6.5.2.5p6), so only
-the former's address is an address constant (§6.6p9), under both identities.
+there; under the GCC identity any query of a literal is 0, as GCC answers
+even optimizing. A block-scope static pointer to an array keeps a bound
+Clang does not fold, a compound literal's or an address difference's, as a
+variable bound without a diagnostic; Clang folds only a static object's own
+array bounds there. A file-scope literal has static storage and a
+block-scope one automatic storage (C99 §6.5.2.5p6), so only the former's
+address is an address constant (§6.6p9), under both identities.
+
+The MSVC and TCC identities take the GCC identity's rules, the stricter
+ones; neither compiler was surveyed, since no `tcc` or `cl.exe` is
+available here. TCC implements the GNU dialect, so GCC's whole-literal
+rule is the nearer model; MSVC is assumed not to read literals in constant
+expressions either.
 
 These cases remain different from the compiler each identity claims:
 
@@ -2181,17 +2208,34 @@ These cases remain different from the compiler each identity claims:
 - Clang also reads a member of a structure literal (`(struct S){1, 2}.b`,
   `(&(struct S){1, 2})->b`), an element of a `const` array literal
   (`(const int[]){1, 2}[1]`) and a pointer literal's value
-  (`(char *)(int *){&g}`); bcc folds only scalar arithmetic literals.
+  (`(char *)(int *){&g}`, `(intptr_t)(int *){0}`); bcc folds only scalar
+  arithmetic literals.
+- Clang folds a literal's value where bcc still requires an integer
+  constant expression: an automatic array with an initializer
+  (`char a[(int){3}] = {0};` in a block, which Clang folds with
+  `-Wgnu-folding-constant`), an array designator (`[(int){1}] = 2`) and a
+  GNU case range (`case 1 ... (int){3}:`).
 - C23 `constexpr` compound literals (`(constexpr int){3}`), which GCC 15
   accepts in integer constant expressions and the bundled Clang does not
   parse, stay unmodeled with `constexpr` objects: lowering refuses them.
 - GCC prints a `-Wpedantic` warning before its error for a literal inside
-  braces within a cast; bcc prints the error alone.
+  braces within a cast; bcc prints the error alone. Clang's
+  `-Wconstant-conversion` and overflow warnings for a literal's
+  initializer (`(unsigned char){300} + 0`, `(int){2147483647} + 1`) are not
+  reproduced, as they are not for other initializers.
+
+Problems found while surveying that have nothing to do with literal reads
+remain open: `_BitInt` widths are not checked at all (`_BitInt((int){8})`
+and `int n; _BitInt(n) x;` are accepted, GCC rejects both), `static char
+c[3] = (char[3]){"ab"};` is rejected though GCC and Clang accept it, an
+out-of-range floating value converted to an integer in a static
+initializer is refused (`static unsigned char u = 300.7;`), and
+`-Wint-to-pointer-cast` is not reported (`(void *)(int){0}`).
 
 `tests/fixtures/programs/static_compound_literals.c` runs every accepted
-form on the interpreter, LLVM and the native back end under each identity
-against the GCC and Clang builds
-(`tests/integration/static_compound_literals.rs`);
+form, the half-precision ones and their excess precision included, on the
+interpreter, LLVM and the native back end under each identity against the
+GCC and Clang builds (`tests/integration/static_compound_literals.rs`);
 `semantic_analysis/tests/compound_literal_statics.rs` and the
 `sema-static-compound-literal-{gcc,clang}` diagnostic goldens cover the
 rejections.

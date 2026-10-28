@@ -248,7 +248,8 @@ impl CompilerConfiguration {
     /// evaluator does: a scalar literal's value folds into the expressions
     /// around it (`(int){3} + 1` initializes a static object), and a literal
     /// initializing a static object is no extension to report. GCC's folder
-    /// reads neither and reports the latter under `-pedantic`.
+    /// reads neither and reports the latter under `-pedantic`; the MSVC and
+    /// TCC identities follow GCC's stricter rules.
     /// C99: §6.6 paragraph 10, p. 96; PDF p. 108 (other constant forms).
     pub(crate) const fn folds_compound_literals(self) -> bool {
         matches!(
