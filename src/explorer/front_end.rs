@@ -346,8 +346,8 @@ fn pp_token_kind(kind: PreprocessorTokenType) -> &'static str {
 
 /// Phase 4 alone: the text phase 4 leaves (adjacent strings still apart,
 /// each token spelled as written) as `-E` lays it out, where each of its
-/// lines came from and, with the trace on, what phase 4 did and the byte
-/// ranges of the main file's header names.
+/// lines came from, the byte ranges of the main file's header names and,
+/// with the trace on, what phase 4 did.
 fn phase_four(
     source: &str,
     configuration: CompilerConfiguration,
@@ -375,14 +375,15 @@ fn phase_four(
     let mut lines = OutputLines::default();
     // Each token is written as it is read, with its provenance still live,
     // so a large source keeps no token array.
-    let traced = with_traced_preprocessor(
+    let (preprocessing, header_names) = with_traced_preprocessor(
         &mut context,
         Path::new(INPUT),
         source,
         header_search(&tu, options),
         options.trace.then_some(&trace_arena),
-        |mut preprocessor, context| {
+        |mut preprocessor, context, _pp| {
             preprocessor.keep_strings_apart();
+            preprocessor.record_header_names();
             let mut ordinal = 0;
             preprocessor.for_each_iterator_item_read_at(context, |context, token, at| {
                 pragmas.write_before(context, ordinal, &mut writer);
@@ -391,17 +392,20 @@ fn phase_four(
                 let place = writer.token(context, token, at);
                 lines.written(&writer.text, context, main_file, place, root);
             });
-            options.trace.then(|| {
+            let main = context.physical_source_file(main_file);
+            let header_names = preprocessor
+                .header_names()
+                .iter()
+                .filter(|name| context.physical_source_file(name.source_file_index) == main)
+                .map(|name| name.index as usize..name.end())
+                .collect();
+            let preprocessing = options.trace.then(|| {
                 let (events, truncated) = preprocessor.trace();
                 Trace::new(context).read(events, truncated)
-            })
+            });
+            (preprocessing, header_names)
         },
     );
-    // Header names are known from the trace alone.
-    let (preprocessing, header_names) = traced
-        .map_or((None, Vec::new()), |(preprocessing, header_names)| {
-            (Some(preprocessing), header_names)
-        });
     pragmas.write_before(&context, usize::MAX, &mut writer);
     writer.finish();
     lines.written(&writer.text, &context, main_file, None, None);
@@ -529,12 +533,11 @@ fn tokens(source: &str, configuration: CompilerConfiguration, options: &Explorer
 
 /// Turns the phase-4 trace into the explorer's account of it.
 struct Trace<'c, 'tu> {
-    context:      &'c Context<'tu>,
-    positions:    Positions,
-    output:       ExplorerPreprocessing,
+    context:   &'c Context<'tu>,
+    positions: Positions,
+    output:    ExplorerPreprocessing,
     /// Each expansion's invocation place and how its result ends.
-    keys:         Vec<((u32, u32), ResultEnd)>,
-    header_names: Vec<Range<usize>>,
+    keys:      Vec<((u32, u32), ResultEnd)>,
 }
 
 impl<'c, 'tu> Trace<'c, 'tu> {
@@ -544,7 +547,6 @@ impl<'c, 'tu> Trace<'c, 'tu> {
             positions: Positions::default(),
             output: ExplorerPreprocessing::default(),
             keys: Vec::new(),
-            header_names: Vec::new(),
         }
     }
 
@@ -552,14 +554,14 @@ impl<'c, 'tu> Trace<'c, 'tu> {
         mut self,
         events: &[TraceEvent<'_>],
         truncated: Option<&Truncated>,
-    ) -> (ExplorerPreprocessing, Vec<Range<usize>>) {
+    ) -> ExplorerPreprocessing {
         for event in events {
             self.event(event);
         }
         if let Some(truncated) = truncated {
             self.truncated(truncated);
         }
-        (self.output, self.header_names)
+        self.output
     }
 
     /// Marks the trace as stopped short, and the expansion it holds only
@@ -746,15 +748,11 @@ impl<'c, 'tu> Trace<'c, 'tu> {
             } => self.skipped(*file, *after, *at_line_start, *until),
             | TraceEvent::Included {
                 directive,
-                name,
                 header,
                 angled,
                 file,
             } => {
                 let (including, line, _) = self.place(directive);
-                if let Some(name) = name.as_ref().filter(|_| including == INPUT) {
-                    self.header_names.push(name.index as usize..name.end());
-                }
                 self.output.includes.push(ExplorerInclude {
                     file: including,
                     line,

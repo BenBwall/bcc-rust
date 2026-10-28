@@ -309,9 +309,9 @@ fn pp_listing(
 }
 
 /// What phase 4 did in the source, placed in the editor's coordinates, with
-/// at most [`MAX_EXPANSIONS`] expansions. Headers' own expansions,
-/// conditionals and directives are left out: the view is about the
-/// program, and a header's are many.
+/// at most [`MAX_EXPANSIONS`] expansions, always including the one the
+/// trace stopped in. Headers' own expansions, conditionals and directives
+/// are left out: the view is about the program, and a header's are many.
 fn preprocessing(trace: &ExplorerPreprocessing, columns: &Columns) -> Preprocessing {
     let input = |file: &str| file == crate::INPUT_NAME;
     let in_source: Vec<_> = trace
@@ -319,12 +319,23 @@ fn preprocessing(trace: &ExplorerPreprocessing, columns: &Columns) -> Preprocess
         .iter()
         .filter(|expansion| input(&expansion.file))
         .collect();
+    let total = in_source.len();
+    let mut shown = in_source;
+    if shown.len() > MAX_EXPANSIONS {
+        let partial = shown[MAX_EXPANSIONS..]
+            .iter()
+            .copied()
+            .find(|expansion| expansion.partial);
+        shown.truncate(MAX_EXPANSIONS);
+        if let Some(partial) = partial {
+            shown[MAX_EXPANSIONS - 1] = partial;
+        }
+    }
     Preprocessing {
-        omitted_expansions: in_source.len().saturating_sub(MAX_EXPANSIONS),
+        omitted_expansions: total - shown.len(),
         truncated:          trace.truncated,
-        expansions:         in_source
+        expansions:         shown
             .into_iter()
-            .take(MAX_EXPANSIONS)
             .map(|expansion| Expansion {
                 range:         SourceSpan {
                     line:       expansion.line as usize,
@@ -605,6 +616,20 @@ mod tests {
         let expansion = &trace.expansions[0];
         assert_eq!(expansion.steps.len(), MAX_STEPS);
         assert!(expansion.omitted_steps > 0);
+    }
+
+    #[test]
+    fn the_expansion_the_trace_stopped_in_is_always_listed() {
+        // Each empty replacement is one event, so the trace stops as the
+        // invocation on about line 49,000 begins, far past the cap.
+        let source = format!("#define E\n{}", "E\n".repeat(60_000));
+        let trace = &compile(&source, false).preprocessing;
+        assert!(trace.truncated);
+        assert_eq!(trace.expansions.len(), MAX_EXPANSIONS);
+        let last = trace.expansions.last().unwrap();
+        assert!(last.partial && last.range.line > 40_000, "{}", last.range.line);
+        assert!(trace.expansions[..MAX_EXPANSIONS - 1].iter().all(|e| !e.partial));
+        assert!(trace.omitted_expansions > 40_000);
     }
 
     #[test]

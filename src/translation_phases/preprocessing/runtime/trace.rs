@@ -170,9 +170,6 @@ pub(crate) enum TraceEvent<'pp> {
     /// C99: §6.10.2 paragraphs 2-4, pp. 149-150; PDF pp. 161-162.
     Included {
         directive: SourceVector,
-        /// The header name in the directive, delimiters included, when it
-        /// is written in one place.
-        name:      Option<SourceVector>,
         header:    &'pp str,
         angled:    bool,
         file:      Option<u32>,
@@ -211,7 +208,7 @@ pub(crate) const MAX_TRACE_EVENTS: usize = 50_000;
 /// at each size it grows to, argument lists, and spellings. It is a quarter
 /// of a WebAssembly region (`util::vm::REGION_BYTES`), so the trace's arena
 /// never fills, and it is apart from every arena phase 4 itself uses.
-const TRACE_BYTES: usize = 8 << 20;
+pub(in crate::translation_phases::preprocessing) const TRACE_BYTES: usize = 8 << 20;
 
 /// The most bytes of one argument a trace spells; a longer argument is cut
 /// and ends in `…`. Nested invocations each spell what is left of their
@@ -243,6 +240,25 @@ impl<'pp> Preprocessor<'_, 'pp> {
             budget: TRACE_BYTES,
             truncated: None,
         });
+    }
+
+    /// Starts recording where each `#include` that phase 4 carries out
+    /// reads its header name, delimiters included, when the name is written
+    /// in one place; call it before preprocessing. The record is apart from
+    /// the trace and never stops: it holds one place per directive.
+    /// C99: §6.10.2 paragraphs 2-3, p. 149; PDF p. 161.
+    pub(crate) fn record_header_names(&mut self) {
+        let state = &mut self.resting_mut().state;
+        state.header_names = Some(ArenaVec::new_in(state.arena));
+    }
+
+    /// The header names recorded so far, in reading order.
+    pub(crate) fn header_names(&mut self) -> &[SourceVector] {
+        self.resting_mut()
+            .state
+            .header_names
+            .as_deref()
+            .unwrap_or_default()
     }
 
     /// What phase 4 did so far, if it was recorded, and where the trace
@@ -551,27 +567,41 @@ impl<'pp> Expander<'_, '_, 'pp, '_> {
         );
     }
 
+    /// Whether `#include` directives are recorded: by the trace, or for
+    /// their header names.
+    #[inline(always)]
+    pub(in crate::translation_phases::preprocessing) fn recording_includes(&self) -> bool {
+        self.tracing() || self.state.header_names.is_some()
+    }
+
+    /// Records an `#include` that named `name` (its place, spelling, and
+    /// whether it is a `<>` name), found as `file` or not at all: its
+    /// header name, if header names are recorded and it is written in one
+    /// place, and its event, if phase 4 is traced.
     #[inline(never)]
-    pub(in crate::translation_phases::preprocessing) fn trace_included(
+    pub(in crate::translation_phases::preprocessing) fn record_included(
         &mut self,
         directive: SourceVectors,
         name: (SourceVectors, &str, bool),
         file: Option<u32>,
     ) {
         let (vectors, header, angled) = name;
-        let directive = self.context.first_source_vector_or_default(directive);
         let segments = self.context.get_source_vectors(vectors);
-        let name = match (segments.first(), segments.last()) {
-            | (Some(first), Some(last))
-                if first.source_file_index == last.source_file_index
-                    && last.end() >= first.index as usize =>
-                Some(SourceVector {
-                    length: u32::try_from(last.end() - first.index as usize)
-                        .expect("a header name is shorter than its file"),
-                    ..first.clone()
-                }),
-            | _ => None,
-        };
+        if let Some(names) = &mut self.state.header_names
+            && let (Some(first), Some(last)) = (segments.first(), segments.last())
+            && first.source_file_index == last.source_file_index
+            && last.end() >= first.index as usize
+        {
+            names.push(SourceVector {
+                length: u32::try_from(last.end() - first.index as usize)
+                    .expect("a header name is shorter than its file"),
+                ..first.clone()
+            });
+        }
+        if !self.tracing() {
+            return;
+        }
+        let directive = self.context.first_source_vector_or_default(directive);
         let Some(header) = self
             .state
             .trace
@@ -584,7 +614,6 @@ impl<'pp> Expander<'_, '_, 'pp, '_> {
         self.push_trace(
             TraceEvent::Included {
                 directive,
-                name,
                 header,
                 angled,
                 file,

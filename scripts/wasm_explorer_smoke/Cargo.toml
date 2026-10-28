@@ -15,7 +15,8 @@ publish = false
 crate-type = ["cdylib"]
 
 [dependencies]
-bcc-rust = { path = "../..", default-features = false, features = ["explorer"] }
+bcc-rust = { path = "../..", default-features = false, features = ["explorer", "serde"] }
+serde_json = "1"
 
 [profile.release]
 opt-level = "s"

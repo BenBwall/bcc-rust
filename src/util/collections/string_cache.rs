@@ -134,6 +134,12 @@ impl<'tu> StringCache<'tu> {
         Self::at_impl(self.data_str(), &self.ends, id.into())
     }
 
+    /// The bytes of every string interned so far.
+    #[cfg(test)]
+    pub(crate) fn bytes(&self) -> usize {
+        self.data.len()
+    }
+
     #[cfg(test)]
     pub(crate) fn clear(&mut self) {
         self.ends.truncate(1);

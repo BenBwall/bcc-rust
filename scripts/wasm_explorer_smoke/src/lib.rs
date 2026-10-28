@@ -7,6 +7,7 @@ use std::fmt::Write as _;
 
 use bcc_rust::explorer::{
     ExplorerOptions,
+    ExplorerOutput,
     compile,
 };
 
@@ -85,7 +86,36 @@ pub unsafe extern "C" fn smoke_compile(
             _ = writeln!(report, "{:4x}: {:<24} {}", instruction.offset, bytes.join(" "), instruction.asm);
         }
     }
-    let mut framed = u32::try_from(report.len()).unwrap_or(u32::MAX).to_le_bytes().to_vec();
-    framed.extend_from_slice(report.as_bytes());
+    framed(&report)
+}
+
+/// Compiles as [`smoke_compile`] does, at `-O0` with the default nesting
+/// limit, and returns every output but the phase-4 trace, as JSON: what
+/// tracing must leave unchanged.
+///
+/// # Safety
+///
+/// As for [`smoke_compile`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn smoke_compile_json(source: *mut u8, length: usize, trace: u32) -> *const u8 {
+    // SAFETY: The host wrote `length` bytes into the allocation.
+    let bytes = unsafe { Vec::from_raw_parts(source, length, length) };
+    let source = String::from_utf8_lossy(&bytes);
+    let output = compile(&source, &ExplorerOptions {
+        trace: trace != 0,
+        ..ExplorerOptions::default()
+    });
+    let json = serde_json::to_string(&ExplorerOutput {
+        preprocessing: None,
+        ..output
+    })
+    .unwrap_or_default();
+    framed(&json)
+}
+
+/// `text` after its little-endian length, leaked for the host to read.
+fn framed(text: &str) -> *const u8 {
+    let mut framed = u32::try_from(text.len()).unwrap_or(u32::MAX).to_le_bytes().to_vec();
+    framed.extend_from_slice(text.as_bytes());
     framed.leak().as_ptr()
 }

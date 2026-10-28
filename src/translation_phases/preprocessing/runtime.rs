@@ -73,6 +73,8 @@ pub(super) use frames::{
 };
 pub(super) use lifecycle::Resting;
 pub(crate) use text_output::ReadAt;
+#[cfg(test)]
+pub(super) use trace::TRACE_BYTES;
 use trace::Trace;
 pub(crate) use trace::{
     TraceEvent,
@@ -86,7 +88,10 @@ use super::{
     token_conversion::LiteralScratch,
 };
 use crate::{
-    translation_phases::preprocessor_tokenizer::LexedFiles,
+    translation_phases::{
+        SourceVector,
+        preprocessor_tokenizer::LexedFiles,
+    },
     util::{
         bump::{
             ArenaMap,
@@ -139,4 +144,6 @@ pub(super) struct PreprocessorState<'pp> {
     pub(super) literal_scratch:     LiteralScratch<'pp>,
     /// What phase 4 did, when a caller asked for a record of it.
     pub(super) trace:               Option<Trace<'pp>>,
+    /// Where each `#include` read its header name, when a caller asked.
+    pub(super) header_names:        Option<ArenaVec<'pp, SourceVector>>,
 }

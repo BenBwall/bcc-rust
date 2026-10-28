@@ -13,7 +13,10 @@ mod observables;
 mod other_token_regressions;
 mod predefined_regressions;
 
-use std::path::PathBuf;
+use std::path::{
+    Path,
+    PathBuf,
+};
 
 use super::{
     Preprocessor,
@@ -35,6 +38,7 @@ use crate::{
         CompilerConfiguration,
         ExtensionPolicy,
     },
+    headers::HeaderSearch,
     translation_phases::{
         Context,
         ErrorSeverity,
@@ -83,6 +87,78 @@ fn preprocess<R>(
     inspect: impl FnOnce(Vec<String>, &[TranslationError<'_>]) -> R,
 ) -> R {
     preprocess_with_configuration(source, CompilerConfiguration::default(), inspect)
+}
+
+/// The phase-4 trace allocates only in its own arena: with it on, the
+/// preprocessing, expansion and translation-unit arenas and the string cache
+/// grow exactly as with it off, on input that spends the trace's whole
+/// budget through every recorder.
+#[test]
+fn the_trace_allocates_only_in_its_own_arena() {
+    let long = "a".repeat(4_000);
+    let empty = ",".repeat(999);
+    let parameters: Vec<String> = (0..1_000).map(|i| format!("p{i}")).collect();
+    let source = format!(
+        "#define F(x) 0\n#define H(y) {h}\n#define H2(y) {h2}\nint a = H2(\"{long}\");\n#define \
+         E(...) 1\nint b = E({empty});\n#define G({parameters}) p0\nint c = G({empty});\n#define \
+         S(x) #x\n#define T(x) S(x)\nconst char *s = T({long});\n#define CAT(a, b) a ## b\nint \
+         CAT(x, {long});\n#if 0\nskipped\n#elif 1\nint d = __LINE__;\n#endif\n#undef F\n#define \
+         I(x) x\nint e = {nested}1{closing};\n#define A 0,0,0,\n#define B {b}\n#define C \
+         {c}\n#define D {d}\nint f[] = {{D 0}};\n",
+        h = vec!["F(y)"; 50].join("+"),
+        h2 = vec!["H(y)"; 50].join("+"),
+        parameters = parameters.join(","),
+        nested = "I(".repeat(200),
+        closing = ")".repeat(200),
+        b = vec!["A"; 30].join(" "),
+        c = vec!["B"; 30].join(" "),
+        d = vec!["C"; 30].join(" "),
+    );
+    // Through the explorer's own path, so the arena the trace is given is
+    // the one checked.
+    let run = |trace: bool| {
+        let tu = crate::util::bump::Bump::new();
+        let mut context = Context::new(&tu);
+        let trace_arena = crate::util::bump::Bump::new();
+        let source = tu.alloc_str(&source);
+        let (output, recorded, pp_high_water, expansion_high_water) =
+            crate::pipeline::with_traced_preprocessor(
+                &mut context,
+                Path::new("<test>"),
+                source,
+                HeaderSearch::default(),
+                trace.then_some(&trace_arena),
+                |mut preprocessor, context, pp| {
+                    let mut output = 0;
+                    preprocessor.for_each_item(context, |_, _| output += 1);
+                    let (events, truncated) = preprocessor.trace();
+                    let recorded = (events.len(), truncated.is_some());
+                    (
+                        output,
+                        recorded,
+                        pp.high_water(),
+                        preprocessor.expansion.high_water(),
+                    )
+                },
+            );
+        let marks = [
+            pp_high_water,
+            expansion_high_water,
+            tu.high_water(),
+            context.string_cache.bytes(),
+        ];
+        (marks, output, recorded, trace_arena.high_water())
+    };
+    let (untraced, output, (events, _), _) = run(false);
+    let (traced, traced_output, recorded, trace_bytes) = run(true);
+    assert_eq!(events, 0);
+    assert!(recorded.1 && recorded.0 > 10_000, "{recorded:?}");
+    assert_eq!(traced_output, output);
+    assert!(trace_bytes <= super::runtime::TRACE_BYTES, "{trace_bytes}");
+    assert_eq!(
+        traced, untraced,
+        "[preprocessing, expansion, translation unit, string cache] with the trace, then without"
+    );
 }
 
 #[test]
@@ -292,7 +368,7 @@ fn phase_07_mapping_diagnoses_every_internal_only_token_kind() {
         SharedVec::default(),
     );
     let contents = context.string_cache.intern("internal-only");
-    let file = context.intern_source_file(std::path::Path::new("<phase-7-totality-test>"));
+    let file = context.intern_source_file(Path::new("<phase-7-totality-test>"));
     let source = context.create_source_vectors(
         crate::translation_phases::SourcePosition::default(),
         file,

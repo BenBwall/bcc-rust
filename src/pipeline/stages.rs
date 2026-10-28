@@ -80,7 +80,7 @@ pub(crate) fn with_traced_preprocessor<'tu, R>(
     source: &'tu str,
     search: HeaderSearch<'_>,
     trace: Option<&Bump>,
-    run: impl for<'pp> FnOnce(Preprocessor<'tu, 'pp>, &mut Context<'tu>) -> R,
+    run: impl for<'pp> FnOnce(Preprocessor<'tu, 'pp>, &mut Context<'tu>, &'pp Bump) -> R,
 ) -> R {
     let pp = Bump::new();
     let mut preprocessor =
@@ -88,7 +88,7 @@ pub(crate) fn with_traced_preprocessor<'tu, R>(
     if let Some(trace) = trace {
         preprocessor.record_trace(trace);
     }
-    run(preprocessor, context)
+    run(preprocessor, context, &pp)
 }
 
 /// Keeps phase-7 working storage scoped to parsing: the parser's scratch

@@ -15,18 +15,25 @@ const module = await WebAssembly.compile(readFileSync(process.argv[2]));
 
 /// A fresh instance's compile function and its linear memory.
 async function instantiate() {
-  const { memory, smoke_alloc, smoke_compile } = (await WebAssembly.instantiate(module)).exports;
-  const compile = (source, { optimize = false, depth = 0, trace = true } = {}) => {
+  const { memory, smoke_alloc, smoke_compile, smoke_compile_json } =
+    (await WebAssembly.instantiate(module)).exports;
+  const call = (source, run) => {
     const bytes = new TextEncoder().encode(source);
     const pointer = smoke_alloc(bytes.length);
     new Uint8Array(memory.buffer, pointer, bytes.length).set(bytes);
-    const report = smoke_compile(pointer, bytes.length, optimize ? 1 : 0, depth, trace ? 1 : 0);
+    const report = run(pointer, bytes.length);
     const length = new DataView(memory.buffer).getUint32(report, true);
     return new TextDecoder().decode(new Uint8Array(memory.buffer, report + 4, length));
   };
-  return { compile, memory };
+  const compile = (source, { optimize = false, depth = 0, trace = true } = {}) =>
+    call(source, (pointer, length) =>
+      smoke_compile(pointer, length, optimize ? 1 : 0, depth, trace ? 1 : 0));
+  // Every output but the trace, as JSON.
+  const outputs = (source, { trace = true } = {}) =>
+    call(source, (pointer, length) => smoke_compile_json(pointer, length, trace ? 1 : 0));
+  return { compile, outputs, memory };
 }
-const { compile } = await instantiate();
+const { compile, outputs } = await instantiate();
 
 const program = `#include <stdint.h>
 static int32_t square(int32_t x) { return x * x; }
@@ -119,10 +126,8 @@ for (const depth of [400, 410]) {
 // Tracing never changes what is compiled. Every byte the trace keeps is
 // charged to one budget in an arena of its own, so running out stops the
 // trace, never the compilation: each shape below, which spends a different
-// part of that budget, compiles with the trace on exactly as with it off,
-// and only the report's trace sections differ.
-const untraced = (report) =>
-  report.replace(/^== (?:trace truncated|expansions)\n(?:(?!== ).*\n)*/gm, "");
+// part of that budget, compiles with the trace on exactly as with it off:
+// every output but the trace is the same, header names included.
 const join = (count, text, separator = "+") => Array(count).fill(text).join(separator);
 const parameters = (count) => Array.from({ length: count }, (_, i) => `a${i}`).join(",");
 // F replaced fan³ times inside one invocation in the source, each time
@@ -163,17 +168,20 @@ for (const [name, source, truncated, expansions] of [
   ["pasted arguments", `#define CAT(a,b) a##b\n#define C2(a,b) CAT(a,b)\n` +
     `int C2(${"a".repeat(20000)},${"b".repeat(20000)});\n`, false],
   ["included headers", `${"#include <stdint.h>\n".repeat(500)}int x;\n`, false],
+  ["a header not found", `#include "missing.h"\nint x;\n`, false],
+  ["a header included after the trace stops",
+    `#include <stddef.h>\n${tens("0,0,0,")}int a[] = {E4 0};\n#include <stdint.h>\nint32_t z;\n`, true],
   ["nested calls", `#define F(x) x\nint x=${"F(".repeat(410)}1${")".repeat(410)};\n`, false],
 ]) {
   const started = Date.now();
   const traced = compile(source);
   const plain = compile(source, { trace: false });
   assert.doesNotMatch(plain, /^== expansions$/m, name);
+  assert.equal(outputs(source), outputs(source, { trace: false }), name);
   assert.match(traced, expansions ?? /^== expansions$/m, name);
   assert.equal(/^== trace truncated$/m.test(traced), truncated, name);
   // Only the expansion the trace stopped in, or as it began, is partial.
   assert.ok((traced.match(/^partial: /gm) ?? []).length <= 1, name);
-  assert.equal(untraced(traced), plain, name);
   assert.ok(Date.now() - started < 20000, `${name} took ${Date.now() - started} ms`);
 }
 

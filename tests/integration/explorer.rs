@@ -910,24 +910,50 @@ mod tests {
             "F(".repeat(400),
             ")".repeat(400)
         );
-        for source in [blow_up, &nested, "int main(void) { return 1 +; }\n"] {
-            let traced = compile(source, &options(false));
+        // A header included once the trace has stopped is still a header
+        // name to phase 3.
+        let late_include =
+            format!("#include <stddef.h>\n{blow_up}#include <stdint.h>\nint32_t z;\n");
+        let mut sources: Vec<(String, String)> = [
+            ("blow-up", blow_up),
+            ("nested", &nested),
+            ("late include", &late_include),
+            ("not found", "#include \"missing.h\"\nint x;\n"),
+            ("error", "int main(void) { return 1 +; }\n"),
+        ]
+        .iter()
+        .map(|(name, source)| ((*name).to_owned(), (*source).to_owned()))
+        .collect();
+        sources.extend(programs());
+        for (name, source) in sources {
+            let traced = compile(&source, &options(false));
             let untraced = compile(
-                source,
+                &source,
                 &ExplorerOptions {
                     trace: false,
                     ..options(false)
                 },
             );
             assert!(traced.preprocessing.is_some() && untraced.preprocessing.is_none());
+            // Every output but the trace, field by field.
             assert_eq!(
                 ExplorerOutput {
                     preprocessing: None,
                     ..traced
                 },
-                untraced
+                untraced,
+                "{name}"
             );
         }
+        let output = compile(&late_include, &options(false));
+        assert!(output.preprocessing.unwrap().truncated);
+        let tokens = output.pp_tokens.unwrap();
+        let header_name = |word: &str| {
+            tokens
+                .iter()
+                .any(|token| token.header_name && token.spelling.contains(word))
+        };
+        assert!(header_name("stddef") && header_name("stdint"));
     }
 
     #[test]

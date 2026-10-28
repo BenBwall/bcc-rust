@@ -155,6 +155,7 @@ impl<'tu, 'pp> Preprocessor<'tu, 'pp> {
                     translation_timestamp: None,
                     literal_scratch: LiteralScratch::new(pp),
                     trace: None,
+                    header_names: None,
                 },
                 tokenizer,
                 last_was_newline: true,
