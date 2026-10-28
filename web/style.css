@@ -233,7 +233,8 @@
 
   /* Lessons */
   .lessons { margin-top: 10px; }
-  .lesson-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(178px, 1fr)); gap: 12px; padding: 4px 0 4px; }
+  /* Two even rows of four, so no lesson sits alone on a row. */
+  .lesson-list { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; padding: 4px 0 4px; }
   .lesson-list li { display: flex; }
   .lesson-card {
     position: relative; width: 100%; display: flex; flex-direction: column; align-items: flex-start; gap: 6px;
@@ -914,6 +915,12 @@
   @media (max-width: 900px) {
     .wasm-row { grid-template-columns: minmax(0, 1fr); }
   }
+  @media (max-width: 700px) {
+    .lesson-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  }
+  @media (max-width: 380px) {
+    .lesson-list { grid-template-columns: minmax(0, 1fr); }
+  }
   @media (max-width: 820px) {
     main { padding: 0 16px 40px; }
     .site-header { gap: 14px; padding: 0 16px; }
@@ -930,6 +937,9 @@
   /* Phones and narrow windows: the WebAssembly controls wrap three to a
      row, and a memory row (16 bytes) fits without its text column. */
   @media (max-width: 600px) {
+    .mode-tabs { width: 100%; }
+    .mode-tab { flex: 1; justify-content: center; padding-inline: 6px; white-space: nowrap; font-size: 13px; }
+    .mode-icon { display: none; }
     .wasm-transport { flex-wrap: wrap; }
     .wasm-transport .button { flex: 1 1 30%; min-width: 0; }
     .memory-grid { font-size: 11.5px; }
