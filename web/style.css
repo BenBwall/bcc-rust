@@ -42,8 +42,8 @@
     --border-strong: #2d3849;
     --text: #e8edf5;
     --text-2: #b7c1d1;
-    --muted: #8591a5;
-    --faint: #5d687b;
+    --muted: #94a0b3;
+    --faint: #808ca0;
     --accent: #5eead4;
     --accent-strong: #2dd4bf;
     --accent-ink: #032b28;
@@ -83,12 +83,12 @@
     --border-strong: #ccd4e0;
     --text: #111827;
     --text-2: #3d4757;
-    --muted: #5f6b7d;
-    --faint: #8b95a5;
-    --accent: #0d9488;
-    --accent-strong: #0f766e;
+    --muted: #566174;
+    --faint: #636e80;
+    --accent: #0f766e;
+    --accent-strong: #115e59;
     --accent-ink: #ffffff;
-    --accent-soft: #0d948814;
+    --accent-soft: #0f766e14;
     --danger: #c62f3c;
     --danger-soft: #e5394612;
     --shadow: 0 1px 2px #0f172a0d, 0 18px 40px -24px #0f172a40;
@@ -97,19 +97,19 @@
     --cat-evaluate: #0b6fb8;
     --cat-convert: #7036d6;
     --cat-memory: #0b7a6d;
-    --cat-lifetime: #b25f00;
+    --cat-lifetime: #a55800;
     --cat-control: #556173;
     --cat-call: #b0185f;
     --cat-fault: #c62f3c;
 
     --obj-0: #c0267a;
     --obj-1: #1f5fd0;
-    --obj-2: #a35f00;
-    --obj-3: #0b7f52;
+    --obj-2: #985800;
+    --obj-3: #0a754b;
     --obj-4: #6a3fd4;
-    --obj-5: #c24c0b;
-    --obj-6: #0a7f94;
-    --obj-7: #4d7a0c;
+    --obj-5: #b8470a;
+    --obj-6: #09748a;
+    --obj-7: #4a740b;
   }
 }
 
@@ -414,7 +414,6 @@
   .recent-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--cat); }
   .recent-index { font: 12px var(--font-mono); color: var(--faint); text-align: right; }
   .recent-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .recent li:nth-child(n+3) { opacity: .7; }
 
   /* Expression tree */
   .tree-scroll { overflow-x: auto; padding: 4px 0 8px; }
@@ -484,8 +483,9 @@
   .object-type { font: 12px var(--font-mono); color: var(--faint); }
   .object-tag { font-size: 11px; padding: 0 6px; border-radius: 999px; background: var(--surface-3); color: var(--muted); }
   .object-lifetime { font-size: 11.5px; color: var(--faint); font-style: italic; }
-  .object.is-ended { opacity: .48; }
-  .object.is-ended .cell { border-style: dashed; }
+  .object.is-ended .cell { border-style: dashed; background: transparent; color: var(--muted); }
+  .object.is-ended .object-name { color: color-mix(in srgb, var(--obj) 70%, var(--muted)); }
+  .object.is-ended .object-swatch { opacity: .5; }
   .cells { display: flex; gap: 0; }
   .cell {
     position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center;

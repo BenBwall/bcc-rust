@@ -67,7 +67,7 @@ function colors(palette, isDark) {
     'editor.background': palette.background,
     'editor.foreground': palette.foreground,
     'editorGutter.background': palette.background,
-    'editorLineNumber.foreground': isDark ? '#4a5568' : '#a0a8b6',
+    'editorLineNumber.foreground': isDark ? '#768296' : '#6b7484',
     'editorLineNumber.activeForeground': isDark ? '#c3cddb' : '#2b3445',
     'editor.lineHighlightBackground': isDark ? '#ffffff08' : '#0b62a308',
     'editor.lineHighlightBorder': '#00000000',
@@ -85,6 +85,13 @@ function colors(palette, isDark) {
     'scrollbarSlider.background': isDark ? '#ffffff14' : '#0000001a',
     'scrollbarSlider.hoverBackground': isDark ? '#ffffff26' : '#0000002b',
     'focusBorder': isDark ? '#5eead4' : '#0b7a6d',
+    // Monaco still tags brackets with its pair-colouring classes when that
+    // feature is off; give every level the delimiter colour so brackets
+    // match the rest of the palette instead of Monaco's rainbow.
+    ...Object.fromEntries(
+      [1, 2, 3, 4, 5, 6].map((level) => [`editorBracketHighlight.foreground${level}`, palette.operator]),
+    ),
+    'editorBracketHighlight.unexpectedBracket.foreground': palette.operator,
   };
 }
 
