@@ -1296,10 +1296,17 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         while let ExpressionType::Parenthesized { expression } = immediate.kind {
             immediate = expression;
         }
+        // A floating value out of the integer's range folds to the value GCC
+        // and Clang store for it, which is no integer constant expression.
+        let mut overflow = false;
         if let Some((bits, signed)) = self.integer_type(target) {
             info.integer = if let ExpressionType::Constant(Constant::Float(value)) = immediate.kind
             {
-                self.float_cast(target, value)
+                self.saturated_float_cast(target, value, None)
+                    .map(|(value, out_of_range)| {
+                        overflow = out_of_range;
+                        value
+                    })
             } else {
                 operand.integer.map(|v| {
                     if matches!(
@@ -1325,8 +1332,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             ) {
                 Some(Integer::int(i128::from(value.truth())).cast(1, false))
             } else {
-                self.float_cast(target, FloatTokenType::LongDouble(value.real))
+                self.saturated_float_cast(target, FloatTokenType::LongDouble(value.real), None)
+                    .map(|(value, out_of_range)| {
+                        overflow = out_of_range;
+                        value
+                    })
             };
+        }
+        if overflow {
+            info.ice = false;
+            info.folding = ConstantFolding::Overflow;
         }
         if self.arithmetic(target) && self.integer_type(target).is_none() {
             info.set_floating(if self.unrounded_half_cast(operand, target) {

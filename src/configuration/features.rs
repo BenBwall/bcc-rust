@@ -120,6 +120,13 @@ pub(crate) enum Feature {
     /// GNU extension: GCC manual, "Compound Literals"; extends C99 §6.7.8
     /// paragraph 16, p. 126; PDF p. 138.
     ArrayCompoundLiteral,
+    /// A floating constant converted out of an integer type's range in a
+    /// static initializer, which GCC folds to the nearest bound and reports
+    /// under `-pedantic` ("overflow in constant expression"); Clang reports
+    /// nothing.
+    /// GNU extension: GCC c/c-typeck.cc, `constant_expression_warning`;
+    /// extends C99 §6.6 paragraph 4, p. 95; PDF p. 107.
+    OverflowingConstant,
     ZeroLengthArrays,
     Int128,
     AutoType,
@@ -326,6 +333,7 @@ impl Feature {
             | Self::OneVoidConditional
             | Self::ConstantCompoundLiteral
             | Self::ArrayCompoundLiteral
+            | Self::OverflowingConstant
             | Self::ZeroLengthArrays
             | Self::Int128
             | Self::AutoType
@@ -461,6 +469,7 @@ impl Feature {
         Self::OneVoidConditional,
         Self::ConstantCompoundLiteral,
         Self::ArrayCompoundLiteral,
+        Self::OverflowingConstant,
         Self::ZeroLengthArrays,
         Self::Int128,
         Self::AutoType,

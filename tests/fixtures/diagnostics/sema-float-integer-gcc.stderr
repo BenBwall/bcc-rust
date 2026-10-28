@@ -1,0 +1,187 @@
+warning: overflow in conversion from `double` to `int` changes value to 2147483647 [-Woverflow]
+ --> sema-float-integer-gcc.c:1:21
+  |
+1 | static int scaled = 1e10;
+  |                     ^^^^ the value is not the integer's
+  |
+  = note: C99 §6.3.1.4p1: a floating value converts to an integer by truncation toward zero; an integral part out of range is undefined, and GCC and Clang store the nearest bound, or 0 for a NaN
+
+warning: 'overflow in constant expression' is a GNU extension [-Wpedantic]
+ --> sema-float-integer-gcc.c:1:21
+  |
+1 | static int scaled = 1e10;
+  |                     ^^^^
+
+warning: overflow in conversion from `double` to `int` changes value to -2147483648 [-Woverflow]
+ --> sema-float-integer-gcc.c:2:16
+  |
+2 | int negative = -1e10;
+  |                ^^^^^ the value is not the integer's
+  |
+  = note: C99 §6.3.1.4p1: a floating value converts to an integer by truncation toward zero; an integral part out of range is undefined, and GCC and Clang store the nearest bound, or 0 for a NaN
+
+warning: 'overflow in constant expression' is a GNU extension [-Wpedantic]
+ --> sema-float-integer-gcc.c:2:16
+  |
+2 | int negative = -1e10;
+  |                ^^^^^
+
+warning: overflow in conversion from `double` to `unsigned int` changes value to 0 [-Woverflow]
+ --> sema-float-integer-gcc.c:3:24
+  |
+3 | unsigned to_unsigned = -1.0;
+  |                        ^^^^ the value is not the integer's
+  |
+  = note: C99 §6.3.1.4p1: a floating value converts to an integer by truncation toward zero; an integral part out of range is undefined, and GCC and Clang store the nearest bound, or 0 for a NaN
+
+warning: 'overflow in constant expression' is a GNU extension [-Wpedantic]
+ --> sema-float-integer-gcc.c:3:24
+  |
+3 | unsigned to_unsigned = -1.0;
+  |                        ^^^^
+
+warning: overflow in conversion from `double` to `signed char` changes value to 127 [-Woverflow]
+ --> sema-float-integer-gcc.c:5:25
+  |
+5 | signed char narrow[] = {300.0, -300.0};
+  |                         ^^^^^ the value is not the integer's
+  |
+  = note: C99 §6.3.1.4p1: a floating value converts to an integer by truncation toward zero; an integral part out of range is undefined, and GCC and Clang store the nearest bound, or 0 for a NaN
+
+warning: 'overflow in constant expression' is a GNU extension [-Wpedantic]
+ --> sema-float-integer-gcc.c:5:25
+  |
+5 | signed char narrow[] = {300.0, -300.0};
+  |                         ^^^^^
+
+warning: overflow in conversion from `double` to `signed char` changes value to -128 [-Woverflow]
+ --> sema-float-integer-gcc.c:5:32
+  |
+5 | signed char narrow[] = {300.0, -300.0};
+  |                                ^^^^^^ the value is not the integer's
+  |
+  = note: C99 §6.3.1.4p1: a floating value converts to an integer by truncation toward zero; an integral part out of range is undefined, and GCC and Clang store the nearest bound, or 0 for a NaN
+
+warning: 'overflow in constant expression' is a GNU extension [-Wpedantic]
+ --> sema-float-integer-gcc.c:5:32
+  |
+5 | signed char narrow[] = {300.0, -300.0};
+  |                                ^^^^^^
+
+warning: overflow in conversion from `double` to `int` changes value to 0 [-Woverflow]
+ --> sema-float-integer-gcc.c:6:19
+  |
+6 | int specials[] = {__builtin_nan(""), __builtin_inf()};
+  |                   ^^^^^^^^^^^^^^^^^ the value is not the integer's
+  |
+  = note: C99 §6.3.1.4p1: a floating value converts to an integer by truncation toward zero; an integral part out of range is undefined, and GCC and Clang store the nearest bound, or 0 for a NaN
+
+warning: 'overflow in constant expression' is a GNU extension [-Wpedantic]
+ --> sema-float-integer-gcc.c:6:19
+  |
+6 | int specials[] = {__builtin_nan(""), __builtin_inf()};
+  |                   ^^^^^^^^^^^^^^^^^
+
+warning: overflow in conversion from `double` to `int` changes value to 2147483647 [-Woverflow]
+ --> sema-float-integer-gcc.c:6:38
+  |
+6 | int specials[] = {__builtin_nan(""), __builtin_inf()};
+  |                                      ^^^^^^^^^^^^^^^ the value is not the integer's
+  |
+  = note: C99 §6.3.1.4p1: a floating value converts to an integer by truncation toward zero; an integral part out of range is undefined, and GCC and Clang store the nearest bound, or 0 for a NaN
+
+warning: 'overflow in constant expression' is a GNU extension [-Wpedantic]
+ --> sema-float-integer-gcc.c:6:38
+  |
+6 | int specials[] = {__builtin_nan(""), __builtin_inf()};
+  |                                      ^^^^^^^^^^^^^^^
+
+warning: overflow in conversion from `float` to `int` changes value to 2147483647 [-Woverflow]
+ --> sema-float-integer-gcc.c:7:18
+  |
+7 | int from_float = 3e9f;
+  |                  ^^^^ the value is not the integer's
+  |
+  = note: C99 §6.3.1.4p1: a floating value converts to an integer by truncation toward zero; an integral part out of range is undefined, and GCC and Clang store the nearest bound, or 0 for a NaN
+
+warning: 'overflow in constant expression' is a GNU extension [-Wpedantic]
+ --> sema-float-integer-gcc.c:7:18
+  |
+7 | int from_float = 3e9f;
+  |                  ^^^^
+
+warning: overflow in conversion from `long double` to `int` changes value to 2147483647 [-Woverflow]
+ --> sema-float-integer-gcc.c:8:24
+  |
+8 | int from_long_double = 1e10L;
+  |                        ^^^^^ the value is not the integer's
+  |
+  = note: C99 §6.3.1.4p1: a floating value converts to an integer by truncation toward zero; an integral part out of range is undefined, and GCC and Clang store the nearest bound, or 0 for a NaN
+
+warning: 'overflow in constant expression' is a GNU extension [-Wpedantic]
+ --> sema-float-integer-gcc.c:8:24
+  |
+8 | int from_long_double = 1e10L;
+  |                        ^^^^^
+
+warning: 'overflow in constant expression' is a GNU extension [-Wpedantic]
+  --> sema-float-integer-gcc.c:11:12
+   |
+11 | int cast = (int)1e10;
+   |            ^^^^^^^^^
+
+warning: 'overflow in constant expression' is a GNU extension [-Wpedantic]
+  --> sema-float-integer-gcc.c:12:17
+   |
+12 | int halved[] = {(int)-1e10 / 2};
+   |                 ^^^^^^^^^^^^^^
+
+warning: overflow in conversion from `double` to `unsigned int` changes value to 15 [-Woverflow]
+  --> sema-float-integer-gcc.c:13:56
+   |
+13 | struct fields { unsigned a : 4; int b : 3; } fields = {100.0, -100.0};
+   |                                                        ^^^^^ the value is not the integer's
+   |
+   = note: C99 §6.3.1.4p1: a floating value converts to an integer by truncation toward zero; an integral part out of range is undefined, and GCC and Clang store the nearest bound, or 0 for a NaN
+
+warning: 'overflow in constant expression' is a GNU extension [-Wpedantic]
+  --> sema-float-integer-gcc.c:13:56
+   |
+13 | struct fields { unsigned a : 4; int b : 3; } fields = {100.0, -100.0};
+   |                                                        ^^^^^
+
+warning: overflow in conversion from `double` to `int` changes value to -4 [-Woverflow]
+  --> sema-float-integer-gcc.c:13:63
+   |
+13 | struct fields { unsigned a : 4; int b : 3; } fields = {100.0, -100.0};
+   |                                                               ^^^^^^ the value is not the integer's
+   |
+   = note: C99 §6.3.1.4p1: a floating value converts to an integer by truncation toward zero; an integral part out of range is undefined, and GCC and Clang store the nearest bound, or 0 for a NaN
+
+warning: 'overflow in constant expression' is a GNU extension [-Wpedantic]
+  --> sema-float-integer-gcc.c:13:63
+   |
+13 | struct fields { unsigned a : 4; int b : 3; } fields = {100.0, -100.0};
+   |                                                               ^^^^^^
+
+warning: 'overflow in constant expression' is a GNU extension [-Wpedantic]
+  --> sema-float-integer-gcc.c:14:43
+   |
+14 | struct casts { unsigned a : 4; } casts = {(unsigned)1e10};
+   |                                           ^^^^^^^^^^^^^^
+
+warning: overflow in conversion from `double` to `int` changes value to 2147483647 [-Woverflow]
+  --> sema-float-integer-gcc.c:16:24
+   |
+16 |     static int local = 1e10;
+   |                        ^^^^ the value is not the integer's
+   |
+   = note: C99 §6.3.1.4p1: a floating value converts to an integer by truncation toward zero; an integral part out of range is undefined, and GCC and Clang store the nearest bound, or 0 for a NaN
+
+warning: 'overflow in constant expression' is a GNU extension [-Wpedantic]
+  --> sema-float-integer-gcc.c:16:24
+   |
+16 |     static int local = 1e10;
+   |                        ^^^^
+
+27 warnings generated.

@@ -39,6 +39,13 @@ mod tests {
         matches_the_claimed_compiler("array_compound_literals.c");
     }
 
+    /// Floating constants converted out of an integer type's range in
+    /// static initializers store each compiler's saturated value.
+    #[test]
+    fn float_integer_initializers_match_the_claimed_compiler() {
+        matches_the_claimed_compiler("float_integer_initializers.c");
+    }
+
     /// Each identity's value of `fixture` matches its compiler's build,
     /// interpreted before and after optimization and built through LLVM
     /// and the native back end.

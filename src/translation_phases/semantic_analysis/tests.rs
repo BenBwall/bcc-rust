@@ -28,6 +28,7 @@ mod diagnostic_parity;
 mod effects;
 mod emission_work;
 mod float128;
+mod float_integer_conversions;
 mod fortify;
 mod half_precision;
 mod initializer_plans;

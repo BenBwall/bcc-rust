@@ -25,6 +25,7 @@ use super::{
     super::parsing::declaration_syntax::BracedInitializerList,
     Analyzer,
     BindingKind,
+    BitRange,
     Duration,
     FlexibleArray,
     InitOperation,
@@ -278,7 +279,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                             if let Some(literal) = literal.or(converted) {
                                 self.check_static_compound_literal(e, literal);
                             } else if static_storage {
-                                self.check_static_initializer(target, info, e, bit_field);
+                                self.check_static_initializer(target, info, e, site.bits);
                             }
                         },
                         | InitializerType::InitializerList(list) => {
@@ -709,8 +710,34 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         target: TypeId,
         info: super::ExpressionInfo<'tu>,
         e: &'tu Expression<'tu>,
-        bit_field: bool,
+        bits: Option<BitRange>,
     ) {
+        let bit_width = bits.map(|bits| bits.width);
+        let bit_field = bits.is_some();
+        let overflow = self.static_float_conversion(target, info, e, bit_width)
+            || info.folding == ConstantFolding::Overflow;
+        if overflow
+            && matches!(
+                self.context.configuration.compiler_identity(),
+                crate::configuration::CompilerIdentity::Gcc
+            )
+        {
+            self.context.report_extension(
+                crate::configuration::Feature::OverflowingConstant,
+                "overflow in constant expression",
+                e.source_vectors,
+            );
+        } else if overflow && bit_field {
+            // Clang's evaluator gives up on the undefined conversion, and
+            // its code generation emits no bit-field without a value.
+            self.error(
+                SemanticErrorKind::NonConstantInitializer,
+                e.source_vectors,
+                None,
+                None,
+            );
+            return;
+        }
         let address = info.constant == ConstantClass::Address
             || (info.static_address
                 && matches!(
@@ -759,6 +786,65 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 None,
             );
         }
+    }
+
+    /// Folds the conversion of the floating constant `e` to the integer
+    /// type `target` of a static object, out of the integer's range, to the
+    /// value its identity's compiler stores, which lowering then writes:
+    /// GCC (`convert_and_check`) saturates to the bit-field's own width
+    /// (`100.0` stores 7 in a 4-bit `int`) and warns under `-Woverflow`;
+    /// Clang saturates to the declared type, whose low bits a bit-field
+    /// keeps, and warns only for a literal (`-Wliteral-conversion`, in
+    /// [`Self::literal_conversion_warning`]). Returns whether the value was
+    /// out of range. The behavior is undefined in C.
+    /// C99: §6.3.1.4 paragraph 1, p. 43; PDF p. 55; §6.7.8 paragraph 4,
+    /// p. 125; PDF p. 137.
+    fn static_float_conversion(
+        &mut self,
+        target: TypeId,
+        info: super::ExpressionInfo<'tu>,
+        e: &'tu Expression<'tu>,
+        bit_width: Option<u32>,
+    ) -> bool {
+        use super::super::preprocessing::FloatTokenType;
+        let value = match (info.floating(), info.binary128()) {
+            | (Some(value), _) => FloatTokenType::LongDouble(value.real),
+            | (_, Some(value)) => FloatTokenType::Float128(value.real),
+            | _ => return false,
+        };
+        if info.integer.is_some() || self.integer_type(info.ty).is_some() {
+            return false;
+        }
+        let gcc = matches!(
+            self.context.configuration.compiler_identity(),
+            crate::configuration::CompilerIdentity::Gcc
+        );
+        let Some((stored, true)) =
+            self.saturated_float_cast(target, value, bit_width.filter(|_| gcc))
+        else {
+            return false;
+        };
+        if let Some(&index) = self.expression_indices.get(&std::ptr::from_ref(e).addr()) {
+            self.expressions[index].integer = Some(stored);
+        }
+        if gcc {
+            let text = crate::diagnostics::format_in!(
+                self.scratch,
+                "overflow in conversion from `{}` to `{}` changes value to {}",
+                self.conversion_spelling(info.ty),
+                self.conversion_spelling(target),
+                stored
+            );
+            let text = self.context.string_cache.intern(text);
+            self.group_diagnostic(
+                crate::configuration::DiagnosticGroup::Overflow,
+                SemanticErrorKind::FloatOverflow(text),
+                e.source_vectors,
+                None,
+                None,
+            );
+        }
+        true
     }
 
     /// The compound literal whose bytes `e` gives a static object or
@@ -1265,7 +1351,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 } => {
                     let e = plan.values[value.0 as usize].expression;
                     let info = self.expression_info(e);
-                    self.check_static_initializer(destination.ty, info, e, bit_field.is_some());
+                    self.check_static_initializer(destination.ty, info, e, bit_field);
                 },
                 | InitOperation::Copy {
                     value, destination, ..
@@ -1280,7 +1366,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                         self.check_static_plan(initializer);
                     } else {
                         let info = self.expression_info(e);
-                        self.check_static_initializer(destination.ty, info, e, false);
+                        self.check_static_initializer(destination.ty, info, e, None);
                     }
                 },
                 | InitOperation::Zero { .. }

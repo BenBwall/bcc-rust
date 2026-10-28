@@ -53,6 +53,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     ) -> bool {
         let source = self.resolve_function_value(source, Some(target));
         if self.assignment_compatible(target, source) {
+            self.literal_conversion_warning(target, source);
             if self.pointer_target(target).is_some() && self.null_pointer_constant(source) {
                 self.null_conversion_warning(source, false, diagnostic_site);
             }
@@ -183,6 +184,122 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 | _ => return false,
             }
         }
+    }
+
+    /// Clang's `-Wliteral-conversion` (`DiagnoseFloatingImpCast`): a
+    /// floating literal, possibly signed and parenthesized, whose implicit
+    /// conversion to an integer type is out of its range ("is undefined") or
+    /// drops a fraction, or that converts to `_Bool` from a value other
+    /// than 0 or 1. GCC reports only an out-of-range conversion, and only in
+    /// a static initializer (`-Woverflow`, beside the static value it
+    /// folds); the MSVC and TCC identities follow Clang.
+    /// C99: §6.3.1.4 paragraph 1, p. 43; PDF p. 55; §6.3.1.2 paragraph 1,
+    /// p. 43; PDF p. 55.
+    fn literal_conversion_warning(&mut self, target: TypeId, source: ExpressionInfo<'tu>) {
+        use crate::translation_phases::{
+            parsing::syntax::{
+                Constant,
+                ExpressionType as E,
+                UnaryOperator,
+            },
+            preprocessing::FloatTokenType,
+        };
+        if matches!(
+            self.context.configuration.compiler_identity(),
+            crate::configuration::CompilerIdentity::Gcc
+        ) || self.integer_type(target).is_none()
+        {
+            return;
+        }
+        let mut literal = source.expression;
+        let mut signed = false;
+        loop {
+            match literal.kind {
+                | E::Parenthesized { expression } => literal = expression,
+                | E::Unary {
+                    operator: UnaryOperator::Plus | UnaryOperator::Minus,
+                    operand_expression,
+                } if !signed => {
+                    signed = true;
+                    literal = operand_expression;
+                },
+                | _ => break,
+            }
+        }
+        if !matches!(literal.kind, E::Constant(Constant::Float(_))) {
+            return;
+        }
+        let (value, integral) = match (source.floating(), source.binary128()) {
+            | (Some(value), _) => (
+                FloatTokenType::LongDouble(value.real),
+                integral_x87(value.real),
+            ),
+            | (_, Some(value)) => (
+                FloatTokenType::Float128(value.real),
+                match value.real.class() {
+                    | crate::binary128::Class::Zero => !value.real.is_negative(),
+                    | crate::binary128::Class::Finite {
+                        exponent,
+                        significand,
+                    } =>
+                        exponent >= 0
+                            || exponent > -128
+                                && significand & ((1_u128 << exponent.unsigned_abs()) - 1) == 0,
+                    | _ => false,
+                },
+            ),
+            | _ => return,
+        };
+        let Some((stored, out_of_range)) = self.saturated_float_cast(target, value, None) else {
+            return;
+        };
+        let bool_target = matches!(
+            self.types.nodes[self.types.non_atomic(target).index],
+            TypeKind::Scalar(Scalar::Bool)
+        );
+        // `_Bool` keeps a 0 or a 1 exactly.
+        let exact = if bool_target {
+            let int = self.types.scalar(Scalar::Int);
+            integral
+                && self
+                    .float_cast(int, value)
+                    .is_some_and(|v| v.value == stored.value)
+        } else {
+            integral
+        };
+        let (from, to) = (
+            self.conversion_spelling(source.ty),
+            self.conversion_spelling(target),
+        );
+        let text = if out_of_range {
+            crate::diagnostics::format_in!(
+                self.scratch,
+                "implicit conversion of out of range value from `{from}` to `{to}` is undefined"
+            )
+        } else if exact {
+            return;
+        } else if bool_target {
+            crate::diagnostics::format_in!(
+                self.scratch,
+                "implicit conversion from `{from}` to `{to}` changes value to {}",
+                if stored.value == 0 { "false" } else { "true" }
+            )
+        } else {
+            crate::diagnostics::format_in!(
+                self.scratch,
+                "implicit conversion from `{from}` to `{to}` changes value to {stored}"
+            )
+        };
+        let text = self.context.string_cache.intern(text);
+        self.group_diagnostic(
+            DiagnosticGroup::LiteralConversion,
+            crate::translation_phases::semantic_analysis::SemanticErrorKind::LiteralConversion(
+                text,
+            ),
+            source.expression.source_vectors,
+            None,
+            None,
+        );
     }
 
     /// Diagnoses suspicious but valid C null pointer constants. Parentheses
@@ -498,4 +615,21 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     fn function_target(&self, ty: TypeId) -> bool {
         matches!(self.types.nodes[ty.index], TypeKind::Function { .. })
     }
+}
+
+/// Whether a host `long double` converts to an integer exactly: it has no
+/// fraction and is not -0. C99: §6.3.1.4 paragraph 1, p. 43; PDF p. 55.
+fn integral_x87(value: crate::float_parsing::LongDouble) -> bool {
+    let Some((negative, exponent, significand)) = value.x87_parts() else {
+        return false;
+    };
+    // Clang's `APFloat::convertToInteger` finds -0 inexact: the integer
+    // loses its sign.
+    if significand == 0 {
+        return !negative;
+    }
+    let Some(shift) = (16383 + 63_u16).checked_sub(exponent) else {
+        return true;
+    };
+    shift < 64 && significand & ((1_u64 << shift) - 1) == 0
 }

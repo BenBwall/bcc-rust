@@ -270,6 +270,12 @@ diagnostic_groups! {
     /// character aside: a warning by default that `-pedantic-errors` makes
     /// an error, as in GCC (a pedantic warning without an option) and Clang.
     ExcessInitializers => Some("excess-initializers"), Warning, true;
+    /// GCC: a floating constant converted out of an integer type's range in
+    /// a static initializer.
+    Overflow => Some("overflow"), Warning, false;
+    /// Clang: a floating literal whose implicit conversion to an integer
+    /// type is out of range or changes its value; `-Wconversion` holds it.
+    LiteralConversion => Some("literal-conversion"), Warning, false;
 }
 
 /// A group's severity when no option names it.

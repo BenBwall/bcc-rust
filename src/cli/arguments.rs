@@ -713,6 +713,10 @@ impl LanguageFlag {
                 .with_warning_option(
                     DiagnosticGroup::ConstantConversion,
                     WarningOption::Enable(enabled),
+                )
+                .with_warning_option(
+                    DiagnosticGroup::LiteralConversion,
+                    WarningOption::Enable(enabled),
                 ),
             | Self::WarningsAsErrors(enabled) => configuration.with_warnings_as_errors(enabled),
             | Self::WarningGroup(group, option) => configuration.with_warning_option(group, option),

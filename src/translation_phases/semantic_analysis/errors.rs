@@ -209,6 +209,16 @@ pub(crate) enum SemanticErrorKind {
     /// integer constant's value; the payload is the interned message.
     /// C99: §6.3.1.3p3, p. 43; PDF p. 55.
     ConstantConversion(StringCacheId),
+    /// GCC's `-Woverflow`: a floating constant converted out of an integer
+    /// type's range in a static initializer, which stores the saturated
+    /// value; the payload is the interned message.
+    /// C99: §6.3.1.4 paragraph 1, p. 43; PDF p. 55.
+    FloatOverflow(StringCacheId),
+    /// Clang's `-Wliteral-conversion`: a floating literal's implicit
+    /// conversion to an integer type is out of range or changes its value;
+    /// the payload is the interned message.
+    /// C99: §6.3.1.4 paragraph 1, p. 43; PDF p. 55.
+    LiteralConversion(StringCacheId),
     /// A string literal initializes an array too short for its characters,
     /// null character aside; the characters that fit are stored. GCC and
     /// Clang accept it with a warning, as the constraint violation it is.
@@ -645,6 +655,8 @@ impl SemanticErrorKind {
                 Some(DiagnosticGroup::InconsistentDllimport),
             | Self::CallAttributeWarning => Some(DiagnosticGroup::AttributeWarning),
             | Self::ConstantConversion(_) => Some(DiagnosticGroup::ConstantConversion),
+            | Self::FloatOverflow(_) => Some(DiagnosticGroup::Overflow),
+            | Self::LiteralConversion(_) => Some(DiagnosticGroup::LiteralConversion),
             | Self::ExcessString => Some(DiagnosticGroup::ExcessInitializers),
             | _ => None,
         }
@@ -745,6 +757,8 @@ impl SemanticErrorKind {
             | Self::InvalidFrameLevel => "expected an integer constant frame level",
             | Self::InvalidLongjmpValue => "expected the constant 1",
             | Self::ConstantConversion(_) => "the converted value differs",
+            | Self::FloatOverflow(_) | Self::LiteralConversion(_) =>
+                "the value is not the integer's",
             | Self::ExcessString => "characters past the array's end are dropped",
             | Self::InvalidBuiltinAlignment => "expected a constant power-of-two alignment",
             | Self::InvalidPrefetchReadWrite => "expected an integer constant of 0 or 1",
@@ -990,6 +1004,8 @@ impl SemanticErrorKind {
                     | crate::configuration::DiagnosticGroup::GnuNullPointerArithmetic
                     | crate::configuration::DiagnosticGroup::ConstantPromotion
                     | crate::configuration::DiagnosticGroup::ConstantConversion
+                    | crate::configuration::DiagnosticGroup::Overflow
+                    | crate::configuration::DiagnosticGroup::LiteralConversion
                     | crate::configuration::DiagnosticGroup::ExcessInitializers => "warning-group diagnostic",
                 },
                 "C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1",
@@ -1015,6 +1031,12 @@ impl SemanticErrorKind {
             | Self::InvalidFrameLevel => (
                 "the frame level must be an integer constant",
                 "GNU extension: GCC requires the level of __builtin_frame_address and __builtin_return_address to be a constant unsigned integer",
+            ),
+            | Self::FloatOverflow(_) | Self::LiteralConversion(_) => (
+                "floating value converted to an integer type changes",
+                "C99 §6.3.1.4p1: a floating value converts to an integer by truncation toward \
+                 zero; an integral part out of range is undefined, and GCC and Clang store the \
+                 nearest bound, or 0 for a NaN",
             ),
             | Self::ExcessString => (
                 "initializer-string for char array is too long",
@@ -1988,7 +2010,10 @@ impl ToDiagnostic for SemanticError {
                     "non-zero bytes"
                 }
             )
-        } else if let SemanticErrorKind::ConstantConversion(text) = self.kind {
+        } else if let SemanticErrorKind::ConstantConversion(text)
+        | SemanticErrorKind::FloatOverflow(text)
+        | SemanticErrorKind::LiteralConversion(text) = self.kind
+        {
             arena.alloc_str(context.string_cache.at(text))
         } else if let SemanticErrorKind::PragmaPackShow(value) = self.kind {
             format_in!(arena, "value of #pragma pack(show) == {value}")
@@ -2102,6 +2127,8 @@ impl GetSeverity for SemanticError {
                 | SemanticErrorKind::InitializerOverride
                 | SemanticErrorKind::PartialInitializerOverride
                 | SemanticErrorKind::ConstantConversion(_)
+                | SemanticErrorKind::FloatOverflow(_)
+                | SemanticErrorKind::LiteralConversion(_)
                 | SemanticErrorKind::ExcessString
                 | SemanticErrorKind::AttributeAfterDefinition
                 | SemanticErrorKind::UnevaluatedStringPrefix

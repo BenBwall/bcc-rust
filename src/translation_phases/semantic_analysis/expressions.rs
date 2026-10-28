@@ -575,7 +575,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 | _ => [None; 3],
             };
             let operands = operands.map(|operand| operand.map(|o| self.expression_info(o)));
-            if operands.iter().flatten().any(|o| o.folded_literal()) {
+            if operands
+                .iter()
+                .flatten()
+                .any(|o| o.folding == ConstantFolding::Overflow && o.integer.is_some())
+                && info.integer.is_some()
+            {
+                info.folding = ConstantFolding::Overflow;
+            } else if operands.iter().flatten().any(|o| o.folded_literal()) {
                 info.folding = ConstantFolding::CompoundLiteral;
             } else if operands.iter().flatten().any(|o| o.folded_address()) {
                 info.folding = ConstantFolding::Address;

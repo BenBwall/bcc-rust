@@ -603,6 +603,7 @@ mode gate and policy diagnostics (`Imaginary` reports an unsupported type); a
 | OneVoidConditional | - | - | - | - | - | - | - | extension (GNU native) | semantic analysis |
 | ConstantCompoundLiteral | - | - | - | - | - | - | - | extension (GNU native) | sema, lowering |
 | ArrayCompoundLiteral | - | - | - | - | - | - | - | extension (GNU native) | sema, lowering |
+| OverflowingConstant | - | - | - | - | - | - | - | extension (GNU native) | sema |
 | ZeroLengthArrays | - | - | - | - | - | - | - | extension (GNU native) | parser |
 | Float128 | - | - | - | - | - | - | - | extension (GNU native) | parser/sema |
 | Int128 | - | - | - | - | - | - | - | extension (GNU native) | parser/sema |
@@ -701,6 +702,9 @@ The following vocabulary entries retain the established diagnostic contracts:
   which keeps the parser's `UnionCasts` report. A cast to another aggregate
   type stays invalid, the result is not an lvalue, and it is no constant
   initializer of a static object, as in GCC.
+- `OverflowingConstant` has GNU origin: a floating constant converted out
+  of an integer type's range in a static initializer, which only the GCC
+  identity reports under `-pedantic` ("overflow in constant expression").
 - `ArrayCompoundLiteral` has GNU origin: an array initialized by a compound
   literal of its type, as "Arrays initialized by array compound literals"
   below describes. Only the Clang identity reports it under `-pedantic`;
@@ -2269,10 +2273,8 @@ These cases remain different from the compiler each identity claims:
   initializer (`(unsigned char){300} + 0`, `(int){2147483647} + 1`) are not
   reproduced, as they are not for other initializers.
 
-Problems found while surveying that have nothing to do with literal reads
-(see "Semantic analysis gaps" below for those since fixed) remain open:
-an out-of-range floating value converted to an integer in a static
-initializer is refused (`static unsigned char u = 300.7;`).
+The problems found while surveying that have nothing to do with literal
+reads are fixed; see "Semantic analysis gaps" below.
 
 `tests/fixtures/programs/static_compound_literals.c` runs every accepted
 form, the half-precision ones and their excess precision included, on the
@@ -2319,6 +2321,38 @@ does for `_BitInt(k)` and enumerators and GCC does not; that predates this
 check and is shared with enumerators and array bounds. The check is
 `Analyzer::bit_int_width`; the `sema-bitint-width-{gcc,clang}` goldens and
 `semantic_analysis/tests/bit_int_widths.rs` pin it.
+
+### Floating values converted out of an integer's range
+
+Converting a floating value whose integral part an integer type cannot
+represent is undefined (C99 §6.3.1.4p1). bcc refused such a static
+initializer (`static int x = 1e10;`); both compilers fold the conversion to
+the nearest bound of the integer, or to 0 for a NaN, and store that:
+
+| | GCC | Clang |
+| --- | --- | --- |
+| stored value | the nearest bound; a bit-field saturates to its own width (`100.0` in an `int : 4` stores 7) | the nearest bound of the declared type, whose low bits a bit-field keeps (`100.0` stores 4) |
+| scalar static initializer | stored | refused by Clang's code generation ("cannot compile this static initializer yet"); bcc stores the value its evaluator computes, as Clang does inside braces |
+| bit-field of static storage | stored | error, "initializer element is not a compile-time constant" |
+| warning | `-Woverflow`, default on, for an implicit conversion of any floating constant in a static initializer only ("overflow in conversion from 'double' to 'int' changes value ...") | `-Wliteral-conversion`, default on and under `-Wconversion`, for an implicit conversion of a floating literal (possibly signed and parenthesized) anywhere: out of range ("... is undefined"), with a fraction dropped, -0 included (`int i = 2147483647.5;`, `int i = -0.0;`), or to `_Bool` from neither 0 nor 1 |
+| `-pedantic` | "overflow in constant expression" for every overflowing static element, explicit casts and arithmetic on them included (`(int)-1e10 / 2`); an error under `-pedantic-errors`. bcc reports it as `OverflowingConstant` under `[-Wpedantic]` | nothing more |
+
+The stored values match each compiler's object file on the interpreter,
+LLVM and the native back end
+(`tests/fixtures/programs/float_integer_initializers.c`), from `float`,
+`double`, `long double` and NaN or infinite operands into every integer
+width up to `__int128`. Such a conversion is no integer constant
+expression in either identity: an enumerator, array bound, bit-field width
+or `_Static_assert` rejects it, as GCC does, where Clang folds the
+saturated value. A conversion in function code keeps its run-time
+evaluation. GCC's pedantic warning for signed integer overflow in a static
+initializer (`(int)1e10 + 1`) and Clang's `-Winteger-overflow` and
+`-Wbitfield-constant-conversion` are not reproduced; bcc still rejects the
+first. `Analyzer::saturated_float_cast` computes the value,
+`Analyzer::static_float_conversion` stores it and warns for GCC, and
+`Analyzer::literal_conversion_warning` warns for Clang; the
+`sema-float-integer-{gcc,clang}` goldens and
+`semantic_analysis/tests/float_integer_conversions.rs` pin the rules.
 
 ### Arrays initialized by array compound literals
 
