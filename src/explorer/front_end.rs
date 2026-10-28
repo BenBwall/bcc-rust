@@ -619,7 +619,14 @@ impl<'c, 'tu> Trace<'c, 'tu> {
                 }
                 self.step(outermost, step);
             },
-            | TraceEvent::Truncated => self.output.truncated = true,
+            | TraceEvent::Truncated => {
+                self.output.truncated = true;
+                // The expansion being read when the trace stopped may lack
+                // its end.
+                if let Some(last) = self.output.expansions.last_mut() {
+                    last.partial = true;
+                }
+            },
             | TraceEvent::Directive { name, at } => {
                 let (file, line, presumed) = self.place(at);
                 self.output.directives.push(ExplorerDirective {
@@ -757,6 +764,7 @@ impl<'c, 'tu> Trace<'c, 'tu> {
             invocation,
             directive,
             result: String::new(),
+            partial: false,
             steps: Vec::new(),
         });
         self.keys.push((key(expansion), ResultEnd::default()));

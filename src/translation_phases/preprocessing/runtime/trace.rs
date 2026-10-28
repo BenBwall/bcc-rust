@@ -33,6 +33,7 @@ use crate::{
         preprocessor_tokenizer::{
             PreprocessorToken,
             PreprocessorTokenType,
+            TokenSource,
         },
     },
     util::{
@@ -181,11 +182,38 @@ pub(crate) enum TraceEvent<'pp> {
 /// could fill that arena (one fixed region in WebAssembly).
 pub(crate) const MAX_TRACE_EVENTS: usize = 50_000;
 
+/// The most bytes of one argument a trace spells; a longer argument is cut
+/// and ends in `…`. Nested invocations each spell what is left of their
+/// arguments, so without a cut the spellings of `F(F(F(...)))` grow with
+/// the square of its depth.
+const MAX_ARGUMENT_BYTES: usize = 160;
+
+/// The most bytes of arguments a trace spells, all told; past it the trace
+/// stops as it does at [`MAX_TRACE_EVENTS`]. The spellings are interned, so
+/// they stay for the rest of the compilation.
+const MAX_SPELLED_BYTES: usize = 1 << 20;
+
+/// What phase 4 did, as far as it was recorded, and what recording it
+/// spent. Recording stops (with [`TraceEvent::Truncated`]) before it could
+/// fill an arena, so tracing never makes a program fail that compiles
+/// without it.
+pub(in crate::translation_phases::preprocessing) struct Trace<'pp> {
+    events:  ArenaVec<'pp, TraceEvent<'pp>>,
+    /// Bytes of arguments spelled so far.
+    spelled: usize,
+    /// Whether the trace stopped.
+    full:    bool,
+}
+
 impl<'pp> Preprocessor<'_, 'pp> {
     /// Starts recording a trace; call it before preprocessing.
     pub(crate) fn record_trace(&mut self) {
         let state = &mut self.resting_mut().state;
-        state.trace = Some(ArenaVec::new_in(state.arena));
+        state.trace = Some(Trace {
+            events:  ArenaVec::new_in(state.arena),
+            spelled: 0,
+            full:    false,
+        });
     }
 
     /// What phase 4 did so far, if it was recorded.
@@ -193,8 +221,8 @@ impl<'pp> Preprocessor<'_, 'pp> {
         self.resting_mut()
             .state
             .trace
-            .as_deref()
-            .unwrap_or_default()
+            .as_ref()
+            .map_or(&[], |trace| &trace.events)
     }
 }
 
@@ -205,10 +233,7 @@ impl<'pp> Expander<'_, '_, 'pp, '_> {
     pub(in crate::translation_phases::preprocessing) fn tracing(&self) -> bool {
         // Once truncated, the trace records nothing more, so nothing more is
         // spelled or allocated for it.
-        self.state
-            .trace
-            .as_ref()
-            .is_some_and(|trace| trace.len() <= MAX_TRACE_EVENTS)
+        self.state.trace.as_ref().is_some_and(|trace| !trace.full)
     }
 
     #[inline(never)]
@@ -263,22 +288,25 @@ impl<'pp> Expander<'_, '_, 'pp, '_> {
             } => {
                 let arena = self.state.arena;
                 let mut spelled = ArenaVec::with_capacity_in(arguments.len(), arena);
+                let mut bytes = 0;
                 for argument in *arguments {
-                    let mut tokens = argument.tokenizer.clone();
-                    let mut read = ArenaVec::new_in(self.scratch);
-                    while let Some(token) = tokens.next_item(self.context) {
-                        read.push(token);
-                    }
                     // An argument read from its invocation ends with the
                     // call's closing parenthesis.
-                    if !argument.substituted
-                        && read.last().is_some_and(|token| {
-                            token.kind == PreprocessorTokenType::ClosingParenthesis
-                        })
-                    {
-                        _ = read.pop();
+                    let (spelling, length) = spell_argument(
+                        self.context,
+                        self.scratch,
+                        argument.tokenizer.clone(),
+                        !argument.substituted,
+                    );
+                    bytes += length;
+                    spelled.push((argument.name, spelling));
+                }
+                if let Some(trace) = &mut self.state.trace {
+                    trace.spelled += bytes;
+                    if trace.spelled > MAX_SPELLED_BYTES {
+                        trace.stop();
+                        return;
                     }
-                    spelled.push((argument.name, spell(self.context, self.scratch, &read)));
                 }
                 (
                     *name,
@@ -525,12 +553,23 @@ impl<'pp> Expander<'_, '_, 'pp, '_> {
     /// [`MAX_TRACE_EVENTS`]; the first event past that is recorded as
     /// [`TraceEvent::Truncated`].
     fn push_trace(&mut self, event: TraceEvent<'pp>) {
-        if let Some(trace) = &mut self.state.trace {
-            match trace.len().cmp(&MAX_TRACE_EVENTS) {
-                | std::cmp::Ordering::Less => trace.push(event),
-                | std::cmp::Ordering::Equal => trace.push(TraceEvent::Truncated),
-                | std::cmp::Ordering::Greater => {},
+        if let Some(trace) = self.state.trace.as_mut().filter(|trace| !trace.full) {
+            if trace.events.len() < MAX_TRACE_EVENTS {
+                trace.events.push(event);
+            } else {
+                trace.stop();
             }
+        }
+    }
+}
+
+impl Trace<'_> {
+    /// Ends the trace with [`TraceEvent::Truncated`]; nothing more is
+    /// recorded, spelled or allocated for it.
+    fn stop(&mut self) {
+        if !self.full {
+            self.events.push(TraceEvent::Truncated);
+            self.full = true;
         }
     }
 }
@@ -548,29 +587,64 @@ fn invocation<'f>(frame: &'f TokenizerFrame<'_>) -> Option<(&'f SourceVector, St
     }
 }
 
-/// `tokens` spelled with each run of whitespace as one space and none at
-/// either end, as `#` would spell them without the quotes.
-fn spell(context: &mut Context<'_>, scratch: &Bump, tokens: &[PreprocessorToken]) -> StringCacheId {
+/// The argument `tokens` replays, spelled with each run of whitespace as one
+/// space and none at either end, as `#` would spell it without the quotes,
+/// and how many bytes that took. With `closing`, the replay ends with the
+/// call's closing parenthesis, which is not part of the argument. Spelling
+/// stops after [`MAX_ARGUMENT_BYTES`], so it reads no more of a long
+/// argument than it spells.
+fn spell_argument(
+    context: &mut Context<'_>,
+    scratch: &Bump,
+    mut tokens: TokenSource<'_>,
+    closing: bool,
+) -> (StringCacheId, usize) {
     let mut text = ArenaString::new_in(scratch);
     let mut space = false;
-    for token in tokens {
-        match token.kind {
-            | PreprocessorTokenType::Whitespace | PreprocessorTokenType::Newline => {
-                space = !text.is_empty();
-            },
-            | PreprocessorTokenType::Placeholder => {},
-            | _ => {
-                if std::mem::take(&mut space) {
-                    text.push(' ');
-                }
-                text.push_str(
-                    context
-                        .string_cache
-                        .at(token.contents)
-                        .trim_end_matches('\0'),
-                );
-            },
+    let mut append = |context: &Context<'_>,
+                      text: &mut ArenaString<'_>,
+                      token: PreprocessorToken| match token.kind {
+        | PreprocessorTokenType::Whitespace | PreprocessorTokenType::Newline => {
+            space = !text.is_empty();
+        },
+        | PreprocessorTokenType::Placeholder => {},
+        | _ => {
+            if std::mem::take(&mut space) {
+                text.push(' ');
+            }
+            text.push_str(
+                context
+                    .string_cache
+                    .at(token.contents)
+                    .trim_end_matches('\0'),
+            );
+        },
+    };
+    // Each token is spelled once the next is read, so the last one, the
+    // closing parenthesis, can be left out.
+    let mut pending = None;
+    while let Some(token) = tokens.next_item(context) {
+        if let Some(previous) = pending.replace(token) {
+            append(context, &mut text, previous);
+        }
+        if text.len() >= MAX_ARGUMENT_BYTES {
+            // One long token, such as a string literal, is cut too.
+            let mut cut = MAX_ARGUMENT_BYTES;
+            while !text.is_char_boundary(cut) {
+                cut -= 1;
+            }
+            let mut shown = ArenaString::new_in(scratch);
+            shown.push_str(&text[..cut]);
+            shown.push_str(" …");
+            let length = shown.len();
+            return (context.string_cache.intern(&*shown), length);
         }
     }
-    context.string_cache.intern(&*text)
+    if let Some(last) = pending
+        && !(closing && last.kind == PreprocessorTokenType::ClosingParenthesis)
+    {
+        append(context, &mut text, last);
+    }
+    let length = text.len();
+    (context.string_cache.intern(&*text), length)
 }

@@ -111,6 +111,9 @@ pub struct Expansion {
     /// name in `#if VERBOSE`.
     pub result:        String,
     pub steps:         Vec<ExpansionStep>,
+    /// Whether the compiler's record stopped inside this expansion, so its
+    /// result and steps may lack the end.
+    pub partial:       bool,
     /// Steps beyond the most the page receives.
     pub omitted_steps: usize,
 }

@@ -99,6 +99,18 @@ assert.doesNotMatch(blowUp, /== diagnostic error/, blowUp.slice(0, 400));
 assert.match(blowUp, /^== trace truncated$/m);
 assert.match(blowUp, /^== asm$/m);
 
+// Tracing never makes a program fail that compiles without it: deeply
+// nested arguments cost the trace a bounded spelling each. 410 levels is
+// the most the preprocessor itself takes here: from about 420 its own
+// argument capture, which copies what is left of each nested argument,
+// fills the expansion arena, with or without the trace.
+for (const depth of [400, 410]) {
+  const nestedCalls = compile(`#define F(x) x\nint x=${"F(".repeat(depth)}1${")".repeat(depth)};\n`);
+  assert.doesNotMatch(nestedCalls, /== diagnostic error/, nestedCalls.slice(0, 400));
+  assert.match(nestedCalls, /^int x= *1 *;$/m, `${depth}`);
+  assert.match(nestedCalls, /^== asm$/m, `${depth}`);
+}
+
 const errors = compile("int main(void) { return 1 +; }\n");
 assert.match(errors, /== diagnostic error\nerror: expected an expression/);
 assert.doesNotMatch(errors, /== ir\n/);

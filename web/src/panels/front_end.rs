@@ -271,8 +271,9 @@ fn preprocessor_card(compilation: &Compilation, on_reveal: Callback<usize>) -> A
                 })}
                 {trace.truncated.then(|| view! {
                     <p class="phase-summary">
-                        "A macro here expands so much that bcc stopped recording after 50,000 steps: \
-                         the lists above end there, while the output is complete."
+                        "A macro here expands so much that bcc stopped recording it (the record keeps \
+                         at most 50,000 steps and 1 MiB of arguments): the lists above end there, \
+                         while the output is complete."
                     </p>
                 })}
             })}
@@ -370,6 +371,28 @@ const SHOWN_STEPS: usize = 40;
 /// output view below has the whole text.
 const SHOWN_CHARACTERS: usize = 600;
 
+/// What an expansion became, for the card and the source's hover: its
+/// result, or why it shows none. After the compiler's record stopped, the
+/// result may lack its end, which the output view has.
+fn outcome(expansion: &Expansion) -> String {
+    match (
+        expansion.partial,
+        expansion.result.is_empty(),
+        expansion.directive,
+    ) {
+        | (true, true, _) =>
+            "not recorded: bcc stopped recording here, and the output below has it".to_owned(),
+        | (true, false, _) => format!(
+            "{} … (bcc stopped recording here; the output below has the rest)",
+            shortened(&expansion.result)
+        ),
+        | (false, false, _) => shortened(&expansion.result),
+        | (false, true, true) =>
+            "nothing in the output: the directive on this line read it".to_owned(),
+        | (false, true, false) => "nothing: its replacement list is empty".to_owned(),
+    }
+}
+
 /// `text`, cut after [`SHOWN_CHARACTERS`] with a note of how much more there
 /// is.
 fn shortened(text: &str) -> String {
@@ -385,11 +408,7 @@ fn shortened(text: &str) -> String {
 
 fn expansion_item(expansion: &Expansion, on_reveal: Callback<usize>) -> impl IntoView {
     let line = expansion.range.line;
-    let result = match (expansion.result.is_empty(), expansion.directive) {
-        | (false, _) => shortened(&expansion.result),
-        | (true, true) => "nothing in the output: the directive on this line read it".to_owned(),
-        | (true, false) => "nothing: its replacement list is empty".to_owned(),
-    };
+    let result = outcome(expansion);
     // The card lists the first steps; the rest would make it endless.
     let more = expansion.steps.len().saturating_sub(SHOWN_STEPS) + expansion.omitted_steps;
     let steps: Vec<_> = expansion.steps.iter().take(SHOWN_STEPS).cloned().collect();
@@ -480,18 +499,11 @@ pub fn source_marks(stage: Stage, compilation: &Compilation) -> Vec<Decoration> 
                 .expansions
                 .iter()
                 .map(|expansion| {
-                    let hover = match (expansion.result.is_empty(), expansion.directive) {
-                        | (false, _) =>
-                            format!("`{}` becomes `{}`", expansion.invocation, expansion.result),
-                        | (true, true) => format!(
-                            "`{}` is expanded for the directive on this line.",
-                            expansion.invocation
-                        ),
-                        | (true, false) => format!(
-                            "`{}` becomes nothing: its replacement list is empty.",
-                            expansion.invocation
-                        ),
-                    };
+                    let hover = format!(
+                        "`{}` → {}",
+                        shortened(&expansion.invocation),
+                        outcome(expansion)
+                    );
                     span(&expansion.range, "src-macro", hover)
                 })
                 .collect();
@@ -521,5 +533,39 @@ pub fn source_marks(stage: Stage, compilation: &Compilation) -> Vec<Decoration> 
             marks
         },
         | _ => Vec::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::outcome;
+    use crate::pipeline::Expansion;
+
+    #[test]
+    fn an_expansion_the_record_stopped_in_is_not_called_empty() {
+        let stopped = Expansion {
+            invocation: "Z".into(),
+            partial: true,
+            ..Expansion::default()
+        };
+        assert!(
+            outcome(&stopped).starts_with("not recorded"),
+            "{}",
+            outcome(&stopped)
+        );
+        let cut = Expansion {
+            result: "0, 0,".into(),
+            ..stopped.clone()
+        };
+        assert!(
+            outcome(&cut).starts_with("0, 0, … (bcc stopped recording"),
+            "{}",
+            outcome(&cut)
+        );
+        let empty = Expansion {
+            partial: false,
+            ..stopped
+        };
+        assert_eq!(outcome(&empty), "nothing: its replacement list is empty");
     }
 }

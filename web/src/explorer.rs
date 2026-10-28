@@ -337,6 +337,7 @@ fn preprocessing(trace: &ExplorerPreprocessing, columns: &Columns) -> Preprocess
                 invocation:    expansion.invocation.clone(),
                 directive:     expansion.directive,
                 result:        expansion.result.clone(),
+                partial:       expansion.partial,
                 omitted_steps: expansion.steps.len().saturating_sub(MAX_STEPS),
                 steps:         expansion
                     .steps

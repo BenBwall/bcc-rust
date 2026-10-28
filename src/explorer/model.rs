@@ -315,6 +315,9 @@ pub struct ExplorerExpansion {
     /// The tokens it produced, spelled as `-E` would write them; empty for
     /// a replacement that produced none or that a directive read.
     pub result:     String,
+    /// Whether the trace stopped while this expansion was being read, so
+    /// `result` and `steps` may lack its end; the preprocessed text has it.
+    pub partial:    bool,
     /// The replacements, `#` and `##` operations it took, in order.
     pub steps:      Vec<ExplorerExpansionStep>,
 }

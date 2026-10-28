@@ -168,3 +168,24 @@ fn the_selected_level_waits_on_whatever_runs_first() {
         LiveCompile::Idle
     );
 }
+
+#[test]
+fn refused_programs_are_let_go_like_compiled_ones() {
+    let mut cache = Compiled::new();
+    let large = "int x;\n".repeat(80_000);
+    for edit in 0..35 {
+        let text = format!("{large}// edit {edit}\n");
+        let refusal = crate::pipeline::too_large(&text).expect("too large");
+        remember(&mut cache, key(&text, false), Err(refusal));
+    }
+    assert_eq!(cache.len(), COMPILED_LIMIT);
+    // The newest is kept, and remembering a key again replaces it.
+    let newest = cache.last().unwrap().0.clone();
+    assert!(newest.0.ends_with("// edit 34\n"));
+    remember(&mut cache, newest.clone(), Err("again".to_owned()));
+    assert_eq!(cache.len(), COMPILED_LIMIT);
+    assert_eq!(
+        cache.iter().filter(|(known, _)| *known == newest).count(),
+        1
+    );
+}

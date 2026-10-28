@@ -810,6 +810,53 @@ mod tests {
     }
 
     #[test]
+    fn deeply_nested_arguments_cost_the_trace_a_bounded_spelling() {
+        // Each nested invocation spells what is left of its argument, which
+        // without a cut grows with the square of the depth and filled an
+        // arena in WebAssembly at 400 levels.
+        for depth in [400, 2000] {
+            let source = format!(
+                "#define F(x) x\nint x={}1{};\n",
+                "F(".repeat(depth),
+                ")".repeat(depth)
+            );
+            let output = compile(&source, &options(false));
+            assert!(
+                output.diagnostics.iter().all(|d| d.severity != "error"),
+                "{depth}: {:#?}",
+                output.diagnostics
+            );
+            let text = output.preprocessed.unwrap();
+            assert!(text.replace(' ', "").contains("intx=1;"), "{text}");
+            let trace = output.preprocessing.unwrap();
+            let steps = &trace.expansions[0].steps;
+            let outer = &steps[0].arguments[0].argument;
+            assert!(outer.len() < 200 && outer.ends_with(" …"), "{outer}");
+            assert!(steps.len() > 100, "{depth}: {}", steps.len());
+        }
+    }
+
+    #[test]
+    fn an_expansion_open_when_the_trace_stops_is_partial() {
+        let mut source = String::from(
+            "#define A 0,\n#define B A A A A A A A A A A\n#define C B B B B B B B B B B\n#define \
+             D C C C C C C C C C C\n#define P",
+        );
+        source.push_str(&" D".repeat(15));
+        source.push_str(&" B".repeat(98));
+        source.push_str(" A 0,\n#define Z 12345\nint a[]={P Z};\n");
+        let trace = compile(&source, &options(false)).preprocessing.unwrap();
+        assert!(trace.truncated);
+        let last = trace.expansions.last().unwrap();
+        assert!(last.partial, "{:?}", last.invocation);
+        assert!(
+            trace.expansions[..trace.expansions.len() - 1]
+                .iter()
+                .all(|expansion| !expansion.partial)
+        );
+    }
+
+    #[test]
     fn each_skipped_group_is_traced_with_its_own_lines() {
         let source = "#if 0\na\n#elif 0\nb\n#elif 1\nc\n#else\nd\n#endif\n";
         let trace = compile(source, &options(false)).preprocessing.unwrap();

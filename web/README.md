@@ -253,8 +253,10 @@ How live compilation runs:
   96 KiB of initializer elements fills the parser's arena and 512 KiB fills
   one arena or another in every shape but comments. The explorer stops at
   500 levels of nesting with a diagnostic, and its trace of phase 4 stops
-  after 50,000 steps (the card says so), so a macro that expands enormously
-  cannot fill the preprocessor's arena through it. A compilation that takes
+  after 50,000 steps or 1 MiB of spelled arguments, each argument cut at
+  160 bytes (the card says so), so a macro that expands enormously cannot
+  fill the preprocessor's arena through it: tracing makes no program fail
+  that compiles without it. A compilation that takes
   over 10 seconds terminates the compiler Worker, as does a trap, which
   leaves the Wasm instance unusable. The view says why: a Rust panic sends
   its message before the trap; a trap without one is a failed allocation, an

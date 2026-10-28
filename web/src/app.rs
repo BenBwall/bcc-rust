@@ -628,7 +628,7 @@ impl State {
         // without loading it.
         if let Some(refusal) = crate::pipeline::too_large(&key.0) {
             self.compiled
-                .update(|compiled| compiled.push((key, Err(refusal))));
+                .update(|compiled| remember(compiled, key, Err(refusal)));
             return;
         }
         self.in_flight.set(Some(key.clone()));
@@ -671,13 +671,8 @@ impl State {
             };
             self.in_flight.set(None);
             if self.editor_text.with_untracked(|text| *text == key.0) {
-                self.compiled.update(|compiled| {
-                    compiled.retain(|(known, _)| *known != key);
-                    compiled.push((key, result));
-                    if compiled.len() > COMPILED_LIMIT {
-                        _ = compiled.remove(0);
-                    }
-                });
+                self.compiled
+                    .update(|compiled| remember(compiled, key, result));
             }
             self.pump();
         });
@@ -1202,6 +1197,17 @@ fn shown(
             ..previous.clone()
         }),
         | _ => current.cloned(),
+    }
+}
+
+/// Keeps `result` for `key` as the newest entry of `compiled`, which holds
+/// at most [`COMPILED_LIMIT`]: each entry holds its whole source, so a
+/// refused program, kept so its refusal shows, is let go like any other.
+fn remember(compiled: &mut Compiled, key: CompileKey, result: Result<Compilation, String>) {
+    compiled.retain(|(known, _)| *known != key);
+    compiled.push((key, result));
+    if compiled.len() > COMPILED_LIMIT {
+        _ = compiled.remove(0);
     }
 }
 

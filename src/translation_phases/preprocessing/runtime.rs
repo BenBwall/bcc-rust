@@ -73,6 +73,7 @@ pub(super) use frames::{
 };
 pub(super) use lifecycle::Resting;
 pub(crate) use text_output::ReadAt;
+use trace::Trace;
 pub(crate) use trace::TraceEvent;
 
 use super::{
@@ -134,5 +135,5 @@ pub(super) struct PreprocessorState<'pp> {
     /// Storage that string-literal conversion reuses.
     pub(super) literal_scratch:     LiteralScratch<'pp>,
     /// What phase 4 did, when a caller asked for a record of it.
-    pub(super) trace:               Option<ArenaVec<'pp, TraceEvent<'pp>>>,
+    pub(super) trace:               Option<Trace<'pp>>,
 }
