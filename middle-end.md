@@ -2483,11 +2483,17 @@ the target is the whole key): startup and exit, `atexit`, `abort` (status 134),
 `<ctype.h>`, `<stdlib.h>` conversions, `qsort`, `bsearch`, `rand`,
 buffered `<stdio.h>` on descriptors 0-2 (stdout line-buffered, stderr
 unbuffered) with the whole `printf` family, whose floating conversions are
-exact (big-integer expansion, ties to even, as glibc), a small `scanf`,
-`<math.h>` (transcendental functions accurate to about an ulp, not
+exact (big-integer expansion, ties to even, as glibc; precisions beyond its
+digit buffer are padded, never copied), a small `scanf` that honours every
+length modifier and reads only the longest valid prefix of a number,
+`<math.h>` (`sin`, `cos` and `tan` from FreeBSD's fdlibm with Payne-Hanek
+argument reduction, translated from rust-lang/libm under its MIT and Sun
+notices; the other transcendental functions accurate to about an ulp, not
 correctly rounded), `<time.h>`, and compiler-rt's `i128` and binary128
-routines. `strtod` is exact only for up to 19 digits and exponents within
-±22. Files cannot be opened.
+routines (the floating-to-integer conversions with compiler-rt's exact
+saturation rules). Allocation sizes that would wrap fail with `ENOMEM`.
+`strtod` is exact only for up to 19 digits and exponents within ±22. Files
+cannot be opened.
 
 **Output.** `--emit=wasm` writes the binary module, `--emit=wat` (and
 `--emit=asm`, `-S`) its text, and `-o x.wasm` the binary; `-c` and linking
