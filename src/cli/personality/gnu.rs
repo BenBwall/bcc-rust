@@ -1003,7 +1003,12 @@ impl State<'_> {
             self.machine.push(text.into());
             return;
         }
-        let known = knows(self.compiler, text);
+        // `-Werror=NAME` and `-Wno-error=NAME` name the warning `-WNAME`.
+        let known = knows(self.compiler, text)
+            || text
+                .strip_prefix("-Werror=")
+                .or_else(|| text.strip_prefix("-Wno-error="))
+                .is_some_and(|name| knows(self.compiler, &format!("-W{name}")));
         if text.starts_with("-W") {
             // GCC ignores an unknown `-Wno-` option; Clang warns about an
             // unknown warning option, which bcc's own parser does.

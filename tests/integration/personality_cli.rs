@@ -3014,6 +3014,36 @@ mod tests {
             succeeds(&output);
             assert_eq!(stderr(&output), "", "{options:?}");
         }
+        // `-Werror=` and `-Wno-error=` name the driver's warning group, which
+        // Clang knows, so they are no unknown warning options.
+        let output = directory.bcc(
+            "--clang-mode",
+            &[
+                "-Werror",
+                "-Werror=unused-command-line-argument",
+                "-c",
+                "a.c",
+                "-o",
+                "a.o",
+            ],
+        );
+        succeeds(&output);
+        assert_eq!(stderr(&output), "");
+        let output = directory.bcc(
+            "--clang-mode",
+            &[
+                "-Werror",
+                "-Wno-error=unused-command-line-argument",
+                "-c",
+                "a.c",
+                "-lm",
+            ],
+        );
+        succeeds(&output);
+        assert_eq!(
+            stderr(&output),
+            "clang: warning: -lm: 'linker' input unused [-Wunused-command-line-argument]\n"
+        );
         let output = directory.bcc("--gcc-mode", &["-Qunused-arguments", "-c", "a.c"]);
         assert_eq!(output.status.code(), Some(1));
         assert_eq!(
