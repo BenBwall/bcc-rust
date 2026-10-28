@@ -3022,6 +3022,53 @@ mod tests {
         );
     }
 
+    /// Clang begins every path it reaches from a main file in the working
+    /// directory through its includers' directories with `./`, in `-H`
+    /// and clang-cl's `/showIncludes`; a header found through `-I` keeps
+    /// its directory's spelling.
+    #[test]
+    fn clang_names_working_directory_headers_with_dot() {
+        let directory = Directory::new();
+        std::fs::create_dir(directory.path("sub")).unwrap();
+        std::fs::create_dir(directory.path("inc")).unwrap();
+        directory.write(
+            "m.c",
+            "#include \"sub/s.h\"\n#include \"a.h\"\n#include \"inc/i.h\"\n#include <j.h>\n",
+        );
+        directory.write("sub/s.h", "#include \"../d.h\"\n#include \"t.h\"\n");
+        directory.write("sub/t.h", "int t;\n");
+        directory.write("d.h", "int d;\n");
+        directory.write("a.h", "int a;\n");
+        directory.write("inc/i.h", "#include \"k.h\"\n");
+        directory.write("inc/k.h", "int k;\n");
+        directory.write("inc/j.h", "int j;\n");
+        let output = directory.bcc("--clang-mode", &["-H", "-fsyntax-only", "-Iinc", "m.c"]);
+        succeeds(&output);
+        assert_eq!(
+            stderr(&output),
+            ". ./sub/s.h\n.. ./sub/../d.h\n.. ./sub/t.h\n. ./a.h\n. ./inc/i.h\n.. ./inc/k.h\n. \
+             inc/j.h\n"
+        );
+        let output = directory.bcc("--gcc-mode", &["-H", "-fsyntax-only", "-Iinc", "m.c"]);
+        succeeds(&output);
+        assert_eq!(
+            stderr(&output),
+            ". sub/s.h\n.. sub/../d.h\n.. sub/t.h\n. a.h\n. inc/i.h\n.. inc/k.h\n. inc/j.h\n"
+        );
+        let output = directory.bcc(
+            "--clang-cl-mode",
+            &["/nologo", "/Zs", "/showIncludes", "/Iinc", "m.c"],
+        );
+        succeeds(&output);
+        assert!(
+            stderr(&output).starts_with(
+                "Note: including file: ./sub/s.h\nNote: including file:  ./sub/../d.h\n"
+            ),
+            "{}",
+            stderr(&output)
+        );
+    }
+
     /// The common symbols an object file defines, by `nm`'s `C` letter.
     fn common_symbols(object: &Path) -> Option<Vec<String>> {
         let listing = Command::new("nm").arg(object).output().ok()?;

@@ -188,15 +188,17 @@ pub(super) fn write(
 /// Prints `Note: including file:` and the header to stderr for each
 /// `#include` that entered one, as `cl /showIncludes` does, with a space
 /// more before the path for each level of nesting; Ninja reads the path
-/// after the prefix and the spaces.
+/// after the prefix and the spaces. clang-cl begins a path as `-H` does.
 pub(super) fn show_includes(context: &Context<'_>) {
     let arena = Bump::new();
     let mut text = ArenaString::new_in(&arena);
+    let clang = context.configuration.compiler_identity().rules() == RuleSet::Clang;
     for entry in context.include_entries.iter().flatten() {
         _ = writeln!(
             text,
-            "Note: including file:{:width$}{}",
+            "Note: including file:{:width$}{}{}",
             "",
+            if clang && entry.here { "./" } else { "" },
             context.get_source_file(entry.file).display(),
             width = entry.depth as usize,
         );
@@ -206,7 +208,8 @@ pub(super) fn show_includes(context: &Context<'_>) {
 
 /// Prints the header each `#include` entered to stderr for `-H`, after a
 /// dot per level of nesting, as GCC and Clang do. Clang names a header
-/// found beside a main file in the working directory `./a.h`, GCC `a.h`.
+/// reached from a main file in the working directory through its
+/// includers' directories `./a.h` or `./sub/../b.h`, GCC `a.h`.
 pub(super) fn header_tree(context: &Context<'_>) {
     let arena = Bump::new();
     let mut text = ArenaString::new_in(&arena);
@@ -216,7 +219,7 @@ pub(super) fn header_tree(context: &Context<'_>) {
             text.push('.');
         }
         let path = context.get_source_file(entry.file);
-        let here = clang && path.is_relative() && path.parent() == Some(Path::new(""));
+        let here = clang && entry.here;
         _ = writeln!(text, " {}{}", if here { "./" } else { "" }, path.display());
     }
     drop(io::stderr().lock().write_all(text.as_bytes()));

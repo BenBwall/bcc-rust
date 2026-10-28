@@ -204,7 +204,12 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
                 .lexed_files
                 .open(self.context, header_source_index, header_string);
         if self.context.include_entries.is_some() {
-            self.record_include_entry(header_source_index, source_depth, &tokenizer);
+            self.record_include_entry(
+                header_source_index,
+                source_depth,
+                &tokenizer,
+                (including_file, header.name, header.is_system_header),
+            );
         }
         self.push_tokenizer_frame(TokenizerFrame {
             frame_type: TokenizerFrameType::SourceFile {
@@ -221,16 +226,39 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
     /// the header's include guard is defined: GCC and Clang do not read
     /// such a header again, so they do not list it either.
     #[inline(never)]
-    fn record_include_entry(&mut self, file: u32, depth: usize, header: &TokenSource<'_>) {
+    fn record_include_entry(
+        &mut self,
+        file: u32,
+        depth: usize,
+        header: &TokenSource<'_>,
+        (includer, name, angled): (u32, &str, bool),
+    ) {
         let guarded = include_guard(header, self.context)
             .is_some_and(|guard| self.state.macro_definitions.contains_key(&guard));
         if guarded {
             return;
         }
         let depth = u32::try_from(depth).expect("the include nesting limit is small");
-        if let Some(entries) = &mut self.context.include_entries {
-            entries.push(IncludeEntry { file, depth });
-        }
+        // Found beside an includer that is itself in, or reached from, the
+        // working directory: Clang names that directory `.`.
+        let includer_path = self.context.get_source_file(includer);
+        let path = self.context.get_source_file(file);
+        let mut buffer = ArenaVec::new_in(self.scratch);
+        let local = !angled
+            && includer_path.parent().is_some_and(|directory| {
+                join_path(&mut buffer, directory, Path::new(name)) == path
+            });
+        let Some(entries) = &mut self.context.include_entries else {
+            return;
+        };
+        let here = local
+            && (includer_path.parent() == Some(Path::new(""))
+                || entries
+                    .iter()
+                    .rev()
+                    .find(|entry| entry.file == includer)
+                    .is_some_and(|entry| entry.here));
+        entries.push(IncludeEntry { file, depth, here });
     }
 
     /// Records a header that cannot be found as one to be generated, under

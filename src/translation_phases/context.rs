@@ -161,12 +161,15 @@ pub(crate) struct Context<'tu> {
     source_texts: ArenaVec<'tu, Option<SourceText<'tu>>>,
 }
 
-/// One `#include` that entered a header: the header's source file index
-/// and its nesting depth.
+/// One `#include` that entered a header: the header's source file index,
+/// its nesting depth, and whether it was found beside an includer in the
+/// working directory or one reached from it that way, whose path Clang
+/// begins with `./`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct IncludeEntry {
     pub(crate) file:  u32,
     pub(crate) depth: u32,
+    pub(crate) here:  bool,
 }
 
 /// Bytes `start..end` of physical file `physical` that a line marker with
