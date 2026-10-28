@@ -7,6 +7,7 @@ use std::fmt::Write as _;
 
 use bcc_rust::explorer::{
     ExplorerOptions,
+    ExplorerOutput,
     compile,
 };
 
@@ -39,9 +40,7 @@ pub unsafe extern "C" fn smoke_compile_wasm(source: *mut u8, length: usize, opti
         }
         report.push('\n');
     }
-    let mut framed = u32::try_from(report.len()).unwrap_or(u32::MAX).to_le_bytes().to_vec();
-    framed.extend_from_slice(report.as_bytes());
-    framed.leak().as_ptr()
+    framed(&report)
 }
 
 /// Room for `length` bytes of source, which the host fills before calling
@@ -53,7 +52,7 @@ pub extern "C" fn smoke_alloc(length: usize) -> *mut u8 {
 
 /// Compiles the `length` bytes at `source` (from [`smoke_alloc`]) and returns
 /// the report, or with `optimize` set, as `-O2` does. A nonzero `depth` is the
-/// nesting limit.
+/// nesting limit. A zero `trace` leaves out the phase-4 trace.
 ///
 /// # Safety
 ///
@@ -64,6 +63,7 @@ pub unsafe extern "C" fn smoke_compile(
     length: usize,
     optimize: u32,
     depth: u32,
+    trace: u32,
 ) -> *const u8 {
     // SAFETY: The host wrote `length` bytes into the allocation.
     let bytes = unsafe { Vec::from_raw_parts(source, length, length) };
@@ -71,13 +71,36 @@ pub unsafe extern "C" fn smoke_compile(
     let output = compile(&source, &ExplorerOptions {
         optimize: optimize != 0,
         max_nesting_depth: (depth != 0).then_some(depth),
+        trace: trace != 0,
         ..ExplorerOptions::default()
     });
     let mut report = String::new();
     for diagnostic in &output.diagnostics {
         _ = write!(report, "== diagnostic {}\n{}", diagnostic.severity, diagnostic.rendered);
     }
+    if let Some(lines) = &output.logical_lines {
+        _ = writeln!(report, "== logical-lines {}", lines.len());
+        for line in lines.iter().filter(|line| !line.changes.is_empty()) {
+            for change in &line.changes {
+                _ = writeln!(report, "{}-{}: {}", line.source.start, line.source.end, change.kind);
+            }
+        }
+    }
+    if let Some(tokens) = &output.pp_tokens {
+        _ = writeln!(report, "== pp-tokens {}", tokens.len());
+    }
+    if let Some(trace) = &output.preprocessing {
+        if trace.truncated {
+            _ = writeln!(report, "== trace truncated");
+        }
+        _ = writeln!(report, "== expansions");
+        for expansion in trace.expansions.iter().filter(|expansion| expansion.file == "<input>") {
+            let partial = if expansion.partial { "partial: " } else { "" };
+            _ = writeln!(report, "{partial}{} -> {}", expansion.invocation, expansion.result);
+        }
+    }
     for (name, text) in [
+        ("preprocessed", &output.preprocessed),
         ("tokens", &output.tokens),
         ("syntax-tree", &output.syntax_tree),
         ("ir", &output.ir),
@@ -95,7 +118,38 @@ pub unsafe extern "C" fn smoke_compile(
             _ = writeln!(report, "{:4x}: {:<24} {}", instruction.offset, bytes.join(" "), instruction.asm);
         }
     }
-    let mut framed = u32::try_from(report.len()).unwrap_or(u32::MAX).to_le_bytes().to_vec();
-    framed.extend_from_slice(report.as_bytes());
+    framed(&report)
+}
+
+/// Compiles as [`smoke_compile`] does, at `-O0` with the default nesting
+/// limit, for `wasm32-wasip1` with `wasm` set, and returns every output but
+/// the phase-4 trace, as JSON: what tracing must leave unchanged.
+///
+/// # Safety
+///
+/// As for [`smoke_compile`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn smoke_compile_json(source: *mut u8, length: usize, trace: u32, wasm: u32) -> *const u8 {
+    // SAFETY: The host wrote `length` bytes into the allocation.
+    let bytes = unsafe { Vec::from_raw_parts(source, length, length) };
+    let source = String::from_utf8_lossy(&bytes);
+    let defaults = ExplorerOptions::default();
+    let output = compile(&source, &ExplorerOptions {
+        target: if wasm != 0 { "wasm32-wasip1".into() } else { defaults.target.clone() },
+        trace: trace != 0,
+        ..defaults
+    });
+    let json = serde_json::to_string(&ExplorerOutput {
+        preprocessing: None,
+        ..output
+    })
+    .unwrap_or_default();
+    framed(&json)
+}
+
+/// `text` after its little-endian length, leaked for the host to read.
+fn framed(text: &str) -> *const u8 {
+    let mut framed = u32::try_from(text.len()).unwrap_or(u32::MAX).to_le_bytes().to_vec();
+    framed.extend_from_slice(text.as_bytes());
     framed.leak().as_ptr()
 }

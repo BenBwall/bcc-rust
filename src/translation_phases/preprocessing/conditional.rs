@@ -25,6 +25,7 @@ use crate::{
     configuration::Feature,
     translation_phases::{
         Context,
+        GetSourceFileIndex,
         SourceVector,
         TranslationPhase,
         preprocessor_tokenizer::{
@@ -46,7 +47,12 @@ impl Expander<'_, '_, '_, '_> {
             self.context,
             directive,
         ));
-        if self.eval_preprocessor_expression(PreprocessorErrorType::NoConditionInIfDirective) {
+        let taken =
+            self.eval_preprocessor_expression(PreprocessorErrorType::NoConditionInIfDirective);
+        if self.tracing() {
+            self.trace_condition(directive.source_vectors, taken, true);
+        }
+        if taken {
             self.resume_at_line_start();
         } else {
             self.skip_over_dead_code(true, SkipMode::FalseGroup);
@@ -117,6 +123,12 @@ impl Expander<'_, '_, '_, '_> {
     /// of skipped groups, §6.10 paragraph 4, p. 147; PDF p. 159.
     fn skip_over_dead_code(&mut self, mut at_line_start: bool, mode: SkipMode) {
         let depth = self.state.open_conditionals.len();
+        // Where the skipped group starts and where the directive that ends
+        // it starts, as byte offsets, for the trace: `#line` changes the
+        // lines it counts, not the bytes.
+        let file = self.source_file_index();
+        let mut after = (self.position().index, at_line_start);
+        let mut until = None;
         self.context.set_ignore_tokenizer_errors(true);
         'lines: while depth > 0 && self.state.open_conditionals.len() >= depth {
             if !at_line_start {
@@ -154,6 +166,19 @@ impl Expander<'_, '_, '_, '_> {
                 | _ => continue 'lines,
             }
             let innermost = self.state.open_conditionals.len() == depth;
+            if innermost
+                && self.tracing()
+                && matches!(
+                    self.context.string_cache.at(name.contents),
+                    "endif" | "elif" | "elifdef" | "elifndef" | "else"
+                )
+            {
+                until = Some(
+                    self.context
+                        .first_source_vector_or_default(name.source_vectors)
+                        .index as usize,
+                );
+            }
             match self.context.string_cache.at(name.contents) {
                 | "if" | "ifdef" | "ifndef" => self
                     .state
@@ -168,24 +193,38 @@ impl Expander<'_, '_, '_, '_> {
                     }
                 },
                 | "elif" if innermost => {
-                    if !self.check_conditional_arm(name, false) || mode == SkipMode::ToEndif {
+                    let valid = self.check_conditional_arm(name, false);
+                    if !valid || mode == SkipMode::ToEndif {
+                        if valid {
+                            self.trace_unevaluated_arm(name, file, &mut after, until);
+                        }
                         continue 'lines;
                     }
                     self.context.set_ignore_tokenizer_errors(false);
                     let taken = self.eval_preprocessor_expression(
                         PreprocessorErrorType::NoConditionInElifDirective,
                     );
+                    if self.tracing() {
+                        self.trace_condition(name.source_vectors, taken, true);
+                    }
+                    self.trace_skip_end(file, after, until);
                     if taken {
                         self.resume_at_line_start();
                         return;
                     }
+                    // The next group is skipped on its own.
+                    after = (until.unwrap_or(after.0), false);
                     self.context.set_ignore_tokenizer_errors(true);
                     at_line_start = true;
                 },
                 | "elifdef" | "elifndef"
                     if innermost && self.context.configuration.accepts(Feature::Elifdef) =>
                 {
-                    if !self.check_conditional_arm(name, false) || mode == SkipMode::ToEndif {
+                    let valid = self.check_conditional_arm(name, false);
+                    if !valid || mode == SkipMode::ToEndif {
+                        if valid {
+                            self.trace_unevaluated_arm(name, file, &mut after, until);
+                        }
                         continue 'lines;
                     }
                     self.context.set_ignore_tokenizer_errors(false);
@@ -200,11 +239,16 @@ impl Expander<'_, '_, '_, '_> {
                         name.source_vectors,
                     );
                     let taken = self.eval_macro_test(directive);
+                    if self.tracing() {
+                        self.trace_condition(name.source_vectors, taken, true);
+                    }
                     at_line_start = true;
+                    self.trace_skip_end(file, after, until);
                     if taken {
                         self.resume_at_line_start();
                         return;
                     }
+                    after = (until.unwrap_or(after.0), false);
                     self.context.set_ignore_tokenizer_errors(true);
                 },
                 | "else" if innermost => {
@@ -212,9 +256,16 @@ impl Expander<'_, '_, '_, '_> {
                     self.context.set_ignore_tokenizer_errors(false);
                     self.finish_conditional_directive("else");
                     at_line_start = true;
-                    if valid && mode == SkipMode::FalseGroup {
+                    let taken = valid && mode == SkipMode::FalseGroup;
+                    if self.tracing() {
+                        self.trace_condition(name.source_vectors, taken, taken);
+                    }
+                    if taken {
                         break 'lines;
                     }
+                    // The `#else` group is skipped on its own.
+                    self.trace_skip_end(file, after, until);
+                    after = (until.unwrap_or(after.0), false);
                     self.context.set_ignore_tokenizer_errors(true);
                 },
                 | _ => {},
@@ -224,7 +275,36 @@ impl Expander<'_, '_, '_, '_> {
         if !at_line_start {
             self.skip_until_newline();
         }
+        self.trace_skip_end(file, after, until);
         self.resume_at_line_start();
+    }
+
+    /// Records the lines a skip passed over: from `after` up to the
+    /// directive at byte `until` that ended the group, or to the end of the
+    /// file.
+    fn trace_skip_end(&mut self, file: u32, after: (usize, bool), until: Option<usize>) {
+        if self.tracing() {
+            self.trace_skipped(file, after, until);
+        }
+    }
+
+    /// Records an `#elif` met after a processed group, whose condition is
+    /// not evaluated, and the group before it; the group after it is
+    /// skipped on its own.
+    ///
+    /// C99: §6.10.1 paragraph 6, p. 149; PDF p. 161.
+    fn trace_unevaluated_arm(
+        &mut self,
+        name: PreprocessorToken,
+        file: u32,
+        after: &mut (usize, bool),
+        until: Option<usize>,
+    ) {
+        if self.tracing() {
+            self.trace_condition(name.source_vectors, false, false);
+            self.trace_skip_end(file, *after, until);
+            *after = (until.unwrap_or(after.0), false);
+        }
     }
 }
 
@@ -288,6 +368,9 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
         }
         let is_else = self.context.string_cache.at(directive.contents) == "else";
         _ = self.check_conditional_arm(directive, is_else);
+        if self.tracing() {
+            self.trace_condition(directive.source_vectors, false, false);
+        }
         if is_else {
             self.finish_conditional_directive("else");
         }
@@ -343,7 +426,11 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
             self.context,
             directive,
         ));
-        if self.eval_macro_test(name) {
+        let taken = self.eval_macro_test(name);
+        if self.tracing() {
+            self.trace_condition(directive.source_vectors, taken, true);
+        }
+        if taken {
             self.resume_at_line_start();
         } else {
             self.skip_over_dead_code(true, SkipMode::FalseGroup);

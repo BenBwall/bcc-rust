@@ -565,6 +565,15 @@ mod tests {
     }
 
     #[test]
+    fn the_compiler_lessons_are_outside_the_machines_subset() {
+        let mut machine = Machine::default();
+        for demo in demos::DEMOS.iter().filter(|demo| demo.stage.is_some()) {
+            let rejected = machine.load(demo.source.to_owned());
+            assert_eq!(rejected.status, "error", "{}", demo.key);
+        }
+    }
+
+    #[test]
     fn rejects_unsupported_source_and_recovers() {
         let mut machine = Machine::default();
         assert_eq!(

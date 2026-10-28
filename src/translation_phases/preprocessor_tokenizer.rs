@@ -71,10 +71,11 @@ pub(crate) use errors::{
 };
 use positions::PositionTracker;
 pub(crate) use positions::position_after;
-use splicing::splice;
 pub(crate) use splicing::{
     LogicalCharacter,
+    RemapKind,
     logical_characters,
+    splice,
 };
 use storage::{
     Entry,

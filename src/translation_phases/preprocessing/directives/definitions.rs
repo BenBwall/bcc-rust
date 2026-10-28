@@ -343,6 +343,9 @@ impl Expander<'_, '_, '_, '_> {
             .state
             .macro_definitions
             .insert(name.identifier_id(self.context), definition);
+        if self.tracing() {
+            self.trace_defined(name, is_function_like);
+        }
         // Clang's implementation-defined pragma mark follows the name across
         // redefinitions (including C99 §6.10.3p2 identical definitions).
         // Only #undef ends it, as it ends the definition (§6.10.3.5p1).
@@ -394,6 +397,9 @@ impl Expander<'_, '_, '_, '_> {
             }
         } else {
             _ = self.state.macro_definitions.remove(&name_id);
+            if self.tracing() {
+                self.trace_undefined(name);
+            }
         }
         if self
             .expect_token_from_previous_phase::<true>(

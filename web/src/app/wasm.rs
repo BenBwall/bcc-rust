@@ -24,7 +24,6 @@ use leptos::{
 use super::State;
 use crate::{
     editor::Decoration,
-    engine,
     wasm::{
         Precompiled,
         WasmBackEnd,
@@ -259,17 +258,7 @@ impl WasmState {
                 if !compiler.connected() {
                     state.compiler.set_value(None);
                 }
-                result.unwrap_or_else(|error| {
-                    Err(
-                        if error == engine::COMPILER.timed_out()
-                            || error == engine::COMPILER.stopped()
-                        {
-                            error
-                        } else {
-                            format!("bcc's in-browser compiler crashed ({error}).")
-                        },
-                    )
-                })
+                result.unwrap_or_else(|error| Err(super::compiler_failure(error)))
             },
             | Err(error) => Err(error),
         };

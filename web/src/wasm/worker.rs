@@ -1150,9 +1150,13 @@ int main(int argc, char **argv) {
                     demo.name
                 );
             }
+            // A function definition's line ends in its body's `{`; a line
+            // such as `int GLUE(count, er) = 0;` declares an object through
+            // a macro.
             for function in demo
                 .source
                 .lines()
+                .filter(|line| line.trim_end().ends_with('{'))
                 .filter_map(|line| line.strip_prefix("int "))
                 .filter_map(|rest| rest.split_once('(').map(|(name, _)| name))
             {

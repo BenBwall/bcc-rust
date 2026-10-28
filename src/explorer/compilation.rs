@@ -3,8 +3,9 @@
 //! `--backend=native`, and keeps diagnostics as values instead of printing
 //! them.
 //!
-//! The token listing preprocesses the source in its own context, as
-//! `--tokens` does. Everything else shares one context: the syntax tree
+//! The front-end views (`front_end.rs`) preprocess the source in their own
+//! context, as `-E` and `--tokens` do. Everything else shares one context:
+//! the syntax tree
 //! is printed from the parsed unit, and each `--emit` kind lowers the
 //! analyzed unit afresh, retrying without optional local retention as the
 //! command line does, so the IR before ABI lowering, after it, and the
@@ -36,6 +37,7 @@ use super::{
     ExplorerWasmFunction,
     ExplorerWasmInstruction,
     ExplorerWasmPosition,
+    front_end,
     line_map,
 };
 use crate::{
@@ -70,11 +72,8 @@ use crate::{
         InlineCopies,
         MiddleEndError,
         analyze_translation_unit,
-        describe_token,
         lower_translation_unit_with_locals,
         parse_translation_unit,
-        preprocess_with_diagnostics,
-        with_preprocessor,
     },
     target::Target,
     translation_phases::{
@@ -122,12 +121,18 @@ pub(super) fn compile_views(
         | Ok(configuration) => configuration,
         | Err(message) => return (failed(format_args!("{message}")), None),
     };
+    let mut output = ExplorerOutput::default();
+    if views == Views::All {
+        let front = front_end::front_end(source, configuration, options);
+        output.logical_lines = Some(front.logical_lines);
+        output.pp_tokens = Some(front.pp_tokens);
+        output.preprocessed = Some(front.preprocessed);
+        output.preprocessed_lines = Some(front.preprocessed_lines);
+        output.preprocessing = front.preprocessing;
+        output.tokens = Some(front.tokens);
+    }
     let tu = Bump::new();
     let source = tu.alloc_str(source);
-    let mut output = ExplorerOutput {
-        tokens: (views == Views::All).then(|| tokens(source, configuration, options)),
-        ..ExplorerOutput::default()
-    };
     let mut context = new_context(&tu, configuration, options);
     let stage = Cell::new("front-end");
     let mut diagnostics = Vec::new();
@@ -190,7 +195,7 @@ fn configure(options: &ExplorerOptions) -> Result<CompilerConfiguration, String>
 
 /// A context that finds only the explorer's in-memory headers and the
 /// embedded resource headers, never a host file.
-fn new_context<'tu>(
+pub(super) fn new_context<'tu>(
     tu: &'tu Bump,
     configuration: CompilerConfiguration,
     options: &ExplorerOptions,
@@ -208,7 +213,7 @@ fn new_context<'tu>(
 
 /// Where headers are searched: beside the source, where the in-memory
 /// headers are, and then the embedded resource headers.
-fn header_search<'a>(tu: &'a Bump, options: &ExplorerOptions) -> HeaderSearch<'a> {
+pub(super) fn header_search<'a>(tu: &'a Bump, options: &ExplorerOptions) -> HeaderSearch<'a> {
     let beside: &[&Path] = if options.files.is_empty() {
         &[]
     } else {
@@ -225,27 +230,6 @@ fn header_search<'a>(tu: &'a Bump, options: &ExplorerOptions) -> HeaderSearch<'a
         after,
         ..HeaderSearch::default()
     }
-}
-
-/// The `--tokens` listing, without the diagnostics it interleaves.
-fn tokens(source: &str, configuration: CompilerConfiguration, options: &ExplorerOptions) -> String {
-    let tu = Bump::new();
-    let source = tu.alloc_str(source);
-    let mut context = new_context(&tu, configuration, options);
-    let items = with_preprocessor(
-        &mut context,
-        Path::new(INPUT),
-        source,
-        header_search(&tu, options),
-        |preprocessor, context, _pp| preprocess_with_diagnostics(preprocessor, context),
-    );
-    let mut text = String::new();
-    let mut scratch = Bump::new();
-    for token in items.into_iter().flatten() {
-        scratch.reset();
-        _ = writeln!(text, "{}", describe_token(token, &context, &scratch));
-    }
-    text
 }
 
 /// The stages after preprocessing, sharing one context and reporter.

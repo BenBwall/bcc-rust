@@ -27,6 +27,8 @@
 //! - Preprocessed-text output (`-E`): where the reader is in its source file,
 //!   and the `-dM` listing of the definitions in effect:
 //!   `runtime/text_output.rs`.
+//! - The opt-in record of what phase 4 did, for the explorer:
+//!   `runtime/trace.rs`.
 //!
 //! C99: translation phases 4-7, §5.1.1.2 paragraph 1 items 4-7, p. 10; PDF p.
 //! 22.
@@ -52,8 +54,9 @@ mod builtins;
 mod diagnostics;
 mod location;
 
-// Preprocessed-text output.
+// Preprocessed-text output and the phase-4 trace.
 mod text_output;
+mod trace;
 
 use builtins::TranslationTimestamp;
 pub(super) use builtins::spell_string_literal;
@@ -69,6 +72,14 @@ pub(super) use frames::{
     TokenizerFrameType,
 };
 pub(super) use lifecycle::Resting;
+pub(crate) use text_output::ReadAt;
+#[cfg(test)]
+pub(super) use trace::TRACE_BYTES;
+use trace::Trace;
+pub(crate) use trace::{
+    TraceEvent,
+    Truncated,
+};
 
 use super::{
     conditional::ConditionalGroup,
@@ -77,7 +88,10 @@ use super::{
     token_conversion::LiteralScratch,
 };
 use crate::{
-    translation_phases::preprocessor_tokenizer::LexedFiles,
+    translation_phases::{
+        SourceVector,
+        preprocessor_tokenizer::LexedFiles,
+    },
     util::{
         bump::{
             ArenaMap,
@@ -90,6 +104,10 @@ use crate::{
 };
 
 /// State kept from the start of preprocessing to its end.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "Each flag is an independent mode of reading or output."
+)]
 pub(super) struct PreprocessorState<'pp> {
     pub(super) counter:             u64,
     /// Reserved optional-replacement marker, checked by ID on token paths.
@@ -99,6 +117,9 @@ pub(super) struct PreprocessorState<'pp> {
     /// Directives end at their first new-line (C99 §6.10p2).
     pub(super) in_directive:        bool,
     pub(super) retain_placeholders: bool,
+    /// Leave adjacent string literals apart, for a text of phase 4 alone;
+    /// phase 6 concatenates them.
+    pub(super) strings_apart:       bool,
     pub(super) arena:               &'pp Bump,
     pub(super) once_set:            ArenaSet<'pp, u32>,
     pub(super) macro_definitions:   ArenaMap<'pp, StringCacheId, MacroDefinition<'pp>>,
@@ -121,4 +142,8 @@ pub(super) struct PreprocessorState<'pp> {
     translation_timestamp:          Option<TranslationTimestamp<'pp>>,
     /// Storage that string-literal conversion reuses.
     pub(super) literal_scratch:     LiteralScratch<'pp>,
+    /// What phase 4 did, when a caller asked for a record of it.
+    pub(super) trace:               Option<Trace<'pp>>,
+    /// Where each `#include` read its header name, when a caller asked.
+    pub(super) header_names:        Option<ArenaVec<'pp, SourceVector>>,
 }

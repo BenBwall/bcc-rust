@@ -27,9 +27,12 @@ use crate::{
         SourceVectors,
         TranslationPhase,
     },
-    util::bump::{
-        ArenaVec,
-        Bump,
+    util::{
+        bump::{
+            ArenaVec,
+            Bump,
+        },
+        string_cache::StringCacheId,
     },
 };
 
@@ -102,6 +105,14 @@ impl LexedCursor<'_> {
                 contents: self.file.contents(entry),
             });
         }
+    }
+
+    /// The kind and spelling of each entry left that is a token.
+    fn spellings(
+        &self,
+    ) -> impl Iterator<Item = (super::PreprocessorTokenType, StringCacheId)> + '_ {
+        (self.next..self.file.len())
+            .filter_map(|entry| Some((self.file.kind(entry)?, self.file.contents(entry))))
     }
 
     /// Reads the missing final newline at the end of the entries, which
@@ -246,6 +257,22 @@ pub(crate) struct LexedFiles<'pp> {
 }
 
 impl<'a> TokenSource<'a> {
+    /// The kind and spelling of each token left, without reading it, so
+    /// nothing is reported and no provenance is recorded; a missing final
+    /// new-line that reading would supply is not among them.
+    pub(crate) fn spellings(
+        &self,
+    ) -> impl Iterator<Item = (super::PreprocessorTokenType, StringCacheId)> + '_ {
+        let (lexed, replayed) = match self {
+            | Self::File(cursor) => (Some(cursor.spellings()), None),
+            | Self::Replay(cursor) => (None, Some(cursor.spellings())),
+        };
+        lexed
+            .into_iter()
+            .flatten()
+            .chain(replayed.into_iter().flatten())
+    }
+
     /// Lexes all of `source` (translation phases 1 through 3) into `arena`
     /// and opens it.
     /// C99: §5.1.1.2p1-3, pp. 9-10; PDF pp. 21-22.

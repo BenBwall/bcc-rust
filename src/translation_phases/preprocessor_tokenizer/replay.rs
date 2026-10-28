@@ -33,6 +33,15 @@ impl ReplayCursor<'_> {
             source_vectors: context.push_source_vectors(token.source_vectors.as_slice()),
         })
     }
+
+    /// The kind and spelling of each token left, without reading it.
+    pub(super) fn spellings(
+        &self,
+    ) -> impl Iterator<Item = (PreprocessorTokenType, StringCacheId)> + '_ {
+        self.tokens[self.next.min(self.tokens.len())..]
+            .iter()
+            .map(|token| (token.kind, token.contents))
+    }
 }
 
 /// A rewindable cursor over preprocessing tokens that phase 4 produced

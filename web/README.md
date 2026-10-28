@@ -11,15 +11,19 @@ them. Visitors pick a lesson (a small C program) and see it three ways:
   current full expression is drawn as a tree whose values fill in as it is
   evaluated, and memory is drawn as call frames holding objects, with
   pointers as arrows.
-- **Compiler pipeline.** What bcc itself produces for the same program:
-  tokens, syntax tree, bcc IR before and after ABI lowering, LLVM IR, native
-  x86-64 assembly, and machine code with its encoded bytes, each with a short
-  explanation. The real compiler runs in the browser and recompiles as you
+- **Compiler pipeline.** What bcc itself produces for the same program, from
+  the first translation phases to machine code: the logical lines after
+  line splicing (phases 1-2), the preprocessing tokens (phase 3), the
+  preprocessed text with every macro expansion, conditional group and
+  `#include` it took (phase 4), tokens (phases 5-7), syntax tree, bcc IR
+  before and after ABI lowering, LLVM IR, native x86-64 assembly, and machine
+  code with its encoded bytes, each with a short explanation and, for the
+  front end, the C99 rules it applies. The real compiler runs in the browser and recompiles as you
   type, at `-O0` or `-O2`, with a note on what the optimizer changed. Its
   errors appear as squiggles in the source and in a diagnostics list, and the
   view says which stage stopped and why. Hovering a source line highlights
-  what it became (line by line for tokens and the syntax tree, per function
-  for the IR and machine stages, whose output keeps no source locations), and
+  what it became (line by line for the front-end stages, per function for
+  the IR and machine stages, whose output keeps no source locations), and
   the reverse.
 
 - **WebAssembly.** The program compiled to WebAssembly by bcc, in the
@@ -176,6 +180,55 @@ built, so a compiler change that alters it fails CI until it is regenerated.
 The crate's `tests/integration/explorer.rs` checks that the explorer's other
 stages equal the CLI's for every lesson.
 
+The front end is shown phase by phase, each from the compiler's own output
+for that phase (`bcc_rust::explorer::compile` returns all of them; the page
+reimplements none):
+
+- **Logical lines (phases 1-2)** come from the lexer's own `splice`: each
+  line after trigraph replacement, new-line mapping and line splicing, with
+  the physical lines it came from in the gutter (`8–12`), `↩` where a splice
+  joined two, and in the source the backslash it deleted. A card lists every
+  splice, trigraph, CRLF and UTF-8 character. Trigraphs are replaced in the
+  ISO modes (the site compiles as `c17`), not the GNU ones.
+- **Preprocessing tokens (phase 3)** are the entries the lexer saved for the
+  main file, read as phase 4 reads them: one per line with its kind, its
+  spelling, and whether it starts a line, follows white space, was a comment
+  (now one space), spans a splice or is read by `#include` as a header name.
+  bcc's lexer forms no header-name tokens; the `#include` handler reads the
+  operand's tokens back as one name, and the listing says which. Hovering an
+  entry boxes its exact range in the source.
+- **Preprocessor (phase 4)** shows the text phase 4 leaves, from one
+  preprocessing run with the preprocessor's opt-in trace on: laid out as
+  `bcc-rust -E` lays it out (line markers included), but with each token
+  spelled as written and adjacent string literals still apart, since `-E`
+  shows them after phase 6 has joined them. The compiler says where each
+  output line came from, so each header the source includes is folded into
+  one line saying what it held (a switch shows it), its lines link to the
+  `#include`, and the gutter numbers each line with the source line it came
+  from. A card lists the headers, the macros defined, the other directives
+  executed (`#pragma`, `#line`, `#error`, …), every expansion with its result
+  and its steps (each replacement with its arguments, replacements made while
+  an argument is prescanned, predefined macros such as `__LINE__`, each `#`
+  and `##` and its result, nested replacements indented as a tree), and each
+  conditional directive with the lines it skipped, saying which arms were
+  not evaluated because an earlier group was kept. Places are physical, as
+  the editor counts them; where `#line` says otherwise, the card shows that
+  too. In the source, invocations are underlined with their expansion on
+  hover, skipped lines are hatched, and conditionals carry a kept or
+  skipped mark. The browser build has no host headers: `#include` finds only
+  bcc's embedded freestanding headers (`<limits.h>`, `<stdint.h>`,
+  `<stddef.h>`, `<stdbool.h>`, …), so `<stdio.h>` is reported as not found.
+- **Tokens (phases 5-7)** is the `--tokens` listing of a second, ordinary
+  preprocessing run.
+
+The page receives at most 20,000 phase-3 entries and 2,000 expansions and
+says how many more there were; source columns are mapped line by line, so a
+large source costs time in proportion to its size.
+
+The lesson "Before the compiler: the preprocessor" (`demos/macros.c`)
+exercises these stages and opens at the preprocessor. The abstract machine
+has no preprocessor, so it rejects that lesson as outside its subset.
+
 How live compilation runs:
 
 - **Off the UI thread, in its own Worker.** The compiler Worker's Wasm is many
@@ -191,11 +244,29 @@ How live compilation runs:
   the previous one, so typing does not make it flicker. The last eight
   compilations are kept, so switching level or going back to a lesson is
   instant.
-- **Bounded.** The explorer refuses more than 1 MiB of source and stops at
-  500 levels of nesting with a diagnostic. A compilation that takes over 10
-  seconds terminates the compiler Worker, as does a trap (an exhausted
-  stack or memory region leaves the Wasm instance unusable). The view says the
-  compiler stopped, and the next edit starts a fresh one.
+- **Bounded.** The page compiles at most 64 KiB of source and says so for a
+  larger program without loading the compiler; the explorer itself refuses
+  more in WebAssembly (`WASM_MAX_SOURCE_BYTES`; 1 MiB on a native host). In
+  the browser each of the compiler's arenas is one fixed 32 MiB region of
+  linear memory, and filling one ends the module with a trap. Measured on
+  programs of one dense shape each (many short declarations, one long line
+  of them, many declarators, a long initializer, a long sum, many small
+  functions, many macro invocations, many locals, one long string, many
+  comments), 64 KiB compiles them all within the page's ten seconds, while
+  96 KiB of initializer elements fills the parser's arena and 512 KiB fills
+  one arena or another in every shape but comments. The explorer stops at
+  500 levels of nesting with a diagnostic, and its trace of phase 4 stops
+  after 50,000 steps or 8 MiB, each argument cut at 160 bytes (the card
+  says so). The trace has an arena of its own, a quarter of which it may
+  use, and charges every byte to that budget before allocating it, so a
+  macro that expands enormously cannot fill an arena through it: tracing
+  makes no program fail that compiles without it. A compilation that takes
+  over 10 seconds terminates the compiler Worker, as does a trap, which
+  leaves the Wasm instance unusable. The view says why: a Rust panic sends
+  its message before the trap; a trap without one is a failed allocation, an
+  arena that filled ("bcc ran out of memory …"); an overflow of the
+  engine's call stack means the program nests too deeply. The next edit
+  starts a fresh compiler.
 - **Diagnostics.** Errors and warnings are Monaco markers in the source, with
   the message on hover, and a list under the stage with each message's place
   (click it to show the line), the part of the compiler that reported it, and
@@ -281,7 +352,8 @@ lessons, so a stale module fails CI, which has no wasm32 clang.
 themes, layout, components, and the classes the editor decorations use). In
 `src/`, `lib.rs` maps the modules. `app.rs` owns the page state, controls,
 keyboard shortcuts and layout. `panels/` renders the narration, expression
-tree, memory diagram and pipeline view. `editor.rs` mounts Monaco, and
+tree, memory diagram and pipeline view, with the front-end stages' cards and
+source marks in `panels/front_end.rs`. `editor.rs` mounts Monaco, and
 `highlight.rs` colours the prerendered fallback. `app/wasm.rs` holds the
 WebAssembly view's page state and controls, `panels/wasm.rs` (with
 `panels/wasm/`) draws it, and `wasm.rs` (with `wasm/`) defines its data, the
@@ -289,9 +361,11 @@ WebAssembly view's page state and controls, `panels/wasm.rs` (with
 (`wasm/worker.rs`) and the narration (`wasm/narration.rs`). The interpreter
 itself is `stepper/`, mapped in its `src/lib.rs`. `palette.rs` assigns each
 variable its colour. `snapshot.rs` defines what the page presents, `demos.rs`
-the lessons, and `pipeline.rs` the compiler stages, their explanations, the
-source-to-output links, why a compilation stopped, the optimizer comparison
-and the bundled LLVM IR. `engine.rs` proxies both Workers over the messages in
+the lessons, and `pipeline.rs` the compiler stages, their explanations and
+citations, the source-to-output links, why a compilation stopped, the
+optimizer comparison and the bundled LLVM IR; `pipeline/front_end.rs` holds
+the front-end phases' data, the folded preprocessed text and its line
+links. `engine.rs` proxies both Workers over the messages in
 `protocol.rs`. In the abstract machine's Worker, `machine.rs` drives an engine
 `Session` and turns each state into a snapshot (UTF-8 byte ranges become
 UTF-16 editor columns); in the compiler's, `explorer.rs` runs bcc and turns
@@ -306,16 +380,17 @@ a titled, cited event at each step; event ranges, expression trees and
 waiting frames; diagnostics and recovery; UTF-16 columns; colouring; every
 lesson compiling live at both levels; placed compiler diagnostics and the
 stop explanation; the machine-code listing; the LLVM IR's sync with the
-lessons; the source-to-output links and the optimizer comparison; and
-prerendering; every lesson stepped through its WebAssembly with a placed,
-narrated state at each instruction; and every lesson compiled by bcc for
-`wasm32-wasip1`, stepped through bcc's own text to the exit status Clang's
-module returns, the conversion of bcc's output, its diagnostics for a
-program it refuses, and the choice between the two compilers. `RUSTFLAGS= cargo test -p
-bcc-wasm-stepper` runs the interpreter's tests: each instruction family
-against the specification's values, control flow, traps, memory bounds,
-decoding and validation, the stepping commands, the WASI host, and the
-lesson modules. The engine's own
+lessons; the source-to-output links, the folded headers and gutter labels of
+the front-end stages, and the optimizer comparison; prerendering; every
+lesson stepped through its WebAssembly with a placed, narrated state at each
+instruction; and every lesson compiled by bcc for `wasm32-wasip1`, stepped
+through bcc's own text to the exit status Clang's module returns, the
+conversion of bcc's output, its diagnostics for a program it refuses, and the
+choice between the two compilers. `RUSTFLAGS= cargo test -p bcc-wasm-stepper`
+runs the interpreter's tests: each instruction family against the
+specification's values, control flow, traps, memory bounds, decoding and
+validation, the stepping commands, the WASI host, and the lesson modules. The
+engine's own
 tests run from the repository root with `cargo test --lib --no-default-features
 --features abstract-machine abstract_machine`. Generated artifacts belong in
 ignored `web/target/`, `web/dist/` and `web/editor/{node_modules,dist,fonts}/`.

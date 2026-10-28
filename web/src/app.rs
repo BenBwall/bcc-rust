@@ -48,6 +48,7 @@ use crate::{
         TreeView,
         WasmListing,
         WasmView,
+        source_marks,
     },
     pipeline::{
         Compilation,
@@ -123,6 +124,7 @@ pub fn App() -> impl IntoView {
                                             theme=state.theme_name
                                             hover_source=state.hover_source.read_only()
                                             hover_output=state.hover_output
+                                            headers=state.headers
                                             filename=state.filename.read_only()
                                             source=state.editor_text.into()
                                             on_reveal=Callback::new(move |line| state.reveal.set(Some(line)))
@@ -212,6 +214,8 @@ pub(crate) struct State {
     announcement:    RwSignal<String>,
     mode:            RwSignal<Mode>,
     stage:           RwSignal<Stage>,
+    /// Whether the preprocessed text shows the headers' text.
+    headers:         RwSignal<bool>,
     theme:           RwSignal<&'static str>,
     theme_name:      Signal<&'static str>,
     /// bcc's compiler Worker, started on the first compilation.
@@ -314,6 +318,7 @@ impl State {
             announcement: RwSignal::new(String::new()),
             mode: RwSignal::new(Mode::Machine),
             stage: RwSignal::new(Stage::Ir),
+            headers: RwSignal::new(false),
             theme,
             theme_name: Signal::derive(move || theme.get()),
             compiler: StoredValue::new_local(None),
@@ -550,11 +555,21 @@ impl State {
         }
     }
 
+    /// Load a lesson, in the view it is about: a lesson about the compiler
+    /// opens the pipeline at its stage, unless the WebAssembly view is open.
     fn select_demo(self, demo: &'static Demo) {
-        // The WebAssembly view steps lessons too; the pipeline view gives
-        // way to the abstract machine.
+        // The WebAssembly view steps every lesson, compiled by bcc itself,
+        // so it stays open. Otherwise a lesson about the compiler opens the
+        // pipeline at its stage, and the others the abstract machine.
+        if let Some(stage) = demo.stage {
+            self.stage.set(stage);
+        }
         if self.mode.get_untracked() != Mode::Wasm {
-            self.mode.set(Mode::Machine);
+            self.mode.set(if demo.stage.is_some() {
+                Mode::Pipeline
+            } else {
+                Mode::Machine
+            });
         }
         self.action(move || self.stage_program(demo.source.into(), demo.name.into()));
     }
@@ -610,6 +625,13 @@ impl State {
         let Some(key) = self.next_compilation() else {
             return;
         };
+        // Larger source than the in-browser compiler takes is refused here,
+        // without loading it.
+        if let Some(refusal) = crate::pipeline::too_large(&key.0) {
+            self.compiled
+                .update(|compiled| remember(compiled, key, Err(refusal)));
+            return;
+        }
         self.in_flight.set(Some(key.clone()));
         spawn_local(async move {
             let result = match self.compiler().await {
@@ -631,27 +653,14 @@ impl State {
                     if !compiler.connected() {
                         self.compiler.set_value(None);
                     }
-                    result.map_err(|error| {
-                        if error == engine::COMPILER.timed_out()
-                            || error == engine::COMPILER.stopped()
-                        {
-                            error
-                        } else {
-                            format!("bcc's in-browser compiler crashed ({error}).")
-                        }
-                    })
+                    result.map_err(compiler_failure)
                 },
                 | Err(error) => Err(error),
             };
             self.in_flight.set(None);
             if self.editor_text.with_untracked(|text| *text == key.0) {
-                self.compiled.update(|compiled| {
-                    compiled.retain(|(known, _)| *known != key);
-                    compiled.push((key, result));
-                    if compiled.len() > COMPILED_LIMIT {
-                        _ = compiled.remove(0);
-                    }
-                });
+                self.compiled
+                    .update(|compiled| remember(compiled, key, result));
             }
             self.pump();
         });
@@ -926,7 +935,8 @@ impl State {
     }
 
     /// The source editor's decorations: execution marks, run target, object
-    /// colours, and pipeline line links.
+    /// colours, and in the pipeline view the stage's own marks and the line
+    /// links (with the exact range of a hovered preprocessing token).
     fn source_layers(self) -> Vec<Layer> {
         if self.mode.get() == Mode::Wasm {
             let (execution, links) = if self.wasm.stale(&self.editor_text.get()) {
@@ -934,10 +944,13 @@ impl State {
             } else {
                 self.wasm.source_marks()
             };
+            // Each layer is listed, so a mark another view drew (such as the
+            // pipeline stage's) is cleared.
             return vec![
                 ("execution", execution),
                 ("objects", Vec::new()),
                 ("target", self.target_layer()),
+                ("stage", Vec::new()),
                 ("links", links),
             ];
         }
@@ -945,7 +958,14 @@ impl State {
         let edited = self.edited.get();
         let mut execution = Vec::new();
         let mut objects = Vec::new();
-        if let Some(snapshot) = snapshot.as_ref().filter(|_| !edited) {
+        // A program the abstract machine refused never ran; the pipeline
+        // view marks what the compiler did with it instead.
+        let refused = |snapshot: &Snapshot| snapshot.step == 0 && snapshot.status == "error";
+        let pipeline = self.mode.get() == Mode::Pipeline;
+        if let Some(snapshot) = snapshot
+            .as_ref()
+            .filter(|snapshot| !edited && !(pipeline && refused(snapshot)))
+        {
             let fault = snapshot.event.category == "fault";
             if let Some(range) = snapshot.event.range {
                 let class = if fault { "exec-fault" } else { "exec-current" };
@@ -997,20 +1017,45 @@ impl State {
         }
         let target = self.target_layer();
         let hovered = self.hover_output.get();
-        let links = if self.mode.get() == Mode::Pipeline && hovered > 0 {
+        let links = if pipeline && hovered > 0 {
             let stage = self.stage.get();
+            let headers = self.headers.get();
             self.compilation.with(|compilation| {
                 compilation
                     .as_ref()
                     .map(|compilation| {
                         self.editor_text.with(|source| {
-                            crate::pipeline::links(stage, compilation, source)
+                            let links = crate::pipeline::links(stage, compilation, source, headers);
+                            let mut marks: Vec<Decoration> = links
                                 .sources_for(hovered)
                                 .into_iter()
                                 .map(|line| Decoration::line(line, "link-line"))
-                                .collect()
+                                .collect();
+                            if let Some(range) = links.range_for(hovered) {
+                                marks.push(Decoration {
+                                    start_line: range.line,
+                                    start_column: range.column,
+                                    end_line: range.end_line,
+                                    end_column: range.end_column.max(range.column + 1),
+                                    class_name: Some("link-range".to_owned()),
+                                    z_index: 4,
+                                    ..Decoration::default()
+                                });
+                            }
+                            marks
                         })
                     })
+                    .unwrap_or_default()
+            })
+        } else {
+            Vec::new()
+        };
+        let stage_marks = if pipeline {
+            let stage = self.stage.get();
+            self.compilation.with(|compilation| {
+                compilation
+                    .as_ref()
+                    .map(|compilation| source_marks(stage, compilation))
                     .unwrap_or_default()
             })
         } else {
@@ -1020,6 +1065,7 @@ impl State {
             ("execution", execution),
             ("objects", objects),
             ("target", target),
+            ("stage", stage_marks),
             ("links", links),
         ]
     }
@@ -1103,6 +1149,21 @@ impl LiveViews {
 
 /// The compilation of `text` at `level`, if it succeeded, with the
 /// precomputed LLVM IR for a lesson.
+/// Why the compiler Worker gave no answer, for the page: a timeout, or a
+/// trap whose cause is known, says so itself.
+fn compiler_failure(error: String) -> String {
+    if error == engine::COMPILER.timed_out()
+        || error == engine::COMPILER.stopped()
+        || error == engine::OUT_OF_MEMORY
+        || error == engine::TOO_DEEP
+        || error.starts_with(engine::INTERNAL_ERROR)
+    {
+        error
+    } else {
+        format!("bcc's in-browser compiler crashed ({error}).")
+    }
+}
+
 fn compilation_of(compiled: &Compiled, text: &str, level: bool) -> Option<Compilation> {
     let llvm = demos::matching(text).and_then(|demo| {
         crate::pipeline::precomputed_llvm(demo.name.trim_end_matches(".c"), level)
@@ -1139,6 +1200,17 @@ fn shown(
             ..previous.clone()
         }),
         | _ => current.cloned(),
+    }
+}
+
+/// Keeps `result` for `key` as the newest entry of `compiled`, which holds
+/// at most [`COMPILED_LIMIT`]: each entry holds its whole source, so a
+/// refused program, kept so its refusal shows, is let go like any other.
+fn remember(compiled: &mut Compiled, key: CompileKey, result: Result<Compilation, String>) {
+    compiled.retain(|(known, _)| *known != key);
+    compiled.push((key, result));
+    if compiled.len() > COMPILED_LIMIT {
+        _ = compiled.remove(0);
     }
 }
 
@@ -1652,9 +1724,10 @@ fn About() -> impl IntoView {
                 <article>
                     <h3>"The compiler"</h3>
                     <p>
-                        "A real compiler doesn’t run your program; it translates it. bcc reads tokens, builds a syntax \
-                         tree, checks types, lowers everything to an SSA intermediate representation, optimizes it, and \
-                         finally selects x86-64 instructions and encodes them as bytes."
+                        "A real compiler doesn’t run your program; it translates it. bcc splices lines, cuts them into \
+                         tokens, runs the preprocessor, builds a syntax tree, checks types, lowers everything to an SSA \
+                         intermediate representation, optimizes it, and finally selects x86-64 instructions and encodes \
+                         them as bytes."
                     </p>
                     <p>
                         "It is allowed to produce any code that behaves like the abstract machine would. That freedom is \
@@ -1670,8 +1743,8 @@ fn About() -> impl IntoView {
                     <h3>"Limits of this model"</h3>
                     <p>
                         "The engine runs a bounded subset of C: int and char locals, int pointers, fixed int arrays, \
-                         functions, if, while and for. No preprocessor, globals, structs, library calls or floating \
-                         point. Operands are evaluated left to right, and nested side effects are rejected rather than \
+                         functions, if, while and for. No preprocessor (the preprocessor lesson opens in the compiler \
+                         pipeline instead), globals, structs, library calls or floating point. Operands are evaluated left to right, and nested side effects are rejected rather than \
                          sequenced."
                     </p>
                     <p>

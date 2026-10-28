@@ -42,6 +42,12 @@ pub struct Decoration {
     pub number_class: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hover:        Option<String>,
+    /// Text drawn before the range without being part of the code, such as
+    /// the mark where a line splice was, styled with `before_class`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub before:       Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub before_class: Option<String>,
     pub z_index:      i32,
 }
 
@@ -94,6 +100,10 @@ pub fn CodeEditor(
     /// A line to scroll into view.
     #[prop(optional)]
     reveal: Option<Signal<Option<usize>>>,
+    /// The gutter's label for each line, in place of its number; empty
+    /// numbers the lines as usual.
+    #[prop(optional)]
+    line_numbers: Option<Signal<Vec<String>>>,
 ) -> impl IntoView {
     let host = NodeRef::<html::Div>::new();
     let ready = RwSignal::new(false);
@@ -112,6 +122,7 @@ pub fn CodeEditor(
         on_hover_line,
         on_gutter_click,
         reveal,
+        line_numbers,
     });
     #[cfg(not(feature = "hydrate"))]
     let _ = (
@@ -123,6 +134,7 @@ pub fn CodeEditor(
         on_hover_line,
         on_gutter_click,
         reveal,
+        line_numbers,
     );
     view! {
         <div class="code-editor" class:is-ready=move || ready.get() data-language=move || language.get()>
@@ -190,6 +202,8 @@ mod monaco {
         fn set_markers(this: &Editor, items: &JsValue);
         #[wasm_bindgen(method, js_name = revealLine)]
         fn reveal_line(this: &Editor, line: usize);
+        #[wasm_bindgen(method, js_name = setLineNumbers)]
+        fn set_line_numbers(this: &Editor, labels: &JsValue);
         #[wasm_bindgen(method, js_name = onChange)]
         fn on_change(this: &Editor, callback: &js_sys::Function);
         #[wasm_bindgen(method, js_name = onHoverLine)]
@@ -251,6 +265,7 @@ mod monaco {
         pub on_hover_line:   Option<Callback<usize>>,
         pub on_gutter_click: Option<Callback<usize>>,
         pub reveal:          Option<Signal<Option<usize>>>,
+        pub line_numbers:    Option<Signal<Vec<String>>>,
     }
 
     #[derive(Serialize)]
@@ -374,6 +389,7 @@ mod monaco {
             decorations,
             markers,
             reveal,
+            line_numbers,
             ..
         } = mount;
         let with = move |apply: &dyn Fn(&Editor)| {
@@ -416,6 +432,16 @@ mod monaco {
                     && let Ok(items) = serde_wasm_bindgen::to_value(&markers)
                 {
                     with(&|editor| editor.set_markers(&items));
+                }
+            });
+        }
+        if let Some(line_numbers) = line_numbers {
+            Effect::new(move || {
+                let labels = line_numbers.get();
+                if ready.get()
+                    && let Ok(labels) = serde_wasm_bindgen::to_value(&labels)
+                {
+                    with(&|editor| editor.set_line_numbers(&labels));
                 }
             });
         }

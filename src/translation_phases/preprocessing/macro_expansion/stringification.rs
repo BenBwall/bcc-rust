@@ -57,7 +57,11 @@ impl Expander<'_, '_, '_, '_> {
                         ..
                     })
                 ) {
-                    Some(self.parse_hash_operator(token))
+                    let result = self.parse_hash_operator(token);
+                    if self.tracing() {
+                        self.trace_stringified(result);
+                    }
+                    Some(result)
                 } else {
                     Some(token)
                 }

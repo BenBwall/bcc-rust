@@ -149,6 +149,13 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
         {
             self.skip_and_expand_until_newline();
         }
+        if self.recording_includes() {
+            self.record_included(
+                directive.source_vectors,
+                (header.source_vectors, header.name, header.is_system_header),
+                header_source_index.map(|(index, _)| index),
+            );
+        }
         let Some((header_source_index, include_search_index)) = header_source_index else {
             return;
         };
