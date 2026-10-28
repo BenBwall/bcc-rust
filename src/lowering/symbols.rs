@@ -38,6 +38,8 @@ use crate::{
         InlineOdr,
         Inlining,
         Linkage,
+        TypeId,
+        TypeKind,
         UnsupportedAttribute,
         Visibility,
     },
@@ -78,16 +80,23 @@ impl Unit<'_, '_, '_> {
         }
     }
 
-    /// Whether `-fcommon` makes the object `binding` a common symbol: an
-    /// external one this unit defines only tentatively, unless an
-    /// attribute asks for a section or for Windows DLL storage, or it is
-    /// thread-local, as Clang's `isVarDeclStrongDefinition` decides. On the
-    /// MSVC target an explicitly aligned object is no common symbol
-    /// either, as there; a WebAssembly module has none.
+    /// Whether the object `binding` is a common symbol: an external one this
+    /// unit defines only tentatively, under `-fcommon` or GNU `common`
+    /// (GNU `nocommon` keeps it a definition), unless it is thread-local or
+    /// imported, or an attribute places it in a section, as Clang's
+    /// `isVarDeclStrongDefinition` decides. On the MSVC target an object
+    /// whose alignment its declaration, its type or a member of its record
+    /// type requires is no common symbol either, as there, since `cl`'s
+    /// linker aligns a communal symbol by its size; a WebAssembly module
+    /// has none.
     /// Extension: C99 §J.5.11, p. 514; PDF p. 526.
     fn common_symbol(&self, binding: usize) -> bool {
         let data = self.sema.bindings[binding];
-        if !self.context.code_assumptions.common_symbols
+        let attributes = self.sema.entity_attributes(binding);
+        let requested = attributes
+            .and_then(|attributes| attributes.common)
+            .unwrap_or(self.context.code_assumptions.common_symbols);
+        if !requested
             || self.target.is_wasm()
             || data.kind != BindingKind::Object
             || data.duration == crate::translation_phases::semantic_analysis::Duration::Thread
@@ -95,14 +104,40 @@ impl Unit<'_, '_, '_> {
         {
             return false;
         }
-        self.sema
-            .entity_attributes(binding)
-            .is_none_or(|attributes| {
-                attributes.section.is_none()
-                    && attributes.dll.is_none()
-                    && !(self.target == crate::target::Target::WindowsMsvc
-                        && attributes.declared_alignment)
-            })
+        let microsoft = self.target == crate::target::Target::WindowsMsvc;
+        attributes.is_none_or(|attributes| {
+            attributes.section.is_none()
+                && attributes.dll != Some(DllStorage::Import)
+                && !(microsoft && attributes.declared_alignment)
+        }) && !(microsoft && self.requires_alignment(data.ty, true))
+    }
+
+    /// Whether `ty`'s alignment is required rather than natural, as Clang's
+    /// `ASTContext::isAlignmentRequired` and the MSVC common-symbol rule
+    /// read it: a typedef or `_Alignas` on the type, or on the element type
+    /// of an array, an `aligned` record, or, for `members`, a non-bit-field
+    /// member of a record that requires its own.
+    fn requires_alignment(&self, mut ty: TypeId, members: bool) -> bool {
+        let types = &self.sema.types;
+        loop {
+            if ty.alignment != 0 {
+                return true;
+            }
+            match types.kind(ty) {
+                | TypeKind::Array(element, _) => ty = element,
+                | _ => break,
+            }
+        }
+        let Some(tag) = types.tag(ty) else {
+            return false;
+        };
+        tag.alignment.get() != 0
+            || members
+                && tag.members.get().iter().any(|member| {
+                    member.width.is_none()
+                        && (member.explicit_alignment != 0
+                            || self.requires_alignment(member.ty, false))
+                })
     }
 
     /// A definition this unit emits is not imported: a later definition

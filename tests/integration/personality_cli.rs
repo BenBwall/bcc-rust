@@ -2952,4 +2952,149 @@ mod tests {
         succeeds(&output);
         assert_eq!(stderr(&output), "");
     }
+
+    /// The common symbols an object file defines, by `nm`'s `C` letter.
+    fn common_symbols(object: &Path) -> Option<Vec<String>> {
+        let listing = Command::new("nm").arg(object).output().ok()?;
+        Some(
+            stdout(&listing)
+                .lines()
+                .filter_map(|line| {
+                    let mut words = line.split_whitespace().rev();
+                    let name = words.next()?;
+                    (words.next()? == "C").then(|| name.to_owned())
+                })
+                .collect(),
+        )
+    }
+
+    /// A `const` tentative definition is common, and so not constant, as in
+    /// Clang; GNU `common` makes an object common under `-fno-common` and
+    /// `nocommon` keeps one a definition under `-fcommon`, the last one
+    /// written winning, on both back ends.
+    #[test]
+    fn common_attributes_and_constant_objects() {
+        if !cfg!(all(target_os = "linux", target_env = "gnu")) {
+            return;
+        }
+        let directory = Directory::new();
+        directory.write(
+            "c.c",
+            "const int cint;\n__attribute__((common)) int ca;\n__attribute__((nocommon)) int \
+             na;\n__attribute__((nocommon)) int last;\n__attribute__((common)) int last;\nint \
+             pa;\n",
+        );
+        for backend in ["--backend=llvm", "--backend=native"] {
+            for (flag, expected) in [
+                ("-fcommon", &["cint", "ca", "last", "pa"][..]),
+                ("-fno-common", &["ca", "last"]),
+            ] {
+                let output = directory.bcc("", &[backend, flag, "-c", "c.c", "-o", "c.o"]);
+                succeeds(&output);
+                let Some(mut symbols) = common_symbols(&directory.path("c.o")) else {
+                    return;
+                };
+                symbols.sort();
+                let mut expected = expected.to_vec();
+                expected.sort_unstable();
+                assert_eq!(symbols, expected, "{backend} {flag}");
+            }
+        }
+    }
+
+    /// On the Windows targets common symbols are COFF communal symbols
+    /// (section 0, the size as the value), as Clang emits them: on MinGW
+    /// every tentative definition, with `-aligncomm` above a byte and a
+    /// `dllexport` one exported; on the MSVC target not one whose alignment
+    /// its declaration, typedef, record or a member requires, since the
+    /// linker aligns a communal symbol by its size alone.
+    #[test]
+    fn coff_common_symbols_follow_clang() {
+        let directory = Directory::new();
+        directory.write(
+            "w.c",
+            "struct B { char q[64]; } __attribute__((aligned(64))) b64;\ntypedef int ai16 \
+             __attribute__((aligned(16)));\nai16 ai;\ntypedef long long al8 \
+             __attribute__((aligned(8)));\nal8 aarr[4];\nstruct F { int x \
+             __attribute__((aligned(8))); } f;\nstruct G { ai16 y; } g;\nstruct H { struct F f; } \
+             h;\nstruct K { struct B b; } k;\n__declspec(dllexport) int dexp;\nchar onebyte;\nint \
+             plain;\n__attribute__((aligned(16))) int own;\n",
+        );
+        let communal = |object: &Path| -> Option<Vec<String>> {
+            let listing = Command::new("objdump")
+                .arg("-t")
+                .arg(object)
+                .output()
+                .ok()?;
+            if !listing.status.success() {
+                return None;
+            }
+            let mut names: Vec<String> = stdout(&listing)
+                .lines()
+                .filter(|line| line.contains("(sec  0)") && line.contains("(scl   2)"))
+                .filter_map(|line| line.split_whitespace().last().map(str::to_owned))
+                .filter(|name| !name.starts_with('_') && !name.starts_with('.'))
+                .collect();
+            names.sort();
+            Some(names)
+        };
+        let directives = |object: &Path| -> String {
+            Command::new("objdump")
+                .args(["-s", "-j", ".drectve"])
+                .arg(object)
+                .output()
+                .map(|output| {
+                    stdout(&output)
+                        .lines()
+                        .filter(|line| line.starts_with(' '))
+                        .map(|line| line.get(43..).unwrap_or(""))
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        for (target, expected) in [
+            (
+                "x86_64-w64-windows-gnu",
+                &[
+                    "aarr", "ai", "b64", "dexp", "f", "g", "h", "k", "onebyte", "own", "plain",
+                ][..],
+            ),
+            ("x86_64-pc-windows-msvc", &["dexp", "h", "onebyte", "plain"]),
+        ] {
+            for backend in ["--backend=llvm", "--backend=native"] {
+                let output = directory.bcc(
+                    "",
+                    &[
+                        &format!("--target={target}"),
+                        backend,
+                        "-fms-extensions",
+                        "-fcommon",
+                        "-c",
+                        "w.c",
+                        "-o",
+                        "w.obj",
+                    ],
+                );
+                succeeds(&output);
+                let Some(names) = communal(&directory.path("w.obj")) else {
+                    return;
+                };
+                assert_eq!(names, expected, "{target} {backend}");
+                let drectve = directives(&directory.path("w.obj"));
+                if target.ends_with("gnu") {
+                    assert!(
+                        drectve.contains("-export:dexp,data"),
+                        "{backend}: {drectve}"
+                    );
+                    assert!(drectve.contains("-aligncomm:"), "{backend}: {drectve}");
+                    assert!(!drectve.contains("onebyte"), "{backend}: {drectve}");
+                } else {
+                    assert!(
+                        drectve.contains("/EXPORT:dexp,DATA"),
+                        "{backend}: {drectve}"
+                    );
+                }
+            }
+        }
+    }
 }

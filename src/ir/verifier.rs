@@ -107,21 +107,26 @@ fn verify_symbol_attributes(
         ));
     }
     // A common symbol is a zero-filled block the linker places, so it has
-    // no contents, section, alias, DLL storage or per-thread copies.
+    // no contents, section, alias or per-thread copies, may take another
+    // unit's definition, so it is not constant, and is defined here, so it
+    // is not imported.
     if linkage == Linkage::Common {
         let zero = match symbol {
             | Symbol::Function(_) => false,
-            | Symbol::Global(global) => module.global(global).init == Some(GlobalInit::Zero),
+            | Symbol::Global(global) => {
+                let global = module.global(global);
+                global.init == Some(GlobalInit::Zero) && !global.constant
+            },
         };
         if !zero
             || thread_local
             || attributes.section.is_some()
             || attributes.alias.is_some()
-            || attributes.dll != DllStorage::Default
+            || attributes.dll == DllStorage::Import
         {
             error(VerifierErrorKind::SymbolAttribute(
-                "a common symbol is a zero-filled global without a section, alias, DLL storage or \
-                 thread-local storage",
+                "a common symbol is a mutable zero-filled global without a section, alias, import \
+                 or thread-local storage",
             ));
         }
     }

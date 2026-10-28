@@ -395,8 +395,9 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
                 global.align.log2()
             )?;
             // A COFF common symbol carries no alignment; MinGW's linker
-            // reads it from an `-aligncomm` directive, as LLVM writes one.
-            if self.target == Target::WindowsGnu {
+            // reads it from an `-aligncomm` directive, as LLVM writes one
+            // for any alignment above a byte.
+            if self.target == Target::WindowsGnu && global.align.log2() != 0 {
                 writeln!(
                     self.out,
                     "\t.section\t.drectve,\"yni\"\n\t.ascii\t\" -aligncomm:{},{}\"",

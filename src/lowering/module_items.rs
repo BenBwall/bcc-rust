@@ -1063,7 +1063,9 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             linkage,
             size: self.sema.flexible_object_size(binding).unwrap_or(size),
             align,
-            constant: types.readonly_object(data.ty),
+            // A common symbol may take another unit's definition, as
+            // Clang's is never constant.
+            constant: types.readonly_object(data.ty) && linkage != IrLinkage::Common,
             thread_local: data.duration
                 == crate::translation_phases::semantic_analysis::Duration::Thread,
         })

@@ -318,6 +318,7 @@ fn ordinary_symbol(attributes: &EntityAttributes<'_>) -> bool {
             declared_alignment: false,
             inlining:           Inlining::Default,
             select_any:         false,
+            common:             None,
             dll:                None,
             inline_odr:         None,
         }
