@@ -85,7 +85,16 @@ without a personality as well:
 - `--sysroot` for the libraries the bundled clang links against, not only the
   headers;
 - `-fwrapv`, `-fpack-struct=N` and `-f[no-]trigraphs`, which the
-  personalities map `-fwrapv`, `cl /ZpN` and `cl /Zc:trigraphs` onto;
+  personalities map `-fwrapv`, `cl /ZpN` and `cl /Zc:trigraphs` onto, and
+  `-f[no-]common`, `-f[no-]wrapv-pointer`, `-f[no-]strict-overflow` and
+  `-f[no-]delete-null-pointer-checks`;
+- `-v` (the header search and each command the driver runs, quoted as
+  Clang quotes them), `-H` (the include tree), `-MG` (with `-M` or `-MM`,
+  missing headers taken to be generated), and `--show-includes` (`cl
+  /showIncludes`), indented by nesting;
+- `--driver-name=NAME`, which the personalities pass so that the driver's
+  own warnings and errors begin `NAME: warning:`, or take `cl`'s
+  `cl : Command line warning :` form under the `cl` identity;
 - `--compiler-identity=clang|gcc|msvc|clang-cl|tcc` and
   `--diagnostic-format=bcc|clang|gcc|msvc|msvc-classic|msvc-caret|tcc`
   (also Clang's `-fdiagnostics-format=`).
@@ -101,6 +110,9 @@ without a personality as well:
 | `__clang__`, `__llvm__` | undefined | 23.1.1 | undefined | 23.1.1 | undefined | 23.1.1 |
 | Other identity | `__VERSION__ "14.2.0"`, execution charset names, `__GCC_IEC_559` | | `_MSC_VER 1933`, `_MSC_FULL_VER`, `_MT`, `_MSVC_TRADITIONAL 0` | `_MSC_VER 1933`, `_MT` | `__TINYC__ 927` | |
 | `_Float32` ... `_Float128` | keywords, distinct types | identifiers | identifiers | identifiers | identifiers | identifiers (`-ffloatn-types`) |
+| `_Float16`, `__bf16` | types, GCC's `__FLT16_*__` and `__BFLT16_*__` | types, Clang's `__FLT16_*__` | identifiers | types | identifiers | types |
+| `__fp16` | identifier | storage type | identifier | storage type | identifier | storage type |
+| Tentative definitions | `-fno-common` (`-fcommon` makes them common) | same | same | same | same | same |
 | Unsigned plain `char` | `-funsigned-char` | `-funsigned-char` | `/J` | `/J`, `-funsigned-char` | `-funsigned-char` | `-funsigned-char` |
 | System headers | host's `/usr/local/include`, multiarch, `/usr/include` | same | `%INCLUDE%` (unless `/X`) | same | host's | the host's when compiling for the host; none for a cross target unless asked |
 | Diagnostics | `file:line:col: error:` + snippet | same + `N errors generated.` | `file(line,col): error:` | same | `file:line: error:` | annotated snippet |
@@ -119,9 +131,13 @@ The `_FloatN` types follow the compiler too. GCC 7 and later make
 every C mode, so the GCC personality's identity turns on bcc's
 `-ffloatn-types`: distinct types, the `f32`-style suffixes, the
 `__FLT32_*__`-family macros and the `__builtin_inff32`-family builtins. The
-pinned Clang 23 rejects all five names and the suffixes in C (it has
-`_Float16` and `__fp16`, which bcc lacks), and neither `cl` nor TCC has them,
-so the other personalities leave them identifiers for glibc's typedefs.
+pinned Clang 23 rejects all five names and the suffixes in C, and neither
+`cl` nor TCC has them, so the other personalities leave them identifiers
+for glibc's typedefs. The half-precision types follow each compiler as
+well: `_Float16` and `__bf16` are types for GCC 13 and Clang, each with its
+own excess-precision rules and macros, Clang's `__fp16` storage type for
+the Clang identities, and none of them for `cl` or TCC
+([language-standards.md](../../language-standards.md#half-precision-floating-types-2026-10-27)).
 bcc's own `-ffloatn-types` and `-fno-floatn-types`, which the GCC, Clang,
 TCC and clang-cl personalities pass on, override either default.
 
@@ -136,8 +152,8 @@ for GCC, Clang and TCC; `msvc.rs` for `cl` and clang-cl):
   `-save-temps`, `-flto`, `-fuse-ld=`), optimizations
   the compiler is permitted but not required to make (`-funroll-loops`,
   `-fomit-frame-pointer`, `-fstrict-aliasing`), code generation tuning (`-mtune=`, `-falign-*`,
-  `-mtls-dialect=`), what bcc always does (`-fno-common`,
-  `-fno-strict-aliasing`: bcc emits no type-based alias information;
+  `-mtls-dialect=`), what bcc always does (`-fno-strict-aliasing`: bcc
+  emits no type-based alias information;
   `-ffp-contract=off`: bcc forms no fused operations; `-fexcess-precision=`:
   x86-64 has none; `-mno-avx`: bcc uses only the baseline instruction set;
   `-march=x86-64`), the
@@ -154,19 +170,17 @@ for GCC, Clang and TCC; `msvc.rs` for `cl` and clang-cl):
   `cl`'s `/GS`, `/sdl`, `/RTC*`, `/guard:cf` and `/Qspectre`; and requests
   bcc's output satisfies less fully but correctly: a newer processor
   (`-march=native`, `-march=x86-64-v3`, `-mavx2`; baseline x86-64 code runs
-  on it, but its macros such as `__AVX2__` stay undefined), `-fcommon` (two
-  units' identical tentative definitions then fail to link, as with
-  `-fno-common`), and `-ffunction-sections`/`-fdata-sections` (the linker's
-  `--gc-sections` removes less). The build goes on and says what it lacks.
+  on it, but its macros such as `__AVX2__` stay undefined), and
+  `-ffunction-sections`/`-fdata-sections` (the linker's `--gc-sections`
+  removes less). The build goes on and says what it lacks.
 - **Refused**, with the compiler's kind of error, for everything else:
   options that change layout or the ABI away from the target's
   (`-fshort-enums`, `-fshort-wchar`, `-fpack-struct=3`, `-mms-bitfields` on
   Linux, `-mno-ms-bitfields` on Windows, `-mregparm=`, `-mlong-double-64`
   outside MSVC, `cl /Gv`), instruction sets bcc's code needs (`-mno-sse`,
   `-mgeneral-regs-only`; `cl /arch:AVX2`, which also changes macros),
-  language rules bcc does not follow (`-fno-delete-null-pointer-checks`,
-  `-fno-strict-overflow`, `-ffast-math`, `-frounding-math`, `cl /fp:strict`,
-  `/volatile:ms`), and
+  language rules bcc does not follow (`-fsemantic-interposition`,
+  `-ffast-math`, `-frounding-math`, `cl /fp:strict`, `/volatile:ms`), and
   instrumentation whose output a build expects (`-fsanitize=`,
   `-fprofile-arcs`, `--coverage`, `-finstrument-functions`, `-fopenmp`).
   An option the lists do not name is refused too, so a newly added option is
@@ -174,6 +188,17 @@ for GCC, Clang and TCC; `msvc.rs` for `cl` and clang-cl):
 
 Where bcc can do what the option asks cheaply, the personality maps it
 instead: `-fwrapv` (lowering marks signed arithmetic without `nsw`),
+`-fwrapv-pointer` (pointer arithmetic without `inbounds`, so it wraps in
+LLVM and the interpreter), `-fno-strict-overflow` (both, as in GCC),
+`-fno-delete-null-pointer-checks` (every LLVM function is
+`null_pointer_is_valid`, as Clang marks them, so a dereference does not let
+LLVM drop a later null check; bcc's own optimizer never drops one),
+`-fcommon` (an external tentative definition the unit leaves tentative is
+a common symbol, LLVM `common` or the native back end's `.comm`, which its
+ELF and COFF writers encode, with MinGW's `-aligncomm`; as in Clang, not
+for thread-local objects, objects in a section or with DLL storage, or
+explicitly aligned objects on the MSVC target; bcc's objects then link
+with GCC's `-fcommon` objects, an initialized definition winning),
 `-fpack-struct=N` and `cl /ZpN` (the packing before any `#pragma pack`),
 `-fpack-struct` alone (every structure packed, the pragmas ignored with
 GCC's warning), the options that give up part of IEC 60559 semantics
@@ -202,18 +227,25 @@ are compiled separately and linked. GCC rejects an unknown option
 `-Wno-*`, which it ignores. Queries: `--version`, `-v`, `-dumpversion` (the
 major version since GCC 7), `-dumpfullversion`, `-dumpmachine`,
 `-print-prog-name=`, `-print-search-dirs`, `-print-multiarch`, `-###`.
+`-v` prints the version lines, then each command before running it and
+the header search its compiler uses; `-###` prints the commands without
+running them. `-H` prints each header an `#include` enters, after a dot
+per level of nesting, and `-MG` with `-M` or `-MM` takes a missing header
+to be generated. Messages from GCC's own driver begin with its name, as
+the executable was run (`gcc: warning: a.o: linker input file unused
+because linking not done`, `x86_64-w64-mingw32-gcc: error: ...`).
 
 **Mapping.** bcc's own command line already takes GCC's spelling of the
 options it implements, so the personality passes them through: `-c -S -E -o
 -x -I -isystem -iquote -idirafter -D -U -include -std= -ansi -O* -w -W*
 -pedantic* -l -L -Wl, -Xlinker -shared -static -pie -M* -fpic -fms-extensions
--fgnu89-inline -ffreestanding -ftls-model=`. `-Wp,` is split and read as
-preprocessor options (Fedora's `-Wp,-D_FORTIFY_SOURCE=2`). `-s`, `-T`, `-u`,
-`-z` and `-e` become linker options. `-Wa,` and `-Xassembler` reach bcc's
-assembly inputs. `-g*`, `-pipe`, `-save-temps` and `--param` have no effect;
-`-B` and `-specs=` warn that they have none. `-Ofast` is refused: it implies
-`-ffast-math`, which defines `__FAST_MATH__` and links `crtfastmath`, which
-bcc does not do.
+-fgnu89-inline -ffreestanding -ftls-model= -H -MG`. `-Wp,` is split and
+read as preprocessor options (Fedora's `-Wp,-D_FORTIFY_SOURCE=2`). `-s`,
+`-T`, `-u`, `-z` and `-e` become linker options. `-Wa,` and `-Xassembler`
+reach bcc's assembly inputs. `-g*`, `-pipe`, `-save-temps` and `--param`
+have no effect; `-B` and `-specs=` warn that they have none. `-Ofast` is
+refused: it implies `-ffast-math`, which defines `__FAST_MATH__` and links
+`crtfastmath`, which bcc does not do.
 
 **Inputs and stages.** GCC's driver leaves a missing input to `cc1`, which
 reports `cc1: fatal error: missing.c: No such file or directory` and
@@ -304,7 +336,13 @@ for each stage option, and leaves `.s` inputs unused (`clang: warning: f.s:
 'assembler' input unused`); `-E`, `-M` and `-MM` override it with the same
 warning for `-fsyntax-only`. A command line that does not link leaves the
 linker's input files unused, with `clang: warning: a.o: 'linker' input
-unused`. These warnings follow the warning options, as Clang's
+unused`, and so are the linker options among them, in order with the
+files (`-lm: 'linker' input unused`, `-Wl,...`, `-Xlinker`, `-z`, `-e`);
+after those, in command-line order, come the arguments only the link reads
+(`argument unused during compilation: '-L/usr/lib'`, also `-T`, `-u`,
+`-s`, `-shared`, `-pie`, `-rdynamic`, `-nostartfiles`), with the stage
+options and `-fsyntax-only` the stage leaves unused. These warnings follow
+the warning options, as Clang's
 `-Wunused-command-line-argument` does: `-w` or
 `-Wno-unused-command-line-argument` silences them, and `-Werror` or
 `-Werror=unused-command-line-argument` makes them errors (`[-Werror,...]`,
@@ -312,6 +350,11 @@ exit status 1) unless `-Wno-error=unused-command-line-argument` exempts
 them; `-Weverything` turns on only the warnings no option has set, so it
 does not undo `-Wno-unused-command-line-argument` or `-Wno-everything`. After a source that fails to compile, Clang compiles the others, as
 GCC does.
+
+`-v`, `-###`, `-H` and `-MG` work as for GCC, with Clang's forms: `-H`
+names a header beside a main file in the working directory `./a.h`, `-MM
+-MG` lists a missing `<...>` header too, and `-MG` without `-M` or `-MM`
+is `clang: error: option '-MG' requires '-M' or '-MM'`.
 
 **Identity.** bcc's default: the pinned Clang 23.1.1 and the GCC 4.2.1 Clang
 claims. `--version` prints `clang version 23.1.1 (bcc 0.1.0, ...)` with the
@@ -390,7 +433,11 @@ to MSVC's codes is documented, so bcc writes no code rather than an invented
 one. The MSVC codes bcc writes are those Microsoft documents for the
 driver's own messages: warnings D9002 (an unknown option), D9024 and D9027
 (inputs), error D8036 (`/Fo` for several sources), and fatal error C1083
-for a source that cannot be opened. `cl` writes compiler diagnostics,
+for a source that cannot be opened. bcc's own driver messages take `cl`'s
+command-line form without a code (`cl : Command line error : cannot build
+...`). `/showIncludes` indents each header by one space more per level of
+nesting, as `cl` does, and leaves out a re-inclusion whose include guard
+is already defined. `cl` writes compiler diagnostics,
 C1083 among them, to stdout; bcc writes them to stderr, as in its other
 modes, and writes only the source names to stdout, as `cl` does.
 
@@ -484,7 +531,11 @@ other value `gnu99`, as TCC sets `__STDC_VERSION__`. TCC reads its inputs
 in order and stops at the first it cannot add, so the inputs after one it
 cannot open, missing or unreadable, are dropped and the run fails with
 `tcc: error: file 'missing.c' not found` (exit status 1), after compiling
-the C sources before it.
+the C sources before it. `-c` and `-o` with several inputs is `tcc: error:
+cannot specify output file with -c many files`. Under the TCC identity a
+`#!` line that starts a file is skipped, as TCC skips it, so a script
+starting `#!/usr/bin/tcc -run` runs; elsewhere the line stays a
+non-directive, which GCC and Clang reject.
 
 **Identity.** `__TINYC__ 927` (TCC 0.9.27), no GNU or Clang macro, and
 `__STDC_VERSION__ 199901L` by default. glibc's headers take their portable
@@ -587,11 +638,18 @@ Besides those above:
   leaving an include) do not rebuild the include stack.
 - The `-dM` listing holds the macros bcc predefines, not the ones GCC or the
   real Clang would; the target tables are Clang's. The GCC identity's
-  floating-point macros for the types bcc has match GCC's, but the standard
-  types' constants keep Clang's spelling, and GCC's `_Float16` and `__bf16`
-  macros (`__FLT16_*__`, `__BFLT16_*__`) are missing with those types.
-  GCC's `__STDC_IEC_559__` family comes from glibc's `stdc-predef.h`, which
-  GCC includes before every file and bcc, like the pinned Clang, does not.
+  floating-point macros match GCC 15's for every type bcc has, `_Float16`'s
+  `__FLT16_*__` and `__bf16`'s `__BFLT16_*__` included, but the standard
+  types' constants keep Clang's spelling (`__FLT_NORM_MAX__
+  3.40282347e+38F` for GCC's 36 digits). GCC's `__STDC_IEC_559__` family
+  comes from glibc's `stdc-predef.h`, which GCC includes before every file
+  and bcc, like the pinned Clang, does not; so `-M`, `-H` and `-v` do not
+  list it either.
+- `<float.h>` defines every name GCC 15's and the pinned Clang's define in
+  each mode, C23's `FLT_NORM_MAX`, `FLT_SNAN`, `INFINITY` and `NAN` and
+  GCC's `FLT_IS_IEC_60559` among them, except GCC's decimal floating
+  `DEC32_*`, `DEC64_*` and `DEC128_*` names in C23 (bcc has no decimal
+  types) and `FLT16_SNAN`, whose `__builtin_nansf16` bcc lacks.
 - `<tgmath.h>` gives a `_FloatN` argument the function of the standard type
   with its format, so `sqrt` of a `_Float32` is `sqrtf`'s value with type
   `float`, where GCC's `__builtin_tgmath` calls `sqrtf32` and keeps the type
@@ -606,18 +664,26 @@ Besides those above:
 - The MSVC personality links through Clang's driver and LLD (`lld-link`),
   which needs the Windows SDK and MSVC libraries (from `%LIB%`); on a Linux
   host without them only `/c`, `/E`, `/P` and `/Fa` work.
-- `-v` prints the version lines but not the commands GCC runs; `-###`
-  prints the bcc command line instead of GCC's subprocesses.
+- `-v` and `-###` print the commands bcc runs, not GCC's or Clang's: each
+  step is a bcc command line that bcc runs in process, named by the path
+  of the running bcc, then, under `-v`, the bundled clang's assembly and
+  link commands. There is no `cc1`, `as` or `collect2` line, no
+  `COLLECT_GCC_OPTIONS`, and GCC's commands are quoted as Clang quotes
+  them. The header search lists every configured directory, without the
+  embedded resource headers, which are no directory on disk.
 - clang-cl's `/o` (a deprecated `/Fe` or `/Fo`), `/imsvc` and the
   `/winsysroot` family are not implemented; they draw the unknown-option
   warning, so `/opt/a.c`, which clang-cl reads as `/o`, is ignored with it
   rather than compiled. Use `-- /opt/a.c`.
 - clang-cl's suggestion for a missing input considers its `cl` options,
   not the Clang options it also takes, which start with `-` only.
-- `/showIncludes` prints `Note: including file: PATH` for every header but
-  does not indent nested ones; `/sourceDependencies`, `-H` and `-MG` are not
-  implemented.
-- TCC's `#!` script line (`#!/usr/bin/tcc -run`) is not skipped.
+- `-H` and `/showIncludes` print their lists after the unit is compiled,
+  not interleaved with its diagnostics, and `-H` omits GCC's closing
+  `Multiple include guards may be useful for:` list. A re-inclusion is left
+  out when the header is one `#ifndef` or `#if !defined` group whose macro
+  is defined, as GCC's and Clang's multiple-include optimization detects
+  it; the embedded resource headers are named `<built-in>/stddef.h`.
+  `/sourceDependencies` is not implemented.
 - The GCC lists come from GCC 15.2, which knows a few options GCC 14 did not.
 - `/Za` turns off only what bcc implements of Microsoft's extensions to C:
   the anonymous tagged members and `_MSC_EXTENSIONS`. The `__`-prefixed
@@ -632,11 +698,6 @@ Besides those above:
 
 These driver behaviours still differ from the compilers mimicked:
 
-- Messages from bcc's own driver do not name the driver: `warning: a.o:
-  linker input file unused because linking not done` where GCC writes
-  `gcc: warning: ...`. Clang's personality warns about unused linker input
-  files itself but not about unused `-l` and `-Wl,` options, which Clang
-  also reports.
 - bcc's `-E` skips assembly inputs, so Clang's `-fsyntax-only`, which
   preprocesses a `.S` input to `-o` or stdout, writes nothing for one, and
   neither does GCC's `-fsyntax-only -S`, which prints a `.S` input
@@ -652,21 +713,29 @@ These driver behaviours still differ from the compilers mimicked:
 - TCC stops at the first input that fails to compile, not only at a missing
   one; bcc compiles the others under `-c`, as GCC does. A missing input
   that is not a C source is reported before the C sources ahead of it are
-  compiled, so under `-c` their objects are not written. `-c` with `-o` and
-  several inputs is refused in GCC's words rather than TCC's (`cannot
-  specify output file with -c many files`).
+  compiled, so under `-c` their objects are not written.
+- TCC's `-run` builds the program into a temporary directory with the
+  bundled clang's linker and runs it, rather than compiling it in memory.
 
 ## Gaps in the compiler these modes expose
 
 These are compiler features, outside the driver, that the personalities
 would use:
 
-- `-fsemantic-interposition`, `-fwrapv-pointer`,
-  `-fno-delete-null-pointer-checks` and common symbols (`-fcommon`).
-- `_Float16` (GCC 12 and Clang on x86-64), `__bf16` (GCC 13) and Clang's
-  `__fp16`, with their macros.
-- `<float.h>` names for the `_FloatN` types (`FLT32_MAX` and the rest):
-  bcc's resource header is Clang's, which knows none of them.
-- Binary128 arithmetic in lowering: `_Float128` and `__float128` values
-  type-check, and glibc's declarations of them compile, but computing with
-  them is refused.
+- `-fsemantic-interposition`, GCC's default with `-fPIC`: bcc inlines and
+  calls a default-visibility definition of a shared library as if it could
+  not be interposed, as Clang does by default and GCC under
+  `-fno-semantic-interposition`, so the option is refused.
+- Decimal floating types, and with them GCC's C23 `<float.h>` `DEC*`
+  names; `FLT16_SNAN` and GCC's other `__builtin_*f16` constant builtins.
+- Whether `cl` makes a C tentative definition a communal symbol by
+  default is unverified: no MSVC was available, and Microsoft documents no
+  option for it. The `cl` personality keeps bcc's `-fno-common` default;
+  clang-cl, like Clang 11 and later, has the same default, and passes a
+  given `-fcommon` on.
+
+Since this list was written, bcc gained binary128 arithmetic on every back
+end (#160), `_Float16` (#163), `__bf16`, complex `_Float16` and `__fp16`
+(#164), the `_FloatN` `<float.h>` names, constant compound literals in
+static initializers (#170), and compound assignment to atomic floating
+objects (#171); the personalities use each through the identity.
