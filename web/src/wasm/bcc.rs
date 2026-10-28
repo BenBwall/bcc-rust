@@ -11,6 +11,7 @@
 
 use bcc_rust::explorer::{
     self,
+    ExplorerDiagnostic,
     ExplorerOptions,
     ExplorerWasm,
 };
@@ -34,6 +35,17 @@ pub struct Bcc;
 
 impl WasmBackEnd for Bcc {
     fn compile(&self, source: &str) -> Result<WasmModule, String> {
+        self.compile_with_diagnostics(source).0
+    }
+}
+
+impl Bcc {
+    /// [`WasmBackEnd::compile`], and every diagnostic bcc reported, which
+    /// the editor draws for the WebAssembly view.
+    pub fn compile_with_diagnostics(
+        &self,
+        source: &str,
+    ) -> (Result<WasmModule, String>, Vec<ExplorerDiagnostic>) {
         let options = ExplorerOptions {
             target: TARGET.into(),
             max_nesting_depth: Some(explorer::WASM_MAX_NESTING_DEPTH),
@@ -41,10 +53,11 @@ impl WasmBackEnd for Bcc {
         };
         let output = explorer::compile(source, &options);
         let name = demos::matching(source).map_or("program.c", |demo| demo.name);
-        match output.wasm {
+        let module = match output.wasm {
             | Some(wasm) => Ok(module(wasm, name, &options.std)),
             | None => Err(refusal(&output.diagnostics)),
-        }
+        };
+        (module, output.diagnostics)
     }
 }
 
@@ -94,7 +107,7 @@ pub fn module(wasm: ExplorerWasm, name: &str, std: &str) -> WasmModule {
 }
 
 /// Why bcc has no module: its errors as it prints them.
-fn refusal(diagnostics: &[explorer::ExplorerDiagnostic]) -> String {
+fn refusal(diagnostics: &[ExplorerDiagnostic]) -> String {
     let errors: Vec<&str> = diagnostics
         .iter()
         .filter(|diagnostic| diagnostic.severity == "error")

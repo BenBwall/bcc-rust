@@ -37,24 +37,6 @@ impl Expander<'_, '_, '_, '_> {
         self.spelling_location(token)
     }
 
-    /// Where the outermost macro invocation being read begins, or `None`
-    /// for a token that a file or a macro argument spells.
-    pub(in crate::translation_phases::preprocessing) fn expansion_start(
-        &self,
-    ) -> Option<SourceVector> {
-        for frame in self.tokenizer_stack.iter().rev() {
-            match &frame.frame_type {
-                | TokenizerFrameType::ObjectLikeMacroInvocation { invocation, .. }
-                | TokenizerFrameType::FunctionLikeMacroInvocation { invocation, .. } =>
-                    return Some(invocation.clone()),
-                | TokenizerFrameType::FunctionLikeMacroArgument { .. }
-                | TokenizerFrameType::SourceFile { .. } => return None,
-                | TokenizerFrameType::Rescan { .. } | TokenizerFrameType::DeferredQuery => (),
-            }
-        }
-        None
-    }
-
     pub(in crate::translation_phases::preprocessing) fn expansion_end(
         &self,
     ) -> Option<SourceVector> {

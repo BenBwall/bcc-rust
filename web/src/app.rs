@@ -245,11 +245,14 @@ pub(crate) struct State {
     shown:           Memo<Option<Compilation>>,
     /// The same at the other level, for the optimizer comparison.
     other_level:     Memo<Option<Compilation>>,
-    /// bcc's diagnostics as squiggles in the source editor.
+    /// bcc's diagnostics as squiggles in the source editor: the pipeline's
+    /// compilation's, or in the WebAssembly view that view's.
     markers:         Memo<Vec<Marker>>,
     placeholder:     Memo<&'static str>,
     /// The WebAssembly view.
     wasm:            wasm::WasmState,
+    /// bcc's recent compilations of the editor's text for that view.
+    wasm_checks:     RwSignal<wasm::Checks>,
 }
 
 impl State {
@@ -266,6 +269,8 @@ impl State {
         let starting = RwSignal::new(false);
         let pending = RwSignal::new(false);
         let theme = RwSignal::new("dark");
+        let mode = RwSignal::new(Mode::Machine);
+        let wasm_checks = RwSignal::new(wasm::Checks::default());
         let live = LiveViews::new(
             editor_text,
             optimize,
@@ -317,7 +322,7 @@ impl State {
             error,
             unavailable: RwSignal::new(None),
             announcement: RwSignal::new(String::new()),
-            mode: RwSignal::new(Mode::Machine),
+            mode,
             stage: RwSignal::new(Stage::Ir),
             headers: RwSignal::new(false),
             theme,
@@ -341,11 +346,12 @@ impl State {
             compilation: live.compilation,
             shown: live.shown,
             other_level: live.other_level,
-            markers: live.markers,
+            markers: markers(mode, editor_text, wasm_checks, live.markers),
             placeholder: Memo::new(move |_| {
                 editor_text.with(|text| demos::matching(text).map_or("", |demo| demo.summary))
             }),
             wasm: wasm::WasmState::new(),
+            wasm_checks,
         }
     }
 
@@ -588,10 +594,12 @@ impl State {
 
     fn set_mode(self, mode: Mode) {
         self.mode.set(mode);
-        self.compile_now();
+        // Loading the program compiles it, so the squiggles' compilation
+        // waits for it rather than compiling the same text twice.
         if mode == Mode::Wasm {
             self.wasm.ensure_loaded(self);
         }
+        self.compile_now();
     }
 
     /// Compile the editor's text once typing pauses.
@@ -617,10 +625,16 @@ impl State {
     /// the optimizer comparison. Text is compiled when the pipeline view
     /// shows it or when it is not a bundled lesson, so its errors show as
     /// squiggles; a lesson in the abstract machine view never loads the
-    /// compiler. A result for text the editor no longer holds is stale and
-    /// dropped.
+    /// compiler. In the WebAssembly view the text is compiled for that
+    /// target instead. A result for text the editor no longer holds is
+    /// stale and dropped.
     fn pump(self) {
         if self.in_flight.with_untracked(Option::is_some) || self.pending.get_untracked() {
+            return;
+        }
+        // The WebAssembly view's squiggles come from its own compilation.
+        if self.mode.get_untracked() == Mode::Wasm {
+            self.wasm.check(self);
             return;
         }
         let Some(key) = self.next_compilation() else {
@@ -967,7 +981,7 @@ impl State {
         let pipeline = self.mode.get() == Mode::Pipeline;
         if let Some(snapshot) = snapshot
             .as_ref()
-            .filter(|snapshot| !edited && !(pipeline && refused(snapshot)))
+            .filter(|snapshot| !(edited || pipeline && refused(snapshot)))
         {
             let fault = snapshot.event.category == "fault";
             if let Some(range) = snapshot.event.range {
@@ -1019,37 +1033,8 @@ impl State {
             });
         }
         let target = self.target_layer();
-        let hovered = self.hover_output.get();
-        let links = if pipeline && hovered > 0 {
-            let stage = self.stage.get();
-            let headers = self.headers.get();
-            self.compilation.with(|compilation| {
-                compilation
-                    .as_ref()
-                    .map(|compilation| {
-                        self.editor_text.with(|source| {
-                            let links = crate::pipeline::links(stage, compilation, source, headers);
-                            let mut marks: Vec<Decoration> = links
-                                .sources_for(hovered)
-                                .into_iter()
-                                .map(|line| Decoration::line(line, "link-line"))
-                                .collect();
-                            if let Some(range) = links.range_for(hovered) {
-                                marks.push(Decoration {
-                                    start_line: range.line,
-                                    start_column: range.column,
-                                    end_line: range.end_line,
-                                    end_column: range.end_column.max(range.column + 1),
-                                    class_name: Some("link-range".to_owned()),
-                                    z_index: 4,
-                                    ..Decoration::default()
-                                });
-                            }
-                            marks
-                        })
-                    })
-                    .unwrap_or_default()
-            })
+        let links = if pipeline {
+            self.hover_links()
         } else {
             Vec::new()
         };
@@ -1071,6 +1056,44 @@ impl State {
             ("stage", stage_marks),
             ("links", links),
         ]
+    }
+
+    /// The source lines (and the exact range, for a preprocessing token)
+    /// that the pipeline output line under the pointer came from.
+    fn hover_links(self) -> Vec<Decoration> {
+        let hovered = self.hover_output.get();
+        if hovered == 0 {
+            return Vec::new();
+        }
+        let stage = self.stage.get();
+        let headers = self.headers.get();
+        self.compilation.with(|compilation| {
+            compilation
+                .as_ref()
+                .map(|compilation| {
+                    self.editor_text.with(|source| {
+                        let links = crate::pipeline::links(stage, compilation, source, headers);
+                        let mut marks: Vec<Decoration> = links
+                            .sources_for(hovered)
+                            .into_iter()
+                            .map(|line| Decoration::line(line, "link-line"))
+                            .collect();
+                        if let Some(range) = links.range_for(hovered) {
+                            marks.push(Decoration {
+                                start_line: range.line,
+                                start_column: range.column,
+                                end_line: range.end_line,
+                                end_column: range.end_column.max(range.column + 1),
+                                class_name: Some("link-range".to_owned()),
+                                z_index: 4,
+                                ..Decoration::default()
+                            });
+                        }
+                        marks
+                    })
+                })
+                .unwrap_or_default()
+        })
     }
 
     /// The run target's mark, set by clicking a line number.
@@ -1309,6 +1332,26 @@ fn initial_theme() -> &'static str {
             "light",
         | _ => "dark",
     }
+}
+
+/// The editor's squiggles: the `pipeline`'s compilation's, or in the
+/// WebAssembly view bcc's compilation of the text for that view, for
+/// wasm32-wasip1, whose C library headers the x86-64 pipeline does not have.
+fn markers(
+    mode: RwSignal<Mode>,
+    editor_text: RwSignal<String>,
+    checks: RwSignal<wasm::Checks>,
+    pipeline: Memo<Vec<Marker>>,
+) -> Memo<Vec<Marker>> {
+    Memo::new(move |_| {
+        if mode.get() == Mode::Wasm {
+            editor_text.with(|text| {
+                checks.with(|checks| checks.diagnostics(text).iter().filter_map(marker).collect())
+            })
+        } else {
+            pipeline.get()
+        }
+    })
 }
 
 /// A squiggle for `diagnostic`, if it is placed in the source.

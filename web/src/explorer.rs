@@ -18,6 +18,7 @@ use std::fmt::Write;
 use bcc_rust::explorer::{
     self,
     ExplorerDiagnostic,
+    ExplorerExpansion,
     ExplorerFunctionBytes,
     ExplorerLineRange,
     ExplorerLogicalLine,
@@ -47,7 +48,10 @@ use crate::{
         Answer,
         Command,
     },
-    wasm::WasmBackEnd,
+    wasm::{
+        Bcc,
+        WasmCompiled,
+    },
 };
 
 /// Run one request from the page.
@@ -58,11 +62,23 @@ pub fn run(command: Command) -> Result<Answer, String> {
     match command {
         | Command::Compile { source, optimize } =>
             Ok(Answer::Compiled(Box::new(compile(&source, optimize)))),
-        | Command::CompileWasm(source) => Ok(Answer::CompiledWasm(Box::new(
-            crate::wasm::Bcc.compile(&source),
-        ))),
+        | Command::CompileWasm(source) => Ok(Answer::CompiledWasm(Box::new(compile_wasm(&source)))),
         | Command::Load(_) | Command::Step | Command::WasmLoad(_) | Command::Wasm(_) =>
             Err("The compiler Worker does not run the abstract machine.".into()),
+    }
+}
+
+/// Compile `source` to WebAssembly with bcc (`wasm/bcc.rs`), its
+/// diagnostics placed in the editor.
+pub fn compile_wasm(source: &str) -> WasmCompiled {
+    let (module, diagnostics) = Bcc.compile_with_diagnostics(source);
+    let columns = Columns::new(source);
+    WasmCompiled {
+        module,
+        diagnostics: diagnostics
+            .iter()
+            .map(|found| diagnostic(found, &columns))
+            .collect(),
     }
 }
 
@@ -179,8 +195,8 @@ fn logical_line(line: &ExplorerLogicalLine, columns: &Columns) -> LogicalLine {
             .changes
             .iter()
             .map(|change| {
-                let at = |column: u32| columns.utf16(change.line as usize, column as usize);
-                let length = change.spelling.chars().count().max(1) as u32;
+                let at = |column: usize| columns.utf16(change.line as usize, column);
+                let length = change.spelling.chars().count().max(1);
                 // A splice ends its line; mark its backslash alone.
                 let length = if change.kind == "splice" { 1 } else { length };
                 SourceChange {
@@ -188,9 +204,9 @@ fn logical_line(line: &ExplorerLogicalLine, columns: &Columns) -> LogicalLine {
                     column:      in_line.utf16(1, change.column as usize),
                     source:      SourceSpan {
                         line:       change.line as usize,
-                        column:     at(change.source_column),
+                        column:     at(change.source_column as usize),
                         end_line:   change.line as usize,
-                        end_column: at(change.source_column + length),
+                        end_column: at(change.source_column as usize + length),
                     },
                     spelling:    change.spelling.clone(),
                     replacement: change.replacement.clone(),
@@ -292,10 +308,8 @@ fn pp_listing(
         });
     }
     if tokens.len() > shown {
-        text.push_str(&format!(
-            "… and {} more entries, not listed here\n",
-            tokens.len() - shown
-        ));
+        let more = tokens.len() - shown;
+        _ = writeln!(text, "… and {more} more entries, not listed here");
     }
     let mut counts: Vec<(String, usize)> = PP_KINDS
         .iter()
@@ -340,40 +354,7 @@ fn preprocessing(trace: &ExplorerPreprocessing, columns: &Columns) -> Preprocess
         truncated:          trace.truncated,
         expansions:         shown
             .into_iter()
-            .map(|expansion| Expansion {
-                range:         SourceSpan {
-                    line:       expansion.line as usize,
-                    column:     columns.utf16(expansion.line as usize, expansion.column as usize),
-                    end_line:   expansion.end_line as usize,
-                    end_column: columns
-                        .utf16(expansion.end_line as usize, expansion.end_column as usize),
-                },
-                presumed:      expansion.presumed.clone(),
-                invocation:    expansion.invocation.clone(),
-                directive:     expansion.directive,
-                result:        expansion.result.clone(),
-                partial:       expansion.partial,
-                omitted_steps: expansion.steps.len().saturating_sub(MAX_STEPS),
-                steps:         expansion
-                    .steps
-                    .iter()
-                    .take(MAX_STEPS)
-                    .map(|step| ExpansionStep {
-                        parent:     step.parent.map(|parent| parent as usize),
-                        kind:       step.kind.clone(),
-                        prescan:    step.prescan,
-                        macro_name: step.macro_name.clone(),
-                        depth:      step.depth as usize,
-                        arguments:  step
-                            .arguments
-                            .iter()
-                            .map(|argument| (argument.parameter.clone(), argument.argument.clone()))
-                            .collect(),
-                        operands:   step.operands.clone(),
-                        result:     step.result.clone(),
-                    })
-                    .collect(),
-            })
+            .map(|expansion| expansion_of(expansion, columns))
             .collect(),
         conditionals:       trace
             .conditionals
@@ -422,10 +403,47 @@ fn preprocessing(trace: &ExplorerPreprocessing, columns: &Columns) -> Preprocess
             .iter()
             .filter(|directive| input(&directive.file))
             .map(|directive| Directive {
-                line:      directive.line as usize,
-                presumed:  directive.presumed.clone(),
-                name:      directive.name.clone(),
-                directive: directive.directive.clone(),
+                line:     directive.line as usize,
+                presumed: directive.presumed.clone(),
+                name:     directive.name.clone(),
+                text:     directive.directive.clone(),
+            })
+            .collect(),
+    }
+}
+
+/// One expansion in the source, with at most `MAX_STEPS` of its steps.
+fn expansion_of(expansion: &ExplorerExpansion, columns: &Columns) -> Expansion {
+    Expansion {
+        range:         SourceSpan {
+            line:       expansion.line as usize,
+            column:     columns.utf16(expansion.line as usize, expansion.column as usize),
+            end_line:   expansion.end_line as usize,
+            end_column: columns.utf16(expansion.end_line as usize, expansion.end_column as usize),
+        },
+        presumed:      expansion.presumed.clone(),
+        invocation:    expansion.invocation.clone(),
+        directive:     expansion.directive,
+        result:        expansion.result.clone(),
+        partial:       expansion.partial,
+        omitted_steps: expansion.steps.len().saturating_sub(MAX_STEPS),
+        steps:         expansion
+            .steps
+            .iter()
+            .take(MAX_STEPS)
+            .map(|step| ExpansionStep {
+                parent:     step.parent.map(|parent| parent as usize),
+                kind:       step.kind.clone(),
+                prescan:    step.prescan,
+                macro_name: step.macro_name.clone(),
+                depth:      step.depth as usize,
+                arguments:  step
+                    .arguments
+                    .iter()
+                    .map(|argument| (argument.parameter.clone(), argument.argument.clone()))
+                    .collect(),
+                operands:   step.operands.clone(),
+                result:     step.result.clone(),
             })
             .collect(),
     }
@@ -587,11 +605,16 @@ mod tests {
             .unwrap_or_else(|| panic!("{folded}"));
         assert!(folded.contains("<stdint.h>: "), "{folded}");
         assert_eq!(lines.unwrap()[summary + 1], Some((2, 2)));
-        let links = links(Stage::Preprocessor, &compilation, source, false);
-        assert_eq!(links.outputs_for(2), [summary + 1]);
-        assert!(links.outputs_for(3).iter().all(|&line| line > summary + 1));
+        let folded_links = links(Stage::Preprocessor, &compilation, source, false);
+        assert_eq!(folded_links.outputs_for(2), [summary + 1]);
+        assert!(
+            folded_links
+                .outputs_for(3)
+                .iter()
+                .all(|&line| line > summary + 1)
+        );
         // With the headers shown, each of their lines links to the include.
-        let shown = crate::pipeline::links(Stage::Preprocessor, &compilation, source, true);
+        let shown = links(Stage::Preprocessor, &compilation, source, true);
         let typedef = full
             .lines()
             .position(|line| line.starts_with("typedef"))
@@ -631,8 +654,16 @@ mod tests {
         assert!(trace.truncated);
         assert_eq!(trace.expansions.len(), MAX_EXPANSIONS);
         let last = trace.expansions.last().unwrap();
-        assert!(last.partial && last.range.line > 40_000, "{}", last.range.line);
-        assert!(trace.expansions[..MAX_EXPANSIONS - 1].iter().all(|e| !e.partial));
+        assert!(
+            last.partial && last.range.line > 40_000,
+            "{}",
+            last.range.line
+        );
+        assert!(
+            trace.expansions[..MAX_EXPANSIONS - 1]
+                .iter()
+                .all(|e| !e.partial)
+        );
         assert!(trace.omitted_expansions > 40_000);
     }
 
@@ -726,6 +757,47 @@ mod tests {
         assert!(stop.explanation.contains(&error.message));
         assert!(compilation.stopped_before(Stage::Ir));
         assert!(!compilation.stopped_before(Stage::Tokens));
+    }
+
+    /// `<stdio.h>` is one of bcc's own headers on wasm32-wasip1 but none on
+    /// x86-64 in the browser: the WebAssembly view's squiggles come from its
+    /// own compilation, and the pipeline's stop says where the header is.
+    #[test]
+    fn the_c_library_headers_are_found_only_for_webassembly() {
+        let source =
+            "#include <stdio.h>\nint main(void) {\n    printf(\"%d\\n\", 1);\n    return x;\n}\n";
+        let wasm = compile_wasm(source);
+        let [error] = &*wasm.diagnostics else {
+            panic!("{:#?}", wasm.diagnostics);
+        };
+        // Only the undeclared `x` on line 4, placed for a squiggle.
+        assert_eq!(error.severity, "error");
+        let range = error.range.expect("in the source");
+        assert_eq!((range.line, range.column), (4, 12), "{error:#?}");
+        assert!(wasm.module.is_err());
+        let fixed = source.replace("return x", "return 0");
+        let wasm = compile_wasm(&fixed);
+        assert!(wasm.diagnostics.is_empty(), "{:#?}", wasm.diagnostics);
+        assert!(wasm.module.is_ok());
+        // For x86-64 the header is missing, and the stop says where to go.
+        let compilation = compile(&fixed, false);
+        let error = compilation
+            .diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.severity == "error")
+            .expect("no <stdio.h> on x86-64");
+        assert_eq!(error.range.map(|range| range.line), Some(1));
+        let stop = compilation.stop().expect("the error stops bcc");
+        assert!(
+            stop.explanation.contains("<stdio.h>"),
+            "{}",
+            stop.explanation
+        );
+        assert!(
+            stop.explanation.contains("choose WebAssembly"),
+            "{}",
+            stop.explanation
+        );
     }
 
     #[test]

@@ -333,3 +333,41 @@ fn expansion_locations_outlive_compaction_and_follow_copies() {
     assert_eq!(context.get_source_vectors(shown)[0].index, site.index);
     assert_eq!(context.file_location(plain_token), plain_token);
 }
+
+/// An argument's token belongs to its invocation's expansion location, but
+/// keeps its own file location, as Clang's line tables give it, when the
+/// invocation spells it; a definition's token takes the invocation's.
+#[test]
+fn file_vectors_keep_arguments_the_invocation_spells() {
+    let tu = crate::util::bump::Bump::new();
+    let mut context = Context::new(&tu);
+    let site = SourceVector {
+        index: 40,
+        line: 3,
+        length: 4,
+        ..SourceVector::default()
+    };
+    let in_definition = SourceVector {
+        length: 1,
+        ..SourceVector::default()
+    };
+    let argument = SourceVector {
+        index: 52,
+        line: 4,
+        column: 9,
+        length: 1,
+        ..SourceVector::default()
+    };
+    let replaced = context.push_source_vectors(std::slice::from_ref(&in_definition));
+    context.record_expansion_start(replaced, site.clone());
+    let written = context.push_source_vectors(std::slice::from_ref(&argument));
+    context.record_expansion_start(written, site.clone());
+    let replaced = context.retain_token_source(replaced);
+    let written = context.retain_token_source(written);
+    context.compact_preprocessor_vectors();
+    assert_eq!(context.expansion_location(replaced), &site);
+    assert_eq!(context.expansion_location(written), &site);
+    assert_eq!(context.file_vector(replaced), &site);
+    assert_eq!(context.file_vector(written), &argument);
+    assert_eq!(context.file_location(written), written);
+}

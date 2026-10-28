@@ -258,10 +258,10 @@ impl Context<'_> {
         }
     }
 
-    /// Where a diagnostic about `source` belongs, as Clang's expansion
-    /// location: the start of the outermost macro invocation that produced
-    /// its first token, or that token itself when a file or a macro
-    /// argument spells it. `source` must not be empty.
+    /// Where `source` comes from as Clang's expansion location: the start of
+    /// the outermost macro invocation that produced its first token (an
+    /// argument's token included), or that token itself when a file spells
+    /// it outside any invocation. `source` must not be empty.
     /// C99: §5.1.1.3 paragraph 1, p. 11; PDF p. 23.
     pub(crate) fn expansion_location(&self, source: SourceVectors) -> &SourceVector {
         let (arena, start) = SourceArena::decode(source);
@@ -279,23 +279,46 @@ impl Context<'_> {
         if source.length() == 0 {
             return source;
         }
-        let (arena, start) = SourceArena::decode(source);
-        let sites = &self.expansion_starts[arena as usize];
-        let Some(id) = sites.get(start) else {
+        let Some(site) = self.invocation_site(source).cloned() else {
             return source;
         };
-        let site = sites.ends[id as usize].clone();
-        let spelling = self.first_source_vector(source);
-        // A token written within the invocation is a macro argument. Its
-        // own physical location is more precise than the macro's name.
-        if spelling.source_file_index == site.source_file_index && spelling.index >= site.index {
-            return source;
-        }
         self.create_retained_source_vectors(
             site.position(self),
             site.source_file_index,
             site.length as usize,
         )
+    }
+
+    /// Where the first token of `source` is in a file, as Clang's file
+    /// location (`SourceManager::getFileLoc`), which its line tables use: the
+    /// token itself when a file spells it, a macro argument written within
+    /// the invocation included, and otherwise the start of the outermost
+    /// invocation that produced it. `source` must not be empty.
+    ///
+    /// One case differs: a macro invoked within an argument, as `BUMP` in
+    /// `F(\n BUMP(x))`, has its replacement placed at the outermost
+    /// invocation (`F`), where Clang follows the argument to the inner
+    /// invocation's line. Arguments are prescanned and replayed from copied
+    /// provenance, so the inner invocation is no longer known when the
+    /// tokens are read; the two lines differ only when the argument starts
+    /// on a later line than the outer invocation.
+    /// C99: §5.1.1.2 paragraph 1 item 4, p. 10; PDF p. 22.
+    pub(crate) fn file_vector(&self, source: SourceVectors) -> &SourceVector {
+        self.invocation_site(source)
+            .unwrap_or_else(|| self.first_source_vector(source))
+    }
+
+    /// The outermost invocation that produced the first token of `source`,
+    /// unless a file spells that token.
+    fn invocation_site(&self, source: SourceVectors) -> Option<&SourceVector> {
+        let (arena, start) = SourceArena::decode(source);
+        let sites = &self.expansion_starts[arena as usize];
+        let site = &sites.ends[sites.get(start)? as usize];
+        let spelling = self.first_source_vector(source);
+        // A token written within the invocation is a macro argument. Its
+        // own physical location is more precise than the macro's name.
+        (spelling.source_file_index != site.source_file_index || spelling.index < site.index)
+            .then_some(site)
     }
 
     /// Where a source range ends in the user's input, before macro expansion.

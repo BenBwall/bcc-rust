@@ -39,18 +39,32 @@ _Noreturn void abort(void) {
     __bcc_wasi_proc_exit(134);
 }
 
+/* A few short arguments, the usual case, fit in static storage, so startup
+   leaves the heap untouched and runs few instructions (the site steps it);
+   more are read into the heap. Either way they are modifiable and
+   argv[argc] is a null pointer, as C99 §5.1.2.2.1p2 requires, also when
+   the host gives no arguments. */
+#define STATIC_ARGS 8
+#define STATIC_ARG_BYTES 256
+static char *static_argv[STATIC_ARGS + 1];
+static char static_arg_bytes[STATIC_ARG_BYTES];
+
 void _start(void) {
     __wasm_call_ctors();
     size_t count = 0, size = 0;
-    char **argv = 0;
-    if (__bcc_wasi_args_sizes_get(&count, &size) == 0 && count > 0) {
+    char **argv = static_argv;
+    char *buffer = static_arg_bytes;
+    if (__bcc_wasi_args_sizes_get(&count, &size) != 0)
+        count = 0;
+    if (count > 0 && (count > STATIC_ARGS || size > STATIC_ARG_BYTES)) {
         argv = malloc((count + 1) * sizeof *argv);
-        char *buffer = malloc(size);
-        if (argv && buffer && __bcc_wasi_args_get(argv, buffer) == 0)
-            argv[count] = 0;
-        else
-            count = 0;
+        buffer = malloc(size);
     }
+    if (count > 0 && !(argv && buffer && __bcc_wasi_args_get(argv, buffer) == 0)) {
+        count = 0;
+        argv = static_argv;
+    }
+    argv[count] = 0;
     exit(__bcc_main((int)count, argv));
 }
 
