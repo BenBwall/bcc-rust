@@ -18,7 +18,8 @@
 //! These options are not part of C, which only gives a thread-local object
 //! one instance per thread. [`CodeAssumptions`] beside them defines what C
 //! leaves undefined about pointers (`-fno-delete-null-pointer-checks`,
-//! `-fwrapv-pointer`).
+//! `-fwrapv-pointer`) and about repeated tentative definitions
+//! (`-fcommon`).
 //! C11: §6.2.4 paragraph 4, p. 38; PDF p. 56.
 
 use super::Target;
@@ -50,6 +51,13 @@ pub(crate) struct CodeAssumptions {
     /// C99 §6.5.6 paragraph 8, p. 83; PDF p. 95 leaves the overflow
     /// undefined.
     pub(crate) wrapv_pointer:         bool,
+    /// A tentative definition with external linkage that the unit leaves
+    /// tentative is a common symbol, which the linker merges with the
+    /// other units' definitions of its name: `-fcommon`, which GCC 10 and
+    /// Clang 11 stopped defaulting to. Extension: C99 §J.5.11, p. 514;
+    /// PDF p. 526 (multiple external definitions); §6.9.2 paragraph 2,
+    /// p. 143; PDF p. 155 (tentative definitions).
+    pub(crate) common_symbols:        bool,
 }
 
 impl CodeOptions {

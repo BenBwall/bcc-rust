@@ -251,6 +251,9 @@ pub(super) enum Linkage {
     LinkOnceOdr,
     /// A body that only inlining uses; the symbol is defined elsewhere.
     AvailableExternally,
+    /// A zero-filled object the linker merges with other units'
+    /// definitions of its name (`-fcommon`).
+    Common,
     /// The special `llvm.global_ctors`, `llvm.global_dtors` and `llvm.used`
     /// arrays.
     Appending,
@@ -577,6 +580,7 @@ impl<'id> Session<'id> {
             | Linkage::WeakOdr => LLVMLinkage::LLVMWeakODRLinkage,
             | Linkage::LinkOnceOdr => LLVMLinkage::LLVMLinkOnceODRLinkage,
             | Linkage::AvailableExternally => LLVMLinkage::LLVMAvailableExternallyLinkage,
+            | Linkage::Common => LLVMLinkage::LLVMCommonLinkage,
             | Linkage::Appending => LLVMLinkage::LLVMAppendingLinkage,
         };
         // SAFETY: The type system ties handles to this live session; every

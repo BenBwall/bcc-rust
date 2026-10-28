@@ -104,6 +104,7 @@ pub(super) fn generate(coff: &mut Coff<'_>) -> Result<()> {
                         kind:       3,
                         visibility: 0,
                         alias:      None,
+                        common:     false,
                     });
                     let offset = object.sections[pdata].data.len() as u64;
                     object.sections[pdata].relocs.push(Reloc {

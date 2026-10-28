@@ -73,8 +73,36 @@ impl Unit<'_, '_, '_> {
                     | Some(InlineOdr::Discardable) => IrLinkage::LinkOnce,
                     | None => IrLinkage::External,
                 },
+            | Linkage::External if self.common_symbol(binding) => IrLinkage::Common,
             | Linkage::External | Linkage::None => IrLinkage::External,
         }
+    }
+
+    /// Whether `-fcommon` makes the object `binding` a common symbol: an
+    /// external one this unit defines only tentatively, unless an
+    /// attribute asks for a section or for Windows DLL storage, or it is
+    /// thread-local, as Clang's `isVarDeclStrongDefinition` decides. On the
+    /// MSVC target an explicitly aligned object is no common symbol
+    /// either, as there; a WebAssembly module has none.
+    /// Extension: C99 §J.5.11, p. 514; PDF p. 526.
+    fn common_symbol(&self, binding: usize) -> bool {
+        let data = self.sema.bindings[binding];
+        if !self.context.code_assumptions.common_symbols
+            || self.target.is_wasm()
+            || data.kind != BindingKind::Object
+            || data.duration == crate::translation_phases::semantic_analysis::Duration::Thread
+            || !self.defines_tentatively(binding)
+        {
+            return false;
+        }
+        self.sema
+            .entity_attributes(binding)
+            .is_none_or(|attributes| {
+                attributes.section.is_none()
+                    && attributes.dll.is_none()
+                    && !(self.target == crate::target::Target::WindowsMsvc
+                        && attributes.declared_alignment)
+            })
     }
 
     /// A definition this unit emits is not imported: a later definition

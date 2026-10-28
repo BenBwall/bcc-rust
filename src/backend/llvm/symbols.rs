@@ -196,7 +196,11 @@ pub(super) fn declare<'id, 'a, 'm>(
 fn linkage(linkage: IrLinkage, defined: bool) -> Option<Linkage> {
     match (linkage, defined) {
         | (IrLinkage::External, _)
-        | (IrLinkage::Internal | IrLinkage::SelectAny | IrLinkage::LinkOnce, false) => None,
+        | (
+            IrLinkage::Internal | IrLinkage::SelectAny | IrLinkage::LinkOnce | IrLinkage::Common,
+            false,
+        ) => None,
+        | (IrLinkage::Common, true) => Some(Linkage::Common),
         | (IrLinkage::Internal, true) => Some(Linkage::Internal),
         | (IrLinkage::Weak, true) => Some(Linkage::Weak),
         | (IrLinkage::Weak, false) => Some(Linkage::ExternWeak),
@@ -248,7 +252,8 @@ fn alias<'id>(
 /// An alias is a definition, so `weak` gives it weak linkage.
 fn alias_linkage<'id>(api: &Session<'id>, value: Val<'id>, linkage: IrLinkage) {
     match linkage {
-        | IrLinkage::External => {},
+        // Only a global without an alias is common.
+        | IrLinkage::External | IrLinkage::Common => {},
         | IrLinkage::Internal => api.linkage(value, Linkage::Internal),
         | IrLinkage::Weak => api.linkage(value, Linkage::Weak),
         | IrLinkage::SelectAny => api.linkage(value, Linkage::WeakOdr),

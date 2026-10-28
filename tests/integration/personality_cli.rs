@@ -2879,4 +2879,77 @@ mod tests {
             assert_eq!(stderr(&output), "", "{mode}");
         }
     }
+
+    /// `-fcommon` makes an external tentative definition a common symbol on
+    /// the LLVM and native back ends, so two units' `int x;` link, and one
+    /// links with GCC's `-fcommon` objects, an initialized definition
+    /// winning; without it (the default, as in GCC 10 and Clang 11) they
+    /// clash. Thread-local objects and objects in a section stay ordinary
+    /// definitions, as in Clang.
+    #[test]
+    fn common_symbols_link_as_gcc_links_them() {
+        if !cfg!(all(target_os = "linux", target_env = "gnu")) {
+            return;
+        }
+        let directory = Directory::new();
+        directory.write(
+            "a.c",
+            "int x;\nint arr[10];\n__thread int t;\n__attribute__((section(\".mysec\"))) int \
+             sec;\nint get(void) { return x + arr[2] + t + sec; }\n",
+        );
+        directory.write(
+            "b.c",
+            "#include <stdio.h>\nint x;\nint arr[10];\nint get(void);\nint main(void) {\n  arr[2] \
+             = 5;\n  printf(\"%d\\n\", get());\n  return 0;\n}\n",
+        );
+        directory.write("init.c", "int x = 7;\nint arr[20];\n");
+        for backend in ["--backend=llvm", "--backend=native"] {
+            for (source, object) in [("a.c", "a.o"), ("b.c", "b.o")] {
+                let output = directory.bcc("", &[backend, "-fcommon", "-c", source, "-o", object]);
+                succeeds(&output);
+            }
+            let symbols = Command::new("nm").arg(directory.path("a.o")).output();
+            if let Ok(symbols) = symbols {
+                let symbols = stdout(&symbols);
+                for common in [" C x\n", " C arr\n"] {
+                    assert!(symbols.contains(common), "{backend}: {symbols}");
+                }
+                assert!(!symbols.contains(" C t\n"), "{backend}: {symbols}");
+                assert!(!symbols.contains(" C sec\n"), "{backend}: {symbols}");
+            }
+            let output = directory.bcc("", &["a.o", "b.o", "-o", "ab"]);
+            succeeds(&output);
+            let run = Command::new(directory.path("ab")).output().unwrap();
+            assert_eq!(stdout(&run), "5\n", "{backend}");
+            if Command::new("gcc").arg("--version").output().is_ok() {
+                let gcc = Command::new("gcc")
+                    .args(["-fcommon", "-c", "init.c", "-o", "init.o"])
+                    .current_dir(&directory.0)
+                    .status()
+                    .unwrap();
+                assert!(gcc.success());
+                let output = directory.bcc("", &["a.o", "b.o", "init.o", "-o", "abi"]);
+                succeeds(&output);
+                let run = Command::new(directory.path("abi")).output().unwrap();
+                assert_eq!(stdout(&run), "12\n", "{backend}");
+            }
+        }
+        // `-fno-common`, the default, defines `x` in each unit.
+        for (source, object) in [("a.c", "a.o"), ("b.c", "b.o")] {
+            let output =
+                directory.bcc("", &["-fcommon", "-fno-common", "-c", source, "-o", object]);
+            succeeds(&output);
+        }
+        let output = directory.bcc("", &["a.o", "b.o", "-o", "ab"]);
+        assert_eq!(output.status.code(), Some(1));
+        assert!(
+            stderr(&output).contains("duplicate symbol: x"),
+            "{}",
+            stderr(&output)
+        );
+        // The personalities pass both on.
+        let output = directory.bcc("--gcc-mode", &["-fcommon", "a.c", "b.c", "-o", "gab"]);
+        succeeds(&output);
+        assert_eq!(stderr(&output), "");
+    }
 }

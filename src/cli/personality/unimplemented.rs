@@ -505,7 +505,6 @@ const IGNORED: &[&str] = &[
     "-fargument-noalias*",
     "-ftoplevel-reorder",
     "-funit-at-a-time",
-    "-fno-common",
     "-fno-short-enums",
     "-fno-short-wchar",
     "-fsigned-bitfields",
@@ -674,11 +673,6 @@ const WARNED: &[(&str, &str)] = &[
     (
         "-fhandle-exceptions",
         "bcc emits no landing pads, so cleanups do not run while an exception unwinds",
-    ),
-    (
-        "-fcommon",
-        "bcc defines each tentative definition in its unit, as -fno-common does, so the same one \
-         in two units fails to link",
     ),
     (
         "-ffunction-sections",
@@ -1033,7 +1027,6 @@ mod tests {
             "-fno-omit-frame-pointer",
             "-fno-strict-aliasing",
             "-fstrict-aliasing",
-            "-fno-common",
             "-fno-finite-math-only",
             "-fvisibility-inlines-hidden",
             "-flto=auto",
@@ -1070,7 +1063,6 @@ mod tests {
             "-fcf-protection=full",
             "-fexceptions",
             "-ftrivial-auto-var-init=zero",
-            "-fcommon",
             "-ffunction-sections",
             "-fdata-sections",
             "-march=native",

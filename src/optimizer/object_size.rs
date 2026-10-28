@@ -460,7 +460,9 @@ fn allocation(draft: &Draft<'_, '_>, objects: Objects<'_, '_>, inst: Inst) -> Ob
             let global = module.global(global);
             if global.init.is_some()
                 && global.attributes.alias.is_none()
-                && global.linkage != Linkage::Weak
+                // The linker may keep another unit's larger definition of a
+                // weak or common object.
+                && !matches!(global.linkage, Linkage::Weak | Linkage::Common)
             {
                 Object::Bytes(global.size)
             } else {

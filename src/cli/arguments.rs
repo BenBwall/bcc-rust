@@ -388,8 +388,9 @@ impl Cli {
         }
     }
 
-    /// What code generation may assume about pointers, each from the last
-    /// flag that sets it, as GCC reads them.
+    /// What code generation may assume about pointers and tentative
+    /// definitions, each from the last flag that sets it, as GCC reads
+    /// them.
     pub(super) fn code_assumptions(&self) -> crate::target::CodeAssumptions {
         let mut assumptions = crate::target::CodeAssumptions::default();
         for option in &self.language_option {
@@ -398,6 +399,8 @@ impl Cli {
                 | "-fno-wrapv-pointer" | "-fstrict-overflow" => assumptions.wrapv_pointer = false,
                 | "-fno-delete-null-pointer-checks" => assumptions.null_pointer_is_valid = true,
                 | "-fdelete-null-pointer-checks" => assumptions.null_pointer_is_valid = false,
+                | "-fcommon" => assumptions.common_symbols = true,
+                | "-fno-common" => assumptions.common_symbols = false,
                 | _ => {},
             }
         }
@@ -586,8 +589,8 @@ enum LanguageFlag {
     Builtins,
     /// A `-fpic`-family flag, which [`Cli::code_options`] reads in order.
     Relocation,
-    /// `-f[no-]wrapv-pointer` or `-f[no-]delete-null-pointer-checks`,
-    /// which [`Cli::code_assumptions`] reads in order.
+    /// `-f[no-]wrapv-pointer`, `-f[no-]delete-null-pointer-checks` or
+    /// `-f[no-]common`, which [`Cli::code_assumptions`] reads in order.
     Code,
 }
 
@@ -659,7 +662,9 @@ impl LanguageFlag {
             | "-fwrapv-pointer"
             | "-fno-wrapv-pointer"
             | "-fdelete-null-pointer-checks"
-            | "-fno-delete-null-pointer-checks" => return Some(Self::Code),
+            | "-fno-delete-null-pointer-checks"
+            | "-fcommon"
+            | "-fno-common" => return Some(Self::Code),
             | "-fbuiltin" | "-fno-builtin" => return Some(Self::Builtins),
             | "-fpack-struct" => return Some(Self::PackAll(true)),
             | "-fno-pack-struct" => return Some(Self::PackAll(false)),
