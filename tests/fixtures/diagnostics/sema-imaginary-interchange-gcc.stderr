@@ -64,12 +64,6 @@ warning: '__typeof__' is a GNU extension [-Wpedantic]
 6 | __typeof__(1.0bf16i) brain;
   | ^^^^^^^^^^
 
-warning: 'imaginary constant' is a GNU extension [-Wpedantic]
- --> sema-imaginary-interchange-gcc.c:6:12
-  |
-6 | __typeof__(1.0bf16i) brain;
-  |            ^^^^^^^^
-
 error: invalid floating constant `1.0bf16i`
  --> sema-imaginary-interchange-gcc.c:6:12
   |
@@ -114,4 +108,4 @@ warning: '__bf16 floating constant suffix' is a GNU extension [-Wpedantic]
 6 | __typeof__(1.0bf16i) brain;
   |            ^^^^^^^^
 
-1 error and 18 warnings generated.
+1 error and 17 warnings generated.

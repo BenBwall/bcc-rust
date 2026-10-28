@@ -2339,7 +2339,8 @@ constant of that suffix has:
 | `bf16` | a complex `__bf16` without a name | invalid suffix |
 
 bcc has no complex `__bf16` type (#164 rejects `_Complex __bf16`), so it
-still rejects `1.0bf16i` under the GCC identity. Under `-pedantic` the
+still rejects `1.0bf16i` under the GCC identity. An invalid constant
+(`1.0f32i` under Clang) reports only its error. Under `-pedantic` the
 constants report the imaginary extension (GCC: "imaginary constants are a
 C2Y feature or GCC extension", Clang: `-Wc2y-extensions`) and, under GCC
 before C23, the suffix. Arithmetic, conversions and storage use the

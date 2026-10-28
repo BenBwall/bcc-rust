@@ -512,11 +512,16 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
             real.push_str(&spelling[index + 1..]);
             real.push('\0');
             let real_contents = self.context.string_cache.intern(&*real);
+            let queued = self.context.pending_queue_length();
             self.context.report_extension(
                 Feature::ImaginaryConstants,
                 "imaginary constant",
                 token.source_vectors,
             );
+            // An invalid constant reports only its error, as both
+            // compilers do.
+            let reported = (self.context.pending_queue_length() > queued).then_some(queued);
+            let errors_from = self.context.pending_queue_length();
             let real_token = self.parse_plain_number(
                 PreprocessorToken {
                     contents: real_contents,
@@ -547,6 +552,9 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                     TokenType::Float(FloatTokenType::ImaginaryFloat64x(v)),
                 // GCC's complex `__bf16` has no name, and bcc no such type.
                 | TokenType::Float(FloatTokenType::BFloat16(_)) => {
+                    if let Some(index) = reported {
+                        self.context.withdraw_pending_error(index);
+                    }
                     self.context.preprocessor_error(PreprocessorError {
                         error_type:     PreprocessorErrorType::InvalidDecimalFloatLiteral,
                         source_vectors: token.source_vectors,
@@ -572,6 +580,11 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                 },
                 | kind => kind,
             };
+            if let Some(index) = reported
+                && self.context.preprocessing_error_since(errors_from)
+            {
+                self.context.withdraw_pending_error(index);
+            }
             return Self::build_token(token, kind);
         }
         self.parse_plain_number(token, representation)

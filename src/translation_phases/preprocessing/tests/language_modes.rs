@@ -873,7 +873,11 @@ fn imaginary_interchange_suffixes_accept_both_orders() {
     }
     // bcc has no complex `__bf16`, and Clang no `fN` suffix.
     assert_eq!(observe("1.0bf16i 1.0ibf16\n", gcc).1.len(), 2);
-    assert_ne!(observe("1.0f32i\n", mode(CStandard::C23)).1.len(), 0);
+    // An invalid constant reports its error alone, not the imaginary
+    // extension too.
+    let pedantic = CompilerConfiguration::new(CStandard::C23, ExtensionPolicy::Warn);
+    assert_eq!(observe("1.0f32i\n", pedantic).1.len(), 1);
+    assert_eq!(observe("1.0f16i\n", pedantic).1.len(), 1);
 }
 
 #[test]

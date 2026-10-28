@@ -16,12 +16,6 @@ warning: 'imaginary constant' is a GNU extension [-Wpedantic]
 3 | _Complex _Float16 upper = 1.0F16j;
   |                           ^^^^^^^
 
-warning: 'imaginary constant' is a GNU extension [-Wpedantic]
- --> sema-imaginary-interchange-clang.c:4:26
-  |
-4 | _Complex double single = 1.0f32i;
-  |                          ^^^^^^^
-
 error: invalid floating constant `1.0f32i`
  --> sema-imaginary-interchange-clang.c:4:26
   |
@@ -30,4 +24,4 @@ error: invalid floating constant `1.0f32i`
   |
   = note: C99 §6.4.4.2: a floating constant is digits with a `.` or an exponent and an optional `f`, `F`, `l`, or `L` suffix, as in `1.5`, `2e10`, or `.5f`
 
-1 error and 4 warnings generated.
+1 error and 3 warnings generated.
