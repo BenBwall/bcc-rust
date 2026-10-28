@@ -17,9 +17,12 @@
 //! the code for IR instruction `inst` of block `block` of function
 //! `function` (its index in the function index space, imports included);
 //! `inst` is `0xFFFFFFFF` for the block's terminator, and `line` is the
-//! source line, 0 when unknown. Entries are in offset order and each
-//! position's code extends to the next entry's offset or the end of its
-//! function. Custom sections follow the code, so their presence does not
+//! source line, 0 when unknown. Every function's code starts with an
+//! entry: when its first instruction is no IR instruction's code (a
+//! prologue, or a function the linker made), one whose `block` and `inst`
+//! are both `0xFFFFFFFF` and whose `line` is 0. Entries are in offset order
+//! and each position's code extends to the next entry's offset or the end
+//! of its function. Custom sections follow the code, so their presence does not
 //! move it.
 //!
 //! Reference: WebAssembly Core Specification 2.0, §5 "Binary Format", and
@@ -155,7 +158,6 @@ pub(crate) fn encode<'a>(module: &WasmModule<'_>, arena: &'a Bump) -> Encoded<'a
     let mut code = ArenaVec::new_in(arena);
     let mut body = ArenaVec::new_in(arena);
     let mut marks = ArenaVec::new_in(arena);
-    let mut placed = ArenaVec::new_in(arena);
     let mut offsets = ArenaVec::new_in(arena);
     let mut function_offsets = ArenaVec::new_in(arena);
     uleb(&mut code, module.functions.len() as u64);
@@ -196,14 +198,23 @@ pub(crate) fn encode<'a>(module: &WasmModule<'_>, arena: &'a Bump) -> Encoded<'a
         }
         body.push(0x0B);
         let size = body.len() as u64;
-        placed.push((code.len(), leb_len(size), size, position));
         uleb(&mut code, size);
         let start = code.len();
         code.extend_from_slice(&body);
+        let function_index = u32_of(module.imports.len() + position);
+        if marks.first().is_none_or(|&(at, ..)| at != code_start) {
+            entries.push(SourceEntry {
+                offset:   u32_of(start + code_start),
+                function: function_index,
+                block:    u32::MAX,
+                inst:     u32::MAX,
+                line:     0,
+            });
+        }
         for &(at, block, inst, line) in &marks {
             entries.push(SourceEntry {
                 offset: u32_of(start + at),
-                function: u32_of(module.imports.len() + position),
+                function: function_index,
                 block,
                 inst,
                 line,

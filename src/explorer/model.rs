@@ -97,7 +97,9 @@ pub struct ExplorerWasm {
     /// code range in `binary`.
     pub functions:    Vec<ExplorerWasmFunction>,
     /// Where the code of each IR instruction starts in `binary`, in offset
-    /// order; the same table as the module's `bcc.sourcemap` section. An
+    /// order, and where each function's code starts when that is not an IR
+    /// instruction's (a prologue, or a function the linker made); the same
+    /// table as the module's `bcc.sourcemap` section. An
     /// engine reports these offsets in stack traces and its debugger's
     /// `Debugger.paused` locations.
     pub positions:    Vec<ExplorerWasmPosition>,
@@ -142,10 +144,12 @@ pub struct ExplorerWasmPosition {
     pub offset:   u32,
     /// The function index, imports first.
     pub function: u32,
-    /// The IR block (`blockN` in the function in `ir_abi`).
-    pub block:    u32,
+    /// The IR block (`blockN` in the function in `ir_abi`), or `None` for
+    /// code before the function's first IR instruction.
+    pub block:    Option<u32>,
     /// The instruction's position in the block, or `None` for the block's
-    /// terminator (its branch or return).
+    /// terminator (its branch or return) and for code before the first IR
+    /// instruction.
     pub inst:     Option<u32>,
     /// The source line, when the IR records it.
     pub line:     Option<u32>,

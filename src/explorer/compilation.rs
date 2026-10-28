@@ -473,7 +473,7 @@ impl<'tu> Stages<'_, '_, 'tu> {
                     .map(|entry| ExplorerWasmPosition {
                         offset:   entry.offset,
                         function: entry.function,
-                        block:    entry.block,
+                        block:    (entry.block != u32::MAX).then_some(entry.block),
                         inst:     (entry.inst != u32::MAX).then_some(entry.inst),
                         line:     (entry.line != 0).then_some(entry.line),
                     })

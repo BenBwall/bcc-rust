@@ -387,6 +387,46 @@ fn offsets_text_lines_and_source_map_agree() {
     );
 }
 
+/// Every function's code starts with a source-map entry, so a prologue or
+/// a function the linker made never takes the line of the code before it:
+/// the entry has no IR position and line 0 unless an IR instruction's code
+/// starts there.
+#[test]
+fn every_function_starts_with_a_source_entry() {
+    let source = "int twice(int x) {\n    return 2 * x;\n}\nint main(void) {\n    char \
+                  buffer[64];\n    buffer[0] = (char)twice(3);\n    return buffer[0];\n}\n";
+    compile_with(source, Target::Wasm32Wasi, false, |compiled| {
+        let mut names = Vec::new();
+        for &(name, start, end) in &compiled.bodies {
+            let first = compiled
+                .entries
+                .iter()
+                .find(|entry| (start..end).contains(&entry.offset))
+                .unwrap_or_else(|| panic!("{name} has no entry"));
+            assert_eq!(first.offset, start, "{name}");
+            if first.block == u32::MAX {
+                assert_eq!((first.inst, first.line), (u32::MAX, 0), "{name}");
+            }
+            names.push(name);
+        }
+        for linked in ["_start", "__bcc_main"] {
+            assert!(names.contains(&linked), "{names:?}");
+        }
+        let main = compiled
+            .bodies
+            .iter()
+            .find(|&&(name, ..)| name == "main")
+            .unwrap();
+        let entry = compiled
+            .entries
+            .iter()
+            .find(|entry| entry.offset == main.1)
+            .unwrap();
+        assert!(entry.line == 0 || entry.line == 4, "{entry:?}");
+    })
+    .unwrap();
+}
+
 /// A call through a declaration without a prototype passes its promoted
 /// arguments as the definition's parameters, not as variadic arguments.
 #[test]
