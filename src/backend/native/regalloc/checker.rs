@@ -46,16 +46,15 @@
 //! registers' own values alone, so an instruction costs time in proportion
 //! to the live set rather than to every value spilled before it, and
 //! straight-line code with a bounded live set checks in time linear in its
-//! length. The liveness itself is the allocator's bit-set dataflow, whose
-//! sets have a bit per virtual register of the function: like allocation,
-//! it costs blocks × virtual registers / 64 words per pass, which a long
-//! function of many blocks still pays.
+//! length. The liveness is the allocator's, whose sets hold only the live
+//! registers, so a long function of many blocks pays for its live sets
+//! rather than for blocks × virtual registers.
 
 use std::fmt;
 
 use super::liveness::{
+    LiveSet,
     Liveness,
-    contains,
     transfer,
 };
 use crate::{
@@ -106,7 +105,7 @@ pub(crate) fn check<'a>(
         }));
     }
     let liveness = Liveness::of_program(func, original.iter().copied(), arena);
-    let deaths = last_mentions(&liveness, original, arena);
+    let deaths = last_mentions(func, &liveness, original, arena);
     let mut checker = Checker {
         arena,
         func,
@@ -174,24 +173,24 @@ pub(crate) fn check<'a>(
 /// instructions mentions while not live after it, as `(instruction,
 /// register)` in instruction order: there the checker forgets them.
 fn last_mentions<'a>(
+    func: &MFunction<'_>,
     liveness: &Liveness<'_>,
     original: &[&[MInst]],
     arena: &'a Bump,
 ) -> ArenaVec<'a, &'a [(u32, VReg)]> {
-    let mut live = ArenaVec::new_in(arena);
+    let mut live = LiveSet::new(func.vreg_count(), arena);
     let mut mentions = ArenaVec::new_in(arena);
     let mut starts = ArenaVec::with_capacity_in(original.len() + 1, arena);
     for (block, insts) in original.iter().enumerate() {
         let start = mentions.len();
         starts.push(start);
-        live.clear();
-        live.extend_from_slice(liveness.out(block));
+        liveness.live_out(func, block, &mut live);
         for (index, inst) in insts.iter().enumerate().rev() {
             let index = u32::try_from(index).expect("instruction numbers fit u32");
             let mut inst = *inst;
             inst.visit_registers(|reg, _| {
                 if let Reg::Virt(vreg) = *reg
-                    && !contains(&live, vreg)
+                    && !live.contains(vreg)
                 {
                     mentions.push((index, vreg));
                 }
@@ -572,14 +571,15 @@ const fn register(value: Value) -> Option<Reg> {
 }
 
 /// Whether the program may still read `value`, or the registers an address
-/// is computed from, where the virtual registers in `live` are live.
-fn is_live(value: Value, live: &[u64]) -> bool {
+/// is computed from, where the virtual registers in the sorted `live` are
+/// live.
+fn is_live(value: Value, live: &[VReg]) -> bool {
     let live_reg = |reg: Reg| match reg {
-        | Reg::Virt(vreg) => contains(live, vreg),
+        | Reg::Virt(vreg) => live.binary_search(&vreg).is_ok(),
         | Reg::Phys(_) => true,
     };
     match value {
-        | Value::Virt(vreg) => contains(live, vreg),
+        | Value::Virt(vreg) => live.binary_search(&vreg).is_ok(),
         | Value::Phys(_) => true,
         | Value::Address { base, index, .. } => live_reg(base) && live_reg(index),
     }
