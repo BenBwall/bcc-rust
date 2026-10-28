@@ -142,6 +142,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             TypeKind::Scalar(s) if matches!(s.representation(), Scalar::Float | Scalar::Double)
         );
         let modifying = operation != O::Load;
+        // Clang refuses a `_BitInt` object ("argument to atomic builtin of
+        // type '_BitInt' is not supported"); GCC accepts it.
+        let refused_bit_int = matches!(self.types.nodes[value.index], TypeKind::BitInt { .. })
+            && self.context.configuration.bit_int_rules() == crate::configuration::RuleSet::Clang;
         let valid = if builtin.family == Family::C11 {
             atomic
         } else if matches!(operation, O::TestSet | O::Clear) && builtin.family == Family::Gnu {
@@ -163,6 +167,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     || pointer
                     || (builtin.family == Family::Gnu && floating))
         } && (!modifying || !object.qualifiers.contains(TypeQualifiers::CONST))
+            && !refused_bit_int
             && match operation {
                 | O::FetchAdd | O::FetchSub =>
                     integer

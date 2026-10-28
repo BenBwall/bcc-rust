@@ -670,7 +670,21 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     | B::LogicalAnd
                     | B::LogicalOr
             ) {
-                info.integer = info.integer.and_then(|v| self.bit_int_result(v, info.ty));
+                if let Some(value) = info
+                    .integer
+                    .and_then(|v| self.bit_int_sign_shift(op, v, info.ty))
+                {
+                    info.integer = Some(value);
+                    if !self.tainted {
+                        self.context.report_extension(
+                            crate::configuration::Feature::SignBitShifts,
+                            "left shift into the sign bit",
+                            e.operator_source_vectors.unwrap_or(e.source_vectors),
+                        );
+                    }
+                } else {
+                    info.integer = info.integer.and_then(|v| self.bit_int_result(v, info.ty));
+                }
             }
             if let Some((bits, signed)) = self.integer_type(info.ty) {
                 info.integer = info.integer.and_then(|v| v.convert(bits, signed));
@@ -2106,6 +2120,34 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             }
         }
         value.convert(width, signed)
+    }
+
+    /// A left shift of a nonnegative narrow signed bit-precise value into
+    /// (not past) its sign bit, folded to its two's-complement result as
+    /// for `int` ([`Integer::sign_bit_shift`]): the constant arithmetic
+    /// computes the operand in `int`, where the result is in range.
+    /// GNU extension: GCC manual, "Integers".
+    /// C99: §6.5.7 paragraph 4, p. 85; PDF p. 97.
+    pub(in crate::translation_phases::semantic_analysis) fn bit_int_sign_shift(
+        &self,
+        op: BinaryOperator,
+        value: Integer,
+        ty: TypeId,
+    ) -> Option<Integer> {
+        let TypeKind::BitInt {
+            width,
+            signed: true,
+        } = self.types.nodes[ty.index]
+        else {
+            return None;
+        };
+        let value_bits = value.to_i128()?;
+        (op == BinaryOperator::LeftShift
+            && width < 32
+            && value_bits >= 1 << (width - 1)
+            && value_bits < 1 << width)
+            .then(|| value.convert(width, true))
+            .flatten()
     }
 
     /// The common type of two promoted integer types, at least one of them

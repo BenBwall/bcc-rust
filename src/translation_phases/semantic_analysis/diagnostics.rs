@@ -143,6 +143,21 @@ impl Analyzer<'_, '_, '_> {
     /// becomes variable length.
     /// C99: §6.6 paragraph 4, p. 95; PDF p. 107.
     /// C99: §6.7.5.2 paragraph 4, pp. 116-117; PDF pp. 128-129.
+    /// Reports arithmetic on a bit-precise value wider than the constant
+    /// evaluator's 128 bits where an integer constant expression is
+    /// required ([`super::Integer::convert`]).
+    /// C23: §6.6 paragraph 6, p. 95; PDF p. 108.
+    pub(super) fn wide_constant(&mut self, source: SourceVectors) {
+        if !self.runtime_bound {
+            self.error(
+                SemanticErrorKind::UnsupportedWideConstant,
+                source,
+                None,
+                None,
+            );
+        }
+    }
+
     pub(super) fn exceptional_constant(&mut self, source: SourceVectors) {
         if !self.runtime_bound {
             self.error(SemanticErrorKind::ConstantOverflow, source, None, None);

@@ -1611,7 +1611,9 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 let result = value
                     .and_then(|v| v.unary(op))
                     .and_then(|v| self.bit_int_result(v, ty));
-                if value.is_some() && result.is_none() {
+                if value.is_some_and(Integer::wide) {
+                    self.wide_constant(source);
+                } else if value.is_some() && result.is_none() {
                     self.exceptional_constant(source);
                 }
                 self.integers.push(result);
@@ -1623,8 +1625,13 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 let result = left
                     .zip(right)
                     .and_then(|(l, r)| l.binary(op, r).or_else(|| l.sign_bit_shift(op, r)))
-                    .and_then(|v| self.bit_int_result(v, ty));
-                if left.is_some() && right.is_some() && result.is_none() {
+                    .and_then(|v| {
+                        self.bit_int_sign_shift(op, v, ty)
+                            .or_else(|| self.bit_int_result(v, ty))
+                    });
+                if left.is_some_and(Integer::wide) || right.is_some_and(Integer::wide) {
+                    self.wide_constant(source);
+                } else if left.is_some() && right.is_some() && result.is_none() {
                     self.exceptional_constant(source);
                 }
                 self.integers.push(result);
@@ -1662,7 +1669,8 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 },
             | Work::ConvertInteger(bits, signed) => {
                 let value = self.integers.pop().flatten();
-                self.integers.push(value.map(|v| v.cast(bits, signed)));
+                self.integers
+                    .push(value.and_then(|v| v.convert(bits, signed)));
             },
             | Work::CastBase(operand, source) => {
                 let ty = self.take_type();
@@ -1697,17 +1705,19 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             },
             | Work::CastDone(ty, _source) => {
                 let value = self.integers.pop().flatten();
-                let result = value.zip(self.integer_type(ty)).map(|(v, (bits, signed))| {
-                    if matches!(self.types.nodes[ty.index], TypeKind::Scalar(Scalar::Bool)) {
-                        Integer {
-                            value:  i128::from(v.value != 0),
-                            bits:   1,
-                            signed: false,
+                let result = value
+                    .zip(self.integer_type(ty))
+                    .and_then(|(v, (bits, signed))| {
+                        if matches!(self.types.nodes[ty.index], TypeKind::Scalar(Scalar::Bool)) {
+                            Some(Integer {
+                                value:  i128::from(v.value != 0),
+                                bits:   1,
+                                signed: false,
+                            })
+                        } else {
+                            v.convert(bits, signed)
                         }
-                    } else {
-                        v.cast(bits, signed)
-                    }
-                });
+                    });
                 self.integers.push(result);
             },
             | Work::SizeofDone(align, source) => {

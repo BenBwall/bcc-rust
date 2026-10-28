@@ -209,3 +209,80 @@ fn clang_rejects_an_atomic_bit_int() {
         ]
     );
 }
+
+#[test]
+fn a_shift_into_the_sign_bit_folds_as_for_int() {
+    // Both compilers fold `(_BitInt(8))1 << 7` to -128 wherever a constant
+    // is required, as they fold `1 << 31`.
+    holds(
+        "enum { A = (_BitInt(8))1 << 7, B = (_BitInt(3))1 << 2 };\n_Static_assert(A == -128 && B \
+         == -4, \"\");\n_Static_assert(((_BitInt(8))1 << 7) == -128, \"\");\nstatic _BitInt(8) s \
+         = (_BitInt(8))1 << 7;\nint f(_BitInt(8) x) { switch (x) { case (_BitInt(8))1 << 7: \
+         return 1; } return 0; }",
+    );
+    // A shift past the sign bit still overflows.
+    assert_ne!(
+        kinds(
+            "enum { C = (_BitInt(8))3 << 7 };",
+            CompilerIdentity::Gcc,
+            crate::target::Target::LinuxGnu
+        ),
+        []
+    );
+}
+
+#[test]
+fn arithmetic_wider_than_128_bits_is_refused_without_panicking() {
+    use SemanticErrorKind::UnsupportedWideConstant as Wide;
+    for (source, expected) in [
+        ("enum { E = (_BitInt(200))1 + 1 };", &[Wide][..]),
+        ("_Static_assert(-(_BitInt(200))5 < 0, \"\");", &[Wide]),
+        (
+            "int f(_BitInt(200) x) { switch (x) { case (_BitInt(200))1 << 150: return 1; } return \
+             0; }",
+            &[Wide],
+        ),
+        ("static _BitInt(200) s = (_BitInt(200))1 + 1;", &[Wide]),
+        // Conversions fold, so these are constants.
+        ("enum { F = (_BitInt(200))1 };", &[]),
+        ("int a[(_BitInt(200))3 ? 2 : 1];", &[]),
+        ("static unsigned _BitInt(200) t = -1;", &[]),
+        (
+            "int f(void) { switch ((_BitInt(200))1) { case 1: return 1; } return 0; }",
+            &[],
+        ),
+    ] {
+        for identity in [CompilerIdentity::Gcc, CompilerIdentity::Clang] {
+            assert_eq!(
+                kinds(source, identity, crate::target::Target::LinuxGnu),
+                expected,
+                "{identity:?}: {source}"
+            );
+        }
+    }
+}
+
+#[test]
+fn clang_rejects_atomic_builtins_on_a_bit_int() {
+    let source = "unsigned _BitInt(7) p; int f(void) { return __atomic_fetch_add(&p, 1, 5) + \
+                  __sync_fetch_and_add(&p, 1); }";
+    assert_eq!(
+        kinds(
+            source,
+            CompilerIdentity::Gcc,
+            crate::target::Target::LinuxGnu
+        ),
+        []
+    );
+    assert_eq!(
+        kinds(
+            source,
+            CompilerIdentity::Clang,
+            crate::target::Target::LinuxGnu
+        ),
+        [
+            SemanticErrorKind::InvalidAtomicOperand,
+            SemanticErrorKind::InvalidAtomicOperand
+        ]
+    );
+}

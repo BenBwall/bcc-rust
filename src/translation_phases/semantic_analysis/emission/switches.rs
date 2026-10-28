@@ -63,7 +63,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let Some((bits, signed)) = self.integer_type(ty) else {
             return;
         };
-        let Some(value) = condition.and_then(|condition| self.folded_integer(condition)) else {
+        // A bit-precise value wider than the constant model is not folded.
+        let Some(value) = condition
+            .and_then(|condition| self.folded_integer(condition))
+            .and_then(|value| value.convert(bits, signed))
+        else {
             if let Some(condition) = condition
                 && self.switch_labels(switch).is_some()
                 && !self.statement_contains_label(body, true)
@@ -83,7 +87,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         _ = self.functions.emission.folds.insert(
             index,
             FoldedSwitch {
-                value: value.cast(bits, signed),
+                value,
                 switch,
                 body,
                 start,

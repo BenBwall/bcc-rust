@@ -780,9 +780,14 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 ) && info.ice
                     && info.integer.is_some())
         };
+        // Arithmetic on a `_BitInt` wider than the constant model is not
+        // folded yet.
+        let wide = |ty| self.integer_type(ty).is_some_and(|(bits, _)| bits > 128);
         if !valid {
             self.error(
-                if info.constant == ConstantClass::Arithmetic {
+                if info.constant == ConstantClass::Arithmetic && (wide(info.ty) || wide(target)) {
+                    SemanticErrorKind::UnsupportedWideConstant
+                } else if info.constant == ConstantClass::Arithmetic {
                     SemanticErrorKind::ConstantOverflow
                 } else {
                     SemanticErrorKind::NonConstantInitializer
