@@ -237,6 +237,11 @@ static void conversions(void) {
            (double)(long double)(_Float16)(B)(float)(0x1p19 + 0x1p19),
            (double)(long double)(_Float16)(B)(0x1p19 + 0x1p19),
            (double)(long double)(B)(_Float16)__builtin_complex((_Float16)0x1.004p0, (_Float16)0));
+    /* A floating constant condition and a comma after a constant are
+       transparent; arithmetic on computed operands is not shortened. */
+    printf("parse contexts %a %a %a\n", (double)(_Float16)(B)(1.0 ? 0x1p20 : -0x1p20),
+           (double)(_Float16)(B)(0, 0x1p20),
+           (double)(_Float16)(B)(float)(0x1p20 / 2 + 0x1p20 / 2));
 }
 
 /* small * small is 2^-140: a float subnormal, but zero as a __bf16. */

@@ -1587,7 +1587,8 @@ to a standard floating type) and rounds that conversion where its
 code does not: `(_Float16)(__bf16)0x1p20` is infinite, but
 `(_Float16)(__bf16)-0x1p20` and `(_Float16)(__bf16)(0x1p19 + 0x1p19)`,
 whose operands GCC folds only later, are `-0x1p20` and `0x1p20`. bcc
-follows each case (`semantic_analysis/excess.rs`);
+follows each case (`semantic_analysis/excess.rs`), with the known
+deviations below;
 `scripts/generate_half_matrix.py` writes a program converting every pair
 of integer, real and complex types through `+`, `?:` and casts, with each
 compiler's output as the expectation (`tests/integration/half_precision.rs`). The ABI passes it as `_Float16`; it is never promoted through `...`.
@@ -1616,6 +1617,26 @@ Verified against GCC 15 and the pinned Clang on every back end
 `storage_half.c` and the ABI link tests). Limits: GCC's `__builtin_*f16`
 constant builtins, `FLT16_SNAN`, and imaginary `f16i` constants are
 absent.
+
+### Known GCC-identity folding deviations
+
+bcc models GCC's parse-time folding by constant nodes (above) rather than
+GCC's whole folder, so these folded constants still convert differently
+under the GCC identity (`(double)` of each, GCC 15). The Clang identity
+matches Clang in each.
+
+| Expression | GCC | bcc |
+| --- | --- | --- |
+| `(_Float16)(__bf16)(1.0 == 1.0 ? 0x1p20 : -0x1p20)` (a comparison or `!` of floating constants as condition) | `inf` | `0x1p+20` |
+| `(_Float16)(__bf16)((int)(0x1p19 + 0x1p19) ? 0x1p20 : -0x1p20)` (an integer conversion of arithmetic as condition) | `inf` | `0x1p+20` |
+| `(_Float16)(__bf16)(float)(1 ? 0x1p19 + 0x1p19 : -0x1p20)` (a constant `?:` beneath a narrowing cast) | `inf` | `0x1p+20` |
+| `(_Float16)(__bf16)(float)(0, (int)(0x1p19 + 0x1p19))` (a comma before an integer conversion) | `inf` | `0x1p+20` |
+| `(_Float16)(__bf16)(float)(1e30 + 1e30)` (constants not exact in the narrower type, which GCC does not shorten) | `0x1.94p+100` | `inf` |
+| `(__bf16)(h * 1)` (GCC simplifies `x * 1` to `x`) | unrounded | rounded |
+
+Separately, a scalar compound literal in a static initializer, such as
+`static double d = (double)((double){0x1p20});`, is refused as not
+constant for every type (also on `main`); GCC and Clang accept it.
 
 ## GNU vectors and x86 SIMD resources (2026-10-09)
 

@@ -12,6 +12,7 @@
 //! `c_parser_cast_expression`.
 
 use super::{
+    Analyzer,
     ExpressionInfo,
     Scalar,
     TypeId,
@@ -88,9 +89,10 @@ pub(crate) fn excess_expression<'tu>(
 /// folds a cast exactly when its operand is already a constant node: a
 /// literal, an integer constant expression, a cast of a constant node, a
 /// `?:` with a constant condition whose selected operand is one,
-/// `__builtin_complex` of constant nodes, or an arithmetic constant
-/// expression narrowed to a standard floating type
-/// (`(float)(0x1p19 + 0x1p19)`), which `convert_to_real` folds. It leaves a
+/// `__builtin_complex` of constant nodes, or an operation on constant nodes
+/// narrowed to a standard floating type (`(float)(0x1p19 + 0x1p19)`), which
+/// GCC shortens and folds. A constant condition may be integer or floating,
+/// and a comma after a constant is transparent. It leaves a
 /// negated or computed floating operand, as in `(__bf16)-0x1p20`, to be folded
 /// later and converts it as a plain run-time value. Parentheses, unary `+`,
 /// `__extension__` and the selections of `_Generic` and
@@ -110,20 +112,25 @@ pub(crate) fn folded_constant<'tu>(
         } =>
             folded_constant(operand_expression, info, scalar)
                 || converted_arithmetic(expression, operand_expression, info, scalar),
-        | E::Conditional(conditional) => match info(conditional.condition_expression)
-            .filter(|condition| condition.ice)
-            .and_then(|condition| condition.integer)
-        {
-            | Some(condition) => folded_constant(
-                if condition.value == 0 {
-                    conditional.else_expression
-                } else {
-                    conditional.then_expression
-                },
-                info,
-                scalar,
-            ),
-            | None => false,
+        // A constant condition, integer or floating, selects its operand
+        // as GCC parses it: the truth-value conversion folds it.
+        | E::Conditional(conditional) => {
+            let condition = conditional.condition_expression;
+            match info(condition)
+                .filter(|_| folded_constant(condition, info, scalar))
+                .and_then(Analyzer::constant_truth)
+            {
+                | Some(truth) => folded_constant(
+                    if truth {
+                        conditional.then_expression
+                    } else {
+                        conditional.else_expression
+                    },
+                    info,
+                    scalar,
+                ),
+                | None => false,
+            }
         },
         // A builtin call that folds, `__builtin_complex`, folds as its
         // operands do.
@@ -137,9 +144,11 @@ pub(crate) fn folded_constant<'tu>(
     }
 }
 
-/// Whether `cast` narrows an arithmetic constant expression to a standard
-/// floating type of less precision, which GCC's `convert_to_real` folds as
-/// it parses it; a widening conversion it leaves.
+/// Whether `cast` narrows an operation on two constant nodes to a standard
+/// floating type of less precision, which GCC's shortening of a narrowed
+/// operation folds as it parses it; a widening conversion, or an operation
+/// on computed operands, it leaves. (GCC shortens only when both constants
+/// are exact in the narrower type; that condition is not modelled.)
 fn converted_arithmetic<'tu>(
     cast: &'tu Expression<'tu>,
     operand: &'tu Expression<'tu>,
@@ -155,16 +164,21 @@ fn converted_arithmetic<'tu>(
         | Scalar::Float128 => Some(113),
         | _ => None,
     };
-    let arithmetic = matches!(
-        operand.kind,
-        E::Binary {
-            operator: BinaryOperator::Addition
+    // The shortening needs both operands to be constants already.
+    let arithmetic = match operand.kind {
+        | E::Binary {
+            operator:
+                BinaryOperator::Addition
                 | BinaryOperator::Subtraction
                 | BinaryOperator::Multiplication
                 | BinaryOperator::Division,
-            ..
-        }
-    );
+            left_expression,
+            right_expression,
+        } =>
+            folded_constant(left_expression, info, scalar)
+                && folded_constant(right_expression, info, scalar),
+        | _ => false,
+    };
     if let (true, Some(cast), Some(operand)) = (arithmetic, info(cast), info(operand))
         && (operand.floating().is_some() || operand.binary128().is_some())
         && let (Some(to), Some(from)) = (
@@ -178,9 +192,9 @@ fn converted_arithmetic<'tu>(
     }
 }
 
-/// `expression` through parentheses, unary `+`, `__extension__` and the
-/// operands `_Generic` and `__builtin_choose_expr` select, which GCC's
-/// parser replaces by what they hold.
+/// `expression` through parentheses, unary `+`, `__extension__`, the
+/// operands `_Generic` and `__builtin_choose_expr` select and a comma's right
+/// operand after a constant, which GCC's parser replaces by what they hold.
 fn strip<'tu>(
     expression: &'tu Expression<'tu>,
     info: &dyn Fn(&'tu Expression<'tu>) -> Option<ExpressionInfo<'tu>>,
@@ -202,6 +216,16 @@ fn strip<'tu>(
                     | Some(selected) => expression = selected,
                     | None => return expression,
                 },
+            // GCC drops a comma's left operand without side effects, here a
+            // constant, and keeps the right one.
+            | E::Binary {
+                operator: BinaryOperator::Comma,
+                left_expression,
+                right_expression,
+            } if info(left_expression).is_some_and(|left| {
+                left.integer.is_some() || left.floating().is_some() || left.binary128().is_some()
+            }) =>
+                expression = right_expression,
             | _ => return expression,
         }
     }
