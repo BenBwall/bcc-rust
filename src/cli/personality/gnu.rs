@@ -100,6 +100,7 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         .into(),
     );
     common.push(format!("--target={}", target.triple()).into());
+    common.push(format!("--driver-name={}", invocation.name).into());
     if invocation.name.ends_with("c89") {
         common.push("-std=c89".into());
     } else if invocation.name.ends_with("c99") {

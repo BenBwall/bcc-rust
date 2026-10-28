@@ -275,7 +275,10 @@ fn report_unreadable(args: &Cli, path: &Path, error: &io::Error, arena: &Bump) {
         | Format::Clang | Format::Msvc | Format::MsvcClassic | Format::MsvcCaret => report_stderr(
             format_args!("error: error reading '{path}': {reason}\n1 error generated."),
         ),
-        | Format::Tcc => report_stderr(format_args!("tcc: error: file '{path}' not found")),
+        | Format::Tcc => report_stderr(format_args!(
+            "{}: error: file '{path}' not found",
+            args.driver.driver_name.as_deref().unwrap_or("tcc")
+        )),
     }
 }
 

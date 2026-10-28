@@ -80,6 +80,10 @@ pub(in crate::cli) struct DriverOptions {
     /// deleted (also accepts GCC -MP).
     #[arg(long)]
     pub(in crate::cli) phony_dependencies: bool,
+    /// Name the driver NAME in its own warnings and errors (`NAME: warning:
+    /// ...`), as the driver personalities do for the compiler they mimic.
+    #[arg(long, hide = true, value_name = "NAME")]
+    pub(in crate::cli) driver_name:        Option<String>,
 }
 
 /// Which dependencies a make rule lists.

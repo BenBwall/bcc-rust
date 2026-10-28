@@ -13,13 +13,11 @@ use super::{
     super::{
         Cli,
         MainError,
-        code_generation::{
-            FAILURE_STATUS,
-            report_stderr,
-        },
+        code_generation::FAILURE_STATUS,
     },
     Input,
     Job,
+    Severity,
     combine,
     compile,
     dependencies::{
@@ -141,10 +139,11 @@ pub(super) fn link(args: &Cli, inputs: &[Input<'_>]) -> Result<i32, MainError> {
     match linked {
         | Ok(()) => Ok(0),
         | Err(error) => {
-            report_stderr(format_args!(
-                "error: cannot build `{}`: {error}",
-                output.display()
-            ));
+            super::report(
+                args,
+                Severity::Error,
+                format_args!("cannot build `{}`: {error}", output.display()),
+            );
             Ok(FAILURE_STATUS)
         },
     }
@@ -173,10 +172,11 @@ pub(super) fn assemble(args: &Cli, assembly: Assembly<'_>, object: &Path) -> i32
     match assembled {
         | Ok(()) => 0,
         | Err(error) => {
-            report_stderr(format_args!(
-                "error: cannot assemble `{}`: {error}",
-                assembly.path.display()
-            ));
+            super::report(
+                args,
+                Severity::Error,
+                format_args!("cannot assemble `{}`: {error}", assembly.path.display()),
+            );
             FAILURE_STATUS
         },
     }
@@ -237,10 +237,14 @@ pub(super) fn warn_unused_assembler_options(args: &Cli) {
             option.strip_prefix("-Wa,").unwrap_or(option).split(',')
         };
         for piece in pieces.filter(|piece| *piece != "--noexecstack") {
-            report_stderr(format_args!(
-                "warning: assembler option '{piece}' is not applied to C sources, which bcc \
-                 assembles itself"
-            ));
+            super::report(
+                args,
+                Severity::Warning,
+                format_args!(
+                    "assembler option '{piece}' is not applied to C sources, which bcc assembles \
+                     itself"
+                ),
+            );
         }
     }
 }

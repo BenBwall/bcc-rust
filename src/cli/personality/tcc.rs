@@ -217,6 +217,7 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         "--compiler-identity=tcc".into(),
         "--diagnostic-format=tcc".into(),
         format!("--target={}", target.triple()).into(),
+        format!("--driver-name={}", invocation.name).into(),
         format!("-std={standard}").into(),
     ];
     bcc.append(&mut out);

@@ -2407,4 +2407,59 @@ mod tests {
             stderr(&output)
         );
     }
+
+    /// Messages from bcc's own driver name the driver as the compiler does:
+    /// `gcc: warning: ...`, `tcc: ...`, `cl : Command line warning : ...`,
+    /// and the name the driver was run as; bcc's own command line names
+    /// none.
+    #[test]
+    fn driver_messages_name_the_driver() {
+        let directory = Directory::new();
+        directory.write("a.c", "int a;\n");
+        directory.write("b.o", "");
+        let message = "b.o: linker input file unused because linking not done\n";
+        for (mode, prefix) in [
+            ("--gcc-mode", "gcc: warning: "),
+            ("--tcc-mode", "tcc: warning: "),
+            ("", "warning: "),
+        ] {
+            let output = directory.bcc(mode, &["-c", "a.c", "b.o"]);
+            succeeds(&output);
+            assert_eq!(stderr(&output), format!("{prefix}{message}"), "{mode}");
+        }
+        // A driver error that ends the run takes the name too.
+        directory.write("b.c", "int b;\n");
+        let output = directory.bcc("--tcc-mode", &["-c", "a.c", "b.c", "-o", "x.o"]);
+        assert_eq!(output.status.code(), Some(1));
+        assert_eq!(
+            stderr(&output),
+            "tcc: error: cannot specify '-o' with '-c', '-S' or '-E' with multiple files\n"
+        );
+        // `cl`'s form has no invented code. Without the Windows SDK's
+        // libraries the link fails in bcc's driver.
+        directory.write("m.c", "int main(void) { return 0; }\n");
+        for (mode, prefix) in [
+            ("--msvc-mode", "cl : Command line error : cannot build `m.exe`: "),
+            ("--clang-cl-mode", "clang-cl: error: cannot build `m.exe`: "),
+        ] {
+            let output = directory.bcc(mode, &["/nologo", "m.c"]);
+            if !output.status.success() {
+                assert!(stderr(&output).starts_with(prefix), "{}", stderr(&output));
+            }
+        }
+        // Run under another name, the driver uses that name.
+        let gcc = directory.path("x86_64-linux-gnu-gcc");
+        if std::os::unix::fs::symlink(env!("CARGO_BIN_EXE_bcc-rust"), &gcc).is_ok() {
+            let output = Command::new(&gcc)
+                .args(["-c", "a.c", "b.o"])
+                .current_dir(&directory.0)
+                .output()
+                .unwrap();
+            succeeds(&output);
+            assert_eq!(
+                stderr(&output),
+                format!("x86_64-linux-gnu-gcc: warning: {message}")
+            );
+        }
+    }
 }
