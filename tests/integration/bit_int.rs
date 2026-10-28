@@ -5,7 +5,8 @@
 //! host GCC's (14 or later) must agree with it. `bit_int.wasm32.expected`
 //! is what wasi-sdk's Clang build prints for `wasm32-wasip1`.
 //! `bit_int_abi.c` links halves built by bcc's back ends, Clang and GCC in
-//! every pairing.
+//! every pairing, and `bit_int_objects.c` prints the bytes of `_BitInt`
+//! objects, padding included.
 
 #[cfg(test)]
 #[expect(
@@ -158,6 +159,107 @@ mod tests {
         }
     }
 
+    /// The bytes of static, automatic, member, array, compound-literal and
+    /// (GCC's only) atomic `_BitInt` objects, padding bits included, are
+    /// what each identity's compiler stores: the value extended from its
+    /// width, in static initializers and at run time, before and after
+    /// compound assignments. The WebAssembly layout is the same, so its
+    /// build prints Clang's bytes.
+    #[test]
+    fn bit_int_object_bytes_match_each_compiler() {
+        if !linux_x86_64() {
+            return;
+        }
+        let source = fixture("bit_int_objects.c");
+        let clang = reference(CLANG, &source);
+        let mut references = vec![("--compiler-identity=clang", clang.clone())];
+        if host_gcc_compiles(&source) {
+            references.push(("--compiler-identity=gcc", reference("gcc", &source)));
+        } else {
+            eprintln!("note: no host GCC with _BitInt; skipping the GCC identity");
+        }
+        for (identity, expected) in &references {
+            for flags in [
+                &["--interpret", "--opt=none"][..],
+                &["--interpret", "--opt=bcc"],
+            ] {
+                let output = bcc(&[&[*identity, "-std=c23", &source][..], flags].concat());
+                assert_eq!(
+                    output.status.code(),
+                    Some(0),
+                    "{identity} {flags:?}: {}",
+                    text(&output.stderr)
+                );
+                assert_eq!(text(&output.stdout), *expected, "{identity} {flags:?}");
+            }
+            for flags in [
+                &["-O0"][..],
+                &["-O2"],
+                &["--backend=native"],
+                &["--backend=native", "--opt=bcc"],
+            ] {
+                let executable = temporary("objects.exe");
+                let built = bcc(&[
+                    &[
+                        *identity,
+                        "-std=c23",
+                        &source,
+                        "-o",
+                        executable.to_str().unwrap(),
+                    ][..],
+                    flags,
+                ]
+                .concat());
+                assert!(
+                    built.status.success(),
+                    "{identity} {flags:?}: {}",
+                    text(&built.stderr)
+                );
+                let run = run_native(&mut Command::new(&executable)).unwrap();
+                assert_eq!(run.status.code(), Some(0), "{identity} {flags:?}");
+                assert_eq!(text(&run.stdout), *expected, "{identity} {flags:?}");
+                std::fs::remove_file(executable).unwrap();
+            }
+        }
+        if !Command::new("node")
+            .arg("--version")
+            .output()
+            .is_ok_and(|output| output.status.success())
+        {
+            eprintln!("skipping wasm32: node is not on the path");
+            return;
+        }
+        let runner = Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts/wasm/run.mjs");
+        for flags in [&["-O0"][..], &["-O2"], &["--opt=bcc"]] {
+            let module = temporary("objects.wasm");
+            let built = bcc(&[
+                &[
+                    "-std=c23",
+                    "--target=wasm32-wasip1",
+                    &source,
+                    "-o",
+                    module.to_str().unwrap(),
+                ][..],
+                flags,
+            ]
+            .concat());
+            assert!(
+                built.status.success(),
+                "wasm32 {flags:?}: {}",
+                text(&built.stderr)
+            );
+            let run = run_native(
+                Command::new("node")
+                    .arg("--no-warnings")
+                    .arg(&runner)
+                    .arg(&module),
+            )
+            .unwrap();
+            assert_eq!(text(&run.stdout), clang, "wasm32 {flags:?}");
+            std::fs::remove_file(module).unwrap();
+        }
+    }
+
     /// Arguments of every width class (narrower than `int`, in one general
     /// register, in two or on the stack 8-aligned after the registers run
     /// out), results, structure members and variadic arguments pass
@@ -282,12 +384,18 @@ mod tests {
         built
     }
 
-    /// The output of `source` built by `compiler`.
+    /// The output of `source` built by `compiler`; GCC calls libatomic for
+    /// 16-byte atomic objects.
     fn reference(compiler: &str, source: &str) -> String {
         let executable = temporary("reference.exe");
         let built = Command::new(compiler)
             .args([source, "-std=c23", "-O0", "-w", "-o"])
             .arg(&executable)
+            .args(if compiler == "gcc" {
+                &["-latomic"][..]
+            } else {
+                &[]
+            })
             .output()
             .unwrap();
         assert!(

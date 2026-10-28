@@ -12703,19 +12703,22 @@ literals
 12617 0:ffffffffffffffff
 12618 ffffffffffffffff:8000000000000000
 12619 0
+12620 ffffffffffffff80
+12621 fffffffffffffffc
+-128 22 -128
 bit-fields
-12620 3fe
-12621 7fe
-12622 fffffffffffffffc
-12623 1:ffffffffffffffff
-12624 ffffffffffffffff:fffffffffffffffd
-12625 1
-12626 fffffffffffffe00
-12627 0
-12628 3
-12629 0:0000000000000000
-12630 ffffffffffffffff:ffffffffffffffeb
-12631 0
+12622 3fe
+12623 7fe
+12624 fffffffffffffffc
+12625 1:ffffffffffffffff
+12626 ffffffffffffffff:fffffffffffffffd
+12627 1
+12628 fffffffffffffe00
+12629 0
+12630 3
+12631 0:0000000000000000
+12632 ffffffffffffffff:ffffffffffffffeb
+12633 0
 24
 switch
 0
@@ -12729,12 +12732,12 @@ switch
 12
 13
 overflow
-0 12632 7f
-1 12633 ffffffffffffff80
-1 12634 7f
-0 12635 0:8000000000000000
-1 12636 ffffffffffffffff:0000000000000000
-1 12637 4c
-1 12638 ffffffffffffffff:fffffffffffffffd
+0 12634 7f
+1 12635 ffffffffffffff80
+1 12636 7f
+0 12637 0:8000000000000000
+1 12638 ffffffffffffffff:0000000000000000
+1 12639 4c
+1 12640 ffffffffffffffff:fffffffffffffffd
 printf
 -12345 32767 -3

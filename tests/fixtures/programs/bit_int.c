@@ -21507,6 +21507,13 @@ static void extras(void) {
     P2(0xffffffffffffffffwb);
     P2(-0x8000000000000000wb);
     P1(255uwb + 1uwb);
+    P1((_BitInt(8))1 << 7);
+    P1((_BitInt(3))1 << 2);
+    {
+        enum { SHIFTED = (_BitInt(8))1 << 7, WRAPPED = (unsigned _BitInt(7))100 + (unsigned _BitInt(7))50 };
+        static _BitInt(8) folded = (_BitInt(8))1 << 7;
+        printf("%d %d %d\n", SHIFTED, WRAPPED, (int)folded);
+    }
 
     printf("bit-fields\n");
     struct fields s = {0};
