@@ -141,7 +141,10 @@ new build never reuses a URL for different bytes. Suggested caching:
   sequence points, and lists the cited C99 paragraphs with a gloss. Earlier
   steps are listed below it and can be revisited.
 - In the source, a solid box marks what the last step evaluated and a dashed
-  underline what runs next; undefined behavior is marked in red.
+  underline what runs next; undefined behavior is marked in red. The compiler
+  pipeline view drops these marks and shows the compiler's instead: the
+  selected stage's marks in the source and the lines linked to the output
+  under the pointer.
 - Back replays retained snapshots (up to 2,000); the engine stays at the newest
   state, and stepping forward replays history before asking it for more.
 - An announcement region narrates each step for screen readers.
