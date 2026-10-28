@@ -195,6 +195,18 @@ impl Engine {
         }
     }
 
+    /// Compile `source` to WebAssembly with bcc in the Worker. The inner
+    /// error is bcc's refusal, with its diagnostics.
+    pub async fn compile_wasm(&self, source: &str) -> Result<Result<WasmModule, String>, String> {
+        match self
+            .request(Command::CompileWasm(source.to_owned()))
+            .await?
+        {
+            | Answer::CompiledWasm(result) => Ok(*result),
+            | _ => Err(UNEXPECTED.into()),
+        }
+    }
+
     pub fn connected(&self) -> bool {
         self.inner.connected.get()
     }

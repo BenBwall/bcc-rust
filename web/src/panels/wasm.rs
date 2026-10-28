@@ -1,8 +1,10 @@
-//! The WebAssembly view: the narration of the last instruction and the
-//! machine's state (operand stack, locals, call stack, the blocks a branch
-//! can reach, globals, linear memory and the program's output), and the
-//! module's text-format listing, which the page shows under the C source
-//! with the instruction just executed and the next one.
+//! The WebAssembly view: which compiler made the module (bcc in the
+//! browser, or clang ahead of time for a lesson, with a switch between
+//! them), the narration of the last instruction and the machine's state
+//! (operand stack, locals, call stack, the blocks a branch can reach, globals,
+//! linear memory and the program's output), and the module's text-format
+//! listing, which the page shows under the C source with the instruction just
+//! executed and the next one.
 
 mod memory;
 mod state;
@@ -11,7 +13,10 @@ use leptos::prelude::*;
 
 use super::rich_text;
 use crate::{
-    app::wasm::WasmState,
+    app::wasm::{
+        Compiler,
+        WasmState,
+    },
     editor::CodeEditor,
 };
 
@@ -21,6 +26,8 @@ pub fn WasmView(
     /// Whether the editor's text differs from the program shown.
     stale: Signal<bool>,
     on_jump: Callback<u64>,
+    /// Step the module this compiler made instead.
+    on_choose: Callback<Compiler>,
 ) -> impl IntoView {
     let shown = move || wasm.program.with(Option::is_some);
     view! {
@@ -29,14 +36,18 @@ pub fn WasmView(
             <div class="stage-missing wasm-unavailable" hidden=move || shown() || wasm.unavailable.with(Option::is_none)>
                 <p class="wasm-unavailable-title">"No WebAssembly module for this program"</p>
                 <p>{move || wasm.unavailable.get().unwrap_or_default()}</p>
+                <pre class="wasm-diagnostic" hidden=move || wasm.refusal.with(Option::is_none)>
+                    {move || wasm.refusal.get().unwrap_or_default()}
+                </pre>
             </div>
             <p class="edit-hint" hidden=move || !stale.get() || !shown()>
-                "You changed the program. This view still steps the lesson's WebAssembly, compiled from the source it started with."
+                "You changed the program. This view still steps the module compiled from the source it started with: choose Run edited code to compile your edits with bcc and step them."
             </p>
             <div class="wasm-loading empty-state" hidden=move || shown() || wasm.unavailable.with(Option::is_some)>
-                "Loading the module into the stepper…"
+                "Compiling with bcc and loading the module into the stepper…"
             </div>
             <Show when=shown>
+                <Provenance wasm on_choose />
                 <Narration wasm on_jump />
                 <div class="wasm-row">
                     <state::OperandStack wasm />
@@ -51,6 +62,80 @@ pub fn WasmView(
                 <state::Console wasm />
             </Show>
         </section>
+    }
+}
+
+/// Who compiled the module and what that means, the switch between bcc and
+/// clang when a lesson has both, and bcc's diagnostics when it refused the
+/// program and clang's module stands in.
+#[component]
+fn Provenance(wasm: WasmState, on_choose: Callback<Compiler>) -> impl IntoView {
+    let compiler = move || wasm.compiler.get();
+    let both = move || wasm.available.with(|available| available.len() > 1);
+    let fell_back =
+        move || compiler() == Some(Compiler::Clang) && wasm.refusal.with(Option::is_some);
+    let command = move || {
+        wasm.program.with(|program| {
+            program
+                .as_ref()
+                .map(|program| program.command.clone())
+                .unwrap_or_default()
+        })
+    };
+    let choice = move |option: Compiler| {
+        view! {
+            <button
+                type="button"
+                class="opt-option"
+                aria-pressed=move || (compiler() == Some(option)).to_string()
+                disabled=move || wasm.locked_tracked()
+                on:click=move |_| on_choose.run(option)
+            >
+                {option.name()}
+            </button>
+        }
+    };
+    view! {
+        <article class="card wasm-provenance" data-compiler=move || compiler().map_or("", |compiler| match compiler {
+            | Compiler::Bcc => "bcc",
+            | Compiler::Clang => "clang",
+        })>
+            <div class="wasm-provenance-head">
+                <h3 class="wasm-provenance-title">
+                    {move || match compiler() {
+                        | Some(Compiler::Bcc) => "Compiled by bcc in your browser",
+                        | _ => "Compiled by Clang (wasi-sdk), ahead of time",
+                    }}
+                </h3>
+                <div class="opt-toggle wasm-compiler-switch" role="group" aria-label="Which compiler's WebAssembly to step" hidden=move || !both()>
+                    {choice(Compiler::Bcc)}
+                    {choice(Compiler::Clang)}
+                </div>
+            </div>
+            <p class="wasm-provenance-body">
+                {move || match compiler() {
+                    | Some(Compiler::Bcc) => rich_text(
+                        "bcc, the C compiler this site is about, is itself compiled to WebAssembly and runs inside this page. \
+                         It just turned the C source into the module you are stepping, at `-O0` and for WASI \
+                         (`wasm32-wasip1`), on your computer: nothing was sent to a server. Edit the program and \
+                         choose Run edited code, and bcc compiles your version.",
+                    ),
+                    | _ => rich_text(
+                        "Clang, from the wasi-sdk toolchain, built this lesson's module when the site was built, at `-O0` \
+                         and without a C library. Only the lessons have one.",
+                    ),
+                }}
+                {move || both().then(|| rich_text(
+                    " Switch compilers to compare: the same C becomes different instructions, because each compiler \
+                     makes its own choices. bcc's module also starts in `$_start`, which its small C library adds.",
+                ))}
+            </p>
+            <div class="wasm-fallback" hidden=move || !fell_back()>
+                <p>"bcc can't compile this program to WebAssembly, so you are stepping Clang's module instead. bcc said:"</p>
+                <pre class="wasm-diagnostic">{move || wasm.refusal.get().unwrap_or_default()}</pre>
+            </div>
+            <code class="wasm-command">{command}</code>
+        </article>
     }
 }
 
@@ -118,6 +203,10 @@ fn Narration(wasm: WasmState, on_jump: Callback<u64>) -> impl IntoView {
                 })
         })
     };
+    let exit = move || {
+        wasm.current
+            .with(|current| current.as_ref().and_then(|current| current.exit))
+    };
     let output = move || {
         wasm.current.with(|current| {
             current
@@ -154,6 +243,10 @@ fn Narration(wasm: WasmState, on_jump: Callback<u64>) -> impl IntoView {
             </p>
             <p class="return-callout" hidden=move || results().is_none()>
                 "Program finished: it returned "<strong>{move || results().unwrap_or_default()}</strong>
+            </p>
+            <p class="return-callout" hidden=move || exit().is_none()>
+                "Program exited with status "<strong>{move || exit().unwrap_or_default()}</strong>
+                ", the number it gave WASI's "<code>"proc_exit"</code>": C's exit status, what "<code>"main"</code>" returned or passed to "<code>"exit"</code>"."
             </p>
             <div class="fault-callout" hidden=move || output().is_none()>
                 <p class="fault-kind">"Trap"</p>
@@ -226,9 +319,9 @@ pub fn WasmListing(
     });
     let producer = move || {
         wasm.program.with(|program| {
-            program.as_ref().map_or_else(String::new, |program| {
-                format!("{} · {} bytes", program.producer, program.size)
-            })
+            program
+                .as_ref()
+                .map_or_else(String::new, |program| format!("{} bytes", program.size))
         })
     };
     let command = move || {
@@ -259,6 +352,15 @@ pub fn WasmListing(
                         <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M2.5 3.5h11v9h-11zM5 6.5h6M5 9.5h4" /></svg>
                         "WebAssembly text"
                     </h2>
+                    <span class="wat-compiler" title=command data-compiler=move || match wasm.compiler.get() {
+                        | Some(Compiler::Bcc) => "bcc",
+                        | _ => "clang",
+                    }>
+                        {move || match wasm.compiler.get() {
+                            | Some(Compiler::Bcc) => "compiled by bcc",
+                            | _ => "compiled by Clang (wasi-sdk)",
+                        }}
+                    </span>
                     <span class="wat-producer">{producer}</span>
                 </div>
             </header>

@@ -811,3 +811,19 @@
     *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
   }
 }
+
+/* Which compiler made the WebAssembly module: bcc live, or clang ahead of
+   time, with the switch between them. */
+@layer components {
+  .wasm-provenance { --compiler: var(--accent); padding: 14px 18px; border-left: 3px solid var(--compiler); }
+  .wasm-provenance[data-compiler="clang"] { --compiler: var(--cat-convert); }
+  .wasm-provenance-head { display: flex; align-items: center; justify-content: space-between; gap: 10px 14px; flex-wrap: wrap; }
+  .wasm-provenance-title { margin: 0; font-size: 15px; font-weight: 680; color: var(--text); }
+  .wasm-provenance-body { margin-top: 6px; color: var(--text-2); font-size: 13.5px; line-height: 1.6; }
+  .wasm-command { display: inline-block; margin-top: 10px; padding: 5px 9px; border-radius: 8px; background: var(--surface-3); color: var(--text-2); font-size: 12px; overflow-wrap: anywhere; }
+  .wasm-fallback { margin-top: 10px; padding: 10px 12px; border-radius: var(--radius-s); background: var(--danger-soft); color: var(--text); font-size: 13.5px; line-height: 1.6; }
+  .wasm-diagnostic { margin-top: 6px; padding: 8px 10px; border-radius: var(--radius-s); background: var(--code-bg); color: var(--text-2); font: 12.5px/1.5 var(--font-mono); white-space: pre; overflow-x: auto; }
+  .wat-compiler { padding: 1px 8px; border-radius: 999px; font-size: 12px; font-weight: 650; color: var(--accent); background: var(--accent-soft); white-space: nowrap; }
+  .wat-compiler[data-compiler="clang"] { color: var(--cat-convert); background: color-mix(in srgb, var(--cat-convert) 14%, transparent); }
+  .wat-header .pane-title { flex-wrap: wrap; }
+}

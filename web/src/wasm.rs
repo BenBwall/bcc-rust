@@ -4,10 +4,11 @@
 //!
 //! Where modules come from is behind [`WasmBackEnd`]: it turns C source
 //! into a [`WasmModule`] (the binary, and optionally which C line each
-//! instruction came from). Today [`Precompiled`] serves the bundled lessons,
-//! built by clang with DWARF line tables (`web/wasm/generate.sh`); bcc's own
-//! WebAssembly back end, once it lands in `bcc_rust::explorer`, becomes a
-//! second implementation that compiles any source in the compiler Worker.
+//! instruction came from). [`Bcc`] compiles any source with bcc's own
+//! WebAssembly back end in the compiler Worker (`bcc.rs`), with bcc's
+//! `.wat` and source map; [`Precompiled`] serves the bundled lessons, built
+//! ahead of time by clang with DWARF line tables (`web/wasm/generate.sh`),
+//! so the page can show both compilers' output for a lesson.
 //!
 //! The page sends the module to the engine Worker (`Command::WasmLoad`),
 //! which answers with a [`WasmProgram`]: the listing and what each of its
@@ -15,6 +16,8 @@
 //! (`Command::Wasm`) answers with the next snapshot. `worker.rs` builds
 //! them from the stepper's state, and `narration.rs` explains each step.
 
+#[cfg(feature = "compiler")]
+mod bcc;
 mod lessons;
 #[cfg(feature = "worker")]
 mod narration;
@@ -22,6 +25,11 @@ mod snapshot;
 #[cfg(feature = "worker")]
 pub mod worker;
 
+#[cfg(feature = "compiler")]
+pub use bcc::{
+    Bcc,
+    TARGET,
+};
 pub use lessons::{
     LESSON_FLAGS,
     LESSON_SECTION,

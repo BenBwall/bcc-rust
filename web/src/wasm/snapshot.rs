@@ -19,6 +19,36 @@ pub struct WasmModule {
     pub producer: String,
     /// The command that built it.
     pub command:  String,
+    /// The compiler's own text format of the module, shown in place of the
+    /// stepper's listing. `None` lists the module as the stepper prints it.
+    pub text:     Option<WasmText>,
+}
+
+/// A compiler's `.wat` for a module, and where each instruction is in it.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
+pub struct WasmText {
+    pub text:         String,
+    /// Each instruction's module offset and its 1-based line in `text`.
+    pub instructions: Vec<WasmTextLine>,
+    /// Each defined function's name and code range in the module.
+    pub functions:    Vec<WasmFunction>,
+}
+
+/// The instruction at module byte `offset` is on line `line` of the text.
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
+pub struct WasmTextLine {
+    pub offset: u32,
+    pub line:   u32,
+}
+
+/// A defined function: its index (imports first), its name, and the module
+/// offsets of its first instruction and just past its final `end`.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
+pub struct WasmFunction {
+    pub index: u32,
+    pub name:  String,
+    pub start: u32,
+    pub end:   u32,
 }
 
 /// From module byte `offset` on, code comes from C `line` (0: no line).
@@ -133,6 +163,8 @@ pub struct WasmSnapshot {
     pub output:    Vec<Output>,
     /// The entry point's results, once it returned.
     pub results:   Vec<Operand>,
+    /// The status the program passed to WASI's `proc_exit`, once it exited.
+    pub exit:      Option<i32>,
 }
 
 impl WasmSnapshot {

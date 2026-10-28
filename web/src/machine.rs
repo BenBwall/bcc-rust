@@ -67,8 +67,9 @@ impl Machine {
                 .wasm
                 .control(control)
                 .map(|snapshot| Answer::Wasm(Box::new(snapshot))),
-            | Command::Compile { .. } => Err("The abstract machine's Worker does not compile; \
-                                              the compiler Worker does."
+            | Command::Compile { .. } | Command::CompileWasm(_) => Err("The abstract machine's \
+                                                                        Worker does not compile; \
+                                                                        the compiler Worker does."
                 .into()),
         }
     }

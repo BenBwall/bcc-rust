@@ -31,6 +31,7 @@ use crate::{
         Answer,
         Command,
     },
+    wasm::WasmBackEnd,
 };
 
 /// Run one request from the page.
@@ -41,6 +42,9 @@ pub fn run(command: Command) -> Result<Answer, String> {
     match command {
         | Command::Compile { source, optimize } =>
             Ok(Answer::Compiled(Box::new(compile(&source, optimize)))),
+        | Command::CompileWasm(source) => Ok(Answer::CompiledWasm(Box::new(
+            crate::wasm::Bcc.compile(&source),
+        ))),
         | Command::Load(_) | Command::Step | Command::WasmLoad(_) | Command::Wasm(_) =>
             Err("The compiler Worker does not run the abstract machine.".into()),
     }

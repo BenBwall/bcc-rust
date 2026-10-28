@@ -165,6 +165,13 @@ impl Context<'_> {
                 "The host first calls `${name}`, the module's start function, which runs before \
                  anything else."
             )
+        } else if name == "_start" {
+            "The host (here, this page) now calls `$_start`, the entry point every WASI program \
+             exports. It is not your code: the compiler's C library added it. It prepares the \
+             program's arguments, calls `main`, and passes `main`'s result to WASI's `proc_exit` \
+             as the program's exit status. Its first instruction is next; choose Next line to run \
+             it up to the first line of your C."
+                .to_owned()
         } else {
             format!(
                 "The host (here, this page) now calls `${name}`, the function the C compiler made \
@@ -612,7 +619,7 @@ impl Context<'_> {
                     &format!(
                         "`{name}` combines the two values bit by bit, like C's `{symbol}`.{}",
                         if operation == "and" && matches!(popped.get(1), Some(Value::I32(1))) {
-                            " Masking with 1 keeps only the lowest bit: clang does this after a \
+                            " Masking with 1 keeps only the lowest bit: compilers do this after a \
                              comparison to turn it into a clean 0 or 1, C's `_Bool`."
                         } else {
                             ""
@@ -783,9 +790,9 @@ impl Context<'_> {
                  through a pointer."
                     .to_owned(),
             | _ if address < u64::from(pointer) && u64::from(pointer) - address <= 256 =>
-                "That address is just below `__stack_pointer`. This function calls nothing, so \
-                 clang lets it keep its C variables there without moving the pointer: no call can \
-                 run and reuse the space before it returns."
+                "That address is just below `__stack_pointer`. This function calls nothing, so the \
+                 compiler lets it keep its C variables there without moving the pointer: no call \
+                 can run and reuse the space before it returns."
                     .to_owned(),
             | _ => "Linear memory is one flat, bounds-checked array of bytes.".to_owned(),
         }
@@ -1067,9 +1074,10 @@ impl Context<'_> {
             "It is a parameter: the caller's argument arrived here when the call began.".to_owned()
         } else if self.machine.stack_pointer.is_some() {
             "Locals are a call's private variables, numbered after its parameters. A C variable \
-             can live in one only if its address is never needed; at `-O0` clang keeps C variables \
-             in the shadow stack instead, and uses locals for scratch values such as the frame's \
-             address."
+             can live in one only if its address is never needed. Compilers differ here: at `-O0` \
+             clang keeps every C variable in the shadow stack and uses locals for scratch values \
+             such as the frame's address, while bcc keeps a variable in a local unless the program \
+             takes its address."
                 .to_owned()
         } else {
             "Locals are a call's private variables, numbered after its parameters, and start at \

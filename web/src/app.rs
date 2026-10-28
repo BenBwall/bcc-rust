@@ -133,6 +133,7 @@ pub fn App() -> impl IntoView {
                                         wasm=state.wasm
                                         stale=Signal::derive(move || state.editor_text.with(|text| state.wasm.stale(text)))
                                         on_jump=Callback::new(move |step| state.wasm.jump(state, step))
+                                        on_choose=Callback::new(move |compiler| state.wasm.choose(state, compiler))
                                     />
                                 </Show>
                             }
@@ -1676,8 +1677,8 @@ fn About() -> impl IntoView {
                     <p>
                         "The compiler pipeline runs bcc itself, compiled to WebAssembly, in your browser. Only LLVM IR \
                          comes from the native bcc build: the browser build has no LLVM, so it is shown for the \
-                         bundled lessons only. Until bcc's own WebAssembly back end lands, the WebAssembly view steps \
-                         the lessons as clang compiled them. "
+                         bundled lessons only. The WebAssembly view steps what bcc compiles in your browser; for a \
+                         lesson, it can also step the module Clang (wasi-sdk) built ahead of time, to compare. "
                         <a href=README_URL>"Read the full notes"</a>"."
                     </p>
                 </article>
