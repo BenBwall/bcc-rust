@@ -395,6 +395,10 @@ fn constant_queries_of_compound_literals_follow_each_compiler() {
         ("1 ? 2 : (int){3}", true),
         ("1 || (int){1}", true),
         ("__builtin_choose_expr(1, 4, (int){3})", true),
+        ("1 ?: (int){1}", true),
+        ("(void *)0 ? (int){1} : 2", true),
+        // The cast keeps `-Wpointer-bool-conversion` quiet.
+        ("(char *)&g ? 2 : (int){1}", true),
     ];
     let sum = queries
         .iter()
@@ -402,7 +406,7 @@ fn constant_queries_of_compound_literals_follow_each_compiler() {
         .map(|(i, (query, _))| format!("{} * __builtin_constant_p({query})", 1 << i))
         .collect::<Vec<_>>()
         .join(" + ");
-    let source = format!("enum {{ E = {sum} }};");
+    let source = format!("int g; enum {{ E = {sum} }};");
     let gcc: i128 = queries
         .iter()
         .enumerate()
@@ -411,7 +415,7 @@ fn constant_queries_of_compound_literals_follow_each_compiler() {
         .sum();
     for (identity, expected) in [
         (CompilerIdentity::Gcc, gcc),
-        (CompilerIdentity::Clang, 0xFF),
+        (CompilerIdentity::Clang, 0x7FF),
     ] {
         with_configuration(
             &source,

@@ -1502,18 +1502,13 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
 
     /// Whether evaluating `operand` reads a compound literal: the operands
     /// `sizeof`, `_Alignof` and a `_Generic` controlling expression never
-    /// evaluate, nor do the operand of `?:`, `&&`, `||` or
-    /// `__builtin_choose_expr` that a constant condition skips. GNU
+    /// evaluate, nor do the operand of `?:` (also without its middle
+    /// operand), `&&`, `||` or `__builtin_choose_expr` that a constant
+    /// condition skips, a null pointer or an address included. GNU
     /// extension: GCC manual, "Other Builtins", `__builtin_constant_p`;
     /// C99 §6.5.2.5 paragraph 4, p. 75; PDF p. 87; §6.5.13-§6.5.15,
     /// pp. 89-90; PDF pp. 101-102.
-    fn reads_compound_literal(&self, operand: &'tu Expression<'tu>) -> bool {
-        let truth = |e: &'tu Expression<'tu>| {
-            let info = self.expression_info(e);
-            (info.constant == ConstantClass::Arithmetic)
-                .then(|| Self::constant_truth(info))
-                .flatten()
-        };
+    fn reads_compound_literal(&mut self, operand: &'tu Expression<'tu>) -> bool {
         let mut work = ArenaVec::new_in(self.scratch);
         work.push(operand);
         while let Some(expression) = work.pop() {
@@ -1535,10 +1530,17 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     },
                 | ExpressionType::Conditional(c) => {
                     work.push(c.condition_expression);
-                    match truth(c.condition_expression) {
+                    match self.condition_truth(c.condition_expression) {
                         | Some(true) => work.push(c.then_expression),
                         | Some(false) => work.push(c.else_expression),
                         | None => work.extend([c.then_expression, c.else_expression]),
+                    }
+                },
+                // GNU `c ?: e`: a true condition is the result.
+                | ExpressionType::OmittedConditional(c) => {
+                    work.push(c.condition_expression);
+                    if self.condition_truth(c.condition_expression) != Some(true) {
+                        work.push(c.else_expression);
                     }
                 },
                 | ExpressionType::Binary {
@@ -1547,7 +1549,9 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     right_expression,
                 } => {
                     work.push(left_expression);
-                    if truth(left_expression) != Some(operator == BinaryOperator::LogicalOr) {
+                    if self.condition_truth(left_expression)
+                        != Some(operator == BinaryOperator::LogicalOr)
+                    {
                         work.push(right_expression);
                     }
                 },
@@ -1557,6 +1561,15 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             }
         }
         false
+    }
+
+    /// The truth of `condition` when it is a constant, as evaluation
+    /// decides it: a number, a null pointer, or the address of an object or
+    /// function that is not weak.
+    /// C99: §6.5.15 paragraph 4, p. 90; PDF p. 102; §6.6 paragraph 9, p. 96;
+    /// PDF p. 108.
+    fn condition_truth(&mut self, condition: &'tu Expression<'tu>) -> Option<bool> {
+        self.evaluate_value(condition, 0)?.truth()
     }
 
     /// Whether evaluating `operand` reads through a non-`const` array

@@ -142,6 +142,9 @@ int main(void) {
            __builtin_constant_p(1 ? 2 : (int){3}),
            __builtin_constant_p(1 || (int){1}),
            __builtin_constant_p(__builtin_choose_expr(1, 4, (int){3})));
+    printf("%d %d %d\n", __builtin_constant_p(1 ?: (int){1}),
+           __builtin_constant_p((void *)0 ? (int){1} : 2),
+           __builtin_constant_p(&g ? 2 : (int){1}));
     printf("%d\n", local());
     return 0;
 }

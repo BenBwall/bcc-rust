@@ -2198,8 +2198,10 @@ literal, as Clang emits it, so `__builtin_constant_p((g, (int){1}))` stays 0
 there. Under the GCC identity a query whose evaluated operands read a
 literal is 0, as GCC answers even optimizing; operands that are never
 evaluated (a `_Generic` controlling expression, `sizeof`, and the operand a
-constant `?:`, `&&`, `||` or `__builtin_choose_expr` skips) do not count, so
-`__builtin_constant_p(1 ? 2 : (int){3})` is 1. A block-scope static pointer
+constant `?:`, with or without its middle operand, `&&`, `||` or
+`__builtin_choose_expr` skips, a null pointer or an object's address
+deciding it too) do not count, so `__builtin_constant_p(1 ? 2 : (int){3})`
+and `__builtin_constant_p(&g ? 2 : (int){1})` are 1. A block-scope static pointer
 to an array keeps a bound Clang does not fold, a compound literal's or an
 address difference's, as a variable bound without a diagnostic; Clang folds
 only where the type could not be variably modified: a static object's own
@@ -2234,13 +2236,22 @@ These cases remain different from the compiler each identity claims:
 - GCC folds a `?:` before the casts around it, so `static int x = (int)(1
   ? (long)(int){3} : 0L);` is constant for GCC; bcc requires the `?:` to
   have the object's type and rejects it.
+- A `?:` whose operands share a type node keeps it, so GCC accepts
+  `1 ? (I){3} : (I){4}` for a typedef `I`, and the same with a typedef of
+  a structure; bcc requires a literal of exactly the `?:`'s own type there.
+  Conversely GCC rejects `(int)(__typeof__(I)){3}` and `(int)(int
+  __attribute__((aligned(8)))){3}` as distinct variants of `int`, which
+  bcc, seeing no typedef name, accepts.
 - A block-scope static object whose member is a pointer to an array with a
   literal bound (`static struct { char (*p)[(int){3}]; } s;`) and a static
-  array of pointers to such arrays (`static char (*a[2])[(int){3}];`): GCC
+  or extern array of pointers to such arrays (`static char
+  (*a[2])[(int){3}];`, `extern char (*b[2])[(int){3}];`): GCC
   accepts both (the first with a `-Wpedantic` warning) and Clang folds the
   first with `-Wgnu-folding-constant` and accepts the second silently; the
   GCC identity rejects both as variably modified statics, and the Clang
   identity warns about the second too.
+- GCC accepts integer-zero literals as null-pointer elements (`{ (int){0} }`
+  into `int *`); bcc and Clang reject them.
 - Inside braces only an arithmetic literal converts to another element
   type; a pointer literal of another pointer type (`{ (int *){&g} }` for a
   `const int *`) stays rejected under both identities, and under the Clang
