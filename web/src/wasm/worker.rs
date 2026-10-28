@@ -36,6 +36,7 @@ use super::{
     WasmProgram,
     WasmRun,
     WasmSnapshot,
+    WasmText,
     WatLine,
     narration,
 };
@@ -49,6 +50,7 @@ const WINDOW: u32 = 256;
 #[derive(Default)]
 pub struct WasmWorker {
     session: Option<Session>,
+    listing: Listing,
 }
 
 impl WasmWorker {
@@ -72,26 +74,19 @@ impl WasmWorker {
         });
         let program = Rc::new(Program::load(&module.bytes, lines)?);
         let session = Session::new(Rc::clone(&program)).map_err(|error| error.to_string())?;
-        let lines = program
-            .wat
-            .lines
-            .iter()
-            .map(|line| WatLine {
-                offset: line.instr.map(|(_, _, offset)| offset),
-                source: line
-                    .instr
-                    .and_then(|(func, pc, _)| program.line_of(func, pc)),
-            })
-            .collect();
+        self.listing = match module.text {
+            | Some(text) => Listing::of_text(text),
+            | None => Listing::of_stepper(&program),
+        };
         let result = WasmProgram {
-            wat: program.wat.text.clone(),
-            lines,
-            producer: module.producer,
-            command: module.command,
-            has_lines: !program.lines.is_empty(),
-            size: module.bytes.len(),
+            wat:        self.listing.text.clone(),
+            lines:      self.listing.lines(&program),
+            producer:   module.producer,
+            command:    module.command,
+            has_lines:  !program.lines.is_empty(),
+            size:       module.bytes.len(),
             unresolved: program.unresolved.clone(),
-            snapshot: snapshot(&session, None),
+            snapshot:   snapshot(&session, &self.listing, None),
         };
         self.session = Some(session);
         Ok(result)
@@ -126,7 +121,117 @@ impl WasmWorker {
             | Some(Stop::Budget) => Some("budget".to_owned()),
             | _ => None,
         };
-        Ok(snapshot(session, stopped))
+        Ok(snapshot(session, &self.listing, stopped))
+    }
+}
+
+/// The listing the page shows (the compiler's `.wat`, or the stepper's own
+/// printout), and the line of each instruction and function header in it.
+#[derive(Default)]
+struct Listing {
+    text:         String,
+    /// Module offset and 1-based line of each instruction, by offset.
+    instructions: Vec<(u32, usize)>,
+    /// Function index and 1-based line of each function's header, by index.
+    headers:      Vec<(u32, usize)>,
+}
+
+impl Listing {
+    /// The stepper's printout of `program`, one instruction per line.
+    fn of_stepper(program: &Program) -> Self {
+        let mut instructions: Vec<(u32, usize)> = Vec::new();
+        let mut headers: Vec<(u32, usize)> = Vec::new();
+        for (index, line) in program.wat.lines.iter().enumerate() {
+            if let Some((_, _, offset)) = line.instr {
+                instructions.push((offset, index + 1));
+            } else if let Some(func) = line.func
+                && headers.last().is_none_or(|&(known, _)| known != func)
+            {
+                headers.push((func, index + 1));
+            }
+        }
+        instructions.sort_unstable();
+        headers.sort_unstable();
+        Self {
+            text: program.wat.text.clone(),
+            instructions,
+            headers,
+        }
+    }
+
+    /// A compiler's text. It defines the functions in order, so the n-th
+    /// `(func` line is the header of `functions[n]`. That also places the
+    /// part of a function the text spells without an instruction: its final
+    /// `end` (the byte before its range's end, which the stepper executes
+    /// when the code falls through) is the `)` that closes it.
+    fn of_text(text: WasmText) -> Self {
+        let mut instructions: Vec<(u32, usize)> = text
+            .instructions
+            .iter()
+            .map(|instruction| (instruction.offset, instruction.line as usize))
+            .collect();
+        let lines: Vec<&str> = text.text.lines().collect();
+        let starts = lines
+            .iter()
+            .enumerate()
+            .filter(|(_, line)| line.trim_start().starts_with("(func"))
+            .map(|(index, _)| index + 1);
+        let mut headers = Vec::new();
+        for (function, header) in text.functions.iter().zip(starts) {
+            headers.push((function.index, header));
+            let end = function.end.saturating_sub(1);
+            if let Some(close) =
+                (header + 1..=lines.len()).find(|&line| lines[line - 1].trim() == ")")
+                && !instructions.iter().any(|&(offset, _)| offset == end)
+            {
+                instructions.push((end, close));
+            }
+        }
+        instructions.sort_unstable();
+        instructions.dedup_by_key(|(offset, _)| *offset);
+        headers.sort_unstable();
+        Self {
+            text: text.text,
+            instructions,
+            headers,
+        }
+    }
+
+    /// The line showing the instruction at module `offset`.
+    fn line_at(&self, offset: u32) -> Option<usize> {
+        self.instructions
+            .binary_search_by_key(&offset, |&(known, _)| known)
+            .ok()
+            .map(|index| self.instructions[index].1)
+    }
+
+    /// The line showing instruction `pc` of `func`.
+    fn line_of(&self, program: &Program, func: u32, pc: u32) -> Option<usize> {
+        self.line_at(program.offset_of(func, pc)?)
+    }
+
+    fn header_of(&self, func: u32) -> Option<usize> {
+        self.headers
+            .binary_search_by_key(&func, |&(known, _)| known)
+            .ok()
+            .map(|index| self.headers[index].1)
+    }
+
+    /// What each line of the listing shows: its instruction's offset, if
+    /// any, and the C line that instruction came from.
+    fn lines(&self, program: &Program) -> Vec<WatLine> {
+        let mut lines = vec![WatLine::default(); self.text.lines().count()];
+        for &(offset, line) in &self.instructions {
+            if let Some(shown) = line.checked_sub(1).and_then(|index| lines.get_mut(index))
+                && shown.offset.is_none()
+            {
+                *shown = WatLine {
+                    offset: Some(offset),
+                    source: program.lines.line_at(offset),
+                };
+            }
+        }
+        lines
     }
 }
 
@@ -142,14 +247,15 @@ fn command(run: WasmRun) -> Command {
 }
 
 /// The page's view of the session's current state.
-fn snapshot(session: &Session, stopped: Option<String>) -> WasmSnapshot {
+fn snapshot(session: &Session, listing: &Listing, stopped: Option<String>) -> WasmSnapshot {
     let program = session.program();
     let machine = session.machine();
     let place = |func: u32, pc: u32| {
+        let offset = program.offset_of(func, pc)?;
         Some(Place {
-            offset:   program.offset_of(func, pc)?,
-            wat_line: program.wat.line_of(func, pc)?,
-            source:   program.line_of(func, pc).map(|line| line as usize),
+            offset,
+            wat_line: listing.line_at(offset)?,
+            source: program.line_of(func, pc).map(|line| line as usize),
         })
     };
     let status = match &machine.status {
@@ -176,8 +282,8 @@ fn snapshot(session: &Session, stopped: Option<String>) -> WasmSnapshot {
         stack: stack(machine).0,
         below: stack(machine).1,
         locals: locals(session),
-        frames: frames(session),
-        labels: labels(session),
+        frames: frames(session, listing),
+        labels: labels(session, listing),
         globals: globals(session),
         memory: memory(session),
         output: machine
@@ -194,6 +300,10 @@ fn snapshot(session: &Session, stopped: Option<String>) -> WasmSnapshot {
             })
             .collect(),
         results,
+        exit: match machine.status {
+            | Status::Exited(code) => Some(code),
+            | _ => None,
+        },
     }
 }
 
@@ -268,7 +378,7 @@ fn locals(session: &Session) -> Vec<Slot> {
         .collect()
 }
 
-fn frames(session: &Session) -> Vec<CallFrame> {
+fn frames(session: &Session, listing: &Listing) -> Vec<CallFrame> {
     let program = session.program();
     let machine = session.machine();
     let count = machine.frames.len();
@@ -286,7 +396,7 @@ fn frames(session: &Session) -> Vec<CallFrame> {
             };
             CallFrame {
                 name:          program.module.func_name(frame.func),
-                wat_line:      program.wat.line_of(frame.func, pc).unwrap_or(0),
+                wat_line:      listing.line_of(program, frame.func, pc).unwrap_or(0),
                 source:        program.line_of(frame.func, pc).map(|line| line as usize),
                 stack_pointer: frame.stack_pointer,
             }
@@ -294,7 +404,7 @@ fn frames(session: &Session) -> Vec<CallFrame> {
         .collect()
 }
 
-fn labels(session: &Session) -> Vec<BlockLabel> {
+fn labels(session: &Session, listing: &Listing) -> Vec<BlockLabel> {
     let program = session.program();
     let machine = session.machine();
     let Some(frame) = machine.frames.last() else {
@@ -308,11 +418,13 @@ fn labels(session: &Session) -> Vec<BlockLabel> {
             kind: label.kind.name().to_owned(),
             name,
             start: if label.kind == LabelKind::Function {
-                program.wat.header_of(frame.func).unwrap_or(0)
+                listing.header_of(frame.func).unwrap_or(0)
             } else {
-                program.wat.line_of(frame.func, label.start).unwrap_or(0)
+                listing
+                    .line_of(program, frame.func, label.start)
+                    .unwrap_or(0)
             },
-            end: program.wat.line_of(frame.func, label.end).unwrap_or(0),
+            end: listing.line_of(program, frame.func, label.end).unwrap_or(0),
             arity: label.arity,
         })
         .collect()
@@ -778,6 +890,257 @@ mod tests {
             })
             .unwrap_err();
         assert!(error.contains("unexpected end of the module"), "{error}");
+    }
+
+    /// Run `module` to its end with Continue requests; the program and its
+    /// last snapshot.
+    fn run_to_end(module: WasmModule) -> (WasmProgram, WasmSnapshot) {
+        let mut worker = WasmWorker::default();
+        let program = worker.load(module).unwrap();
+        let mut last = program.snapshot.clone();
+        for _ in 0..50 {
+            if !last.can_step() {
+                break;
+            }
+            last = worker.control(WasmControl::Run(WasmRun::Continue)).unwrap();
+        }
+        (program, last)
+    }
+
+    fn stdout(snapshot: &WasmSnapshot) -> String {
+        snapshot
+            .output
+            .iter()
+            .filter(|output| output.stream == "stdout")
+            .map(|output| output.text.as_str())
+            .collect()
+    }
+
+    /// bcc's module of every lesson runs in the stepper to the same outcome
+    /// as clang's: the same output (none) and `main`'s result, which clang's
+    /// module returns to the host and bcc's passes to `proc_exit`. Even the
+    /// two lessons with undefined behavior agree: at `-O0` both compilers
+    /// read the same zeroed shadow stack memory.
+    #[cfg(feature = "compiler")]
+    #[test]
+    fn bcc_compiles_every_lesson_to_a_module_that_ends_as_clangs_does() {
+        use crate::wasm::Bcc;
+        for demo in &DEMOS {
+            let (_, clang) = run_to_end(Precompiled.compile(demo.source).unwrap());
+            let (program, bcc) = run_to_end(Bcc.compile(demo.source).unwrap());
+            assert_eq!(clang.status, "finished", "{}", demo.name);
+            assert_eq!(bcc.status, "exited", "{}: {:?}", demo.name, bcc.narration);
+            let returned: i32 = clang.results[0].text.parse().unwrap();
+            assert_eq!(bcc.exit, Some(returned), "{}", demo.name);
+            assert_eq!(stdout(&bcc), stdout(&clang), "{}", demo.name);
+            assert!(
+                program.unresolved.is_empty(),
+                "{}: {:?}",
+                demo.name,
+                program.unresolved
+            );
+            assert_eq!(program.producer, "bcc");
+        }
+    }
+
+    /// bcc's `.wat` is the listing: every instruction the stepper can stop
+    /// at has its line in it, the C lines come from bcc's source map, and
+    /// stepping each lesson one instruction at a time places every state.
+    #[cfg(feature = "compiler")]
+    #[test]
+    fn bcc_modules_step_through_bccs_own_text() {
+        use crate::wasm::Bcc;
+        for demo in &DEMOS {
+            let module = Bcc.compile(demo.source).unwrap();
+            let text = module.text.clone().unwrap();
+            let loaded = Program::load(&module.bytes, None).unwrap();
+            let mut worker = WasmWorker::default();
+            let program = worker.load(module).unwrap();
+            assert_eq!(program.wat, text.text);
+            assert!(program.has_lines);
+            assert_eq!(program.lines.len(), program.wat.lines().count());
+            for index in 0..u32::try_from(loaded.module.funcs.len()).unwrap() {
+                let Some(body) = loaded.module.body(index) else {
+                    continue;
+                };
+                for &offset in &body.offsets {
+                    assert!(
+                        program.wat_line_of(offset).is_some(),
+                        "{}: offset {offset:#x} has no line in bcc's text",
+                        demo.name
+                    );
+                }
+            }
+            let source_lines = demo.source.lines().count();
+            let c_lines: Vec<u32> = program
+                .lines
+                .iter()
+                .filter_map(|line| line.source)
+                .collect();
+            assert!(!c_lines.is_empty(), "{}", demo.name);
+            assert!(
+                c_lines
+                    .iter()
+                    .all(|&line| (1..=u32::try_from(source_lines).unwrap()).contains(&line))
+            );
+            // Hovering `main`'s first line finds its code in the text.
+            let main = demo
+                .source
+                .lines()
+                .position(|line| line.starts_with("int main"))
+                .unwrap()
+                + 1;
+            let body = (main + 1..=source_lines)
+                .find(|&line| !program.wat_lines_for(line).is_empty())
+                .unwrap_or_else(|| panic!("{}: no code for main's body", demo.name));
+            for line in program.wat_lines_for(body) {
+                assert_eq!(program.source_for(line), Some(body));
+            }
+            let mut snapshot = program.snapshot.clone();
+            let mut steps = 0;
+            let mut on_c_line = false;
+            while snapshot.can_step() {
+                snapshot = worker.control(WasmControl::Run(WasmRun::Step)).unwrap();
+                steps += 1;
+                assert!(steps < 200_000, "{}: runaway", demo.name);
+                for place in snapshot.next.iter().chain(&snapshot.last) {
+                    let line = program.wat.lines().nth(place.wat_line - 1).unwrap();
+                    assert!(!line.trim().is_empty(), "{} step {steps}", demo.name);
+                    on_c_line |= place.source.is_some();
+                }
+                for frame in &snapshot.frames {
+                    assert!(
+                        frame.wat_line > 0,
+                        "{} step {steps}: {}",
+                        demo.name,
+                        frame.name
+                    );
+                }
+                for label in &snapshot.labels {
+                    assert!(
+                        label.start > 0 && label.end >= label.start,
+                        "{} step {steps}: {label:?}",
+                        demo.name
+                    );
+                }
+            }
+            assert!(on_c_line, "{}", demo.name);
+            assert_eq!(snapshot.status, "exited", "{}", demo.name);
+        }
+    }
+
+    /// bcc's C library talks to its host only through WASI, and the stepper
+    /// provides every function it imports: reading standard input (empty
+    /// here), the arguments, the environment (empty), the clock, both
+    /// output streams and `proc_exit`.
+    #[cfg(feature = "compiler")]
+    #[test]
+    fn the_stepper_provides_every_wasi_function_bccs_library_imports() {
+        use crate::wasm::Bcc;
+        let source = r#"#include <stdio.h>
+#include <stdlib.h>
+#include <time.h>
+
+int main(int argc, char **argv) {
+    int n = -1;
+    int read = scanf("%d", &n);
+    printf("%d %s %d %d %s\n", argc, argv[0], read, n, getenv("HOME") ? "home" : "none");
+    printf("%d %d\n", time(NULL) >= 0, clock() >= 0);
+    fprintf(stderr, "to stderr\n");
+    return 3;
+}
+"#;
+        let module = Bcc.compile(source).unwrap();
+        let loaded = Program::load(&module.bytes, None).unwrap();
+        let mut imports: Vec<&str> = loaded
+            .module
+            .imports
+            .iter()
+            .map(|import| {
+                assert_eq!(import.module, "wasi_snapshot_preview1");
+                import.name.as_str()
+            })
+            .collect();
+        imports.sort_unstable();
+        assert_eq!(
+            imports,
+            [
+                "args_get",
+                "args_sizes_get",
+                "clock_time_get",
+                "environ_get",
+                "environ_sizes_get",
+                "fd_read",
+                "fd_write",
+                "proc_exit",
+            ]
+        );
+        let (program, end) = run_to_end(module);
+        assert!(program.unresolved.is_empty(), "{:?}", program.unresolved);
+        assert_eq!(end.exit, Some(3), "{:?}", end.narration);
+        assert_eq!(stdout(&end), "1 program -1 -1 none\n1 1\n");
+        assert!(
+            end.output
+                .iter()
+                .any(|output| output.stream == "stderr" && output.text == "to stderr\n")
+        );
+    }
+
+    /// Beginners write big static arrays. The review's 20 MiB one (338
+    /// pages) now runs; one past the stepper's 64 MiB is refused when it
+    /// loads, with the limit in plain words, which the page shows once.
+    #[cfg(feature = "compiler")]
+    #[test]
+    fn big_static_arrays_run_up_to_the_steppers_memory_limit() {
+        use crate::wasm::Bcc;
+        let fits = "static char big[20 << 20];\nint main(void) {\n    big[5] = 1;\n    return \
+                    big[5];\n}\n";
+        let (program, end) = run_to_end(Bcc.compile(fits).unwrap());
+        assert_eq!(end.exit, Some(1), "{:?}", end.narration);
+        assert!(end.memory.pages >= 338, "{}", end.memory.pages);
+        assert_eq!(program.unresolved, Vec::<String>::new());
+        let too_big = fits.replace("20 << 20", "70 << 20");
+        let error = WasmWorker::default()
+            .load(Bcc.compile(&too_big).unwrap())
+            .unwrap_err();
+        assert!(
+            error.contains("at most 64 MiB") && error.contains("largest arrays smaller"),
+            "{error}"
+        );
+    }
+
+    /// Next line from `$_start`, which has no C line, reaches `main`'s first
+    /// line, and the start narration says what `$_start` is.
+    #[cfg(feature = "compiler")]
+    #[test]
+    fn next_line_leaves_bccs_startup_code_for_main() {
+        use crate::wasm::Bcc;
+        let demo = &DEMOS[0];
+        let mut worker = WasmWorker::default();
+        let program = worker.load(Bcc.compile(demo.source).unwrap()).unwrap();
+        assert!(
+            program
+                .snapshot
+                .narration
+                .explanation
+                .contains("entry point every WASI program"),
+            "{}",
+            program.snapshot.narration.explanation
+        );
+        let snapshot = worker.control(WasmControl::Run(WasmRun::NextLine)).unwrap();
+        let main = demo
+            .source
+            .lines()
+            .position(|line| line.starts_with("int main"))
+            .unwrap()
+            + 1;
+        let line = snapshot.next.and_then(|place| place.source).unwrap();
+        assert!(line >= main, "line {line}");
+        assert!(
+            snapshot.frames.iter().any(|frame| frame.name == "main"),
+            "{:?}",
+            snapshot.frames
+        );
     }
 
     /// The precompiled modules must come from the lessons' current source,

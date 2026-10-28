@@ -192,9 +192,12 @@ pub fn entry_point(module: &Module) -> Option<u32> {
 fn new_memory(min: u32, max: Option<u32>) -> Result<Memory, InstantiateError> {
     if min > MAX_PAGES {
         return Err(InstantiateError(format!(
-            "the module asks for {min} pages of memory ({} MiB); the stepper allows at most \
-             {MAX_PAGES} (16 MiB)",
-            u64::from(min) * 64 / 1024
+            "the program needs {} MiB of memory ({min} pages of 64 KiB, counting its static \
+             arrays and the C stack), but the stepper runs programs of at most {} MiB \
+             ({MAX_PAGES} pages), so that a browser tab can keep up with them. Make its largest \
+             arrays smaller.",
+            u64::from(min).div_ceil(16),
+            MAX_PAGES / 16
         )));
     }
     Ok(Memory::new(min, max))

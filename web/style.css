@@ -788,7 +788,8 @@
   .memory-note { margin-bottom: 10px; color: var(--text-2); font-size: 13.5px; }
   .memory-grid { overflow-x: auto; padding: 8px 0; border: 1px solid var(--border); border-radius: var(--radius-s); background: var(--code-bg); font: 12.5px/1 var(--font-mono); }
   .memory-row { display: flex; align-items: center; gap: 14px; padding: 2px 12px; min-width: max-content; }
-  .memory-address { width: 6ch; text-align: right; color: var(--faint); }
+  /* Wide enough for any address of the stepper's 64 MiB of memory. */
+  .memory-address { width: 8ch; flex: none; text-align: right; color: var(--faint); }
   .memory-cells { display: grid; grid-template-columns: repeat(16, 2.6ch); gap: 3px; }
   .memory-row.is-words .memory-cells { grid-template-columns: repeat(4, 12ch); gap: 3px; }
   .memory-byte, .memory-word { position: relative; padding: 4px 0; border-radius: 4px; text-align: center; color: var(--text-2); }
@@ -920,7 +921,36 @@
     .toolbar { position: static; }
     .narration-title { font-size: 19px; }
   }
+  /* Phones and narrow windows: the WebAssembly controls wrap three to a
+     row, and a memory row (16 bytes) fits without its text column. */
+  @media (max-width: 600px) {
+    .wasm-transport { flex-wrap: wrap; }
+    .wasm-transport .button { flex: 1 1 30%; min-width: 0; }
+    .memory-grid { font-size: 11.5px; }
+    .memory-row { gap: 8px; padding: 2px 8px; }
+    .memory-cells { grid-template-columns: repeat(16, 2.3ch); gap: 2px; }
+    .memory-row.is-words .memory-cells { grid-template-columns: repeat(4, 10.5ch); }
+    .memory-row:not(.is-words) .memory-byte:nth-child(4n):not(:last-child) { margin-right: 3px; }
+    .memory-text { display: none; }
+  }
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
   }
+}
+
+/* Which compiler made the WebAssembly module: bcc live, or clang ahead of
+   time, with the switch between them. */
+@layer components {
+  .wasm-provenance { --compiler: var(--accent); padding: 14px 18px; border-left: 3px solid var(--compiler); }
+  .wasm-provenance[data-compiler="clang"] { --compiler: var(--cat-convert); }
+  .wasm-provenance-head { display: flex; align-items: center; justify-content: space-between; gap: 10px 14px; flex-wrap: wrap; }
+  .wasm-provenance-title { margin: 0; font-size: 15px; font-weight: 680; color: var(--text); }
+  .wasm-provenance-body { margin-top: 6px; color: var(--text-2); font-size: 13.5px; line-height: 1.6; }
+  .wasm-command { display: inline-block; margin-top: 10px; padding: 5px 9px; border-radius: 8px; background: var(--surface-3); color: var(--text-2); font-size: 12px; overflow-wrap: anywhere; }
+  .wasm-fallback { margin-top: 10px; padding: 10px 12px; border-radius: var(--radius-s); background: var(--danger-soft); color: var(--text); font-size: 13.5px; line-height: 1.6; }
+  .wasm-diagnostic { margin-top: 6px; padding: 8px 10px; border-radius: var(--radius-s); background: var(--code-bg); color: var(--text-2); font: 12.5px/1.5 var(--font-mono); white-space: pre; overflow-x: auto; }
+  .wasm-diagnostic.is-prose { white-space: pre-wrap; font-family: var(--font-sans); font-size: 13px; line-height: 1.55; }
+  .wat-compiler { padding: 1px 8px; border-radius: 999px; font-size: 12px; font-weight: 650; color: var(--accent); background: var(--accent-soft); white-space: nowrap; }
+  .wat-compiler[data-compiler="clang"] { color: var(--cat-convert); background: color-mix(in srgb, var(--cat-convert) 14%, transparent); }
+  .wat-header .pane-title { flex-wrap: wrap; }
 }

@@ -12,7 +12,10 @@
 //! Execution is deterministic, so going back re-executes from the nearest
 //! checkpoint: the session keeps a copy of the machine every few thousand
 //! steps, fewer and further apart as a run grows, within
-//! [`CHECKPOINT_BYTES`]. Copies share linear memory until it is written.
+//! [`CHECKPOINT_BYTES`], plus the two most recent copies at multiples of
+//! [`RECENT_INTERVAL`], so a step back near where the run is replays little
+//! however large the program's memory. Copies share linear memory until it
+//! is written.
 //!
 //! Every input is bounded: decoding, validation and the DWARF reader never
 //! allocate more than their input implies, the host checks a buffer before
@@ -150,9 +153,24 @@ pub struct Session {
     /// Copies of the machine at steps 0, `interval`, `2 * interval`, …
     checkpoints: Vec<Machine>,
     interval:    u64,
+    /// The last [`RECENT`] copies taken at multiples of
+    /// [`RECENT_INTERVAL`], oldest first, outside the checkpoints' budget.
+    recent:      Vec<Machine>,
+    /// How many instructions the last [`Session::go_to`] re-executed.
+    replayed:    u64,
     /// Module offsets of instructions to stop before.
     breakpoints: BTreeSet<u32>,
 }
+
+/// Steps between the recent copies of the machine. Going back from where
+/// the run is re-executes at most twice this many instructions, even when
+/// the program's memory is so large that the budgeted checkpoints have
+/// thinned to the first.
+pub const RECENT_INTERVAL: u64 = 1 << 15;
+/// Recent copies kept. Each may hold a copy of linear memory, so a program
+/// at the 64 MiB limit can cost two more copies than the checkpoints'
+/// budget.
+const RECENT: usize = 2;
 
 /// Checkpoints kept before they are thinned.
 const CHECKPOINTS: usize = 48;
@@ -252,6 +270,17 @@ impl Session {
                     .retain(|checkpoint| checkpoint.steps.is_multiple_of(interval));
             }
         }
+        if self.machine.steps.is_multiple_of(RECENT_INTERVAL)
+            && !self
+                .recent
+                .iter()
+                .any(|recent| recent.steps == self.machine.steps)
+        {
+            if self.recent.len() == RECENT {
+                self.recent.remove(0);
+            }
+            self.recent.push(self.machine.clone());
+        }
     }
 }
 
@@ -339,6 +368,8 @@ impl Session {
             checkpoints: vec![machine.clone()],
             machine,
             interval: 1024,
+            recent: Vec::new(),
+            replayed: 0,
             breakpoints: BTreeSet::new(),
         })
     }
@@ -357,20 +388,30 @@ impl Session {
     }
 
     /// Show the state after `steps` instructions, re-executing from the
-    /// nearest checkpoint (or the end, if the program stops first).
+    /// nearest checkpoint or recent copy (or the end, if the program stops
+    /// first).
     pub fn go_to(&mut self, steps: u64) {
         let steps = steps.min(MAX_STEPS);
         let index = self
             .checkpoints
             .partition_point(|checkpoint| checkpoint.steps <= steps)
             .saturating_sub(1);
-        // Restore a checkpoint to go back, or to skip ahead of the machine.
-        if steps < self.machine.steps || self.checkpoints[index].steps > self.machine.steps {
-            self.machine = self.checkpoints[index].clone();
+        let nearest = self
+            .recent
+            .iter()
+            .filter(|recent| recent.steps <= steps)
+            .max_by_key(|recent| recent.steps)
+            .filter(|recent| recent.steps > self.checkpoints[index].steps)
+            .unwrap_or(&self.checkpoints[index]);
+        // Restore a copy to go back, or to skip ahead of the machine.
+        if steps < self.machine.steps || nearest.steps > self.machine.steps {
+            self.machine = nearest.clone();
         }
+        let from = self.machine.steps;
         while self.machine.steps < steps && self.machine.status == Status::Running {
             self.step();
         }
+        self.replayed = self.machine.steps - from;
     }
 
     pub fn set_breakpoints(&mut self, offsets: impl IntoIterator<Item = u32>) {

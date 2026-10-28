@@ -453,6 +453,30 @@ fn offsets_text_lines_and_source_map_agree() {
     );
 }
 
+/// Symbols keep their underscores in the text, since `_` is an `idchar`
+/// (WebAssembly 2.0 §6.3.5); only characters outside that set are escaped.
+#[test]
+fn text_identifiers_keep_underscores() {
+    let source = "int my_value(void) { return 7; }\nint main(void) { return my_value(); }\n";
+    let text = compile_with(source, Target::Wasm32Wasi, false, |compiled| {
+        let mut text = String::new();
+        compiled
+            .write_text_with_lines(&mut text, &mut Vec::new())
+            .unwrap();
+        text
+    })
+    .unwrap();
+    for spelled in [
+        "(export \"_start\" (func $_start))",
+        "(func $_start ",
+        "(func $my_value ",
+        "call $__bcc_main",
+    ] {
+        assert!(text.contains(spelled), "{spelled} not in the text");
+    }
+    assert!(!text.contains('`'), "nothing needs escaping");
+}
+
 /// Every function's code starts with a source-map entry, so a prologue or
 /// a function the linker made never takes the line of the code before it:
 /// the entry has no IR position and line 0 unless an IR instruction's code

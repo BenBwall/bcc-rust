@@ -20,10 +20,12 @@ use crate::{
 
 /// Bytes per page.
 pub const PAGE: usize = 65_536;
-/// The most pages the stepper lets a memory grow to (16 MiB), below the
-/// format's own limit, so a runaway `memory.grow` cannot exhaust the
-/// browser tab.
-pub const MAX_PAGES: u32 = 256;
+/// The most pages the stepper lets a memory have (64 MiB), below the
+/// format's own limit, so a big program or a runaway `memory.grow` cannot
+/// exhaust the browser tab. A memory this large is as big as the
+/// checkpoints' whole budget ([`crate::CHECKPOINT_BYTES`]), so they thin to
+/// the first one, and going back replays from the start.
+pub const MAX_PAGES: u32 = 1024;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Memory {
