@@ -108,6 +108,35 @@ int atoi(const char *s) { return (int)strtol(s, 0, 10); }
 long atol(const char *s) { return strtol(s, 0, 10); }
 long long atoll(const char *s) { return strtoll(s, 0, 10); }
 
+/* The payload of a NaN whose n-char-sequence is [first, last): the
+   sequence read as an integer in base 0 when all of it is one, and 0
+   otherwise, as in glibc (an integer too large gives all ones). errno is
+   unchanged. C99 7.20.1.3p4. */
+static unsigned long long nan_payload(const char *first, const char *last) {
+    int saved = errno;
+    char *digits;
+    unsigned long long v = strtoull(first, &digits, 0);
+    errno = saved;
+    return digits == last ? v : 0;
+}
+
+/* The quiet NaN with a sign and the low bits of a payload. */
+static double nan_double(int negative, unsigned long long payload) {
+    union {
+        unsigned long long u;
+        double d;
+    } bits = {(negative ? 1ull << 63 : 0) | 0x7ff8000000000000ull | (payload & 0x7ffffffffffffull)};
+    return bits.d;
+}
+
+static float nan_float(int negative, unsigned long long payload) {
+    union {
+        unsigned u;
+        float f;
+    } bits = {(negative ? 1u << 31 : 0) | 0x7fc00000u | (unsigned)(payload & 0x3fffffu)};
+    return bits.f;
+}
+
 static const double exact_powers[] = {1e0,  1e1,  1e2,  1e3,  1e4,  1e5,  1e6,  1e7,
                                       1e8,  1e9,  1e10, 1e11, 1e12, 1e13, 1e14, 1e15,
                                       1e16, 1e17, 1e18, 1e19, 1e20, 1e21, 1e22};
@@ -136,22 +165,13 @@ double strtod(const char *s, char **end) {
             while (isalnum((unsigned char)*q) || *q == '_')
                 q++;
             if (*q == ')') {
-                /* The payload is the sequence read as an integer in base
-                   0 when all of it is one, as in glibc. */
-                char *digits;
-                unsigned long long v = strtoull(p + 1, &digits, 0);
-                if (digits == q)
-                    payload = v;
+                payload = nan_payload(p + 1, q);
                 p = q + 1;
             }
         }
         if (end)
             *end = (char *)p;
-        union {
-            unsigned long long u;
-            double d;
-        } bits = {(negative ? 1ull << 63 : 0) | 0x7ff8000000000000ull | (payload & 0x7ffffffffffffull)};
-        return bits.d;
+        return nan_double(negative, payload);
     }
     if (p[0] == '0' && (p[1] | 32) == 'x') {
         /* Hexadecimal: exact up to 16 significant digits. */
@@ -288,38 +308,23 @@ float strtof(const char *s, char **end) {
             double d;
             unsigned long long u;
         } wide = {v};
-        union {
-            unsigned u;
-            float f;
-        } narrow = {(unsigned)(wide.u >> 32 & 0x80000000u) | 0x7fc00000u | (unsigned)(wide.u & 0x3fffffu)};
-        return narrow.f;
+        return nan_float(wide.u >> 63, wide.u);
     }
     return (float)v;
 }
 
-/* nan("n-char-sequence") is strtod("NAN(n-char-sequence)"), C99
-   7.12.11.2; text receives that string. */
-static void nan_text(char *text, size_t size, const char *tag) {
-    size_t length = strlen(tag);
-    if (length > size - 6)
-        length = 0;
-    memcpy(text, "nan(", 4);
-    memcpy(text + 4, tag, length);
-    text[4 + length] = ')';
-    text[5 + length] = 0;
+/* nan("n-char-sequence") is strtod("NAN(n-char-sequence)") (C99
+   7.12.11.2): a tag that is no n-char-sequence gives payload 0. */
+static unsigned long long tag_payload(const char *tag) {
+    const char *last = tag;
+    while (isalnum((unsigned char)*last) || *last == '_')
+        last++;
+    return *last ? 0 : nan_payload(tag, last);
 }
 
-double nan(const char *tag) {
-    char text[80];
-    nan_text(text, sizeof text, tag);
-    return strtod(text, 0);
-}
+double nan(const char *tag) { return nan_double(0, tag_payload(tag)); }
+float nanf(const char *tag) { return nan_float(0, tag_payload(tag)); }
 
-float nanf(const char *tag) {
-    char text[80];
-    nan_text(text, sizeof text, tag);
-    return strtof(text, 0);
-}
 long double strtold(const char *s, char **end) { return strtod(s, end); }
 double atof(const char *s) { return strtod(s, 0); }
 
