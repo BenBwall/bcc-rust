@@ -17,6 +17,7 @@ use crate::{
     Host,
     Machine,
     Program,
+    RECENT_INTERVAL,
     Session,
     Status,
     TrapKind,
@@ -216,8 +217,9 @@ fn checkpoints_stay_within_their_byte_budget() {
 }
 
 /// A program with big static arrays fits up to 64 MiB of memory; going
-/// back in it still replays exactly, though its checkpoints thin to the
-/// first. Past the cap it is refused, in words a beginner can act on.
+/// back in it replays exactly, and near where the run is it stays quick
+/// though its budgeted checkpoints thin to the first. Past the cap it is
+/// refused, in words a beginner can act on.
 #[test]
 fn memory_up_to_64_mib_runs_and_more_is_refused_plainly() {
     let mut module = Builder::new();
@@ -232,16 +234,32 @@ fn memory_up_to_64_mib_runs_and_more_is_refused_plainly() {
          local.get 0 i32.store br 0 end",
     );
     let mut session = Session::new(program(&module)).unwrap();
-    session.run(Command::Continue, 50_000);
+    session.run(Command::Continue, 300_000);
     assert_eq!(session.machine().status, Status::Running);
     assert_eq!(session.machine().memory.as_ref().unwrap().pages(), 1024);
-    let mut forward = Session::new(Rc::clone(session.program())).unwrap();
-    forward.run(Command::Continue, 31_234);
+    // The budgeted checkpoints have thinned to the first, but the recent
+    // copies keep going back cheap: a step back, and a few thousand, each
+    // re-execute at most two recent intervals, not 300,000 instructions.
+    assert_eq!(session.checkpoints.len(), 1);
+    for target in [299_999, 290_000, 270_123] {
+        let mut forward = Session::new(Rc::clone(session.program())).unwrap();
+        forward.run(Command::Continue, target);
+        session.go_to(target);
+        assert!(
+            session.replayed <= 2 * RECENT_INTERVAL,
+            "{} instructions re-executed to reach {target}",
+            session.replayed
+        );
+        assert_eq!(session.machine().steps, target);
+        assert_eq!(session.machine().stack, forward.machine().stack);
+        assert_eq!(
+            session.machine().memory.as_ref().unwrap().bytes,
+            forward.machine().memory.as_ref().unwrap().bytes
+        );
+    }
+    // Far back, before the recent copies, it replays from the first.
     session.go_to(31_234);
-    assert_eq!(
-        session.machine().memory.as_ref().unwrap().bytes,
-        forward.machine().memory.as_ref().unwrap().bytes
-    );
+    assert_eq!(session.replayed, 31_234);
 
     let mut module = Builder::new();
     module.memory(1025, None);

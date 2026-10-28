@@ -296,7 +296,10 @@ other modules' imports unresolved: calling one traps. It is deterministic,
 so Back re-executes from the nearest checkpoint (one every 1,024
 instructions, thinned as a run grows). Linear memory is copied on write,
 so a checkpoint shares unchanged memory, and the checkpoints together keep
-at most 64 MiB. One session runs at most 50
+at most 64 MiB. The two most recent copies at multiples of 32,768
+instructions are kept apart from that budget, so stepping back near the
+current instruction re-executes at most 65,536 instructions even in a
+program whose memory alone fills the budget. One session runs at most 50
 million instructions, one request at most 2 million, and memory may grow to
 64 MiB.
 
