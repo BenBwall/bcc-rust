@@ -5,8 +5,11 @@
 //! index. The module's other parts (constant expressions, segments,
 //! exports, the start function) are checked too.
 //!
-//! One rule is relaxed: `ref.func` may name any function, not only those an
-//! element segment or export declares.
+//! One rule is extended: constant expressions may use `i32` and `i64`
+//! `add`, `sub` and `mul` (the extended-constant proposal, part of
+//! WebAssembly 3.0), which linkers emit for position-independent code.
+
+use std::collections::BTreeSet;
 
 use crate::{
     instr::{
@@ -75,10 +78,16 @@ pub fn validate(module: &Module) -> Result<(), String> {
 
 /// The index spaces a function body refers to.
 struct Context<'m> {
-    module:   &'m Module,
-    globals:  Vec<GlobalType>,
-    tables:   Vec<TableType>,
-    memories: usize,
+    module:           &'m Module,
+    globals:          Vec<GlobalType>,
+    /// How many of `globals` are imported: the only ones a constant
+    /// expression may read (§3.4.10).
+    imported_globals: usize,
+    tables:           Vec<TableType>,
+    memories:         usize,
+    /// The functions a `ref.func` in code may name: those an element
+    /// segment, export or global initializer mentions (§3.4.10, C.refs).
+    refs:             BTreeSet<u32>,
 }
 
 impl<'m> Context<'m> {
@@ -94,13 +103,35 @@ impl<'m> Context<'m> {
                 | ImportKind::Func(_) => {},
             }
         }
+        let imported_globals = globals.len();
         globals.extend(module.globals.iter().map(|global| global.ty));
         tables.extend(module.tables.iter().copied());
+        let constants = module
+            .globals
+            .iter()
+            .map(|global| &global.init)
+            .chain(module.elements.iter().flat_map(|element| &element.items));
+        let mut refs: BTreeSet<u32> = constants
+            .flat_map(|expr| &expr.code)
+            .filter_map(|instr| match instr {
+                | Instr::RefFunc(func) => Some(*func),
+                | _ => None,
+            })
+            .collect();
+        refs.extend(
+            module
+                .exports
+                .iter()
+                .filter(|export| export.kind == ExternKind::Func)
+                .map(|export| export.index),
+        );
         Self {
             module,
             globals,
+            imported_globals,
             tables,
             memories,
+            refs,
         }
     }
 
@@ -133,15 +164,20 @@ impl<'m> Context<'m> {
                 return Err("a memory's limits are out of range".into());
             }
         }
-        let imported_globals = self.globals.len() - module.globals.len();
+        for table in &self.tables {
+            if table.limits.max.is_some_and(|max| max < table.limits.min) {
+                return Err("a table's maximum is below its minimum".into());
+            }
+        }
         for (index, global) in module.globals.iter().enumerate() {
-            // A global's initializer may read only the globals before it.
-            self.constant(&global.init, global.ty.value, imported_globals + index)
-                .map_err(|message| format!("global {}: {message}", imported_globals + index))?;
+            self.constant(&global.init, global.ty.value)
+                .map_err(|message| {
+                    format!("global {}: {message}", self.imported_globals + index)
+                })?;
         }
         for (index, element) in module.elements.iter().enumerate() {
             for item in &element.items {
-                self.constant(item, element.ty, self.globals.len())
+                self.constant(item, element.ty)
                     .map_err(|message| format!("element segment {index}: {message}"))?;
             }
             if let SegmentMode::Active {
@@ -155,7 +191,7 @@ impl<'m> Context<'m> {
                 if table.element != element.ty {
                     return Err(format!("element segment {index} has the wrong type"));
                 }
-                self.constant(offset, ValType::I32, self.globals.len())
+                self.constant(offset, ValType::I32)
                     .map_err(|message| format!("element segment {index}: {message}"))?;
             }
         }
@@ -168,11 +204,15 @@ impl<'m> Context<'m> {
                 if *memory as usize >= self.memories {
                     return Err(format!("data segment {index} names an unknown memory"));
                 }
-                self.constant(offset, ValType::I32, self.globals.len())
+                self.constant(offset, ValType::I32)
                     .map_err(|message| format!("data segment {index}: {message}"))?;
             }
         }
+        let mut names = BTreeSet::new();
         for export in &module.exports {
+            if !names.insert(export.name.as_str()) {
+                return Err(format!("two exports are named \"{}\"", export.name));
+            }
             let known = match export.kind {
                 | ExternKind::Func => (export.index as usize) < module.funcs.len(),
                 | ExternKind::Table => (export.index as usize) < self.tables.len(),
@@ -193,9 +233,10 @@ impl<'m> Context<'m> {
         Ok(())
     }
 
-    /// Check a constant expression of type `ty` that may read the first
-    /// `globals` globals (immutable ones only).
-    fn constant(&self, expr: &ConstExpr, ty: ValType, globals: usize) -> Result<(), String> {
+    /// Check a constant expression of type `ty`, which may read only
+    /// imported immutable globals.
+    fn constant(&self, expr: &ConstExpr, ty: ValType) -> Result<(), String> {
+        let globals = self.imported_globals;
         let mut stack = Vec::new();
         for instr in &expr.code {
             match instr {
@@ -216,7 +257,7 @@ impl<'m> Context<'m> {
                         .get(*global as usize)
                         .filter(|_| (*global as usize) < globals)
                     else {
-                        return Err("a constant reads an unknown global".into());
+                        return Err("a constant expression may read only imported globals".into());
                     };
                     if global.mutable {
                         return Err("a constant reads a mutable global".into());
@@ -552,6 +593,12 @@ impl Checker<'_, '_> {
             },
             | Instr::RefFunc(func) => {
                 self.context.func_type(*func)?;
+                if !self.context.refs.contains(func) {
+                    return Err(format!(
+                        "ref.func names function {func}, which no element segment, export or \
+                         global declares"
+                    ));
+                }
                 self.push(Some(FuncRef));
             },
             | Instr::Numeric(op) => {

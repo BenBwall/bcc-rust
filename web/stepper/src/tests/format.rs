@@ -8,6 +8,7 @@ use super::{
         section,
     },
     program,
+    raw,
 };
 use crate::{
     Program,
@@ -182,4 +183,67 @@ fn padded_leb_immediates_decode() {
         crate::Instr::Call(0)
     );
     bytes.clear();
+}
+
+#[test]
+fn the_2_0_module_rules_are_enforced() {
+    // Two exports with one name.
+    let mut module = Builder::new();
+    module.func("f", &[], &[], &[], "");
+    module.func("f", &[], &[], &[], "");
+    rejects(&module.build(), "two exports are named \"f\"");
+    // A table whose maximum is below its minimum.
+    rejects(
+        &raw(&[(4, &[1, 0x70, 1, 2, 1])]),
+        "maximum is below its minimum",
+    );
+    // ref.func of a function nothing declares; exporting it declares it.
+    let types: &[u8] = &[1, 0x60, 0, 1, 0x70];
+    let code: &[u8] = &[1, 4, 0, 0xD2, 0, 0x0B];
+    rejects(
+        &raw(&[(1, types), (3, &[1, 0]), (10, code)]),
+        "no element segment, export",
+    );
+    let export: &[u8] = &[1, 1, b'f', 0, 0];
+    Program::load(
+        &raw(&[(1, types), (3, &[1, 0]), (7, export), (10, code)]),
+        None,
+    )
+    .unwrap();
+    // A global initializer may read only imported globals.
+    let mut module = Builder::new();
+    module.global("a", I32, false, "i32.const 1");
+    module.global("b", I32, false, "global.get 0");
+    module.func("f", &[], &[], &[], "");
+    rejects(&module.build(), "may read only imported globals");
+    // memory.init needs a DataCount section.
+    let types: &[u8] = &[1, 0x60, 0, 0];
+    let body: &[u8] = &[1, 12, 0, 0x41, 0, 0x41, 0, 0x41, 0, 0xFC, 8, 0, 0, 0x0B];
+    rejects(
+        &raw(&[
+            (1, types),
+            (3, &[1, 0]),
+            (5, &[1, 0, 1]),
+            (10, body),
+            (11, &[1, 1, 0]),
+        ]),
+        "need a data count section",
+    );
+    // A block type index is an s33: at most five bytes.
+    let block = |index: &[u8]| {
+        let mut body = vec![0, 0x02];
+        body.extend_from_slice(index);
+        body.extend([0x0B, 0x0B]);
+        let mut code = vec![1];
+        leb(&mut code, body.len() as u64);
+        code.extend(body);
+        raw(&[(1, types), (3, &[1, 0]), (10, &code)])
+    };
+    Program::load(&block(&[0x80, 0x80, 0x80, 0x80, 0x00]), None).unwrap();
+    rejects(&block(&[0x80, 0x80, 0x80, 0x80, 0x80, 0x00]), "too large");
+    // Extended constants stay accepted.
+    let mut module = Builder::new();
+    module.global("a", I32, false, "i32.const 1 i32.const 2 i32.add");
+    module.func("f", &[], &[], &[], "");
+    program(&module);
 }

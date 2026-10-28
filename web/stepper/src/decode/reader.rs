@@ -94,6 +94,11 @@ impl<'a> Reader<'a> {
         self.signed(64)
     }
 
+    /// An `s33` (§5.2.2), used only for block type indices.
+    pub fn s33(&mut self) -> Result<i64, DecodeError> {
+        self.signed(33)
+    }
+
     /// A `uN` LEB128 (§5.2.2): at most `ceil(N / 7)` bytes, the unused bits
     /// of the last one zero.
     fn unsigned(&mut self, bits: u32) -> Result<u64, DecodeError> {

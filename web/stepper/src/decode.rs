@@ -106,6 +106,12 @@ pub fn decode(bytes: &[u8]) -> Result<Module, DecodeError> {
     if data_count.is_some_and(|count| count as usize != module.data.len()) {
         return Err(reader.error("the data count section disagrees with the data section"));
     }
+    // `memory.init` and `data.drop` name data segments before the Data
+    // section, so they need the DataCount section (§5.5.16).
+    if data_count.is_none() && module.funcs.iter().any(uses_data_segments) {
+        return Err(reader
+            .error("memory.init and data.drop need a data count section, which the module lacks"));
+    }
     let memories = module.memories.len()
         + module
             .imports
@@ -116,6 +122,13 @@ pub fn decode(bytes: &[u8]) -> Result<Module, DecodeError> {
         return Err(reader.error("multiple memories are not supported"));
     }
     Ok(module)
+}
+
+fn uses_data_segments(func: &Func) -> bool {
+    matches!(&func.kind, FuncKind::Defined(body) if body
+        .code
+        .iter()
+        .any(|instr| matches!(instr, crate::instr::Instr::MemoryInit(_) | crate::instr::Instr::DataDrop(_))))
 }
 
 /// A decoding failure at a module offset.
@@ -201,7 +214,7 @@ pub(crate) fn block_type(reader: &mut Reader<'_>) -> Result<BlockType, DecodeErr
 impl Reader<'_> {
     /// A block type's type index, an `s33` (§5.4.1) that must be positive.
     fn signed_block_index(&mut self) -> Result<u32, DecodeError> {
-        let index = self.i64()?;
+        let index = self.s33()?;
         u32::try_from(index).map_err(|_| self.error("a block type index is out of range"))
     }
 }
