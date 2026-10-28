@@ -2427,13 +2427,13 @@ mod tests {
             succeeds(&output);
             assert_eq!(stderr(&output), format!("{prefix}{message}"), "{mode}");
         }
-        // A driver error that ends the run takes the name too.
+        // TCC words `-o` with `-c` and several inputs itself.
         directory.write("b.c", "int b;\n");
         let output = directory.bcc("--tcc-mode", &["-c", "a.c", "b.c", "-o", "x.o"]);
         assert_eq!(output.status.code(), Some(1));
         assert_eq!(
             stderr(&output),
-            "tcc: error: cannot specify '-o' with '-c', '-S' or '-E' with multiple files\n"
+            "tcc: error: cannot specify output file with -c many files\n"
         );
         // `cl`'s form has no invented code. Without the Windows SDK's
         // libraries the link fails in bcc's driver.

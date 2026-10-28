@@ -53,6 +53,7 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
     let mut out: Vec<OsString> = Vec::new();
     let mut standard = "gnu99";
     let mut stage = false;
+    let mut compile_only = false;
     let mut output = false;
     let mut inputs = Inputs::default();
     let mut run: Option<Vec<OsString>> = None;
@@ -101,6 +102,7 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
             },
             | "-c" | "-E" => {
                 stage = true;
+                compile_only |= text == "-c";
                 out.push(text.into());
             },
             | "-b" | "-g" | "-w" | "-shared" | "-static" | "-rdynamic" | "-nostdlib" | "-P"
@@ -210,6 +212,14 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
     }
     if inputs.count == 0 {
         invocation.error(format_args!("no input files"));
+        return Err(MainError::Reported(1));
+    }
+    // TCC writes one object under `-c`, so `-o` names it only for one
+    // input (`tcc.c`, `main`).
+    if compile_only && output && inputs.count > 1 {
+        invocation.error(format_args!(
+            "cannot specify output file with -c many files"
+        ));
         return Err(MainError::Reported(1));
     }
     let mut bcc: Vec<OsString> = vec![
