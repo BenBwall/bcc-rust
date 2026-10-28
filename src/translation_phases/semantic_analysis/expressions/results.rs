@@ -72,6 +72,11 @@ pub(crate) enum ConstantFolding {
     Permitted,
     /// An address difference or pointer-to-integer cast folded under §6.6p10.
     Address,
+    /// A value folded from a scalar compound literal's under §6.6p10, as
+    /// Clang's evaluator reads the literal: constant contexts take it as an
+    /// `Address` fold, but code generation loads the literal, so its
+    /// `llvm.is.constant` sees no constant.
+    CompoundLiteral,
     AtomicCast,
 }
 
@@ -87,7 +92,19 @@ impl ExpressionInfo<'_> {
         self.folding == ConstantFolding::AtomicCast
     }
 
+    /// Whether Clang folds this value in every mode, though it is no
+    /// integer constant expression; integer-constant contexts report it as
+    /// `-Wgnu-folding-constant`.
     pub(in crate::translation_phases::semantic_analysis) fn folded_address(self) -> bool {
-        self.folding == ConstantFolding::Address
+        matches!(
+            self.folding,
+            ConstantFolding::Address | ConstantFolding::CompoundLiteral
+        )
+    }
+
+    /// Whether this folded value reads a compound literal, which code
+    /// generation loads rather than emitting a constant.
+    pub(in crate::translation_phases::semantic_analysis) fn folded_literal(self) -> bool {
+        self.folding == ConstantFolding::CompoundLiteral
     }
 }

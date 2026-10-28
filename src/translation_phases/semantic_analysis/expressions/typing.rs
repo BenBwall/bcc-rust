@@ -1240,62 +1240,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
         self.convert(operand.expression, target, ConversionKind::Assignment);
         let mut info = Self::expression_result(e, target.unqualified());
-        info.unfolded_binary128 = operand.unfolded_binary128;
-        let mut immediate = operand.expression;
-        while let ExpressionType::Parenthesized { expression } = immediate.kind {
-            immediate = expression;
-        }
-        if let Some((bits, signed)) = self.integer_type(target) {
-            info.integer = if let ExpressionType::Constant(Constant::Float(value)) = immediate.kind
-            {
-                self.float_cast(target, value)
-            } else {
-                operand.integer.map(|v| {
-                    if matches!(
-                        self.types.nodes[target.index],
-                        TypeKind::Scalar(Scalar::Bool)
-                    ) {
-                        Integer::int(i128::from(v.value != 0)).cast(1, false)
-                    } else {
-                        v.cast(bits, signed)
-                    }
-                })
-            };
-            info.ice = operand.ice
-                || matches!(immediate.kind, ExpressionType::Constant(Constant::Float(_)));
-        }
-        if operand.floating().is_some()
-            && let Some(value) = self.floating_value(operand)
-            && self.integer_type(target).is_some()
-        {
-            info.integer = if matches!(
-                self.types.nodes[target.index],
-                TypeKind::Scalar(Scalar::Bool)
-            ) {
-                Some(Integer::int(i128::from(value.truth())).cast(1, false))
-            } else {
-                self.float_cast(target, FloatTokenType::LongDouble(value.real))
-            };
-        }
-        if self.arithmetic(target) && self.integer_type(target).is_none() {
-            info.set_floating(if self.unrounded_half_cast(operand, target) {
-                // A complex operand gives its real part.
-                operand
-                    .floating()
-                    .map(|value| super::super::Floating::real(value.real))
-            } else {
-                self.converted_floating(operand, target)
-            });
-        }
-        if self.arithmetic(target) && operand.constant == ConstantClass::Arithmetic {
-            info.constant = ConstantClass::Arithmetic;
-            self.convert_binary128(operand, target, &mut info);
-        }
-        if info.unfolded_binary128 {
-            info.integer = None;
-            info.set_floating(None);
-            info.ice = false;
-        }
+        self.fold_conversion(&mut info, target, operand);
         // Known pointer truth is an accepted arithmetic constant form, but
         // not an integer constant expression. C99 §6.3.1.2p1, p. 43;
         // PDF p. 55; implementation latitude §6.6p10, p. 96; PDF p. 108.
@@ -1345,6 +1290,76 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             self.control.record_difference(e, labels);
         }
         info
+    }
+
+    /// Gives `info`, a value of type `target`, the folded value of
+    /// `operand` converted to it: an integer truncated or truth-converted,
+    /// a floating value rounded to the target's format, and the arithmetic
+    /// constant class when the operand has it. A cast and the value a
+    /// scalar compound literal stores share it.
+    /// C99: §6.3.1.2-§6.3.1.5, pp. 43-44; PDF pp. 55-56.
+    pub(in crate::translation_phases::semantic_analysis) fn fold_conversion(
+        &mut self,
+        info: &mut ExpressionInfo<'tu>,
+        target: TypeId,
+        operand: ExpressionInfo<'tu>,
+    ) {
+        info.unfolded_binary128 = operand.unfolded_binary128;
+        let mut immediate = operand.expression;
+        while let ExpressionType::Parenthesized { expression } = immediate.kind {
+            immediate = expression;
+        }
+        if let Some((bits, signed)) = self.integer_type(target) {
+            info.integer = if let ExpressionType::Constant(Constant::Float(value)) = immediate.kind
+            {
+                self.float_cast(target, value)
+            } else {
+                operand.integer.map(|v| {
+                    if matches!(
+                        self.types.nodes[target.index],
+                        TypeKind::Scalar(Scalar::Bool)
+                    ) {
+                        Integer::int(i128::from(v.value != 0)).cast(1, false)
+                    } else {
+                        v.cast(bits, signed)
+                    }
+                })
+            };
+            info.ice = operand.ice
+                || matches!(immediate.kind, ExpressionType::Constant(Constant::Float(_)));
+        }
+        if operand.floating().is_some()
+            && let Some(value) = self.floating_value(operand)
+            && self.integer_type(target).is_some()
+        {
+            info.integer = if matches!(
+                self.types.nodes[target.index],
+                TypeKind::Scalar(Scalar::Bool)
+            ) {
+                Some(Integer::int(i128::from(value.truth())).cast(1, false))
+            } else {
+                self.float_cast(target, FloatTokenType::LongDouble(value.real))
+            };
+        }
+        if self.arithmetic(target) && self.integer_type(target).is_none() {
+            info.set_floating(if self.unrounded_half_cast(operand, target) {
+                // A complex operand gives its real part.
+                operand
+                    .floating()
+                    .map(|value| super::super::Floating::real(value.real))
+            } else {
+                self.converted_floating(operand, target)
+            });
+        }
+        if self.arithmetic(target) && operand.constant == ConstantClass::Arithmetic {
+            info.constant = ConstantClass::Arithmetic;
+            self.convert_binary128(operand, target, info);
+        }
+        if info.unfolded_binary128 {
+            info.integer = None;
+            info.set_floating(None);
+            info.ice = false;
+        }
     }
 
     /// C99: §6.5.3.4p1-5, p. 80; PDF p. 92.

@@ -1643,6 +1643,44 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
+    /// Whether the object `declarator` declares is a pointer: the
+    /// derivation nearest its identifier is a `*` rather than an array or
+    /// function suffix (`(*p)[n]`, not `*a[n]`). Clang folds a non-constant
+    /// bound only in a block-scope static object's own array type, so a
+    /// static pointer to an array keeps its variable bound there.
+    /// C99: §6.7.5 paragraphs 4-6, p. 115; PDF p. 127.
+    pub(super) fn declares_pointer(&self, declarator: Declarator<'tu>) -> bool {
+        let mut levels = ArenaVec::new_in(self.scratch);
+        let mut level = declarator;
+        loop {
+            levels.push(level);
+            let inner = level.kind.iter().find_map(|direct| match *direct {
+                | DirectDeclarator::Parenthesized(p) => Some(p.declarator),
+                | _ => None,
+            });
+            match inner {
+                | Some(inner) => level = inner,
+                | None => break,
+            }
+        }
+        for level in levels.iter().rev() {
+            if level.kind.iter().any(|direct| {
+                matches!(
+                    direct,
+                    DirectDeclarator::Array { .. }
+                        | DirectDeclarator::Function { .. }
+                        | DirectDeclarator::KAndRStyleFunction { .. }
+                )
+            }) {
+                return false;
+            }
+            if !level.pointer.levels.is_empty() {
+                return true;
+            }
+        }
+        false
+    }
+
     /// Parameter array qualifiers/static belong only to the outermost array
     /// derivation. Walk constructors in type-construction order, including
     /// parenthesized pointer derivations, without native recursion.

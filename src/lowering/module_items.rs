@@ -1573,7 +1573,11 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
         // C99 §6.7.8p19: a later write replaces overlapping addresses,
         // including a scalar member that overwrites only part of a pointer.
         discard(relocations, offset, offset + written, self.pointer_bytes());
+        // A literal with a folded value, a Clang-read one or an element GCC
+        // converts from another type, stores that value instead.
         if let Some(field) = bit_field
+            && info.integer.is_none()
+            && info.floating().is_none()
             && let Some((literal, literal_ty)) = self.whole_compound_literal(expression)
         {
             return self.static_bit_field_literal(bytes, start, field, literal, literal_ty);

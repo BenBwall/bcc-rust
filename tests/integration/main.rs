@@ -48,6 +48,7 @@ mod pointer_diagnostics;
 mod preprocessing_cli;
 mod reachable_functions;
 mod semantic_cli;
+mod static_compound_literals;
 mod static_function_designators;
 mod static_relocations;
 mod target_resource_headers;

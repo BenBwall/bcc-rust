@@ -891,7 +891,7 @@ impl SemanticErrorKind {
             ),
             | Self::FoldedIntegerConstant => (
                 "expression is not an integer constant expression; folding it to a constant is a GNU extension",
-                "C99 §6.6p6: pointer conversions are not allowed in an integer constant expression",
+                "C99 §6.6p6: an integer constant expression reads no object and converts no pointer",
             ),
             | Self::NullPointerArithmetic => (
                 "arithmetic on a null pointer treated as a cast from integer to pointer is a GNU extension",

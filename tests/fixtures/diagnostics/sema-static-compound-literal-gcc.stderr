@@ -1,0 +1,59 @@
+warning: 'compound literal as a constant initializer' is a GNU extension [-Wpedantic]
+ --> sema-static-compound-literal-gcc.c:1:24
+  |
+1 | static double scaled = (double)((double){0x1p20});
+  |                        ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: 'compound literal as a constant initializer' is a GNU extension [-Wpedantic]
+ --> sema-static-compound-literal-gcc.c:2:25
+  |
+2 | static int round_trip = (int)(long)(int){3};
+  |                         ^^^^^^^^^^^^^^^^^^^
+
+warning: 'compound literal as a constant initializer' is a GNU extension [-Wpedantic]
+ --> sema-static-compound-literal-gcc.c:3:23
+  |
+3 | static int selected = 1 ? (int){3} : 0;
+  |                       ^^^^^^^^^^^^^^^^
+
+error: static-storage initializer requires a constant expression
+ --> sema-static-compound-literal-gcc.c:4:18
+  |
+4 | static int sum = (int){3} + 1;
+  |                  ^^^^^^^^^^^^ not a constant expression
+  |
+  = note: C99 §6.7.8p4: every expression in an initializer for an object of static storage duration is constant or a string literal
+
+error: static-storage initializer requires a constant expression
+ --> sema-static-compound-literal-gcc.c:5:24
+  |
+5 | static int truncated = (int)(double)(int){3};
+  |                        ^^^^^^^^^^^^^^^^^^^^^ not a constant expression
+  |
+  = note: C99 §6.7.8p4: every expression in an initializer for an object of static storage duration is constant or a string literal
+
+error: static-storage initializer requires a constant expression
+ --> sema-static-compound-literal-gcc.c:6:26
+  |
+6 | static int braced[1] = { (int)(int){3} };
+  |                          ^^^^^^^^^^^^^ not a constant expression
+  |
+  = note: C99 §6.7.8p4: every expression in an initializer for an object of static storage duration is constant or a string literal
+
+error: an integer constant expression is required: `E`
+ --> sema-static-compound-literal-gcc.c:7:8
+  |
+7 | enum { E = (int){3} };
+  |        ^^^^^^^^^^^^ not an integer constant expression
+  |
+  = note: C99 §6.6p3 and p6: integer constant expressions restrict operators and operands
+
+error: static-storage initializer requires a constant expression
+ --> sema-static-compound-literal-gcc.c:8:32
+  |
+8 | void f(void) { static int *p = &(int){3}; (void)p; }
+  |                                ^^^^^^^^^ not a constant expression
+  |
+  = note: C99 §6.7.8p4: every expression in an initializer for an object of static storage duration is constant or a string literal
+
+5 errors and 3 warnings generated.

@@ -322,6 +322,57 @@ int main(void) {
     }
 }
 
+/// Compound literals in static initializers keep the target's formats:
+/// `long double` is binary128 on WebAssembly, whose bytes a literal gives
+/// whole, through a cast, as a converted braced element and as Clang's
+/// folded value, and `__fp16` literals fold in `float`. The bytes are those
+/// x86-64 Clang gives `__float128` and `__fp16`.
+#[test]
+fn static_compound_literals_keep_binary128_and_fp16_bytes() {
+    if !node_available() {
+        eprintln!("note: node is not on the path; skipping the WebAssembly literal test");
+        return;
+    }
+    let source = r#"
+int printf(const char *, ...);
+static long double whole = (long double){0.1L};
+static long double cast = (long double)(long double){0.1L};
+static long double elements[2] = { (long double){1.5L}, (double){0.1} };
+static long double product = (long double){0.1L} * 3;
+static __fp16 half = (__fp16){0.1};
+static float half_product = (__fp16){0.1} * 3;
+static __fp16 half_element[1] = { (float){0.3f} };
+static void dump(const char *name, const void *p, unsigned n) {
+    const unsigned char *b = p;
+    printf("%s", name);
+    for (unsigned i = 0; i < n; i++) printf(" %02x", b[i]);
+    printf("\n");
+}
+int main(void) {
+    dump("whole", &whole, sizeof whole);
+    dump("cast", &cast, sizeof cast);
+    dump("elements", elements, sizeof elements);
+    dump("product", &product, sizeof product);
+    dump("half", &half, sizeof half);
+    printf("half_product %a\n", (double)half_product);
+    dump("half_element", half_element, sizeof half_element);
+    return 0;
+}
+"#;
+    let tenth = "9a 99 99 99 99 99 99 99 99 99 99 99 99 99 fb 3f";
+    let expected = format!(
+        "whole {tenth}\ncast {tenth}\nelements 00 00 00 00 00 00 00 00 00 00 00 00 00 80 ff 3f 00 \
+         00 00 00 00 00 00 a0 99 99 99 99 99 99 fb 3f\nproduct 34 33 33 33 33 33 33 33 33 33 33 \
+         33 33 33 fd 3f\nhalf 66 2e\nhalf_product 0x1.332p-2\nhalf_element cd 34\n"
+    );
+    for optimize in [false, true] {
+        let bytes = compile(source, Target::Wasm32Wasi, optimize).unwrap();
+        let run = run("literals", &bytes);
+        assert_eq!(run.status, 0, "{}", run.stderr);
+        assert_eq!(run.stdout, expected, "optimize {optimize}");
+    }
+}
+
 /// Every instruction's offset and text line agree: the byte at the offset is
 /// the opcode the text line spells, and the source map's offsets start
 /// instructions of the right function.

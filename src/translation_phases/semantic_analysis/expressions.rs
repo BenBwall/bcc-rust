@@ -468,6 +468,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     info.ty = self
                         .check_initializer(ty, initializer, self.scope == 0, false, None)
                         .0;
+                    self.fold_compound_literal(&mut info, initializer);
                 }
                 info.category = self.object_category(info.ty);
                 info.static_address = self.scope == 0;
@@ -550,30 +551,33 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             info.ice = false;
         } else {
             // C99 §6.6p10 permits additional constant forms. Preserve the
-            // GNU-folded address difference through enclosing arithmetic;
-            // evaluate reports it through the existing extension policy.
-            let folded_address = match e.kind {
+            // GNU-folded address difference and compound literal value
+            // through enclosing arithmetic, a literal's read over an
+            // address's; evaluate reports them through the existing
+            // extension policy.
+            let operands = match e.kind {
                 | E::Cast {
                     operand_expression, ..
                 }
                 | E::Unary {
                     operand_expression, ..
-                } => self.expression_info(operand_expression).folded_address(),
+                } => [Some(operand_expression), None, None],
                 | E::Binary {
                     left_expression,
                     right_expression,
                     ..
-                } =>
-                    self.expression_info(left_expression).folded_address()
-                        || self.expression_info(right_expression).folded_address(),
-                | E::Conditional(c) | E::OmittedConditional(c) =>
-                    self.expression_info(c.condition_expression)
-                        .folded_address()
-                        || self.expression_info(c.then_expression).folded_address()
-                        || self.expression_info(c.else_expression).folded_address(),
-                | _ => false,
+                } => [Some(left_expression), Some(right_expression), None],
+                | E::Conditional(c) | E::OmittedConditional(c) => [
+                    Some(c.condition_expression),
+                    Some(c.then_expression),
+                    Some(c.else_expression),
+                ],
+                | _ => [None; 3],
             };
-            if folded_address {
+            let operands = operands.map(|operand| operand.map(|o| self.expression_info(o)));
+            if operands.iter().flatten().any(|o| o.folded_literal()) {
+                info.folding = ConstantFolding::CompoundLiteral;
+            } else if operands.iter().flatten().any(|o| o.folded_address()) {
                 info.folding = ConstantFolding::Address;
             }
         }

@@ -81,6 +81,7 @@ use crate::{
             },
         },
         preprocessing::{
+            KeywordTokenType,
             LiteralEncoding,
             StringTokenType,
         },
@@ -1444,6 +1445,13 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         if !scalar {
             return false;
         }
+        // GCC's folder reads no compound literal: GCC answers zero for
+        // `(int){1}`, even optimizing.
+        if !self.context.configuration.folds_compound_literals()
+            && self.reads_compound_literal(operand)
+        {
+            return false;
+        }
         // Nested queries are integer constant expressions, including under
         // arithmetic, casts and selected wrappers. Their semantic value is
         // available here even when control evaluation deliberately stays
@@ -1464,7 +1472,8 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
     /// A comma whose left operand is an ordinary nonvolatile read, before an
     /// arithmetic constant: function code emits the read, and
     /// `llvm.is.constant` sees only the constant result. A pointer result is
-    /// never constant there. GNU extension: `__builtin_constant_p`;
+    /// never constant there, nor a value read from a compound literal,
+    /// which function code loads. GNU extension: `__builtin_constant_p`;
     /// C99 §6.5.17p2, p. 94; PDF p. 106.
     fn discarded_comma_constant(&mut self, mut operand: &'tu Expression<'tu>, depth: u32) -> bool {
         if depth >= DEPTH {
@@ -1486,8 +1495,81 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             && (self.discarded_comma_constant(right_expression, depth + 1) || {
                 let info = self.expression_info(right_expression);
                 info.constant == ConstantClass::Arithmetic
+                    && !info.folded_literal()
                     && (info.integer.is_some() || info.floating().is_some())
             })
+    }
+
+    /// Whether evaluating `operand` reads a compound literal: the operands
+    /// `sizeof`, `_Alignof` and a `_Generic` controlling expression never
+    /// evaluate, nor do the operand of `?:` (also without its middle
+    /// operand), `&&`, `||` or `__builtin_choose_expr` that a constant
+    /// condition skips, a null pointer or an address included. GNU
+    /// extension: GCC manual, "Other Builtins", `__builtin_constant_p`;
+    /// C99 §6.5.2.5 paragraph 4, p. 75; PDF p. 87; §6.5.13-§6.5.15,
+    /// pp. 89-90; PDF pp. 101-102.
+    fn reads_compound_literal(&mut self, operand: &'tu Expression<'tu>) -> bool {
+        let mut work = ArenaVec::new_in(self.scratch);
+        work.push(operand);
+        while let Some(expression) = work.pop() {
+            match expression.kind {
+                | ExpressionType::CompoundLiteral { .. } => return true,
+                | ExpressionType::SizeofExpr(_)
+                | ExpressionType::SizeofType(_)
+                | ExpressionType::AlignofExpr(_)
+                | ExpressionType::AlignofType(_) => {},
+                | ExpressionType::Generic(_) => {
+                    if let Some(selected) = self.expression_info(expression).selected_expression {
+                        work.push(selected);
+                    }
+                },
+                | ExpressionType::Builtin(builtin)
+                    if builtin.keyword == KeywordTokenType::BuiltinChooseExpr =>
+                    if let Some(selected) = self.expression_info(expression).selected_expression {
+                        work.push(selected);
+                    },
+                | ExpressionType::Conditional(c) => {
+                    work.push(c.condition_expression);
+                    match self.condition_truth(c.condition_expression) {
+                        | Some(true) => work.push(c.then_expression),
+                        | Some(false) => work.push(c.else_expression),
+                        | None => work.extend([c.then_expression, c.else_expression]),
+                    }
+                },
+                // GNU `c ?: e`: a true condition is the result.
+                | ExpressionType::OmittedConditional(c) => {
+                    work.push(c.condition_expression);
+                    if self.condition_truth(c.condition_expression) != Some(true) {
+                        work.push(c.else_expression);
+                    }
+                },
+                | ExpressionType::Binary {
+                    operator: operator @ (BinaryOperator::LogicalAnd | BinaryOperator::LogicalOr),
+                    left_expression,
+                    right_expression,
+                } => {
+                    work.push(left_expression);
+                    if self.condition_truth(left_expression)
+                        != Some(operator == BinaryOperator::LogicalOr)
+                    {
+                        work.push(right_expression);
+                    }
+                },
+                | _ => super::labels::expression_children(self.scratch, expression, |child| {
+                    work.push(child);
+                }),
+            }
+        }
+        false
+    }
+
+    /// The truth of `condition` when it is a constant, as evaluation
+    /// decides it: a number, a null pointer, or the address of an object or
+    /// function that is not weak.
+    /// C99: §6.5.15 paragraph 4, p. 90; PDF p. 102; §6.6 paragraph 9, p. 96;
+    /// PDF p. 108.
+    fn condition_truth(&mut self, condition: &'tu Expression<'tu>) -> Option<bool> {
+        self.evaluate_value(condition, 0)?.truth()
     }
 
     /// Whether evaluating `operand` reads through a non-`const` array
