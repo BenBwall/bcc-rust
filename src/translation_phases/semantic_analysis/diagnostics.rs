@@ -7,6 +7,8 @@
 
 use super::{
     Analyzer,
+    ArenaVec,
+    ConstantClass,
     SemanticError,
     SemanticErrorKind,
 };
@@ -14,6 +16,10 @@ use crate::{
     translation_phases::{
         SourceVectors,
         TranslationError,
+        parsing::syntax::{
+            Expression,
+            ExpressionType,
+        },
     },
     util::string_cache::StringCacheId,
 };
@@ -138,26 +144,70 @@ impl Analyzer<'_, '_, '_> {
         }
     }
 
+    /// Reports arithmetic on a bit-precise value wider than the constant
+    /// evaluator's 128 bits where an integer constant expression is
+    /// required ([`super::Integer::convert`]). An array bound reports it
+    /// too: GCC and Clang take such a bound as a constant, not as a
+    /// variable length array's.
+    /// C23: §6.6 paragraph 6, p. 95; PDF p. 108.
+    pub(super) fn wide_constant(&mut self, source: SourceVectors) {
+        self.error(
+            SemanticErrorKind::UnsupportedWideConstant,
+            source,
+            None,
+            None,
+        );
+    }
+
+    /// Whether `expression` failed to fold because an operand has a
+    /// bit-precise type wider than the constant model: some arithmetic
+    /// constant in it of such a type has no folded value
+    /// ([`super::Integer::convert`]). A context that requires a constant
+    /// reports [`Self::wide_constant`] for it instead of its own error.
+    /// C23: §6.6 paragraph 6, p. 95; PDF p. 108.
+    pub(super) fn wide_unfolded(&self, expression: &Expression<'_>) -> bool {
+        let mut pending = ArenaVec::new_in(self.scratch);
+        pending.push(expression);
+        while let Some(expression) = pending.pop() {
+            if let Some(&index) = self
+                .expression_indices
+                .get(&std::ptr::from_ref(expression).addr())
+                && self.expressions[index].constant == ConstantClass::Arithmetic
+                && self.expressions[index].integer.is_none()
+                && self
+                    .integer_type(self.expressions[index].ty)
+                    .is_some_and(|(bits, _)| bits > 128)
+            {
+                return true;
+            }
+            match expression.kind {
+                | ExpressionType::Parenthesized { expression }
+                | ExpressionType::Unary {
+                    operand_expression: expression,
+                    ..
+                }
+                | ExpressionType::Cast {
+                    operand_expression: expression,
+                    ..
+                } => pending.push(expression),
+                | ExpressionType::Binary {
+                    left_expression,
+                    right_expression,
+                    ..
+                } => pending.extend([left_expression, right_expression]),
+                | ExpressionType::Conditional(c) | ExpressionType::OmittedConditional(c) =>
+                    pending.extend([c.condition_expression, c.then_expression, c.else_expression]),
+                | _ => {},
+            }
+        }
+        false
+    }
+
     /// Exceptional evaluation violates the representability constraint where
     /// an integer constant expression is required; an array bound instead
     /// becomes variable length.
     /// C99: §6.6 paragraph 4, p. 95; PDF p. 107.
     /// C99: §6.7.5.2 paragraph 4, pp. 116-117; PDF pp. 128-129.
-    /// Reports arithmetic on a bit-precise value wider than the constant
-    /// evaluator's 128 bits where an integer constant expression is
-    /// required ([`super::Integer::convert`]).
-    /// C23: §6.6 paragraph 6, p. 95; PDF p. 108.
-    pub(super) fn wide_constant(&mut self, source: SourceVectors) {
-        if !self.runtime_bound {
-            self.error(
-                SemanticErrorKind::UnsupportedWideConstant,
-                source,
-                None,
-                None,
-            );
-        }
-    }
-
     pub(super) fn exceptional_constant(&mut self, source: SourceVectors) {
         if !self.runtime_bound {
             self.error(SemanticErrorKind::ConstantOverflow, source, None, None);

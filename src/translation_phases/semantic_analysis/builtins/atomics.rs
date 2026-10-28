@@ -142,10 +142,22 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             TypeKind::Scalar(s) if matches!(s.representation(), Scalar::Float | Scalar::Double)
         );
         let modifying = operation != O::Load;
-        // Clang refuses a `_BitInt` object ("argument to atomic builtin of
-        // type '_BitInt' is not supported"); GCC accepts it.
-        let refused_bit_int = matches!(self.types.nodes[value.index], TypeKind::BitInt { .. })
-            && self.context.configuration.bit_int_rules() == crate::configuration::RuleSet::Clang;
+        // Clang refuses a `_BitInt` object in the `__atomic` value builtins,
+        // and in the `__sync` builtins unless its width is a power of two;
+        // GCC accepts it.
+        if let TypeKind::BitInt { width, .. } = self.types.nodes[value.index]
+            && self.context.configuration.bit_int_rules() == crate::configuration::RuleSet::Clang
+            && let Some(kind) = match builtin.family {
+                | Family::Gnu if !matches!(operation, O::TestSet | O::Clear) =>
+                    Some(SemanticErrorKind::AtomicBuiltinBitInt),
+                | Family::Sync if !width.is_power_of_two() =>
+                    Some(SemanticErrorKind::AtomicOperandSize),
+                | _ => None,
+            }
+        {
+            self.error(kind, args[0].source_vectors, None, None);
+            return Self::expression_result(e, self.types.unknown());
+        }
         let valid = if builtin.family == Family::C11 {
             atomic
         } else if matches!(operation, O::TestSet | O::Clear) && builtin.family == Family::Gnu {
@@ -167,7 +179,6 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     || pointer
                     || (builtin.family == Family::Gnu && floating))
         } && (!modifying || !object.qualifiers.contains(TypeQualifiers::CONST))
-            && !refused_bit_int
             && match operation {
                 | O::FetchAdd | O::FetchSub =>
                     integer

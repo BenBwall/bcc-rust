@@ -837,8 +837,20 @@ impl Integer {
     /// p. 94.
     pub(crate) fn binary(self, op: BinaryOperator, right: Self) -> Option<Self> {
         use BinaryOperator as B;
+        // A wide shift count is read by its value; a wide left operand's
+        // shifts take its type (`Analyzer::bit_int_shift`).
+        if !self.wide() && right.wide() && matches!(op, B::LeftShift | B::RightShift) {
+            return self.binary(
+                op,
+                Self {
+                    bits:   128,
+                    signed: true,
+                    value:  right.to_i128()?,
+                },
+            );
+        }
         if self.wide() || right.wide() {
-            return None;
+            return self.wide_binary(op, right);
         }
         let (mut l, mut r) = (self.promote(), right.promote());
         if matches!(op, B::LogicalAnd | B::LogicalOr) {
@@ -910,10 +922,87 @@ impl Integer {
         l.checked(value)
     }
 
+    /// [`Self::binary`] with an operand of a bit-precise type wider than
+    /// the model's 128 bits, whose value stands for its 128-bit pattern
+    /// sign-extended to that width ([`Self::convert`]). Such patterns are
+    /// closed under the bitwise operators, and an addition, subtraction or
+    /// multiplication that does not overflow `i128` gives the pattern of the
+    /// exact result, which wraps modulo 2^N for an unsigned type just as
+    /// the pattern does; so does a division of values a signed type or a
+    /// nonnegative pattern stands for. An unsigned pattern with its top bit
+    /// set stands for a value above every nonnegative one. Anything else,
+    /// and shifts ([`Analyzer::bit_int_shift`]), is not folded.
+    /// C23: §6.2.5 paragraph 8, p. 39; PDF p. 52; §6.3.1.8 paragraph 1,
+    /// pp. 48-49; PDF pp. 61-62.
+    fn wide_binary(self, op: BinaryOperator, right: Self) -> Option<Self> {
+        use BinaryOperator as B;
+        if matches!(op, B::LogicalAnd | B::LogicalOr) {
+            return Some(Self::int(i128::from(if op == B::LogicalAnd {
+                self.value != 0 && right.value != 0
+            } else {
+                self.value != 0 || right.value != 0
+            })));
+        }
+        let (bits, signed) = common((self.bits, self.signed), (right.bits, right.signed));
+        let (l, r) = (self.convert(bits, signed)?, right.convert(bits, signed)?);
+        let key = |v: Self| (!v.signed && v.value < 0, v.value);
+        let comparison = key(l).cmp(&key(r));
+        let predicate = match op {
+            | B::LessThan => Some(comparison.is_lt()),
+            | B::LessThanOrEqual => Some(!comparison.is_gt()),
+            | B::GreaterThan => Some(comparison.is_gt()),
+            | B::GreaterThanOrEqual => Some(!comparison.is_lt()),
+            | B::Equal => Some(comparison.is_eq()),
+            | B::NotEqual => Some(!comparison.is_eq()),
+            | _ => None,
+        };
+        if let Some(result) = predicate {
+            return Some(Self::int(i128::from(result)));
+        }
+        let value = match op {
+            | B::Addition => l.value.checked_add(r.value)?,
+            | B::Subtraction => l.value.checked_sub(r.value)?,
+            | B::Multiplication => l.value.checked_mul(r.value)?,
+            | B::Division | B::Modulo => {
+                if r.value == 0 || (!signed && (l.value < 0 || r.value < 0)) {
+                    return None;
+                }
+                if op == B::Division {
+                    l.value.checked_div(r.value)?
+                } else {
+                    l.value.checked_rem(r.value)?
+                }
+            },
+            | B::BitwiseAnd => l.value & r.value,
+            | B::BitwiseOr => l.value | r.value,
+            | B::BitwiseXor => l.value ^ r.value,
+            | _ => return None,
+        };
+        Some(Self {
+            value,
+            bits,
+            signed,
+        })
+    }
+
     /// C99: §6.5.3.3p1-5, p. 79; PDF p. 91.
     pub(crate) fn unary(self, op: UnaryOperator) -> Option<Self> {
+        // A wide value's pattern negates and inverts as its own
+        // ([`Self::wide_binary`]).
         if self.wide() {
-            return None;
+            return match op {
+                | UnaryOperator::Plus | UnaryOperator::Extension => Some(self),
+                | UnaryOperator::Minus => Some(Self {
+                    value: self.value.checked_neg()?,
+                    ..self
+                }),
+                | UnaryOperator::BitwiseNot => Some(Self {
+                    value: !self.value,
+                    ..self
+                }),
+                | UnaryOperator::LogicalNot => Some(Self::int(i128::from(self.value == 0))),
+                | _ => None,
+            };
         }
         let v = self.promote();
         match op {
@@ -945,9 +1034,10 @@ impl Integer {
     /// model's 128 bits. There a value stands for its two's-complement
     /// pattern sign-extended from bit 127 to the type's width: every value
     /// of a signed type converts, as does a nonnegative value of an unsigned
-    /// type of at most 127 bits or a value of a wide type, and the others
-    /// are not folded. Arithmetic on such wide values is not folded either
-    /// ([`Self::binary`], [`Self::unary`]).
+    /// type of at most 127 bits or a value of a wide type; an unsigned
+    /// 128-bit value with its top bit set, whose zero extension that pattern
+    /// cannot stand for, is not folded. Arithmetic on wide values folds
+    /// where its result keeps the pattern ([`Self::wide_binary`]).
     /// C99: §6.3.1.3p1-3, p. 43; PDF p. 55.
     /// C23: §6.2.5 paragraph 8, p. 39; PDF p. 52.
     pub(crate) fn convert(self, bits: u32, signed: bool) -> Option<Self> {
@@ -958,6 +1048,20 @@ impl Integer {
             value: self.value,
             bits,
             signed,
+        })
+    }
+
+    /// This value as one of at most 128 bits with the same mathematical
+    /// value: itself, or for a wide value its value as `__int128` where
+    /// that holds it.
+    pub(crate) fn exact(self) -> Option<Self> {
+        if !self.wide() {
+            return Some(self);
+        }
+        Some(Self {
+            value:  self.to_i128()?,
+            bits:   128,
+            signed: true,
         })
     }
 
@@ -980,7 +1084,10 @@ impl Integer {
     /// C99: §6.7.2.2p3, p. 105; PDF p. 117.
     pub(crate) fn increment(self) -> Option<Self> {
         if self.wide() {
-            return None;
+            return (self.signed || self.value >= 0).then_some(Self {
+                value: self.value.checked_add(1)?,
+                ..self
+            });
         }
         if self.signed {
             self.checked(self.value.checked_add(1)?)

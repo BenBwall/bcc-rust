@@ -299,8 +299,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                                 crate::translation_phases::semantic_analysis::EffectContext::Value,
                             )
                             && let Some((a, b)) = a.integer.zip(b.integer)
-                            && !a.wide()
-                            && !b.wide()
+                            // A wide operand counts by its value, where the
+                            // model holds it exactly.
+                            && let Some(a) = Integer::exact(a)
+                            && let Some(b) = Integer::exact(b)
                             // A wider bit-precise destination is not folded.
                             && let Some((bits, signed)) = self
                                 .integer_type(destination)

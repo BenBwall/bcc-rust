@@ -232,17 +232,58 @@ fn a_shift_into_the_sign_bit_folds_as_for_int() {
 }
 
 #[test]
-fn arithmetic_wider_than_128_bits_is_refused_without_panicking() {
-    use SemanticErrorKind::UnsupportedWideConstant as Wide;
+fn arithmetic_wider_than_128_bits_folds_where_the_model_holds_it() {
+    // A wide value stands for its 128-bit pattern sign-extended, which
+    // arithmetic that does not overflow `__int128` keeps.
+    holds_on_x86_64(
+        "typedef _BitInt(200) W; typedef unsigned _BitInt(200) U;\nenum { A = (int)((W)1 + 1), B \
+         = (int)((W)-5 * 7), C = (int)(((U)0 - 3) & 0xff) };\n_Static_assert(A == 2 && B == -35 \
+         && C == 253, \"\");\n_Static_assert((W)-1 < 0 && (U)-1 > 0 && (U)-1 > (U)5, \
+         \"\");\n_Static_assert((W)100 / -7 == -14 && (W)100 % -7 == 2, \
+         \"\");\n_Static_assert((int)~(U)5 == -6 && -(W)9 == -9, \"\");\n_Static_assert(((W)1 << \
+         100 >> 98) == 4 && (1 << (W)3) == 8, \"\");\n_Static_assert((W)-3 >= (W)-4 && !(W)0 && \
+         ((W)1 && 1), \"\");\n_Static_assert(__builtin_add_overflow_p((W)0x7fffffff, 1, (int)0), \
+         \"\");\n_Static_assert(sizeof(int[(W)3 * 2]) == 6 * sizeof(int), \
+         \"\");\n_Static_assert(__builtin_choose_expr((W)1 + 1, 1, 0), \"\");\n_Alignas((W)8 * 2) \
+         int aligned;\n_Static_assert(_Alignof(aligned) == 16, \"\");\nstatic long long product = \
+         (W)1000000000000LL * 3 + 1;\nint bounds[(W)1 + 3];\nstruct S { int a[(W)1 + 3]; int x : \
+         (W)2 + 3; };\nint f(int x) { switch (x) { case (W)1 * 3: return 1; } return 0; }",
+    );
+}
+
+#[test]
+fn wide_constants_the_model_cannot_hold_are_refused_clearly() {
+    use SemanticErrorKind::{
+        ConstantOverflow as Overflow,
+        UnsupportedWideConstant as Wide,
+    };
+    // A huge unsigned value divided, shifted right or past 128 bits, and an
+    // unsigned 128-bit value with its top bit set, zero-extended, have no
+    // folded value; every context that requires a constant says so. `H`
+    // stands for such a constant.
     for (source, expected) in [
-        ("enum { E = (_BitInt(200))1 + 1 };", &[Wide][..]),
-        ("_Static_assert(-(_BitInt(200))5 < 0, \"\");", &[Wide]),
+        ("enum { E = H };", &[Wide][..]),
+        ("int a[H + 1];", &[Wide]),
+        ("struct S { int a[H + 1]; };", &[Wide]),
         (
-            "int f(_BitInt(200) x) { switch (x) { case (_BitInt(200))1 << 150: return 1; } return \
-             0; }",
+            "int f(void) { static int b[H + 1]; return sizeof b; }",
             &[Wide],
         ),
-        ("static _BitInt(200) s = (_BitInt(200))1 + 1;", &[Wide]),
+        ("_Alignas(H ? 8 : 16) int x;", &[Wide]),
+        ("static long long m = H;", &[Wide]),
+        ("int c = __builtin_choose_expr(H, 1, 2);", &[Wide]),
+        ("_Static_assert(sizeof(int[H + 1]) == 8, \"\");", &[Wide]),
+        ("struct T { int x : H + 1; };", &[Wide]),
+        (
+            "int f(int x) { switch (x) { case (_BitInt(200))1 << 150: return 1; } return 0; }",
+            &[Wide],
+        ),
+        (
+            "_Static_assert((unsigned _BitInt(129))(unsigned __int128)-1 != 0, \"\");",
+            &[Wide],
+        ),
+        // Undefined at any width.
+        ("enum { E = (int)((_BitInt(200))1 / 0) };", &[Overflow]),
         // Conversions fold, so these are constants.
         ("enum { F = (_BitInt(200))1 };", &[]),
         ("int a[(_BitInt(200))3 ? 2 : 1];", &[]),
@@ -252,9 +293,10 @@ fn arithmetic_wider_than_128_bits_is_refused_without_panicking() {
             &[],
         ),
     ] {
+        let source = format!("#define H ((unsigned _BitInt(200))-1 / 2 > 1)\n{source}");
         for identity in [CompilerIdentity::Gcc, CompilerIdentity::Clang] {
             assert_eq!(
-                kinds(source, identity, crate::target::Target::LinuxGnu),
+                kinds(&source, identity, crate::target::Target::LinuxGnu),
                 expected,
                 "{identity:?}: {source}"
             );
@@ -263,26 +305,82 @@ fn arithmetic_wider_than_128_bits_is_refused_without_panicking() {
 }
 
 #[test]
-fn clang_rejects_atomic_builtins_on_a_bit_int() {
-    let source = "unsigned _BitInt(7) p; int f(void) { return __atomic_fetch_add(&p, 1, 5) + \
-                  __sync_fetch_and_add(&p, 1); }";
-    assert_eq!(
-        kinds(
-            source,
-            CompilerIdentity::Gcc,
-            crate::target::Target::LinuxGnu
-        ),
-        []
+fn shifts_check_the_bit_precise_width() {
+    // The count and the result take the `_BitInt`'s width, not the `int`
+    // its operand computes in: these are undefined.
+    for source in [
+        "enum { E = (int)((_BitInt(31))3 << 30) };",
+        "enum { E = (int)((_BitInt(31))7 << 29) };",
+        "enum { E = (int)((unsigned _BitInt(8))1 << 8) };",
+        "enum { E = (int)((unsigned _BitInt(7))100 >> 7) };",
+    ] {
+        assert_eq!(
+            kinds(
+                source,
+                CompilerIdentity::Gcc,
+                crate::target::Target::LinuxGnu
+            ),
+            [SemanticErrorKind::ConstantOverflow],
+            "{source}"
+        );
+    }
+    holds_on_x86_64(
+        "_Static_assert(((_BitInt(31))1 << 30) == -1073741824, \"\");\n_Static_assert(((unsigned \
+         _BitInt(8))1 << 7) == 128, \"\");\n_Static_assert(((_BitInt(8))-128 >> 7) == -1, \
+         \"\");\n_Static_assert(((_BitInt(128))1 << 126) > 0, \"\");",
     );
-    assert_eq!(
-        kinds(
-            source,
-            CompilerIdentity::Clang,
-            crate::target::Target::LinuxGnu
-        ),
-        [
-            SemanticErrorKind::InvalidAtomicOperand,
-            SemanticErrorKind::InvalidAtomicOperand
-        ]
-    );
+}
+
+#[test]
+fn atomic_builtins_take_a_bit_int_as_each_compiler_does() {
+    use SemanticErrorKind::{
+        AtomicBuiltinBitInt as BitInt,
+        AtomicOperandSize as Size,
+    };
+    // Clang refuses the `__atomic` value builtins and a `__sync` builtin
+    // on a width that is no power of two; GCC accepts every one.
+    for (operation, eight, seven) in [
+        ("__atomic_fetch_add(&p, 1, 5)", Some(BitInt), Some(BitInt)),
+        ("__atomic_load_n(&p, 5)", Some(BitInt), Some(BitInt)),
+        ("__atomic_test_and_set(&p, 5)", None, None),
+        ("__sync_fetch_and_add(&p, 1)", None, Some(Size)),
+        ("__sync_val_compare_and_swap(&p, 1, 2)", None, Some(Size)),
+        ("__sync_lock_test_and_set(&p, 1)", None, Some(Size)),
+    ] {
+        for (width, expected) in [(8, eight), (7, seven)] {
+            let source = format!(
+                "unsigned _BitInt({width}) p; int f(void) {{ return (int)({operation}); }}"
+            );
+            assert_eq!(
+                kinds(
+                    &source,
+                    CompilerIdentity::Gcc,
+                    crate::target::Target::LinuxGnu
+                ),
+                [],
+                "{source}"
+            );
+            assert_eq!(
+                kinds(
+                    &source,
+                    CompilerIdentity::Clang,
+                    crate::target::Target::LinuxGnu
+                ),
+                expected.into_iter().collect::<Vec<_>>(),
+                "{source}"
+            );
+        }
+    }
+}
+
+/// Asserts that `source` has no semantic errors for either identity on
+/// Linux x86-64.
+fn holds_on_x86_64(source: &str) {
+    for identity in [CompilerIdentity::Gcc, CompilerIdentity::Clang] {
+        assert_eq!(
+            kinds(source, identity, crate::target::Target::LinuxGnu),
+            [],
+            "{identity:?}: {source}"
+        );
+    }
 }

@@ -421,6 +421,16 @@ pub(crate) enum SemanticErrorKind {
     /// GNU extension: GCC manual, "__sync Builtins".
     /// <https://gcc.gnu.org/onlinedocs/gcc/_005f_005fsync-Builtins.html>
     InvalidAtomicOperand,
+    /// Clang: an `__atomic` builtin other than `__atomic_test_and_set` and
+    /// `__atomic_clear` on a `_BitInt` object, which GCC accepts.
+    /// Clang extension: `err_atomic_builtin_bit_int_prohibit` in
+    /// `DiagnosticSemaKinds.td`.
+    AtomicBuiltinBitInt,
+    /// Clang: a `__sync` builtin on a `_BitInt` whose width is not a power
+    /// of two, which GCC accepts.
+    /// Clang extension: `err_atomic_builtin_pointer_size` in
+    /// `DiagnosticSemaKinds.td`.
+    AtomicOperandSize,
     /// Clang diagnoses invalid constant orders as warnings.
     /// GNU extension: GCC manual, "__atomic Builtins".
     /// <https://gcc.gnu.org/onlinedocs/gcc/_005f_005fatomic-Builtins.html>
@@ -887,6 +897,8 @@ impl SemanticErrorKind {
             | Self::InvalidAtomicType => "invalid atomic operand type",
             | Self::InvalidGenericSelection => "invalid generic association list",
             | Self::InvalidAtomicOperand => "invalid atomic builtin operand",
+            | Self::AtomicBuiltinBitInt => "a _BitInt object",
+            | Self::AtomicOperandSize => "not a power-of-two size",
             | Self::InvalidAtomicOrder => "invalid memory order",
             | Self::InvalidAtomicFailureOrder => "invalid failure memory order",
             | Self::AtomicBufferQualifiers => "pointer conversion discards qualifiers",
@@ -1095,6 +1107,16 @@ impl SemanticErrorKind {
             | Self::AtomicBufferQualifiers => (
                 "atomic buffer argument discards pointer target qualifiers",
                 "Clang atomic builtins convert generic value, expected and output buffers to pointers to the unqualified value type",
+            ),
+            | Self::AtomicBuiltinBitInt => (
+                "argument to atomic builtin of type '_BitInt' is not supported",
+                "Clang's __atomic builtins refuse bit-precise integers, except \
+                 __atomic_test_and_set and __atomic_clear; GCC accepts them",
+            ),
+            | Self::AtomicOperandSize => (
+                "atomic memory operand must have a power-of-two size",
+                "Clang's __sync builtins take a _BitInt only of a power-of-two width; GCC \
+                 accepts any",
             ),
             | Self::InvalidAtomicOperand => (
                 "operand does not satisfy the atomic builtin type contract",
@@ -1715,9 +1737,10 @@ impl SemanticErrorKind {
                 "C99 §6.6p3 and p6: integer constant expressions restrict operators and operands",
             ),
             | Self::UnsupportedWideConstant => (
-                "not yet supported: folding arithmetic on _BitInt types of more than 128 bits",
+                "not yet supported: folding this _BitInt constant of more than 128 bits",
                 "C23 §6.6p6: this is an integer constant expression, but the constant evaluator \
-                 holds 128 bits and does not yet fold a wider bit-precise result",
+                 holds a value of a wider bit-precise type only as the sign extension of 128 \
+                 bits, which this result is not",
             ),
             | Self::ConstantOverflow => (
                 "constant expression overflows or has an invalid operation",

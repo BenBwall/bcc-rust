@@ -633,7 +633,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 info.integer = Self::floating_comparison(op, left_value, right_value);
             }
             info.ice = left.ice && right.ice;
-            if !floating && let Some((l, r)) = left.integer.zip(right.integer) {
+            let mut sign_bit = false;
+            if !floating
+                && let Some((l, r)) = left.integer.zip(right.integer)
+                && let Some((value, into_sign_bit)) = self.bit_int_shift(op, l, r, info.ty)
+            {
+                info.integer = value;
+                sign_bit = into_sign_bit;
+            } else if !floating && let Some((l, r)) = left.integer.zip(right.integer) {
                 info.integer = l.binary(op, r);
                 if info.integer.is_none()
                     && let Some(value) = l.sign_bit_shift(op, r)
@@ -670,21 +677,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     | B::LogicalAnd
                     | B::LogicalOr
             ) {
-                if let Some(value) = info
-                    .integer
-                    .and_then(|v| self.bit_int_sign_shift(op, v, info.ty))
-                {
-                    info.integer = Some(value);
-                    if !self.tainted {
-                        self.context.report_extension(
-                            crate::configuration::Feature::SignBitShifts,
-                            "left shift into the sign bit",
-                            e.operator_source_vectors.unwrap_or(e.source_vectors),
-                        );
-                    }
-                } else {
-                    info.integer = info.integer.and_then(|v| self.bit_int_result(v, info.ty));
-                }
+                info.integer = info.integer.and_then(|v| self.bit_int_result(v, info.ty));
+            }
+            if sign_bit && !self.tainted {
+                self.context.report_extension(
+                    crate::configuration::Feature::SignBitShifts,
+                    "left shift into the sign bit",
+                    e.operator_source_vectors.unwrap_or(e.source_vectors),
+                );
             }
             if let Some((bits, signed)) = self.integer_type(info.ty) {
                 info.integer = info.integer.and_then(|v| v.convert(bits, signed));
@@ -2122,32 +2122,72 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         value.convert(width, signed)
     }
 
-    /// A left shift of a nonnegative narrow signed bit-precise value into
-    /// (not past) its sign bit, folded to its two's-complement result as
-    /// for `int` ([`Integer::sign_bit_shift`]): the constant arithmetic
-    /// computes the operand in `int`, where the result is in range.
-    /// GNU extension: GCC manual, "Integers".
-    /// C99: §6.5.7 paragraph 4, p. 85; PDF p. 97.
-    pub(in crate::translation_phases::semantic_analysis) fn bit_int_sign_shift(
+    /// A shift whose left operand, and so its result, has the bit-precise
+    /// type `ty`, folded at that type's width N rather than at the `int` the
+    /// constant arithmetic promotes a narrow operand to: a count of N or
+    /// more, a negative value shifted left or a signed result past the sign
+    /// bit is undefined and no constant. A nonnegative value shifted into
+    /// (not past) the sign bit folds to its two's-complement result, as for
+    /// `int` ([`Integer::sign_bit_shift`]), which the second result reports.
+    /// Above 128 bits the shift folds where the model's pattern holds its
+    /// result ([`Integer::convert`]). `None` for any other shift.
+    /// C99: §6.5.7 paragraphs 3-5, p. 85; PDF p. 97. GNU extension: GCC
+    /// manual, "Integers".
+    pub(in crate::translation_phases::semantic_analysis) fn bit_int_shift(
         &self,
         op: BinaryOperator,
-        value: Integer,
+        left: Integer,
+        right: Integer,
         ty: TypeId,
-    ) -> Option<Integer> {
-        let TypeKind::BitInt {
-            width,
-            signed: true,
-        } = self.types.nodes[ty.index]
-        else {
+    ) -> Option<(Option<Integer>, bool)> {
+        if !matches!(op, BinaryOperator::LeftShift | BinaryOperator::RightShift) {
+            return None;
+        }
+        let TypeKind::BitInt { width, signed } = self.types.nodes[ty.index] else {
             return None;
         };
-        let value_bits = value.to_i128()?;
-        (op == BinaryOperator::LeftShift
-            && width < 32
-            && value_bits >= 1 << (width - 1)
-            && value_bits < 1 << width)
-            .then(|| value.convert(width, true))
-            .flatten()
+        let mut sign_bit = false;
+        let mut fold = || {
+            let count = u32::try_from(right.to_i128()?)
+                .ok()
+                .filter(|&count| count < width)?;
+            let value = left.convert(width, signed)?;
+            if value.wide() {
+                let shifted = if op == BinaryOperator::RightShift {
+                    if !signed && value.value < 0 {
+                        return None;
+                    }
+                    value.value >> count.min(127)
+                } else {
+                    if (signed && value.value < 0) || count >= 128 {
+                        return None;
+                    }
+                    let shifted = value.value << count;
+                    (shifted >> count == value.value).then_some(shifted)?
+                };
+                return value.convert(width, signed).map(|v| Integer {
+                    value: shifted,
+                    ..v
+                });
+            }
+            let raw = value.value.cast_unsigned() & (u128::MAX >> (128 - width));
+            let shifted = if op == BinaryOperator::RightShift {
+                if signed {
+                    (value.value >> count).cast_unsigned()
+                } else {
+                    raw >> count
+                }
+            } else {
+                if signed && (value.value < 0 || raw > (u128::MAX >> (128 - width)) >> count) {
+                    return None;
+                }
+                sign_bit = signed && (raw << count) >> (width - 1) & 1 == 1;
+                raw << count
+            };
+            Integer::int(shifted.cast_signed()).convert(width, signed)
+        };
+        let result = fold();
+        Some((result, sign_bit))
     }
 
     /// The common type of two promoted integer types, at least one of them

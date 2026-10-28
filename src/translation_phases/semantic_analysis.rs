@@ -1611,7 +1611,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 let result = value
                     .and_then(|v| v.unary(op))
                     .and_then(|v| self.bit_int_result(v, ty));
-                if value.is_some_and(Integer::wide) {
+                if value.is_some_and(Integer::wide) && result.is_none() {
                     self.wide_constant(source);
                 } else if value.is_some() && result.is_none() {
                     self.exceptional_constant(source);
@@ -1622,14 +1622,24 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 let right = self.integers.pop().flatten();
                 let left = self.integers.pop().flatten();
                 // Expression typing has already reported a sign-bit shift.
-                let result = left
-                    .zip(right)
-                    .and_then(|(l, r)| l.binary(op, r).or_else(|| l.sign_bit_shift(op, r)))
-                    .and_then(|v| {
-                        self.bit_int_sign_shift(op, v, ty)
-                            .or_else(|| self.bit_int_result(v, ty))
-                    });
-                if left.is_some_and(Integer::wide) || right.is_some_and(Integer::wide) {
+                let result =
+                    left.zip(right)
+                        .and_then(|(l, r)| match self.bit_int_shift(op, l, r, ty) {
+                            | Some((result, _)) => result,
+                            | None => l
+                                .binary(op, r)
+                                .or_else(|| l.sign_bit_shift(op, r))
+                                .and_then(|v| self.bit_int_result(v, ty)),
+                        });
+                // A division by zero is undefined at any width.
+                let by_zero = matches!(op, BinaryOperator::Division | BinaryOperator::Modulo)
+                    && right.is_some_and(|r| r.value == 0);
+                if left.is_some()
+                    && right.is_some()
+                    && (left.is_some_and(Integer::wide) || right.is_some_and(Integer::wide))
+                    && result.is_none()
+                    && !by_zero
+                {
                     self.wide_constant(source);
                 } else if left.is_some() && right.is_some() && result.is_none() {
                     self.exceptional_constant(source);
@@ -1703,8 +1713,16 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 self.work.push(Work::CastDone(ty, source));
                 self.work.push(Work::Eval(operand));
             },
-            | Work::CastDone(ty, _source) => {
+            | Work::CastDone(ty, source) => {
                 let value = self.integers.pop().flatten();
+                // An unsigned 128-bit value with its top bit set, converted
+                // to a wider `_BitInt`, has no folded value yet.
+                if let Some(v) = value
+                    && let Some((bits, signed)) = self.integer_type(ty)
+                    && v.convert(bits, signed).is_none()
+                {
+                    self.wide_constant(source);
+                }
                 let result = value
                     .zip(self.integer_type(ty))
                     .and_then(|(v, (bits, signed))| {
