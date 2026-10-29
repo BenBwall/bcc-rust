@@ -92,11 +92,19 @@ pub(super) fn run(
             },
             | Step::Run {
                 program,
+                name,
                 arguments,
                 stdin,
             } => {
                 let mut command = Command::new(&program);
                 _ = command.args(arguments);
+                #[cfg(unix)]
+                if let Some(name) = name {
+                    use std::os::unix::process::CommandExt as _;
+                    _ = command.arg0(name);
+                }
+                #[cfg(not(unix))]
+                drop(name);
                 let status = match stdin.map(std::fs::File::open).transpose() {
                     | Ok(stdin) => {
                         if let Some(stdin) = stdin {
@@ -342,6 +350,8 @@ enum Step {
     /// status, with its standard input read from `stdin` if given.
     Run {
         program:   PathBuf,
+        /// The program's `argv[0]`, when it is not `program`.
+        name:      Option<OsString>,
         arguments: Vec<OsString>,
         stdin:     Option<PathBuf>,
     },

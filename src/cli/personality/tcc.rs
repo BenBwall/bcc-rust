@@ -66,6 +66,7 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         invocation,
         target,
         state: State::default(),
+        listfiles: 0,
     };
     let query = parser.parse(invocation.arguments.clone(), true)?;
     let state = parser.state;
@@ -84,6 +85,7 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         | Some(Query::Archive(arguments)) => {
             plan.steps.push(Step::Run {
                 program:   version::program_name("ar").into(),
+                name:      None,
                 arguments: arguments.clone(),
                 stdin:     None,
             });
@@ -217,6 +219,9 @@ struct State {
     run:               Option<String>,
     /// The program's arguments after `-run FILE`.
     run_arguments:     Vec<OsString>,
+    /// The program's `argv[0]`: FILE, or `--` for `FILES -run -- ARGS`,
+    /// as TCC passes the argument it stopped at.
+    run_name:          Option<OsString>,
     /// `-rstdin FILE`.
     run_stdin:         Option<OsString>,
     standard_c11:      bool,
@@ -242,7 +247,12 @@ struct Parser<'a> {
     invocation: &'a Invocation,
     target:     Target,
     state:      State,
+    /// The `@FILE` arguments read so far.
+    listfiles:  usize,
 }
+
+/// The most `@FILE` arguments a command line may read.
+const LISTFILE_LIMIT: usize = 4096;
 
 /// How an option in TCC's table takes its value.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -340,6 +350,17 @@ impl Parser<'_> {
             // `@FILE` is replaced by the arguments it holds.
             if let [b'@', _, ..] = bytes {
                 let name = PathBuf::from(&argument.to_string_lossy()[1..]);
+                // TCC reads listfiles without a limit, so one that names
+                // itself never ends there; bcc stops after a bound.
+                self.listfiles += 1;
+                if self.listfiles > LISTFILE_LIMIT {
+                    self.invocation.error(format_args!(
+                        "listfile '{}' not read: more than {LISTFILE_LIMIT} listfiles (does one \
+                         name itself?)",
+                        name.display()
+                    ));
+                    return Err(MainError::Reported(1));
+                }
                 let Ok(text) = std::fs::read(&name) else {
                     self.invocation
                         .error(format_args!("listfile '{}' not found", name.display()));
@@ -354,6 +375,7 @@ impl Parser<'_> {
                 self.add_input(&argument)?;
                 self.state.empty = false;
                 if self.state.run.is_some() {
+                    self.state.run_name = Some(argument);
                     break;
                 }
                 continue;
@@ -361,6 +383,7 @@ impl Parser<'_> {
             // `tcc FILES -run -- ARGS`.
             if bytes == b"--" {
                 if self.state.run.is_some() {
+                    self.state.run_name = Some(argument);
                     break;
                 }
                 continue;
@@ -470,8 +493,13 @@ impl Parser<'_> {
                     "{}\n",
                     machine(self.target)
                 )))),
-            | "I" | "D" | "U" | "isystem" | "include" => {
-                state.options.push(format!("-{name}").into());
+            // Joined, so that a value starting with `-` (`tcc -I -c`, a
+            // directory named `-c`) stays a value for bcc too.
+            | "I" => state.options.push(concat("--include-directory=", &value)),
+            | "isystem" => state.options.push(concat("--isystem=", &value)),
+            | "D" | "U" => state.options.push(concat(&format!("-{name}"), &value)),
+            | "include" => {
+                state.options.push("-include".into());
                 state.options.push(value);
             },
             | "L" => self.link_option(concat("-L", &value)),
@@ -942,6 +970,16 @@ impl State {
                 }
             },
             | Some(Action::Run) => {
+                // TCC reopens standard input before it compiles.
+                if let Some(stdin) = &self.run_stdin
+                    && std::fs::File::open(stdin).is_err()
+                {
+                    invocation.error(format_args!(
+                        "failed to reopen stdin from '{}'",
+                        stdin.to_string_lossy()
+                    ));
+                    return Err(MainError::Reported(1));
+                }
                 let directory = TemporaryDirectory::create().map_err(|source| {
                     MainError::WriteOutputFileError {
                         path: std::env::temp_dir(),
@@ -965,6 +1003,7 @@ impl State {
                 plan.steps.push(Step::Bcc(step));
                 plan.steps.push(Step::Run {
                     program,
+                    name: self.run_name,
                     arguments: self.run_arguments,
                     stdin: self.run_stdin.map(PathBuf::from),
                 });

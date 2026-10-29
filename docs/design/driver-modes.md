@@ -542,7 +542,12 @@ operand rule it satisfies, so `-ofile`, `-xc`, `-Ifoo`, `-runFILE` and
 `-gdwarf` are options with joined values and `-MT` is `invalid option --
 '-MT'`. `@FILE` is replaced by the arguments FILE holds, split at blanks
 with double quotes grouping and a backslash escaping a quote (`tcc: error:
-listfile 'x' not found`); `-Wp,A,B` reads `A` and `B` as options.
+listfile 'x' not found`). TCC reads listfiles without a limit, so one
+that names itself makes TCC hang; bcc stops after 4096 (`tcc: error:
+listfile 'self.txt' not read: more than 4096 listfiles (does one name
+itself?)`). `-Wp,A,B` reads `A` and `B` as options. An option's value is
+the next argument even when that starts with `-`, so `tcc -I -c -c a.c`
+searches a directory named `-c`.
 `-c`, `-E`, `-r`, `-shared` and `-run` choose what is built: the last one
 wins, and each one after the first draws `tcc: warning: -c: overriding
 compiler action already specified` (also `-c -c`). A second `-o` draws
@@ -573,8 +578,10 @@ cannot open, missing or unreadable, are dropped and the run fails with
 the C sources before it. `-run FILE ARGS...` compiles FILE, with the options
 between `-run` and FILE, and runs it with ARGS; `tcc FILES -run -- ARGS`
 runs FILES; `-run` with no input is `tcc: error: no input files`. The
-program's exit status is the command's. `-rstdin FILE` gives the program
-FILE as its standard input. Under the TCC identity a `#!` line that starts
+program's `argv[0]` is the argument TCC stopped at, FILE or `--`, and its
+exit status is the command's. `-rstdin FILE` gives the program FILE as its
+standard input; a FILE that cannot be opened is `tcc: error: failed to
+reopen stdin from 'FILE'` before anything is compiled, as in `mob`. Under the TCC identity a `#!` line that starts
 a file is skipped, as TCC skips it, so a script starting `#!/usr/bin/tcc
 -run` runs; elsewhere the line stays a non-directive, which GCC and Clang
 reject.
@@ -697,8 +704,8 @@ holding a `long double`), structures of one class (`{int, int}`, `{float,
 float}`, `{short, char[5]}`), `_Bool` and narrow parameters, and the
 layout and passing of bit-field structures. They do not agree on the
 structures of at most 16 bytes that mix integer and floating members or
-hold an array of floats (`{double, long}`, `{char, double}`,
-`{float[3]}`), passed or returned directly or through `...`: TCC
+hold an array of floats (`{double, long}`, `{int, double}`, `{char,
+double}`, `{float[3]}`), passed or returned directly or through `...`: TCC
 classifies such a structure as a whole (`classify_x86_64_inner` in
 `x86_64-gen.c` merges the members' classes) rather than by eightbyte as
 the x86-64 psABI requires, so `{double, long}` travels in two integer

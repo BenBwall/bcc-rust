@@ -2611,6 +2611,31 @@ mod tests {
             stderr(&output),
             "tcc: error: listfile 'missing.txt' not found\n"
         );
+        // TCC never ends a listfile that names itself; bcc stops.
+        directory.write("self.txt", "@self.txt\n");
+        let output = directory.bcc("--tcc-mode", &["@self.txt"]);
+        assert_eq!(output.status.code(), Some(1));
+        assert_eq!(
+            stderr(&output),
+            "tcc: error: listfile 'self.txt' not read: more than 4096 listfiles (does one name \
+             itself?)\n"
+        );
+        directory.write("two.txt", "@two.txt @two.txt\n");
+        let output = directory.bcc("--tcc-mode", &["@two.txt"]);
+        assert_eq!(output.status.code(), Some(1));
+        // A value that starts with `-` stays a value, as in TCC: here a
+        // directory named `-c`.
+        std::fs::create_dir(directory.path("-c")).unwrap();
+        directory.write("-c/dash.h", "#define X 4\n");
+        directory.write("dash.c", "#include \"dash.h\"\nint x = X;\n");
+        for args in [
+            &["-I", "-c", "-c", "dash.c"][..],
+            &["-isystem", "-c", "-c", "dash.c"][..],
+        ] {
+            let output = directory.bcc("--tcc-mode", args);
+            succeeds(&output);
+            assert_eq!(stderr(&output), "", "{args:?}");
+        }
         // `-Wp,` splits its operand into options; `-ofile` is joined.
         let output = directory.bcc("--tcc-mode", &["-Wp,-DX=3,-UY", "-c", "x.c", "-ojoined.o"]);
         succeeds(&output);
@@ -2812,6 +2837,28 @@ mod tests {
              return argc;\n}\n",
         );
         directory.write("input.txt", "abc");
+        directory.write(
+            "name.c",
+            "#include <stdio.h>\nint main(int argc, char **argv) { puts(argv[0]); return 0; }\n",
+        );
+        // The program's `argv[0]` is the argument TCC stopped at.
+        for (args, name) in [
+            (&["-run", "name.c", "x"][..], "name.c\n"),
+            (&["name.c", "-run", "--", "x"][..], "--\n"),
+        ] {
+            let output = directory.bcc("--tcc-mode", args);
+            succeeds(&output);
+            if cfg!(unix) {
+                assert_eq!(stdout(&output), name, "{args:?}");
+            }
+        }
+        // TCC opens `-rstdin`'s file before it compiles anything.
+        let output = directory.bcc("--tcc-mode", &["-rstdin", "nope.txt", "-run", "name.c"]);
+        assert_eq!(output.status.code(), Some(1));
+        assert_eq!(
+            stderr(&output),
+            "tcc: error: failed to reopen stdin from 'nope.txt'\n"
+        );
         let output = directory.bcc(
             "--tcc-mode",
             &[
@@ -3015,6 +3062,7 @@ mod tests {
             &["-c", "-c", "hello.c"],
             &["@args.txt"],
             &["-Wp,-DFOO=5", "-E", "-P", "macros.c"],
+            &["-I", "-c", "-c", "hello.c"],
         ];
         let run = |program: &std::ffi::OsStr, mode: Option<&str>, args: &[&str]| {
             let directory = Directory::new();
