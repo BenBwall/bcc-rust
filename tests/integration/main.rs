@@ -41,6 +41,7 @@ mod llvm_build_cache;
 mod local_statics;
 mod math_builtins_cli;
 mod mingw_target_macros;
+mod msvc;
 mod native_runner;
 mod native_section_parity;
 mod optimization_cli;
