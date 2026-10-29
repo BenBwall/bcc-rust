@@ -2390,26 +2390,20 @@ Semantics follow C23:
   are refused as `1u << 32` is), while a nonnegative value shifted into
   (not past) the sign bit folds to its two's-complement result, as for
   `int` (`(_BitInt(8))1 << 7` is -128 in both compilers). Values of widths
-  above 128 bits exceed the 128-bit constant model (`Integer`), which
-  holds such a value as its 128-bit pattern sign-extended to N bits: every
-  signed value converts, and so does an unsigned one below 2^127, or one of
-  another wide type converted to a type no wider (an unsigned pattern with
-  bit 127 set stands for 2^N - k, whose zero extension to a wider type no
-  such pattern holds). Converted to a floating type, 2^N - k rounds once
-  from its top 128 bits and a sticky bit (`bits::from_bit_precise`). Arithmetic folds whenever `__int128` arithmetic on the
-  patterns does not overflow, which gives the exact result modulo 2^N:
-  `+`, `-`, `*`, the bitwise operators, `~`, unary `-`, comparisons, a
-  division or remainder of signed values (or of unsigned ones below 2^127),
-  and shifts whose result stays in the pattern. Where a constant is
-  required, a result the pattern cannot hold is refused with "not yet
-  supported: folding this _BitInt constant of more than 128 bits"
-  (`UnsupportedWideConstant`): an unsigned value with bit 127 set converted
-  to a wider type (`(unsigned _BitInt(129))(unsigned __int128)-1`,
-  `(_BitInt(200))(unsigned _BitInt(150))-1`), a huge unsigned value divided
-  or shifted right, a shift past bit 127. Both compilers fold these. The error replaces the generic
-  one of every context: enumerators, case labels, array bounds (a variable
-  length array at block scope), bit-field widths, `_Alignas`, static
-  assertions and initializers, and `__builtin_choose_expr`.
+  above 128 bits, up to `BITINT_MAXWIDTH`, fold exactly: `Integer` keeps a
+  value `i128` holds in place, and any other names its two's-complement
+  64-bit limbs, interned in the unit's table (`WideIntegers`, which
+  `SemanticTranslationUnit::integer_limbs` reads for lowering). Every
+  operator, conversion and context folds as at narrow widths, with the
+  same rules at N bits: products are schoolbook and quotients Knuth's
+  algorithm D (a release build checks 600 assertions with about 5,000
+  operations on 65535-bit values in 0.6 s). A wide value converts to a floating type rounded
+  once to nearest even (its top 128 bits from the leading one and a sticky
+  bit, `bits::from_scaled`), and a floating value converts to a wide type
+  truncated exactly (`double` reaches 2^1024, `long double` and
+  `__float128` 2^16384); out of range it is no constant, as for narrow
+  types. The overflow builtins compare the exact result with the
+  destination's range at any width.
 - **Bit-fields** take a `_BitInt` of at most its width; the record lays the
   field out in storage units of the declared type, as both compilers do.
 - **Overflow builtins** accept bit-precise operands and results and check
@@ -2464,8 +2458,8 @@ lowering stops with "not yet supported by lowering: _BitInt types of more
 than 128 bits". The remaining work is the limb legalization of their
 operations (with helpers equivalent to libgcc's `__mulbitint3`,
 `__divmodbitint4`, `__floatbitint*` and `__fix*bitint`, which GCC 13's
-libgcc lacks, so bcc must carry its own), folding at those widths, and `wb`
-constants of more than 64 bits. `tests/integration/bit_int.rs` compares
+libgcc lacks, so bcc must carry its own) and `wb` constants of more than
+64 bits. `tests/integration/bit_int.rs` compares
 every operator, conversion and folded constant at widths 1-128 with the
 bundled Clang and GCC 15 on every back end, and with wasi-sdk's Clang on
 `wasm32-wasip1`, and links calls between bcc, Clang and GCC objects.

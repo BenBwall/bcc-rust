@@ -1209,7 +1209,12 @@ analysis over the same inputs as `Parser` and `Parser only`; the difference
 from `Parser` is the cost of analysis.
 
 Integer constant evaluation stores 128-bit patterns plus width and signedness.
-Unsigned high-half patterns use `u128` arithmetic and formatting. Its division relies on
+Unsigned high-half patterns use `u128` arithmetic and formatting. A `_BitInt`
+wider than 128 bits whose value `i128` does not hold names its exact
+two's-complement limbs in the analyzer's interned table
+(`semantic_analysis/wide_integers.rs`), which every folding site reaches
+through `WideIntegers` and which `SemanticTranslationUnit` keeps for lowering
+(`integer_limbs`, `integer_float_bits`) and inspection. Its division relies on
 the linker flags in `.cargo/config.toml` that keep `compiler_builtins`'
 `__divti3`/`__modti3` across linker-plugin LTO (see the README's LTO section).
 
