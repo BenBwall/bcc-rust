@@ -2194,6 +2194,9 @@ printf(\"%f %f %F\\n\",1e100,-0.0,1.0/0.0); return 0; }",
         let target = format!("--target={target}");
         let executable = temporary("builtin-setjmp.exe");
         let path = executable.to_str().unwrap();
+        // Every configuration runs before the test fails, so a report names
+        // each one that differs.
+        let mut failures = Vec::new();
         for opt in [
             &["--llvm-opt=O0"][..],
             &["--opt=bcc", "--llvm-opt=O2"][..],
@@ -2203,10 +2206,16 @@ printf(\"%f %f %F\\n\",1e100,-0.0,1.0/0.0); return 0; }",
             let built = compile(&[&[target.as_str(), "-o", path][..], opt].concat());
             assert!(built.status.success(), "{opt:?}: {}", text(&built.stderr));
             let output = run_native(&mut Command::new(&executable)).unwrap();
-            assert_eq!(output.status.code(), Some(0), "{opt:?}");
-            assert_eq!(text(&output.stdout), TRANSCRIPT, "{opt:?}");
+            if output.status.code() != Some(0) || text(&output.stdout) != TRANSCRIPT {
+                failures.push(format!(
+                    "{opt:?}: {:?}\n{}",
+                    output.status.code(),
+                    text(&output.stdout)
+                ));
+            }
         }
         std::fs::remove_file(&executable).unwrap();
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 
     #[test]
