@@ -575,8 +575,10 @@ the syntax tree; the preprocessing arena keeps lexed files and macros until
 preprocessing ends; an expansion arena is reset between top-level macro
 expansions; and the parse arena keeps the parser's scratch pools and scopes until
 parsing ends. The token array, source provenance, string cache, parsed roots,
-and file-scope typedef set each grow in place in a region of their own.
-Every region reserves its address space when first used and commits memory
+and file-scope typedef set each grow in place in a region of their own, and
+so does any arena block of 16 MiB or more, such as a table with an entry
+for each expression of a large translation unit; within an arena, a table
+that grew by copying would keep each copy it outgrew. Every region reserves its address space when first used and commits memory
 only as far as it is written. Compiler code allocates from nothing else:
 the `disallowed-types`, `disallowed-macros`, and `disallowed-methods` lists
 in [`.clippy.toml`](.clippy.toml) reject global-allocator types and calls,
