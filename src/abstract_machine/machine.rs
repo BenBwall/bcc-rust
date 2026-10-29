@@ -198,6 +198,13 @@ impl Machine {
                 self.push(Operand::Value(result.clone()))?;
                 self.binary(range, source, operator, left, right, result)
             },
+            | Op::ElementAddress => {
+                let right = self.pop_value()?;
+                let left = self.pop_value()?;
+                let result = self.binary_value("+", left.clone(), right.clone())?;
+                self.push(Operand::Value(result.clone()))?;
+                self.binary(range, source, "&[]", left, right, result)
+            },
             | &Op::Store {
                 initializer,
                 full_expression,

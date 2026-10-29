@@ -78,7 +78,10 @@ pub(super) fn print_parser_output<'tu>(
         && output.semantic_types
     {
         let inspection = Bump::new();
-        eprint!("{}", semantic.inspect(context, &inspection));
+        eprint!(
+            "{}",
+            semantic.inspect(context, &inspection, output.syntax_locations)
+        );
     }
     expect_stderr(reporter.finish(context, stderr));
     reporter.errors
@@ -209,13 +212,14 @@ fn print_raw_syntax(unit: &ParsedTranslationUnit<'_>) {
 )]
 pub(super) struct ParserOutput {
     /// Print resolved declarations, types, linkage and storage duration.
-    #[clap(long, conflicts_with_all = ["tokens", "syntax_tree", "raw_syntax"])]
+    #[clap(long, group = "located_view", conflicts_with_all = ["tokens", "syntax_tree", "raw_syntax"])]
     semantic_types:   bool,
     /// Print a deterministic, source-oriented C syntax tree.
-    #[clap(long, conflicts_with = "tokens")]
+    #[clap(long, group = "located_view", conflicts_with = "tokens")]
     syntax_tree:      bool,
-    /// Include line and column locations in `--syntax-tree` output.
-    #[clap(long, requires = "syntax_tree")]
+    /// Include line and column locations in `--syntax-tree` or
+    /// `--semantic-types` output.
+    #[clap(long, requires = "located_view")]
     syntax_locations: bool,
     /// Print the raw syntax tree, in Rust debug form, for storage debugging.
     #[clap(long, conflicts_with = "tokens")]

@@ -267,19 +267,23 @@ mod arrows {
 
     use super::Arrow;
 
-    /// Recompute the pointer arrows after the next layout.
+    /// Recompute the pointer arrows after the next layout. The panel may be
+    /// gone by then (switching views unmounts it), so a frame that finds
+    /// its node or signals disposed does nothing.
     pub fn schedule(
         canvas: NodeRef<html::Div>,
         arrows: RwSignal<Vec<Arrow>>,
         size: RwSignal<(f64, f64)>,
     ) {
         request_animation_frame(move || {
-            let Some(canvas) = canvas.get_untracked() else {
+            let Some(canvas) = canvas.try_get_untracked().flatten() else {
                 return;
             };
             let (drawn, extent) = measure(&canvas);
-            size.set(extent);
-            arrows.set(drawn);
+            if size.try_set(extent).is_some() {
+                return;
+            }
+            _ = arrows.try_set(drawn);
         });
     }
 

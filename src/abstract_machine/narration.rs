@@ -30,8 +30,8 @@ pub(super) fn start(range: SourceRange) -> Event {
     explained(
         Event::new(EventKind::Start, range, String::from("Ready to run main")),
         "The C standard defines a program by what an abstract machine does when it runs it: one \
-         evaluation at a time, with named objects instead of registers. Each Step below performs \
-         one of those evaluations and explains the rule behind it.",
+         evaluation at a time, with named objects instead of registers. Each Step performs one of \
+         those evaluations and explains the rule behind it.",
         &[clauses::ABSTRACT_MACHINE],
     )
 }
@@ -101,11 +101,20 @@ impl Machine {
             )
         } else {
             let title = format!("End the lifetime of {names}");
-            let text = format!(
-                "The block finishes, so {names} reach the end of their lifetime. Their storage \
-                 can be reused for other objects, and any pointer still holding their address \
-                 becomes indeterminate. The next time the block runs, it gets fresh objects."
-            );
+            let text = if ended.len() == 1 {
+                format!(
+                    "The block finishes, so {names} reaches the end of its lifetime. Its storage \
+                     can be reused for other objects, and any pointer still holding its address \
+                     becomes indeterminate. The next time the block runs, it gets a fresh object."
+                )
+            } else {
+                format!(
+                    "The block finishes, so {names} reach the end of their lifetime. Their \
+                     storage can be reused for other objects, and any pointer still holding their \
+                     address becomes indeterminate. The next time the block runs, it gets fresh \
+                     objects."
+                )
+            };
             explained(
                 Event::new(EventKind::LeaveBlock, range, title),
                 &text,
@@ -324,10 +333,13 @@ impl Machine {
         offset: i32,
     ) -> Event {
         let location = self.location(target, offset);
-        let steps = self.short_value(&index);
+        let steps = match index {
+            | Value::Integer(index) => movement(index, "element"),
+            | _ => String::from("by the index"),
+        };
         let text = format!(
-            "Subscripting: a[i] means *(a + i). Starting from {}, the machine moves {steps} \
-             element(s) forward and designates {location}.",
+            "Subscripting: a[i] means *(a + i). Starting from {}, the machine moves {steps} and \
+             designates {location}.",
             self.value_text(&base),
         );
         let mut event = explained(
@@ -376,6 +388,8 @@ impl Machine {
         result(event, Operand::Value(output))
     }
 
+    /// The event for a binary operator; `&[]` is `&E1[E2]`, which C99
+    /// §6.5.3.2p3 evaluates as `E1 + E2` without the indirection.
     pub(super) fn binary(
         &self,
         range: SourceRange,
@@ -385,6 +399,10 @@ impl Machine {
         right: Value,
         output: Value,
     ) -> Event {
+        let (operator, element) = match operator {
+            | "&[]" => ("+", true),
+            | _ => (operator, false),
+        };
         let (a, b, shown) = (
             self.short_value(&left),
             self.short_value(&right),
@@ -413,14 +431,37 @@ impl Machine {
                 } else {
                     (&right, &left)
                 };
-                let mut text = format!(
-                    "Pointer arithmetic counts elements, not bytes: {} {operator} {} moves {} \
-                     int(s) and gives {}.",
-                    self.value_text(pointer),
-                    self.short_value(count),
-                    self.short_value(count).trim_start_matches('-'),
-                    self.value_text(&output),
-                );
+                let written = snippet(source, range);
+                let moved = match count {
+                    | &Value::Integer(count) if operator == "-" =>
+                        movement(count.saturating_neg(), "int"),
+                    | &Value::Integer(count) => movement(count, "int"),
+                    | _ => String::from("by the count"),
+                };
+                let mut text = if element {
+                    format!(
+                        "`{written}` asks for an element's address, so the element itself is \
+                         never read: C defines &a[i] as a + i, which uses only the pointer and \
+                         the index. Pointer arithmetic counts elements, not bytes: {} {operator} \
+                         {} moves {moved} and gives {}.",
+                        self.value_text(pointer),
+                        self.short_value(count),
+                        self.value_text(&output),
+                    )
+                } else {
+                    format!(
+                        "Pointer arithmetic counts elements, not bytes: {} {operator} {} moves \
+                         {moved} and gives {}.",
+                        self.value_text(pointer),
+                        self.short_value(count),
+                        self.value_text(&output),
+                    )
+                };
+                let cited: &[Clause] = if element {
+                    &[clauses::ADDRESS_OPERATOR, clauses::POINTER_ARITHMETIC]
+                } else {
+                    &[clauses::POINTER_ARITHMETIC]
+                };
                 if self.one_past(&output) {
                     text.push_str(
                         " That is the one-past-the-end position: a pointer there may be formed \
@@ -431,10 +472,10 @@ impl Machine {
                     Event::new(
                         EventKind::PointerArithmetic,
                         range,
-                        format!("Pointer arithmetic: {}", snippet(source, range)),
+                        format!("Pointer arithmetic: {written}"),
                     ),
                     &text,
-                    &[clauses::POINTER_ARITHMETIC],
+                    cited,
                 )
             },
             | (Value::Pointer { .. }, _) | (_, Value::Pointer { .. }) => explained(
@@ -480,7 +521,7 @@ impl Machine {
                     | "-" => ("subtracts", clauses::ADDITION),
                     | "*" => ("multiplies", clauses::MULTIPLICATION),
                     | "/" => ("divides, truncating toward zero,", clauses::DIVISION),
-                    | _ => ("takes the remainder of", clauses::DIVISION),
+                    | _ => ("takes the remainder of the division", clauses::DIVISION),
                 };
                 explained(
                     Event::new(
@@ -737,10 +778,18 @@ impl Machine {
                 self.value_text(&object.value)
             );
         }
-        let mut text = format!(
-            "All arguments are evaluated before the call; that is a sequence point. The machine \
-             creates a new activation of {name} (frame #{frame}) on top of the call stack."
-        );
+        let mut text = if arguments.is_empty() {
+            format!(
+                "The call has no arguments to evaluate. The machine creates a new activation of \
+                 {name} (frame #{frame}) on top of the call stack."
+            )
+        } else {
+            format!(
+                "All arguments are evaluated before the call; that is a sequence point. The \
+                 machine creates a new activation of {name} (frame #{frame}) on top of the call \
+                 stack."
+            )
+        };
         if parameters.is_empty() {
             text.push_str(" It takes no parameters.");
         } else {
@@ -1042,6 +1091,19 @@ fn explained(mut event: Event, text: &str, cited: &[Clause]) -> Event {
 fn result(mut event: Event, operand: Operand) -> Event {
     event.result = Some(operand);
     event
+}
+
+/// How far an offset of `delta` elements moves a pointer: "0 ints",
+/// "1 int forward", "2 elements back".
+fn movement(delta: i32, noun: &str) -> String {
+    let count = delta.unsigned_abs();
+    let plural = if count == 1 { "" } else { "s" };
+    let direction = match delta.signum() {
+        | 1 => " forward",
+        | -1 => " back",
+        | _ => "",
+    };
+    format!("{count} {noun}{plural}{direction}")
 }
 
 fn snippet(source: &str, range: SourceRange) -> &str {

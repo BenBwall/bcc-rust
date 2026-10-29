@@ -76,9 +76,10 @@ int main(void) {
 for (const optimize of [false, true]) {
   const report = compile(program, { optimize });
   assert.doesNotMatch(report, /== diagnostic error/, report);
-  for (const section of ["tokens", "syntax-tree", "ir", "ir-abi", "asm"]) {
+  for (const section of ["tokens", "syntax-tree", "semantic-types", "ir", "ir-abi", "asm"]) {
     assert.match(report, new RegExp(`^== ${section}$`, "m"), section);
   }
+  assert.match(report, /^    object total type=int duration=automatic size=4 align=4$/m);
   assert.match(report, /^function @main\(\) -> i32 external \{$/m);
   assert.match(report, /^main:$/m);
   assert.match(report, /^== machine-code main$/m);

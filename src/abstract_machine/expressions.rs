@@ -187,6 +187,7 @@ impl Parser<'_> {
         };
         while self.take("[") {
             let index = self.expression(0)?;
+            let closing = self.current().range;
             self.expect("]")?;
             let base = &self.expressions[value];
             let subscript = &self.expressions[index];
@@ -202,7 +203,7 @@ impl Parser<'_> {
                 ExprKind::Index(value, index),
                 Type::Int,
                 false,
-                combined(base.range, subscript.range),
+                combined(base.range, closing),
                 base.height.max(subscript.height) + 1,
             )?;
         }
@@ -278,7 +279,7 @@ impl Parser<'_> {
                         let base = self.emit_expression(base, false)?;
                         let index = self.emit_expression(index, false)?;
                         let tree = self.tree("&[]", range, vec![base, index])?;
-                        self.emit_node(Op::Binary("+"), range, tree)?;
+                        self.emit_node(Op::ElementAddress, range, tree)?;
                         tree
                     },
                     | _ => {

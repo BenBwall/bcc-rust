@@ -403,6 +403,8 @@ pub(super) enum Op {
     Index,
     Unary(&'static str),
     Binary(&'static str),
+    /// `&E1[E2]`: `E1 + E2` without the indirection (C99 §6.5.3.2p3).
+    ElementAddress,
     Store {
         /// An initializer rather than an assignment expression.
         initializer:     bool,
