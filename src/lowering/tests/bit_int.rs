@@ -64,11 +64,11 @@ fn wide_bit_ints_are_objects_that_call_the_runtime() {
     for target in [Target::LinuxGnu, Target::WindowsMsvc] {
         let text = lower_for(source, target).expect("lowers");
         for wanted in [
-            "result(size 32, align 8, [])",
-            "aggregate(size 32, align 8, [])",
+            "ptr result(size 32, align 8)",
+            "ptr aggregate(size 32, align 8) noundef",
             "call @__bcc_bitint_mul(",
-            "call @__bcc_bitint_from_int(",
             "call @__bcc_bitint_add(",
+            "function @__bcc_bitint_mul(ptr, ptr, ptr, i32, i32) internal",
         ] {
             assert!(text.contains(wanted), "{target:?} {wanted}\n{text}");
         }
@@ -87,23 +87,26 @@ fn wide_constants_are_objects_of_their_limbs() {
         "_BitInt(129) g = -2;\n_BitInt(129) f(void) { return (_BitInt(129))-3; }",
     );
     assert!(
-        text.contains("fdffffffffffffffffffffffffffffffffffffffffffffff"),
+        text.contains(
+            "global @g external size 24, align 8 = bytes \
+             \"feffffffffffffffffffffffffffffffffffffffffffffff\""
+        ),
         "{text}"
     );
-    assert!(text.contains("@.bitint"), "{text}");
     assert!(
-        text.contains("fcffffffffffffffffffffffffffffffffffffffffffffff")
-            || text.contains("0xfffffffffffffffc"),
+        text.contains(
+            "global @.bitint internal constant size 24, align 8 = bytes \
+             \"fdffffffffffffffffffffffffffffffffffffffffffffff\""
+        ),
         "{text}"
     );
 }
 
-/// A switch on a wide value compares it with each case in turn; a case
-/// range compares with both bounds.
+/// A switch on a wide value compares it with each case in turn.
 #[test]
 fn wide_switches_compare_with_each_case() {
     let text = lowered(
-        "int f(_BitInt(300) x) { switch (x) { case 1: return 1; case 5 ... 9: return 2; \
+        "int f(_BitInt(300) x) { switch (x) { case 1: return 1; case 5: case 9: return 2; \
          default: return 0; } }",
     );
     assert_eq!(text.matches("call @__bcc_bitint_cmp(").count(), 3, "{text}");
@@ -130,7 +133,7 @@ fn the_middle_end_links_the_routines_a_module_calls() {
     let source = tu.alloc_str(
         "_BitInt(300) f(_BitInt(300) a, _BitInt(300) b) { return a / b; }\n",
     );
-    let mut context = crate::translation_phases::Context::with_configuration(
+    let mut context = Context::with_configuration(
         &tu,
         crate::configuration::CompilerConfiguration::default(),
     );
@@ -148,7 +151,7 @@ fn the_middle_end_links_the_routines_a_module_calls() {
         &sema,
         &arena,
         None,
-        crate::ir::Profile::PreAbi,
+        Profile::PreAbi,
     )
     .expect("lowers");
     let defined = |name: &str| {

@@ -541,6 +541,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 } else {
                     (right, left)
                 };
+                let index = self.wide_index(index, source)?;
                 let address = self.offset_pointer(pointer, index, false, source)?;
                 self.push_item(Operand::Place(Place::Memory(address)), info.ty);
             },

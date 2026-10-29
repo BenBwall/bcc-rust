@@ -101,15 +101,8 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
     ) -> Result<Item, LoweringError> {
         use BinaryOperator as B;
         let Some((width, signed)) = self.wide_bit_int(left.ty) else {
-            // Only the right operand is wide: a shift count or an index,
-            // whose low 64 bits hold every defined value. As a value it is
-            // an unsigned integer to `binary`, which reads it no wider.
-            let address = self.wide_address(right, source)?;
-            let low = self.load_limbs_value(address, Type::I64);
-            let right = Item {
-                operand: Operand::Value(low),
-                ty:      right.ty,
-            };
+            // Only the right operand is wide: a shift count or an index.
+            let right = self.wide_index(right, source)?;
             return self.binary(operator, left, right, ty, source);
         };
         if let Some(cc) = comparison(operator) {
@@ -182,6 +175,24 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
         Ok(Item {
             operand: Operand::Aggregate(result),
             ty,
+        })
+    }
+
+    /// A wide shift count or array index as the value of its low 64 bits,
+    /// which hold every defined count and every index of an object; any
+    /// other `item` as it is. To `binary` and `offset_pointer` that value is
+    /// an unsigned integer, which they read no wider.
+    /// C99: §6.5.2.1 paragraph 2, p. 70; PDF p. 82; §6.5.7 paragraph 3,
+    /// p. 84; PDF p. 96.
+    pub(super) fn wide_index(&mut self, item: Item, source: SourceVectors) -> Result<Item, LoweringError> {
+        if self.wide_bit_int(item.ty).is_none() || matches!(item.operand, Operand::Value(_)) {
+            return Ok(item);
+        }
+        let address = self.wide_address(item, source)?;
+        let low = self.load_limbs_value(address, Type::I64);
+        Ok(Item {
+            operand: Operand::Value(low),
+            ty:      item.ty,
         })
     }
 
@@ -566,6 +577,28 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
         Ok(())
     }
 
+    /// The wide constant `value`, an integer of at most 128 bits whose
+    /// signedness extended it to `i128`, converted to the wide type `ty`:
+    /// the address of a constant object of its limbs.
+    fn wide_limbs_constant(
+        &mut self,
+        value: i128,
+        ty: TypeId,
+        source: SourceVectors,
+    ) -> Result<Value, LoweringError> {
+        self.constant_object(ty, source, |limbs| {
+            let pattern = value.cast_unsigned();
+            let fill = if value < 0 { u64::MAX } else { 0 };
+            for (index, limb) in limbs.iter_mut().enumerate() {
+                *limb = match index {
+                    | 0 => pattern as u64,
+                    | 1 => (pattern >> 64) as u64,
+                    | _ => fill,
+                };
+            }
+        })
+    }
+
     /// The folded wide constant `value` of type `ty`: the address of an
     /// internal constant object holding its limbs, which nothing writes.
     /// C99: §6.6 paragraph 6, p. 95; PDF p. 107.
@@ -575,12 +608,24 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
         ty: TypeId,
         source: SourceVectors,
     ) -> Result<Value, LoweringError> {
+        let sema = self.unit.sema;
+        self.constant_object(ty, source, |limbs| sema.integer_limbs(value, limbs))
+    }
+
+    /// The address of a constant object of the wide type `ty` whose limbs
+    /// `fill` writes, its padding bits then extended.
+    fn constant_object(
+        &mut self,
+        ty: TypeId,
+        source: SourceVectors,
+        fill: impl FnOnce(&mut [u64]),
+    ) -> Result<Value, LoweringError> {
         let layout = types::layout(&self.unit.sema.types, ty).map_err(|kind| at(kind, source))?;
         let count = usize::try_from(layout.size / 8)
             .map_err(|_| LoweringError::missing("a wide constant has no size", source))?;
         let mut limbs = ArenaVec::with_capacity_in(count, self.scratch);
         limbs.resize(count, 0_u64);
-        self.unit.sema.integer_limbs(value, &mut limbs);
+        fill(&mut limbs);
         if let Some((width, signed)) = self.wide_bit_int(ty) {
             extend_limbs(&mut limbs, width, signed);
         }
@@ -656,6 +701,17 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
                     },
                     | Repr::Int { .. } | Repr::Bool | Repr::Pointer => {
                         let value = self.value(item, source)?;
+                        // A constant becomes a constant object.
+                        if let Some(constant) = self.draft.constant(value) {
+                            let ty = self.draft.value_type(value);
+                            let constant =
+                                self.cast_constant(constant, ty, from.signed(), Type::I128);
+                            let address = self.wide_limbs_constant(constant, to, source)?;
+                            return Ok(Item {
+                                operand: Operand::Aggregate(address),
+                                ty:      to,
+                            });
+                        }
                         let value = if from == Repr::Pointer {
                             self.convert(Opcode::Ptrtoint, Type::I64, value)
                         } else {
@@ -845,6 +901,90 @@ pub(super) fn extend_limbs(limbs: &mut [u64], width: u32, signed: bool) {
             (*top << spare) >> spare
         };
     }
+}
+
+/// A finite floating value as its sign, an integer significand and the
+/// power of two that scales it.
+type FloatParts = (bool, u128, i32);
+
+/// The parts of an x87 extended value, given as its sign, biased exponent
+/// and significand with the explicit integer bit; `None` for an infinity or
+/// a NaN.
+pub(super) fn x87_parts((sign, exponent, significand): (bool, u16, u64)) -> Option<FloatParts> {
+    (exponent != 0x7fff).then(|| {
+        (
+            sign,
+            u128::from(significand),
+            i32::from(exponent.max(1)) - 16383 - 63,
+        )
+    })
+}
+
+/// The parts of the binary128 value with encoding `bits`; `None` for an
+/// infinity or a NaN.
+pub(super) fn binary128_parts(bits: u128) -> Option<FloatParts> {
+    let exponent = i32::try_from(bits >> 112 & 0x7fff).unwrap_or(0x7fff);
+    let fraction = bits & ((1 << 112) - 1);
+    (exponent != 0x7fff).then(|| {
+        let significand = if exponent == 0 {
+            fraction
+        } else {
+            fraction | 1 << 112
+        };
+        (bits >> 127 == 1, significand, exponent.max(1) - 16383 - 112)
+    })
+}
+
+/// Writes the floating value `parts` truncated toward zero to `limbs` as an
+/// integer of `width` bits and the given signedness, or `None` if the
+/// integer part is out of the type's range, which is undefined.
+/// C99: §6.3.1.4 paragraph 1, p. 43; PDF p. 55.
+pub(super) fn truncated_limbs(
+    (negative, significand, exponent): FloatParts,
+    width: u32,
+    signed: bool,
+    limbs: &mut [u64],
+) -> Option<()> {
+    limbs.fill(0);
+    let (magnitude, shift) = if exponent < 0 {
+        (
+            significand
+                .checked_shr(exponent.unsigned_abs())
+                .unwrap_or(0),
+            0,
+        )
+    } else {
+        (significand, exponent.unsigned_abs())
+    };
+    if magnitude == 0 {
+        return Some(());
+    }
+    // The magnitude's bits, from bit `shift`, must fit below the sign bit,
+    // or be exactly 2^(width - 1) for the most negative value.
+    if negative && !signed {
+        return None;
+    }
+    let length = 128 - magnitude.leading_zeros() + shift;
+    let limit = if signed { width - 1 } else { width };
+    if length > limit && !(negative && length == width && magnitude.is_power_of_two()) {
+        return None;
+    }
+    for bit in 0..128 - magnitude.leading_zeros() {
+        if magnitude >> bit & 1 == 1 {
+            let at = (bit + shift) as usize;
+            *limbs.get_mut(at / 64)? |= 1 << (at % 64);
+        }
+    }
+    if negative {
+        let mut borrow = false;
+        for limb in limbs.iter_mut() {
+            let (value, wrapped) = 0_u64.overflowing_sub(*limb);
+            let (value, wrapped_again) = value.overflowing_sub(u64::from(borrow));
+            *limb = value;
+            borrow = wrapped || wrapped_again;
+        }
+    }
+    Some(())
 }
 
 /// A routine of the runtime (`wide_bit_int/runtime.c`).

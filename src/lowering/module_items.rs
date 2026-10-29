@@ -1640,12 +1640,23 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
         // A wide bit-precise object stores its limbs, its padding bits
         // extended from its width.
         if let Some((width, signed)) = super::wide_bit_int::wide_bit_int(&self.sema.types, ty) {
-            let Some(value) = integer else {
-                return Err(unsupported());
-            };
             let mut limbs = ArenaVec::with_capacity_in(size / 8, self.tables);
             limbs.resize(size / 8, 0_u64);
-            self.sema.integer_limbs(value, &mut limbs);
+            // A floating constant truncates toward zero (§6.3.1.4p1).
+            let parts = if let Some(folded) = info.binary128() {
+                super::wide_bit_int::binary128_parts(folded.real.to_bits())
+            } else {
+                info.floating()
+                    .and_then(|folded| folded.real.x87_parts())
+                    .and_then(super::wide_bit_int::x87_parts)
+            };
+            match (integer, parts) {
+                | (Some(value), _) => self.sema.integer_limbs(value, &mut limbs),
+                | (None, Some(parts)) =>
+                    super::wide_bit_int::truncated_limbs(parts, width, signed, &mut limbs)
+                        .ok_or_else(unsupported)?,
+                | (None, None) => return Err(unsupported()),
+            }
             super::wide_bit_int::extend_limbs(&mut limbs, width, signed);
             if let Some(field) = bit_field {
                 for bit in 0..field.width as usize {
