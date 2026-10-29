@@ -569,7 +569,11 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         };
         let value = if folded.is_none() {
             let item = self.pop();
-            Some(self.value(item, source)?)
+            // A wide value is the address of its limbs.
+            Some(match item.operand {
+                | Operand::Aggregate(address) if self.wide_bit_int(item.ty).is_some() => address,
+                | _ => self.value(item, source)?,
+            })
         } else {
             None
         };
@@ -583,16 +587,21 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             .ok_or_else(|| {
                 LoweringError::missing("switch dispatch facts are not retained", source)
             })?;
-        let Repr::Int { ty, .. } = self.repr(facts.ty, source)? else {
-            return Err(LoweringError::missing(
-                "a switch value is not an integer",
-                source,
-            ));
+        let wide = self.wide_bit_int(facts.ty).is_some();
+        let ty = match self.repr(facts.ty, source)? {
+            | Repr::Int { ty, .. } => ty,
+            | _ if wide => Type::I64,
+            | _ =>
+                return Err(LoweringError::missing(
+                    "a switch value is not an integer",
+                    source,
+                )),
         };
         let start = self.switch_blocks.len();
         let mut default = None;
         let mut cases = ArenaVec::new_in(self.scratch);
         let mut ranges = ArenaVec::new_in(self.scratch);
+        let mut wide_cases = ArenaVec::new_in(self.scratch);
         let mut selected_target = None;
         for (ordinal, case) in facts.cases.iter().enumerate() {
             debug_assert_eq!(case.ordinal, ordinal, "case facts retain source order");
@@ -620,7 +629,9 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 }
                 continue;
             }
-            if case.range {
+            if wide {
+                wide_cases.push((case.lower, case.range.then_some(case.upper), target));
+            } else if case.range {
                 ranges.push((case.lower.value, case.upper.value, target));
             } else {
                 cases.push((case.lower.value, self.draft.edge(target, &[])));
@@ -660,7 +671,9 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         // never an expansion proportional to the number of covered values.
         // GNU extension: <https://gcc.gnu.org/onlinedocs/gcc/Case-Ranges.html>.
         let default = default.expect("default or no-match transition has a block");
-        if ranges.is_empty() {
+        if wide {
+            self.wide_dispatch(value, facts.ty, &wide_cases, default, source)?;
+        } else if ranges.is_empty() {
             let default = self.draft.edge(default, &[]);
             self.draft.terminate_and_continue_dead(Terminator::Switch {
                 value,

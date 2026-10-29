@@ -31,7 +31,10 @@ use super::{
     LoweringError,
     expressions::comparison,
     module_items::at,
-    ssa::Op,
+    ssa::{
+        Op,
+        Terminator,
+    },
     types::{
         self,
         Repr,
@@ -43,8 +46,10 @@ use super::{
     },
 };
 use crate::{
+    builtins::OverflowOperation,
     ir::{
         Align,
+        Block,
         InstData,
         InstFlags,
         IntCC,
@@ -289,6 +294,196 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
         let nonzero = self.wide_call(Helper::Test, &[address, bits], source)?;
         let zero = self.iconst(Type::I32, 0);
         Ok(self.icmp(IntCC::Ne, nonzero, zero))
+    }
+
+    /// GCC's overflow builtins with a wide operand or destination: the
+    /// operands, converted to a signed type wide enough for the exact
+    /// result, are added, subtracted or multiplied there; the result is
+    /// that value converted to `destination`, which overflowed unless it
+    /// converts back to the exact value. Returns the result and the
+    /// overflow as an `i1`.
+    /// GNU extension: GCC manual, "Integer Overflow Builtins".
+    pub(super) fn wide_overflow(
+        &mut self,
+        operation: OverflowOperation,
+        a: Item,
+        b: Item,
+        destination: TypeId,
+        source: SourceVectors,
+    ) -> Result<(Item, Value), LoweringError> {
+        let (a_width, a_signed) = self.integer_width(a.ty, source)?;
+        let (b_width, b_signed) = self.integer_width(b.ty, source)?;
+        let (to_width, to_signed) = self.integer_width(destination, source)?;
+        // Magnitudes, then a sign bit: a sum or difference needs one bit
+        // more than its wider operand, a product the sum of their bits.
+        let a_bits = a_width + u32::from(!a_signed);
+        let b_bits = b_width + u32::from(!b_signed);
+        let exact = match operation {
+            | OverflowOperation::Mul => a_bits + b_bits,
+            | OverflowOperation::Add | OverflowOperation::Sub => a_bits.max(b_bits) + 1,
+        }
+        .max(to_width + 1)
+        .max(129);
+        let size = u64::from(exact.div_ceil(64)) * 8;
+        let align = Align::from_bytes(8).unwrap_or(Align::BYTE);
+        let left = self.fresh_object(size, align, source)?;
+        self.exact_operand(left, exact, a, source)?;
+        let right = self.fresh_object(size, align, source)?;
+        self.exact_operand(right, exact, b, source)?;
+        let value = self.fresh_object(size, align, source)?;
+        let helper = match operation {
+            | OverflowOperation::Add => Helper::Add,
+            | OverflowOperation::Sub => Helper::Subtract,
+            | OverflowOperation::Mul => Helper::Multiply,
+        };
+        let bits = self.iconst(Type::I32, i128::from(exact));
+        let one = self.iconst(Type::I32, 1);
+        _ = self.wide_call(helper, &[value, left, right, bits, one], source)?;
+        let exact_item = |ty| Item {
+            operand: Operand::Aggregate(value),
+            ty,
+        };
+        // The result, then back to the exact width.
+        let (result, back) = if self.wide_bit_int(destination).is_some() {
+            let result = self.fresh_object(size.max(u64::from(to_width.div_ceil(64)) * 8), align, source)?;
+            let args = [
+                result,
+                self.iconst(Type::I32, i128::from(to_width)),
+                self.iconst(Type::I32, i128::from(to_signed)),
+                value,
+                bits,
+                one,
+            ];
+            _ = self.wide_call(Helper::Convert, &args, source)?;
+            let back = self.fresh_object(size, align, source)?;
+            let args = [
+                back,
+                bits,
+                one,
+                result,
+                self.iconst(Type::I32, i128::from(to_width)),
+                self.iconst(Type::I32, i128::from(to_signed)),
+            ];
+            _ = self.wide_call(Helper::Convert, &args, source)?;
+            (
+                Item {
+                    operand: Operand::Aggregate(result),
+                    ty:      destination,
+                },
+                back,
+            )
+        } else {
+            let target = self.repr(destination, source)?;
+            let operand = self.narrow_from_wide(exact_item(a.ty), (exact, true), target, source)?;
+            let result = Item {
+                operand,
+                ty: destination,
+            };
+            let back = self.fresh_object(size, align, source)?;
+            self.exact_operand(back, exact, result, source)?;
+            (result, back)
+        };
+        let order = self.wide_call(Helper::Compare, &[value, back, bits, one], source)?;
+        let zero = self.iconst(Type::I32, 0);
+        Ok((result, self.icmp(IntCC::Ne, order, zero)))
+    }
+
+    /// Stores the integer `item` at `address` as a signed integer of
+    /// `width` bits, more than 128, which holds its value.
+    fn exact_operand(
+        &mut self,
+        address: Value,
+        width: u32,
+        item: Item,
+        source: SourceVectors,
+    ) -> Result<(), LoweringError> {
+        let bits = self.iconst(Type::I32, i128::from(width));
+        let one = self.iconst(Type::I32, 1);
+        if let Some((from_width, from_signed)) = self.wide_bit_int(item.ty) {
+            let from = self.wide_address(item, source)?;
+            let args = [
+                address,
+                bits,
+                one,
+                from,
+                self.iconst(Type::I32, i128::from(from_width)),
+                self.iconst(Type::I32, i128::from(from_signed)),
+            ];
+            _ = self.wide_call(Helper::Convert, &args, source)?;
+            return Ok(());
+        }
+        let signed = self.repr(item.ty, source)?.signed();
+        let value = self.value(item, source)?;
+        let value = self.extend(value, signed, Type::I128);
+        let low = self.convert(Opcode::Trunc, Type::I64, value);
+        let shift = self.iconst(Type::I128, 64);
+        let high = self.binary_inst(Opcode::Lshr, InstFlags::empty(), value, shift);
+        let high = self.convert(Opcode::Trunc, Type::I64, high);
+        _ = self.wide_call(Helper::FromInteger, &[address, bits, one, low, high], source)?;
+        Ok(())
+    }
+
+    /// The width and signedness of the integer type `ty`.
+    fn integer_width(&self, ty: TypeId, source: SourceVectors) -> Result<(u32, bool), LoweringError> {
+        if let Some(wide) = self.wide_bit_int(ty) {
+            return Ok(wide);
+        }
+        match self.repr(ty, source)? {
+            | Repr::Int { signed, width, .. } => Ok((u32::from(width), signed)),
+            | Repr::Bool => Ok((1, false)),
+            | _ => Err(LoweringError::missing("an overflow operand is no integer", source)),
+        }
+    }
+
+    /// Dispatches a `switch` on the wide value at `address`, of type `ty`:
+    /// a comparison with each case's constant, or two with a GNU case
+    /// range's bounds, in source order, and `default` when none matches.
+    /// C99: §6.8.4.2 paragraphs 4-5, p. 134; PDF p. 146. GNU extension:
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Case-Ranges.html>.
+    pub(super) fn wide_dispatch(
+        &mut self,
+        address: Value,
+        ty: TypeId,
+        cases: &[(Integer, Option<Integer>, Block)],
+        default: Block,
+        source: SourceVectors,
+    ) -> Result<(), LoweringError> {
+        let (width, signed) = self
+            .wide_bit_int(ty)
+            .ok_or_else(|| LoweringError::missing("a wide switch has no width", source))?;
+        for &(lower, upper, target) in cases {
+            let next = self.draft.create_block(&[]);
+            let bounds = match upper {
+                | Some(upper) => [(lower, IntCC::Sge), (upper, IntCC::Sle)],
+                | None => [(lower, IntCC::Eq), (lower, IntCC::Eq)],
+            };
+            for (index, (bound, cc)) in bounds.into_iter().enumerate() {
+                if index == 1 && upper.is_none() {
+                    break;
+                }
+                let constant = self.wide_constant(bound, ty, source)?;
+                let bits = self.iconst(Type::I32, i128::from(width));
+                let sign = self.iconst(Type::I32, i128::from(signed));
+                let order =
+                    self.wide_call(Helper::Compare, &[address, constant, bits, sign], source)?;
+                let zero = self.iconst(Type::I32, 0);
+                let condition = self.icmp(cc, order, zero);
+                if index == 0 && upper.is_some() {
+                    let within = self.draft.create_block(&[]);
+                    self.draft.brif(condition, within, next);
+                    self.draft.seal(within);
+                    self.draft.switch_to(within);
+                } else {
+                    self.draft.brif(condition, target, next);
+                }
+            }
+            self.draft.seal(next);
+            self.draft.switch_to(next);
+        }
+        let edge = self.draft.edge(default, &[]);
+        self.draft
+            .terminate_and_continue_dead(Terminator::Jump(edge));
+        Ok(())
     }
 
     /// The folded wide constant `value` of type `ty`: the address of an
