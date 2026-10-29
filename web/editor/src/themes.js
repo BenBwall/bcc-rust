@@ -5,7 +5,7 @@
 const dark = {
   background: '#0f141d',
   foreground: '#dfe6f0',
-  muted: '#7a869a',
+  muted: '#9fa7b6',
   keyword: '#c4a7ff',
   type: '#7cc7f7',
   number: '#f5b86a',
@@ -21,12 +21,12 @@ const dark = {
 const light = {
   background: '#ffffff',
   foreground: '#1b2230',
-  muted: '#6b7484',
+  muted: '#58606d',
   keyword: '#7036d6',
   type: '#0b62a3',
-  number: '#a8530a',
-  string: '#17773a',
-  function: '#0b7a6d',
+  number: '#964a09',
+  string: '#156d35',
+  function: '#0a6b60',
   variable: '#1f4fbf',
   slot: '#8a2fb8',
   label: '#b0185f',
@@ -68,6 +68,9 @@ function colors(palette, isDark) {
     'editor.foreground': palette.foreground,
     'editorGutter.background': palette.background,
     'editorLineNumber.foreground': isDark ? '#768296' : '#6b7484',
+    // The number of the empty line after a final new-line, which Monaco
+    // otherwise dims to 1.7:1.
+    'editorLineNumber.dimmedForeground': isDark ? '#768296' : '#6b7484',
     'editorLineNumber.activeForeground': isDark ? '#c3cddb' : '#2b3445',
     'editor.lineHighlightBackground': isDark ? '#ffffff08' : '#0b62a308',
     'editor.lineHighlightBorder': '#00000000',

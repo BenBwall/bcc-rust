@@ -85,31 +85,31 @@
     --text-2: #3d4757;
     --muted: #566174;
     --faint: #636e80;
-    --accent: #0f766e;
-    --accent-strong: #115e59;
+    --accent: #0d655f;
+    --accent-strong: #0a4f4a;
     --accent-ink: #ffffff;
-    --accent-soft: #0f766e14;
-    --danger: #c62f3c;
+    --accent-soft: #0d655f14;
+    --danger: #a62732;
     --danger-soft: #e5394612;
     --shadow: 0 1px 2px #0f172a0d, 0 18px 40px -24px #0f172a40;
     --line: #b9c3d1;
 
-    --cat-evaluate: #0b6fb8;
-    --cat-convert: #7036d6;
-    --cat-memory: #0b7a6d;
-    --cat-lifetime: #a55800;
-    --cat-control: #556173;
-    --cat-call: #b0185f;
-    --cat-fault: #c62f3c;
+    --cat-evaluate: #095d9b;
+    --cat-convert: #6c34cd;
+    --cat-memory: #09655a;
+    --cat-lifetime: #8b4a00;
+    --cat-control: #515c6d;
+    --cat-call: #a51759;
+    --cat-fault: #a62732;
 
-    --obj-0: #c0267a;
-    --obj-1: #1f5fd0;
-    --obj-2: #985800;
-    --obj-3: #0a754b;
+    --obj-0: #af236f;
+    --obj-1: #1d59c4;
+    --obj-2: #8c5100;
+    --obj-3: #096d46;
     --obj-4: #6a3fd4;
-    --obj-5: #b8470a;
-    --obj-6: #09748a;
-    --obj-7: #4a740b;
+    --obj-5: #a43f09;
+    --obj-6: #08687c;
+    --obj-7: #436a0a;
   }
 }
 
@@ -451,7 +451,7 @@
   .tnode-label { font-size: 14px; font-weight: 650; color: var(--text); white-space: nowrap; }
   .tnode-value { margin-top: 3px; font-size: 12.5px; color: var(--muted); white-space: nowrap; }
   .tnode-pill.is-pending { border-style: dashed; background: transparent; }
-  .tnode-pill.is-pending .tnode-value { color: var(--faint); }
+  .tnode-pill.is-pending .tnode-value { color: var(--muted); }
   .tnode-pill.is-value .tnode-value { color: var(--cat-evaluate); font-weight: 600; }
   .tnode-pill.is-lvalue { border-color: color-mix(in srgb, var(--cat-memory) 55%, var(--border)); }
   .tnode-pill.is-lvalue .tnode-value { color: var(--cat-memory); }
@@ -506,7 +506,7 @@
   .cells .cell:only-child { border-radius: 8px; }
   .cell-index { position: absolute; top: -17px; font: 500 10.5px var(--font-mono); color: var(--faint); }
   .cells:has(.cell-index) { margin-top: 14px; }
-  .cell.is-indeterminate .cell-value { color: var(--faint); }
+  .cell.is-indeterminate .cell-value { color: var(--muted); }
   .cell.is-indeterminate { background: repeating-linear-gradient(135deg, transparent 0 5px, color-mix(in srgb, var(--faint) 14%, transparent) 5px 6px), var(--surface); }
   .cell.is-pointer .cell-value { color: var(--obj); font-size: 18px; }
   .cell.is-null .cell-value { font-size: 12px; color: var(--muted); }
@@ -852,7 +852,7 @@
     font: 500 12px var(--font-sans); white-space: nowrap; pointer-events: none;
   }
   .monaco-editor .exec-current {
-    background: color-mix(in srgb, var(--cat, var(--cat-memory)) 26%, transparent);
+    background: color-mix(in srgb, var(--cat, var(--cat-memory)) 12%, transparent);
     outline: 1px solid color-mix(in srgb, var(--cat, var(--cat-memory)) 70%, transparent);
     border-radius: 3px;
   }
@@ -864,14 +864,14 @@
   .monaco-editor .cat-call { --cat: var(--cat-call); }
   .monaco-editor .exec-line { background: color-mix(in srgb, var(--accent) 7%, transparent); }
   .monaco-editor .exec-next { border-bottom: 2px dashed color-mix(in srgb, var(--muted) 80%, transparent); }
-  .monaco-editor .exec-fault { background: color-mix(in srgb, var(--danger) 22%, transparent); outline: 1px solid color-mix(in srgb, var(--danger) 60%, transparent); border-radius: 3px; }
+  .monaco-editor .exec-fault { background: color-mix(in srgb, var(--danger) 10%, transparent); outline: 1px solid color-mix(in srgb, var(--danger) 60%, transparent); border-radius: 3px; }
   .monaco-editor .exec-fault-text { text-decoration: underline wavy var(--danger); text-underline-offset: 4px; }
   .monaco-editor .exec-line-fault { background: color-mix(in srgb, var(--danger) 9%, transparent); }
   .monaco-editor .obj-ident { color: var(--obj) !important; font-weight: 600; }
   .monaco-editor .target-line { background: color-mix(in srgb, var(--cat-lifetime) 9%, transparent); }
   .monaco-editor .target-glyph::before { content: ""; display: block; width: 9px; height: 9px; margin: 6px auto 0; border-radius: 50%; background: var(--cat-lifetime); box-shadow: 0 0 0 3px color-mix(in srgb, var(--cat-lifetime) 25%, transparent); }
-  .monaco-editor .link-line { background: color-mix(in srgb, var(--accent) 16%, transparent); }
-  .monaco-editor .link-range { outline: 1.5px solid color-mix(in srgb, var(--accent) 85%, transparent); background: color-mix(in srgb, var(--accent) 18%, transparent); border-radius: 3px; }
+  .monaco-editor .link-line { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+  .monaco-editor .link-range { outline: 1.5px solid color-mix(in srgb, var(--accent) 85%, transparent); background: color-mix(in srgb, var(--accent) 12%, transparent); border-radius: 3px; }
   /* What the front-end stages mark in the source and in their output. */
   .monaco-editor .src-splice { color: var(--accent) !important; font-weight: 700; background: color-mix(in srgb, var(--accent) 18%, transparent); border-radius: 3px; }
   .monaco-editor .src-trigraph { color: var(--cat-convert) !important; background: color-mix(in srgb, var(--cat-convert) 16%, transparent); border-radius: 3px; }
