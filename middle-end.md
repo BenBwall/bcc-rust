@@ -1040,7 +1040,11 @@ its size (in memory on both x86-64 conventions). Its operations write fresh
 objects, inline for conversions to and from integers of at most 128 bits
 and otherwise through calls to the routines of
 `lowering/wide_bit_int/runtime.c`, which lowering declares as internal
-functions without bodies. After lowering, the middle end compiles that C
+functions without bodies, named `bcc.bitint.*` so that no C function can
+take their names. A result's stack slot is reused once an operation has
+read it and at the next statement (`release_wide`,
+`free_wide_temporaries`), and a function needing more than 6 MiB of them
+is refused. After lowering, the middle end compiles that C
 runtime with bcc for the unit's target when a module calls one of them and
 moves the bodies the module reaches into it
 (`wide_bit_int::runtime::link`), before the optimizer runs, so every back

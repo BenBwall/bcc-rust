@@ -2470,7 +2470,9 @@ floating types, `switch` (a comparison with each case), bit-fields and the
 overflow builtins call routines of a C runtime,
 `lowering/wide_bit_int/runtime.c`. The middle end compiles it with bcc for
 the unit's target whenever a module calls one of its routines and moves
-the routines the module reaches into it as internal functions, so every
+the routines the module reaches into it as internal functions (named
+`bcc.bitint.*`, which no C identifier can spell, so a program's own
+`__bcc_bitint_add` keeps its name and meaning), so every
 back end (the interpreter, LLVM and the native back end) runs the same
 code and no program needs libgcc's `__mulbitint3`, `__divmodbitint4`,
 `__floatbitint*` and `__fix*bitint`, which GCC 13's libgcc lacks. The
@@ -2482,16 +2484,26 @@ digits; a conversion to a floating type rounds once, from the value's top
 nothing where binary16 does not overflow, and `__bf16` rounds once for GCC
 and through `float` for Clang, as each compiler converts (and as bcc
 converts `__int128`). An atomic compound
-assignment loops on a compare-exchange of the object's bytes. LLVM never
+assignment loops on a compare-exchange of the object's bytes. A result's
+stack slot is freed once an operation has read it, and every slot at the
+next statement, so a chain of operations in one expression takes a slot or
+two and a balanced tree one per level (a 1024-term `_BitInt(65535)` chain
+needs three); a function whose results would still need more than 6 MiB of
+stack is refused ("not yet supported by lowering: functions whose wide
+_BitInt results need more than 6 MiB of stack"). The runtime's division
+works in place in two arrays of the operands' limbs, 2 MiB at Clang's
+widest type, 8388608 bits; its conversions to floating types take one. LLVM never
 sees a wide `iN`, so its legalization of very wide integers does not
 apply. A conversion between a wide `_BitInt` and a complex type is refused
 ("not yet supported by lowering: conversions between complex types and
 _BitInt types of more than 128 bits").
 
-Clang 23 converts an `unsigned _BitInt(N)` of more than 128 bits whose
-top bit is set to `long double` or `__float128` as if it were negative
-(GCC does not); bcc converts its value, as GCC does, under both
-identities. `tests/integration/bit_int.rs` compares every operator, conversion and
+Two Clang 23 conversions of wide values to x87 `long double` are wrong,
+and bcc converts as GCC does under both identities: an `unsigned
+_BitInt(N)` of more than 128 bits whose top bit is set becomes negative
+(also in `__float128`), and at `-O0` some values close to halfway between
+two `long double`s, signed ones too, round one ulp the wrong way (15 of the
+780 conversions of the review probe `cl50e.c`). `tests/integration/bit_int.rs` compares every operator, conversion and
 folded constant at widths 1-128 (`bit_int.c`) and at widths 129, 192, 255,
 256, 257, 512, 1000 and 4096, and 65535 for GCC (`bit_int_wide.c`, from
 `scripts/generate_wide_bit_int_program.py`), with the bundled Clang and GCC
