@@ -580,6 +580,16 @@ impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
                 self.half_conversion(inst, opcode, ty, arg)?,
             | InstData::Unary { opcode, ty, arg } if wide_float(ty, self.ty(arg)) =>
                 self.wide_float_unary(inst, opcode, ty, arg)?,
+            | InstData::Unary {
+                opcode:
+                    opcode @ (Opcode::Popcount
+                    | Opcode::Clz
+                    | Opcode::ClzDefined
+                    | Opcode::Ctz
+                    | Opcode::CtzDefined),
+                ty: Type::I128,
+                arg,
+            } => self.wide_bit_count(inst, opcode, arg),
             | InstData::Unary { opcode, ty, arg }
                 if ty == Type::I128 || self.ty(arg) == Type::I128 =>
                 self.wide_conversion(inst, opcode, ty, arg)?,
@@ -1341,9 +1351,15 @@ impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
     /// `(width - 1) ^ index` of the highest set bit; the defined forms
     /// replace a zero source's index with one that yields the width.
     fn bit_scan(&mut self, opcode: Opcode, ty: Type, dst: Reg, arg: Value) {
+        let src = self.extended(arg, false);
+        self.bit_scan_reg(opcode, ty, dst, src);
+    }
+
+    /// [`Self::bit_scan`] of the register `src`, which holds a value of
+    /// `ty` zero-extended to at least 32 bits.
+    pub(super) fn bit_scan_reg(&mut self, opcode: Opcode, ty: Type, dst: Reg, src: Reg) {
         let bits = ty.bits();
         let width = op_width(ty);
-        let src = self.extended(arg, false);
         let reverse = matches!(opcode, Opcode::Clz | Opcode::ClzDefined);
         let defined = matches!(opcode, Opcode::CtzDefined | Opcode::ClzDefined);
         let zero_index = if reverse { 2 * bits - 1 } else { bits };
@@ -1382,11 +1398,17 @@ impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
     /// no `popcnt`: pairs, nibbles and bytes are summed in place, and a
     /// multiplication gathers the bytes into the top one.
     fn popcount(&mut self, ty: Type, dst: Reg, arg: Value) {
+        let x = self.extended(arg, false);
+        self.popcount_reg(ty, dst, x);
+    }
+
+    /// [`Self::popcount`] of the register `x`, which holds a value of `ty`
+    /// zero-extended to at least 32 bits.
+    pub(super) fn popcount_reg(&mut self, ty: Type, dst: Reg, x: Reg) {
         let width = op_width(ty);
         let wide = width == Width::B64;
         let constant_ty = if wide { Type::I64 } else { Type::I32 };
         let pattern = |byte: u64| (byte * 0x0101_0101_0101_0101) & mask(constant_ty);
-        let x = self.extended(arg, false);
         // x - ((x >> 1) & 0x55..)
         let half = self.vreg();
         self.copy(half, x);

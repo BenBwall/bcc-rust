@@ -7,8 +7,12 @@
 //! <https://gcc.gnu.org/onlinedocs/gcc/Integer-Overflow-Builtins.html>
 //! <https://gcc.gnu.org/onlinedocs/gcc/Object-Size-Checking.html>
 //! <https://gcc.gnu.org/onlinedocs/gcc/Stack-Allocation.html>
+//!
+//! `atomic.rs` lowers the atomic builtins, `floating.rs` the floating
+//! classifications and `bits.rs` the type-generic bit builtins.
 
 mod atomic;
+mod bits;
 mod floating;
 
 use super::{
@@ -516,6 +520,8 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 };
                 Operand::Value(self.extend(count, false, Type::I32))
             },
+            | CommonBuiltin::GenericBit(operation) =>
+                self.generic_bit(operation, instance, &items[..count], source)?,
             | CommonBuiltin::Float(operation, _) => self.floating_builtin(
                 operation,
                 &items[..count],

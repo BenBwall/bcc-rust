@@ -328,7 +328,7 @@ must not be advertised merely because Clang advertises them.
 
 ### Embedded freestanding headers
 
-All eleven public headers are discoverable in all language modes, and each behaves like
+All twelve public headers are discoverable in all language modes, and each behaves like
 Clang's resource header of the same name, whose logic, not text, they follow.
 In a hosted translation a header that Clang chains to the C library tests
 `__has_include_next` and reads the library's header with `#include_next`
@@ -352,6 +352,7 @@ still follows the configured extension policy.
 | `stdint.h` | All 8/16/32/64 exact, least and fast types, pointer and maximum types, corresponding limits and constant macros; `SIG_ATOMIC`, `SIZE`, `PTRDIFF`, `WCHAR`, `WINT` limits. Hosted, a C library `<stdint.h>` replaces all of these, as with Clang. |
 | `stdalign.h` | Like Clang: `alignas`, `alignof`, and the two indicator macros when `__STDC_VERSION__` exists and precedes C23; empty in C89 and C23/C2y. |
 | `stdatomic.h` | C11 atomic typedefs, `memory_order`, `atomic_flag`, initialization, fences, lock-free queries and all generic operation macros. Hosted, it defers to a following system header except with `_MSC_VER` in C mode, matching the pinned Clang resource header. C17 marks `ATOMIC_VAR_INIT` deprecated through `#pragma clang deprecated`; `_CLANG_DISABLE_CRT_DEPRECATION_WARNINGS` suppresses that marker. C23 removes `ATOMIC_VAR_INIT` and adds `atomic_char8_t` and `ATOMIC_CHAR8_T_LOCK_FREE`. No `__STDC_NO_ATOMICS__` is defined or interpreted, as in Clang. |
+| `stdbit.h` | C23's `<stdbit.h>` (§7.18): `__STDC_VERSION_STDBIT_H__` (`202311L`), `__STDC_ENDIAN_LITTLE__` (1234), `__STDC_ENDIAN_BIG__` (4321), `__STDC_ENDIAN_NATIVE__` (little), the 70 `stdc_*_u{c,s,i,l,ll}` functions and the 14 type-generic macros. Wherever the C library has the header (glibc 2.39 and later, whose macros use the `__builtin_stdc_*` builtins when the compiler has them) it defers to it, freestanding too, as GCC and Clang find it there. Otherwise it declares the functions with external linkage and defines each as a macro over its builtin, converting the argument as the prototype does; the same text is the `<stdbit.h>` of bcc's WASI C library, which defines the functions (`backend/wasm/runtime/stdbit.c`). Elsewhere a call that suppresses a macro needs a C library that defines them. Neither GCC nor Clang ships the header, so for the Clang and clang-cl identities the resource directory has none (`headers::provides`): without a C library's (`-nostdlibinc`), `#include <stdbit.h>` finds no header, as in Clang. |
 | `stdnoreturn.h` | Like Clang: `noreturn` and `__noreturn_is_defined` in every mode, retained in C23 despite deprecation. |
 | `mm_malloc.h` | Not ISO C; GCC and Clang ship it, and MinGW-w64's `<malloc.h>` includes it. Like Clang's, it includes `<stdlib.h>` and defines `static __inline__` `_mm_malloc` and `_mm_free`: through `__mingw_aligned_malloc` for MinGW-w64, `_aligned_malloc` for the MSVC runtime (from its `<malloc.h>`, unless that defines `_mm_malloc` as a macro), and `posix_memalign`, which it declares, elsewhere. An alignment of 1 uses `malloc`, and a smaller power of two is raised to a pointer's alignment. The x86 intrinsic headers (`x86intrin.h`, `emmintrin.h`, `immintrin.h`, `cpuid.h` and their family) need vector types and target builtins and are not provided. |
 
@@ -2652,3 +2653,57 @@ are in
 `sema-pointer-int-cast-{gcc,clang,options,system-gcc,system-clang}` goldens
 and
 `semantic_analysis/tests/pointer_integer_casts.rs` pin them.
+
+## Type-generic bit builtins and `<stdbit.h>` (2026-10-29)
+
+`__builtin_popcountg`, `__builtin_clzg` and `__builtin_ctzg` (with their
+optional result for zero), and the `__builtin_stdc_*` forms of C23's
+`<stdbit.h>` functions with GCC 15's `__builtin_stdc_rotate_left` and
+`__builtin_stdc_rotate_right`, exist for every identity under `GnuBuiltins`,
+as GCC 15 and Clang 23 provide them. GCC 14's `__builtin_parityg`,
+`__builtin_ffsg` and `__builtin_clrsbg` exist for the GCC identity only
+(`Feature::GccBitBuiltins`), as Clang 23 lacks them. Each computes at its
+operand's width, for every unsigned integer type up to `unsigned __int128`
+and every `unsigned _BitInt(N)`. The registry shard is `src/builtins/bits.rs`;
+`semantic_analysis/builtins/bits.rs` types, checks and folds the calls.
+
+The identity's rules (`bit_builtin_rules`) decide what each accepts, both
+compilers having been probed:
+
+| Rule | GCC 15 | Clang 23 |
+| --- | --- | --- |
+| Operand | an unsigned integer type that is neither `bool` nor an enumeration; a signed one for `ffsg` and `clrsbg` | an unsigned integer type; `bool` and enumerations also for `popcountg`, `clzg`, `ctzg` and the rotations, at 1 bit or the underlying type's width |
+| Bit-field operand | at the field's width (a `bit_ceil` of 5 in `unsigned : 3` is 0) | at the declared type's width |
+| Result for zero | `int` after the default argument promotions, a `_BitInt` narrower than `int` (or a signed one as wide) included | `int` after the integer promotions |
+| Rotation count | any integer type but an enumeration; a negative count is undefined | any integer type; a negative count turns the other way |
+| `clzg`/`ctzg` of constant zero without a result | folds to the width | no constant |
+
+A call whose operands are integer constant expressions is one at every
+width. bcc reduces a negative rotation count as Clang does under both
+identities, and folds a rotation of every `_BitInt` (GCC 15 does not fold
+one of `unsigned _BitInt(N)` in a static assertion for some widths that no
+standard type has, such as 2, 7, 63, 65 and 127). An enumeration with a fixed
+underlying type, which bcc does not lower, is refused wherever GCC or Clang
+refuses any enumeration. Not modeled: GCC's
+`-Wshift-count-negative` warning for a negative constant count, and GCC's
+bit-field type as a result type (bcc gives a value-returning form on a
+bit-field the field's declared type; the value is GCC's). The misuse
+diagnostics are `BitBuiltinNotInteger`, `BitBuiltinSigned`,
+`BitBuiltinUnsigned`, `BitBuiltinBoolOrEnum`, `BitBuiltinFallback` and
+`BitBuiltinRotateCount`, with the existing wrong-argument-count error. Clang
+23 crashes ("unsupported library call operation") rotating a `_BitInt` wider
+than 128 bits by a count that is not a constant; bcc computes it.
+
+Lowering (`lowering/builtins/bits.rs`) derives every operation from the
+ones, leading and trailing counts of the operand: at most 128 bits from the
+IR's `popcount`, `clz_defined` and `ctz_defined` on the value's IR type,
+corrected for the bits above its width; wider through new routines of the
+`_BitInt` runtime (`popcount`, `leading`, `trailing`, `clrsb`, `bit_floor`,
+`bit_ceil`, `rotate`, `residue`). `clzg` and `ctzg` without a result for zero
+use the IR's `clz` and `ctz`, undefined at zero. The native back end now
+selects `i128` bit counts from its halves' counts; bcc has no CPU-feature
+model, so native code keeps its baseline `bsf`/`bsr` and SWAR sequences
+rather than `popcnt`, `lzcnt` or `tzcnt`. `tests/integration/stdbit.rs` runs
+`tests/fixtures/programs/stdbit{,_gcc,_clang}.c` on every back end against
+Clang 23 and GCC 15 (and wasi-sdk's Clang for wasm32), and the
+`sema-stdbit-{gcc,clang}` goldens pin the misuse diagnostics.

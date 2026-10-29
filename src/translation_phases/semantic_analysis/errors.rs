@@ -437,6 +437,33 @@ pub(crate) enum SemanticErrorKind {
     /// Clang extension: the error "`__builtin_mul_overflow` does not support
     /// 'signed `_BitInt`' operands of more than 128 bits".
     OverflowBuiltinBitInt,
+    /// A type-generic bit builtin's operand that is no integer: GCC's
+    /// "does not have integral type", Clang's "must be a scalar unsigned
+    /// integer type".
+    /// GNU extension: GCC manual, "Bit Operation Builtins".
+    BitBuiltinNotInteger,
+    /// A signed operand of a type-generic bit builtin that counts an
+    /// unsigned one's bits: GCC's "has signed type", Clang's "must be a
+    /// scalar unsigned integer type".
+    /// GNU extension: GCC manual, "Bit Operation Builtins".
+    BitBuiltinSigned,
+    /// An unsigned operand of GCC's `__builtin_ffsg` or `__builtin_clrsbg`,
+    /// which take a signed one: GCC's "has unsigned type".
+    /// GNU extension: GCC manual, "Bit Operation Builtins".
+    BitBuiltinUnsigned,
+    /// A `bool` or enumerated operand, which GCC refuses for every
+    /// type-generic bit builtin and Clang for the `__builtin_stdc_*` forms
+    /// other than the rotations.
+    /// GNU extension: GCC manual, "Bit Operation Builtins".
+    BitBuiltinBoolOrEnum,
+    /// The result for zero given to `__builtin_clzg` or `__builtin_ctzg`
+    /// whose promoted type is not `int`.
+    /// GNU extension: GCC manual, "Bit Operation Builtins".
+    BitBuiltinFallback,
+    /// A rotation count that is no integer, or under GCC's rules an
+    /// enumerated one.
+    /// GNU extension: GCC manual, "Bit Operation Builtins".
+    BitBuiltinRotateCount,
     /// Clang diagnoses invalid constant orders as warnings.
     /// GNU extension: GCC manual, "__atomic Builtins".
     /// <https://gcc.gnu.org/onlinedocs/gcc/_005f_005fatomic-Builtins.html>
@@ -906,6 +933,12 @@ impl SemanticErrorKind {
             | Self::AtomicOperandSize => "not a power-of-two size",
             | Self::AtomicOperandBytes => "more than 16 bytes",
             | Self::OverflowBuiltinBitInt => "a signed _BitInt of more than 128 bits",
+            | Self::BitBuiltinNotInteger => "not an integer",
+            | Self::BitBuiltinSigned => "has a signed type",
+            | Self::BitBuiltinUnsigned => "has an unsigned type",
+            | Self::BitBuiltinBoolOrEnum => "has a boolean or enumerated type",
+            | Self::BitBuiltinFallback => "not of type int after promotion",
+            | Self::BitBuiltinRotateCount => "not a valid rotation count",
             | Self::InvalidAtomicOrder => "invalid memory order",
             | Self::InvalidAtomicFailureOrder => "invalid failure memory order",
             | Self::AtomicBufferQualifiers => "pointer conversion discards qualifiers",
@@ -1129,6 +1162,35 @@ impl SemanticErrorKind {
                  than 128 bits",
                 "Clang's __builtin_mul_overflow multiplies at most 128 bits of a signed \
                  _BitInt; GCC accepts any width",
+            ),
+            | Self::BitBuiltinNotInteger => (
+                "argument must have an integer type",
+                "GCC's and Clang's type-generic bit builtins compute on the bits of an \
+                 integer operand",
+            ),
+            | Self::BitBuiltinSigned => (
+                "argument must have an unsigned integer type",
+                "GCC's and Clang's type-generic bit builtins count the bits of an unsigned \
+                 operand; only __builtin_ffsg and __builtin_clrsbg take a signed one",
+            ),
+            | Self::BitBuiltinUnsigned => (
+                "argument must have a signed integer type",
+                "GCC's __builtin_ffsg and __builtin_clrsbg take a signed operand",
+            ),
+            | Self::BitBuiltinBoolOrEnum => (
+                "argument must not have a boolean or enumerated type",
+                "GCC refuses bool and enumerated operands of its type-generic bit builtins, \
+                 and Clang of the __builtin_stdc_* forms other than the rotations",
+            ),
+            | Self::BitBuiltinFallback => (
+                "the result for zero must have type int",
+                "the second argument of __builtin_clzg and __builtin_ctzg is an int, after \
+                 the integer promotions",
+            ),
+            | Self::BitBuiltinRotateCount => (
+                "the rotation count must have an integer type",
+                "GCC and Clang rotate by an integer count of any type, which GCC requires to \
+                 be no enumeration",
             ),
             | Self::AtomicOperandSize => (
                 "atomic memory operand must have a power-of-two size",

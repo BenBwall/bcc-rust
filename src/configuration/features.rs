@@ -231,6 +231,12 @@ pub(crate) enum Feature {
     /// Language Extensions, "Half-Precision Floating Point",
     /// <https://clang.llvm.org/docs/LanguageExtensions.html#half-precision-floating-point>.
     Fp16,
+    /// GCC 14's `__builtin_parityg`, `__builtin_ffsg` and
+    /// `__builtin_clrsbg`, which exist for the GCC identity only: Clang 23
+    /// has the other type-generic bit builtins but not these.
+    /// GNU extension: GCC manual, "Bit Operation Builtins",
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Bit-Operation-Builtins.html>.
+    GccBitBuiltins,
 }
 
 impl Feature {
@@ -362,7 +368,8 @@ impl Feature {
             | Self::SameTypeCasts
             | Self::ForwardEnumReference
             | Self::BFloat16
-            | Self::Fp16 => FeatureOrigin::Gnu,
+            | Self::Fp16
+            | Self::GccBitBuiltins => FeatureOrigin::Gnu,
 
             | Self::MsDeclspec => FeatureOrigin::Msvc(MsvcFeature::Declspec),
             | Self::MsIntTypes => FeatureOrigin::Msvc(MsvcFeature::IntTypes),
@@ -377,10 +384,19 @@ impl Feature {
         }
     }
 
+    /// The feature's bit in the configuration's `u128` sets of accepted
+    /// and native features.
     pub(super) const fn bit(self) -> u128 {
         1 << self as u8
     }
 }
+
+// Every feature has a bit of its own: the 128 bits are all in use, so a
+// further feature must widen the sets rather than wrap to bit 0.
+const _: () = assert!(
+    Feature::ALL.len() <= u128::BITS as usize,
+    "the feature sets have no bit for another feature; widen them"
+);
 
 impl Feature {
     pub(crate) const ALL: &'static [Self] = &[
@@ -511,6 +527,7 @@ impl Feature {
         Self::Float16,
         Self::BFloat16,
         Self::Fp16,
+        Self::GccBitBuiltins,
     ];
 }
 

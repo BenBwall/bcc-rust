@@ -298,6 +298,43 @@ impl WideIntegers<'_> {
         })
     }
 
+    /// `operation` applied to the bits of `value` reduced modulo 2^`bits`,
+    /// as little-endian limbs with every bit from `bits` up clear, and to
+    /// zeroed limbs of a `bits`-bit result: its answer, and that result as
+    /// an unsigned `bits`-bit integer. The type-generic bit builtins fold
+    /// through it at any width.
+    /// GNU extension: GCC manual, "Bit Operation Builtins".
+    pub(crate) fn bit_operation<R>(
+        &self,
+        value: Integer,
+        bits: u32,
+        operation: impl FnOnce(&[u64], &mut [u64]) -> R,
+    ) -> (R, Integer) {
+        self.with_scratch(|scratch| {
+            let count = limb_count(bits);
+            let number = load(self, value, count, scratch);
+            let partial = bits % 64;
+            if partial != 0 {
+                number[count - 1] &= u64::MAX >> (64 - partial);
+            }
+            let out = zeroed(scratch, count);
+            let answer = operation(number, out);
+            let result = if bits <= 128 {
+                let pattern =
+                    u128::from(out[0]) | out.get(1).map_or(0, |&high| u128::from(high) << 64);
+                Integer {
+                    value: pattern.cast_signed(),
+                    bits,
+                    signed: false,
+                    wide: None,
+                }
+            } else {
+                self.canonical(out, bits, false)
+            };
+            (answer, result)
+        })
+    }
+
     /// Whether the infinitely precise `left op right` (`+`, `-` or `*`)
     /// lies outside the integer type of `bits` width and `signed`ness, for
     /// an operand or a type wider than 128 bits: what

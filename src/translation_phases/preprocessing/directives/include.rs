@@ -358,15 +358,16 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
 
     /// The file `path` names in `directory`, interned, when it exists there
     /// in the context's file system. The resource directory holds exactly
-    /// the embedded headers.
+    /// the embedded headers the identity has
+    /// ([`crate::headers::provides`]).
     pub(in crate::translation_phases::preprocessing) fn probe_header(
         &mut self,
         directory: &Path,
         path: &Path,
     ) -> Option<u32> {
         if crate::headers::is_embedded(directory) {
-            return crate::headers::embedded(directory, path)
-                .is_some()
+            let identity = self.context.configuration.compiler_identity();
+            return crate::headers::provides(directory, path, identity)
                 .then(|| self.context.intern_builtin_header(directory, path));
         }
         // Each candidate is spelled in the expansion arena and taken back

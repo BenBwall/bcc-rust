@@ -1,0 +1,89 @@
+error: argument must have an unsigned integer type: `__builtin_popcountg`
+ --> sema-stdbit-clang.c:8:56
+  |
+8 | int signed_operand(int x) { return __builtin_popcountg(x); }
+  |                                                        ^ has a signed type
+  |
+  = note: GCC's and Clang's type-generic bit builtins count the bits of an unsigned operand; only __builtin_ffsg and __builtin_clrsbg take a signed one
+
+error: argument must have an unsigned integer type: `__builtin_clzg`
+  --> sema-stdbit-clang.c:9:59
+   |
+ 9 | int signed_enum_operand(enum s x) { return __builtin_clzg(x); }
+   |                                                           ^ has a signed type
+   |
+   = note: GCC's and Clang's type-generic bit builtins count the bits of an unsigned operand; only __builtin_ffsg and __builtin_clrsbg take a signed one
+
+error: argument must not have a boolean or enumerated type: `__builtin_stdc_leading_zeros`
+  --> sema-stdbit-clang.c:12:69
+   |
+12 | int stdc_bool_operand(bool x) { return __builtin_stdc_leading_zeros(x); }
+   |                                                                     ^ has a boolean or enumerated type
+   |
+   = note: GCC refuses bool and enumerated operands of its type-generic bit builtins, and Clang of the __builtin_stdc_* forms other than the rotations
+
+error: argument must not have a boolean or enumerated type: `__builtin_stdc_bit_width`
+  --> sema-stdbit-clang.c:13:67
+   |
+13 | int stdc_enum_operand(enum e x) { return __builtin_stdc_bit_width(x); }
+   |                                                                   ^ has a boolean or enumerated type
+   |
+   = note: GCC refuses bool and enumerated operands of its type-generic bit builtins, and Clang of the __builtin_stdc_* forms other than the rotations
+
+error: argument must have an integer type: `__builtin_stdc_count_ones`
+  --> sema-stdbit-clang.c:14:63
+   |
+14 | int float_operand(float x) { return __builtin_stdc_count_ones(x); }
+   |                                                               ^ not an integer
+   |
+   = note: GCC's and Clang's type-generic bit builtins compute on the bits of an integer operand
+
+error: the result for zero must have type int: `__builtin_clzg`
+  --> sema-stdbit-clang.c:15:62
+   |
+15 | int unsigned_fallback(unsigned x) { return __builtin_clzg(x, 1u); }
+   |                                                              ^^ not of type int after promotion
+   |
+   = note: the second argument of __builtin_clzg and __builtin_ctzg is an int, after the integer promotions
+
+error: the result for zero must have type int: `__builtin_ctzg`
+  --> sema-stdbit-clang.c:16:61
+   |
+16 | int bit_int_fallback(unsigned x) { return __builtin_ctzg(x, (_BitInt(32))1); }
+   |                                                             ^^^^^^^^^^^^^^ not of type int after promotion
+   |
+   = note: the second argument of __builtin_clzg and __builtin_ctzg is an int, after the integer promotions
+
+error: the result for zero must have type int: `__builtin_clzg`
+  --> sema-stdbit-clang.c:17:58
+   |
+17 | int enum_fallback(unsigned x) { return __builtin_clzg(x, (enum e)1) + __builtin_clzg(x, (enum s)1); }
+   |                                                          ^^^^^^^^^ not of type int after promotion
+   |
+   = note: the second argument of __builtin_clzg and __builtin_ctzg is an int, after the integer promotions
+
+error: the rotation count must have an integer type: `__builtin_stdc_rotate_left`
+  --> sema-stdbit-clang.c:19:70
+   |
+19 | int pointer_count(unsigned x) { return __builtin_stdc_rotate_left(x, (int *)0); }
+   |                                                                      ^^^^^^^^ not a valid rotation count
+   |
+   = note: GCC and Clang rotate by an integer count of any type, which GCC requires to be no enumeration
+
+error: function call has the wrong number of arguments: `__builtin_stdc_bit_ceil`
+  --> sema-stdbit-clang.c:21:35
+   |
+21 | int too_many(unsigned x) { return __builtin_stdc_bit_ceil(x, 1); }
+   |                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ wrong number of arguments
+   |
+   = note: C99 §6.5.2.2p2: a prototype fixes the required arguments; only an ellipsis permits additional arguments
+
+error: argument must not have a boolean or enumerated type: `__builtin_stdc_leading_ones`
+  --> sema-stdbit-clang.c:23:95
+   |
+23 | int fixed_operand(enum fixed x) { return __builtin_popcountg(x) + __builtin_stdc_leading_ones(x); }
+   |                                                                                               ^ has a boolean or enumerated type
+   |
+   = note: GCC refuses bool and enumerated operands of its type-generic bit builtins, and Clang of the __builtin_stdc_* forms other than the rotations
+
+11 errors generated.

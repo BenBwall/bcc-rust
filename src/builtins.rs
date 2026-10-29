@@ -8,7 +8,8 @@
 //! aliases, C99 real math, atomic contracts and the object-size-checking
 //! aliases of fortified headers. `x86.rs` is generated from the resource
 //! headers' x86 calls; `vector.rs` and `type_generic.rs` hold the vector and
-//! type-generic families, whose calls their own semantic handlers type.
+//! type-generic families, whose calls their own semantic handlers type, and
+//! `bits.rs` the type-generic bit operations.
 //! `contract.rs` defines closed rules, operations and effects. Semantic
 //! handlers check these contracts and retain instances; lowering owns
 //! executable implementations. `external.rs` is the external-symbol contract:
@@ -25,6 +26,7 @@ mod contract;
 
 // Static index and contract shards
 mod atomic;
+mod bits;
 mod checked;
 mod external;
 mod index;

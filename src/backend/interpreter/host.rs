@@ -11,7 +11,7 @@
 //! `strings.rs` the
 //! string, wide-string, character and conversion functions, `math.rs`,
 //! `quad.rs` (glibc's `_Float128` functions) and `complex.rs` the numeric
-//! library, and `checked.rs` the
+//! library, `bits.rs` the functions of `<stdbit.h>`, and `checked.rs` the
 //! object-size-checking `__*_chk` entry points of fortified C libraries;
 //! `library.rs` gives the signatures of the functions outside the builtin
 //! catalog, and `arguments.rs` reads the variadic arguments of formatted
@@ -25,6 +25,7 @@ mod printf;
 mod scanf;
 
 // Library families
+mod bits;
 mod checked;
 mod complex;
 mod errno;
@@ -401,6 +402,9 @@ impl DefaultHost<'_> {
             return result;
         }
         if let Some(result) = self.quad(call, memory) {
+            return result;
+        }
+        if let Some(result) = bits::call(call, self.long_width) {
             return result;
         }
         let args = call.args;

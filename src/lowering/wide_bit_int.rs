@@ -47,7 +47,10 @@ use super::{
     },
 };
 use crate::{
-    builtins::OverflowOperation,
+    builtins::{
+        GenericBit,
+        OverflowOperation,
+    },
     ir::{
         Align,
         Block,
@@ -473,6 +476,130 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
                 source,
             )),
         }
+    }
+
+    /// The number of one bits of the `width`-bit value at `address`, as an
+    /// `i32`. GNU extension: GCC manual, "Bit Operation Builtins".
+    pub(super) fn wide_ones(
+        &mut self,
+        address: Value,
+        width: u32,
+        source: SourceVectors,
+    ) -> Result<Value, LoweringError> {
+        let bits = self.iconst(Type::I32, i128::from(width));
+        self.wide_call(Helper::Popcount, &[address, bits], source)
+    }
+
+    /// The number of leading (else trailing) bits equal to `one` of the
+    /// `width`-bit value at `address`, as an `i32`: `width` when every bit
+    /// is. GNU extension: GCC manual, "Bit Operation Builtins".
+    pub(super) fn wide_edge(
+        &mut self,
+        address: Value,
+        width: u32,
+        leading: bool,
+        one: bool,
+        source: SourceVectors,
+    ) -> Result<Value, LoweringError> {
+        let bits = self.iconst(Type::I32, i128::from(width));
+        let one = self.iconst(Type::I32, i128::from(one));
+        let helper = if leading {
+            Helper::Leading
+        } else {
+            Helper::Trailing
+        };
+        self.wide_call(helper, &[address, bits, one], source)
+    }
+
+    /// GCC's `__builtin_clrsbg` of the signed `width`-bit value at
+    /// `address`, as an `i32`. GNU extension: GCC manual, "Bit Operation
+    /// Builtins".
+    pub(super) fn wide_redundant_sign_bits(
+        &mut self,
+        address: Value,
+        width: u32,
+        source: SourceVectors,
+    ) -> Result<Value, LoweringError> {
+        let bits = self.iconst(Type::I32, i128::from(width));
+        self.wide_call(Helper::RedundantSign, &[address, bits], source)
+    }
+
+    /// `__builtin_stdc_bit_floor`, `bit_ceil`, `rotate_left` or
+    /// `rotate_right` of the wide `item`, by `rotation` (an `i64` below the
+    /// width) for a rotation, in a fresh object of its type.
+    /// GNU extension: GCC manual, "Bit Operation Builtins".
+    /// C23: §7.18.15-§7.18.16, pp. 310-311; PDF pp. 323-324.
+    pub(super) fn wide_bit_value(
+        &mut self,
+        operation: GenericBit,
+        item: Item,
+        rotation: Option<Value>,
+        source: SourceVectors,
+    ) -> Result<Item, LoweringError> {
+        let (width, _) = self
+            .wide_bit_int(item.ty)
+            .ok_or_else(|| LoweringError::missing("a wide operand has no width", source))?;
+        let a = wide_address(item, source)?;
+        let result = self.wide_object(item.ty, source)?;
+        let bits = self.iconst(Type::I32, i128::from(width));
+        match (operation, rotation) {
+            | (GenericBit::BitFloor, _) => {
+                _ = self.wide_call(Helper::BitFloor, &[result, a, bits], source)?;
+            },
+            | (GenericBit::BitCeil, _) => {
+                _ = self.wide_call(Helper::BitCeil, &[result, a, bits], source)?;
+            },
+            | (GenericBit::RotateLeft | GenericBit::RotateRight, Some(count)) => {
+                // Right by `count` is left by the rest of the width.
+                let count = if operation == GenericBit::RotateRight {
+                    let zero = self.iconst(Type::I64, 0);
+                    let width = self.iconst(Type::I64, i128::from(width));
+                    let rest = self.binary_inst(Opcode::Isub, InstFlags::empty(), width, count);
+                    let unrotated = self.icmp(IntCC::Eq, count, zero);
+                    self.inst(
+                        InstData::Select {
+                            ty:   Type::I64,
+                            args: [unrotated, zero, rest],
+                        },
+                        Type::I64,
+                    )
+                } else {
+                    count
+                };
+                _ = self.wide_call(Helper::Rotate, &[result, a, bits, count], source)?;
+            },
+            | _ =>
+                return Err(LoweringError::missing(
+                    "a wide bit operation has no lowering",
+                    source,
+                )),
+        }
+        self.release_wide(item);
+        Ok(Item {
+            operand: Operand::Aggregate(result),
+            ty:      item.ty,
+        })
+    }
+
+    /// The wide integer `item` modulo `modulus`, from 0 up to it also for
+    /// a negative value, as an `i64`: a rotation count reduced to the
+    /// width. GNU extension: GCC manual, "Bit Operation Builtins".
+    pub(super) fn wide_residue(
+        &mut self,
+        item: Item,
+        modulus: u32,
+        source: SourceVectors,
+    ) -> Result<Value, LoweringError> {
+        let (width, signed) = self
+            .wide_bit_int(item.ty)
+            .ok_or_else(|| LoweringError::missing("a wide operand has no width", source))?;
+        let a = wide_address(item, source)?;
+        let bits = self.iconst(Type::I32, i128::from(width));
+        let sign = self.iconst(Type::I32, i128::from(signed));
+        let modulus = self.iconst(Type::I64, i128::from(modulus));
+        let residue = self.wide_call(Helper::Residue, &[a, bits, sign, modulus], source)?;
+        self.release_wide(item);
+        Ok(residue)
     }
 
     /// The value of the bit-field `field` at `address`, whose declared
@@ -1008,7 +1135,7 @@ pub(super) fn wide_bit_int(
 }
 
 /// The address of the object holding the wide value `item`.
-fn wide_address(item: Item, source: SourceVectors) -> Result<Value, LoweringError> {
+pub(super) fn wide_address(item: Item, source: SourceVectors) -> Result<Value, LoweringError> {
     match item.operand {
         | Operand::Aggregate(address) | Operand::Place(Place::Memory(address)) => Ok(address),
         | _ => Err(LoweringError::missing(
@@ -1144,6 +1271,14 @@ enum Helper {
     /// To `__bf16`, rounded once, as a `float` holding that value.
     ToBfloat,
     FromFloat(Type),
+    Popcount,
+    Leading,
+    Trailing,
+    RedundantSign,
+    BitFloor,
+    BitCeil,
+    Rotate,
+    Residue,
 }
 
 impl Helper {
@@ -1176,6 +1311,14 @@ impl Helper {
             | Self::FromFloat(Type::F64) => "bcc.bitint.from_f64",
             | Self::FromFloat(Type::F80) => "bcc.bitint.from_f80",
             | Self::FromFloat(Type::F128) => "bcc.bitint.from_f128",
+            | Self::Popcount => "bcc.bitint.popcount",
+            | Self::Leading => "bcc.bitint.leading",
+            | Self::Trailing => "bcc.bitint.trailing",
+            | Self::RedundantSign => "bcc.bitint.clrsb",
+            | Self::BitFloor => "bcc.bitint.bit_floor",
+            | Self::BitCeil => "bcc.bitint.bit_ceil",
+            | Self::Rotate => "bcc.bitint.rotate",
+            | Self::Residue => "bcc.bitint.residue",
             | Self::ToFloat(_) | Self::FromFloat(_) =>
                 return Err(LoweringError::unsupported(
                     Construct::WideBitIntConversion,
@@ -1207,21 +1350,31 @@ impl Helper {
             | Self::Xor => &[Ptr, Ptr, Ptr, I32, I32],
             | Self::Not | Self::Negate | Self::Compare => &[Ptr, Ptr, I32, I32],
             | Self::ShiftLeft | Self::ShiftRight => &[Ptr, Ptr, I64, I32, I32],
-            | Self::Test => &[Ptr, I32],
+            | Self::Test | Self::Popcount | Self::RedundantSign => &[Ptr, I32],
             | Self::Convert | Self::FieldGet => &[Ptr, I32, I32, Ptr, I32, I32],
             | Self::FromInteger => &[Ptr, I32, I32, I64, I64, I32],
             | Self::FieldSet => &[Ptr, I32, I32, Ptr],
-            | Self::ToFloat(_) | Self::ToBfloat => &[Ptr, I32, I32],
+            | Self::ToFloat(_) | Self::ToBfloat | Self::Leading | Self::Trailing =>
+                &[Ptr, I32, I32],
             | Self::FromFloat(F32) => &[Ptr, I32, I32, F32],
             | Self::FromFloat(F64) => &[Ptr, I32, I32, F64],
             | Self::FromFloat(F80) => &[Ptr, I32, I32, F80],
             | Self::FromFloat(_) => &[Ptr, I32, I32, F128],
+            | Self::BitFloor | Self::BitCeil => &[Ptr, Ptr, I32],
+            | Self::Rotate => &[Ptr, Ptr, I32, I64],
+            | Self::Residue => &[Ptr, I32, I32, I64],
         }
     }
 
     fn result(self) -> Option<Type> {
         match self {
-            | Self::Compare | Self::Test => Some(Type::I32),
+            | Self::Compare
+            | Self::Test
+            | Self::Popcount
+            | Self::Leading
+            | Self::Trailing
+            | Self::RedundantSign => Some(Type::I32),
+            | Self::Residue => Some(Type::I64),
             | Self::ToFloat(ty) => Some(ty),
             | Self::ToBfloat => Some(Type::F32),
             | _ => None,

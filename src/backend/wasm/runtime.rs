@@ -9,8 +9,9 @@
 //! the conversions (`strtod` and its kin correctly rounded, in
 //! `floatscan.c`) and utilities of `<stdlib.h>`, buffered `<stdio.h>`
 //! streams on file descriptors 0-2 with the full `printf` family (exact
-//! floating conversions) and a small `scanf`, and the rounding functions of
-//! `<math.h>`. It talks to the host only through WASI preview 1 imports
+//! floating conversions) and a small `scanf`, the rounding functions of
+//! `<math.h>`, and the functions of `<stdbit.h>`, whose header is bcc's
+//! resource header. It talks to the host only through WASI preview 1 imports
 //! (`fd_write`, `fd_read`, `proc_exit`, `args_get`, `environ_get`,
 //! `clock_time_get`), so Node's `wasi` module, wasmtime or a browser
 //! shim runs the result. Files cannot be opened.
@@ -77,6 +78,7 @@ pub(crate) const SOURCES: &[(&str, &str)] = &[
     ("floatscan.c", include_str!("runtime/floatscan.c")),
     ("math.c", include_str!("runtime/math.c")),
     ("trig.c", include_str!("runtime/trig.c")),
+    ("stdbit.c", include_str!("runtime/stdbit.c")),
     ("compiler_rt.c", include_str!("runtime/compiler_rt.c")),
 ];
 

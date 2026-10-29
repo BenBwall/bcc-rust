@@ -35,6 +35,10 @@ pub(super) enum P {
     LongDouble,
     /// `_Float128`.
     Quad,
+    /// `unsigned char` or `bool`.
+    Char,
+    /// `unsigned short`.
+    Short,
 }
 
 /// A function's result, fixed parameters and whether it is variadic.
@@ -79,6 +83,18 @@ pub(super) fn signature(name: &str) -> Option<Signature> {
         WChar,
         Wide64,
     };
+    if let Some((_, suffix, returns)) = super::bits::parse(name) {
+        const PARAMETERS: [&[P]; 5] = [&[P::Char], &[P::Short], &[Int], &[Long], &[Wide64]];
+        let parameters = PARAMETERS[suffix];
+        return Some(fixed(
+            match returns {
+                | super::bits::Returns::Count => Int,
+                | super::bits::Returns::Bool => P::Char,
+                | super::bits::Returns::Value => parameters[0],
+            },
+            parameters,
+        ));
+    }
     Some(match name {
         | "fopen" => fixed(Ptr, &[Ptr, Ptr]),
         | "freopen" => fixed(Ptr, &[Ptr, Ptr, Ptr]),
@@ -229,6 +245,8 @@ pub(super) fn check(
             | P::Double => Type::F64,
             | P::LongDouble => long_double,
             | P::Quad => Type::F128,
+            | P::Char => Type::I8,
+            | P::Short => Type::I16,
         })
     };
     let fixed = signature.parameters.len();
@@ -275,5 +293,20 @@ fn every_added_host_function_has_a_signature() {
             signature(name).is_some() || crate::builtins::external_signature(name).is_some(),
             "{name}"
         );
+    }
+}
+
+#[cfg(test)]
+#[test]
+#[expect(
+    clippy::disallowed_macros,
+    reason = "The test spells each function's name."
+)]
+fn every_stdbit_function_has_a_signature() {
+    for operation in super::bits::OPERATIONS {
+        for suffix in super::bits::SUFFIXES {
+            let name = format!("stdc_{operation}_{suffix}");
+            assert!(signature(&name).is_some(), "{name}");
+        }
     }
 }

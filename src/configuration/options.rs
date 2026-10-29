@@ -66,6 +66,7 @@ impl CompilerConfiguration {
                 | Feature::InterchangeFloatTypes => self.interchange_float_types(),
                 | Feature::Float16 | Feature::BFloat16 => self.half_precision_types(),
                 | Feature::Fp16 => self.storage_half_type(),
+                | Feature::GccBitBuiltins => matches!(self.identity, super::CompilerIdentity::Gcc),
                 | _ => true,
             };
             if accepted {
@@ -274,6 +275,16 @@ impl CompilerConfiguration {
     /// an extension before C23.
     /// C23: §6.7.3.1 paragraph 4, p. 104; PDF p. 117.
     pub(crate) const fn bit_int_rules(self) -> super::RuleSet {
+        self.identity.rules()
+    }
+
+    /// GCC's rules (TCC's and MSVC's too) or Clang's (clang-cl's too) for
+    /// the type-generic bit builtins: which operand types each accepts,
+    /// whether a bit-field operand counts at its own width, and whether
+    /// `__builtin_clzg` or `__builtin_ctzg` of zero with no result for zero
+    /// folds to the width. GNU extension: GCC manual, "Bit Operation
+    /// Builtins".
+    pub(crate) const fn bit_builtin_rules(self) -> super::RuleSet {
         self.identity.rules()
     }
 
