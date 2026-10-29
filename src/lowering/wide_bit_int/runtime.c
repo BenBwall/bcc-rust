@@ -16,6 +16,12 @@ typedef unsigned __int128 wide;
 
 #define LIMBS(bits) (((bits) + 63u) / 64u)
 
+/* A routine a module calls. Each loops over its operands' limbs, so it is
+   kept out of line: expanding one at every wide operation costs code size
+   and, at 65535 bits, most of LLVM's optimization time, for the saving of
+   a call. */
+#define BCC_ROUTINE __attribute__((noinline))
+
 /* Limb i of a, its top limb extended from bit `bits` by signedness, and
    limbs beyond the top its sign. */
 static limb __bcc_bitint_limb(const limb *a, unsigned i, unsigned bits, int is_signed) {
@@ -43,7 +49,7 @@ static void __bcc_bitint_extend(limb *d, unsigned bits, int is_signed) {
     d[n - 1] = __bcc_bitint_limb(d, n - 1, bits, is_signed);
 }
 
-void __bcc_bitint_add(limb *d, const limb *a, const limb *b, unsigned bits, int is_signed) {
+BCC_ROUTINE void __bcc_bitint_add(limb *d, const limb *a, const limb *b, unsigned bits, int is_signed) {
     unsigned n = LIMBS(bits);
     limb carry = 0;
     for (unsigned i = 0; i < n; i++) {
@@ -54,7 +60,7 @@ void __bcc_bitint_add(limb *d, const limb *a, const limb *b, unsigned bits, int 
     __bcc_bitint_extend(d, bits, is_signed);
 }
 
-void __bcc_bitint_sub(limb *d, const limb *a, const limb *b, unsigned bits, int is_signed) {
+BCC_ROUTINE void __bcc_bitint_sub(limb *d, const limb *a, const limb *b, unsigned bits, int is_signed) {
     unsigned n = LIMBS(bits);
     limb borrow = 0;
     for (unsigned i = 0; i < n; i++) {
@@ -67,7 +73,7 @@ void __bcc_bitint_sub(limb *d, const limb *a, const limb *b, unsigned bits, int 
 
 /* The low N bits of the product, which only the operands' low N bits
    affect. */
-void __bcc_bitint_mul(limb *d, const limb *a, const limb *b, unsigned bits, int is_signed) {
+BCC_ROUTINE void __bcc_bitint_mul(limb *d, const limb *a, const limb *b, unsigned bits, int is_signed) {
     unsigned n = LIMBS(bits);
     for (unsigned i = 0; i < n; i++)
         d[i] = 0;
@@ -85,31 +91,31 @@ void __bcc_bitint_mul(limb *d, const limb *a, const limb *b, unsigned bits, int 
     __bcc_bitint_extend(d, bits, is_signed);
 }
 
-void __bcc_bitint_and(limb *d, const limb *a, const limb *b, unsigned bits, int is_signed) {
+BCC_ROUTINE void __bcc_bitint_and(limb *d, const limb *a, const limb *b, unsigned bits, int is_signed) {
     for (unsigned i = 0; i < LIMBS(bits); i++)
         d[i] = a[i] & b[i];
     __bcc_bitint_extend(d, bits, is_signed);
 }
 
-void __bcc_bitint_or(limb *d, const limb *a, const limb *b, unsigned bits, int is_signed) {
+BCC_ROUTINE void __bcc_bitint_or(limb *d, const limb *a, const limb *b, unsigned bits, int is_signed) {
     for (unsigned i = 0; i < LIMBS(bits); i++)
         d[i] = a[i] | b[i];
     __bcc_bitint_extend(d, bits, is_signed);
 }
 
-void __bcc_bitint_xor(limb *d, const limb *a, const limb *b, unsigned bits, int is_signed) {
+BCC_ROUTINE void __bcc_bitint_xor(limb *d, const limb *a, const limb *b, unsigned bits, int is_signed) {
     for (unsigned i = 0; i < LIMBS(bits); i++)
         d[i] = a[i] ^ b[i];
     __bcc_bitint_extend(d, bits, is_signed);
 }
 
-void __bcc_bitint_not(limb *d, const limb *a, unsigned bits, int is_signed) {
+BCC_ROUTINE void __bcc_bitint_not(limb *d, const limb *a, unsigned bits, int is_signed) {
     for (unsigned i = 0; i < LIMBS(bits); i++)
         d[i] = ~a[i];
     __bcc_bitint_extend(d, bits, is_signed);
 }
 
-void __bcc_bitint_neg(limb *d, const limb *a, unsigned bits, int is_signed) {
+BCC_ROUTINE void __bcc_bitint_neg(limb *d, const limb *a, unsigned bits, int is_signed) {
     unsigned n = LIMBS(bits);
     limb borrow = 0;
     for (unsigned i = 0; i < n; i++) {
@@ -121,7 +127,7 @@ void __bcc_bitint_neg(limb *d, const limb *a, unsigned bits, int is_signed) {
 }
 
 /* a << count, for count < N. */
-void __bcc_bitint_shl(limb *d, const limb *a, limb count, unsigned bits, int is_signed) {
+BCC_ROUTINE void __bcc_bitint_shl(limb *d, const limb *a, limb count, unsigned bits, int is_signed) {
     unsigned n = LIMBS(bits);
     unsigned whole = (unsigned)(count / 64), part = (unsigned)(count % 64);
     for (unsigned k = n; k-- > 0;) {
@@ -133,7 +139,7 @@ void __bcc_bitint_shl(limb *d, const limb *a, limb count, unsigned bits, int is_
 }
 
 /* a >> count, for count < N: arithmetic for a signed type. */
-void __bcc_bitint_shr(limb *d, const limb *a, limb count, unsigned bits, int is_signed) {
+BCC_ROUTINE void __bcc_bitint_shr(limb *d, const limb *a, limb count, unsigned bits, int is_signed) {
     unsigned n = LIMBS(bits);
     unsigned whole = (unsigned)(count / 64), part = (unsigned)(count % 64);
     for (unsigned k = 0; k < n; k++) {
@@ -145,7 +151,7 @@ void __bcc_bitint_shr(limb *d, const limb *a, limb count, unsigned bits, int is_
 }
 
 /* -1, 0 or 1 as a is below, equal to or above b. */
-int __bcc_bitint_cmp(const limb *a, const limb *b, unsigned bits, int is_signed) {
+BCC_ROUTINE int __bcc_bitint_cmp(const limb *a, const limb *b, unsigned bits, int is_signed) {
     unsigned n = LIMBS(bits);
     int na = __bcc_bitint_negative(a, bits, is_signed);
     int nb = __bcc_bitint_negative(b, bits, is_signed);
@@ -161,7 +167,7 @@ int __bcc_bitint_cmp(const limb *a, const limb *b, unsigned bits, int is_signed)
 }
 
 /* Whether a is nonzero. */
-int __bcc_bitint_test(const limb *a, unsigned bits) {
+BCC_ROUTINE int __bcc_bitint_test(const limb *a, unsigned bits) {
     for (unsigned i = 0; i < LIMBS(bits); i++)
         if (__bcc_bitint_limb(a, i, bits, 0))
             return 1;
@@ -170,7 +176,7 @@ int __bcc_bitint_test(const limb *a, unsigned bits) {
 
 /* a converted to a _BitInt(dbits): truncated, or extended by a's
    signedness (C23 6.3.1.3). */
-void __bcc_bitint_convert(limb *d, unsigned dbits, int dsigned, const limb *a, unsigned abits,
+BCC_ROUTINE void __bcc_bitint_convert(limb *d, unsigned dbits, int dsigned, const limb *a, unsigned abits,
                           int asigned) {
     for (unsigned i = 0; i < LIMBS(dbits); i++)
         d[i] = __bcc_bitint_limb(a, i, abits, asigned);
@@ -179,7 +185,7 @@ void __bcc_bitint_convert(limb *d, unsigned dbits, int dsigned, const limb *a, u
 
 /* The `width`-bit field at bit `shift` of the bytes at p, read as a
    _BitInt(bits) of the field's signedness, which is the type's. */
-void __bcc_bitint_field_get(limb *d, unsigned bits, int is_signed, const unsigned char *p,
+BCC_ROUTINE void __bcc_bitint_field_get(limb *d, unsigned bits, int is_signed, const unsigned char *p,
                             unsigned shift, unsigned width) {
     unsigned n = LIMBS(bits);
     for (unsigned i = 0; i < n; i++)
@@ -199,7 +205,7 @@ void __bcc_bitint_field_get(limb *d, unsigned bits, int is_signed, const unsigne
    bytes at p, leaving the bits around it: a byte the field covers is
    written whole, without reading it, and only the partly covered first and
    last bytes are read (which lowering freezes). */
-void __bcc_bitint_field_set(unsigned char *p, unsigned shift, unsigned width, const limb *a) {
+BCC_ROUTINE void __bcc_bitint_field_set(unsigned char *p, unsigned shift, unsigned width, const limb *a) {
     unsigned end = shift + width;
     for (unsigned byte = shift / 8; byte * 8 < end; byte++) {
         unsigned low = byte * 8 < shift ? shift : byte * 8;
@@ -217,7 +223,7 @@ void __bcc_bitint_field_set(unsigned char *p, unsigned shift, unsigned width, co
 
 /* The 128-bit value low | high << 64, signed if `value_signed`, converted
    to a _BitInt(bits). */
-void __bcc_bitint_from_int(limb *d, unsigned bits, int is_signed, limb low, limb high,
+BCC_ROUTINE void __bcc_bitint_from_int(limb *d, unsigned bits, int is_signed, limb low, limb high,
                            int value_signed) {
     unsigned n = LIMBS(bits);
     limb fill = value_signed && (long long)high < 0 ? ~0ull : 0;
@@ -357,11 +363,11 @@ static void __bcc_bitint_divmod(limb *quotient, limb *remainder, const limb *a, 
         __bcc_bitint_store(remainder, r, rn, na, bits, is_signed);
 }
 
-void __bcc_bitint_div(limb *d, const limb *a, const limb *b, unsigned bits, int is_signed) {
+BCC_ROUTINE void __bcc_bitint_div(limb *d, const limb *a, const limb *b, unsigned bits, int is_signed) {
     __bcc_bitint_divmod(d, 0, a, b, bits, is_signed);
 }
 
-void __bcc_bitint_rem(limb *d, const limb *a, const limb *b, unsigned bits, int is_signed) {
+BCC_ROUTINE void __bcc_bitint_rem(limb *d, const limb *a, const limb *b, unsigned bits, int is_signed) {
     __bcc_bitint_divmod(0, d, a, b, bits, is_signed);
 }
 
@@ -394,7 +400,7 @@ static void __bcc_bitint_from_parts(limb *d, unsigned bits, int is_signed, int n
     __bcc_bitint_extend(d, bits, is_signed);
 }
 
-void __bcc_bitint_from_f64(limb *d, unsigned bits, int is_signed, double value) {
+BCC_ROUTINE void __bcc_bitint_from_f64(limb *d, unsigned bits, int is_signed, double value) {
     union {
         double value;
         limb bits;
@@ -407,20 +413,20 @@ void __bcc_bitint_from_f64(limb *d, unsigned bits, int is_signed, double value) 
                             (exponent ? exponent : 1) - 1075);
 }
 
-void __bcc_bitint_from_f32(limb *d, unsigned bits, int is_signed, float value) {
+BCC_ROUTINE void __bcc_bitint_from_f32(limb *d, unsigned bits, int is_signed, float value) {
     __bcc_bitint_from_f64(d, bits, is_signed, value);
 }
 
-void __bcc_bitint_from_f16(limb *d, unsigned bits, int is_signed, _Float16 value) {
+BCC_ROUTINE void __bcc_bitint_from_f16(limb *d, unsigned bits, int is_signed, _Float16 value) {
     __bcc_bitint_from_f64(d, bits, is_signed, value);
 }
 
-void __bcc_bitint_from_bf16(limb *d, unsigned bits, int is_signed, __bf16 value) {
+BCC_ROUTINE void __bcc_bitint_from_bf16(limb *d, unsigned bits, int is_signed, __bf16 value) {
     __bcc_bitint_from_f64(d, bits, is_signed, value);
 }
 
 #if __LDBL_MANT_DIG__ == 64
-void __bcc_bitint_from_f80(limb *d, unsigned bits, int is_signed, long double value) {
+BCC_ROUTINE void __bcc_bitint_from_f80(limb *d, unsigned bits, int is_signed, long double value) {
     union {
         long double value;
         struct {
@@ -436,7 +442,7 @@ void __bcc_bitint_from_f80(limb *d, unsigned bits, int is_signed, long double va
 #endif
 
 #ifdef __SIZEOF_FLOAT128__
-void __bcc_bitint_from_f128(limb *d, unsigned bits, int is_signed, __float128 value) {
+BCC_ROUTINE void __bcc_bitint_from_f128(limb *d, unsigned bits, int is_signed, __float128 value) {
     union {
         __float128 value;
         struct {
@@ -474,7 +480,7 @@ static wide __bcc_bitint_top(const limb *m, unsigned used, unsigned *scale) {
 }
 
 #define BCC_BITINT_TO_FLOAT(name, T)                                                 \
-    T name(const limb *a, unsigned bits, int is_signed) {                            \
+    BCC_ROUTINE T name(const limb *a, unsigned bits, int is_signed) {                \
         int negative = __bcc_bitint_negative(a, bits, is_signed);                    \
         limb m[LIMBS(bits)];                                                         \
         unsigned scale;                                                              \
@@ -500,7 +506,7 @@ BCC_BITINT_TO_FLOAT(__bcc_bitint_to_f128, __float128)
 /* a rounded once to __bf16's 8 significant bits, to nearest even, as a
    float, which holds that value exactly: GCC's conversion. Clang rounds
    through float instead, which lowering does with __bcc_bitint_to_f32. */
-float __bcc_bitint_to_bf16(const limb *a, unsigned bits, int is_signed) {
+BCC_ROUTINE float __bcc_bitint_to_bf16(const limb *a, unsigned bits, int is_signed) {
     int negative = __bcc_bitint_negative(a, bits, is_signed);
     limb m[LIMBS(bits)];
     unsigned scale;

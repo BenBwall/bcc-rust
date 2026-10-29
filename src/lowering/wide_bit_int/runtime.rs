@@ -120,9 +120,11 @@ pub(crate) fn link<'ir>(
         }
         retarget(&mut body, &callees);
         let signature = module.intern(runtime.signature(runtime.function(source).signature));
+        let inlining = runtime.function(source).inlining;
         let function = module.function_mut(target);
         function.signature = signature;
         function.linkage = Linkage::Internal;
+        function.inlining = inlining;
         function.body = Some(body);
     }
     Ok(())
