@@ -455,6 +455,28 @@ impl<'tu> SemanticTranslationUnit<'tu> {
     pub(crate) fn lowerable(&self, context: &Context<'_>) -> bool {
         self.errors == 0 && context.error_count() == 0
     }
+
+    /// Writes the folded integer `value` to `limbs` as little-endian 64-bit
+    /// limbs of its two's-complement representation, extended through the
+    /// whole slice by the value's signedness: the image of a `_BitInt` of
+    /// more than 128 bits in memory, padding bits extended as GCC and Clang
+    /// store them.
+    /// C23: §6.2.6.2 paragraphs 1-2, pp. 42-43; PDF pp. 55-56.
+    pub(crate) fn integer_limbs(&self, value: Integer, limbs: &mut [u64]) {
+        let fill = if value.signed && value.value < 0 {
+            u64::MAX
+        } else {
+            0
+        };
+        let pattern = value.value as u128;
+        for (index, limb) in limbs.iter_mut().enumerate() {
+            *limb = match index {
+                | 0 => pattern as u64,
+                | 1 => (pattern >> 64) as u64,
+                | _ => fill,
+            };
+        }
+    }
 }
 
 impl<'tu> SemanticTranslationUnit<'tu> {
