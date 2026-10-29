@@ -365,6 +365,14 @@ pub(crate) enum SemanticErrorKind {
     FileScopeVariableType,
     /// C99: §6.7p4; 6.2.7p2, p. 97; 40; PDF p. 109; 52.
     IncompatibleDeclaration,
+    /// A declaration of a Microsoft compiler intrinsic whose type is not
+    /// the intrinsic's (Clang's `conflicting types for '__va_start'`).
+    /// MSVC extension; C99: §6.2.7p2, p. 40; PDF p. 52.
+    IncompatibleIntrinsicDeclaration,
+    /// A function definition of a Microsoft compiler intrinsic (Clang's
+    /// `definition of builtin function`). MSVC extension; C99: §6.9.1,
+    /// pp. 141-142; PDF pp. 153-154.
+    IntrinsicDefinition,
     /// C99: §6.7p3, p. 97; PDF p. 109.
     DuplicateDeclaration,
     /// C99: §6.2.2p4-7, pp. 30-31; PDF pp. 42-43.
@@ -865,7 +873,9 @@ impl SemanticErrorKind {
             | Self::InvalidStarBound => "`[*]` is not allowed here",
             | Self::ObjectTooLarge => "too large",
             | Self::FileScopeVariableType => "variably modified type",
-            | Self::IncompatibleDeclaration => "conflicting type",
+            | Self::IncompatibleDeclaration | Self::IncompatibleIntrinsicDeclaration =>
+                "conflicting type",
+            | Self::IntrinsicDefinition => "defines a compiler intrinsic",
             | Self::DuplicateDeclaration => "declared again here",
             | Self::ConflictingLinkage => "linkage conflicts with the previous declaration",
             | Self::TagKindMismatch => "different tag kind",
@@ -1792,6 +1802,16 @@ impl SemanticErrorKind {
             | Self::IncompatibleDeclaration => (
                 "redeclaration has an incompatible type",
                 "C99 §6.7p4 and §6.2.7p2: declarations of the same entity require compatible types",
+            ),
+            | Self::IncompatibleIntrinsicDeclaration => (
+                "declaration conflicts with the type of a compiler intrinsic",
+                "the compiler declares this Microsoft intrinsic itself; C99 §6.2.7p2: \
+                 declarations of the same function require compatible types",
+            ),
+            | Self::IntrinsicDefinition => (
+                "a compiler intrinsic cannot be defined",
+                "the compiler implements this Microsoft intrinsic, so a program declares it but \
+                 does not define it",
             ),
             | Self::DuplicateDeclaration => (
                 "identifier with no linkage is declared more than once",

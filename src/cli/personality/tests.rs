@@ -120,8 +120,8 @@ fn cl_links_the_runtime_library_it_selects() {
             "{step:?}"
         );
     }
-    // A command line of file names alone still selects C17 and the column
-    // diagnostics.
+    // A command line of file names alone still selects C17 and the
+    // diagnostics `cl` writes without `/diagnostics:`, `file(line):`.
     let alone = planned(Personality::Msvc, &["a.c"]);
     assert!(
         alone[0].iter().any(|argument| argument == "-std=c17"),
@@ -130,7 +130,7 @@ fn cl_links_the_runtime_library_it_selects() {
     assert!(
         alone[0]
             .iter()
-            .any(|argument| argument == "--diagnostic-format=msvc"),
+            .any(|argument| argument == "--diagnostic-format=msvc-classic"),
         "{alone:?}"
     );
 }

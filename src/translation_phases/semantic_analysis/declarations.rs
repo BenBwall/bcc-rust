@@ -1073,8 +1073,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             }
         }
         let index = self.bindings.len();
+        let origin = if kind == BindingKind::Function && linkage == Linkage::External {
+            self.redeclared_intrinsic(name, ty)
+        } else {
+            super::BindingOrigin::User
+        };
         self.bindings.push(Binding {
-            origin: super::BindingOrigin::User,
+            origin,
             name,
             ty,
             scope: self.scope,
@@ -1092,6 +1097,40 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if linkage != Linkage::None {
             _ = self.external.insert(identity, index);
         }
+    }
+
+    /// The origin of a function declaration named `name` with type `ty`:
+    /// a Microsoft compiler intrinsic stays one when the declaration's type
+    /// is compatible with the intrinsic's, as in `cl` and Clang, whose
+    /// headers declare the intrinsics they call (`<vadefs.h>` declares
+    /// `__va_start`, `<intrin.h>` `__debugbreak`), and a declaration of
+    /// another type is an error, as Clang's `conflicting types`; any other
+    /// declaration names an ordinary function. `function_body` refuses a
+    /// definition of an intrinsic.
+    /// C99: §6.2.7 paragraph 2, p. 40; PDF p. 52 (compatible types).
+    /// MSVC extension: Microsoft Learn, "Compiler intrinsics".
+    fn redeclared_intrinsic(&mut self, name: Identifier, ty: TypeId) -> super::BindingOrigin {
+        let descriptor =
+            crate::builtins::lookup(self.context.string_cache.at(name.name)).filter(|descriptor| {
+                descriptor.availability.naming == crate::builtins::NamingPolicy::Microsoft
+                    && descriptor.syntax == crate::builtins::SyntaxForm::OrdinaryCall
+                    && self.context.configuration.msvc_compatibility()
+                    && descriptor.availability.accepted(self.context.configuration)
+            });
+        let Some(descriptor) = descriptor else {
+            return super::BindingOrigin::User;
+        };
+        let intrinsic = self.descriptor_type(descriptor);
+        if self.types.composite(intrinsic, ty).is_some() {
+            return super::BindingOrigin::Intrinsic(descriptor.id);
+        }
+        self.error(
+            SemanticErrorKind::IncompatibleIntrinsicDeclaration,
+            name.source_vectors,
+            Some(name.name),
+            None,
+        );
+        super::BindingOrigin::User
     }
 
     /// System V packs non-straddling fields at the bit cursor. Microsoft

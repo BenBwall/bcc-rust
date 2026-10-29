@@ -835,6 +835,7 @@ pub(crate) enum BuiltinId {
     StdcBitCeil = 816,
     StdcRotateLeft = 817,
     StdcRotateRight = 818,
+    MsVaStart = 819,
 }
 
 impl BuiltinId {
@@ -933,10 +934,11 @@ impl BuiltinId {
             | Self::Isnanf => &scalar::BUILTINS[89],
             | Self::Isnanl => &scalar::BUILTINS[90],
             | Self::Rdtsc => &scalar::BUILTINS[91],
-            | Self::Debugbreak => &scalar::BUILTINS[92],
-            | Self::Annotation => &scalar::BUILTINS[93],
-            | Self::VaArgPack => &scalar::BUILTINS[94],
-            | Self::VaArgPackLen => &scalar::BUILTINS[95],
+            | Self::MsVaStart => &scalar::BUILTINS[92],
+            | Self::Debugbreak => &scalar::BUILTINS[93],
+            | Self::Annotation => &scalar::BUILTINS[94],
+            | Self::VaArgPack => &scalar::BUILTINS[95],
+            | Self::VaArgPackLen => &scalar::BUILTINS[96],
             | Self::LibraryAbort => &library::BUILTINS[0],
             | Self::LibraryAbs => &library::BUILTINS[1],
             | Self::LibraryCalloc => &library::BUILTINS[2],
@@ -2609,5 +2611,6 @@ const NAMES: &[(&str, BuiltinId)] = &[
         BuiltinId::AtomicSyncValCompareAndSwap,
     ),
     ("__sync_xor_and_fetch", BuiltinId::AtomicSyncXorAndFetch),
+    ("__va_start", BuiltinId::MsVaStart),
     ("alloca", BuiltinId::PlainAlloca),
 ];

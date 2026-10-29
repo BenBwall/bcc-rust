@@ -68,6 +68,10 @@ impl Analyzer<'_, '_, '_> {
                 self.types.intern(TypeKind::Pointer(ty))
             },
             | SignatureType::VaList => self.va_list_parameter(),
+            | SignatureType::VaListPointer => {
+                let list = self.builtin_va_list();
+                self.types.intern(TypeKind::Pointer(list))
+            },
             | SignatureType::File => self.file_parameter(),
             | SignatureType::Vector(scalar, count) => self.signature_vector(scalar, count),
             | SignatureType::VectorPointer(scalar, count, constant) => {

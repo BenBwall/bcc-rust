@@ -232,6 +232,70 @@ fn timestamp_and_breakpoint_intrinsics_lower() {
     );
 }
 
+/// Microsoft's `__va_start(&ap, last)`, through which `<vadefs.h>` defines
+/// `va_start` on x64, starts the list `ap` points to, and stays the
+/// intrinsic, as `__debugbreak` does, when a header declares it with a
+/// compatible type, as the MSVC headers do. Without Microsoft extensions
+/// the name is ordinary.
+#[test]
+fn declared_microsoft_intrinsics_stay_intrinsics() {
+    let source = r"typedef char *va_list;
+void __cdecl __va_start(va_list *, ...);
+void __cdecl __debugbreak(void);
+int sum(int n, ...) {
+    va_list ap;
+    ((void)(__va_start(&ap, n)));
+    int s = 0;
+    for (int i = 0; i < n; i++) s += *(int *)((ap += 8) - 8);
+    ap = 0;
+    return s;
+}
+void stop(void) { __debugbreak(); }
+int main(void) { return sum(3, 1, 2, 30) - 33; }
+";
+    let configuration = CompilerConfiguration::default()
+        .with_target(Target::WindowsMsvc)
+        .with_msvc_extensions(true);
+    // `<vadefs.h>`'s `va_arg` reads the list as Win64 lays it out, which
+    // the interpreter models only after ABI lowering.
+    for optimize in [false, true] {
+        with_configured_module(
+            source,
+            Target::WindowsMsvc,
+            optimize,
+            Profile::PostAbi,
+            configuration,
+            |module, target| {
+                assert_eq!(interpret(module, target).0, 0, "{module}");
+                let text = module.to_string();
+                assert!(!text.contains("@__va_start"), "{text}");
+                assert!(!text.contains("@__debugbreak"), "{text}");
+            },
+        );
+    }
+    // Without Microsoft extensions the names are ordinary; with them a
+    // declaration of another type is an error
+    // (`semantic_analysis::tests::declarations`).
+    let ordinary = "int __va_start(int);\nint f(void) { return __va_start(1); }\n";
+    with_configured_module(
+        ordinary,
+        Target::WindowsMsvc,
+        false,
+        Profile::PostAbi,
+        configuration.with_msvc_extensions(false),
+        |module, _| assert!(calls_from(module, "f", "__va_start"), "{module}"),
+    );
+}
+
+/// Whether `function` in `module` calls `callee` directly.
+fn calls_from(module: &Module<'_>, function: &str, callee: &str) -> bool {
+    let text = module.to_string();
+    text.split(&format!("function @{function}("))
+        .nth(1)
+        .and_then(|body| body.split("\nfunction ").next())
+        .is_some_and(|body| body.contains(&format!("call @{callee}(")))
+}
+
 /// Runs `main` and returns its status, ignoring output.
 fn interpret_main_only(module: &Module<'_>, target: Target) -> i32 {
     interpret(module, target).0

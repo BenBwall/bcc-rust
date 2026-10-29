@@ -127,6 +127,26 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let binding = name
             .and_then(|n| self.lookup(Namespace::Ordinary, n.name))
             .map(|e| e.binding);
+        // A Microsoft intrinsic its declarations kept an intrinsic is the
+        // compiler's to implement, as Clang refuses a definition of a
+        // builtin function.
+        if let Some(index) = binding.filter(|&index| index >= prior)
+            && let Some(name) = name
+            && self.bindings[index]
+                .origin
+                .descriptor()
+                .is_some_and(|descriptor| {
+                    descriptor.availability.naming == crate::builtins::NamingPolicy::Microsoft
+                })
+        {
+            self.error(
+                SemanticErrorKind::IntrinsicDefinition,
+                name.source_vectors,
+                Some(name.name),
+                None,
+            );
+            self.bindings[index].origin = super::BindingOrigin::User;
+        }
         _ = self.correspondence.declaration(
             f.declarator,
             binding

@@ -330,6 +330,40 @@ block0:
     );
 }
 
+/// On Win64 the frame address is the establisher frame, `%rsp` after the
+/// prologue, as LLVM computes `llvm.frameaddress`: the Microsoft C
+/// runtime's `longjmp` unwinds to the frame `_setjmp` records and fails
+/// with `STATUS_BAD_STACK` for any other address.
+#[test]
+fn win64_frame_addresses_are_establisher_frames() {
+    for target in [Target::WindowsMsvc, Target::WindowsGnu] {
+        let text = assembly(
+            "abi lowered
+global @buffer external size 256, align 16 = zero
+function @_setjmp(ptr, ptr) -> i32 external returns_twice
+function @f() -> i32 external {
+    slot0 = stack_slot 64, align 16
+block0:
+    v0 = global_addr @buffer
+    v1 = frame_address
+    v2 = call @_setjmp(v0, v1)
+    v3 = stack_addr slot0
+    store.i32 v2, v3, align 4
+    v4 = load.i32 v3, align 4
+    return v4
+}
+",
+            target,
+        );
+        let f = function_text(&text, "f");
+        let end = f.find(".seh_endprologue").expect(f);
+        assert!(
+            f[end..].contains("leaq\t0(%rsp), %rdx") || f[end..].contains("movq\t%rsp, %rdx"),
+            "{target:?}: {f}"
+        );
+    }
+}
+
 #[test]
 fn mingw_reaches_undefined_data_through_refptr_stubs() {
     // #69: data the module does not define may be in a DLL, which MinGW's

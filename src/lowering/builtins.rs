@@ -160,7 +160,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 }
             } else {
                 InstData::Unary {
-                    opcode: if operation == VaOperation::Start {
+                    opcode: if matches!(operation, VaOperation::Start | VaOperation::StartAt) {
                         Opcode::VaStart
                     } else {
                         Opcode::VaEnd

@@ -165,6 +165,16 @@ mod tests {
             cl_expand("--clang-cl-mode", &[], "_MSC_VER __GNUC__ __clang__"),
             "1933 __GNUC__ 1"
         );
+        // `cl` 19.44 defines a build number of 0, Clang one of 1.
+        assert_eq!(
+            cl_expand(
+                "--msvc-mode",
+                &[],
+                "_MSC_BUILD _MSC_EXTENSIONS _WIN32 _M_X64 _M_AMD64"
+            ),
+            "0 1 1 100 100"
+        );
+        assert_eq!(cl_expand("--clang-cl-mode", &[], "_MSC_BUILD"), "1");
         assert_eq!(cl_expand("--msvc-mode", &["/DX#5", "/DY=6"], "X Y"), "5 6");
     }
 
@@ -629,6 +639,9 @@ mod tests {
         let tcc = stdout(&directory.bcc("--tcc-mode", &["-v"]));
         assert!(tcc.starts_with("tcc version 0.9.27 "), "{tcc}");
         assert!(tcc.contains("bcc"), "{tcc}");
+        // `cl` alone prints its banner and, to stdout, its usage; with an
+        // option and no file it stops with error D8003, as clang-cl stops
+        // with its driver's error.
         let cl = directory.bcc("--msvc-mode", &[]);
         succeeds(&cl);
         assert!(
@@ -637,7 +650,63 @@ mod tests {
             stderr(&cl)
         );
         assert!(stderr(&cl).contains("bcc"), "{}", stderr(&cl));
-        assert!(stderr(&cl).contains("usage: cl"), "{}", stderr(&cl));
+        assert_eq!(
+            stdout(&cl),
+            "usage: cl [ option... ] filename... [ /link linkoption... ]\n"
+        );
+        let cl = directory.bcc("--msvc-mode", &["/nologo"]);
+        assert_eq!(cl.status.code(), Some(2));
+        assert_eq!(
+            stderr(&cl),
+            "cl : Command line error D8003 : missing source filename\n"
+        );
+        for arguments in [&[][..], &["/nologo"]] {
+            let clang_cl = directory.bcc("--clang-cl-mode", arguments);
+            assert_eq!(clang_cl.status.code(), Some(1));
+            assert_eq!(stderr(&clang_cl), "clang-cl: error: no input files\n");
+        }
+        // Queries need no input: clang-cl prints its version for
+        // `--version` (stdout) and `-v` or `-###` (stderr), as build systems
+        // probe it, and both compilers print help for `/HELP`.
+        for (arguments, stream) in [
+            (&["--version"][..], "stdout"),
+            (&["/nologo", "--version"], "stdout"),
+            (&["-v"], "stderr"),
+            (&["-###"], "stderr"),
+        ] {
+            let clang_cl = directory.bcc("--clang-cl-mode", arguments);
+            succeeds(&clang_cl);
+            let text = if stream == "stdout" {
+                stdout(&clang_cl)
+            } else {
+                stderr(&clang_cl)
+            };
+            assert!(
+                text.starts_with("clang version 23.1.1 (bcc ")
+                    && text.contains("\nTarget: x86_64-pc-windows-msvc\n"),
+                "{arguments:?}: {text}"
+            );
+        }
+        let triple = directory.bcc("--clang-cl-mode", &["-print-target-triple"]);
+        succeeds(&triple);
+        assert_eq!(stdout(&triple), "x86_64-pc-windows-msvc\n");
+        let search = directory.bcc("--clang-cl-mode", &["-print-search-dirs"]);
+        succeeds(&search);
+        assert!(
+            stdout(&search).starts_with("programs: =")
+                && stdout(&search).contains("\nlibraries: ="),
+            "{}",
+            stdout(&search)
+        );
+        for mode in ["--msvc-mode", "--clang-cl-mode"] {
+            let help = directory.bcc(mode, &["/nologo", "/HELP"]);
+            succeeds(&help);
+            assert!(
+                stdout(&help).starts_with("usage: "),
+                "{mode}: {}",
+                stdout(&help)
+            );
+        }
     }
 
     #[test]
@@ -920,16 +989,17 @@ mod tests {
                 "bad.c:2: error: ",
                 false,
             ),
+            // `cl` writes the column only under `/diagnostics:column`.
             (
                 "--msvc-mode",
                 &["/nologo", "/c", "bad.c"][..],
-                "bad.c(2,11): error: ",
+                "bad.c(2): error: ",
                 false,
             ),
             (
                 "--msvc-mode",
-                &["/nologo", "/c", "/diagnostics:classic", "bad.c"][..],
-                "bad.c(2): error: ",
+                &["/nologo", "/c", "/diagnostics:column", "bad.c"][..],
+                "bad.c(2,11): error: ",
                 false,
             ),
         ] {
@@ -1042,7 +1112,8 @@ mod tests {
             &["/nologo", "/c", "one.c", "two.c", "/Foout/"],
         );
         succeeds(&output);
-        assert_eq!(stdout(&output), "one.c\ntwo.c\n");
+        // `cl` says it generates code after compiling several sources.
+        assert_eq!(stdout(&output), "one.c\ntwo.c\nGenerating Code...\n");
         assert!(directory.path("out/one.obj").is_file());
         assert!(directory.path("out/two.obj").is_file());
         succeeds(&directory.bcc("--msvc-mode", &["/nologo", "/c", "/Fa", "one.c"]));
@@ -1284,11 +1355,11 @@ mod tests {
     fn cl_reads_a_command_line_of_only_file_names() {
         let directory = Directory::new();
         directory.write("bad.c", "int x = ;\n");
-        // `cl` alone compiles C17 with its column diagnostics.
+        // `cl` alone compiles C17 with its classic diagnostics.
         let output = directory.bcc("--msvc-mode", &["bad.c"]);
         assert_ne!(output.status.code(), Some(0));
         assert!(
-            stderr(&output).contains("bad.c(1,9): error:"),
+            stderr(&output).contains("bad.c(1): error:"),
             "{}",
             stderr(&output)
         );
@@ -1310,7 +1381,7 @@ mod tests {
         let bad = directory.bcc("--msvc-mode", &["/nologo", "/Zs", "bad.c"]);
         assert_eq!(bad.status.code(), Some(2));
         assert!(
-            stderr(&bad).contains("bad.c(1,9): error:"),
+            stderr(&bad).contains("bad.c(1): error:"),
             "{}",
             stderr(&bad)
         );
@@ -1624,7 +1695,10 @@ mod tests {
             );
             assert_eq!(
                 stdout(&cl),
-                format!("missing.c\n{}\n", object.replace(".obj", ".c"))
+                format!(
+                    "missing.c\n{}\nGenerating Code...\n",
+                    object.replace(".obj", ".c")
+                )
             );
             assert!(!directory.path("missing.exe").exists());
         }
@@ -2457,18 +2531,21 @@ mod tests {
             }
         }
         // Run under another name, the driver uses that name.
-        let gcc = directory.path("x86_64-linux-gnu-gcc");
-        if std::os::unix::fs::symlink(env!("CARGO_BIN_EXE_bcc-rust"), &gcc).is_ok() {
-            let output = Command::new(&gcc)
-                .args(["-c", "a.c", "b.o"])
-                .current_dir(&directory.0)
-                .output()
-                .unwrap();
-            succeeds(&output);
-            assert_eq!(
-                stderr(&output),
-                format!("x86_64-linux-gnu-gcc: warning: {message}")
-            );
+        #[cfg(unix)]
+        {
+            let gcc = directory.path("x86_64-linux-gnu-gcc");
+            if std::os::unix::fs::symlink(env!("CARGO_BIN_EXE_bcc-rust"), &gcc).is_ok() {
+                let output = Command::new(&gcc)
+                    .args(["-c", "a.c", "b.o"])
+                    .current_dir(&directory.0)
+                    .output()
+                    .unwrap();
+                succeeds(&output);
+                assert_eq!(
+                    stderr(&output),
+                    format!("x86_64-linux-gnu-gcc: warning: {message}")
+                );
+            }
         }
     }
 

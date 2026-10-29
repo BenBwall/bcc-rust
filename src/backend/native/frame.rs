@@ -7,7 +7,8 @@
 //!  Win64 home area            CFA .. CFA + 32
 //!  return address             CFA - 8
 //!  callee-saved pushes        8 bytes each (`%rbp` among them with a frame pointer;
-//!                             first, at CFA - 16, when the frame address is taken)
+//!                             first, at CFA - 16, when the frame address is taken;
+//!                             on Win64 the frame address is 0(%rsp) instead)
 //!  stack slots                each at its alignment (at most 16)
 //!  register save area         System V variadic functions: 176 bytes
 //!  Win64 SSE saves            16 bytes each for `%xmm6`-`%xmm15`
@@ -32,7 +33,10 @@
 //! above 16 keeps the ordinary frame, as does every Win64 function.
 
 use super::{
-    conv::CallConv,
+    conv::{
+        CallConv,
+        ConvKind,
+    },
     mir::{
         FrameObject,
         MFunction,
@@ -78,6 +82,9 @@ pub(crate) struct Frame<'a> {
     register_save:        u32,
     incoming:             u32,
     home:                 u32,
+    /// Whether the frame follows Win64, whose frame address is the
+    /// establisher frame ([`FrameObject::FrameAddress`]).
+    win64:                bool,
 }
 
 impl<'a> Frame<'a> {
@@ -182,6 +189,7 @@ impl<'a> Frame<'a> {
             register_save: narrow(register_save),
             incoming,
             home: incoming - conv.home_area,
+            win64: conv.kind == ConvKind::Win64,
         })
     }
 
@@ -198,6 +206,14 @@ impl<'a> Frame<'a> {
             | FrameObject::Spill(slot) => self.spills + 8 * slot,
             | FrameObject::RegisterSave(offset) => self.register_save + offset,
             | FrameObject::ReturnAddress => self.home - 8,
+            // On Win64 the frame address is the frame's establisher frame,
+            // the address its unwind information names it by: `%rsp` after
+            // the prologue, which `%rbp` then also holds (`.seh_setframe
+            // %rbp, 0`). LLVM returns the same, and the C runtime's
+            // `longjmp` unwinds to the frame `_setjmp` was given. Elsewhere
+            // it is where a frame pointer saves the caller's `%rbp`, as in
+            // GCC.
+            | FrameObject::FrameAddress if self.win64 => 0,
             | FrameObject::FrameAddress => self.home - 16,
         };
         let base = if self.rbp_based { PReg::Rbp } else { PReg::Rsp };

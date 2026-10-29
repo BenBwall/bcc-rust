@@ -70,7 +70,12 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
     let slash_paths = clang_cl || !cfg!(windows);
     // After `--`, every argument is an input.
     let mut inputs_only = false;
-    let mut state = State::default();
+    let mut state = State {
+        // `cl` writes `file(line):` unless `/diagnostics:column` asks for
+        // the column; clang-cl writes `file(line,col):`.
+        diagnostics: if clang_cl { "msvc" } else { "msvc-classic" },
+        ..State::default()
+    };
     // clang-cl reads its `/clang:` options after the others, wherever they
     // stand, so they win over `cl`'s (`/clang:-fsigned-char` over `/J`).
     let mut clang_options: Vec<OsString> = Vec::new();
@@ -110,9 +115,15 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
             state.sources.push(Source::new(argument, false));
             continue;
         }
-        if option == "?" || option == "help" {
+        if matches!(option, "?" | "help" | "HELP") {
             return Ok(Plan::print(help(&invocation.name)));
         }
+        if clang_cl && let Some(plan) = clang_cl_query(invocation, text) {
+            return Ok(plan);
+        }
+        // clang-cl's `-v` and `-###` print its version even without an
+        // input; with one they reach bcc's driver.
+        state.verbose |= clang_cl && matches!(text, "-v" | "-###");
         if clang_cl && let Some(clang) = option.strip_prefix("clang:") {
             // `/clang:OPTION` gives clang-cl a Clang option; bcc reads most.
             clang_options.push(clang.into());
@@ -202,6 +213,12 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         // `cl` replaces trigraphs only under `/Zc:trigraphs`.
         "-fno-trigraphs".into(),
     ];
+    // `cl` makes a tentative definition a communal symbol, so two units
+    // that both declare `int x;` link; clang-cl does not, as Clang 11 and
+    // later do not.
+    if !clang_cl {
+        common.push("-fcommon".into());
+    }
     if !state.extensions {
         // `/Za`: ISO C without Microsoft's anonymous tagged members, and
         // without `_MSC_EXTENSIONS`; the `__`-prefixed keywords stay.
@@ -235,9 +252,46 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         keep_going: !clang_cl,
         ..Plan::default()
     };
-    if !state.nologo && !clang_cl {
+    let banner = (!state.nologo && !clang_cl)
+        .then(|| version::banner(invocation.personality, &invocation.name, target));
+    if state.sources.is_empty() {
+        // clang-cl refuses a command line without inputs, as Clang does.
+        // `cl` alone prints its usage to stdout after its banner; with
+        // options and no file it stops with error D8003.
+        if clang_cl && state.verbose {
+            plan.steps.push(Step::Print {
+                text:   version::verbose(invocation.personality, target),
+                stderr: true,
+            });
+            return Ok(plan);
+        }
+        if clang_cl {
+            invocation.error(format_args!("no input files"));
+            return Err(MainError::Reported(error_status(invocation.personality)));
+        }
+        if let Some(banner) = banner {
+            super::print(&banner, true);
+        }
+        if invocation.arguments.is_empty() {
+            super::print(
+                &format!(
+                    "usage: {} [ option... ] filename... [ /link linkoption... ]\n",
+                    invocation.name
+                ),
+                false,
+            );
+            return Ok(plan);
+        }
+        state.command_line_error(
+            invocation,
+            Some("D8003"),
+            format_args!("missing source filename"),
+        );
+        return Err(MainError::Reported(ERROR_STATUS));
+    }
+    if let Some(banner) = banner {
         plan.steps.push(Step::Print {
-            text:   version::banner(invocation.personality, &invocation.name, target),
+            text:   banner,
             stderr: true,
         });
     }
@@ -246,18 +300,6 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         .iter()
         .filter(|source| source.is_c())
         .collect();
-    if c_sources.is_empty() && state.sources.is_empty() {
-        if !state.nologo || clang_cl {
-            super::print(
-                &format!(
-                    "usage: {} [ option... ] filename... [ /link linkoption... ]\n",
-                    invocation.name
-                ),
-                true,
-            );
-        }
-        return Ok(plan);
-    }
     if let Some(source) = state.sources.iter().find(|source| source.cpp) {
         invocation.error(format_args!(
             "'{}': bcc compiles C only; C++ sources are not supported",
@@ -355,6 +397,14 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         plan.steps.push(Step::Bcc(step));
         objects.push(object);
     }
+    // `cl` compiles several sources in one batch and then says that it
+    // generates their code, also when one of them was missing.
+    if !clang_cl && c_sources.len() > 1 {
+        plan.steps.push(Step::Print {
+            text:   "Generating Code...\n".into(),
+            stderr: false,
+        });
+    }
     if state.compile_only {
         return Ok(plan);
     }
@@ -380,6 +430,46 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
     link.push(executable.into());
     plan.steps.push(Step::Link(link));
     Ok(plan)
+}
+
+/// What clang-cl's driver answers itself, without inputs, for one of its
+/// query options: `--version` (to stdout, with the target), the target
+/// triple, and the directories it searches for programs and its resource
+/// libraries, which are the bundled LLVM's that bcc's driver runs.
+fn clang_cl_query(invocation: &Invocation, text: &str) -> Option<Plan> {
+    let target = || {
+        invocation
+            .target
+            .unwrap_or_else(|| host_target(invocation.personality))
+    };
+    match text {
+        | "--version" => Some(Plan::print(version::banner(
+            invocation.personality,
+            &invocation.name,
+            target(),
+        ))),
+        | "-print-target-triple" | "-print-effective-triple" =>
+            Some(Plan::print(format!("{}\n", target().triple()))),
+        | "-print-search-dirs" => {
+            let linker = PathBuf::from(version::program_name("lld-link"));
+            let programs = linker.parent().unwrap_or_else(|| Path::new(""));
+            let major = version::CLANG_VERSION
+                .split('.')
+                .next()
+                .unwrap_or(version::CLANG_VERSION);
+            let libraries = programs
+                .parent()
+                .unwrap_or(programs)
+                .join("lib/clang")
+                .join(major);
+            Some(Plan::print(format!(
+                "programs: ={}\nlibraries: ={}\n",
+                programs.display(),
+                libraries.display()
+            )))
+        },
+        | _ => None,
+    }
 }
 
 /// Whether `option` is one of `cl`'s own options that clang-cl does not
@@ -532,6 +622,8 @@ struct State {
     /// Microsoft extensions: `/Ze` (the default) or `/Za`, the last wins.
     extensions:              bool,
     nologo:                  bool,
+    /// clang-cl's `-v` or `-###`, which print its version without inputs.
+    verbose:                 bool,
     ignore_include_variable: bool,
     standard:                &'static str,
     diagnostics:             &'static str,
@@ -540,7 +632,8 @@ struct State {
 
 impl Default for State {
     /// `cl`'s defaults: C17 (as clang-cl maps its default C mode), column
-    /// diagnostics, Microsoft extensions, and the static runtime.
+    /// diagnostics (clang-cl's; `plan` gives `cl` its classic form),
+    /// Microsoft extensions, and the static runtime.
     fn default() -> Self {
         Self {
             bcc:                     Vec::new(),
@@ -561,6 +654,7 @@ impl Default for State {
             runtime:                 None,
             extensions:              true,
             nologo:                  false,
+            verbose:                 false,
             ignore_include_variable: false,
             standard:                "c17",
             diagnostics:             "msvc",

@@ -112,10 +112,10 @@ without a personality as well:
 | `_Float32` ... `_Float128` | keywords, distinct types | identifiers | identifiers | identifiers | identifiers | identifiers (`-ffloatn-types`) |
 | `_Float16`, `__bf16` | types, GCC's `__FLT16_*__` and `__BFLT16_*__` | types, Clang's `__FLT16_*__` | identifiers | types | identifiers | types |
 | `__fp16` | identifier | storage type | identifier | storage type | identifier | storage type |
-| Tentative definitions | `-fno-common` (`-fcommon` makes them common) | same | same | same | same | same |
+| Tentative definitions | `-fno-common` (`-fcommon` makes them common) | same | `-fcommon` (`cl` makes them common) | `-fno-common` | `-fno-common` | `-fno-common` |
 | Unsigned plain `char` | `-funsigned-char` | `-funsigned-char` | `/J` | `/J`, `-funsigned-char` | `-funsigned-char` | `-funsigned-char` |
 | System headers | host's `/usr/local/include`, multiarch, `/usr/include` | same | `%INCLUDE%` (unless `/X`) | same | host's | the host's when compiling for the host; none for a cross target unless asked |
-| Diagnostics | `file:line:col: error:` + snippet | same + `N errors generated.` | `file(line,col): error:` | same | `file:line: error:` | annotated snippet |
+| Diagnostics | `file:line:col: error:` + snippet | same + `N errors generated.` | `file(line): error:` | `file(line,col): error:` | `file:line: error:` | annotated snippet |
 | Default output | `a.out` (`a.exe` on Windows) | same | `first.exe`, objects kept | same | `a.out` | none (analysis only) |
 | `__bcc__` | defined | defined | defined | defined | defined | defined |
 
@@ -398,7 +398,12 @@ compiles `/tmp/a.c`, and `/bogus` there is an input of unknown type (D9024)
 rather than an unknown option. `cl` compiles every source even after one fails, reports
 a missing one with `c1: fatal error C1083: Cannot open source file:
 'missing.c': No such file or directory` after printing its name, skips the
-link, and exits with status 2, as it does after any error.
+link, and exits with status 2, as it does after any error. After compiling
+several sources it prints `Generating Code...` to stdout, also when one was
+missing. `cl` alone prints its banner and, to stdout, `usage: cl [
+option... ] filename... [ /link linkoption... ]`, and succeeds; with options
+but no file it stops with `cl : Command line error D8003 : missing source
+filename` and status 2. `/?`, `/help` and `/HELP` print bcc's help.
 
 **Mapping.**
 
@@ -427,11 +432,14 @@ link, and exits with status 2, as it does after any error.
 
 **Defaults.** The `x86_64-pc-windows-msvc` target with every Microsoft
 extension bcc implements (`-fms-extensions`), which on that target also
-predefines `_MSC_VER` 1933, `_MSC_FULL_VER` 193300000, `_MSC_BUILD` and
-`_MSC_EXTENSIONS`. The identity removes the GNU and Clang macros and adds
-`_MT` (the default static runtime) and `_MSVC_TRADITIONAL 0`: bcc's
-preprocessor is conforming, like `cl /Zc:preprocessor`. Directories in
-`%INCLUDE%` are system header directories.
+predefines `_MSC_VER` 1933, `_MSC_FULL_VER` 193300000, `_MSC_BUILD` (0, as
+`cl` 19.44 defines it; Clang and clang-cl define 1) and `_MSC_EXTENSIONS`.
+The identity removes the GNU and Clang macros and adds `_MT` (the default
+static runtime) and `_MSVC_TRADITIONAL 0`: bcc's preprocessor is
+conforming, like `cl /Zc:preprocessor`. Directories in `%INCLUDE%` are
+system header directories. A tentative definition is a communal symbol
+(`-fcommon`), as `cl` makes it, so two units that both declare `int x;`
+link.
 
 **Language mode.** `cl` without `/std:` compiles a C dialect close to C17 and
 leaves `__STDC_VERSION__` undefined; `/std:c11` and `/std:c17` define it.
@@ -439,14 +447,18 @@ bcc compiles C17 by default, as clang-cl does, and defines
 `__STDC_VERSION__` as `201710L`. `cl` defines `__STDC__` only under `/Za` or
 `/Zc:__STDC__`; bcc always defines it, as ISO C requires.
 
-**Diagnostics.** `file(line,col): error: message`, the form clang-cl and
-`cl /diagnostics:column` write and MSBuild parses. `cl`'s own messages carry
+**Diagnostics.** `file(line): error: message`, the form `cl` writes
+without `/diagnostics:` (its `/diagnostics:classic`); `/diagnostics:column`
+gives `file(line,col):`, the form clang-cl writes by default and MSBuild
+asks `cl` for. `cl`'s own messages carry
 a code such as `C2065`; bcc's messages are its own, and no mapping from them
 to MSVC's codes is documented, so bcc writes no code rather than an invented
 one. The MSVC codes bcc writes are those Microsoft documents for the
 driver's own messages: warnings D9002 (an unknown option), D9024 and D9027
-(inputs), error D8036 (`/Fo` for several sources), and fatal error C1083
-for a source that cannot be opened. bcc's own driver messages take `cl`'s
+(inputs), errors D8003 (no source file) and D8036 (`/Fo` for several
+sources), and fatal error C1083 for a source that cannot be opened, which
+gives the C runtime's reason (`No such file or directory`) on Windows too,
+as `cl` does, rather than the system's. bcc's own driver messages take `cl`'s
 command-line form without a code (`cl : Command line error : cannot build
 ...`). `/showIncludes` indents each header by one space more per level of
 nesting, as `cl` does, and leaves out a re-inclusion whose include guard
@@ -457,6 +469,79 @@ modes, and writes only the source names to stdout, as `cl` does.
 **Banner.** `bcc 0.1.0, compatible with Microsoft (R) C/C++ Optimizing
 Compiler Version 19.33.0 for x64; not a Microsoft product`, to stderr. Tools
 read the version and `for x64` from it.
+
+### Checked against `cl.exe` on Windows
+
+`tests/integration/msvc/` compares the personality with the real `cl.exe`
+on a Windows host with Visual Studio or its Build Tools; elsewhere, and
+without them, its tests skip. They take the newest installation `vswhere`
+finds with the x64 C compiler and run both compilers in the environment its
+`vcvars64.bat` sets. The ignored `msvc::toolchain::probe` reports what a
+host has (`cargo test --test integration msvc::toolchain::probe --
+--ignored --nocapture`). On the host they were run on (29 October 2026):
+Build Tools 2022 17.14 (and 2019 and 2017), `cl` 19.44.35228, `link`
+14.44.35228, the Windows SDK 10.0.19041.0 (the registry's `KitsRoot10`,
+with `ucrt.lib` and `kernel32.lib`), and no `lld-link` or `clang-cl` on
+`PATH`; bcc uses the bundled LLVM's.
+
+- **The C runtime.** Programs using `printf` and `vsnprintf`, `malloc`,
+  `realloc` and `calloc`, files (`fopen`, `fgets`, `fread`, `fseek`,
+  `ftell`, `remove`), `qsort` with a callback, `atexit`, `strtod`,
+  `setjmp` and `longjmp` through several frames, wide characters and
+  `exit` from a nested call, built under `/MD`, `/MT` and `/MDd` by `cl`,
+  by `bcc --msvc-mode` and by bcc's native back end (clang-cl's
+  `--backend=native`), print and return the same. `long double` is
+  `double` (`sizeof` 8, `LDBL_MANT_DIG` 53, `%Lg`). bcc links through the
+  bundled clang and LLD, which find Visual Studio's libraries and the SDK
+  themselves, also without `vcvars64.bat`'s `%LIB%`; headers come only
+  from `%INCLUDE%`, so bcc, like `cl`, needs that environment.
+- **DLLs.** A DLL exporting functions and data with
+  `__declspec(dllexport)`, built with `/LD`, and its import library link
+  with a client importing them with `__declspec(dllimport)`, for every
+  pair of the three compilers.
+- **ABI.** bcc's objects link with `cl`'s in both directions, through
+  `link.exe`: structures of 1, 3, 8, 16 and 20 bytes, of a `double` and of
+  two `float`s, passed and returned by value; eleven mixed arguments; `int`,
+  `double`, `long long`, pointer and structure variadic arguments and a
+  `va_list` passed on; `__int64` arithmetic; callbacks taking a structure;
+  `_Bool`, `signed char`, `unsigned short`, `float` and `long double`
+  results. bcc refuses `__vectorcall` (and `/Gv`), so it is not compared.
+- **Tentative definitions.** `int shared;` and `double shared[100];` in two
+  units are communal symbols in `cl` and, under the personality's
+  `-fcommon`, in bcc: every pairing links and runs alike. An object of a
+  `struct __declspec(align(64))` type is a strong definition in both, so
+  every pairing fails alike (`right-cl.obj : error LNK2005: shared already
+  defined in left-cl.obj`), as Clang's MSVC rule for required alignment
+  says. A record with an `_Alignas(64)` member (which `cl` reads only under
+  `/std:c11`), a `__declspec(dllexport)` object and a `const` one were not
+  compared on Windows: the test that surveys them first ran with the
+  `_Alignas` case compiled without `/std:c11`.
+- **Command lines.** `/c`, `/Fo` naming a file or a directory, `/Fe`,
+  `/link /OUT:`, `/std:c11`, `/std:c17`, `/O2`, `/Zi`, no source file
+  (D8003), `/Fo` for several sources (D8036), an unknown option (D9002)
+  and a header among the inputs (D9024, D9027) give the same status, the
+  same files and the same lines; `/E`, `/EP`, `/P`, `/D`, `/I`, `/W4`,
+  `/WX`, missing sources and headers and compile errors the same status and
+  files.
+- **Predefined macros.** `_WIN32`, `_WIN64`, `_M_X64` and `_M_AMD64` (100),
+  `_MT`, `_DLL`, `_DEBUG`, `_CHAR_UNSIGNED`, `_MSC_EXTENSIONS`,
+  `_MSC_BUILD`, `_INTEGRAL_MAX_BITS` (64), `_ISO_VOLATILE`, `_M_FP_PRECISE`
+  and `__STDC_HOSTED__` agree with no option and under `/MD`, `/MDd`,
+  `/MTd`, `/LD`, `/std:c11`, `/std:c17`, `/std:clatest`, `/Za`, `/J`,
+  `/O2`, `/fp:fast` and `/Zc:preprocessor`, and neither defines
+  `__GNUC__`, `__clang__`, `__AVX__`, `_M_IX86` or `_M_ARM64`.
+
+The comparison found what this section and Deviations now record: bcc's
+`printf` failed to link (`lld-link: error: undefined symbol: __va_start`)
+until the Microsoft intrinsic `__va_start`, through which `<vadefs.h>`
+defines `va_start`, stayed an intrinsic where the header declares it; the
+native back end's `longjmp` died with `STATUS_BAD_STACK` (0xC0000028)
+until `_setjmp` received the caller's establisher frame (a one-argument
+`_setjmp` or `_setjmpex` gets the frame address, as `cl` and Clang pass
+it, and the native back end's Win64 frame address is the establisher
+frame, as LLVM's is); and the driver differed in D8003, the classic
+diagnostic form, `Generating Code...`, C1083's reason, `_MSC_BUILD` and
+communal tentative definitions.
 
 ## clang-cl
 
@@ -472,7 +557,12 @@ stand, so `/clang:-fsigned-char /J` leaves `char` signed, and ignores a
 bare `-fsigned-char` or `-funsigned-char` with the same warning. The
 identity keeps the Clang macros and drops the GNU ones, as clang-cl does. It
 prints no banner and no source names. As Clang's driver does, it refuses a
-missing source before compiling any (`clang-cl: error: no such file or
+command line without inputs (`clang-cl: error: no input files`, status 1),
+except for the queries it answers without one: `--version` (to stdout),
+`-v` and `-###` (the same lines to stderr), `-print-target-triple`,
+`-print-search-dirs` (the bundled LLVM's programs and resource libraries)
+and `/help`, `/HELP` or `-help`; and it refuses
+a missing source before compiling any (`clang-cl: error: no such file or
 directory: 'missing.c'`; also an input for the linker whose name starts
 with `/`, with `; did you mean '/Brepro'?` when an option is one edit
 away), warns that a stage before linking leaves an input
@@ -764,9 +854,11 @@ size` for `(void *)int`, `(void *)short`, `(int)p` and `(char)p`, none for
 static initializers as GCC does; it has no `_Float16` or `_BitInt` and
 rejects array compound literals and out-of-range floating conversions in
 static initializers (`initializer element is not constant`), so GCC's
-rules stay the closer model. `cl`'s behaviour was not surveyed: there is
-no MSVC on the machines that produced them, and Microsoft documents too
-little of it.
+rules stay the closer model. `cl`'s behaviour in these rules was not
+surveyed: Microsoft documents too little of it, and the Windows
+comparison ([Checked against `cl.exe` on
+Windows](#checked-against-clexe-on-windows)) covers the driver, the
+runtime and the ABI, not these rules.
 
 ## Decisions
 
@@ -844,8 +936,40 @@ Besides those above:
   clang-cl does; `cl` defines only the latter. The MSVC identity keeps
   Clang's target macros, as for `__x86_64__`.
 - The MSVC personality links through Clang's driver and LLD (`lld-link`),
-  which needs the Windows SDK and MSVC libraries (from `%LIB%`); on a Linux
-  host without them only `/c`, `/E`, `/P` and `/Fa` work.
+  which needs the Windows SDK and MSVC libraries; on Windows Clang's driver
+  finds them itself, and on a Linux host without them only `/c`, `/E`,
+  `/P` and `/Fa` work. LLD writes an import library for every DLL, where
+  `link.exe` writes one (and an `.exp` file) only for a DLL that exports
+  something, so `cl /LD b.c` of a DLL without exports leaves `b.dll` and
+  `b.obj` and bcc also `b.lib`. `/Zi` writes no `vc140.pdb`: bcc ignores
+  it.
+- Against `cl` 19.44 the predefined macros differ in these, as the MSVC
+  identity decides above: `_MSC_VER` and `_MSC_FULL_VER` (1944 and
+  194435228; bcc claims 19.33); `_MSVC_TRADITIONAL`, which `cl` defines as
+  1 unless `/Zc:preprocessor` or a `/std:` option selects its conforming
+  preprocessor; `__STDC__`, which `cl` defines only under `/Za`;
+  `__STDC_VERSION__`, which `cl` leaves undefined without `/std:` and
+  defines as `202312L` for `/std:clatest`, where bcc's C23 is
+  `202311L`; `__STDC_NO_ATOMICS__`, `__STDC_NO_COMPLEX__` and
+  `__STDC_NO_VLA__`, which `cl` defines under `/std:c11` and later and bcc,
+  which has all three, does not; `__STDC_NO_THREADS__`, which bcc defines
+  and `cl` 19.44 does not; Clang's target macros, `__x86_64__` and
+  `__SSE2__` among them; and `_M_FP_FAST`, which `cl /fp:fast` defines and
+  bcc, keeping IEC 60559 semantics, does not.
+- `cl /E` writes `#line 1 "pp.c"` directives, one with the full path of
+  each header (backslashes doubled), and keeps a blank line for every
+  line that produced nothing, as `/EP` and `/P` do; bcc writes GNU markers
+  (`# 5 "pp.c"`) only where lines are skipped, and no blank lines.
+- A missing header is `cl`'s fatal error, which ends the unit
+  (`inc.c(1): fatal error C1083: Cannot open include file: 'deep.h': No
+  such file or directory`); bcc reports `cannot find header` with the
+  directories it searched, and goes on.
+- Compiler messages are bcc's own, without `cl`'s codes, and go to stderr:
+  `cl`'s `bad.c(2): error C2065: 'missing': undeclared identifier` is
+  bcc's `bad.c(2): error: identifier has no visible declaration:
+  `missing`` and a C99 note. bcc has no unreferenced-local warning
+  (`cl /W4`'s C4101), so `cl /W4 /WX` fails (error C2220) on a unit bcc
+  compiles.
 - `-v` and `-###` print the commands bcc runs, not GCC's or Clang's: each
   step is a bcc command line that bcc runs in process, named by the path
   of the running bcc, then, under `-v`, the bundled clang's assembly and
@@ -962,11 +1086,10 @@ would use:
   function, so a program calling it links; bcc follows GCC and Clang and
   leaves the call to an external definition, so the link fails (`ld.lld:
   error: undefined symbol: f`). C99 §6.7.4p6 allows either.
-- Whether `cl` makes a C tentative definition a communal symbol by
-  default is unverified: no MSVC was available, and Microsoft documents no
-  option for it. The `cl` personality keeps bcc's `-fno-common` default;
-  clang-cl, like Clang 11 and later, has the same default, and passes a
-  given `-fcommon` on.
+- `cl` compiles a unit without a declaration (`cl /c /Tch.h` of a header
+  holding only macros writes `h.obj`); bcc refuses it, as above.
+- `__vectorcall` and `cl /Gv` are refused, so bcc cannot call or define a
+  function with that convention.
 
 Since this list was written, bcc gained binary128 arithmetic on every back
 end (#160), `_Float16` (#163), `__bf16`, complex `_Float16` and `__fp16`

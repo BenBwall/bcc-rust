@@ -98,6 +98,9 @@ pub(crate) enum SignatureType {
     /// `char *` itself on Windows. C99: §7.15p3, p. 249; PDF p. 261;
     /// §6.7.5.3p7, p. 119; PDF p. 131.
     VaList,
+    /// A pointer to the target's `__builtin_va_list` object, `char **` on
+    /// Windows (Microsoft `__va_start`).
+    VaListPointer,
     /// `FILE *`, naming the program's own `<stdio.h>` typedef.
     /// C99: §7.19.1p2, p. 262; PDF p. 274.
     File,
@@ -367,6 +370,11 @@ pub(crate) enum UnsupportedReason {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum VaOperation {
     Start,
+    /// Microsoft's `__va_start(&ap, last)`, which `<vadefs.h>` calls for
+    /// `va_start` on x64: `va_start` on the list its first operand points
+    /// to. MSVC extension: Clang implements it as `va_start` of
+    /// `*(&ap)` (its `Builtins.td`, `__va_start`).
+    StartAt,
     End,
     Copy,
     Arg,
