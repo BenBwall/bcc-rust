@@ -261,88 +261,100 @@ static void __bcc_bitint_store(limb *d, const limb *m, unsigned n, int negative,
     __bcc_bitint_extend(d, bits, is_signed);
 }
 
-/* Knuth's algorithm D (TAOCP vol. 2, 4.3.1) on 64-bit digits: the quotient
-   of the m-limb u by the n-limb v into q (m - n + 1 limbs) and the
-   remainder into r (n limbs), for m >= n >= 2 and a nonzero top limb of v.
-   un and vn are scratch of m + 1 and n limbs. */
-static void __bcc_bitint_divide(limb *q, limb *r, const limb *u, const limb *v, unsigned m,
-                                unsigned n, limb *un, limb *vn) {
+/* Knuth's algorithm D (TAOCP vol. 2, 4.3.1) on 64-bit digits, in place:
+   u, m + 1 limbs whose top one is zero, is divided by v, n limbs with a
+   nonzero top one, for m >= n >= 2. Both are normalized in place. The
+   quotient digit of step j goes to u[j + n], which the step leaves zero
+   and no later step reads, so u ends holding the quotient in u[n..m] and
+   the remainder, unnormalized again, in u[0..n-1]. */
+static void __bcc_bitint_divide(limb *u, limb *v, unsigned m, unsigned n) {
     int s = __builtin_clzll(v[n - 1]);
-    for (unsigned i = n - 1; i > 0; i--)
-        vn[i] = v[i] << s | (s ? v[i - 1] >> (64 - s) : 0);
-    vn[0] = v[0] << s;
-    un[m] = s ? u[m - 1] >> (64 - s) : 0;
-    for (unsigned i = m - 1; i > 0; i--)
-        un[i] = u[i] << s | (s ? u[i - 1] >> (64 - s) : 0);
-    un[0] = u[0] << s;
+    if (s) {
+        for (unsigned i = n - 1; i > 0; i--)
+            v[i] = v[i] << s | v[i - 1] >> (64 - s);
+        v[0] <<= s;
+        for (unsigned i = m; i > 0; i--)
+            u[i] = u[i] << s | u[i - 1] >> (64 - s);
+        u[0] <<= s;
+    }
     for (unsigned j = m - n + 1; j-- > 0;) {
-        wide numerator = (wide)un[j + n] << 64 | un[j + n - 1];
-        wide qhat = numerator / vn[n - 1];
-        wide rhat = numerator - qhat * vn[n - 1];
-        while (qhat >> 64 || qhat * vn[n - 2] > (rhat << 64 | un[j + n - 2])) {
+        wide numerator = (wide)u[j + n] << 64 | u[j + n - 1];
+        wide qhat = numerator / v[n - 1];
+        wide rhat = numerator - qhat * v[n - 1];
+        while (qhat >> 64 || qhat * v[n - 2] > (rhat << 64 | u[j + n - 2])) {
             qhat--;
-            rhat += vn[n - 1];
+            rhat += v[n - 1];
             if (rhat >> 64)
                 break;
         }
         limb borrow = 0, carry = 0;
         for (unsigned i = 0; i < n; i++) {
-            wide product = qhat * vn[i] + carry;
+            wide product = qhat * v[i] + carry;
             carry = (limb)(product >> 64);
-            limb low = (limb)product, x = un[i + j];
-            un[i + j] = x - low - borrow;
+            limb low = (limb)product, x = u[i + j];
+            u[i + j] = x - low - borrow;
             borrow = x < low || x - low < borrow;
         }
-        limb x = un[j + n];
-        un[j + n] = x - carry - borrow;
-        q[j] = (limb)qhat;
+        limb x = u[j + n];
+        limb digit = (limb)qhat;
         if (x < carry || x - carry < borrow) {
-            q[j]--;
+            digit--;
             limb add = 0;
             for (unsigned i = 0; i < n; i++) {
-                wide sum = (wide)un[i + j] + vn[i] + add;
-                un[i + j] = (limb)sum;
+                wide sum = (wide)u[i + j] + v[i] + add;
+                u[i + j] = (limb)sum;
                 add = (limb)(sum >> 64);
             }
-            un[j + n] += add;
         }
+        u[j + n] = digit;
     }
-    for (unsigned i = 0; i < n; i++)
-        r[i] = un[i] >> s | (s ? un[i + 1] << (64 - s) : 0);
+    if (s) {
+        for (unsigned i = 0; i < n; i++)
+            u[i] = u[i] >> s | (i + 1 < n ? u[i + 1] << (64 - s) : 0);
+    }
 }
 
 /* The quotient (truncated toward zero) into quotient and the remainder into
-   remainder, either of which may be null (C23 6.5.5p6). */
+   remainder, either of which may be null (C23 6.5.5p6). The work takes two
+   arrays of the width's limbs, 2 MB at Clang's 8388608 bits. */
 static void __bcc_bitint_divmod(limb *quotient, limb *remainder, const limb *a, const limb *b,
                                 unsigned bits, int is_signed) {
     unsigned n = LIMBS(bits);
     int na = __bcc_bitint_negative(a, bits, is_signed);
     int nb = __bcc_bitint_negative(b, bits, is_signed);
-    limb u[n], v[n], q[n], r[n], un[n + 1], vn[n];
+    limb u[n + 1], v[n];
     unsigned m = __bcc_bitint_absolute(u, a, bits, is_signed, na);
     unsigned k = __bcc_bitint_absolute(v, b, bits, is_signed, nb);
-    for (unsigned i = 0; i < n; i++)
-        q[i] = r[i] = 0;
+    u[m] = 0;
+    /* The quotient's and the remainder's limbs within u, and their counts. */
+    const limb *q = u, *r = u;
+    unsigned qn = 0, rn = 0;
+    limb rest = 0;
     if (k == 0) {
         /* Division by zero is undefined. */
     } else if (m < k) {
-        for (unsigned i = 0; i < m; i++)
-            r[i] = u[i];
+        rn = m;
     } else if (k == 1) {
-        wide rest = 0;
+        wide carried = 0;
         for (unsigned j = m; j-- > 0;) {
-            wide numerator = rest << 64 | u[j];
-            q[j] = (limb)(numerator / v[0]);
-            rest = numerator % v[0];
+            wide numerator = carried << 64 | u[j];
+            u[j] = (limb)(numerator / v[0]);
+            carried = numerator % v[0];
         }
-        r[0] = (limb)rest;
+        rest = (limb)carried;
+        qn = m;
+        r = &rest;
+        rn = 1;
     } else {
-        __bcc_bitint_divide(q, r, u, v, m, k, un, vn);
+        __bcc_bitint_divide(u, v, m, k);
+        q = u + k;
+        qn = m - k + 1;
+        rn = k;
     }
     if (quotient)
-        __bcc_bitint_store(quotient, q, n, na != nb, bits, is_signed);
+        __bcc_bitint_store(quotient, q, qn, na != nb, bits, is_signed);
     if (remainder)
-        __bcc_bitint_store(remainder, r, n, na, bits, is_signed);
+        __bcc_bitint_store(remainder, r, rn, na, bits, is_signed);
 }
 
 void __bcc_bitint_div(limb *d, const limb *a, const limb *b, unsigned bits, int is_signed) {
