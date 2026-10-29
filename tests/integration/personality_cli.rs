@@ -115,6 +115,15 @@ mod tests {
         })
     }
 
+    /// The target bcc's GCC and Clang personalities compile for by default:
+    /// the host's, MinGW-w64 on a Windows GNU host, as `--target=` names it
+    /// and as GCC's `-v` names it.
+    const HOST_TARGET: (&str, &str) = if cfg!(windows) {
+        ("x86_64-w64-windows-gnu", "x86_64-w64-mingw32")
+    } else {
+        ("x86_64-unknown-linux-gnu", "x86_64-linux-gnu")
+    };
+
     /// Expands `names` in the `cl` personality `mode` with `options`.
     fn cl_expand(mode: &str, options: &[&str], names: &str) -> String {
         let directory = Directory::new();
@@ -2178,7 +2187,14 @@ mod tests {
         let directory = Directory::new();
         directory.write("x.c", "struct s { char c; int i : 3; } v;\n");
         let gcc = |args: &[&str]| directory.bcc("--gcc-mode", args);
-        let refused = gcc(&["-c", "-mms-bitfields", "x.c", "-o", "x.o"]);
+        // MinGW GCC, the default on a Windows host, takes the Microsoft
+        // options, so the Linux cases name their target.
+        let linux = |args: &[&str]| {
+            let mut options = vec!["--target=x86_64-linux-gnu"];
+            options.extend(args);
+            gcc(&options)
+        };
+        let refused = linux(&["-c", "-mms-bitfields", "x.c", "-o", "x.o"]);
         assert_eq!(refused.status.code(), Some(1));
         assert!(
             stderr(&refused).contains("'-mms-bitfields' is not supported"),
@@ -2203,7 +2219,7 @@ mod tests {
             "w.o",
         ]);
         assert_eq!(windows.status.code(), Some(1), "{}", stderr(&windows));
-        succeeds(&gcc(&[
+        succeeds(&linux(&[
             "-c",
             "-mno-ms-bitfields",
             "-mlong-double-80",
@@ -2213,7 +2229,7 @@ mod tests {
         ]));
         // A newer processor warns: baseline code runs on it.
         for option in ["-march=native", "-march=x86-64-v3", "-mavx2"] {
-            let output = gcc(&["-c", option, "x.c", "-o", "x.o"]);
+            let output = linux(&["-c", option, "x.c", "-o", "x.o"]);
             succeeds(&output);
             assert!(
                 stderr(&output).contains(&format!("'{option}' is ignored: bcc generates baseline")),
@@ -2221,7 +2237,7 @@ mod tests {
                 stderr(&output)
             );
         }
-        succeeds(&gcc(&[
+        succeeds(&linux(&[
             "-c",
             "-march=x86-64",
             "-mtune=native",
@@ -2650,8 +2666,8 @@ mod tests {
         let directory = Directory::new();
         directory.write(
             "script.c",
-            "#!/usr/bin/tcc -run\n#include <stdio.h>\nint main(int argc, char **argv) {\n  \
-             printf(\"%d %s\\n\", argc, argv[1]);\n  return 3;\n}\n",
+            "#!/usr/bin/tcc -run\nint printf(const char *, ...);\nint main(int argc, char **argv) \
+             {\n  printf(\"%d %s\\n\", argc, argv[1]);\n  return 3;\n}\n",
         );
         let output = directory.bcc("--tcc-mode", &["-run", "script.c", "one"]);
         assert_eq!(output.status.code(), Some(3), "{}", stderr(&output));
@@ -2907,16 +2923,19 @@ mod tests {
     #[test]
     fn tcc_run_reads_options_and_arguments_as_tcc_does() {
         let directory = Directory::new();
+        // The programs declare what they call: bcc has none of the headers
+        // TCC for Windows ships, so TCC finds no `<stdio.h>` there.
         directory.write(
             "args.c",
-            "#include <stdio.h>\nint main(int argc, char **argv) {\n  int c, n = 0;\n  while ((c \
-             = getchar()) != EOF) n++;\n  printf(\"%d %d %s\\n\", N, n, argv[argc - 1]);\n  \
-             return argc;\n}\n",
+            "int getchar(void);\nint printf(const char *, ...);\nint main(int argc, char **argv) \
+             {\n  int c, n = 0;\n  while ((c = getchar()) != -1) n++;\n  printf(\"%d %d %s\\n\", \
+             N, n, argv[argc - 1]);\n  return argc;\n}\n",
         );
         directory.write("input.txt", "abc");
         directory.write(
             "name.c",
-            "#include <stdio.h>\nint main(int argc, char **argv) { puts(argv[0]); return 0; }\n",
+            "int puts(const char *);\nint main(int argc, char **argv) { puts(argv[0]); return 0; \
+             }\n",
         );
         // The program's `argv[0]` is the argument TCC stopped at.
         for (args, name) in [
@@ -2967,10 +2986,29 @@ mod tests {
     /// warnings, and one line per diagnostic up to the first error.
     #[test]
     fn tcc_identity_follows_tcc() {
+        // TCC for Windows, the default on a Windows host, claims Windows
+        // and leaves the glibc family out (`tccdefs.h`, `!defined _WIN32`).
+        for (target, unix) in [
+            ("x86_64-unknown-linux-gnu", true),
+            ("x86_64-w64-windows-gnu", false),
+        ] {
+            let tcc = macros_with(
+                "",
+                &["--compiler-identity=tcc", &format!("--target={target}")],
+            );
+            assert_eq!(
+                defines(&tcc, "__REDIRECT(name,proto,alias)").as_deref(),
+                unix.then_some("name proto __asm__(#alias)"),
+                "{target}"
+            );
+            assert_eq!(defines(&tcc, "__unix__").is_some(), unix, "{target}");
+            assert_eq!(defines(&tcc, "_WIN32").is_some(), !unix, "{target}");
+        }
         let tcc = macros("--tcc-mode");
+        let windows = cfg!(windows);
         assert_eq!(
-            defines(&tcc, "__REDIRECT(name,proto,alias)").as_deref(),
-            Some("name proto __asm__(#alias)")
+            defines(&tcc, "__REDIRECT(name,proto,alias)").is_some(),
+            !windows
         );
         for name in [
             "__SIZEOF_INT128__",
@@ -2981,7 +3019,8 @@ mod tests {
         ] {
             assert_eq!(defines(&tcc, name), None, "{name}");
         }
-        assert_eq!(defines(&tcc, "__unix__").as_deref(), Some("1"));
+        assert_eq!(defines(&tcc, "__unix__").is_some(), !windows);
+        assert_eq!(defines(&tcc, "_WIN32").is_some(), windows);
         let c11 = macros_with("--tcc-mode", &["-std=c11"]);
         assert_eq!(
             defines(&c11, "__STDC_VERSION__").as_deref(),
@@ -3202,14 +3241,20 @@ mod tests {
         directory.write("a.c", "int main(void) { return 0; }\n");
         directory.write("b.c", "int b;\n");
         let exe = std::fs::canonicalize(env!("CARGO_BIN_EXE_bcc-rust")).unwrap();
-        let line = |options: &str| format!(" \"{}\" {options}\n", exe.display());
+        // Windows spells a canonical path verbatim (`\\?\C:\…`); the running
+        // bcc names itself without the prefix.
+        let exe = exe.to_str().unwrap();
+        let exe = exe.strip_prefix(r"\\?\").unwrap_or(exe);
+        // Clang's `-###` escapes a backslash in a quoted word.
+        let line = |options: &str| format!(" \"{}\" {options}\n", exe.replace('\\', r"\\"));
+        let (triple, gcc_triple) = HOST_TARGET;
         let output = directory.bcc("--clang-mode", &["-###", "-c", "a.c"]);
         succeeds(&output);
         assert!(
-            stderr(&output).ends_with(&line(
+            stderr(&output).ends_with(&line(&format!(
                 "\"--compiler-identity=clang\" \"--diagnostic-format=clang\" \
-                 \"--target=x86_64-unknown-linux-gnu\" \"--driver-name=clang\" \"a.c\" \"-c\""
-            )),
+                 \"--target={triple}\" \"--driver-name=clang\" \"a.c\" \"-c\""
+            ))),
             "{}",
             stderr(&output)
         );
@@ -3217,13 +3262,15 @@ mod tests {
         let output = directory.bcc("--gcc-mode", &["-v", "-c", "a.c"]);
         succeeds(&output);
         let text = stderr(&output);
-        assert!(text.starts_with("Target: x86_64-linux-gnu\n"), "{text}");
+        assert!(
+            text.starts_with(&format!("Target: {gcc_triple}\n")),
+            "{text}"
+        );
         // GCC's `-v` quotes nothing, its `-###` only what the shell needs.
         assert!(
             text.contains(&format!(
-                " {} -v --compiler-identity=gcc --diagnostic-format=gcc \
-                 --target=x86_64-unknown-linux-gnu --driver-name=gcc a.c -c\n",
-                exe.display()
+                " {exe} -v --compiler-identity=gcc --diagnostic-format=gcc --target={triple} \
+                 --driver-name=gcc a.c -c\n"
             )),
             "{text}"
         );
@@ -3276,9 +3323,13 @@ mod tests {
         );
         let output = directory.bcc("--clang-mode", &["-H", "-fsyntax-only", "h.c"]);
         succeeds(&output);
+        let here = if cfg!(windows) { r".\\" } else { "./" };
         assert_eq!(
             stderr(&output),
-            ". ./guarded.h\n.. ./b.h\n. ./defined.h\n. ./open.h\n. ./open.h\n. ./b.h\n"
+            format!(
+                ". {here}guarded.h\n.. {here}b.h\n. {here}defined.h\n. {here}open.h\n. \
+                 {here}open.h\n. {here}b.h\n"
+            )
         );
         let output = directory.bcc("--msvc-mode", &["/nologo", "/Zs", "/showIncludes", "h.c"]);
         succeeds(&output);
@@ -3574,11 +3625,11 @@ mod tests {
         succeeds(&output);
         let text = stderr(&output);
         assert!(
-            text.ends_with(
-                " \"--compiler-identity=gcc\" \"--diagnostic-format=gcc\" \
-                 \"--target=x86_64-unknown-linux-gnu\" \"--driver-name=gcc\" \"a b.c\" -D \
-                 \"X=\\\"y z\\\"\" -c \"--output=o\\$.o\"\n"
-            ),
+            text.ends_with(&format!(
+                " \"--compiler-identity=gcc\" \"--diagnostic-format=gcc\" \"--target={}\" \
+                 \"--driver-name=gcc\" \"a b.c\" -D \"X=\\\"y z\\\"\" -c \"--output=o\\$.o\"\n",
+                HOST_TARGET.0
+            )),
             "{text}"
         );
     }
@@ -3661,7 +3712,9 @@ mod tests {
     /// Clang begins every path it reaches from a main file in the working
     /// directory through its includers' directories with `./`, in `-H`
     /// and clang-cl's `/showIncludes`; a header found through `-I` keeps
-    /// its directory's spelling.
+    /// its directory's spelling. Clang joins with the host's separator,
+    /// so `.\sub/s.h` and `.\sub\../d.h` on Windows, and `-H` escapes
+    /// each backslash; GCC joins with `/`.
     #[test]
     fn clang_names_working_directory_headers_with_dot() {
         let directory = Directory::new();
@@ -3682,9 +3735,30 @@ mod tests {
         succeeds(&output);
         assert_eq!(
             stderr(&output),
-            ". ./sub/s.h\n.. ./sub/../d.h\n.. ./sub/t.h\n. ./a.h\n. ./inc/i.h\n.. ./inc/k.h\n. \
-             inc/j.h\n"
+            // As in a string literal (`Lexer::Stringify`).
+            if cfg!(windows) {
+                concat!(
+                    r". .\\sub/s.h",
+                    "\n",
+                    r".. .\\sub\\../d.h",
+                    "\n",
+                    r".. .\\sub\\t.h",
+                    "\n",
+                    r". .\\a.h",
+                    "\n",
+                    r". .\\inc/i.h",
+                    "\n",
+                    r".. .\\inc\\k.h",
+                    "\n",
+                    r". inc\\j.h",
+                    "\n"
+                )
+            } else {
+                ". ./sub/s.h\n.. ./sub/../d.h\n.. ./sub/t.h\n. ./a.h\n. ./inc/i.h\n.. ./inc/k.h\n. \
+                 inc/j.h\n"
+            }
         );
+        // GCC joins with `/` on every host.
         let output = directory.bcc("--gcc-mode", &["-H", "-fsyntax-only", "-Iinc", "m.c"]);
         succeeds(&output);
         assert_eq!(
@@ -3697,9 +3771,11 @@ mod tests {
         );
         succeeds(&output);
         assert!(
-            stderr(&output).starts_with(
+            stderr(&output).starts_with(if cfg!(windows) {
+                "Note: including file: .\\sub/s.h\nNote: including file:  .\\sub\\../d.h\n"
+            } else {
                 "Note: including file: ./sub/s.h\nNote: including file:  ./sub/../d.h\n"
-            ),
+            }),
             "{}",
             stderr(&output)
         );
