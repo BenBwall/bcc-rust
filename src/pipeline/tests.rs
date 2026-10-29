@@ -2,6 +2,7 @@
 //! syntax-tree consumption. `middle_end.rs` runs whole programs through the
 //! middle end, the interpreter and LLVM.
 
+mod memory;
 mod middle_end;
 
 use std::path::PathBuf;

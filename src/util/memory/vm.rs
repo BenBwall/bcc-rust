@@ -123,6 +123,11 @@ impl GrowingRegion {
         self.committed
     }
 
+    /// The bytes reserved, which bound what can be committed.
+    pub(crate) fn reserved(&self) -> usize {
+        self.region.reserved()
+    }
+
     /// The region's base. Memory is reachable through it only up to the
     /// committed prefix at the time of the call, so derive pointers into newly
     /// committed memory after [`Self::ensure_committed`] succeeds.

@@ -6,12 +6,14 @@
 //! and [`arena_list::ArenaList::copy_from_slice`].
 //!
 //! Files by role:
-//! - Allocation: `memory/bump.rs`.
+//! - Allocation: `memory/bump.rs`, with its large blocks in
+//!   `memory/large_blocks.rs`.
 //! - Virtual memory: `memory/vm.rs`.
 //! - Immutable lists: `memory/arena_list.rs`.
 
 // Allocation
 pub(crate) mod bump;
+mod large_blocks;
 
 // Virtual memory
 pub(crate) mod vm;
