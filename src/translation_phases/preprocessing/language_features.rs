@@ -1039,10 +1039,14 @@ pub(super) fn with_identity_macros<'a>(
     if configuration.msvc_compatibility()
         && configuration.target() == crate::target::Target::WindowsMsvc
     {
-        out.push_str(
-            "#define _MSC_VER 1933\n#define _MSC_FULL_VER 193300000\n#define _MSC_BUILD \
-             1\n#define _MSC_EXTENSIONS 1\n",
-        );
+        out.push_str("#define _MSC_VER 1933\n#define _MSC_FULL_VER 193300000\n");
+        // Clang defines a build number of 1; `cl` 19.44 defines 0.
+        out.push_str(if identity == CompilerIdentity::Msvc {
+            "#define _MSC_BUILD 0\n"
+        } else {
+            "#define _MSC_BUILD 1\n"
+        });
+        out.push_str("#define _MSC_EXTENSIONS 1\n");
     }
     if configuration.accepts(Feature::C23Keywords) {
         out.push_str(configuration.target().atomic_c23_macros());

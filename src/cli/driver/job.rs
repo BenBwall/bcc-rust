@@ -296,8 +296,18 @@ fn report_unreadable(args: &Cli, path: &Path, error: &io::Error, arena: &Bump) {
 }
 
 /// The C library's `strerror` text for `error`, which the compilers print,
-/// without the ` (os error N)` Rust appends to it.
+/// without the ` (os error N)` Rust appends to it. On Windows Rust words an
+/// error as the system does (`The system cannot find the file specified.`),
+/// where `cl` and MinGW's GCC print the C runtime's text for `ENOENT` and
+/// `EACCES`.
 pub(super) fn os_reason<'a>(error: &io::Error, arena: &'a Bump) -> &'a str {
+    if cfg!(windows) {
+        match error.kind() {
+            | io::ErrorKind::NotFound => return "No such file or directory",
+            | io::ErrorKind::PermissionDenied => return "Permission denied",
+            | _ => {},
+        }
+    }
     let mut text = ArenaString::new_in(arena);
     _ = write!(text, "{error}");
     let text = text.into_str();

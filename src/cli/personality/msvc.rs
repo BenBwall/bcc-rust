@@ -70,7 +70,12 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
     let slash_paths = clang_cl || !cfg!(windows);
     // After `--`, every argument is an input.
     let mut inputs_only = false;
-    let mut state = State::default();
+    let mut state = State {
+        // `cl` writes `file(line):` unless `/diagnostics:column` asks for
+        // the column; clang-cl writes `file(line,col):`.
+        diagnostics: if clang_cl { "msvc" } else { "msvc-classic" },
+        ..State::default()
+    };
     // clang-cl reads its `/clang:` options after the others, wherever they
     // stand, so they win over `cl`'s (`/clang:-fsigned-char` over `/J`).
     let mut clang_options: Vec<OsString> = Vec::new();
@@ -235,9 +240,39 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         keep_going: !clang_cl,
         ..Plan::default()
     };
-    if !state.nologo && !clang_cl {
+    let banner = (!state.nologo && !clang_cl)
+        .then(|| version::banner(invocation.personality, &invocation.name, target));
+    if state.sources.is_empty() {
+        // clang-cl refuses a command line without inputs, as Clang does.
+        // `cl` alone prints its usage to stdout after its banner; with
+        // options and no file it stops with error D8003.
+        if clang_cl {
+            invocation.error(format_args!("no input files"));
+            return Err(MainError::Reported(error_status(invocation.personality)));
+        }
+        if let Some(banner) = banner {
+            super::print(&banner, true);
+        }
+        if invocation.arguments.is_empty() {
+            super::print(
+                &format!(
+                    "usage: {} [ option... ] filename... [ /link linkoption... ]\n",
+                    invocation.name
+                ),
+                false,
+            );
+            return Ok(plan);
+        }
+        state.command_line_error(
+            invocation,
+            Some("D8003"),
+            format_args!("missing source filename"),
+        );
+        return Err(MainError::Reported(ERROR_STATUS));
+    }
+    if let Some(banner) = banner {
         plan.steps.push(Step::Print {
-            text:   version::banner(invocation.personality, &invocation.name, target),
+            text:   banner,
             stderr: true,
         });
     }
@@ -246,18 +281,6 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         .iter()
         .filter(|source| source.is_c())
         .collect();
-    if c_sources.is_empty() && state.sources.is_empty() {
-        if !state.nologo || clang_cl {
-            super::print(
-                &format!(
-                    "usage: {} [ option... ] filename... [ /link linkoption... ]\n",
-                    invocation.name
-                ),
-                true,
-            );
-        }
-        return Ok(plan);
-    }
     if let Some(source) = state.sources.iter().find(|source| source.cpp) {
         invocation.error(format_args!(
             "'{}': bcc compiles C only; C++ sources are not supported",
@@ -354,6 +377,14 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         }
         plan.steps.push(Step::Bcc(step));
         objects.push(object);
+    }
+    // `cl` compiles several sources in one batch and then says that it
+    // generates their code, also when one of them was missing.
+    if !clang_cl && c_sources.len() > 1 {
+        plan.steps.push(Step::Print {
+            text:   "Generating Code...\n".into(),
+            stderr: false,
+        });
     }
     if state.compile_only {
         return Ok(plan);
@@ -540,7 +571,8 @@ struct State {
 
 impl Default for State {
     /// `cl`'s defaults: C17 (as clang-cl maps its default C mode), column
-    /// diagnostics, Microsoft extensions, and the static runtime.
+    /// diagnostics (clang-cl's; `plan` gives `cl` its classic form),
+    /// Microsoft extensions, and the static runtime.
     fn default() -> Self {
         Self {
             bcc:                     Vec::new(),
