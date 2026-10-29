@@ -2459,16 +2459,46 @@ Calls follow each target's convention as Clang implements it:
 lowering as the structure of their two limbs, storing and loading them at
 the call (`types::limb_argument`).
 
-bcc does not yet lower `_BitInt` of more than 128 bits on any back end:
-lowering stops with "not yet supported by lowering: _BitInt types of more
-than 128 bits". The remaining work is the limb legalization of their
-operations (with helpers equivalent to libgcc's `__mulbitint3`,
-`__divmodbitint4`, `__floatbitint*` and `__fix*bitint`, which GCC 13's
-libgcc lacks, so bcc must carry its own), folding at those widths, and `wb`
-constants of more than 64 bits. `tests/integration/bit_int.rs` compares
-every operator, conversion and folded constant at widths 1-128 with the
-bundled Clang and GCC 15 on every back end, and with wasi-sdk's Clang on
-`wasm32-wasip1`, and links calls between bcc, Clang and GCC objects.
+A `_BitInt` of more than 128 bits has no IR type: lowering keeps it in
+memory as the psABI lays it out, like a structure
+(`lowering/wide_bit_int.rs`), so objects, members, arrays, calls, results
+and `va_arg` take the aggregate paths, which pass it as the table above
+says. Its value is the address of an object holding it, padding bits
+extended; each operation writes a fresh object. Conversions to and from
+integers of at most 128 bits load or build the low limbs inline; the
+arithmetic, bitwise, shift and comparison operators, `++`/`--`, compound
+assignments, conversions between wide widths and to and from the real
+floating types, `switch` (a comparison with each case), bit-fields and the
+overflow builtins call routines of a C runtime,
+`lowering/wide_bit_int/runtime.c`. The middle end compiles it with bcc for
+the unit's target whenever a module calls one of its routines and moves
+the routines the module reaches into it as internal functions, so every
+back end (the interpreter, LLVM and the native back end) runs the same
+code and no program needs libgcc's `__mulbitint3`, `__divmodbitint4`,
+`__floatbitint*` and `__fix*bitint`, which GCC 13's libgcc lacks. The
+routines read only an operand's value bits, so a value whose padding
+another compiler left unextended (GCC 15 does, in memory, for some
+results) computes correctly. Division uses Knuth's algorithm D on 64-bit
+digits; a conversion to a floating type rounds once, from the value's top
+128 bits and a sticky bit, and a 16-bit floating type goes through `float`,
+which is exact where binary16 does not overflow. An atomic compound
+assignment loops on a compare-exchange of the object's bytes. LLVM never
+sees a wide `iN`, so its legalization of very wide integers does not
+apply. A conversion between a wide `_BitInt` and a complex type is refused
+("not yet supported by lowering: conversions between complex types and
+_BitInt types of more than 128 bits").
+
+Clang 23 converts an `unsigned _BitInt(N)` of more than 128 bits whose
+top bit is set to `long double` or `__float128` as if it were negative
+(GCC does not); bcc converts its value, as GCC does, under both
+identities. The remaining work is `wb` constants of more than 64 bits.
+`tests/integration/bit_int.rs` compares every operator, conversion and
+folded constant at widths 1-128 (`bit_int.c`) and at widths 129, 192, 255,
+256, 257, 512, 1000 and 4096, and 65535 for GCC (`bit_int_wide.c`, from
+`scripts/generate_wide_bit_int_program.py`), with the bundled Clang and GCC
+15 on every back end, and with wasi-sdk's Clang on `wasm32-wasip1` for
+widths up to 128; it links calls between bcc, Clang and GCC objects at
+both sizes (`bit_int_abi.c`, `bit_int_wide_abi.c`).
 
 ### Imaginary interchange constants
 

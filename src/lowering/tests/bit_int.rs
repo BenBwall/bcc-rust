@@ -1,6 +1,6 @@
 //! `_BitInt(N)` of up to 128 bits in the IR integer of its storage,
 //! extended from N bits, and passed at calls as each target's convention
-//! classifies it. Wider ones are refused.
+//! classifies it; wider ones in memory, computed by the runtime's routines.
 
 use super::*;
 
@@ -53,24 +53,117 @@ fn wide_arguments_cross_calls_as_limbs_on_x86_64() {
     assert!(text.contains("@f(i128 noundef) -> i128"), "{text}");
 }
 
+/// A `_BitInt` of more than 128 bits is an object of its limbs: its
+/// operations call the runtime's routines, which lowering declares as
+/// internal functions for the middle end to define, and a call passes it as
+/// an aggregate of its size, 8-aligned, which both x86-64 conventions pass
+/// in memory.
 #[test]
-fn bit_ints_wider_than_128_bits_are_refused() {
-    for source in [
-        "int f(_BitInt(129) *p) { return *p; }",
-        "int f(int i) { return (int)(_BitInt(129))i; }",
-        "struct S { _BitInt(200) x; }; extern struct S s; int f(void) { return s.x; }",
-        "_BitInt(129) g(_BitInt(129) a); int h(void) { g(0); return 0; }",
-        "int f(void) { switch ((_BitInt(200))1) { case 1: return 1; default: return 0; } }",
-    ] {
-        let errors = lower(source).expect_err("refused");
-        assert!(
-            errors.iter().all(|error| error
-                == "not yet supported by lowering: _BitInt types of more than 128 bits"),
-            "{source}: {errors:?}"
-        );
+fn wide_bit_ints_are_objects_that_call_the_runtime() {
+    let source = "_BitInt(200) f(_BitInt(200) a, _BitInt(200) b) { return a * b + 1; }";
+    for target in [Target::LinuxGnu, Target::WindowsMsvc] {
+        let text = lower_for(source, target).expect("lowers");
+        for wanted in [
+            "result(size 32, align 8, [])",
+            "aggregate(size 32, align 8, [])",
+            "call @__bcc_bitint_mul(",
+            "call @__bcc_bitint_from_int(",
+            "call @__bcc_bitint_add(",
+        ] {
+            assert!(text.contains(wanted), "{target:?} {wanted}\n{text}");
+        }
     }
     // Its size and alignment are constants.
     drop(lowered(
         "int f(void) { return sizeof(_BitInt(129)) + _Alignof(_BitInt(1000)); }",
     ));
+}
+
+/// A folded wide constant is an internal constant object of its limbs,
+/// its padding bits extended, and a static object stores its limbs.
+#[test]
+fn wide_constants_are_objects_of_their_limbs() {
+    let text = lowered(
+        "_BitInt(129) g = -2;\n_BitInt(129) f(void) { return (_BitInt(129))-3; }",
+    );
+    assert!(
+        text.contains("fdffffffffffffffffffffffffffffffffffffffffffffff"),
+        "{text}"
+    );
+    assert!(text.contains("@.bitint"), "{text}");
+    assert!(
+        text.contains("fcffffffffffffffffffffffffffffffffffffffffffffff")
+            || text.contains("0xfffffffffffffffc"),
+        "{text}"
+    );
+}
+
+/// A switch on a wide value compares it with each case in turn; a case
+/// range compares with both bounds.
+#[test]
+fn wide_switches_compare_with_each_case() {
+    let text = lowered(
+        "int f(_BitInt(300) x) { switch (x) { case 1: return 1; case 5 ... 9: return 2; \
+         default: return 0; } }",
+    );
+    assert_eq!(text.matches("call @__bcc_bitint_cmp(").count(), 3, "{text}");
+}
+
+/// A conversion between a wide integer and a complex type is refused.
+#[test]
+fn wide_complex_conversions_are_refused() {
+    let errors = lower("double _Complex f(_BitInt(300) x) { return x; }").expect_err("refused");
+    assert!(
+        errors.iter().all(|error| error
+            == "not yet supported by lowering: conversions between complex types and _BitInt \
+                types of more than 128 bits"),
+        "{errors:?}"
+    );
+}
+
+/// The middle end defines the routines a module calls, and those they
+/// call, with the bodies bcc compiles from the runtime, as internal
+/// functions; routines nothing calls stay out.
+#[test]
+fn the_middle_end_links_the_routines_a_module_calls() {
+    let tu = Bump::new();
+    let source = tu.alloc_str(
+        "_BitInt(300) f(_BitInt(300) a, _BitInt(300) b) { return a / b; }\n",
+    );
+    let mut context = crate::translation_phases::Context::with_configuration(
+        &tu,
+        crate::configuration::CompilerConfiguration::default(),
+    );
+    let unit = parse_translation_unit(
+        &mut context,
+        Path::new("<test>"),
+        source,
+        HeaderSearch::default(),
+    );
+    let sema = analyze_translation_unit(&mut context, &unit);
+    let arena = Bump::new();
+    let module = crate::pipeline::lower_translation_unit(
+        &context,
+        &unit,
+        &sema,
+        &arena,
+        None,
+        crate::ir::Profile::PreAbi,
+    )
+    .expect("lowers");
+    let defined = |name: &str| {
+        module
+            .functions()
+            .any(|(_, function)| function.name == name && function.body.is_some())
+    };
+    assert!(defined("__bcc_bitint_div"), "{module}");
+    assert!(!defined("__bcc_bitint_mul"), "{module}");
+    assert!(
+        module
+            .functions()
+            .filter(|(_, function)| function.name.starts_with("__bcc_bitint_"))
+            .all(|(_, function)| function.linkage == crate::ir::Linkage::Internal
+                && function.body.is_some()),
+        "{module}"
+    );
 }

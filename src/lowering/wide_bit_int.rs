@@ -235,7 +235,7 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
         let sign = self.iconst(Type::I32, i128::from(signed));
         let low = self.iconst(Type::I64, 1);
         let high = self.iconst(Type::I64, 0);
-        _ = self.wide_call(Helper::FromInteger, &[one, bits, sign, low, high], source)?;
+        _ = self.wide_call(Helper::FromInteger, &[one, bits, sign, low, high, sign], source)?;
         let a = self.wide_address(item, source)?;
         let result = self.wide_object(item.ty, source)?;
         let helper = if increment {
@@ -420,7 +420,12 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
         let shift = self.iconst(Type::I128, 64);
         let high = self.binary_inst(Opcode::Lshr, InstFlags::empty(), value, shift);
         let high = self.convert(Opcode::Trunc, Type::I64, high);
-        _ = self.wide_call(Helper::FromInteger, &[address, bits, one, low, high], source)?;
+        let from_signed = self.iconst(Type::I32, i128::from(signed));
+        _ = self.wide_call(
+            Helper::FromInteger,
+            &[address, bits, one, low, high, from_signed],
+            source,
+        )?;
         Ok(())
     }
 
@@ -661,9 +666,10 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
                         let shift = self.iconst(Type::I128, 64);
                         let high = self.binary_inst(Opcode::Lshr, InstFlags::empty(), value, shift);
                         let high = self.convert(Opcode::Trunc, Type::I64, high);
+                        let from_signed = self.iconst(Type::I32, i128::from(from.signed()));
                         _ = self.wide_call(
                             Helper::FromInteger,
-                            &[result, bits, sign, low, high],
+                            &[result, bits, sign, low, high, from_signed],
                             source,
                         )?;
                     },
@@ -928,7 +934,7 @@ impl Helper {
             | Self::ShiftLeft | Self::ShiftRight => &[Ptr, Ptr, I64, I32, I32],
             | Self::Test => &[Ptr, I32],
             | Self::Convert => &[Ptr, I32, I32, Ptr, I32, I32],
-            | Self::FromInteger => &[Ptr, I32, I32, I64, I64],
+            | Self::FromInteger => &[Ptr, I32, I32, I64, I64, I32],
             | Self::FieldGet => &[Ptr, I32, I32, Ptr, I32, I32],
             | Self::FieldSet => &[Ptr, I32, I32, Ptr],
             | Self::ToFloat(_) => &[Ptr, I32, I32],

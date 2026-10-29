@@ -215,11 +215,12 @@ void __bcc_bitint_field_set(unsigned char *p, unsigned shift, unsigned width, co
     }
 }
 
-/* The 128-bit value low | high << 64, already extended by its own
-   signedness, converted to a _BitInt(bits). */
-void __bcc_bitint_from_int(limb *d, unsigned bits, int is_signed, limb low, limb high) {
+/* The 128-bit value low | high << 64, signed if `value_signed`, converted
+   to a _BitInt(bits). */
+void __bcc_bitint_from_int(limb *d, unsigned bits, int is_signed, limb low, limb high,
+                           int value_signed) {
     unsigned n = LIMBS(bits);
-    limb fill = (long long)high < 0 ? ~0ull : 0;
+    limb fill = value_signed && (long long)high < 0 ? ~0ull : 0;
     for (unsigned i = 0; i < n; i++)
         d[i] = i == 0 ? low : i == 1 ? high : fill;
     __bcc_bitint_extend(d, bits, is_signed);
