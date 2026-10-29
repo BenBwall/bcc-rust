@@ -186,3 +186,17 @@ fn wide_bfloat_conversions_round_as_each_compiler_does() {
         assert!(text.contains("fptrunc.bf16"), "{identity:?}\n{text}");
     }
 }
+
+/// Wide results share their stack slots between statements, so a long run
+/// of operations takes a few slots, not one per operation.
+#[test]
+fn wide_results_share_slots_between_statements() {
+    let mut source = String::from("_BitInt(300) f(_BitInt(300) a) {\n");
+    for _ in 0..50 {
+        source.push_str("    a = a * 3 + 1;\n");
+    }
+    source.push_str("    return a;\n}");
+    let text = lowered(&source);
+    let slots = text.matches("stack_slot").count();
+    assert!(slots <= 4, "{slots} slots\n{text}");
+}

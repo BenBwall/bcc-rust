@@ -8301,6 +8301,43 @@ static void folded(void) {
     { static const _BitInt(4173) folded = (unsigned _BitInt(4096))(((unsigned _BitInt(4096))0xe8ed581e85372c57ULL) | ((unsigned _BitInt(4096))0xedfb471fd6461deaULL << 64) | ((unsigned _BitInt(4096))0xb8404fd962182878ULL << 128) | ((unsigned _BitInt(4096))0xfa9294fb11db0467ULL << 192) | ((unsigned _BitInt(4096))0x928a781faed628abULL << 256) | ((unsigned _BitInt(4096))0x648d7b9b70bd689ULL << 320) | ((unsigned _BitInt(4096))0xf653953cad5aae0aULL << 384) | ((unsigned _BitInt(4096))0xd142f2b4523bada8ULL << 448) | ((unsigned _BitInt(4096))0x285f740ba1602f76ULL << 512) | ((unsigned _BitInt(4096))0x51ac6f26d743af09ULL << 576) | ((unsigned _BitInt(4096))0x45daa8f759e7974aULL << 640) | ((unsigned _BitInt(4096))0xa7123386b16dd971ULL << 704) | ((unsigned _BitInt(4096))0x3b724d4eeba9fb7cULL << 768) | ((unsigned _BitInt(4096))0x5f8157c659bd4596ULL << 832) | ((unsigned _BitInt(4096))0x23a8549ad5233236ULL << 896) | ((unsigned _BitInt(4096))0x1a963818c9914517ULL << 960) | ((unsigned _BitInt(4096))0x91cdf3caa19221ceULL << 1024) | ((unsigned _BitInt(4096))0xe8286f73c3a89f5eULL << 1088) | ((unsigned _BitInt(4096))0xcc39fffb2ee35a21ULL << 1152) | ((unsigned _BitInt(4096))0xdbcb9fadfddccbbcULL << 1216) | ((unsigned _BitInt(4096))0xa3fdb99c8f9a9fbdULL << 1280) | ((unsigned _BitInt(4096))0x1f3d2a7594d8406dULL << 1344) | ((unsigned _BitInt(4096))0xdb19868e36808fe4ULL << 1408) | ((unsigned _BitInt(4096))0x90726e60c7f3602aULL << 1472) | ((unsigned _BitInt(4096))0xc9297e086f6ae23dULL << 1536) | ((unsigned _BitInt(4096))0xd9d3ce308a397455ULL << 1600) | ((unsigned _BitInt(4096))0x15ff4c74a8cfaab7ULL << 1664) | ((unsigned _BitInt(4096))0x8406572b8037fd85ULL << 1728) | ((unsigned _BitInt(4096))0xfe851173ba41fe4dULL << 1792) | ((unsigned _BitInt(4096))0x1f41981a99cc1711ULL << 1856) | ((unsigned _BitInt(4096))0x1f5485eb65c4e644ULL << 1920) | ((unsigned _BitInt(4096))0xbd26dfc704880af0ULL << 1984) | ((unsigned _BitInt(4096))0x6f97d4154ed7d1ebULL << 2048) | ((unsigned _BitInt(4096))0xb062d5e08b1c840cULL << 2112) | ((unsigned _BitInt(4096))0xb7ea0bbb93ac817aULL << 2176) | ((unsigned _BitInt(4096))0x139a6c9b8fca8cf2ULL << 2240) | ((unsigned _BitInt(4096))0x1c9c92297ba4bcc6ULL << 2304) | ((unsigned _BitInt(4096))0x69b3401fd264cce0ULL << 2368) | ((unsigned _BitInt(4096))0xd1bf68738c428b01ULL << 2432) | ((unsigned _BitInt(4096))0x75ec1ee5f08cc52fULL << 2496) | ((unsigned _BitInt(4096))0xb3ab2f1509c4f2eeULL << 2560) | ((unsigned _BitInt(4096))0xac315863abeacf4aULL << 2624) | ((unsigned _BitInt(4096))0x5dd73fc8d7d77085ULL << 2688) | ((unsigned _BitInt(4096))0x10c8c9adec65c1e9ULL << 2752) | ((unsigned _BitInt(4096))0x501fe10eded2f2a6ULL << 2816) | ((unsigned _BitInt(4096))0x8e1bd1741e2482c2ULL << 2880) | ((unsigned _BitInt(4096))0x1d9620a44bdd1ee9ULL << 2944) | ((unsigned _BitInt(4096))0xf949365474078310ULL << 3008) | ((unsigned _BitInt(4096))0xf06a6026fd8a9ec1ULL << 3072) | ((unsigned _BitInt(4096))0x4e2ff89421f1f6ebULL << 3136) | ((unsigned _BitInt(4096))0x3608a0fefdda09a5ULL << 3200) | ((unsigned _BitInt(4096))0xd9a3ba2248447687ULL << 3264) | ((unsigned _BitInt(4096))0xcdfc2465ca46c31bULL << 3328) | ((unsigned _BitInt(4096))0x58418046c712d9e1ULL << 3392) | ((unsigned _BitInt(4096))0x4d8d183249da434fULL << 3456) | ((unsigned _BitInt(4096))0xb35b9d4c35d55559ULL << 3520) | ((unsigned _BitInt(4096))0xce2f6709145db8eeULL << 3584) | ((unsigned _BitInt(4096))0xe232f94c58118d46ULL << 3648) | ((unsigned _BitInt(4096))0x2904fbecb1ea20d8ULL << 3712) | ((unsigned _BitInt(4096))0x1537d2fccade3224ULL << 3776) | ((unsigned _BitInt(4096))0x97dcaff10bd60efeULL << 3840) | ((unsigned _BitInt(4096))0xddc7e74f03c05bb3ULL << 3904) | ((unsigned _BitInt(4096))0xc633f52f34331772ULL << 3968) | ((unsigned _BitInt(4096))0x6353f48ba7f52055ULL << 4032)); show(&folded, 4173); }
 }
 
+
+static _BitInt(300) chain(_BitInt(300) a, _BitInt(300) b, int n) {
+    _BitInt(300) r = a;
+    for (int i = 0; i < n; i++) {
+        _BitInt(300) t = r * 3 + b;
+        r = i % 2 ? t - a : t / 2;
+    }
+    return n > 2 ? r + a * b : r - b;
+}
+
+#ifdef BIT_INT_65535
+#define STEP(k) r = (r + a * (k)) / (b + (k)) + (a >> (k)) - (b << (k));
+#define TEN(k) STEP(k) STEP(k + 1) STEP(k + 2) STEP(k + 3) STEP(k + 4) \
+    STEP(k + 5) STEP(k + 6) STEP(k + 7) STEP(k + 8) STEP(k + 9)
+static _BitInt(65535) deep(_BitInt(65535) a, _BitInt(65535) b) {
+    _BitInt(65535) r = a;
+    TEN(0) TEN(10) TEN(20) TEN(30) TEN(40) TEN(50) TEN(60) TEN(70)
+    TEN(80) TEN(90) TEN(100) TEN(110) TEN(120) TEN(130) TEN(140)
+    return r;
+}
+#endif
+
+static void extras(void) {
+    printf("extras\n");
+    volatile int n = 5;
+    _BitInt(300) a = (_BitInt(300))n << 200, b = (_BitInt(300))n * 1234567;
+    SHOW(_BitInt(300), 300, chain(a, b, n));
+    SHOW(_BitInt(300), 300, chain(-a, b, 2));
+    _BitInt(300) values[4];
+    for (int i = 0; i < 4; i++)
+        values[i] = a * i - b;
+    SHOW(_BitInt(300), 300, values[0] + values[1] * values[2] - values[3]);
+#ifdef BIT_INT_65535
+    _BitInt(65535) big = (_BitInt(65535))n << 65000, small = (_BitInt(65535))n << 300;
+    SHOW(_BitInt(65535), 65535, deep(big, small));
+#endif
+}
 int main(void) {
     run_bs129();
     run_bu129();
@@ -8326,5 +8363,6 @@ int main(void) {
 #endif
     conversions();
     folded();
+    extras();
     return 0;
 }

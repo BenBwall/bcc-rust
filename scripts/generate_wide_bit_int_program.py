@@ -252,12 +252,14 @@ def generate():
         sections.append((ty, is_huge, operands))
     lines.extend(conversions(sections, rng))
     lines.extend(folded(sections, rng))
+    lines.extend(EXTRAS.splitlines())
     lines.append("int main(void) {")
     for ty, is_huge, _ in sections:
         call = f"    run_{ty.tag}();"
         lines.append(f"#ifdef BIT_INT_65535\n{call}\n#endif" if is_huge else call)
     lines.append("    conversions();")
     lines.append("    folded();")
+    lines.append("    extras();")
     lines.append("    return 0;")
     lines.append("}")
     OUTPUT.write_text("\n".join(lines) + "\n")
@@ -421,6 +423,48 @@ def folded(sections, rng):
     lines.append("}")
     lines.append("")
     return lines
+
+
+# Values that cross statements and conditionals, and a function whose
+# hundreds of 65535-bit results need their stack slots shared.
+EXTRAS = r"""
+static _BitInt(300) chain(_BitInt(300) a, _BitInt(300) b, int n) {
+    _BitInt(300) r = a;
+    for (int i = 0; i < n; i++) {
+        _BitInt(300) t = r * 3 + b;
+        r = i % 2 ? t - a : t / 2;
+    }
+    return n > 2 ? r + a * b : r - b;
+}
+
+#ifdef BIT_INT_65535
+#define STEP(k) r = (r + a * (k)) / (b + (k)) + (a >> (k)) - (b << (k));
+#define TEN(k) STEP(k) STEP(k + 1) STEP(k + 2) STEP(k + 3) STEP(k + 4) \
+    STEP(k + 5) STEP(k + 6) STEP(k + 7) STEP(k + 8) STEP(k + 9)
+static _BitInt(65535) deep(_BitInt(65535) a, _BitInt(65535) b) {
+    _BitInt(65535) r = a;
+    TEN(0) TEN(10) TEN(20) TEN(30) TEN(40) TEN(50) TEN(60) TEN(70)
+    TEN(80) TEN(90) TEN(100) TEN(110) TEN(120) TEN(130) TEN(140)
+    return r;
+}
+#endif
+
+static void extras(void) {
+    printf("extras\n");
+    volatile int n = 5;
+    _BitInt(300) a = (_BitInt(300))n << 200, b = (_BitInt(300))n * 1234567;
+    SHOW(_BitInt(300), 300, chain(a, b, n));
+    SHOW(_BitInt(300), 300, chain(-a, b, 2));
+    _BitInt(300) values[4];
+    for (int i = 0; i < 4; i++)
+        values[i] = a * i - b;
+    SHOW(_BitInt(300), 300, values[0] + values[1] * values[2] - values[3]);
+#ifdef BIT_INT_65535
+    _BitInt(65535) big = (_BitInt(65535))n << 65000, small = (_BitInt(65535))n << 300;
+    SHOW(_BitInt(65535), 65535, deep(big, small));
+#endif
+}
+"""
 
 
 def literal_of(value):
