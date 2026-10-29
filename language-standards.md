@@ -328,7 +328,7 @@ must not be advertised merely because Clang advertises them.
 
 ### Embedded freestanding headers
 
-All eleven public headers are discoverable in all language modes, and each behaves like
+All twelve public headers are discoverable in all language modes, and each behaves like
 Clang's resource header of the same name, whose logic, not text, they follow.
 In a hosted translation a header that Clang chains to the C library tests
 `__has_include_next` and reads the library's header with `#include_next`
@@ -352,6 +352,7 @@ still follows the configured extension policy.
 | `stdint.h` | All 8/16/32/64 exact, least and fast types, pointer and maximum types, corresponding limits and constant macros; `SIG_ATOMIC`, `SIZE`, `PTRDIFF`, `WCHAR`, `WINT` limits. Hosted, a C library `<stdint.h>` replaces all of these, as with Clang. |
 | `stdalign.h` | Like Clang: `alignas`, `alignof`, and the two indicator macros when `__STDC_VERSION__` exists and precedes C23; empty in C89 and C23/C2y. |
 | `stdatomic.h` | C11 atomic typedefs, `memory_order`, `atomic_flag`, initialization, fences, lock-free queries and all generic operation macros. Hosted, it defers to a following system header except with `_MSC_VER` in C mode, matching the pinned Clang resource header. C17 marks `ATOMIC_VAR_INIT` deprecated through `#pragma clang deprecated`; `_CLANG_DISABLE_CRT_DEPRECATION_WARNINGS` suppresses that marker. C23 removes `ATOMIC_VAR_INIT` and adds `atomic_char8_t` and `ATOMIC_CHAR8_T_LOCK_FREE`. No `__STDC_NO_ATOMICS__` is defined or interpreted, as in Clang. |
+| `stdbit.h` | C23's `<stdbit.h>` (§7.18): `__STDC_VERSION_STDBIT_H__` (`202311L`), `__STDC_ENDIAN_LITTLE__` (1234), `__STDC_ENDIAN_BIG__` (4321), `__STDC_ENDIAN_NATIVE__` (little), the 70 `stdc_*_u{c,s,i,l,ll}` functions and the 14 type-generic macros. Hosted, it defers to the C library's header (glibc 2.39 and later, whose macros use the `__builtin_stdc_*` builtins when the compiler has them); otherwise, freestanding or on `wasm32-wasip1`, it declares the functions with external linkage and defines each as a macro over its builtin, converting the argument as the prototype does. bcc's WASI C library defines the functions (`backend/wasm/runtime/stdbit.c`); elsewhere a call that suppresses a macro needs a C library that defines them. Neither GCC nor Clang ships the header. |
 | `stdnoreturn.h` | Like Clang: `noreturn` and `__noreturn_is_defined` in every mode, retained in C23 despite deprecation. |
 | `mm_malloc.h` | Not ISO C; GCC and Clang ship it, and MinGW-w64's `<malloc.h>` includes it. Like Clang's, it includes `<stdlib.h>` and defines `static __inline__` `_mm_malloc` and `_mm_free`: through `__mingw_aligned_malloc` for MinGW-w64, `_aligned_malloc` for the MSVC runtime (from its `<malloc.h>`, unless that defines `_mm_malloc` as a macro), and `posix_memalign`, which it declares, elsewhere. An alignment of 1 uses `malloc`, and a smaller power of two is raised to a pointer's alignment. The x86 intrinsic headers (`x86intrin.h`, `emmintrin.h`, `immintrin.h`, `cpuid.h` and their family) need vector types and target builtins and are not provided. |
 
