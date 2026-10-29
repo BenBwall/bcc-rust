@@ -843,14 +843,45 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
         )
     }
 
-    /// A fresh object of the wide type `ty`.
+    /// A fresh object of the wide type `ty`, for a result: a stack slot of
+    /// its size that no live value holds, or a new one.
     fn wide_object(&mut self, ty: TypeId, source: SourceVectors) -> Result<Value, LoweringError> {
         let layout = types::layout(&self.unit.sema.types, ty).map_err(|kind| at(kind, source))?;
-        self.fresh_object(
-            layout.size,
-            Align::from_bytes(8).unwrap_or(Align::BYTE),
-            source,
-        )
+        let slot = match self
+            .wide_temporaries
+            .iter_mut()
+            .find(|(size, _, live)| *size == layout.size && !*live)
+        {
+            | Some((_, slot, live)) => {
+                *live = true;
+                *slot
+            },
+            | None => {
+                let size = u32::try_from(layout.size).map_err(|_| {
+                    LoweringError::unsupported(Construct::LargeAutomaticObject, source)
+                })?;
+                let slot = self.object_slot(size, Align::from_bytes(8).unwrap_or(Align::BYTE));
+                self.wide_temporaries.push((layout.size, slot, true));
+                slot
+            },
+        };
+        Ok(self.inst(InstData::StackAddr { slot }, Type::Ptr))
+    }
+
+    /// Frees the wide results' stack slots when a statement or declaration
+    /// begins with no operand pending: a result lives only within its full
+    /// expression, and one that a statement expression yields to the
+    /// expression around it is that expression's pending operand, as is
+    /// every other value still to be used. Each slot then serves one
+    /// result per full expression instead of a function holding one per
+    /// operation, which at 65535 bits would exhaust the stack.
+    /// C99: §6.8 paragraph 4, p. 131; PDF p. 143 (full expressions).
+    pub(super) fn free_wide_temporaries(&mut self) {
+        if self.operands.is_empty() {
+            for (_, _, live) in &mut self.wide_temporaries {
+                *live = false;
+            }
+        }
     }
 
     /// Calls the runtime routine `helper` with `args`, declaring it on its

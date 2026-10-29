@@ -86,6 +86,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         mode: StatementMode,
     ) -> Result<(), LoweringError> {
         use StatementType as S;
+        self.free_wide_temporaries();
         let source = statement.source_vectors;
         let control = self
             .unit
@@ -909,6 +910,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         &mut self,
         declaration: &'tu Declaration<'tu>,
     ) -> Result<(), LoweringError> {
+        self.free_wide_temporaries();
         let mut tasks = ArenaVec::new_in(self.scratch);
         let site = self
             .unit
@@ -1069,6 +1071,7 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
             targets: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, scratch),
             switch_blocks: ArenaVec::new_in(scratch),
             switch_starts: ArenaVec::new_in(scratch),
+            wide_temporaries: ArenaVec::new_in(scratch),
             result: record.result.unqualified(),
             bounds: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, scratch),
             vla_tokens: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, scratch),
