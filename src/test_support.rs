@@ -53,6 +53,37 @@ use std::{
     },
 };
 
+/// `lines` declarations whose initializers nest a few small function-like
+/// macros, as ordinary macro-heavy code does: each line expands to about 390
+/// tokens and 300 expressions.
+pub(crate) fn macro_heavy_source(lines: usize) -> String {
+    use std::fmt::Write;
+    let mut source = String::from(
+        "#define MIN(a,b) ((a)<(b)?(a):(b))\n#define MAX(a,b) ((a)>(b)?(a):(b))\n#define \
+         CLAMP(x,lo,hi) MIN(MAX(x,lo),hi)\n#define SQ(x) ((x)*(x))\n#define CALL(f, ...) \
+         f(__VA_ARGS__)\nint g(int, int);\n",
+    );
+    for i in 0..lines {
+        _ = writeln!(
+            source,
+            "int v{i} = CLAMP(SQ({i} + MIN({i}, 3)), MAX(1, (2, 3)), CALL(g, SQ(4), MIN(({i}), \
+             9)));"
+        );
+    }
+    source
+}
+
+/// The bytes of virtual memory `run` commits on this thread at its peak, and
+/// what `run` returns. Every arena and region vector commits through the
+/// counted regions, so this is the compiler's whole working storage.
+pub(crate) fn committed_peak<R>(run: impl FnOnce() -> R) -> (usize, R) {
+    use crate::util::vm::accounting;
+    let before = accounting::live();
+    accounting::reset_peak();
+    let result = run();
+    (accounting::peak().committed - before.committed, result)
+}
+
 /// GCC scalar/library names remain ordinary calls when a local pointer binds
 /// them. Spellings come from the documented families, independently of the
 /// compiler classifier. The unbound clz call protects intrinsic recognition.

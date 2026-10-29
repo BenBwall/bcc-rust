@@ -12,6 +12,12 @@
 //! boundary (see [`super::vm`]). A [`TailVec`] takes the rest of the
 //! reservation as its capacity and commits as it is written, so a vector
 //! whose final length is unknown never commits room it does not fill.
+//!
+//! A block of at least [`large_blocks::LARGE_BLOCK_BYTES`] instead gets a
+//! region of its own (see [`super::large_blocks`]), where it grows without
+//! copying and which it returns when deallocated. Only the latest block can
+//! grow in place in the arena, so a large table that grew there would leave
+//! every outgrown copy behind.
 
 use std::{
     alloc::{
@@ -40,6 +46,11 @@ use allocator_api2::{
 };
 use rustc_hash::FxBuildHasher;
 
+use super::large_blocks::{
+    self,
+    BLOCK_OFFSET,
+    LargeBlocks,
+};
 use crate::util::vm::{
     GrowingRegion,
     REGION_BYTES,
@@ -179,7 +190,7 @@ impl Bump {
     }
 
     /// The most bytes this arena has held at once, including alignment
-    /// padding and blocks a reset later reclaimed.
+    /// padding, large blocks, and blocks a reset later reclaimed.
     #[cfg_attr(
         not(any(test, feature = "benchmarking-internals")),
         expect(
@@ -261,6 +272,7 @@ impl Bump {
         let inner = self.inner.get_mut();
         inner.used = 0;
         inner.last = None;
+        inner.large.release_all();
     }
 
     /// An empty arena. It holds no region until something is allocated.
@@ -272,6 +284,7 @@ impl Bump {
                 last:       None,
                 high_water: 0,
                 tail:       None,
+                large:      LargeBlocks::new(),
             }),
         }
     }
@@ -283,12 +296,16 @@ struct Inner {
     /// Every live block lies below this offset.
     used:       usize,
     last:       Option<Last>,
-    /// The largest `used` since the arena was created.
+    /// The largest `used` plus large-block bytes since the arena was
+    /// created.
     high_water: usize,
     /// Where the open [`TailVec`] starts, if one is open. It owns everything
     /// from there to the end of the reservation, so nothing else may
     /// allocate until it closes.
     tail:       Option<usize>,
+    /// Blocks of at least [`large_blocks::LARGE_BLOCK_BYTES`], each in its
+    /// own region.
+    large:      LargeBlocks,
 }
 
 impl Inner {
@@ -308,6 +325,11 @@ impl Inner {
         // refuse rather than overlap it.
         if self.tail.is_some() {
             return Err(AllocError);
+        }
+        if LargeBlocks::wants(layout) {
+            let block = self.large.allocate(layout)?;
+            self.note_high_water();
+            return Ok(block);
         }
         let used = self.used;
         let region = self.region()?;
@@ -347,7 +369,21 @@ impl Inner {
 
     fn set_used(&mut self, used: usize) {
         self.used = used;
-        self.high_water = self.high_water.max(used);
+        self.note_high_water();
+    }
+
+    fn note_high_water(&mut self) {
+        self.high_water = self.high_water.max(self.used + self.large.bytes());
+    }
+
+    /// Whether `ptr`, a nonempty block of this arena, is a large block: one
+    /// outside the arena's own region.
+    fn is_large(&self, ptr: NonNull<u8>) -> bool {
+        large_blocks::ENABLED
+            && self.region.as_ref().is_none_or(|region| {
+                let base = region.as_ptr().as_ptr() as usize;
+                !(base..base + REGION_BYTES).contains(&(ptr.as_ptr() as usize))
+            })
     }
 }
 
@@ -653,6 +689,14 @@ unsafe impl Allocator for Bump {
             return;
         }
         let mut inner = self.inner.borrow_mut();
+        if inner.is_large(ptr) {
+            // SAFETY: the caller passes a live block of this arena, and a
+            // block outside its region is a large one; nothing uses it again.
+            unsafe {
+                inner.large.release(ptr);
+            }
+            return;
+        }
         if let Some(last) = inner
             .last
             .filter(|last| last.ptr == ptr && layout.size() <= last.size)
@@ -679,6 +723,16 @@ unsafe impl Allocator for Bump {
         if old_layout.size() != 0 {
             let mut inner = self.inner.borrow_mut();
             let inner = &mut *inner;
+            // A large block grows where it is unless its region is full.
+            if inner.is_large(ptr)
+                && new_layout.align() <= BLOCK_OFFSET
+                // SAFETY: the caller passes a live block of this arena, and
+                // a block outside its region is a large one.
+                && let Ok(grown) = unsafe { inner.large.resize(ptr, new_layout.size()) }
+            {
+                inner.note_high_water();
+                return Ok(grown);
+            }
             // A latest block exists, so the region was reserved for it.
             let latest = inner
                 .last
@@ -709,6 +763,11 @@ unsafe impl Allocator for Bump {
         // allocation is disjoint and holds at least `new_layout.size()` bytes.
         unsafe {
             ptr::copy_nonoverlapping(ptr.as_ptr(), new_ptr.as_ptr().cast(), old_layout.size());
+        }
+        // SAFETY: the old block is live and not used again, so a large one
+        // can be released.
+        unsafe {
+            self.deallocate(ptr, old_layout);
         }
         Ok(new_ptr)
     }
@@ -760,6 +819,11 @@ unsafe impl Allocator for Bump {
             return Err(AllocError);
         }
         let mut inner = self.inner.borrow_mut();
+        if new_layout.size() != 0 && inner.is_large(ptr) {
+            // SAFETY: the caller passes a live block of this arena, and a
+            // block outside its region is a large one. It stays where it is.
+            return unsafe { inner.large.resize(ptr, new_layout.size()) };
+        }
         // Shrinking the latest block returns its tail to the arena, so a
         // vector sized by doubling can end up exact.
         if let Some(last) = inner
