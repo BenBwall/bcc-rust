@@ -2480,8 +2480,10 @@ routines read only an operand's value bits, so a value whose padding
 another compiler left unextended (GCC 15 does, in memory, for some
 results) computes correctly. Division uses Knuth's algorithm D on 64-bit
 digits; a conversion to a floating type rounds once, from the value's top
-128 bits and a sticky bit, and a 16-bit floating type goes through `float`,
-which is exact where binary16 does not overflow. An atomic compound
+128 bits and a sticky bit; `_Float16` goes through `float`, which loses
+nothing where binary16 does not overflow, and `__bf16` rounds once for GCC
+and through `float` for Clang, as each compiler converts (and as bcc
+converts `__int128`). An atomic compound
 assignment loops on a compare-exchange of the object's bytes. LLVM never
 sees a wide `iN`, so its legalization of very wide integers does not
 apply. A conversion between a wide `_BitInt` and a complex type is refused

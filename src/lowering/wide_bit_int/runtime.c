@@ -484,3 +484,28 @@ BCC_BITINT_TO_FLOAT(__bcc_bitint_to_f80, long double)
 #ifdef __SIZEOF_FLOAT128__
 BCC_BITINT_TO_FLOAT(__bcc_bitint_to_f128, __float128)
 #endif
+
+/* a rounded once to __bf16's 8 significant bits, to nearest even, as a
+   float, which holds that value exactly: GCC's conversion. Clang rounds
+   through float instead, which lowering does with __bcc_bitint_to_f32. */
+float __bcc_bitint_to_bf16(const limb *a, unsigned bits, int is_signed) {
+    int negative = __bcc_bitint_negative(a, bits, is_signed);
+    limb m[LIMBS(bits)];
+    unsigned scale;
+    wide top = __bcc_bitint_top(m, __bcc_bitint_absolute(m, a, bits, is_signed, negative), &scale);
+    limb high = (limb)(top >> 64);
+    int leading = high ? 127 - __builtin_clzll(high) : top ? 63 - __builtin_clzll((limb)top) : 0;
+    if (leading > 7) {
+        unsigned shift = (unsigned)leading - 7;
+        wide rest = top & (((wide)1 << shift) - 1), half = (wide)1 << (shift - 1);
+        top >>= shift;
+        if (rest > half || (rest == half && (top & 1)))
+            top++;
+        scale += shift;
+    }
+    float result = (float)top;
+    for (; scale >= 32; scale -= 32)
+        result *= 4294967296.0f;
+    result *= (float)(1ull << scale);
+    return negative ? -result : result;
+}

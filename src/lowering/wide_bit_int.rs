@@ -660,8 +660,9 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
     /// or pointer is the low limbs of a wide value, and becomes one
     /// extended by its signedness; a floating value converts in the
     /// runtime, truncating toward zero one way and rounding to nearest the
-    /// other, a 16-bit type through `float`, which holds every integer
-    /// binary16 does not overflow on and every 16-bit value exactly.
+    /// other, `_Float16` through `float`, which holds every integer
+    /// binary16 does not overflow on and every 16-bit value exactly, and
+    /// `__bf16` rounded once for GCC and through `float` for Clang.
     /// C99: §6.3.1.2-§6.3.1.4, pp. 43-44; PDF pp. 55-56; §6.3.2.3
     /// paragraphs 5-6, p. 47; PDF p. 59.
     pub(super) fn wide_convert(
@@ -806,8 +807,14 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
                 };
                 let bits = self.iconst(Type::I32, i128::from(width));
                 let sign = self.iconst(Type::I32, i128::from(signed));
-                let value =
-                    self.wide_call(Helper::ToFloat(compute), &[address, bits, sign], source)?;
+                // GCC rounds to `__bf16` once, Clang through `float`
+                // (`integer_to_bfloat`).
+                let helper = if ty == Type::BF16 && self.half_in_float() {
+                    Helper::ToBfloat
+                } else {
+                    Helper::ToFloat(compute)
+                };
+                let value = self.wide_call(helper, &[address, bits, sign], source)?;
                 Operand::Value(if compute == ty {
                     value
                 } else {
@@ -1033,6 +1040,8 @@ enum Helper {
     FieldGet,
     FieldSet,
     ToFloat(Type),
+    /// To `__bf16`, rounded once, as a `float` holding that value.
+    ToBfloat,
     FromFloat(Type),
 }
 
@@ -1058,6 +1067,7 @@ impl Helper {
             | Self::FieldGet => "__bcc_bitint_field_get",
             | Self::FieldSet => "__bcc_bitint_field_set",
             | Self::ToFloat(Type::F32) => "__bcc_bitint_to_f32",
+            | Self::ToBfloat => "__bcc_bitint_to_bf16",
             | Self::ToFloat(Type::F64) => "__bcc_bitint_to_f64",
             | Self::ToFloat(Type::F80) => "__bcc_bitint_to_f80",
             | Self::ToFloat(Type::F128) => "__bcc_bitint_to_f128",
@@ -1100,7 +1110,7 @@ impl Helper {
             | Self::Convert | Self::FieldGet => &[Ptr, I32, I32, Ptr, I32, I32],
             | Self::FromInteger => &[Ptr, I32, I32, I64, I64, I32],
             | Self::FieldSet => &[Ptr, I32, I32, Ptr],
-            | Self::ToFloat(_) => &[Ptr, I32, I32],
+            | Self::ToFloat(_) | Self::ToBfloat => &[Ptr, I32, I32],
             | Self::FromFloat(F32) => &[Ptr, I32, I32, F32],
             | Self::FromFloat(F64) => &[Ptr, I32, I32, F64],
             | Self::FromFloat(F80) => &[Ptr, I32, I32, F80],
@@ -1112,6 +1122,7 @@ impl Helper {
         match self {
             | Self::Compare | Self::Test => Some(Type::I32),
             | Self::ToFloat(ty) => Some(ty),
+            | Self::ToBfloat => Some(Type::F32),
             | _ => None,
         }
     }

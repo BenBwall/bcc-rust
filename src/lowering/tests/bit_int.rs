@@ -166,3 +166,23 @@ fn the_middle_end_links_the_routines_a_module_calls() {
         "{module}"
     );
 }
+
+/// A wide value becomes a `__bf16` rounded once for GCC, which its own
+/// routine does, and through `float` for Clang, as each compiler converts.
+#[test]
+fn wide_bfloat_conversions_round_as_each_compiler_does() {
+    use crate::configuration::{
+        CompilerConfiguration,
+        CompilerIdentity,
+    };
+    let source = "__bf16 f(_BitInt(300) x) { return x; }";
+    for (identity, routine) in [
+        (CompilerIdentity::Gcc, "call @__bcc_bitint_to_bf16("),
+        (CompilerIdentity::Clang, "call @__bcc_bitint_to_f32("),
+    ] {
+        let configuration = CompilerConfiguration::default().with_compiler_identity(identity);
+        let text = lower_with(source, configuration).expect("lowers");
+        assert!(text.contains(routine), "{identity:?}\n{text}");
+        assert!(text.contains("fptrunc.bf16"), "{identity:?}\n{text}");
+    }
+}
