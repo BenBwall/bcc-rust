@@ -19,4 +19,6 @@ int promoted_fallback(unsigned x) { return __builtin_clzg(x, (char)1) + __builti
 int pointer_count(unsigned x) { return __builtin_stdc_rotate_left(x, (int *)0); }
 int enum_count(unsigned x) { return __builtin_stdc_rotate_left(x, (enum e)1); }
 int too_many(unsigned x) { return __builtin_stdc_bit_ceil(x, 1); }
+enum fixed : unsigned char { Fixed };
+int fixed_operand(enum fixed x) { return __builtin_popcountg(x) + __builtin_stdc_leading_ones(x); }
 int following;

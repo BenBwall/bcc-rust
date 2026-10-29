@@ -384,10 +384,19 @@ impl Feature {
         }
     }
 
+    /// The feature's bit in the configuration's `u128` sets of accepted
+    /// and native features.
     pub(super) const fn bit(self) -> u128 {
         1 << self as u8
     }
 }
+
+// Every feature has a bit of its own: the 128 bits are all in use, so a
+// further feature must widen the sets rather than wrap to bit 0.
+const _: () = assert!(
+    Feature::ALL.len() <= u128::BITS as usize,
+    "the feature sets have no bit for another feature; widen them"
+);
 
 impl Feature {
     pub(crate) const ALL: &'static [Self] = &[

@@ -206,9 +206,10 @@ impl Checker<'_, '_> {
                     Opcode::Sdiv | Opcode::Udiv | Opcode::Srem | Opcode::Urem
                 ) =>
                 Err(Construct::Opcode(opcode)),
-            // `i128` counts are selected from their halves' counts.
             | InstData::Unary { ty: Type::I1, .. } if opcode.is_bit_unary() =>
                 Err(Construct::Opcode(opcode)),
+            // Of the `i128` bit operations, the counts are selected from
+            // their halves' counts; a byte swap is not.
             | InstData::Unary { ty: Type::I128, .. } if opcode == Opcode::Bswap =>
                 Err(Construct::Opcode(opcode)),
             | InstData::Unary { .. } if opcode == Opcode::VaArg => Err(Construct::Opcode(opcode)),

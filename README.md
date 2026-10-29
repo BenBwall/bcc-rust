@@ -484,8 +484,8 @@ provides: `<float.h>`, `<iso646.h>`, `<limits.h>`, `<stdarg.h>`, `<stdbool.h>`,
 and `<stdnoreturn.h>` are also available, with the Clang language-mode macro
 gates documented in [language-standards.md](language-standards.md), and so is
 C23's `<stdbit.h>`, which defers to the C library's header where it has one
-(glibc 2.39 and later) and otherwise maps each function onto bcc's
-type-generic bit builtins.
+(glibc 2.39 and later) and otherwise, for the identities other than Clang's,
+maps each function onto bcc's type-generic bit builtins.
 `<mm_malloc.h>`, which GCC and Clang ship and MinGW-w64's `<malloc.h>`
 includes, defines `_mm_malloc` and `_mm_free` over the C library's aligned
 allocators. These are

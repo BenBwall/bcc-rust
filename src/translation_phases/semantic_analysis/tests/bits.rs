@@ -101,6 +101,8 @@ fn misuse_reports_each_identity_s_constraint() {
     expected.extend([K::BitBuiltinFallback; 5]);
     expected.extend([K::BitBuiltinRotateCount; 2]);
     expected.extend([K::InvalidArgumentCount; 4]);
+    expected.extend([K::BitBuiltinBoolOrEnum; 2]);
+    expected.push(K::BitBuiltinRotateCount);
     assert_eq!(errors(gcc, CompilerIdentity::Gcc), expected);
     let clang = include_str!("../../../../tests/fixtures/diagnostics/sema-stdbit-clang.c");
     let mut expected = vec![K::BitBuiltinSigned; 2];
@@ -109,6 +111,7 @@ fn misuse_reports_each_identity_s_constraint() {
     expected.extend([K::BitBuiltinFallback; 3]);
     expected.push(K::BitBuiltinRotateCount);
     expected.push(K::InvalidArgumentCount);
+    expected.push(K::BitBuiltinBoolOrEnum);
     assert_eq!(errors(clang, CompilerIdentity::Clang), expected);
 }
 

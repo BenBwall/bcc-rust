@@ -1,7 +1,7 @@
 //! The type-generic bit builtins and `<stdbit.h>` on every back end.
 //! `tests/fixtures/programs/stdbit.c` runs every builtin GCC and Clang
 //! share and every `<stdbit.h>` function at every unsigned width, with
-//! glibc's header on the host and with bcc's own in a freestanding build;
+//! glibc's header on the host and with bcc's own under `-nostdlibinc`;
 //! the bundled Clang's build is the reference for both identities, and the
 //! host GCC's (15 or later) must agree with it. `stdbit.wasm32.expected` is
 //! what wasi-sdk's Clang build prints for `wasm32-wasip1`, with bcc's
@@ -39,7 +39,8 @@ mod tests {
     /// Every shared builtin and `<stdbit.h>` function prints what Clang's
     /// and GCC's builds print, under each identity, interpreted before and
     /// after optimization and built through LLVM and the native back end;
-    /// and with bcc's own header in a freestanding build.
+    /// and with bcc's own header, which the GCC identity finds when the C
+    /// library's directories are not searched.
     #[test]
     fn stdbit_programs_match_clang_and_gcc() {
         if !linux_x86_64() || !compiles(CLANG, &fixture("stdbit.c")) {
@@ -58,10 +59,68 @@ mod tests {
         }
         check(
             &source,
-            "--compiler-identity=clang",
-            &["-ffreestanding"],
+            "--compiler-identity=gcc",
+            &["-nostdlibinc", "-DBCC_NO_LIBRARY_HEADERS"],
             &expected,
         );
+    }
+
+    /// `<stdbit.h>` is the C library's wherever it has one, freestanding
+    /// too, as GCC and Clang find it; without the library's directories
+    /// the GCC identity finds bcc's own, and the Clang identities none, as
+    /// Clang ships no `<stdbit.h>`.
+    #[test]
+    fn stdbit_header_follows_each_identity() {
+        if !linux_x86_64() || !Path::new("/usr/include/stdbit.h").exists() {
+            return;
+        }
+        let source = temporary("include.c");
+        std::fs::write(
+            &source,
+            "#include <stdbit.h>\nint main(void) { return stdc_bit_width(5u) != 3; }\n",
+        )
+        .unwrap();
+        let source = source.to_str().unwrap();
+        for (identity, flags, header) in [
+            ("gcc", &[][..], Some("/usr/include/stdbit.h")),
+            (
+                "gcc",
+                &["-ffreestanding"][..],
+                Some("/usr/include/stdbit.h"),
+            ),
+            (
+                "clang",
+                &["-ffreestanding"][..],
+                Some("/usr/include/stdbit.h"),
+            ),
+            ("gcc", &["-nostdlibinc"][..], Some("<built-in>/stdbit.h")),
+            ("clang", &["-nostdlibinc"][..], None),
+        ] {
+            let identity = format!("--compiler-identity={identity}");
+            let output = bcc(&[
+                &[&*identity, "-std=c23", "-H", "-fsyntax-only", source][..],
+                flags,
+            ]
+            .concat());
+            let stderr = text(&output.stderr);
+            match header {
+                | Some(header) => {
+                    assert!(output.status.success(), "{identity} {flags:?}: {stderr}");
+                    assert!(
+                        stderr.lines().any(|line| line.ends_with(header)),
+                        "{identity} {flags:?}: {stderr}"
+                    );
+                },
+                | None => {
+                    assert!(!output.status.success(), "{identity} {flags:?}");
+                    assert!(
+                        stderr.contains("cannot find header `stdbit.h`"),
+                        "{identity} {flags:?}: {stderr}"
+                    );
+                },
+            }
+        }
+        std::fs::remove_file(source).unwrap();
     }
 
     /// The same program built by bcc's WebAssembly back end for

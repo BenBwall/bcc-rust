@@ -78,4 +78,12 @@ error: function call has the wrong number of arguments: `__builtin_stdc_bit_ceil
    |
    = note: C99 §6.5.2.2p2: a prototype fixes the required arguments; only an ellipsis permits additional arguments
 
-10 errors generated.
+error: argument must not have a boolean or enumerated type: `__builtin_stdc_leading_ones`
+  --> sema-stdbit-clang.c:23:95
+   |
+23 | int fixed_operand(enum fixed x) { return __builtin_popcountg(x) + __builtin_stdc_leading_ones(x); }
+   |                                                                                               ^ has a boolean or enumerated type
+   |
+   = note: GCC refuses bool and enumerated operands of its type-generic bit builtins, and Clang of the __builtin_stdc_* forms other than the rotations
+
+11 errors generated.

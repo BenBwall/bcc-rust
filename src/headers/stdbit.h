@@ -1,21 +1,18 @@
 /* C23: 7.18, pp. 304-311; PDF pp. 317-324 (N3220). */
-#ifndef __BCC_STDBIT_H
-#define __BCC_STDBIT_H
-/* Hosted, the C library's <stdbit.h> (glibc 2.39 and later) provides every
-   definition; its type-generic macros use the compiler's type-generic
-   builtins where it has them, as bcc does. */
-#if __STDC_HOSTED__
+/* A C library's <stdbit.h> (glibc 2.39 and later) provides every
+   definition, also in a freestanding translation, as GCC and Clang find
+   it; its type-generic macros use the compiler's type-generic builtins
+   where it has them, as bcc does. The Clang identities find only that
+   header (headers::provides), as Clang ships none. */
 #if __has_include_next(<stdbit.h>)
 #include_next <stdbit.h>
-#define __BCC_STDBIT_FROM_LIBRARY
 #endif
-#endif
-#ifndef __BCC_STDBIT_FROM_LIBRARY
-/* Otherwise, as for a freestanding program or the WebAssembly WASI target,
-   every function is also a macro over its bcc builtin. The functions have
-   external linkage; bcc's WASI C library defines them, and on other
-   targets a C library that lacks this header must, for a call that
-   suppresses the macro. */
+/* Otherwise every function is also a macro over its bcc builtin. This
+   text is also the <stdbit.h> of bcc's WASI C library, which defines the
+   functions; on other targets a C library that lacks this header must,
+   for a call that suppresses the macro. The library's header, or this
+   one, defines __STDC_VERSION_STDBIT_H__ once. */
+#ifndef __STDC_VERSION_STDBIT_H__
 #define __need_size_t
 #include <stddef.h>
 #include <stdint.h>
@@ -165,5 +162,4 @@ __BCC_STDBIT(bit_ceil, value)
 #define stdc_bit_ceil_ui(x) stdc_bit_ceil((unsigned int)(x))
 #define stdc_bit_ceil_ul(x) stdc_bit_ceil((unsigned long)(x))
 #define stdc_bit_ceil_ull(x) stdc_bit_ceil((unsigned long long)(x))
-#endif /* __BCC_STDBIT_FROM_LIBRARY */
-#endif /* __BCC_STDBIT_H */
+#endif /* __STDC_VERSION_STDBIT_H__ */

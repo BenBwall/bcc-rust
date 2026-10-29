@@ -49,6 +49,26 @@ pub(crate) fn embedded(directory: &Path, name: &Path) -> Option<&'static str> {
     }
 }
 
+/// Whether the embedded `directory` holds the header `name` for a
+/// compilation as `identity`: every embedded header, except that the
+/// resource directory has no `<stdbit.h>` for the Clang identities, as
+/// Clang ships none, so their lookup finds only a C library's (bcc's WASI
+/// C library has one).
+pub(crate) fn provides(
+    directory: &Path,
+    name: &Path,
+    identity: crate::configuration::CompilerIdentity,
+) -> bool {
+    use crate::configuration::CompilerIdentity;
+    embedded(directory, name).is_some()
+        && !(directory == Path::new(DIRECTORY)
+            && name == Path::new("stdbit.h")
+            && matches!(
+                identity,
+                CompilerIdentity::Clang | CompilerIdentity::ClangCl
+            ))
+}
+
 /// The text of an embedded header's path, `DIRECTORY/name` or
 /// `WASI_DIRECTORY/name`.
 pub(crate) fn embedded_path(path: &Path) -> Option<&'static str> {
@@ -72,6 +92,8 @@ pub(crate) fn wasi_text(name: &Path) -> Option<&'static str> {
         | "inttypes.h" => include_str!("headers/wasi/inttypes.h"),
         | "math.h" => include_str!("headers/wasi/math.h"),
         | "setjmp.h" => include_str!("headers/wasi/setjmp.h"),
+        // The resource header, which is also the C library's here.
+        | "stdbit.h" => include_str!("headers/stdbit.h"),
         | "stdio.h" => include_str!("headers/wasi/stdio.h"),
         | "stdlib.h" => include_str!("headers/wasi/stdlib.h"),
         | "string.h" => include_str!("headers/wasi/string.h"),

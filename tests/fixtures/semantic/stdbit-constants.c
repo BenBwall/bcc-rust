@@ -84,7 +84,8 @@ _Static_assert(__builtin_stdc_rotate_left(1u, -1) == 0x80000000u);
 _Static_assert(__builtin_stdc_rotate_left((unsigned _BitInt(7))1, -1) == 0x40);
 _Static_assert(__builtin_stdc_rotate_right((unsigned char)1, -9) == 2);
 _Static_assert(__builtin_stdc_rotate_right(1u, -(((_BitInt(300))1 << 290) + 1)) == 2);
-/* GCC 15 does not fold a rotation of this width. */
+/* GCC 15 does not fold a rotation of this width (nor of 2, 63, 65 or
+   127 bits). */
 _Static_assert(__builtin_stdc_rotate_right((unsigned _BitInt(7))1, 1) == 0x40);
 #endif
 int following;

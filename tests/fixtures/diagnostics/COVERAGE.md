@@ -80,8 +80,10 @@ Type-generic bit builtins (2026-10-29): `sema-stdbit-gcc.c` and
 `__builtin_popcountg` and its siblings: signed, `bool`, enumerated,
 floating, pointer and structure operands, `ffsg` and `clrsbg` with unsigned
 ones, a result for zero that is not an `int` after each compiler's
-promotions, enumerated, floating and pointer rotation counts, and wrong
-argument counts. Every error is on the line GCC 15 or Clang 23 reports;
+promotions, enumerated, floating and pointer rotation counts, wrong
+argument counts, and operands and counts of an enumeration with a fixed
+underlying type, which both compilers refuse where they refuse any
+enumeration. Every error is on the line GCC 15 or Clang 23 reports;
 `semantic_analysis/tests/bits.rs` checks the kinds.
 
 Each top-level `.c` is run as `bcc-rust <file-name>` with this directory as the current directory. An optional sibling `.args` supplies whitespace-separated CLI flags before the filename. Its sibling `.stderr` stores the exact bytes, including the summary. `NO_COLOR=1` is set; `CLICOLOR_FORCE`, `CPATH`, and `C_INCLUDE_PATH` are removed. `RUST_BACKTRACE=0` keeps crash regressions from depending on an inherited backtrace setting. No paths, whitespace, source spellings, or panic output are normalized.

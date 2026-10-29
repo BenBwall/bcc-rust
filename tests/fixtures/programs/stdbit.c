@@ -10,7 +10,13 @@
    print the same, and on wasm32 with a 128-bit BITINT_MAXWIDTH the wider
    widths are left out. */
 #include <stdbit.h>
+/* Built with -nostdlibinc -DBCC_NO_LIBRARY_HEADERS, <stdbit.h> is bcc's
+   own, and printf is declared here. */
+#ifdef BCC_NO_LIBRARY_HEADERS
+int printf(const char *restrict format, ...);
+#else
 #include <stdio.h>
+#endif
 
 static unsigned long long state = 0x9e3779b97f4a7c15ull;
 

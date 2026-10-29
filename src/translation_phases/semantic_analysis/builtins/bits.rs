@@ -147,18 +147,25 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         gcc: bool,
         name: Identifier,
     ) -> Option<(u32, bool)> {
+        let ty = self.types.non_atomic(ty);
+        let enumerated = self.enumerated(ty);
         if self.types.unanalyzed(ty) {
+            // An enumeration with a fixed underlying type is not modeled,
+            // but the rules that refuse every enumeration refuse it.
+            if enumerated && (gcc || (operation.stdc() && !operation.rotate())) {
+                return self.bit_operand_error(
+                    SemanticErrorKind::BitBuiltinBoolOrEnum,
+                    argument,
+                    name,
+                );
+            }
             return None;
         }
-        let ty = self.types.non_atomic(ty);
         let Some((width, signed)) = self.integer_type(ty) else {
             return self.bit_operand_error(SemanticErrorKind::BitBuiltinNotInteger, argument, name);
         };
-        let bool_or_enum = match self.types.nodes[ty.index] {
-            | TypeKind::Scalar(Scalar::Bool) => true,
-            | TypeKind::Tag(id) => self.types.tags[id].kind == TagKind::Enum,
-            | _ => false,
-        };
+        let bool_or_enum =
+            enumerated || self.types.nodes[ty.index] == TypeKind::Scalar(Scalar::Bool);
         let kind = if gcc {
             if bool_or_enum {
                 Some(SemanticErrorKind::BitBuiltinBoolOrEnum)
@@ -235,14 +242,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     ) -> bool {
         let info = self.expression_info(argument);
         let ty = self.converted(info);
-        if self.types.unanalyzed(ty) {
+        let ty = self.types.non_atomic(ty);
+        let enumerated = self.enumerated(ty);
+        if self.types.unanalyzed(ty) && !(gcc && enumerated) {
             return false;
         }
-        let ty = self.types.non_atomic(ty);
-        let enumerated = matches!(
-            self.types.nodes[ty.index],
-            TypeKind::Tag(id) if self.types.tags[id].kind == TagKind::Enum
-        );
         if self.integer_type(ty).is_none() || (gcc && enumerated) {
             self.error(
                 SemanticErrorKind::BitBuiltinRotateCount,
@@ -253,6 +257,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             return false;
         }
         true
+    }
+
+    /// Whether `ty` is an enumerated type, with or without a fixed
+    /// underlying type.
+    fn enumerated(&self, ty: TypeId) -> bool {
+        matches!(
+            self.types.nodes[ty.index],
+            TypeKind::Tag(id) if self.types.tags[id].kind == TagKind::Enum
+        )
     }
 
     /// The value of `operation` on the constant `value`, already reduced to

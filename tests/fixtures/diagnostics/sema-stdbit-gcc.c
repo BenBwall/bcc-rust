@@ -1,7 +1,8 @@
 /* Misused type-generic bit builtins under GCC's rules: GCC refuses signed,
    bool and enumerated operands (ffsg and clrsbg take signed ones), a
    result for zero that is not an int after GCC's promotions, and an
-   enumerated rotation count. */
+   enumerated rotation count, also of an enumeration with a fixed
+   underlying type. */
 enum e { A, B };
 struct s { int i; } object;
 int signed_operand(int x) { return __builtin_popcountg(x); }
@@ -27,4 +28,7 @@ int bool_count(unsigned x) { return __builtin_stdc_rotate_right(x, (bool)1); }
 int missing(void) { return __builtin_popcountg(); }
 int extra(unsigned x) { return __builtin_popcountg(x, 1) + __builtin_clzg(x, 1, 2); }
 int missing_count(unsigned x) { return __builtin_stdc_rotate_left(x); }
+enum fixed : unsigned char { Fixed };
+int fixed_operand(enum fixed x) { return __builtin_popcountg(x) + __builtin_stdc_bit_width(x); }
+int fixed_count(unsigned x, enum fixed k) { return __builtin_stdc_rotate_left(x, k); }
 int following;
