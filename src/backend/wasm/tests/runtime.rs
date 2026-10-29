@@ -4,18 +4,28 @@
 //! its buffers and hexadecimal precision, floating to 128-bit conversions
 //! at their limits, allocation size overflow and memory's last page,
 //! trigonometric argument reduction, NaN payloads and nextafter, and
-//! `__fp16` conversions against Clang), each
-//! compiled for `wasm32-wasip1` at `-O0` and `-O2` and run under Node.
+//! `__fp16` conversions against Clang), then correctly rounded `strtod`,
+//! `strtof` and `strtold`, numeric scanf fields of any length, C23's binary
+//! prefixes and binary128 printf, each compiled for `wasm32-wasip1` at
+//! `-O0` and `-O2` and run under Node.
 //! Expected outputs are glibc's, except where the 32-bit data model or
 //! binary128 `long double` decides otherwise (marked).
 
 use super::execution::{
     compile,
+    compile_configured,
     node_available,
     run_with_arguments,
     run_with_input,
 };
-use crate::target::Target;
+use crate::{
+    configuration::{
+        CStandard,
+        CompilerConfiguration,
+        ExtensionPolicy,
+    },
+    target::Target,
+};
 
 /// Runs `source` at both optimization levels and returns its stdout.
 fn outputs(name: &str, source: &str) -> Option<[String; 2]> {
@@ -816,5 +826,889 @@ int main(void) {
                 assert!(ulps <= 1, "{line} against glibc's {want}");
             }
         }
+    }
+}
+
+/// `strtof`, `strtod` and `strtold` on hard cases: halfway points with
+/// long tails, the edges of overflow, of the least normal (tininess after
+/// rounding decides `ERANGE`, as glibc decides it on x86) and of the least
+/// subnormal, long hexadecimal significands, huge exponents, and partial
+/// subject sequences. Expected: glibc 2.43, with `strtof128` for binary128
+/// `long double`. glibc before 2.41 rounds `strtof("0x1.000001p-150")` to
+/// zero (fixed by 457622c2fa8f, bug 30220); wasi-libc (musl) rounds the
+/// 117-bit hexadecimal significands of binary128 down.
+#[test]
+fn strtod_strtof_and_strtold_round_correctly() {
+    let source = r#"#include <errno.h>
+#include <stdio.h>
+#include <stdlib.h>
+static const char *const inputs[] = {
+    ".5",
+    "-.",
+    "1e",
+    "1e+x",
+    "1e 5",
+    "1.e5",
+    "0x",
+    "0x.p1",
+    "0x1p",
+    "0x1.8P-1",
+    "0x1p-1074",
+    "0x1.0000000000001p-1075",
+    "0x1p-1075",
+    "0x1.fffffffffffff7ffffffffp1023",
+    "0x1.fffffffffffff8p1023",
+    "0x1p-149",
+    "0x1.000001p-150",
+    "0x1p-16494",
+    "0x1.0000000000000000000000000001p-16495",
+    "0x1.ffffffffffffffffffffffffffff8p16383",
+    "0x1d5.988b0000000000000000000000dp-29",
+    "0x123456789abcdef0123456789abcdef01234567898p-300",
+    "0x1p-99999999999999999999999",
+    "0x0p99999999999999999999999",
+    "infin",
+    "-Infinity",
+    "-nan(abc_9)",
+    "nan(12",
+    "  \t +1.5",
+    "0.1",
+    "1.7976931348623157e308",
+    "1.7976931348623158e308",
+    "1.797693134862315807937289714053e308",
+    "2.2250738585072011e-308",
+    "2.225073858507201136057409796709131975934819546351645648e-308",
+    "2.225073858507201136057409796709131975934819546351645649e-308",
+    "4.9406564584124654e-324",
+    "2.4703282292062327e-324",
+    "2.47032822920623272e-324",
+    "1e-400",
+    "3.4028235677973366e38",
+    "1.1754942e-38",
+    "7.0064923e-46",
+    "7.0064924e-46",
+    "1.18973149535723176508575932662800702e4932",
+    "1.1897314953572317650857593266280071308e4932",
+    "6.47517511943802511092443895822764655e-4966",
+    "3.2375875597190125554622194791138232e-4966",
+    "3.2375875597190125554622194791138233e-4966",
+    "1e4933",
+    "9007199254740993",
+    "9007199254740992.5",
+    "9007199254740993.0000000000000000000000000000000000001",
+    "123456789012345678901234567890e-30",
+    "0e-99999999999999999999",
+    "1e-99999999999999999999",
+};
+static const char *name(int e) { return e == 0 ? "0" : e == ERANGE ? "ERANGE" : "other"; }
+int main(void) {
+    for (int i = 0; i < (int)(sizeof inputs / sizeof inputs[0]); i++) {
+        const char *s = inputs[i];
+        char *end;
+        union { float f; unsigned u; } f;
+        union { double d; unsigned long long u; } d;
+        union { long double q; unsigned long long w[2]; } q;
+        errno = 0;
+        f.f = strtof(s, &end);
+        printf("f %08x %d %s", f.u, (int)(end - s), name(errno));
+        errno = 0;
+        d.d = strtod(s, &end);
+        printf("\nd %016llx %d %s", d.u, (int)(end - s), name(errno));
+        errno = 0;
+        q.q = strtold(s, &end);
+        printf("\nq %016llx%016llx %d %s\n", q.w[1], q.w[0], (int)(end - s), name(errno));
+    }
+    return 0;
+}
+"#;
+    let expected = [
+        "f 3f000000 2 0",
+        "d 3fe0000000000000 2 0",
+        "q 3ffe0000000000000000000000000000 2 0",
+        "f 00000000 0 0",
+        "d 0000000000000000 0 0",
+        "q 00000000000000000000000000000000 0 0",
+        "f 3f800000 1 0",
+        "d 3ff0000000000000 1 0",
+        "q 3fff0000000000000000000000000000 1 0",
+        "f 3f800000 1 0",
+        "d 3ff0000000000000 1 0",
+        "q 3fff0000000000000000000000000000 1 0",
+        "f 3f800000 1 0",
+        "d 3ff0000000000000 1 0",
+        "q 3fff0000000000000000000000000000 1 0",
+        "f 47c35000 4 0",
+        "d 40f86a0000000000 4 0",
+        "q 400f86a0000000000000000000000000 4 0",
+        "f 00000000 1 0",
+        "d 0000000000000000 1 0",
+        "q 00000000000000000000000000000000 1 0",
+        "f 00000000 1 0",
+        "d 0000000000000000 1 0",
+        "q 00000000000000000000000000000000 1 0",
+        "f 3f800000 3 0",
+        "d 3ff0000000000000 3 0",
+        "q 3fff0000000000000000000000000000 3 0",
+        "f 3f400000 8 0",
+        "d 3fe8000000000000 8 0",
+        "q 3ffe8000000000000000000000000000 8 0",
+        "f 00000000 9 ERANGE",
+        "d 0000000000000001 9 0",
+        "q 3bcd0000000000000000000000000000 9 0",
+        "f 00000000 23 ERANGE",
+        "d 0000000000000001 23 ERANGE",
+        "q 3bcc0000000000001000000000000000 23 0",
+        "f 00000000 9 ERANGE",
+        "d 0000000000000000 9 ERANGE",
+        "q 3bcc0000000000000000000000000000 9 0",
+        "f 7f800000 31 ERANGE",
+        "d 7fefffffffffffff 31 0",
+        "q 43fefffffffffffff7ffffffff000000 31 0",
+        "f 7f800000 23 ERANGE",
+        "d 7ff0000000000000 23 ERANGE",
+        "q 43fefffffffffffff800000000000000 23 0",
+        "f 00000001 8 0",
+        "d 36a0000000000000 8 0",
+        "q 3f6a0000000000000000000000000000 8 0",
+        "f 00000001 15 ERANGE",
+        "d 3690000010000000 15 0",
+        "q 3f690000010000000000000000000000 15 0",
+        "f 00000000 10 ERANGE",
+        "d 0000000000000000 10 ERANGE",
+        "q 00000000000000000000000000000001 10 0",
+        "f 00000000 39 ERANGE",
+        "d 0000000000000000 39 ERANGE",
+        "q 00000000000000000000000000000001 39 ERANGE",
+        "f 7f800000 39 ERANGE",
+        "d 7ff0000000000000 39 ERANGE",
+        "q 7fff0000000000000000000000000000 39 ERANGE",
+        "f 356acc46 37 0",
+        "d 3ead5988b0000000 37 0",
+        "q 3fead5988b0000000000000000000001 37 0",
+        "f 00002469 49 ERANGE",
+        "d 37723456789abcdf 49 0",
+        "q 3f7723456789abcdef0123456789abce 49 0",
+        "f 00000000 28 ERANGE",
+        "d 0000000000000000 28 ERANGE",
+        "q 00000000000000000000000000000000 28 ERANGE",
+        "f 00000000 27 0",
+        "d 0000000000000000 27 0",
+        "q 00000000000000000000000000000000 27 0",
+        "f 7f800000 3 0",
+        "d 7ff0000000000000 3 0",
+        "q 7fff0000000000000000000000000000 3 0",
+        "f ff800000 9 0",
+        "d fff0000000000000 9 0",
+        "q ffff0000000000000000000000000000 9 0",
+        "f ffc00000 11 0",
+        "d fff8000000000000 11 0",
+        "q ffff8000000000000000000000000000 11 0",
+        "f 7fc00000 3 0",
+        "d 7ff8000000000000 3 0",
+        "q 7fff8000000000000000000000000000 3 0",
+        "f 3fc00000 8 0",
+        "d 3ff8000000000000 8 0",
+        "q 3fff8000000000000000000000000000 8 0",
+        "f 3dcccccd 3 0",
+        "d 3fb999999999999a 3 0",
+        "q 3ffb999999999999999999999999999a 3 0",
+        "f 7f800000 22 ERANGE",
+        "d 7fefffffffffffff 22 0",
+        "q 43feffffffffffffef58d64ce2b76a4c 22 0",
+        "f 7f800000 22 ERANGE",
+        "d 7fefffffffffffff 22 0",
+        "q 43fefffffffffffff75d1b02ca61e744 22 0",
+        "f 7f800000 36 ERANGE",
+        "d 7fefffffffffffff 36 0",
+        "q 43fefffffffffffff7ffffffffffff3b 36 0",
+        "f 00000000 23 ERANGE",
+        "d 000fffffffffffff 23 ERANGE",
+        "q 3c00ffffffffffffedaa23baa641a6b1 23 0",
+        "f 00000000 61 ERANGE",
+        "d 000fffffffffffff 61 ERANGE",
+        "q 3c00fffffffffffff000000000000000 61 0",
+        "f 00000000 61 ERANGE",
+        "d 0010000000000000 61 ERANGE",
+        "q 3c00fffffffffffff000000000000000 61 0",
+        "f 00000000 23 ERANGE",
+        "d 0000000000000001 23 ERANGE",
+        "q 3bccfffffffffffffec81f3d47cee6c9 23 0",
+        "f 00000000 23 ERANGE",
+        "d 0000000000000000 23 ERANGE",
+        "q 3bcbfffffffffffffec81f3d47cee6c9 23 0",
+        "f 00000000 24 ERANGE",
+        "d 0000000000000000 24 ERANGE",
+        "q 3bcbfffffffffffffff2d0a61405b195 24 0",
+        "f 00000000 6 ERANGE",
+        "d 0000000000000000 6 ERANGE",
+        "q 3ace2bfcfc0f923df5f4726370a1be12 6 0",
+        "f 7f7fffff 21 0",
+        "d 47effffff0000000 21 0",
+        "q 407efffffeffffffff4e7526c7c5d300 21 0",
+        "f 007fffff 13 ERANGE",
+        "d 380fffffbb1dd6a1 13 0",
+        "q 3f80fffffbb1dd6a0a77b3e438168536 13 0",
+        "f 00000000 13 ERANGE",
+        "d 368ffffffe57d2bc 13 0",
+        "q 3f68ffffffe57d2bba836e66af60d35d 13 0",
+        "f 00000001 13 ERANGE",
+        "d 369000000300b570 13 0",
+        "q 3f69000000300b56f9951bcccfa5b925 13 0",
+        "f 7f800000 42 ERANGE",
+        "d 7ff0000000000000 42 ERANGE",
+        "q 7ffeffffffffffffffffffffffffffff 42 0",
+        "f 7f800000 44 ERANGE",
+        "d 7ff0000000000000 44 ERANGE",
+        "q 7fff0000000000000000000000000000 44 ERANGE",
+        "f 00000000 43 ERANGE",
+        "d 0000000000000000 43 ERANGE",
+        "q 00000000000000000000000000000001 43 ERANGE",
+        "f 00000000 42 ERANGE",
+        "d 0000000000000000 42 ERANGE",
+        "q 00000000000000000000000000000000 42 ERANGE",
+        "f 00000000 42 ERANGE",
+        "d 0000000000000000 42 ERANGE",
+        "q 00000000000000000000000000000001 42 ERANGE",
+        "f 7f800000 6 ERANGE",
+        "d 7ff0000000000000 6 ERANGE",
+        "q 7fff0000000000000000000000000000 6 ERANGE",
+        "f 5a000000 16 0",
+        "d 4340000000000000 16 0",
+        "q 40340000000000000800000000000000 16 0",
+        "f 5a000000 18 0",
+        "d 4340000000000000 18 0",
+        "q 40340000000000000400000000000000 18 0",
+        "f 5a000000 54 0",
+        "d 4340000000000001 54 0",
+        "q 40340000000000000800000000000000 54 0",
+        "f 3dfcd6ea 34 0",
+        "d 3fbf9add3746f65f 34 0",
+        "q 3ffbf9add3746f65f1c3f968abdeed4e 34 0",
+        "f 00000000 23 0",
+        "d 0000000000000000 23 0",
+        "q 00000000000000000000000000000000 23 0",
+        "f 00000000 23 ERANGE",
+        "d 0000000000000000 23 ERANGE",
+        "q 00000000000000000000000000000000 23 ERANGE",
+    ];
+    for output in outputs("strtod-hard", source).into_iter().flatten() {
+        assert_eq!(output, expected.join("\n") + "\n");
+    }
+}
+
+/// `strtold` on the interpreter's `strtof128` edge fixture: binary128
+/// values just below the least normal that do and do not round to it,
+/// whose `ERANGE` follows glibc's tininess after rounding, and exact
+/// decimal subnormals over 11000 digits long. Expected: glibc's
+/// `strtof128`, the same in 2.39 and 2.43.
+#[test]
+fn strtold_reads_the_strtof128_edges() {
+    let source = format!(
+        "{}{}",
+        include_str!("../../../../tests/fixtures/programs/strtof128_edges.h"),
+        r#"#include <errno.h>
+#include <stdio.h>
+#include <stdlib.h>
+int main(void) {
+    for (int i = 0; i < (int)(sizeof strtof128_edges / sizeof strtof128_edges[0]); i++) {
+        const char *text = strtof128_edges[i].text;
+        char *end;
+        union { long double q; unsigned long long w[2]; } u;
+        errno = 0;
+        u.q = strtold(text, &end);
+        printf("%s %016llx%016llx %d %d\n", strtof128_edges[i].name, u.w[1], u.w[0], (int)(end - text), errno == ERANGE);
+    }
+    return 0;
+}
+"#
+    );
+    let expected = [
+        "hex_round_normal 00010000000000000000000000000000 40 1",
+        "hex_round_normal_below 0000ffffffffffffffffffffffffffff 40 1",
+        "exact_decimal_half_normal 00008000000000000000000000000000 11459 0",
+        "exact_decimal_minsub 00000000000000000000000000000001 11536 0",
+        "hex_uppercase 0000000000000000000000000000001b 14 1",
+        "hex_no_exponent 00000000000000000000000000000001 4128 0",
+    ];
+    for output in outputs("strtold-edges", &source).into_iter().flatten() {
+        assert_eq!(output, expected.join("\n") + "\n");
+    }
+}
+
+/// Decimal midpoints between adjacent floats, doubles and binary128 values,
+/// and the strings just above and below them, written exactly (up to 1200
+/// digits) by the runtime's exact printf: each must round to even, up or
+/// down. A float or double midpoint is exact in the next wider type; a
+/// binary128 midpoint is the digit-wise mean of its neighbours' exact
+/// fixed-point expansions. wasi-libc passes the same program.
+#[test]
+fn decimal_midpoints_round_to_even() {
+    let source = r#"#include <errno.h>
+#include <math.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+static unsigned long long state = 0x9e3779b97f4a7c15ull;
+static unsigned long long next(void) {
+    state ^= state << 13;
+    state ^= state >> 7;
+    state ^= state << 17;
+    return state;
+}
+static char text[24000], other[24000];
+static int failures;
+static void check(const char *what, int ok, const char *input) {
+    if (!ok && failures++ < 5)
+        printf("FAIL %s %.60s...\n", what, input);
+}
+/* Appends to an exact %Le string a digit 1 just before its exponent,
+   which moves it up in magnitude by less than any ulp of interest. */
+static void nudge(char *s) {
+    char *e = strchr(s, 'e');
+    memmove(e + 1, e, strlen(e) + 1);
+    *e = '1';
+}
+/* A string that is the decimal midpoint of two adjacent binary128 values
+   a < b (both positive, written exactly with %.*Lf at the same scale),
+   or one just above or below it. */
+static void midpoint(long double a, long double b, int digits, int where) {
+    sprintf(text, "%.*Lf", digits, a);
+    sprintf(other, "%.*Lf", digits, b);
+    /* Both have the same length here (same integer part width). */
+    size_t n = strlen(text);
+    int carry = 0;
+    for (size_t i = n; i-- > 0;) {
+        if (text[i] == '.')
+            continue;
+        int d = text[i] - '0' + other[i] - '0' + carry;
+        text[i] = (char)('0' + d % 10);
+        carry = d / 10;
+    }
+    /* Halve the sum (carry, text) digit by digit: the midpoint ends in 5. */
+    int rem = carry;
+    for (size_t i = 0; i < n; i++) {
+        if (text[i] == '.')
+            continue;
+        int d = rem * 10 + text[i] - '0';
+        text[i] = (char)('0' + d / 2);
+        rem = d % 2;
+    }
+    if (rem)
+        text[n++] = '5';
+    text[n] = 0;
+    if (where > 0) {
+        strcat(text, "000000000000000000000000000001");
+    } else if (where < 0) {
+        /* Lower the last nonzero digit and fill in nines. */
+        size_t last = n;
+        while (text[--last] == '0' || text[last] == '.')
+            ;
+        text[last]--;
+        for (size_t i = last + 1; i < n; i++)
+            if (text[i] != '.')
+                text[i] = '9';
+        strcat(text, "999999999999999999999999999999");
+    }
+}
+int main(void) {
+    for (int i = 0; i < 3000; i++) {
+        unsigned long long bits = next();
+        int kind = i % 4;
+        if (kind == 0)
+            bits &= 0x000fffffffffffffull; /* subnormal */
+        else if (kind == 1)
+            bits = (bits & 0x800fffffffffffffull) | 0x7fe0000000000000ull; /* top binade */
+        else if (kind == 2)
+            bits = (bits & 0x800fffffffffffffull) | 0x0010000000000000ull; /* least normal binade */
+        if (((bits >> 52) & 0x7ff) == 0x7ff)
+            bits ^= 1ull << 52;
+        union { unsigned long long u; double d; } x = {bits}, y = {bits + 1};
+        if (y.d != y.d || fabs(y.d) == __builtin_inf())
+            continue;
+        long double mid = ((long double)x.d + (long double)y.d) / 2;
+        double even = (bits & 1) ? y.d : x.d;
+        sprintf(text, "%.1200Le", mid);
+        errno = 0;
+        check("double tie", strtod(text, 0) == even, text);
+        nudge(text);
+        check("double above", strtod(text, 0) == y.d, text);
+        sprintf(text, "%.1200Le", nextafterl(mid, 0));
+        check("double below", strtod(text, 0) == x.d, text);
+        /* float midpoints are exact in double */
+        union { unsigned u; float f; } fx = {(unsigned)bits & 0x7fffffffu}, fy = {((unsigned)bits & 0x7fffffffu) + 1};
+        if (fy.f != fy.f || fy.f == __builtin_inff())
+            continue;
+        double fmid = ((double)fx.f + (double)fy.f) / 2;
+        float feven = (fx.u & 1) ? fy.f : fx.f;
+        sprintf(text, "%.200e", fmid);
+        check("float tie", strtof(text, 0) == feven, text);
+        nudge(text);
+        check("float above", strtof(text, 0) == fy.f, text);
+        sprintf(text, "%.200e", nextafter(fmid, 0));
+        check("float below", strtof(text, 0) == fx.f, text);
+    }
+    /* binary128 midpoints in [2^-60, 2^60), written as fixed-point. */
+    for (int i = 0; i < 1500; i++) {
+        union { unsigned long long w[2]; long double q; } a, b;
+        a.w[0] = next();
+        a.w[1] = (next() & 0x0000ffffffffffffull) | (unsigned long long)(0x3fff - 60 + (int)(next() % 120)) << 48;
+        b = a;
+        if (!++b.w[0])
+            b.w[1]++;
+        sprintf(text, "%.0Lf", a.q);
+        sprintf(other, "%.0Lf", b.q);
+        if (strlen(text) != strlen(other))
+            continue;
+        long double even = (a.w[0] & 1) ? b.q : a.q;
+        midpoint(a.q, b.q, 180, 0);
+        check("quad tie", strtold(text, 0) == even, text);
+        midpoint(a.q, b.q, 180, 1);
+        check("quad above", strtold(text, 0) == b.q, text);
+        midpoint(a.q, b.q, 180, -1);
+        check("quad below", strtold(text, 0) == a.q, text);
+    }
+    printf("%d failures\n", failures);
+    return 0;
+}
+"#;
+    for output in outputs("strtod-midpoints", source).into_iter().flatten() {
+        assert_eq!(output, "0 failures\n");
+    }
+}
+
+/// Midpoints written with 17000 to 30000 significant digits, past the
+/// 2048 base-10^9 words decfloat keeps, and one unit in their last digit
+/// below and above them: the reproducer of review round 1, (1 + 3 *
+/// 2^-113) * 2^-5000 less one unit in its 18405th digit, and 40 random
+/// binary128 and double midpoints. Before the fix, a word dropped from the
+/// full buffer was merged whole into the last kept one, made a word of
+/// 10^9, and the inputs just below rounded up, as wasi-libc's still do.
+#[test]
+fn midpoints_past_the_digit_buffer_round_correctly() {
+    let source = r#"#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+static char a[13000], b[13000], text[32000];
+static unsigned long long state = 0x2545f4914f6cdd1dull;
+static unsigned long long next(void) {
+    state ^= state << 13;
+    state ^= state >> 7;
+    state ^= state << 17;
+    return state;
+}
+/* From exact %e spellings of adjacent values a < b with the same decimal
+   exponent, writes their midpoint with `total` significant digits, one
+   unit in the last of them below it (where < 0) or above it (where > 0).
+   Returns 0 when the exponents differ. */
+static int long_midpoint(int total, int where) {
+    char *ea = strchr(a, 'e'), *eb = strchr(b, 'e');
+    if (strcmp(ea, eb))
+        return 0;
+    int n = 0;
+    for (char *p = a; p < ea; p++)
+        if (*p != '.')
+            text[n++] = *p;
+    int carry = 0;
+    for (int i = n, j = (int)(eb - b); i-- > 0;) {
+        if (b[--j] == '.')
+            j--;
+        int d = text[i] - '0' + b[j] - '0' + carry;
+        text[i] = (char)('0' + d % 10);
+        carry = d / 10;
+    }
+    int rem = carry;
+    for (int i = 0; i < n; i++) {
+        int d = rem * 10 + text[i] - '0';
+        text[i] = (char)('0' + d / 2);
+        rem = d % 2;
+    }
+    if (rem)
+        text[n++] = '5';
+    while (n < total)
+        text[n++] = '0';
+    if (where < 0) {
+        int last = n;
+        while (text[--last] == '0')
+            text[last] = '9';
+        text[last]--;
+    } else if (where > 0) {
+        text[n - 1] = '1';
+    }
+    memmove(text + 2, text + 1, n - 1);
+    text[1] = '.';
+    strcpy(text + n + 1, ea);
+    return 1;
+}
+static int failures;
+static void quad(long double x, long double y, int total) {
+    union { long double q; unsigned long long w[2]; } lo = {x};
+    sprintf(a, "%.12000Le", x);
+    sprintf(b, "%.12000Le", y);
+    for (int where = -1; where <= 1; where++) {
+        if (!long_midpoint(total, where))
+            return;
+        long double want = where < 0 ? x : where > 0 ? y : (lo.w[0] & 1 ? y : x);
+        if (strtold(text, 0) != want && failures++ < 5)
+            printf("FAIL quad %d digits, %d: %016llx%016llx\n", total, where, lo.w[1], lo.w[0]);
+    }
+}
+static void dbl(double x, double y, int total) {
+    union { double d; unsigned long long u; } lo = {x};
+    sprintf(a, "%.1200e", x);
+    sprintf(b, "%.1200e", y);
+    for (int where = -1; where <= 1; where++) {
+        if (!long_midpoint(total, where))
+            return;
+        double want = where < 0 ? x : where > 0 ? y : (lo.u & 1 ? y : x);
+        if (strtod(text, 0) != want && failures++ < 5)
+            printf("FAIL double %d digits, %d: %016llx\n", total, where, lo.u);
+    }
+}
+int main(void) {
+    /* (1 + 3 * 2^-113) * 2^-5000 less one unit in its 18405th digit. */
+    quad(0x1.0000000000000000000000000001p-5000L, 0x1.0000000000000000000000000002p-5000L, 18405);
+    for (int i = 0; i < 40; i++) {
+        int total = 17000 + (int)(next() % 13000);
+        if (i % 4 == 3) {
+            union { unsigned long long u; double d; } x = {next() & 0x7fefffffffffffffull}, y = {x.u + 1};
+            dbl(x.d, y.d, total);
+        } else {
+            union { unsigned long long w[2]; long double q; } x, y;
+            x.w[0] = next();
+            x.w[1] = next() & 0x7ffeffffffffffffull;
+            y = x;
+            if (!++y.w[0])
+                y.w[1]++;
+            quad(x.q, y.q, total);
+        }
+    }
+    printf("%d failures\n", failures);
+    return 0;
+}
+"#;
+    for output in outputs("long-midpoints", source).into_iter().flatten() {
+        assert_eq!(output, "0 failures\n");
+    }
+}
+
+/// scanf reads numeric fields of any length, as glibc does (the runtime
+/// used to split them after 511 characters), `%Lf` reads binary128 whole,
+/// and `%f` rounds straight to float. Expected: glibc, with `strtof128`
+/// for the binary128 bits.
+#[test]
+fn scanf_reads_numeric_fields_of_any_length() {
+    let source = r#"/* scanf fields longer than 511 characters, from a string and stdin. */
+#include <stdio.h>
+#include <string.h>
+static char in[40000];
+static void line(const char *what, int r, double d, int n, const char *rest) { printf("%s %d %a %d%s%s\n", what, r, d, n, *rest ? " " : "", rest); }
+int main(void) {
+    int a = -1, n = -1, r; char rest[32] = "-"; double d; float f;
+    memset(in, '0', 900); strcpy(in + 900, "42 next");
+    r = sscanf(in, "%d%n%31s", &a, &n, rest);
+    printf("int %d %d %d %s\n", r, a, n, rest);
+    /* 2^-1074 * 1.5 as an exact decimal: halfway, ties to even gives 2^-1073 */
+    strcpy(in, "0.");
+    memset(in + 2, '0', 323);
+    strcpy(in + 325, "7411");
+    /* digits of 3 * 2^-1075 = 7.4109846876186981626485318930233205854758970392148714663837852375101326090531312779794975454245398856969484704316857659638998506553390969459816219401617281718945106978546710679176872575177347315553307795408549809608457500958111373034747658096871009590975442271004757307809711118935784838675653998783503015228055934046593739791790738723868299395818481660169122019456499931289798411362062484498678713572180352209017023903285791732520220528974020802906854021606612375549983402671300035812486479041385743401875520901590172592547146296175134159774938718574737870961645638908718119841271673056017045493004705269590165763776884908267986972573366521765567941072508764337560846003984904972149117463085539556354188641513168478436313080237596295773983001708984375e-324 */
+    r = sscanf(in, "%lf%n", &d, &n);
+    line("short", r, d, n, "");
+    for (int pad = 600; pad <= 3000; pad += 1200) {
+        strcpy(in, "1.");
+        memset(in + 2, '0', pad);
+        strcpy(in + 2 + pad, "1 x");
+        r = sscanf(in, "%lf%n%31s", &d, &n, rest);
+        line("pad", r, d, n, rest);
+        strcpy(in, "9007199254740993.");
+        memset(in + 17, '0', pad);
+        strcpy(in + 17 + pad, "1e0 x");
+        r = sscanf(in, "%lf%n%31s", &d, &n, rest);
+        line("halfway+", r, d, n, rest);
+        in[17 + pad] = 0;
+        r = sscanf(in, "%lf%n", &d, &n);
+        line("halfway", r, d, n, "");
+        strcpy(in, "16777217.");
+        memset(in + 9, '0', pad);
+        strcpy(in + 9 + pad, "1");
+        r = sscanf(in, "%f%n", &f, &n);
+        line("float", r, f, n, "");
+    }
+    /* a field stops at its width */
+    memset(in, '1', 1000); in[1000] = 0;
+    r = sscanf(in, "%700lf%n", &d, &n);
+    line("width", r, d, n, "");
+    /* %Lf reads binary128 whole, and %f rounds once, straight to float. */
+    long double q;
+    r = sscanf("0.1 1.00000005960464477539062500000001 -1e-4950", "%Lf %f %Le", &q, &f, &q);
+    union { long double q; unsigned long long w[2]; } u = {q};
+    printf("%d %a %016llx%016llx\n", r, f, u.w[1], u.w[0]);
+    r = sscanf("0.1", "%Lf", &u.q);
+    printf("%d %016llx%016llx\n", r, u.w[1], u.w[0]);
+    return 0;
+}
+"#;
+    let expected = [
+        "int 2 42 902 next",
+        "short 1 0x0.0000000000002p-1022 329",
+        "pad 2 0x1p+0 603 x",
+        "halfway+ 2 0x1.0000000000001p+53 620 x",
+        "halfway 1 0x1p+53 617",
+        "float 1 0x1.000002p+24 610",
+        "pad 2 0x1p+0 1803 x",
+        "halfway+ 2 0x1.0000000000001p+53 1820 x",
+        "halfway 1 0x1p+53 1817",
+        "float 1 0x1.000002p+24 1810",
+        "pad 2 0x1p+0 3003 x",
+        "halfway+ 2 0x1.0000000000001p+53 3020 x",
+        "halfway 1 0x1p+53 3017",
+        "float 1 0x1.000002p+24 3010",
+        "width 1 inf 700",
+        "3 0x1.000002p+0 800000000000000000057c9647e1a018",
+        "1 3ffb999999999999999999999999999a",
+    ];
+    for output in outputs("scanf-long-fields", source).into_iter().flatten() {
+        assert_eq!(output, expected.join("\n") + "\n");
+    }
+}
+
+/// C23's `0b` prefix in `strtol` (base 0 and 2), `strtoimax` and scanf's
+/// `%i`, read under `-std=c23` and with `_GNU_SOURCE`, where the headers
+/// redirect to the `__isoc23_*` functions as glibc's do, and not in C17;
+/// `%b` reads binary in every mode, as glibc's scanf has since 2.38.
+/// Expected: glibc 2.43 at `-std=c17` and `-std=c23`. glibc before 2.42
+/// accepts a lone `0x` or `0b` prefix in scanf as the number 0 (rejected
+/// since e78cb4f6bd03, bug 12701); the runtime rejects both, as C99
+/// 7.19.6.2p10 has it.
+#[test]
+fn binary_prefixes_follow_the_language_standard() {
+    let source = r#"#include <stdio.h>
+#include <stdlib.h>
+#include <inttypes.h>
+#include <errno.h>
+static void t(const char *s, int base) {
+    char *e;
+    long v = strtol(s, &e, base);
+    printf("strtol %s %d: %ld %d\n", s, base, v, (int)(e - s));
+}
+static void sc(const char *s, const char *f) {
+    int a = -99, n = -1;
+    char rest[20] = "-";
+    int r = sscanf(s, f, &a, &n, rest);
+    printf("sscanf %s %s: %d %d %d %s\n", s, f, r, a, n, rest);
+}
+int main(void) {
+    t("0b101", 0); t("0B11", 0); t("0b", 0); t("0b2", 0); t("0b101", 2); t("-0b11", 0); t(" +0b1x", 0);
+    t("0b101", 16); t("0b101", 10); t("0b1", 8);
+    char *e;
+    unsigned long long u = strtoull("0b111", &e, 0);
+    long long ll = strtoll("-0b111", 0, 2);
+    unsigned long ul = strtoul("0B1", 0, 0);
+    intmax_t im = strtoimax("0b1010", 0, 0);
+    uintmax_t um = strtoumax("0b1010", 0, 2);
+    printf("%llu %d %lld %lu %jd %ju\n", u, (int)(e - "0b111"), ll, ul, im, um);
+    sc("0b101 x", "%i%n%s"); sc("0b x", "%i%n%s"); sc("0b2 x", "%i%n%s"); sc("-0B11x", "%i%n%s");
+    sc("0b1", "%2i%n%s"); sc("0b1", "%3i%n%s");
+    sc("101 x", "%b%n%s"); sc("0b101 x", "%b%n%s"); sc("0x x", "%b%n%s"); sc("0b x", "%b%n%s");
+    sc("0b x", "%x%n%s"); sc("0x x", "%i%n%s");
+    return 0;
+}
+"#;
+    let c17 = [
+        "strtol 0b101 0: 0 1",
+        "strtol 0B11 0: 0 1",
+        "strtol 0b 0: 0 1",
+        "strtol 0b2 0: 0 1",
+        "strtol 0b101 2: 0 1",
+        "strtol -0b11 0: 0 2",
+        "strtol  +0b1x 0: 0 3",
+        "strtol 0b101 16: 45313 5",
+        "strtol 0b101 10: 0 1",
+        "strtol 0b1 8: 0 1",
+        "0 1 0 0 0 0",
+        "sscanf 0b101 x %i%n%s: 2 0 1 b101",
+        "sscanf 0b x %i%n%s: 2 0 1 b",
+        "sscanf 0b2 x %i%n%s: 2 0 1 b2",
+        "sscanf -0B11x %i%n%s: 2 0 2 B11x",
+        "sscanf 0b1 %2i%n%s: 2 0 1 b1",
+        "sscanf 0b1 %3i%n%s: 2 0 1 b1",
+        "sscanf 101 x %b%n%s: 2 5 3 x",
+        "sscanf 0b101 x %b%n%s: 2 5 5 x",
+        "sscanf 0x x %b%n%s: 2 0 1 x",
+        "sscanf 0b x %b%n%s: 0 -99 -1 -",
+        "sscanf 0b x %x%n%s: 2 11 2 x",
+        "sscanf 0x x %i%n%s: 0 -99 -1 -",
+    ];
+    let c23 = [
+        "strtol 0b101 0: 5 5",
+        "strtol 0B11 0: 3 4",
+        "strtol 0b 0: 0 1",
+        "strtol 0b2 0: 0 1",
+        "strtol 0b101 2: 5 5",
+        "strtol -0b11 0: -3 5",
+        "strtol  +0b1x 0: 1 5",
+        "strtol 0b101 16: 45313 5",
+        "strtol 0b101 10: 0 1",
+        "strtol 0b1 8: 0 1",
+        "7 5 -7 1 10 10",
+        "sscanf 0b101 x %i%n%s: 2 5 5 x",
+        "sscanf 0b x %i%n%s: 0 -99 -1 -",
+        "sscanf 0b2 x %i%n%s: 0 -99 -1 -",
+        "sscanf -0B11x %i%n%s: 2 -3 5 x",
+        "sscanf 0b1 %2i%n%s: 0 -99 -1 -",
+        "sscanf 0b1 %3i%n%s: 1 1 3 -",
+        "sscanf 101 x %b%n%s: 2 5 3 x",
+        "sscanf 0b101 x %b%n%s: 2 5 5 x",
+        "sscanf 0x x %b%n%s: 2 0 1 x",
+        "sscanf 0b x %b%n%s: 0 -99 -1 -",
+        "sscanf 0b x %x%n%s: 2 11 2 x",
+        "sscanf 0x x %i%n%s: 0 -99 -1 -",
+    ];
+    if !node_available() {
+        eprintln!("note: node is not on the path; skipping the binary prefix test");
+        return;
+    }
+    let gnu_source = format!("#define _GNU_SOURCE\n{source}");
+    for (standard, gnu, source, expected) in [
+        (CStandard::C17, false, source, &c17),
+        (CStandard::C23, false, source, &c23),
+        (CStandard::C17, true, gnu_source.as_str(), &c23),
+    ] {
+        let configuration = CompilerConfiguration::new(standard, ExtensionPolicy::Allow)
+            .with_target(Target::Wasm32Wasi)
+            .with_gnu_extensions(gnu);
+        for optimize in [false, true] {
+            let bytes = compile_configured(source, configuration, optimize, |compiled| {
+                compiled.bytes.to_vec()
+            })
+            .unwrap();
+            let run = run_with_input("binary-prefixes", &bytes, b"");
+            assert_eq!(run.status, 0, "{}", run.stderr);
+            assert_eq!(
+                run.stdout,
+                expected.join("\n") + "\n",
+                "{standard:?} gnu {gnu} optimize {optimize}"
+            );
+        }
+    }
+}
+
+/// printf of binary128 `long double` with `%La`, `%Le`, `%Lf` and `%Lg`
+/// on subnormals, the least normal, the greatest finite value and values
+/// next to rounding boundaries, at precisions up to 11500 (outputs longer
+/// than 64 characters are given as length, FNV-1a hash and first 20
+/// characters). Expected: glibc's `strfromf128`, the same in 2.39 and 2.43.
+#[test]
+fn binary128_printf_matches_glibc() {
+    let source = r#"#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+static char out[20000];
+int main(void) {
+    static const unsigned long long values[][2] = {
+        {0, 1},                                      /* least subnormal */
+        {0x0000ffffffffffffull, ~0ull},              /* largest subnormal */
+        {0x0000800000000000ull, 0x123},              /* subnormal */
+        {0x0001000000000000ull, 0},                  /* least normal */
+        {0x7ffeffffffffffffull, ~0ull},              /* greatest finite */
+        {0x3ffb999999999999ull, 0x999999999999999aull}, /* 0.1 */
+        {0xbfff000000000000ull, 1},                  /* -(1 + ulp) */
+        {0x4008f3ffffffffffull, ~0ull},              /* just below 1000 */
+    };
+    static const char *formats[] = {"%La", "%.0La", "%.3La", "%.40Le", "%.36Lg", "%.0Le", "%.5Lf", "%.40Lf", "%.11500Le"};
+    for (int i = 0; i < 8; i++) {
+        union { unsigned long long w[2]; long double q; } u = {{values[i][1], values[i][0]}};
+        for (int f = 0; f < 9; f++) {
+            snprintf(out, sizeof out, formats[f], u.q);
+            size_t n = strlen(out);
+            if (n > 64) {
+                unsigned hash = 2166136261u;
+                for (size_t k = 0; k < n; k++)
+                    hash = (hash ^ (unsigned char)out[k]) * 16777619u;
+                printf("%zu:%08x:%.20s\n", n, hash, out);
+            } else {
+                printf("%s\n", out);
+            }
+        }
+    }
+    return 0;
+}
+"#;
+    let expected = [
+        "0x0.0000000000000000000000000001p-16382",
+        "0x0p-16382",
+        "0x0.000p-16382",
+        "6.4751751194380251109244389582276465524996e-4966",
+        "6.47517511943802511092443895822764655e-4966",
+        "6e-4966",
+        "0.00000",
+        "0.0000000000000000000000000000000000000000",
+        "11508:fd003292:6.475175119438025110",
+        "0x0.ffffffffffffffffffffffffffffp-16382",
+        "0x1p-16382",
+        "0x1.000p-16382",
+        "3.3621031431120935062626778173217519550806e-4932",
+        "3.36210314311209350626267781732175196e-4932",
+        "3e-4932",
+        "0.00000",
+        "0.0000000000000000000000000000000000000000",
+        "11508:f4b89d21:3.362103143112093506",
+        "0x0.8000000000000000000000000123p-16382",
+        "0x1p-16382",
+        "0x0.800p-16382",
+        "1.6810515715560467531313389086610647288950e-4932",
+        "1.68105157155604675313133890866106473e-4932",
+        "2e-4932",
+        "0.00000",
+        "0.0000000000000000000000000000000000000000",
+        "11508:0c30b95e:1.681051571556046753",
+        "0x1p-16382",
+        "0x1p-16382",
+        "0x1.000p-16382",
+        "3.3621031431120935062626778173217526025981e-4932",
+        "3.3621031431120935062626778173217526e-4932",
+        "3e-4932",
+        "0.00000",
+        "0.0000000000000000000000000000000000000000",
+        "11508:f83e199c:3.362103143112093506",
+        "0x1.ffffffffffffffffffffffffffffp+16383",
+        "0x2p+16383",
+        "0x2.000p+16383",
+        "1.1897314953572317650857593266280070161965e+4932",
+        "1.18973149535723176508575932662800702e+4932",
+        "1e+4932",
+        "4939:e100db08:11897314953572317650",
+        "4974:ad8e6a68:11897314953572317650",
+        "11508:bf92cda2:1.189731495357231765",
+        "0x1.999999999999999999999999999ap-4",
+        "0x2p-4",
+        "0x1.99ap-4",
+        "1.0000000000000000000000000000000000481482e-01",
+        "0.100000000000000000000000000000000005",
+        "1e-01",
+        "0.10000",
+        "0.1000000000000000000000000000000000048148",
+        "11506:b41fbb1b:1.000000000000000000",
+        "-0x1.0000000000000000000000000001p+0",
+        "-0x1p+0",
+        "-0x1.000p+0",
+        "-1.0000000000000000000000000000000001925930e+00",
+        "-1.00000000000000000000000000000000019",
+        "-1e+00",
+        "-1.00000",
+        "-1.0000000000000000000000000000000001925930",
+        "11507:444bfd5c:-1.00000000000000000",
+        "0x1.f3ffffffffffffffffffffffffffp+9",
+        "0x2p+9",
+        "0x1.f40p+9",
+        "9.9999999999999999999999999999999990139239e+02",
+        "999.999999999999999999999999999999901",
+        "1e+03",
+        "1000.00000",
+        "999.9999999999999999999999999999999013923868",
+        "11506:ff2864c4:9.999999999999999999",
+    ];
+    for output in outputs("printf-binary128", source).into_iter().flatten() {
+        assert_eq!(output, expected.join("\n") + "\n");
     }
 }

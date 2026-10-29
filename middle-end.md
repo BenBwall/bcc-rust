@@ -2551,8 +2551,18 @@ unbuffered) with the whole `printf` family, whose floating conversions are
 exact (big-integer expansion, ties to even, as glibc; precisions beyond its
 digit buffer are padded, never copied), a small `scanf` that honours every
 length modifier (`L` as `ll` for integers, as glibc), reads only the
-longest valid prefix of a number and fails when that prefix is not a whole
-number (`0x`, `1e+`), `<math.h>` (`sin`, `cos` and `tan` are FreeBSD's
+longest valid prefix of a number, of any length, and fails when that
+prefix is not a whole number (`0x`, `1e+`), `strtof`, `strtod` and
+`strtold` correctly rounded to their own formats for subject sequences of
+any length (`floatscan.c`: musl's `decfloat` scales the decimal digits in
+base-10^9 words until their integer part is a 113-bit significand, which
+integer code rounds once to `float`, `double` or binary128 `long double`;
+glibc's end pointers and `ERANGE`, with tininess after rounding), so `%f`,
+`%lf` and `%Lf` are too, the C23 `0b` prefix in `strtol` and `%i` under
+the `__isoc23_*` names to which the headers redirect for `-std=c23`,
+`gnu23` and `_GNU_SOURCE`, as glibc's do (other modes keep C17's
+behaviour; `%b` reads binary in every mode, as in glibc 2.38 and later),
+`<math.h>` (`sin`, `cos` and `tan` are FreeBSD's
 fdlibm with Payne-Hanek argument reduction, translated from rust-lang/libm
 under its MIT and Sun notices, so they give musl's results, which can
 differ from glibc's by a few ulps; the float variants round the double
@@ -2562,9 +2572,8 @@ payloads, and `nextafter` and `nextafterl` set `ERANGE`, as glibc),
 `<time.h>`, and compiler-rt's `i128` and binary128 routines (the
 floating-to-integer conversions with compiler-rt's exact saturation rules).
 Allocation sizes that would wrap fail with `ENOMEM`, and the heap never
-takes memory's last page, whose end would wrap to 0. `strtod` is exact only
-for up to 19 digits and exponents within ±22, and `strtold` and `%Lf` read
-binary128 `long double` at double precision. Files cannot be opened.
+takes memory's last page, whose end would wrap to 0. Files cannot be
+opened.
 
 **Output.** `--emit=wasm` writes the binary module, `--emit=wat` (and
 `--emit=asm`, `-S`) its text, and `-o x.wasm` the binary; `-c` and linking

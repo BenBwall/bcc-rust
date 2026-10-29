@@ -150,7 +150,7 @@ impl Expander<'_, '_, '_, '_> {
                 });
                 break 'base;
             };
-            match self.update_macro_argument_paren_depth(token, variadic, paren_depth) {
+            match self.update_macro_argument_paren_depth(token.kind, variadic, paren_depth) {
                 | Some(depth) => paren_depth = depth,
                 | None => break,
             }

@@ -115,6 +115,7 @@ use crate::{
     },
     util::{
         bump::{
+            ArenaMap,
             ArenaVec,
             Bump,
         },
@@ -363,8 +364,9 @@ impl Expander<'_, '_, '_, '_> {
             // C99 §6.10.3.1: parameters are replaced before the replacement
             // list is rescanned, so a parameter hides a macro of its name.
             // `##` runs after replacement, so its result names no parameter.
-            if !is_pasted && let Some(frame) = self.handle_macro_argument(token) {
-                self.push_tokenizer_frame(frame);
+            // Only a replacement list with parameters has any; most names
+            // are read elsewhere, without the call.
+            if !is_pasted && self.get_arguments().is_some() && self.handle_macro_argument(token) {
                 continue;
             }
             if self.is_reading_operand() {
@@ -388,89 +390,11 @@ impl Expander<'_, '_, '_, '_> {
                 };
                 break 'base Some(token);
             }
-            if let Some(md) = self
-                .state
-                .macro_definitions
-                .get(&token.identifier_id(self.context))
-                .cloned()
-            {
-                match md {
-                    | MacroDefinition::ObjectLike { tokenizer } => {
-                        self.warn_deprecated_macro(token);
-                        let frame = TokenizerFrame {
-                            frame_type: TokenizerFrameType::ObjectLikeMacroInvocation {
-                                invocation_end: self.expansion_end().unwrap_or_else(|| {
-                                    self.context
-                                        .get_source_vectors(token.source_vectors)
-                                        .last()
-                                        .cloned()
-                                        .unwrap_or_default()
-                                }),
-                                invocation:     self.invocation_location(token),
-                                spelling:       self.spelling_location(token),
-                                name:           token.identifier_id(self.context),
-                                released:       false,
-                            },
-                            tokenizer,
-                        };
-                        if self.tracing() {
-                            self.trace_invocation(&frame);
-                        }
-                        self.push_tokenizer_frame(frame);
-                        continue;
-                    },
-                    | MacroDefinition::FunctionLike {
-                        argument_names,
-                        tokenizer,
-                        is_variadic,
-                        variadic_alias,
-                    } => {
-                        let variadic_name = is_variadic.then(|| {
-                            variadic_alias
-                                .unwrap_or_else(|| self.context.string_cache.intern("__VA_ARGS__"))
-                        });
-                        let Some((arguments, invocation_end)) =
-                            self.capture_cross_frame_call(token, argument_names, variadic_name)
-                        else {
-                            break 'base Some(token);
-                        };
-                        self.warn_deprecated_macro(token);
-                        let (tokenizer, arguments) = if is_variadic {
-                            self.prepare_variadic_body(token, tokenizer, arguments)
-                        } else {
-                            (tokenizer, arguments)
-                        };
-                        let frame = TokenizerFrame {
-                            frame_type: TokenizerFrameType::FunctionLikeMacroInvocation {
-                                invocation_end,
-                                invocation: self.invocation_location(token),
-                                spelling: self.spelling_location(token),
-                                name: token.identifier_id(self.context),
-                                arguments,
-                                is_variadic,
-                                released: false,
-                            },
-                            tokenizer,
-                        };
-                        if self.tracing() {
-                            self.trace_invocation(&frame);
-                        }
-                        self.push_tokenizer_frame(frame);
-                        continue;
-                    },
-                    | MacroDefinition::BuiltIn => {
-                        let result = self.expand_builtin(token);
-                        if self.tracing() {
-                            self.trace_builtin(token, result);
-                        }
-                        if let Some(result) = result {
-                            break 'base Some(result);
-                        }
-                        continue 'base;
-                    },
-                }
+            // The bulk of replacement is out of line, so that the frame of
+            // this loop, which argument prescans nest, stays small.
+            if let Some(token) = self.replace_macro_name(token) {
+                break 'base Some(token);
             }
-            break 'base Some(token);
         };
         self.generate_placeholders = false;
         self.current_is_newline = ret.is_none_or(|t| t.kind == PreprocessorTokenType::Newline);
@@ -535,6 +459,11 @@ struct Expander<'c, 'tu, 'pp: 'x, 'x> {
     source_segment_limit:  usize,
     /// Frames pushed since the expansion arena was last reset.
     pushed_frames:         usize,
+    /// For each `(` that collecting a macro call shared from a replay and
+    /// saw closed there, keyed by its address, how many tokens later its
+    /// `)` is. A call nested in that argument then skips the group rather
+    /// than reading it again.
+    paren_ends:            ArenaMap<'x, usize, usize>,
 }
 
 // Tests.

@@ -12,7 +12,11 @@ use std::fmt::{
 
 use super::{
     PreprocessorToken,
-    replay::ReplayCursor,
+    replay::{
+        ReplayCursor,
+        SharedRun,
+        SharedToken,
+    },
     storage::LexedFile,
 };
 use crate::{
@@ -299,6 +303,46 @@ impl<'a> TokenSource<'a> {
         empty_location: SourceVector,
     ) -> Self {
         Self::Replay(ReplayCursor::new(context, arena, parts, empty_location))
+    }
+
+    /// Replays `runs` in order and then `tail`, sharing their tokens; see
+    /// [`ReplayCursor`]. `empty_location` locates an empty replay.
+    pub(crate) fn replay_runs(
+        arena: &'a Bump,
+        runs: &[SharedRun<'a>],
+        tail: SharedRun<'a>,
+        empty_location: SourceVector,
+    ) -> Self {
+        Self::Replay(ReplayCursor::of_runs(arena, runs, tail, empty_location))
+    }
+
+    /// Whether this source replays tokens it can share; see
+    /// [`Self::next_shared`].
+    pub(crate) fn is_replay(&self) -> bool {
+        matches!(self, Self::Replay(_))
+    }
+
+    /// Reads the next token of a replay without recording its provenance.
+    pub(crate) fn next_shared(&mut self) -> Option<SharedToken<'a>> {
+        match self {
+            | Self::Replay(cursor) => cursor.next_shared(),
+            | Self::File(_) => unreachable!("only replayed tokens are shared"),
+        }
+    }
+
+    /// Moves a replay past the tokens between `open`, the token it just
+    /// shared, and the one `offset` tokens after it, which is read next,
+    /// and returns them; `None`, reading nothing, when that token is not in
+    /// this replay.
+    pub(crate) fn skip_shared(
+        &mut self,
+        open: SharedToken<'a>,
+        offset: usize,
+    ) -> Option<SharedRun<'a>> {
+        match self {
+            | Self::Replay(cursor) => cursor.skip_shared(open, offset),
+            | Self::File(_) => None,
+        }
     }
 
     /// A zero-length diagnostic location at `position`, which this source

@@ -125,7 +125,7 @@ impl Expander<'_, '_, '_, '_> {
                             let has_generated_token = *has_generated_token;
                             let next_paren_depth = match paren_depth {
                                 | Some(depth) => self
-                                    .update_macro_argument_paren_depth(token, variadic, depth)
+                                    .update_macro_argument_paren_depth(token.kind, variadic, depth)
                                     .map(Some),
                                 | None => Some(None),
                             };
