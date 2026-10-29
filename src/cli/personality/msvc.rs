@@ -207,6 +207,12 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         // `cl` replaces trigraphs only under `/Zc:trigraphs`.
         "-fno-trigraphs".into(),
     ];
+    // `cl` makes a tentative definition a communal symbol, so two units
+    // that both declare `int x;` link; clang-cl does not, as Clang 11 and
+    // later do not.
+    if !clang_cl {
+        common.push("-fcommon".into());
+    }
     if !state.extensions {
         // `/Za`: ISO C without Microsoft's anonymous tagged members, and
         // without `_MSC_EXTENSIONS`; the `__`-prefixed keywords stay.
