@@ -1730,7 +1730,13 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
             return Ok(());
         }
         let value = if let Some(value) = integer {
-            Some(value.value)
+            // A wide value's low bits are the low bits of `value`, but
+            // whether it is zero takes all of them.
+            Some(if representation == Repr::Bool {
+                i128::from(!value.is_zero())
+            } else {
+                value.value
+            })
         } else if let Some(folded) = info.binary128()
             && matches!(representation, Repr::Int { .. } | Repr::Bool)
         {

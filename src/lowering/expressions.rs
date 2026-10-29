@@ -132,7 +132,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         {
             let ty = representation.value_type().expect("integers have values");
             let value = if representation == Repr::Bool {
-                i128::from(value.value != 0)
+                i128::from(!value.is_zero())
             } else {
                 value.value
             };

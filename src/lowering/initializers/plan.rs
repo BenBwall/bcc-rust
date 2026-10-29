@@ -36,6 +36,7 @@ use crate::{
         semantic_analysis::{
             InitOperation,
             InitializerPlan,
+            Integer,
             SemanticTranslationUnit,
             TypeId,
             TypeKind,
@@ -447,7 +448,7 @@ fn zero_leaf<'tu>(sema: &SemanticTranslationUnit<'tu>, leaf: Leaf<'tu>) -> bool 
                 Ok(Repr::Int { .. } | Repr::Bool | Repr::Pointer)
             ) && sema
                 .expression_info(expression)
-                .is_some_and(|info| info.ice && info.integer.is_some_and(|value| value.value == 0)),
+                .is_some_and(|info| info.ice && info.integer.is_some_and(Integer::is_zero)),
         | Leaf::String { .. } | Leaf::Copy { .. } => false,
     }
 }

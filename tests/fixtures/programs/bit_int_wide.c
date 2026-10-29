@@ -8326,8 +8326,20 @@ static _BitInt(65535) deep(_BitInt(65535) a, _BitInt(65535) b) {
 #define WIDTH(x) _Generic((x), unsigned _BitInt(136): 136, _BitInt(128): 128, \
     _BitInt(126): 126, _BitInt(209): 209, unsigned _BitInt(200): 200, default: 0)
 
+struct flags {
+    _Bool b;
+    int i;
+    long long l;
+};
+
 static void extras(void) {
     printf("extras\n");
+    /* Folded wide values whose low 128 bits are zero are not zero. */
+    struct flags f = {(_BitInt(200))1 << 128, (int)((_BitInt(200))1 << 130), 5};
+    _Bool t = (_BitInt(200))1 << 150;
+    static _Bool st = (_BitInt(200))1 << 150;
+    static struct flags sf = {(_BitInt(200))1 << 128, (int)((_BitInt(200))1 << 130), 5};
+    printf("%d %d %lld %d %d %d %d\n", f.b, f.i, f.l, t, st, sf.b, sf.i);
     /* wb constants of more than 64 bits, in every base. */
     printf("%d %d %d %d %d\n", WIDTH(0xfedcba9876543210fedcba9876543210ffuwb),
            WIDTH(123456789012345678901234567890123456789wb),
