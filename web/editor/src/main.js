@@ -38,6 +38,18 @@ defineThemes(monaco);
 // site's web font has arrived.
 document.fonts?.ready.then(() => monaco.editor.remeasureFonts());
 
+// How the page was last used: by keyboard or by pointer. The Tab hint shows
+// only when the keyboard brought the focus into an editor.
+let usingKeyboard = false;
+addEventListener('keydown', () => { usingKeyboard = true; }, true);
+addEventListener('pointerdown', () => { usingKeyboard = false; }, true);
+
+/** The key that switches what Tab does in an editor: Alt+M (Option+M on a
+ * Mac). Monaco's own Ctrl+M (Ctrl+Shift+M on a Mac) cannot undo the
+ * `tabFocusMode` option, and Firefox takes Ctrl+M to mute the tab. */
+const TAB_KEY_TOGGLE = monaco.KeyMod.Alt | monaco.KeyCode.KeyM;
+const TAB_KEY_TOGGLE_LABEL = /Mac|iPhone|iPad/.test(navigator.platform) ? '⌥M' : 'Alt+M';
+
 /** Switch every editor between the site's `light` and `dark` themes. */
 export function setTheme(theme) {
   monaco.editor.setTheme(theme === 'light' ? 'bcc-light' : 'bcc-dark');
@@ -96,8 +108,12 @@ class Editor {
       quickSuggestions: false,
       suggestOnTriggerCharacters: false,
       contextmenu: false,
-      tabFocusMode: false,
+      // Tab moves the keyboard focus on, as everywhere else on the page,
+      // instead of trapping it in the editor (and editing the lesson);
+      // Alt+M switches Tab to indenting while editing (see TabHint).
+      tabFocusMode: true,
     });
+    this.tabHint = new TabHint(this.editor);
   }
 
   getValue() {
@@ -276,6 +292,7 @@ class Editor {
     for (const listener of this.listeners.splice(0)) {
       listener.dispose();
     }
+    this.tabHint.dispose();
     monaco.editor.setModelMarkers(this.editor.getModel(), 'bcc', []);
     for (const collection of this.decorations.values()) {
       collection.clear();
@@ -286,5 +303,67 @@ class Editor {
     if (model && !model.isDisposed()) {
       model.dispose();
     }
+  }
+}
+
+/**
+ * What Tab does in an editable editor, and the key that switches it. Tab
+ * starts by moving the focus on, as everywhere else on the page; Alt+M
+ * makes it indent, and back. A small note in the editor's corner says
+ * which, while the keyboard has the focus there, and screen readers hear
+ * it when it changes.
+ */
+class TabHint {
+  constructor(editor) {
+    this.editor = editor;
+    this.node = document.createElement('div');
+    this.node.className = 'tab-hint';
+    this.node.setAttribute('role', 'status');
+    this.node.hidden = true;
+    this.widget = {
+      getId: () => 'bcc.tabHint',
+      getDomNode: () => this.node,
+      getPosition: () => ({ preference: monaco.editor.OverlayWidgetPositionPreference.BOTTOM_RIGHT_CORNER }),
+    };
+    editor.addOverlayWidget(this.widget);
+    this.action = editor.addAction({
+      id: 'bcc.toggleTabFocus',
+      label: 'Toggle Tab Key Moves Focus',
+      keybindings: [TAB_KEY_TOGGLE],
+      precondition: '!editorReadonly',
+      run: () => {
+        editor.updateOptions({ tabFocusMode: !this.movesFocus() });
+        this.show();
+      },
+    });
+    this.listeners = [
+      editor.onDidFocusEditorText(() => {
+        if (usingKeyboard) this.show();
+      }),
+      editor.onDidBlurEditorText(() => this.hide()),
+      editor.onMouseDown(() => this.hide()),
+    ];
+  }
+
+  movesFocus() {
+    return this.editor.getOption(monaco.editor.EditorOption.tabFocusMode);
+  }
+
+  show() {
+    if (this.editor.getOption(monaco.editor.EditorOption.readOnly)) return;
+    this.node.textContent = this.movesFocus()
+      ? `Tab moves focus · ${TAB_KEY_TOGGLE_LABEL}: Tab indents`
+      : `Tab indents · ${TAB_KEY_TOGGLE_LABEL}: Tab moves focus`;
+    this.node.hidden = false;
+  }
+
+  hide() {
+    this.node.hidden = true;
+  }
+
+  dispose() {
+    for (const listener of this.listeners) listener.dispose();
+    this.action.dispose();
+    this.editor.removeOverlayWidget(this.widget);
   }
 }

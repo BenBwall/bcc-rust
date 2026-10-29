@@ -154,6 +154,7 @@ pub fn compile(source: &str, optimize: bool) -> Compilation {
             .sum(),
         tokens: output.tokens,
         syntax_tree: output.syntax_tree,
+        semantic_types: output.semantic_types,
         ir: output.ir,
         ir_abi: output.ir_abi,
         llvm: None,

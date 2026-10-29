@@ -103,6 +103,7 @@ pub unsafe extern "C" fn smoke_compile(
         ("preprocessed", &output.preprocessed),
         ("tokens", &output.tokens),
         ("syntax-tree", &output.syntax_tree),
+        ("semantic-types", &output.semantic_types),
         ("ir", &output.ir),
         ("ir-abi", &output.ir_abi),
         ("asm", &output.asm),

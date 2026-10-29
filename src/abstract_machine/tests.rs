@@ -631,6 +631,142 @@ fn pointer_events_describe_decay_one_past_and_indirection() {
 }
 
 #[test]
+fn subscripts_span_their_bracket_and_narration_agrees_in_number() {
+    let source = "int f(void) { return 1; }\nint main(void) { int a[3] = {1, 2, 3}; int *p = \
+                  &a[2]; { int t = a[1]; } int one = f(); return one + *p; }";
+    let states = states(source);
+    let event = |kind: EventKind| {
+        states
+            .iter()
+            .map(|state| &state.event)
+            .filter(|event| event.kind == kind)
+            .collect::<Vec<_>>()
+    };
+    let text = |event: &super::Event| {
+        source
+            .get(event.range.start..event.range.end)
+            .expect("event range")
+            .to_owned()
+    };
+    // C99 §6.5.3.2p3: &a[2] is a + 2; its range and title include the `]`.
+    let address = event(EventKind::PointerArithmetic)[0];
+    assert_eq!(text(address), "&a[2]");
+    assert_eq!(address.title, "Pointer arithmetic: &a[2]");
+    assert!(
+        address.explanation.contains("moves 2 ints") && address.explanation.contains("a + i"),
+        "{}",
+        address.explanation
+    );
+    assert_eq!(address.clauses[0].id, "6.5.3.2p3");
+    assert!(
+        address
+            .explanation
+            .contains("the element itself is never read"),
+        "{}",
+        address.explanation
+    );
+    let subscript = event(EventKind::Subscript)[0];
+    assert_eq!(text(subscript), "a[1]");
+    assert!(
+        subscript.explanation.contains("moves 1 element forward"),
+        "{}",
+        subscript.explanation
+    );
+    let ended = event(EventKind::LeaveBlock)[0];
+    assert!(
+        ended
+            .explanation
+            .contains("`t` reaches the end of its lifetime"),
+        "{}",
+        ended.explanation
+    );
+    let remainder = self::states("int main(void) { int x = 7; return x % 3; }")
+        .into_iter()
+        .find(|state| state.event.kind == EventKind::Arithmetic)
+        .expect("the remainder is computed")
+        .event;
+    assert!(
+        remainder
+            .explanation
+            .contains("takes the remainder of the division in int: 7 % 3 = 1"),
+        "{}",
+        remainder.explanation
+    );
+    let call = event(EventKind::Call)[0];
+    assert!(
+        call.explanation.starts_with("The call has no arguments"),
+        "{}",
+        call.explanation
+    );
+}
+
+/// The pointer-arithmetic events of `main`'s `int *q = INITIALIZER;`, each
+/// with the source text it covers and whether it is narrated as `&a[i]`.
+fn pointer_steps(initializer: &str) -> Vec<(String, bool, String)> {
+    let source = format!(
+        "int main(void) {{ int a[3] = {{1, 2, 3}}; int x = 0; int *q = {initializer}; return x; }}"
+    );
+    self::states(&source)
+        .into_iter()
+        .filter(|state| state.event.kind == EventKind::PointerArithmetic)
+        .map(|state| {
+            let event = state.event;
+            let text = source[event.range.start..event.range.end].to_owned();
+            let element = event.clauses.iter().any(|clause| clause.id == "6.5.3.2p3");
+            assert_eq!(
+                element,
+                event.explanation.contains("&a[i] as a + i"),
+                "{}",
+                event.explanation
+            );
+            (text, element, event.explanation)
+        })
+        .collect()
+}
+
+#[test]
+fn only_an_element_address_is_narrated_as_one() {
+    // C99 §6.5.3.2p3: the `&[]` node, not the source text, decides.
+    let steps = pointer_steps("&a[1] + 1");
+    assert_eq!(
+        steps
+            .iter()
+            .map(|(text, element, _)| (text.as_str(), *element))
+            .collect::<Vec<_>>(),
+        [("&a[1]", true), ("&a[1] + 1", false)]
+    );
+    assert!(steps[1].2.contains("moves 1 int forward"), "{}", steps[1].2);
+    let steps = pointer_steps("&x + 1");
+    assert_eq!(steps.len(), 1);
+    assert!(!steps[0].1, "{}", steps[0].2);
+    let steps = pointer_steps("&a[2] - 1");
+    assert_eq!(
+        steps
+            .iter()
+            .map(|(text, element, _)| (text.as_str(), *element))
+            .collect::<Vec<_>>(),
+        [("&a[2]", true), ("&a[2] - 1", false)]
+    );
+    assert!(steps[1].2.contains("moves 1 int back"), "{}", steps[1].2);
+    let steps = pointer_steps("(&a[2])");
+    assert_eq!(steps.len(), 1);
+    assert!(steps[0].1, "{}", steps[0].2);
+    // A negative index moves back.
+    let back =
+        self::states("int main(void) { int a[3] = {1, 2, 3}; int *p = a + 2; return p[-1]; }")
+            .into_iter()
+            .find(|state| state.event.kind == EventKind::Subscript)
+            .expect("p[-1] is a subscript")
+            .event;
+    assert!(
+        back.explanation
+            .contains("moves 1 element back and designates a[1]"),
+        "{}",
+        back.explanation
+    );
+}
+
+#[test]
 fn char_values_are_promoted_and_out_of_range_stores_wrap() {
     let source =
         "int main(void) { char c = 100; char d = c + c; int w = c + c; c++; return w + d; }";

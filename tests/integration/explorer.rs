@@ -155,6 +155,16 @@ mod tests {
                         Some(&*with(&["--syntax-tree", "--syntax-locations"]).1),
                         "{name}"
                     );
+                    assert_eq!(
+                        output.semantic_types.as_deref(),
+                        Some(&*with(&["--semantic-types"]).1),
+                        "{name}"
+                    );
+                    assert_eq!(
+                        located.semantic_types.as_deref(),
+                        Some(&*with(&["--semantic-types", "--syntax-locations"]).1),
+                        "{name}"
+                    );
                 }
                 for (view, flag) in [
                     (&output.ir, "--emit=ir"),

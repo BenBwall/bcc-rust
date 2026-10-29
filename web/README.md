@@ -15,10 +15,11 @@ them. Visitors pick a lesson (a small C program) and see it three ways:
   the first translation phases to machine code: the logical lines after
   line splicing (phases 1-2), the preprocessing tokens (phase 3), the
   preprocessed text with every macro expansion, conditional group and
-  `#include` it took (phase 4), tokens (phases 5-7), syntax tree, bcc IR
-  before and after ABI lowering, LLVM IR, native x86-64 assembly, and machine
-  code with its encoded bytes, each with a short explanation and, for the
-  front end, the C99 rules it applies. The real compiler runs in the browser and recompiles as you
+  `#include` it took (phase 4), tokens (phases 5-7), syntax tree, semantic
+  types (every declaration's scope, type, linkage, storage duration and size,
+  and every expression's type), bcc IR before and after ABI lowering, LLVM
+  IR, native x86-64 assembly, and machine code with its encoded bytes, each
+  with a short explanation and, for the front end, the C99 rules it applies. The real compiler runs in the browser and recompiles as you
   type, at `-O0` or `-O2`, with a note on what the optimizer changed. Its
   errors appear as squiggles in the source and in a diagnostics list, and the
   view says which stage stopped and why. Hovering a source line highlights
@@ -132,12 +133,21 @@ new build never reuses a URL for different bytes. Suggested caching:
   stops it; **Reset** (`Shift+R`) reloads the program. Shortcuts are ignored
   while typing in the editor. Click a line number to set a run target, then
   **Run to line**.
+- `Tab` moves the keyboard focus through the page, editors included, rather
+  than indenting (Monaco's `tabFocusMode`). In the source editor, `Alt+M`
+  (`⌥M` on a Mac) switches `Tab` to indenting and back; a note in the
+  editor's corner says which while the keyboard has the focus there.
+  Monaco's own toggle (`Ctrl+M`) cannot undo the option, and Firefox takes
+  `Ctrl+M` to mute the tab.
 - The narration card names the rule each step applied, colour coded by kind
   (evaluate, convert, memory, lifetime, control flow, call, stopped), marks
   sequence points, and lists the cited C99 paragraphs with a gloss. Earlier
   steps are listed below it and can be revisited.
 - In the source, a solid box marks what the last step evaluated and a dashed
-  underline what runs next; undefined behavior is marked in red.
+  underline what runs next; undefined behavior is marked in red. The compiler
+  pipeline view drops these marks and shows the compiler's instead: the
+  selected stage's marks in the source and the lines linked to the output
+  under the pointer.
 - Back replays retained snapshots (up to 2,000); the engine stays at the newest
   state, and stepping forward replays history before asking it for more.
 - An announcement region narrates each step for screen readers.
@@ -152,9 +162,9 @@ engine** starts a new one.
 Every stage except LLVM IR is compiled in the browser by bcc itself:
 `bcc_rust::explorer::compile`, the same front end, optimizer and x86-64 back
 end as the native build, minus LLVM. `src/explorer.rs` maps its output onto
-the page's `Compilation`: the text stages as they are (the syntax tree with
-`--syntax-locations`), each function's machine code as an offset/bytes/
-instruction listing, diagnostics in the editor's UTF-16 columns, and the
+the page's `Compilation`: the text stages as they are (the syntax tree and the
+semantic types with `--syntax-locations`), each function's machine code as an
+offset/bytes/instruction listing, diagnostics in the editor's UTF-16 columns, and the
 compiler's per-function `line_map`, which links source lines to the IR,
 assembly and listing.
 
@@ -226,6 +236,11 @@ reimplements none):
   comes from the native compiler).
 - **Tokens (phases 5-7)** is the `--tokens` listing of a second, ordinary
   preprocessing run.
+- **Syntax tree** and **Semantic types** (phase 7) are `--syntax-tree` and
+  `--semantic-types`, both with `--syntax-locations`, so each line that has a
+  place in the source links to it: every scope with its declarations (type,
+  linkage, storage duration, size and alignment), then each expression's
+  type and value category, then the implicit conversions applied to them.
 
 The page receives at most 20,000 phase-3 entries and 2,000 expansions and
 says how many more there were; source columns are mapped line by line, so a

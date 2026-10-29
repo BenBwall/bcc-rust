@@ -340,7 +340,11 @@ fn m4_registry_preserves_baseline_semantic_types_on_every_target() {
         let unit = crate::pipeline::analyze_translation_unit(&mut context, &syntax);
         assert_eq!(unit.errors, 0, "{:?}", context.take_pending_errors());
         let arena = Bump::new();
-        assert_eq!(unit.inspect(&context, &arena), expected, "{target:?}");
+        assert_eq!(
+            unit.inspect(&context, &arena, false),
+            expected,
+            "{target:?}"
+        );
     }
 }
 

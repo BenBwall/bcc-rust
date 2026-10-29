@@ -33,9 +33,10 @@ pub struct ExplorerOptions {
     /// (`#include "list.h"` finds `list.h`), searched before the embedded
     /// resource headers. The host file system is never read.
     pub files:             Vec<ExplorerFile>,
-    /// Ends every syntax-tree line with the `@line:column` of its node, as
-    /// `--syntax-locations` does, so a viewer can link the tree to the
-    /// source line by line.
+    /// Ends every syntax-tree line, and each declared name and expression in
+    /// the semantic view, with the `@line:column` of its source, as
+    /// `--syntax-locations` does, so a viewer can link them to the source
+    /// line by line.
     pub syntax_locations:  bool,
     /// Records what phase 4 did, for
     /// [`ExplorerOutput::preprocessing`]; without it, that is `None`.
@@ -80,6 +81,11 @@ pub struct ExplorerOutput {
     pub tokens:             Option<String>,
     /// The syntax tree, as `--syntax-tree` prints it.
     pub syntax_tree:        Option<String>,
+    /// What semantic analysis made of the tree, as `--semantic-types` prints
+    /// it: every scope's declarations with their types, linkage, storage
+    /// duration, size and alignment, then each expression's type and value
+    /// category and the implicit conversions applied to it.
+    pub semantic_types:     Option<String>,
     /// The bcc IR before ABI lowering, as `--emit=ir --backend=native`
     /// prints it.
     pub ir:                 Option<String>,

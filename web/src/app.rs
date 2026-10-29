@@ -975,14 +975,11 @@ impl State {
         let edited = self.edited.get();
         let mut execution = Vec::new();
         let mut objects = Vec::new();
-        // A program the abstract machine refused never ran; the pipeline
-        // view marks what the compiler did with it instead.
-        let refused = |snapshot: &Snapshot| snapshot.step == 0 && snapshot.status == "error";
+        // The pipeline view marks what the compiler did with the source,
+        // not where the abstract machine is: its stepping marks would
+        // say "just evaluated" in a view that evaluates nothing.
         let pipeline = self.mode.get() == Mode::Pipeline;
-        if let Some(snapshot) = snapshot
-            .as_ref()
-            .filter(|snapshot| !(edited || pipeline && refused(snapshot)))
-        {
+        if let Some(snapshot) = snapshot.as_ref().filter(|_| !(edited || pipeline)) {
             let fault = snapshot.event.category == "fault";
             if let Some(range) = snapshot.event.range {
                 let class = if fault { "exec-fault" } else { "exec-current" };
@@ -1032,7 +1029,11 @@ impl State {
                 }
             });
         }
-        let target = self.target_layer();
+        let target = if pipeline {
+            Vec::new()
+        } else {
+            self.target_layer()
+        };
         let links = if pipeline {
             self.hover_links()
         } else {
@@ -1715,7 +1716,7 @@ fn SourcePane(state: State) -> impl IntoView {
                 text=state.editor_text
                 language=Signal::stored("c")
                 theme=state.theme_name
-                label="C source code. Edit it, then choose Run edited code."
+                label="C source code. Edit it, then choose Run edited code. Tab moves to the next control; Alt+M makes Tab indent."
                 decorations=layers
                 markers=state.markers.into()
                 on_change
@@ -1723,10 +1724,14 @@ fn SourcePane(state: State) -> impl IntoView {
                 on_gutter_click=on_gutter
                 reveal=state.reveal.into()
             />
-            <footer class="source-legend" hidden=move || state.mode.get() == Mode::Wasm>
+            <footer class="source-legend" hidden=move || state.mode.get() != Mode::Machine>
                 <span><i class="swatch swatch-current"></i>"just evaluated"</span>
                 <span><i class="swatch swatch-next"></i>"next"</span>
                 <span><i class="swatch swatch-target"></i>"click a line number to set a run target"</span>
+                <span><i class="swatch swatch-squiggle"></i>"bcc error"</span>
+            </footer>
+            <footer class="source-legend" hidden=move || state.mode.get() != Mode::Pipeline>
+                <span><i class="swatch swatch-link"></i>"hover a line to find what it became"</span>
                 <span><i class="swatch swatch-squiggle"></i>"bcc error"</span>
             </footer>
             <Show when=move || state.mode.get() == Mode::Wasm>

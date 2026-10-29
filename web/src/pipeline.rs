@@ -88,6 +88,8 @@ pub struct Compilation {
     pub preprocessing:      Preprocessing,
     pub tokens:             Option<String>,
     pub syntax_tree:        Option<String>,
+    /// Semantic analysis's scopes, declarations and expression types.
+    pub semantic_types:     Option<String>,
     pub ir:                 Option<String>,
     pub ir_abi:             Option<String>,
     /// LLVM IR; only the native compiler produces it.
@@ -154,6 +156,7 @@ impl FunctionLines {
             | Stage::Preprocessor
             | Stage::Tokens
             | Stage::SyntaxTree
+            | Stage::SemanticTypes
             | Stage::Llvm => None,
         }
     }
@@ -168,6 +171,7 @@ impl Compilation {
             | Stage::Preprocessor => self.preprocessed.as_deref(),
             | Stage::Tokens => self.tokens.as_deref(),
             | Stage::SyntaxTree => self.syntax_tree.as_deref(),
+            | Stage::SemanticTypes => self.semantic_types.as_deref(),
             | Stage::Ir => self.ir.as_deref(),
             | Stage::IrAbi => self.ir_abi.as_deref(),
             | Stage::Llvm => self.llvm.as_deref(),
@@ -274,6 +278,8 @@ pub enum Stage {
     /// Phases 5-7: tokens.
     Tokens,
     SyntaxTree,
+    /// Phase 7's semantic analysis: declarations and expression types.
+    SemanticTypes,
     Ir,
     IrAbi,
     Llvm,
@@ -282,12 +288,13 @@ pub enum Stage {
 }
 
 impl Stage {
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 11] = [
         Self::Lines,
         Self::PpTokens,
         Self::Preprocessor,
         Self::Tokens,
         Self::SyntaxTree,
+        Self::SemanticTypes,
         Self::Ir,
         Self::IrAbi,
         Self::Llvm,
@@ -302,6 +309,7 @@ impl Stage {
             | Self::Preprocessor => "preprocessor",
             | Self::Tokens => "tokens",
             | Self::SyntaxTree => "syntax-tree",
+            | Self::SemanticTypes => "semantic-types",
             | Self::Ir => "ir",
             | Self::IrAbi => "ir-abi",
             | Self::Llvm => "llvm",
@@ -317,6 +325,7 @@ impl Stage {
             | Self::Preprocessor => "Preprocessor",
             | Self::Tokens => "Tokens",
             | Self::SyntaxTree => "Syntax tree",
+            | Self::SemanticTypes => "Semantic types",
             | Self::Ir => "bcc IR",
             | Self::IrAbi => "ABI-lowered IR",
             | Self::Llvm => "LLVM IR",
@@ -332,7 +341,8 @@ impl Stage {
             | Self::PpTokens
             | Self::Preprocessor
             | Self::Tokens
-            | Self::SyntaxTree => "Front end",
+            | Self::SyntaxTree
+            | Self::SemanticTypes => "Front end",
             | Self::Ir | Self::IrAbi | Self::Llvm => "Middle end",
             | Self::Asm | Self::MachineCode => "Back end",
         }
@@ -345,7 +355,7 @@ impl Stage {
             | Self::PpTokens => Some("phase 3"),
             | Self::Preprocessor => Some("phase 4"),
             | Self::Tokens => Some("phases 5–7"),
-            | Self::SyntaxTree => Some("phase 7"),
+            | Self::SyntaxTree | Self::SemanticTypes => Some("phase 7"),
             | _ => None,
         }
     }
@@ -357,6 +367,7 @@ impl Stage {
             | Self::PpTokens => "pp-tokens",
             | Self::Tokens => "tokens",
             | Self::SyntaxTree => "syntax-tree",
+            | Self::SemanticTypes => "semantic-types",
             | Self::Ir | Self::IrAbi => "bcc-ir",
             | Self::Llvm => "llvm",
             | Self::Asm => "asm",
@@ -384,6 +395,7 @@ impl Stage {
             | Self::Preprocessor => "-E",
             | Self::Tokens => "--tokens",
             | Self::SyntaxTree => "--syntax-tree --syntax-locations",
+            | Self::SemanticTypes => "--semantic-types --syntax-locations",
             | Self::Ir => "--emit=ir",
             | Self::IrAbi => "--emit=ir-abi",
             | Self::Llvm => "--emit=llvm",
@@ -441,8 +453,22 @@ impl Stage {
             | Self::SyntaxTree =>
                 "The parser checks the tokens against C's grammar and builds a tree. Precedence is \
                  decided here: in total + next * 2 the multiplication becomes a child of the \
-                 addition. Semantic analysis then attaches types to every declaration and \
-                 expression and checks rules the grammar cannot express.",
+                 addition. The tree records only what was written; what the names mean is the next \
+                 stage's work.",
+            | Self::SemanticTypes =>
+                "Semantic analysis walks the tree and works out what everything means. Each name \
+                 is looked up in its scope (the file, a function, a block) and bound to one \
+                 declaration, which gets a type, a linkage that says whether other files can see \
+                 it, and a storage duration that says how long it lives: static for the whole run, \
+                 automatic for one execution of its block. Objects get their size and alignment in \
+                 bytes. Then every expression gets a type and a category: an lvalue designates an \
+                 object (a modifiable-lvalue is one you may assign to, unlike a const or an \
+                 array), a function-designator names a function, and an rvalue is just a value. \
+                 The convert lines are the implicit conversions C inserts, such as reading an \
+                 lvalue (lvalue conversion), an array becoming a pointer, or an int becoming a \
+                 long. Rules the grammar cannot express, such as assigning to a const or calling \
+                 with the wrong arguments, are checked here; a type written <unanalyzed> is one \
+                 bcc could not work out, usually because of an error earlier in the program.",
             | Self::Ir =>
                 "bcc lowers the typed tree into its own intermediate representation. Each value \
                  (v1, v2, …) is assigned exactly once (static single assignment), control flow is \
@@ -586,6 +612,50 @@ impl Stage {
                     citation: "C99: §5.1.1.2 paragraph 1 item 7, p. 10; PDF p. 22.",
                 },
             ],
+            | Self::SemanticTypes => &[
+                Rule {
+                    id:       "6.2.1p2",
+                    title:    "Scopes of identifiers",
+                    gloss:    "A name can be used only within its scope: the file, a function, a \
+                               block, or a function prototype.",
+                    citation: "C99: §6.2.1 paragraph 2, p. 29; PDF p. 41.",
+                },
+                Rule {
+                    id:       "6.2.2p1",
+                    title:    "Linkages of identifiers",
+                    gloss:    "Linkage lets declarations in different scopes or files name the \
+                               same object or function: external, internal, or none.",
+                    citation: "C99: §6.2.2 paragraph 1, p. 30; PDF p. 42.",
+                },
+                Rule {
+                    id:       "6.2.4p1",
+                    title:    "Storage durations of objects",
+                    gloss:    "An object's storage duration (static, automatic or allocated) \
+                               determines its lifetime.",
+                    citation: "C99: §6.2.4 paragraph 1, p. 32; PDF p. 44.",
+                },
+                Rule {
+                    id:       "6.2.5p1",
+                    title:    "Types",
+                    gloss:    "The type of the expression used to access a value determines what \
+                               the value means.",
+                    citation: "C99: §6.2.5 paragraph 1, p. 33; PDF p. 45.",
+                },
+                Rule {
+                    id:       "6.3.2.1p1",
+                    title:    "Lvalues",
+                    gloss:    "An lvalue is an expression that designates an object; a modifiable \
+                               lvalue may be assigned to.",
+                    citation: "C99: §6.3.2.1 paragraph 1, p. 46; PDF p. 58.",
+                },
+                Rule {
+                    id:       "6.3p1",
+                    title:    "Conversions",
+                    gloss:    "Several operators convert their operands from one type to another \
+                               automatically: these are the implicit conversions.",
+                    citation: "C99: §6.3 paragraph 1, p. 42; PDF p. 54.",
+                },
+            ],
             | _ => &[],
         }
     }
@@ -594,7 +664,7 @@ impl Stage {
     fn locations(self) -> Option<fn(&str) -> Option<usize>> {
         match self {
             | Self::Tokens => Some(token_line),
-            | Self::SyntaxTree => Some(syntax_line),
+            | Self::SyntaxTree | Self::SemanticTypes => Some(syntax_line),
             | _ => None,
         }
     }
@@ -606,7 +676,8 @@ impl Stage {
             | Self::PpTokens
             | Self::Preprocessor
             | Self::Tokens
-            | Self::SyntaxTree =>
+            | Self::SyntaxTree
+            | Self::SemanticTypes =>
                 "The front end does the same work at every optimization level. The one difference \
                  is that -O2 defines the macro __OPTIMIZE__, as GCC and Clang do.",
             | Self::Ir =>
@@ -1020,7 +1091,8 @@ impl Census {
                 | Stage::PpTokens
                 | Stage::Preprocessor
                 | Stage::Tokens
-                | Stage::SyntaxTree => false,
+                | Stage::SyntaxTree
+                | Stage::SemanticTypes => false,
             };
             if !instruction {
                 continue;

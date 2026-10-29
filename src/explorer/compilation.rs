@@ -269,6 +269,10 @@ impl<'tu> Stages<'_, '_, 'tu> {
             .to_string()
         });
         let sema = analyze_translation_unit(self.context, &unit);
+        self.output.semantic_types = (self.views == Views::All).then(|| {
+            sema.inspect(self.context, &inspection, options.syntax_locations)
+                .to_owned()
+        });
         self.flush();
         if !sema.lowerable(self.context) {
             return;
