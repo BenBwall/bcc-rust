@@ -377,11 +377,6 @@ pub(crate) enum SemanticErrorKind {
     InvalidConstant,
     /// C99: §6.6p4; 6.5p5, p. 95; 67; PDF p. 107; 79.
     ConstantOverflow,
-    /// Arithmetic on a `_BitInt` wider than the constant evaluator's 128
-    /// bits where an integer constant expression is required: valid C23,
-    /// which GCC and Clang fold, but not yet folded here.
-    /// C23: §6.6 paragraph 6, p. 95; PDF p. 108.
-    UnsupportedWideConstant,
     /// C99: §6.7.2.2p4, p. 105; PDF p. 117. Values outside int that share
     /// one 64-bit type are the policy extension of §6.7.2.2p2.
     EnumeratorRange,
@@ -437,6 +432,11 @@ pub(crate) enum SemanticErrorKind {
     /// Clang extension: the error "address argument to atomic builtin must
     /// be a pointer to 1,2,4,8 or 16 byte type".
     AtomicOperandBytes,
+    /// Clang: `__builtin_mul_overflow` with a signed `_BitInt` operand or
+    /// result of more than 128 bits, which GCC accepts.
+    /// Clang extension: the error "`__builtin_mul_overflow` does not support
+    /// 'signed `_BitInt`' operands of more than 128 bits".
+    OverflowBuiltinBitInt,
     /// Clang diagnoses invalid constant orders as warnings.
     /// GNU extension: GCC manual, "__atomic Builtins".
     /// <https://gcc.gnu.org/onlinedocs/gcc/_005f_005fatomic-Builtins.html>
@@ -846,7 +846,6 @@ impl SemanticErrorKind {
             | Self::InvalidConstant | Self::InvalidChooseCondition =>
                 "not an integer constant expression",
             | Self::ConstantOverflow => "overflow or invalid operation",
-            | Self::UnsupportedWideConstant => "computed in more than 128 bits",
             | Self::EnumeratorRange => "no supported enum type holds this value with the others",
             | Self::InvalidMember => "incomplete member type",
             | Self::DuplicateMember => "member declared again here",
@@ -906,6 +905,7 @@ impl SemanticErrorKind {
             | Self::AtomicBuiltinBitInt => "a _BitInt object",
             | Self::AtomicOperandSize => "not a power-of-two size",
             | Self::AtomicOperandBytes => "more than 16 bytes",
+            | Self::OverflowBuiltinBitInt => "a signed _BitInt of more than 128 bits",
             | Self::InvalidAtomicOrder => "invalid memory order",
             | Self::InvalidAtomicFailureOrder => "invalid failure memory order",
             | Self::AtomicBufferQualifiers => "pointer conversion discards qualifiers",
@@ -1123,6 +1123,12 @@ impl SemanticErrorKind {
             | Self::AtomicOperandBytes => (
                 "address argument to atomic builtin must be a pointer to 1,2,4,8 or 16 byte type",
                 "the __sync builtins operate on objects of at most 16 bytes, in Clang and GCC",
+            ),
+            | Self::OverflowBuiltinBitInt => (
+                "__builtin_mul_overflow does not support 'signed _BitInt' operands of more \
+                 than 128 bits",
+                "Clang's __builtin_mul_overflow multiplies at most 128 bits of a signed \
+                 _BitInt; GCC accepts any width",
             ),
             | Self::AtomicOperandSize => (
                 "atomic memory operand must have a power-of-two size",
@@ -1746,12 +1752,6 @@ impl SemanticErrorKind {
             | Self::InvalidConstant => (
                 "an integer constant expression is required",
                 "C99 §6.6p3 and p6: integer constant expressions restrict operators and operands",
-            ),
-            | Self::UnsupportedWideConstant => (
-                "not yet supported: folding this _BitInt constant of more than 128 bits",
-                "C23 §6.6p6: this is an integer constant expression, but the constant evaluator \
-                 holds a value of a wider bit-precise type only as the sign extension of 128 \
-                 bits, which this result is not",
             ),
             | Self::ConstantOverflow => (
                 "constant expression overflows or has an invalid operation",

@@ -599,6 +599,15 @@ fn bit_precise_preprocessing_constants_use_intmax_magnitude_checks() {
     let (tokens, errors) = observe("9223372036854775808wb;\n", mode(CStandard::C23));
     assert!(errors.is_empty(), "{errors:?}");
     assert!(spellings(&tokens).contains("_BitInt(65)"), "{tokens:?}");
+    // A magnitude past 64 bits keeps its spelling, and its narrowest type.
+    let (tokens, errors) = observe(
+        "18446744073709551616wb 0x1'0000'0000'0000'0000'0000uwb;\n",
+        mode(CStandard::C23),
+    );
+    assert!(errors.is_empty(), "{errors:?}");
+    let tokens = spellings(&tokens);
+    assert!(tokens.contains("(_BitInt(66))"), "{tokens}");
+    assert!(tokens.contains("(unsigned _BitInt(81))"), "{tokens}");
 }
 
 #[test]

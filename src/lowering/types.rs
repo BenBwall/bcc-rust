@@ -94,7 +94,7 @@ pub(super) fn repr(types: &Types<'_>, mut ty: TypeId) -> Result<Repr, LoweringEr
         | TypeKind::Unmodeled(reason) => Err(LoweringErrorKind::UnmodeledType(reason)),
         | TypeKind::Scalar(scalar) => scalar_repr(types, scalar),
         | TypeKind::Pointer(_) | TypeKind::Nullptr => Ok(Repr::Pointer),
-        | TypeKind::BitInt { width, signed } => bit_int_repr(width, signed),
+        | TypeKind::BitInt { width, signed } => Ok(bit_int_repr(width, signed)),
         | TypeKind::Array(element, _) =>
             if types.unanalyzed(element) {
                 Err(super::LoweringError::unanalyzed_kind(types, ty))
@@ -182,15 +182,16 @@ fn scalar_repr(types: &Types<'_>, scalar: Scalar) -> Result<Repr, LoweringErrorK
 /// ([`crate::target::Layout`] of `bit_int_layout`); a wider one is not yet
 /// lowered.
 /// C23: §6.2.5 paragraphs 5-8, p. 39; PDF p. 52.
-fn bit_int_repr(width: u32, signed: bool) -> Result<Repr, LoweringErrorKind> {
+fn bit_int_repr(width: u32, signed: bool) -> Repr {
+    // A wider one lives in memory as its limbs (`wide_bit_int.rs`).
     let Some(width) = u8::try_from(width).ok().filter(|&width| width <= 128) else {
-        return Err(LoweringErrorKind::Unsupported(Construct::WideBitInt));
+        return Repr::Aggregate;
     };
-    Ok(Repr::Int {
+    Repr::Int {
         ty: int_type(u32::from(width)),
         signed,
         width,
-    })
+    }
 }
 
 /// The IR integer type of a C integer `bits` wide.

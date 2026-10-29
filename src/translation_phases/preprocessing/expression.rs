@@ -360,6 +360,8 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                                 | IntegerTokenType::UnsignedInt(ui) => self.expression_parser.operand_stack.push(PreprocessorExpressionOperand::Unsigned(u64::from(ui))),
                                 | IntegerTokenType::UnsignedLong(ul) => self.expression_parser.operand_stack.push(PreprocessorExpressionOperand::Unsigned(ul.get())),
                                 | IntegerTokenType::UnsignedLongLong(ull) | IntegerTokenType::BitInt(ull, _, true) => self.expression_parser.operand_stack.push(PreprocessorExpressionOperand::Unsigned(ull.get())),
+                                // Only target constants keep more than 64 bits.
+                                | IntegerTokenType::WideBitInt(..) => unreachable!("Compiler bug: a preprocessing constant has at most 64 bits."),
                             },
                             _ => unreachable!("Compiler bug: parse_number should return a number token."),
                         }

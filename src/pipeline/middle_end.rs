@@ -10,21 +10,36 @@
 //! `--emit=ir` prints the pre-ABI module and `--emit=ir-abi` the post-ABI
 //! one.
 
+use std::path::Path;
+
 use crate::{
     abi::{
         AbiError,
         lower_abi,
     },
+    configuration::{
+        CStandard,
+        CompilerConfiguration,
+        ExtensionPolicy,
+    },
+    headers::HeaderSearch,
     ir::{
         Module,
         Profile,
     },
-    lowering::LoweringErrors,
+    lowering::{
+        LoweringErrors,
+        wide_bit_int_runtime,
+    },
     optimizer::{
         OptimizerOptions,
         optimize,
         resolve_inline_copies,
         resolve_object_sizes,
+    },
+    pipeline::{
+        analyze_translation_unit,
+        parse_translation_unit,
     },
     translation_phases::{
         Context,
@@ -171,6 +186,12 @@ fn lower_diagnosed<'tu, 'ir>(
         &mut options,
     )
     .map_err(MiddleEndError::Lowering)?;
+    if wide_bit_int_runtime::needed(&module) {
+        let mut runtime = compile_wide_bit_int_runtime(context, arena)?;
+        scratch.reset();
+        wide_bit_int_runtime::link(&mut module, &mut runtime, &scratch)
+            .map_err(|fact| runtime_error(arena, fact))?;
+    }
     if let Some(options) = optimizer {
         scratch.reset();
         _ = optimize(&mut module, options, &scratch);
@@ -198,6 +219,61 @@ fn lower_diagnosed<'tu, 'ir>(
         module,
         call_diagnostics,
         retained_diagnostics,
+    })
+}
+
+/// The runtime of the `_BitInt` types of more than 128 bits
+/// (`lowering/wide_bit_int/runtime.c`), compiled for the unit's target into
+/// `arena`: optimized C17 with GNU extensions, whatever the unit's language
+/// mode, as the bundled WebAssembly runtime is built. It does not compile
+/// only through a bug of bcc, reported as a missing fact.
+fn compile_wide_bit_int_runtime<'ir>(
+    context: &Context<'_>,
+    arena: &'ir Bump,
+) -> Result<Module<'ir>, MiddleEndError<'ir>> {
+    let configuration = CompilerConfiguration::new(CStandard::C17, ExtensionPolicy::Allow)
+        .with_gnu_extensions(true)
+        .with_target(context.configuration.target())
+        .with_optimization((true, false))
+        .with_suppress_warnings(true);
+    let tu = Bump::new();
+    let mut runtime_context = Context::with_configuration(&tu, configuration);
+    let source = tu.alloc_str(wide_bit_int_runtime::SOURCE);
+    let unit = parse_translation_unit(
+        &mut runtime_context,
+        Path::new("bitint-runtime.c"),
+        source,
+        HeaderSearch::default(),
+    );
+    let sema = analyze_translation_unit(&mut runtime_context, &unit);
+    if !sema.lowerable(&runtime_context) {
+        return Err(runtime_error(arena, "the _BitInt runtime does not compile"));
+    }
+    let optimizer = OptimizerOptions::default();
+    lower_diagnosed(
+        &runtime_context,
+        &unit,
+        &sema,
+        arena,
+        Some(&optimizer),
+        Profile::PreAbi,
+        LoweringControl {
+            copies: InlineCopies::Resolve,
+            retain_locals: false,
+            #[cfg(feature = "recursive-lowering-study")]
+            recursive: false,
+        },
+    )
+    .map(|diagnosed| diagnosed.module)
+}
+
+/// A failure of the `_BitInt` runtime, `fact`, as a lowering error.
+fn runtime_error<'ir>(arena: &'ir Bump, fact: &'static str) -> MiddleEndError<'ir> {
+    MiddleEndError::Lowering(LoweringErrors {
+        errors: arena.alloc_slice_copy(&[crate::lowering::LoweringError {
+            kind:   crate::lowering::LoweringErrorKind::MissingFact(fact),
+            source: None,
+        }]),
     })
 }
 

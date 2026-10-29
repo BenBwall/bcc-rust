@@ -299,6 +299,12 @@ fn constant_label(constant: &Constant) -> impl Display {
                         value.get(),
                         if unsigned { "unsigned " } else { "" }
                     ),
+                | IntegerTokenType::WideBitInt(_, width, unsigned) =>
+                    return write!(
+                        f,
+                        "more than 64 bits ({}_BitInt({width}))",
+                        if unsigned { "unsigned " } else { "" }
+                    ),
                 | IntegerTokenType::Imaginary(value, component) =>
                     return write!(f, "{}i ({})", value.get(), component.type_name()),
                 | IntegerTokenType::Int(value) => (i128::from(value), "int"),

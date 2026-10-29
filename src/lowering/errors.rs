@@ -99,8 +99,12 @@ pub(crate) enum Construct {
     /// An automatic object or compound literal of 4 GiB or more, beyond the
     /// IR's 32-bit stack slot sizes.
     LargeAutomaticObject,
-    /// A bit-precise integer type of more than 128 bits.
-    WideBitInt,
+    /// A conversion between a `_BitInt` of more than 128 bits and a
+    /// complex type.
+    WideBitIntConversion,
+    /// A function whose `_BitInt` results of more than 128 bits would need
+    /// more stack than a default thread has.
+    WideBitIntTemporaries,
 }
 
 /// The errors of one translation unit, in the `'ir` arena.
@@ -164,7 +168,10 @@ impl Construct {
             | Self::SelectionDeclaration => "declarations in selection statements",
             | Self::Extension => "this extension",
             | Self::LargeAutomaticObject => "automatic objects of 4 GiB or more",
-            | Self::WideBitInt => "_BitInt types of more than 128 bits",
+            | Self::WideBitIntConversion =>
+                "conversions between complex types and _BitInt types of more than 128 bits",
+            | Self::WideBitIntTemporaries =>
+                "functions whose wide _BitInt results need more than 6 MiB of stack",
             | Self::CompoundLiteralStorage =>
                 "compound literals with static or thread storage duration",
         }

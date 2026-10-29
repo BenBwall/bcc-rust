@@ -36,6 +36,7 @@ use crate::{
         semantic_analysis::{
             InitOperation,
             InitializerPlan,
+            Integer,
             SemanticTranslationUnit,
             TypeId,
             TypeKind,
@@ -122,9 +123,13 @@ pub(super) fn plan_leaves<'tu, 's>(
                 .checked_add(shift)
                 .ok_or_else(|| LoweringError::unsupported(Construct::Initializer, source))
         };
+        // A wide bit-precise integer is a scalar held in memory.
         let check = |ty: TypeId, source: SourceVectors| {
             repr(&sema.types, ty)
-                .map(Repr::is_scalar)
+                .map(|representation| {
+                    representation.is_scalar()
+                        || super::super::wide_bit_int::wide_bit_int(&sema.types, ty).is_some()
+                })
                 .map_err(|kind| at(kind, source))
         };
         let size = |ty: TypeId, source: SourceVectors| {
@@ -443,7 +448,7 @@ fn zero_leaf<'tu>(sema: &SemanticTranslationUnit<'tu>, leaf: Leaf<'tu>) -> bool 
                 Ok(Repr::Int { .. } | Repr::Bool | Repr::Pointer)
             ) && sema
                 .expression_info(expression)
-                .is_some_and(|info| info.ice && info.integer.is_some_and(|value| value.value == 0)),
+                .is_some_and(|info| info.ice && info.integer.is_some_and(Integer::is_zero)),
         | Leaf::String { .. } | Leaf::Copy { .. } => false,
     }
 }

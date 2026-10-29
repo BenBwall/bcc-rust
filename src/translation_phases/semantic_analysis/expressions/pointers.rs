@@ -5,6 +5,7 @@
 //! §6.8.6.4p3, p. 139; PDF p. 151; §6.7.8p11, p. 126; PDF p. 138.
 
 use super::{
+    super::WideStore,
     ConversionKind,
     ExpressionInfo,
 };
@@ -299,12 +300,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             crate::diagnostics::format_in!(
                 self.scratch,
                 "implicit conversion from `{from}` to `{to}` changes value to {}",
-                if stored.value == 0 { "false" } else { "true" }
+                if stored.is_zero() { "false" } else { "true" }
             )
         } else {
             crate::diagnostics::format_in!(
                 self.scratch,
-                "implicit conversion from `{from}` to `{to}` changes value to {stored}"
+                "implicit conversion from `{from}` to `{to}` changes value to {}",
+                self.wide.display(stored)
             )
         };
         let text = self.context.string_cache.intern(text);

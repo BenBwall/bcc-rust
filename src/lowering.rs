@@ -45,10 +45,11 @@
 //!   loads and stores; `alignment.rs` owns backing-place guarantees and all
 //!   memory and allocation alignment; `bit_fields.rs` bit-field reads and
 //!   writes; `bit_int.rs` the bit-precise integers calls pass in memory;
-//!   `initializers.rs` walks braced initializers; `assembly.rs` lowers GNU
-//!   `asm` statements; `vla.rs` evaluates saved array extents and runs the
-//!   cleanups of the regions an exit leaves: dynamic stack restores, and GNU
-//!   cleanup calls from `cleanup.rs`.
+//!   `wide_bit_int.rs` those of more than 128 bits, which live in memory and
+//!   compute in the C runtime beside it; `initializers.rs` walks braced
+//!   initializers; `assembly.rs` lowers GNU `asm` statements; `vla.rs`
+//!   evaluates saved array extents and runs the cleanups of the regions an exit
+//!   leaves: dynamic stack restores, and GNU cleanup calls from `cleanup.rs`.
 //! - Construction: `ssa.rs` holds the draft function and its SSA variables;
 //!   `emit.rs` copies a finished draft into the module; `types.rs` maps C types
 //!   to IR types; shared `crate::float_parsing::bits` turns folded floating
@@ -86,6 +87,7 @@ mod places;
 mod recursive;
 mod statements;
 mod vla;
+mod wide_bit_int;
 mod work;
 
 // Construction
@@ -111,6 +113,7 @@ pub(crate) use errors::{
 };
 use module_items::Unit;
 use ssa::Draft;
+pub(crate) use wide_bit_int::runtime as wide_bit_int_runtime;
 use work::{
     Item,
     JumpTargets,
@@ -588,6 +591,12 @@ struct FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
     switch_blocks:      ArenaVec<'s, Block>,
     /// Where each open switch's blocks start in `switch_blocks`.
     switch_starts:      ArenaVec<'s, usize>,
+    /// The stack slots of wide `_BitInt` results, and the address of the
+    /// live value each holds (`wide_bit_int.rs`).
+    wide_temporaries:   ArenaVec<'s, wide_bit_int::Temporary>,
+    /// While positive, a consumed wide result keeps its slot: the code
+    /// being lowered runs more than once (an atomic update's retry loop).
+    wide_holds:         u32,
     /// The unqualified result type that `return` converts to.
     result:             TypeId,
     bounds:             ArenaMap<'s, usize, ssa::Var>,

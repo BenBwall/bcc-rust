@@ -31,6 +31,9 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
                 source,
             ));
         };
+        if self.wide_bit_int(place.ty).is_some() {
+            return self.atomic_update_bytes(address, place.ty, source, update);
+        }
         let ty = self.unit.sema.types.non_atomic(place.ty).unqualified();
         let layout = types::layout(&self.unit.sema.types, place.ty)
             .map_err(|kind| crate::lowering::module_items::at(kind, source))?;
@@ -42,7 +45,12 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
         self.draft.switch_to(retry);
         let expected = self.draft.block_params(retry)[0];
         let old = self.atomic_bits_item(expected, ty, source)?;
-        let desired = update(self, old)?;
+        // The update runs again on each retry, so the wide results it reads
+        // keep their slots.
+        self.wide_holds += 1;
+        let desired = update(self, old);
+        self.wide_holds -= 1;
+        let desired = desired?;
         let bits = self.atomic_item_bits(desired, bits_ty, source)?;
         let align = self.place_alignment(address, types::align(layout));
         let observed = self
@@ -60,6 +68,75 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
             self.draft.edge(done, &[]),
             self.draft.edge(retry, &[observed]),
         ];
+        self.draft
+            .terminate(crate::lowering::ssa::Terminator::Brif(success, edges));
+        self.draft.seal(retry);
+        self.draft.seal(done);
+        self.draft.switch_to(done);
+        Ok((old, desired))
+    }
+
+    /// [`Self::atomic_update`] of an object of more than 16 bytes, a wide
+    /// bit-precise integer, which no register holds: its bytes are loaded
+    /// into an object, the update computes from that object, and a
+    /// compare-exchange of the bytes stores the result or refreshes the
+    /// object with the value it found for another try.
+    /// C11: §6.5.16.2p3, pp. 103-104; PDF pp. 121-122.
+    fn atomic_update_bytes(
+        &mut self,
+        address: Value,
+        object: TypeId,
+        source: SourceVectors,
+        update: impl FnOnce(&mut Self, Item) -> Result<Item, LoweringError>,
+    ) -> Result<(Item, Item), LoweringError> {
+        let ty = self.unit.sema.types.non_atomic(object).unqualified();
+        let layout = types::layout(&self.unit.sema.types, object)
+            .map_err(|kind| crate::lowering::module_items::at(kind, source))?;
+        let align = self.place_alignment(address, types::align(layout));
+        let volatile = types::is_volatile(object);
+        let expected = self.fresh_object(layout.size, types::align(layout), source)?;
+        let size = self.iconst(Type::I64, i128::from(layout.size));
+        _ = self.atomic_inst(
+            A::LoadBytes,
+            Type::I8,
+            &[address, expected, size],
+            [M::SeqCst, M::Relaxed],
+            align,
+            volatile,
+        );
+        let retry = self.draft.create_block(&[]);
+        let done = self.draft.create_block(&[]);
+        self.draft.jump(retry, &[]);
+        self.draft.switch_to(retry);
+        let old = Item {
+            operand: Operand::Aggregate(expected),
+            ty,
+        };
+        // The update runs again on each retry, so the wide results it reads
+        // keep their slots.
+        self.wide_holds += 1;
+        let desired = update(self, old);
+        self.wide_holds -= 1;
+        let desired = desired?;
+        let Operand::Aggregate(bytes) = desired.operand else {
+            return Err(LoweringError::unsupported(
+                crate::lowering::Construct::Atomic,
+                source,
+            ));
+        };
+        let exchanged = self
+            .atomic_inst(
+                A::CompareExchangeBytes,
+                Type::I8,
+                &[address, expected, bytes, size],
+                [M::SeqCst, M::SeqCst],
+                align,
+                volatile,
+            )
+            .expect("compare result");
+        let zero = self.iconst(Type::I8, 0);
+        let success = self.icmp(IntCC::Ne, exchanged, zero);
+        let edges = [self.draft.edge(done, &[]), self.draft.edge(retry, &[])];
         self.draft
             .terminate(crate::lowering::ssa::Terminator::Brif(success, edges));
         self.draft.seal(retry);

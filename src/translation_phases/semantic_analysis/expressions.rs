@@ -169,7 +169,20 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                             value:  value.into(),
                             bits:   u32::from(width),
                             signed: !unsigned,
+                            wide:   None,
                         });
+                        info.ice = true;
+                        info.constant = ConstantClass::Arithmetic;
+                        self.retain_expression(info);
+                        return;
+                    },
+                    | IntegerTokenType::WideBitInt(spelling, width, unsigned) => {
+                        info.ty = self.types.intern(TypeKind::BitInt {
+                            width,
+                            signed: !unsigned,
+                        });
+                        let spelling = self.context.string_cache.at(spelling);
+                        info.integer = Some(self.wide.literal(spelling, width, !unsigned));
                         info.ice = true;
                         info.constant = ConstantClass::Arithmetic;
                         self.retain_expression(info);
@@ -186,6 +199,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         value: value.into(),
                         bits,
                         signed,
+                        wide: None,
                     });
                 }
                 info.ice = true;
@@ -212,6 +226,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     value,
                     bits,
                     signed,
+                    wide: None,
                 });
                 info.ice = true;
                 info.constant = ConstantClass::Arithmetic;
@@ -656,7 +671,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     TypeKind::Scalar(Scalar::Bool)
                 ) && marked(operands[0]),
             | E::Conditional(_) | E::OmittedConditional(_) => {
-                let truth = operands[0].and_then(|o| o.integer).map(|v| v.value != 0);
+                let truth = operands[0].and_then(|o| o.integer).map(|v| !v.is_zero());
                 match (truth, e.kind) {
                     | (Some(true), E::OmittedConditional(_)) => marked(operands[0]),
                     | (Some(true), _) => marked(operands[1]),

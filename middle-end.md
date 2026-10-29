@@ -1033,9 +1033,25 @@ unspecified. The other operations keep extended operands extended. On the
 x86-64 targets a 65-128-bit argument or result is described to ABI lowering
 as the aggregate of its two 64-bit limbs (`lowering/bit_int.rs`), which
 System V passes in two general registers or 8-aligned on the stack and
-Win64 by reference and `sret`; WebAssembly passes the `i128`. Wider
-`_BitInt`s are refused (`Construct::WideBitInt`). `language-standards.md`
-("`_BitInt` types") records the semantics and the GCC and Clang ABI facts.
+Win64 by reference and `sret`; WebAssembly passes the `i128`. A wider
+`_BitInt` is `Repr::Aggregate`: an object of its 64-bit limbs whose value
+is its address, as a structure's is, so calls pass it as an aggregate of
+its size (in memory on both x86-64 conventions). Its operations write fresh
+objects, inline for conversions to and from integers of at most 128 bits
+and otherwise through calls to the routines of
+`lowering/wide_bit_int/runtime.c`, which lowering declares as internal
+functions without bodies, named `bcc.bitint.*` so that no C function can
+take their names. A result's stack slot is reused once an operation has
+read it and at the next statement (`release_wide`,
+`free_wide_temporaries`), and a function needing more than 6 MiB of them
+is refused. After lowering, the middle end compiles that C
+runtime with bcc for the unit's target when a module calls one of them and
+moves the bodies the module reaches into it
+(`wide_bit_int::runtime::link`), before the optimizer runs, so every back
+end sees ordinary internal functions. They are `noinline`: each is a loop
+over limbs, and expanding one at every wide operation made LLVM's `-O2`
+spend most of its time on the copies. `language-standards.md` ("`_BitInt`
+types") records the semantics and the GCC and Clang ABI facts.
 
 Complex scalars use two immutable SSA component values retained in a sparse
 arena table; taking an lvalue's value immediately loads both components.

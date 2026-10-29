@@ -68,7 +68,13 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 | _ => {},
             }
         }
-        let truth = self.truth(item, source)?;
+        // The tested value is also the result, so a wide one keeps its
+        // object (`truth` would free it).
+        let truth = match item.operand {
+            | Operand::Aggregate(address) if self.wide_bit_int(item.ty).is_some() =>
+                self.wide_truth(address, item.ty, source)?,
+            | _ => self.truth(item, source)?,
+        };
         let ty = self.info(e)?.ty;
         // A void alternative makes the whole expression void (GNU), so the
         // tested value is discarded rather than passed to the merge.
@@ -81,7 +87,11 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 self.excess(result, source)?
             } else {
                 let result = self.settle(result);
-                self.value(result, source)?
+                match result.operand {
+                    // A structure or a wide `_BitInt` passes its address.
+                    | Operand::Aggregate(address) => address,
+                    | _ => self.value(result, source)?,
+                }
             };
             self.draft.edge(merge, &[value])
         };

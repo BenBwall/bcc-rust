@@ -533,6 +533,24 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 } else {
                     None
                 };
+                if [items[0].ty, items[1].ty, destination]
+                    .into_iter()
+                    .any(|ty| self.wide_bit_int(ty).is_some())
+                {
+                    let (result, overflow) =
+                        self.wide_overflow(op, items[0], items[1], destination, source)?;
+                    if !predicate {
+                        let address = self.value(items[2], source)?;
+                        let place = Item {
+                            operand: Operand::Place(super::Place::Memory(address)),
+                            ty:      destination,
+                        };
+                        _ = self.write(place, result, source)?;
+                    }
+                    let overflow = self.extend(overflow, false, Type::I8);
+                    self.push_item(Operand::Value(overflow), instance.result_type);
+                    return Ok(());
+                }
                 let (result, overflow) =
                     self.overflow(op, items[0], items[1], destination, width, source)?;
                 if !predicate {

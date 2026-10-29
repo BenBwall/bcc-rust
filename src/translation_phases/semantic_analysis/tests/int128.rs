@@ -113,11 +113,13 @@ fn full_width_integer_operations_and_conversions() {
         value:  n as i128,
         bits:   128,
         signed: false,
+        wide:   None,
     };
     let signed = |n| Integer {
         value:  n,
         bits:   128,
         signed: true,
+        wide:   None,
     };
     let max = unsigned(u128::MAX);
     assert_eq!(max.to_i128(), None);

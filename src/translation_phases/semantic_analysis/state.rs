@@ -63,6 +63,7 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
             work: ArenaVec::new_in(scratch),
             values: ArenaVec::new_in(scratch),
             integers: ArenaVec::new_in(scratch),
+            wide: super::WideIntegers::new(tu),
             tainted: false,
             function_name: None,
             old_parameter_mode: false,

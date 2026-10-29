@@ -251,7 +251,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                             predicate.expression,
                             arguments.as_slice(),
                         )
-                        .is_some_and(|value| value.value != 0)
+                        .is_some_and(|value| !value.is_zero())
                 {
                     self.call_attribute_diagnostic(
                         expression.source_vectors,

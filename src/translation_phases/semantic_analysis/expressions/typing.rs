@@ -207,7 +207,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         info.unfolded_binary128 = operand.unfolded_binary128;
         info.integer = operand
             .integer
-            .and_then(|v| v.unary(op))
+            .and_then(|v| self.wide.unary(v, op))
             .and_then(|v| self.bit_int_result(v, ty));
         if op == U::LogicalNot {
             info.integer =
@@ -244,7 +244,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             // Unary plus converts nothing and minus flips the sign, NaNs
             // included (C99 Annex F.3).
             let folded = (op == U::Minus || op == U::Plus)
-                .then(|| Self::binary128_value(operand))
+                .then(|| self.binary128_value(operand))
                 .flatten();
             info.set_binary128(folded.map(|value| {
                 if op == U::Minus {
@@ -580,7 +580,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 };
                 let domains = u8::from(complex_type(lt)) | (u8::from(complex_type(rt)) << 1);
                 if let Some((left_value, right_value)) =
-                    Self::binary128_value(left).zip(Self::binary128_value(right))
+                    self.binary128_value(left).zip(self.binary128_value(right))
                 {
                     if self.binary128_type(info.ty) {
                         info.set_binary128(Self::binary128_binary(
@@ -641,7 +641,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 info.integer = value;
                 sign_bit = into_sign_bit;
             } else if !floating && let Some((l, r)) = left.integer.zip(right.integer) {
-                info.integer = l.binary(op, r);
+                info.integer = self.wide.binary(l, op, r);
                 if info.integer.is_none()
                     && let Some(value) = l.sign_bit_shift(op, r)
                 {
@@ -687,7 +687,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 );
             }
             if let Some((bits, signed)) = self.integer_type(info.ty) {
-                info.integer = info.integer.and_then(|v| v.convert(bits, signed));
+                info.integer = info.integer.map(|v| self.wide.convert(v, bits, signed));
             }
             if left.constant == ConstantClass::Arithmetic
                 && right.constant == ConstantClass::Arithmetic
@@ -812,7 +812,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 info.set_floating(self.converted_floating(selected, ty));
             }
             if let Some((bits, signed)) = self.integer_type(ty) {
-                info.integer = info.integer.and_then(|v| v.convert(bits, signed));
+                info.integer = info.integer.map(|v| self.wide.convert(v, bits, signed));
             }
             if condition.constant == ConstantClass::Arithmetic {
                 info.constant = if self.address_value(selected) {
@@ -1338,14 +1338,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         value
                     })
             } else {
-                operand.integer.and_then(|v| {
+                operand.integer.map(|v| {
                     if matches!(
                         self.types.nodes[target.index],
                         TypeKind::Scalar(Scalar::Bool)
                     ) {
-                        Some(Integer::int(i128::from(v.value != 0)).cast(1, false))
+                        Integer::int(i128::from(!v.is_zero())).cast(1, false)
                     } else {
-                        v.convert(bits, signed)
+                        self.wide.convert(v, bits, signed)
                     }
                 })
             };
@@ -1441,6 +1441,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 value:  i128::from(value),
                 bits:   64,
                 signed: false,
+                wide:   None,
             });
             info.ice = true;
             info.constant = ConstantClass::Arithmetic;
@@ -2119,7 +2120,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 return None;
             }
         }
-        value.convert(width, signed)
+        Some(self.wide.convert(value, width, signed))
     }
 
     /// A shift whose left operand, and so its result, has the bit-precise
@@ -2129,8 +2130,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// bit is undefined and no constant. A nonnegative value shifted into
     /// (not past) the sign bit folds to its two's-complement result, as for
     /// `int` ([`Integer::sign_bit_shift`]), which the second result reports.
-    /// Above 128 bits the shift folds where the model's pattern holds its
-    /// result ([`Integer::convert`]). `None` for any other shift.
+    /// Above 128 bits the shift folds exactly ([`super::WideIntegers::shift`]).
+    /// `None` for any other shift.
     /// C99: §6.5.7 paragraphs 3-5, p. 85; PDF p. 97. GNU extension: GCC
     /// manual, "Integers".
     pub(in crate::translation_phases::semantic_analysis) fn bit_int_shift(
@@ -2151,24 +2152,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             let count = u32::try_from(right.to_i128()?)
                 .ok()
                 .filter(|&count| count < width)?;
-            let value = left.convert(width, signed)?;
+            let value = self.wide.convert(left, width, signed);
             if value.wide() {
-                let shifted = if op == BinaryOperator::RightShift {
-                    if !signed && value.value < 0 {
-                        return None;
-                    }
-                    value.value >> count.min(127)
-                } else {
-                    if (signed && value.value < 0) || count >= 128 {
-                        return None;
-                    }
-                    let shifted = value.value << count;
-                    (shifted >> count == value.value).then_some(shifted)?
-                };
-                return value.convert(width, signed).map(|v| Integer {
-                    value: shifted,
-                    ..v
-                });
+                let (shifted, into_sign_bit) = self.wide.shift(op, value, count)?;
+                sign_bit = into_sign_bit;
+                return Some(shifted);
             }
             let raw = value.value.cast_unsigned() & (u128::MAX >> (128 - width));
             let shifted = if op == BinaryOperator::RightShift {
@@ -2184,7 +2172,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 sign_bit = signed && (raw << count) >> (width - 1) & 1 == 1;
                 raw << count
             };
-            Integer::int(shifted.cast_signed()).convert(width, signed)
+            Some(Integer::int(shifted.cast_signed()).cast(width, signed))
         };
         let result = fold();
         Some((result, sign_bit))
@@ -2258,10 +2246,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         info: ExpressionInfo<'tu>,
     ) -> bool {
         self.nullptr_type(info.ty)
-            || (info.ice && info.integer.is_some_and(|v| v.value == 0))
+            || (info.ice && info.integer.is_some_and(Integer::is_zero))
             || (matches!(self.types.nodes[info.ty.index], TypeKind::Pointer(target) if matches!(self.types.nodes[target.index], TypeKind::Scalar(Scalar::Void)))
                 && info.constant == ConstantClass::Address
-                && info.integer.is_some_and(|v| v.value == 0))
+                && info.integer.is_some_and(Integer::is_zero))
     }
 
     /// C99: §6.5.16.1p1, p. 92; PDF p. 104. Qualifier inclusion applies

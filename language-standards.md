@@ -21,8 +21,8 @@ feature matrix, is implemented through the batch pipeline. These limits remain:
   constant bounds and typedefs naming unions wait for analysis.
 - Decimal type keywords parse, but the decimal floating suffixes `df`, `dd` and
   `dl` and decimal values are not implemented.
-- Integer constants are limited to 64-bit magnitudes. A signed `wb` constant may
-  take a 65-bit type for a 64-bit magnitude; larger magnitudes are diagnosed.
+- Integer constants are limited to 64-bit magnitudes, except `wb` and `uwb`
+  constants, which reach `BITINT_MAXWIDTH`; larger magnitudes are diagnosed.
   Preprocessing expressions use a 64-bit intmax/uintmax model.
 - C2y is the subset listed under [Decisions](#decisions), not every current or
   future draft change.
@@ -2382,8 +2382,12 @@ Semantics follow C23:
   including `__int128`, which outranks `_BitInt(128)`.
 - **Constants.** `wb` and `uwb` constants take the narrowest width that holds
   the value and, for `wb`, a sign bit (`3wb` is `_BitInt(3)`, `0uwb`
-  `unsigned _BitInt(1)`; §6.4.4.2p6); the lexer reads at most 64 bits of
-  magnitude. Folding computes at the type's width: an unsigned result wraps
+  `unsigned _BitInt(1)`; §6.4.4.2p6), in every radix and up to
+  `BITINT_MAXWIDTH` (`18446744073709551616wb` is `_BitInt(66)`); one wider
+  is "too large", as GCC reports it. A token of more than 64 bits keeps
+  its spelling, which semantic analysis reads into the exact value
+  (`IntegerTokenType::WideBitInt`, `preprocessing::bit_precise_magnitude`).
+  Folding computes at the type's width: an unsigned result wraps
   modulo 2^N and a signed one outside the type's range overflowed and is no
   constant. A shift checks its count and result against N, not against
   the `int` a narrow operand computes in: a count of N or more and a signed
@@ -2393,26 +2397,20 @@ Semantics follow C23:
   are refused as `1u << 32` is), while a nonnegative value shifted into
   (not past) the sign bit folds to its two's-complement result, as for
   `int` (`(_BitInt(8))1 << 7` is -128 in both compilers). Values of widths
-  above 128 bits exceed the 128-bit constant model (`Integer`), which
-  holds such a value as its 128-bit pattern sign-extended to N bits: every
-  signed value converts, and so does an unsigned one below 2^127, or one of
-  another wide type converted to a type no wider (an unsigned pattern with
-  bit 127 set stands for 2^N - k, whose zero extension to a wider type no
-  such pattern holds). Converted to a floating type, 2^N - k rounds once
-  from its top 128 bits and a sticky bit (`bits::from_bit_precise`). Arithmetic folds whenever `__int128` arithmetic on the
-  patterns does not overflow, which gives the exact result modulo 2^N:
-  `+`, `-`, `*`, the bitwise operators, `~`, unary `-`, comparisons, a
-  division or remainder of signed values (or of unsigned ones below 2^127),
-  and shifts whose result stays in the pattern. Where a constant is
-  required, a result the pattern cannot hold is refused with "not yet
-  supported: folding this _BitInt constant of more than 128 bits"
-  (`UnsupportedWideConstant`): an unsigned value with bit 127 set converted
-  to a wider type (`(unsigned _BitInt(129))(unsigned __int128)-1`,
-  `(_BitInt(200))(unsigned _BitInt(150))-1`), a huge unsigned value divided
-  or shifted right, a shift past bit 127. Both compilers fold these. The error replaces the generic
-  one of every context: enumerators, case labels, array bounds (a variable
-  length array at block scope), bit-field widths, `_Alignas`, static
-  assertions and initializers, and `__builtin_choose_expr`.
+  above 128 bits, up to `BITINT_MAXWIDTH`, fold exactly: `Integer` keeps a
+  value `i128` holds in place, and any other names its two's-complement
+  64-bit limbs, interned in the unit's table (`WideIntegers`, which
+  `SemanticTranslationUnit::integer_limbs` reads for lowering). Every
+  operator, conversion and context folds as at narrow widths, with the
+  same rules at N bits: products are schoolbook and quotients Knuth's
+  algorithm D (a release build checks 600 assertions with about 5,000
+  operations on 65535-bit values in 0.6 s). A wide value converts to a floating type rounded
+  once to nearest even (its top 128 bits from the leading one and a sticky
+  bit, `bits::from_scaled`), and a floating value converts to a wide type
+  truncated exactly (`double` reaches 2^1024, `long double` and
+  `__float128` 2^16384); out of range it is no constant, as for narrow
+  types. The overflow builtins compare the exact result with the
+  destination's range at any width.
 - **Bit-fields** take a `_BitInt` of at most its width; the record lays the
   field out in storage units of the declared type, as both compilers do.
 - **Overflow builtins** accept bit-precise operands and results and check
@@ -2462,16 +2460,59 @@ Calls follow each target's convention as Clang implements it:
 lowering as the structure of their two limbs, storing and loading them at
 the call (`types::limb_argument`).
 
-bcc does not yet lower `_BitInt` of more than 128 bits on any back end:
-lowering stops with "not yet supported by lowering: _BitInt types of more
-than 128 bits". The remaining work is the limb legalization of their
-operations (with helpers equivalent to libgcc's `__mulbitint3`,
-`__divmodbitint4`, `__floatbitint*` and `__fix*bitint`, which GCC 13's
-libgcc lacks, so bcc must carry its own), folding at those widths, and `wb`
-constants of more than 64 bits. `tests/integration/bit_int.rs` compares
-every operator, conversion and folded constant at widths 1-128 with the
-bundled Clang and GCC 15 on every back end, and with wasi-sdk's Clang on
-`wasm32-wasip1`, and links calls between bcc, Clang and GCC objects.
+A `_BitInt` of more than 128 bits has no IR type: lowering keeps it in
+memory as the psABI lays it out, like a structure
+(`lowering/wide_bit_int.rs`), so objects, members, arrays, calls, results
+and `va_arg` take the aggregate paths, which pass it as the table above
+says. Its value is the address of an object holding it, padding bits
+extended; each operation writes a fresh object. Conversions to and from
+integers of at most 128 bits load or build the low limbs inline; the
+arithmetic, bitwise, shift and comparison operators, `++`/`--`, compound
+assignments, conversions between wide widths and to and from the real
+floating types, `switch` (a comparison with each case), bit-fields and the
+overflow builtins call routines of a C runtime,
+`lowering/wide_bit_int/runtime.c`. The middle end compiles it with bcc for
+the unit's target whenever a module calls one of its routines and moves
+the routines the module reaches into it as internal functions (named
+`bcc.bitint.*`, which no C identifier can spell, so a program's own
+`__bcc_bitint_add` keeps its name and meaning), so every
+back end (the interpreter, LLVM and the native back end) runs the same
+code and no program needs libgcc's `__mulbitint3`, `__divmodbitint4`,
+`__floatbitint*` and `__fix*bitint`, which GCC 13's libgcc lacks. The
+routines read only an operand's value bits, so a value whose padding
+another compiler left unextended (GCC 15 does, in memory, for some
+results) computes correctly. Division uses Knuth's algorithm D on 64-bit
+digits; a conversion to a floating type rounds once, from the value's top
+128 bits and a sticky bit; `_Float16` goes through `float`, which loses
+nothing where binary16 does not overflow, and `__bf16` rounds once for GCC
+and through `float` for Clang, as each compiler converts (and as bcc
+converts `__int128`). An atomic compound
+assignment loops on a compare-exchange of the object's bytes. A result's
+stack slot is freed once an operation has read it, and every slot at the
+next statement, so a chain of operations in one expression takes a slot or
+two and a balanced tree one per level (a 1024-term `_BitInt(65535)` chain
+needs three); a function whose results would still need more than 6 MiB of
+stack is refused ("not yet supported by lowering: functions whose wide
+_BitInt results need more than 6 MiB of stack"). The runtime's division
+works in place in two arrays of the operands' limbs, 2 MiB at Clang's
+widest type, 8388608 bits; its conversions to floating types take one. LLVM never
+sees a wide `iN`, so its legalization of very wide integers does not
+apply. A conversion between a wide `_BitInt` and a complex type is refused
+("not yet supported by lowering: conversions between complex types and
+_BitInt types of more than 128 bits").
+
+Two Clang 23 conversions of wide values to x87 `long double` are wrong,
+and bcc converts as GCC does under both identities: an `unsigned
+_BitInt(N)` of more than 128 bits whose top bit is set becomes negative
+(also in `__float128`), and at `-O0` some values close to halfway between
+two `long double`s, signed ones too, round one ulp the wrong way (15 of the
+780 conversions of the review probe `cl50e.c`). `tests/integration/bit_int.rs` compares every operator, conversion and
+folded constant at widths 1-128 (`bit_int.c`) and at widths 129, 192, 255,
+256, 257, 512, 1000 and 4096, and 65535 for GCC (`bit_int_wide.c`, from
+`scripts/generate_wide_bit_int_program.py`), with the bundled Clang and GCC
+15 on every back end, and with wasi-sdk's Clang on `wasm32-wasip1` for
+widths up to 128; it links calls between bcc, Clang and GCC objects at
+both sizes (`bit_int_abi.c`, `bit_int_wide_abi.c`).
 
 ### Imaginary interchange constants
 

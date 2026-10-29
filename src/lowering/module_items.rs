@@ -1162,6 +1162,36 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
         Ok(global)
     }
 
+    /// A fresh internal constant global named after `stem`, holding `bytes`
+    /// at an alignment of `align` bytes.
+    pub(super) fn internal_constant(
+        &mut self,
+        stem: &'a str,
+        bytes: &[u8],
+        align: u64,
+    ) -> GlobalId {
+        let name = self.unique_name(stem);
+        let global = self.module.declare_global(
+            name,
+            GlobalDecl {
+                linkage:      IrLinkage::Internal,
+                size:         bytes.len() as u64,
+                align:        Align::from_bytes(align).unwrap_or(Align::BYTE),
+                constant:     true,
+                thread_local: false,
+            },
+        );
+        self.module.define_global(
+            global,
+            GlobalInit::Bytes {
+                bytes,
+                relocations: &[],
+            },
+        );
+        _ = self.generated_globals.insert(global);
+        global
+    }
+
     /// Encodes a literal and its terminator in the target's character units.
     /// C99: §6.4.5p5, pp. 62-63; PDF pp. 74-75;
     /// §6.7.8p14-15, p. 126; PDF p. 138.
@@ -1612,13 +1642,56 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
                     TypeKind::Pointer(_) | TypeKind::Array(..)
                 )
         });
+        // A wide bit-precise object stores its limbs, its padding bits
+        // extended from its width.
+        if let Some((width, signed)) = super::wide_bit_int::wide_bit_int(&self.sema.types, ty) {
+            let mut limbs = ArenaVec::with_capacity_in(size / 8, self.tables);
+            limbs.resize(size / 8, 0_u64);
+            // A floating constant truncates toward zero (§6.3.1.4p1).
+            let parts = if let Some(folded) = info.binary128() {
+                super::wide_bit_int::binary128_parts(folded.real.to_bits())
+            } else {
+                info.floating()
+                    .and_then(|folded| folded.real.x87_parts())
+                    .and_then(super::wide_bit_int::x87_parts)
+            };
+            match (integer, parts) {
+                | (Some(value), _) => self.sema.integer_limbs(value, &mut limbs),
+                | (None, Some(parts)) =>
+                    super::wide_bit_int::truncated_limbs(parts, width, signed, &mut limbs)
+                        .ok_or_else(unsupported)?,
+                | (None, None) => return Err(unsupported()),
+            }
+            super::wide_bit_int::extend_limbs(&mut limbs, width, signed);
+            if let Some(field) = bit_field {
+                for bit in 0..field.width as usize {
+                    let at = field.bit_offset as usize + bit;
+                    let byte = bytes.get_mut(start + at / 8).ok_or_else(unsupported)?;
+                    let mask = 1_u8 << (at % 8);
+                    if limbs[bit / 64] >> (bit % 64) & 1 == 1 {
+                        *byte |= mask;
+                    } else {
+                        *byte &= !mask;
+                    }
+                }
+                return Ok(());
+            }
+            for (target, limb) in bytes[start..start + size]
+                .as_chunks_mut::<8>()
+                .0
+                .iter_mut()
+                .zip(&limbs)
+            {
+                target.copy_from_slice(&limb.to_le_bytes());
+            }
+            return Ok(());
+        }
         if let Repr::Complex { component } = representation {
             let real = match (info.floating(), integer) {
                 | _ if let Some(value) = info.binary128() =>
                     floats::binary128_bits(value.real, component),
                 | (Some(value), _) => floats::constant_bits(&value.real, component),
-                | (_, Some(value)) =>
-                    floats::from_bit_precise(value.value, value.bits, value.signed, component),
+                | (_, Some(value)) => self.sema.integer_float_bits(value, component),
                 | _ => None,
             }
             .ok_or_else(unsupported)?;
@@ -1646,8 +1719,7 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
                 | _ if let Some(folded) = info.binary128() =>
                     floats::binary128_bits(folded.real, float),
                 | (Some(folded), _) => floats::constant_bits(&folded.real, float),
-                | (None, Some(value)) =>
-                    floats::from_bit_precise(value.value, value.bits, value.signed, float),
+                | (None, Some(value)) => self.sema.integer_float_bits(value, float),
                 | (None, None) => None,
             }
             .ok_or_else(unsupported)?;
@@ -1658,7 +1730,13 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
             return Ok(());
         }
         let value = if let Some(value) = integer {
-            Some(value.value)
+            // A wide value's low bits are the low bits of `value`, but
+            // whether it is zero takes all of them.
+            Some(if representation == Repr::Bool {
+                i128::from(!value.is_zero())
+            } else {
+                value.value
+            })
         } else if let Some(folded) = info.binary128()
             && matches!(representation, Repr::Int { .. } | Repr::Bool)
         {
