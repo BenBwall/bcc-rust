@@ -195,11 +195,21 @@ fn probe_bundled(msvc: Option<&Msvc>) {
 const HELLO: &str =
     "#include <stdio.h>\nint main(void) { printf(\"hello %d\\n\", 42); return 3; }\n";
 
-const MACROS: &str = "_MSC_VER=_MSC_VER\n_MSC_FULL_VER=_MSC_FULL_VER\n_MSC_BUILD=_MSC_BUILD\\
-                      n_MSC_EXTENSIONS=_MSC_EXTENSIONS\n_MSVC_TRADITIONAL=_MSVC_TRADITIONAL\\
-                      n_WIN32=_WIN32\n_WIN64=_WIN64\n_M_X64=_M_X64\n_M_AMD64=_M_AMD64\n_MT=_MT\\
-                      n_DLL=_DLL\n__STDC__=__STDC__\n__STDC_VERSION__=__STDC_VERSION__\\
-                      n__STDC_HOSTED__=__STDC_HOSTED__\n";
+const MACROS: &str = r"_MSC_VER=_MSC_VER
+_MSC_FULL_VER=_MSC_FULL_VER
+_MSC_BUILD=_MSC_BUILD
+_MSC_EXTENSIONS=_MSC_EXTENSIONS
+_MSVC_TRADITIONAL=_MSVC_TRADITIONAL
+_WIN32=_WIN32
+_WIN64=_WIN64
+_M_X64=_M_X64
+_M_AMD64=_M_AMD64
+_MT=_MT
+_DLL=_DLL
+__STDC__=__STDC__
+__STDC_VERSION__=__STDC_VERSION__
+__STDC_HOSTED__=__STDC_HOSTED__
+";
 
 /// A Visual Studio or Build Tools installation with the x64 C compiler, and
 /// the environment its `vcvars64.bat` sets.
@@ -270,13 +280,33 @@ impl Msvc {
 
     /// `bcc --msvc-mode` in the same environment.
     pub(super) fn bcc(&self) -> Command {
+        self.bcc_in(&["--msvc-mode"])
+    }
+
+    /// `bcc --clang-cl-mode --backend=native`: the cl personalities with
+    /// bcc's native back end, which only clang-cl's pass-through of `-`
+    /// options can select.
+    pub(super) fn bcc_native(&self) -> Command {
+        self.bcc_in(&["--clang-cl-mode", "--backend=native"])
+    }
+
+    fn bcc_in(&self, mode: &[&str]) -> Command {
         let mut command = Command::new(env!("CARGO_BIN_EXE_bcc-rust"));
         _ = command
             .env_clear()
             .envs(self.environment.iter().map(|(name, value)| (name, value)))
             .env("NO_COLOR", "1")
-            .arg("--msvc-mode");
+            .args(mode);
         command
+    }
+
+    /// `compiler`'s command in this environment.
+    pub(super) fn compiler(&self, compiler: Compiler) -> Command {
+        match compiler {
+            | Compiler::Cl => self.cl(),
+            | Compiler::Bcc => self.bcc(),
+            | Compiler::BccNative => self.bcc_native(),
+        }
     }
 
     /// A variable of the `vcvars64.bat` environment, matched as Windows
@@ -286,6 +316,100 @@ impl Msvc {
             .iter()
             .find(|(key, _)| key.eq_ignore_ascii_case(name))
             .map(|(_, value)| value.as_os_str())
+    }
+}
+
+/// A compiler that builds the programs these tests compare.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Compiler {
+    /// The real `cl.exe`, the reference.
+    Cl,
+    /// `bcc --msvc-mode`, with the LLVM back end.
+    Bcc,
+    /// bcc's native back end, through the clang-cl personality.
+    BccNative,
+}
+
+impl Compiler {
+    pub(super) const ALL: [Self; 3] = [Self::Cl, Self::Bcc, Self::BccNative];
+
+    /// A short name for directories and reports.
+    pub(super) const fn label(self) -> &'static str {
+        match self {
+            | Self::Cl => "cl",
+            | Self::Bcc => "bcc",
+            | Self::BccNative => "bcc-native",
+        }
+    }
+}
+
+/// What a built program did: its exit status and standard output.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct Outcome {
+    pub(super) status: Option<i32>,
+    pub(super) stdout: String,
+}
+
+/// Runs `command` (a compiler or linker) in `directory`, printing it and
+/// its output; `Err` holds the output of a failing one.
+pub(super) fn build(command: &mut Command, directory: &Path) -> Result<(), String> {
+    let output = report(command.current_dir(directory));
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "{command:?} failed with {}:\n{}{}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        ))
+    }
+}
+
+/// Runs the built `program` and returns what it did, `Err` if it did not
+/// start.
+pub(super) fn outcome(program: &Path) -> Result<Outcome, String> {
+    let output = run_program(program).ok_or_else(|| format!("no {}", program.display()))?;
+    Ok(Outcome {
+        status: output.status.code(),
+        stdout: String::from_utf8_lossy(&output.stdout).replace("\r\n", "\n"),
+    })
+}
+
+/// Collects the differences a comparison finds, so one run reports all of
+/// them before failing.
+#[derive(Default)]
+pub(super) struct Differences(Vec<String>);
+
+impl Differences {
+    /// Records `label`'s difference when `actual` is not `expected`.
+    pub(super) fn compare<T: PartialEq + std::fmt::Debug>(
+        &mut self,
+        label: &str,
+        expected: &T,
+        actual: &T,
+    ) {
+        if expected != actual {
+            self.0
+                .push(format!("{label}:\n  cl:  {expected:?}\n  bcc: {actual:?}"));
+        }
+    }
+
+    pub(super) fn push(&mut self, difference: String) {
+        self.0.push(difference);
+    }
+
+    /// Prints every difference and fails if there is one.
+    pub(super) fn assert_none(self, subject: &str) {
+        for difference in &self.0 {
+            println!("DIFFERENCE {difference}");
+        }
+        assert!(
+            self.0.is_empty(),
+            "{} {subject} differences:\n{}",
+            self.0.len(),
+            self.0.join("\n")
+        );
     }
 }
 

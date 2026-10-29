@@ -17,4 +17,12 @@
 )]
 
 #[cfg(test)]
+mod cli;
+#[cfg(test)]
+mod crt;
+#[cfg(test)]
+mod interop;
+#[cfg(test)]
+mod macros;
+#[cfg(test)]
 mod toolchain;
