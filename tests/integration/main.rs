@@ -54,6 +54,7 @@ mod semantic_cli;
 mod static_compound_literals;
 mod static_function_designators;
 mod static_relocations;
+mod stdbit;
 mod target_resource_headers;
 mod target_selection;
 mod thread_local_linkage_cli;
