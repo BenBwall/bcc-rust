@@ -134,8 +134,11 @@ new build never reuses a URL for different bytes. Suggested caching:
   while typing in the editor. Click a line number to set a run target, then
   **Run to line**.
 - `Tab` moves the keyboard focus through the page, editors included, rather
-  than indenting (Monaco's `tabFocusMode`); `Ctrl+M` in an editor switches
-  `Tab` to indenting, as in VS Code.
+  than indenting (Monaco's `tabFocusMode`). In the source editor, `Alt+M`
+  (`⌥M` on a Mac) switches `Tab` to indenting and back; a note in the
+  editor's corner says which while the keyboard has the focus there.
+  Monaco's own toggle (`Ctrl+M`) cannot undo the option, and Firefox takes
+  `Ctrl+M` to mute the tab.
 - The narration card names the rule each step applied, colour coded by kind
   (evaluate, convert, memory, lifetime, control flow, call, stopped), marks
   sequence points, and lists the cited C99 paragraphs with a gloss. Earlier

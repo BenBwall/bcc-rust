@@ -845,6 +845,12 @@
 
 /* Classes the Rust side applies to Monaco decorations. */
 @layer editor {
+  /* What Tab does in the focused editor (web/editor/src/main.js). */
+  .monaco-editor .tab-hint {
+    margin: 0 14px 10px 0; padding: 3px 9px; border-radius: 999px;
+    border: 1px solid var(--border-strong); background: var(--surface-2); color: var(--text-2);
+    font: 500 12px var(--font-sans); white-space: nowrap; pointer-events: none;
+  }
   .monaco-editor .exec-current {
     background: color-mix(in srgb, var(--cat, var(--cat-memory)) 26%, transparent);
     outline: 1px solid color-mix(in srgb, var(--cat, var(--cat-memory)) 70%, transparent);

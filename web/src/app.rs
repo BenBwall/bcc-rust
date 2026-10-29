@@ -1716,7 +1716,7 @@ fn SourcePane(state: State) -> impl IntoView {
                 text=state.editor_text
                 language=Signal::stored("c")
                 theme=state.theme_name
-                label="C source code. Edit it, then choose Run edited code. Tab moves to the next control; Ctrl+M makes Tab indent."
+                label="C source code. Edit it, then choose Run edited code. Tab moves to the next control; Alt+M makes Tab indent."
                 decorations=layers
                 markers=state.markers.into()
                 on_change
