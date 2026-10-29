@@ -211,8 +211,8 @@ fn preprocessed_text_peak(lines: usize) -> (usize, usize) {
     })
 }
 
-/// `-E` writes each token's text as the token is produced, so what it keeps
-/// per token is about the text alone, between 400 and 800 lines.
+/// `-E` formats each token's text as the token is produced, so what it
+/// keeps per token is about the text alone, between 400 and 800 lines.
 #[test]
 fn preprocessed_text_commits_little_more_than_its_text_per_token() {
     let (small, small_tokens) = preprocessed_text_peak(400);

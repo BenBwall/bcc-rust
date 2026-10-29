@@ -326,8 +326,11 @@ impl Inner {
         if self.tail.is_some() {
             return Err(AllocError);
         }
-        if LargeBlocks::wants(layout) {
-            let block = self.large.allocate(layout)?;
+        // Without a region of its own, a large block takes its place in the
+        // arena like any other.
+        if LargeBlocks::wants(layout)
+            && let Ok(block) = self.large.allocate(layout)
+        {
             self.note_high_water();
             return Ok(block);
         }
@@ -819,7 +822,18 @@ unsafe impl Allocator for Bump {
             return Err(AllocError);
         }
         let mut inner = self.inner.borrow_mut();
-        if new_layout.size() != 0 && inner.is_large(ptr) {
+        if old_layout.size() != 0 && inner.is_large(ptr) {
+            if new_layout.size() == 0 {
+                // SAFETY: the caller passes a live block of this arena, a
+                // block outside its region is a large one, and only the
+                // returned empty block is used from now on.
+                unsafe {
+                    inner.large.release(ptr);
+                }
+                let empty = NonNull::new(ptr::without_provenance_mut(new_layout.align()))
+                    .ok_or(AllocError)?;
+                return Ok(NonNull::slice_from_raw_parts(empty, 0));
+            }
             // SAFETY: the caller passes a live block of this arena, and a
             // block outside its region is a large one. It stays where it is.
             return unsafe { inner.large.resize(ptr, new_layout.size()) };

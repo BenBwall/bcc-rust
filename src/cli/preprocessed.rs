@@ -1,7 +1,7 @@
 //! Prints the preprocessed translation unit as C source text (`-E`), with
 //! GCC's line markers unless `-P` drops them, or the macro definitions in
 //! effect at its end (`-dM`). The text itself, shared with the explorer, is
-//! written by `pipeline/preprocessed_text.rs`; this file streams it to the
+//! written by `pipeline/preprocessed_text.rs`; this file writes it to the
 //! output and reports diagnostics in order.
 //!
 //! C99: translation phases 4-6, §5.1.1.2 paragraph 1 items 4-6, p. 10;
@@ -41,11 +41,13 @@ use crate::{
 /// Preprocesses the input and writes its text to `out`. Diagnostics go to
 /// stderr. Returns whether an error was reported.
 ///
-/// Each token's text is written as the token is produced, while its
-/// provenance is still current, so no token outlives its turn. Diagnostics
-/// are reported once preprocessing ends, as the preprocessor may still
-/// withdraw or suppress one it queued; [`Step`] records where each one goes
-/// between the flushes of the text.
+/// Each token's text is formatted into one buffer as the token is produced,
+/// while its provenance is still current, so no token outlives its turn;
+/// the buffer holds the whole text. Diagnostics are reported once
+/// preprocessing ends, as the preprocessor may still withdraw or suppress
+/// one it queued, and only then is the text written to `out`: [`Step`]
+/// records where each diagnostic goes between the 64 KiB pieces of text, so
+/// stdout and stderr interleave as they did when every token was kept.
 pub(super) fn print_preprocessed<'tu>(
     context: &mut Context<'tu>,
     source_filename: &Path,

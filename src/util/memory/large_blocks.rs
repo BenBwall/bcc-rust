@@ -10,7 +10,11 @@
 //! when it is deallocated, so a large table costs only its capacity.
 //!
 //! Each region starts with a one-page [`Header`] that links it into its
-//! arena's list; the block follows at [`BLOCK_OFFSET`].
+//! arena's list; the block follows at [`BLOCK_OFFSET`]. A region reserves
+//! [`RESERVATION_FACTOR`] times what its block first asks for, so address
+//! space follows the input rather than the arena's own reservation; a block
+//! that outgrows it moves once to a larger region, releasing the old one.
+//! When no region can be reserved, the arena keeps the block in its own.
 
 use std::{
     alloc::Layout,
@@ -42,6 +46,11 @@ pub(super) const ENABLED: bool = cfg!(not(any(
     target_family = "wasm",
     feature = "parser-study-small-regions"
 )));
+
+/// How many times its first size a large block's region reserves: a
+/// vector that doubles moves to a new region once every three growths,
+/// copying only what it holds.
+const RESERVATION_FACTOR: usize = 8;
 
 /// Where a block starts in its region: one page past the header, so a
 /// block may ask for any alignment up to a page.
@@ -76,10 +85,16 @@ impl LargeBlocks {
         ENABLED && layout.size() >= LARGE_BLOCK_BYTES && layout.align() <= BLOCK_OFFSET
     }
 
-    /// A new block of `layout` in a region of its own.
+    /// A new block of `layout` in a region of its own, or an error when no
+    /// region can be reserved or committed for it.
     pub(super) fn allocate(&mut self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
         let end = BLOCK_OFFSET.checked_add(layout.size()).ok_or(AllocError)?;
-        let mut region = GrowingRegion::reserve(REGION_BYTES).map_err(|_| AllocError)?;
+        // No block is larger than an arena could hold.
+        if end > REGION_BYTES {
+            return Err(AllocError);
+        }
+        let reservation = end.saturating_mul(RESERVATION_FACTOR).min(REGION_BYTES);
+        let mut region = GrowingRegion::reserve(reservation).map_err(|_| AllocError)?;
         region.ensure_committed(end).map_err(|_| AllocError)?;
         let header = region.as_ptr().cast::<Header>();
         let next = self.first;
@@ -106,7 +121,8 @@ impl LargeBlocks {
     }
 
     /// Grows or shrinks the large block at `ptr` to `size` bytes where it
-    /// is, committing further into its region when it grows.
+    /// is, committing further into its region when it grows. Growing beyond
+    /// the region's reservation fails and leaves the block as it was.
     ///
     /// # Safety
     ///
@@ -120,7 +136,12 @@ impl LargeBlocks {
         let header = unsafe { Self::header(ptr) };
         // SAFETY: the block is live, so its header is.
         let entry = unsafe { Self::entry(header) };
-        let end = BLOCK_OFFSET.checked_add(size).ok_or(AllocError)?;
+        // A block that outgrows its region moves to a larger one. Checking
+        // first keeps the region from making an error, which would allocate.
+        let end = BLOCK_OFFSET
+            .checked_add(size)
+            .filter(|&end| end <= entry.region.reserved())
+            .ok_or(AllocError)?;
         entry.region.ensure_committed(end).map_err(|_| AllocError)?;
         self.bytes = self.bytes - entry.size + size;
         entry.size = size;
@@ -256,6 +277,7 @@ mod tests {
     use super::{
         LARGE_BLOCK_BYTES as LARGE,
         LargeBlocks,
+        RESERVATION_FACTOR,
     };
     use crate::util::{
         bump::{
@@ -263,7 +285,10 @@ mod tests {
             ArenaVec,
             Bump,
         },
-        vm::accounting,
+        vm::{
+            accounting,
+            faults,
+        },
     };
 
     #[test]
@@ -345,5 +370,74 @@ mod tests {
         assert_eq!(accounting::live().regions, before.regions + 2);
         arena.reset();
         assert_eq!(accounting::live().regions, before.regions + 1);
+    }
+
+    #[test]
+    #[cfg_attr(
+        any(miri, target_family = "wasm", feature = "parser-study-small-regions"),
+        ignore = "blocks have no regions of their own here"
+    )]
+    fn a_large_block_stays_in_the_arena_when_no_region_can_be_reserved() {
+        let arena = Bump::new();
+        let small = arena.alloc(7_u32);
+        let before = accounting::live();
+        let layout = Layout::from_size_align(LARGE, 64).unwrap();
+        let block = {
+            let _failing = faults::fail_reserves(1);
+            arena.allocate(layout).unwrap().cast::<u8>()
+        };
+        // The arena's own region holds it: no region was added.
+        assert_eq!(accounting::live().regions, before.regions);
+        assert!(arena.high_water() >= LARGE);
+        // SAFETY: the block was just allocated with this layout.
+        unsafe {
+            block.as_ptr().write_bytes(0x5A, layout.size());
+        }
+        let grown_layout = Layout::from_size_align(2 * LARGE, 64).unwrap();
+        // SAFETY: the block is live and fits `layout`.
+        let grown = unsafe { arena.grow(block, layout, grown_layout) }
+            .unwrap()
+            .cast::<u8>();
+        let last = grown.as_ptr().wrapping_add(LARGE - 1);
+        // SAFETY: the grown block holds the old block's bytes.
+        assert_eq!(unsafe { last.read() }, 0x5A);
+        assert_eq!(*small, 7);
+    }
+
+    #[test]
+    #[cfg_attr(
+        any(miri, target_family = "wasm", feature = "parser-study-small-regions"),
+        ignore = "blocks have no regions of their own here"
+    )]
+    fn a_large_block_reserves_a_multiple_of_its_size_and_moves_beyond_it() {
+        let arena = Bump::new();
+        let before = accounting::live();
+        let layout = Layout::from_size_align(LARGE, 64).unwrap();
+        let block = arena.allocate(layout).unwrap().cast::<u8>();
+        let reserved = accounting::live().reserved - before.reserved;
+        assert!(
+            (LARGE..=RESERVATION_FACTOR * (LARGE + 2 * 1024 * 1024)).contains(&reserved),
+            "{reserved}"
+        );
+        // SAFETY: the block was just allocated with this layout.
+        unsafe {
+            block.as_ptr().write(0xC3);
+        }
+        // Growing past the reservation moves the block to a new region and
+        // releases the old one; the new region's pages are not touched.
+        let grown_layout = Layout::from_size_align(2 * RESERVATION_FACTOR * LARGE, 64).unwrap();
+        // SAFETY: the block is live and fits `layout`.
+        let grown = unsafe { arena.grow(block, layout, grown_layout) }
+            .unwrap()
+            .cast::<u8>();
+        // SAFETY: the grown block holds the old block's bytes.
+        assert_eq!(unsafe { grown.as_ptr().read() }, 0xC3);
+        assert_eq!(accounting::live().regions, before.regions + 1);
+        // Shrinking to nothing releases the region too.
+        let empty = Layout::from_size_align(0, 64).unwrap();
+        // SAFETY: the block is live and fits `grown_layout`.
+        let shrunk = unsafe { arena.shrink(grown, grown_layout, empty) }.unwrap();
+        assert_eq!(shrunk.len(), 0);
+        assert_eq!(accounting::live().regions, before.regions);
     }
 }
