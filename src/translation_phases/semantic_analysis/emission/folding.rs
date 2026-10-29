@@ -60,6 +60,7 @@ use crate::{
         BitOperation,
         BuiltinId,
         BuiltinOperation,
+        GenericBitResult,
     },
     float_parsing::LongDouble,
     translation_phases::{
@@ -1244,9 +1245,9 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
     /// `__builtin_expect` takes its first operand, converted to `long`;
     /// `__builtin_constant_p` is 1 for an arithmetic operand that folds or
     /// a pointer to the start of a string literal, and 0 for one with side
-    /// effects (`EvaluateBuiltinConstantP`); `__builtin_abs`, the count-bit and
-    /// byte-swap builtins compute their value; `strlen` and
-    /// `__builtin_strlen` count a string's elements.
+    /// effects (`EvaluateBuiltinConstantP`); `__builtin_abs`, the count-bit,
+    /// type-generic bit and byte-swap builtins compute their value; `strlen`
+    /// and `__builtin_strlen` count a string's elements.
     fn builtin_value(
         &mut self,
         callee: &'tu Expression<'tu>,
@@ -1306,6 +1307,34 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     let bits = self.types.target.integer(scalar)?.0;
                     bit_count(operation, value, bits)
                         .map(|count| Value::Integer(Integer::int(count)))
+                },
+                // At the width of the operand's type, as the call's
+                // checker computes it.
+                | BuiltinOperation::GenericBit(operation) => {
+                    let operand = *arguments.first()?;
+                    let ty = self.types.non_atomic(self.expression_info(operand).ty);
+                    let (width, signed) = self.integer_type(ty)?;
+                    let Value::Integer(value) = self.evaluate_value(operand, depth)? else {
+                        return None;
+                    };
+                    let second = match arguments.get(1) {
+                        | Some(&argument) => match self.evaluate_value(argument, depth)? {
+                            | Value::Integer(second) => Some(second),
+                            | _ => return None,
+                        },
+                        | None => None,
+                    };
+                    let value = self.wide.convert(value, width, signed);
+                    let gcc = self.context.configuration.bit_builtin_rules()
+                        == crate::configuration::RuleSet::Gcc;
+                    let folded = self.generic_bit_value(operation, value, second, gcc)?;
+                    let (bits, signed) = match operation.result() {
+                        | GenericBitResult::Int => (32, true),
+                        | GenericBitResult::UnsignedInt => (32, false),
+                        | GenericBitResult::Bool => (1, false),
+                        | GenericBitResult::Operand => (width, signed),
+                    };
+                    Some(Value::Integer(self.wide.convert(folded, bits, signed)))
                 },
                 | BuiltinOperation::Bswap(bits) => {
                     let Value::Integer(value) = self.evaluate_value(*arguments.first()?, depth)?

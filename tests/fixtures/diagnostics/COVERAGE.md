@@ -75,6 +75,15 @@ wrong argument counts, and Clang's `-Wconstant-conversion` for
 `4294967297LL`, which converts to 1. `int[5]` and `int (*)[5]` buffers are accepted, since GCC
 types the buffer `void *` (Clang's `void **` rejects them).
 
+Type-generic bit builtins (2026-10-29): `sema-stdbit-gcc.c` and
+`sema-stdbit-clang.c` pin each identity's operand rules for
+`__builtin_popcountg` and its siblings: signed, `bool`, enumerated,
+floating, pointer and structure operands, `ffsg` and `clrsbg` with unsigned
+ones, a result for zero that is not an `int` after each compiler's
+promotions, enumerated, floating and pointer rotation counts, and wrong
+argument counts. Every error is on the line GCC 15 or Clang 23 reports;
+`semantic_analysis/tests/bits.rs` checks the kinds.
+
 Each top-level `.c` is run as `bcc-rust <file-name>` with this directory as the current directory. An optional sibling `.args` supplies whitespace-separated CLI flags before the filename. Its sibling `.stderr` stores the exact bytes, including the summary. `NO_COLOR=1` is set; `CLICOLOR_FORCE`, `CPATH`, and `C_INCLUDE_PATH` are removed. `RUST_BACKTRACE=0` keeps crash regressions from depending on an inherited backtrace setting. No paths, whitespace, source spellings, or panic output are normalized.
 
 Run `cargo test --test integration diagnostics_golden`. Use `BLESS=1 cargo test --test integration diagnostics_golden` to rewrite every snapshot. The guard remains active while blessing and runs every C fixture again. Both tests accumulate failures so one mismatch does not hide later fixtures.

@@ -2652,3 +2652,54 @@ are in
 `sema-pointer-int-cast-{gcc,clang,options,system-gcc,system-clang}` goldens
 and
 `semantic_analysis/tests/pointer_integer_casts.rs` pin them.
+
+## Type-generic bit builtins and `<stdbit.h>` (2026-10-29)
+
+`__builtin_popcountg`, `__builtin_clzg` and `__builtin_ctzg` (with their
+optional result for zero), and the `__builtin_stdc_*` forms of C23's
+`<stdbit.h>` functions with GCC 15's `__builtin_stdc_rotate_left` and
+`__builtin_stdc_rotate_right`, exist for every identity under `GnuBuiltins`,
+as GCC 15 and Clang 23 provide them. GCC 14's `__builtin_parityg`,
+`__builtin_ffsg` and `__builtin_clrsbg` exist for the GCC identity only
+(`Feature::GccBitBuiltins`), as Clang 23 lacks them. Each computes at its
+operand's width, for every unsigned integer type up to `unsigned __int128`
+and every `unsigned _BitInt(N)`. The registry shard is `src/builtins/bits.rs`;
+`semantic_analysis/builtins/bits.rs` types, checks and folds the calls.
+
+The identity's rules (`bit_builtin_rules`) decide what each accepts, both
+compilers having been probed:
+
+| Rule | GCC 15 | Clang 23 |
+| --- | --- | --- |
+| Operand | an unsigned integer type that is neither `bool` nor an enumeration; a signed one for `ffsg` and `clrsbg` | an unsigned integer type; `bool` and enumerations also for `popcountg`, `clzg`, `ctzg` and the rotations, at 1 bit or the underlying type's width |
+| Bit-field operand | at the field's width (a `bit_ceil` of 5 in `unsigned : 3` is 0) | at the declared type's width |
+| Result for zero | `int` after the default argument promotions, a `_BitInt` narrower than `int` (or a signed one as wide) included | `int` after the integer promotions |
+| Rotation count | any integer type but an enumeration; a negative count is undefined | any integer type; a negative count turns the other way |
+| `clzg`/`ctzg` of constant zero without a result | folds to the width | no constant |
+
+A call whose operands are integer constant expressions is one at every
+width. bcc reduces a negative rotation count as Clang does under both
+identities, and folds a rotation of every `_BitInt` (GCC 15 does not fold
+one of `unsigned _BitInt(7)` in a static assertion). Not modeled: GCC's
+`-Wshift-count-negative` warning for a negative constant count, and GCC's
+bit-field type as a result type (bcc gives a value-returning form on a
+bit-field the field's declared type; the value is GCC's). The misuse
+diagnostics are `BitBuiltinNotInteger`, `BitBuiltinSigned`,
+`BitBuiltinUnsigned`, `BitBuiltinBoolOrEnum`, `BitBuiltinFallback` and
+`BitBuiltinRotateCount`, with the existing wrong-argument-count error. Clang
+23 crashes ("unsupported library call operation") rotating a `_BitInt` wider
+than 128 bits by a count that is not a constant; bcc computes it.
+
+Lowering (`lowering/builtins/bits.rs`) derives every operation from the
+ones, leading and trailing counts of the operand: at most 128 bits from the
+IR's `popcount`, `clz_defined` and `ctz_defined` on the value's IR type,
+corrected for the bits above its width; wider through new routines of the
+`_BitInt` runtime (`popcount`, `leading`, `trailing`, `clrsb`, `bit_floor`,
+`bit_ceil`, `rotate`, `residue`). `clzg` and `ctzg` without a result for zero
+use the IR's `clz` and `ctz`, undefined at zero. The native back end now
+selects `i128` bit counts from its halves' counts; bcc has no CPU-feature
+model, so native code keeps its baseline `bsf`/`bsr` and SWAR sequences
+rather than `popcnt`, `lzcnt` or `tzcnt`. `tests/integration/stdbit.rs` runs
+`tests/fixtures/programs/stdbit{,_gcc,_clang}.c` on every back end against
+Clang 23 and GCC 15 (and wasi-sdk's Clang for wasm32), and the
+`sema-stdbit-{gcc,clang}` goldens pin the misuse diagnostics.

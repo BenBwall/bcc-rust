@@ -2752,3 +2752,21 @@ parameter or result of type `__fp16` is refused (`Fp16Parameter`,
 `Fp16Return`, Clang's "did you forget * ?" errors), as is `_Complex __fp16`
 (`ComplexFp16`). GCC provides the type only on ARM, so the other identities
 keep the name an identifier.
+
+## Type-generic bit builtins (2026-10-29)
+
+The type-generic bit builtins (`src/builtins/bits.rs`) have the closed type
+rule `TypeRule::GenericBit` and the operation
+`BuiltinOperation::GenericBit(GenericBit)`, and retain a checked instance.
+`semantic_analysis/builtins/bits.rs` checks the operand by the identity's
+rules (`CompilerConfiguration::bit_builtin_rules`), converts a result for
+zero to `int` and leaves a rotation count its own type, and records the
+operation type whose width the call computes at: the operand's lvalue type,
+or an `unsigned _BitInt(1)` for Clang's `bool`, or a `_BitInt` of a
+narrower bit-field's width under GCC's rules. The result is `int`,
+`unsigned int`, `bool` or the operand's type. Calls of constant operands
+fold at any width (`generic_bit_value`, through
+`WideIntegers::bit_operation` for the limbs of a value of more than 128
+bits), as does the emission evaluator's condition folding. The rules, the
+probed compiler behaviour and the deviations are in
+[language-standards.md](language-standards.md#type-generic-bit-builtins-and-stdbith-2026-10-29).

@@ -21,6 +21,8 @@
 //!   classes feed the retained expression effects in `facts/effects.rs`.
 //!   `designators.rs` rejects non-call uses of intrinsic-only functions.
 //! - Atomic calls: `atomics.rs` checks atomic operands and orders.
+//! - Type-generic bit operations: `bits.rs` types, checks and folds
+//!   `__builtin_popcountg`, its siblings and the `__builtin_stdc_*` forms.
 //! - Target and overloaded calls: `x86_builtins.rs` checks generated x86
 //!   immediates and the overloaded vector builtins. Vector shuffles,
 //!   conversions and bit casts are in `../vectors.rs`; type classification,
@@ -43,6 +45,9 @@ pub(super) mod registry;
 
 // Atomic calls
 mod atomics;
+
+// Type-generic bit operations
+mod bits;
 
 // Target immediates and overloaded operands
 mod x86_builtins;

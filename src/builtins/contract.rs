@@ -144,6 +144,9 @@ pub(crate) enum TypeRule {
     /// GNU type classification of an unevaluated operand.
     TypeClassify,
     Math128(Math128),
+    /// A type-generic bit operation on one integer operand, whose type
+    /// selects the width and, for some, the result type.
+    GenericBit,
 }
 
 /// Clang's operand-overloaded vector builtins; the operand types select the
@@ -272,6 +275,8 @@ pub(crate) enum BuiltinOperation {
     Atomic(AtomicBuiltin),
     Varargs(VaOperation),
     Bit(BitOperation, Scalar),
+    /// A type-generic bit operation at its operand's width.
+    GenericBit(GenericBit),
     Float(FloatOperation, Option<Scalar>),
     Bswap(u32),
     /// Clang rotate builtins reduce the count modulo the unsigned operand
@@ -403,6 +408,92 @@ pub(crate) enum BitOperation {
     Parity,
     Ffs,
     Clrsb,
+}
+
+/// The type-generic bit operations: Clang 19's and GCC 14's
+/// `__builtin_popcountg`, `__builtin_clzg` and `__builtin_ctzg` (the last
+/// two with an optional result for zero), GCC 14's `__builtin_parityg`,
+/// `__builtin_ffsg` and `__builtin_clrsbg`, and GCC 15's and Clang's
+/// `__builtin_stdc_*` forms of C23's `<stdbit.h>` functions, each computed
+/// at the width of its operand's type.
+/// GNU extension: GCC manual, "Bit Operation Builtins",
+/// <https://gcc.gnu.org/onlinedocs/gcc/Bit-Operation-Builtins.html>;
+/// Clang Language Extensions, "`__builtin_popcountg`",
+/// <https://clang.llvm.org/docs/LanguageExtensions.html#builtin-popcountg>.
+/// C23: §7.18.3-§7.18.16, pp. 305-311; PDF pp. 318-324.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum GenericBit {
+    Popcount,
+    Clz,
+    Ctz,
+    Parity,
+    Ffs,
+    Clrsb,
+    LeadingZeros,
+    LeadingOnes,
+    TrailingZeros,
+    TrailingOnes,
+    FirstLeadingZero,
+    FirstLeadingOne,
+    FirstTrailingZero,
+    FirstTrailingOne,
+    CountZeros,
+    CountOnes,
+    HasSingleBit,
+    BitWidth,
+    BitFloor,
+    BitCeil,
+    RotateLeft,
+    RotateRight,
+}
+
+impl GenericBit {
+    /// Whether the operand must be signed (`__builtin_ffsg` and
+    /// `__builtin_clrsbg`) rather than unsigned.
+    pub(crate) const fn signed_operand(self) -> bool {
+        matches!(self, Self::Ffs | Self::Clrsb)
+    }
+
+    /// Whether a second argument may give the result for a zero operand.
+    pub(crate) const fn fallback(self) -> bool {
+        matches!(self, Self::Clz | Self::Ctz)
+    }
+
+    /// Whether the second argument is a rotation count.
+    pub(crate) const fn rotate(self) -> bool {
+        matches!(self, Self::RotateLeft | Self::RotateRight)
+    }
+
+    /// Whether the operation is one of the `__builtin_stdc_*` forms, which
+    /// GCC checks and reports apart from the older type-generic builtins.
+    pub(crate) const fn stdc(self) -> bool {
+        !matches!(
+            self,
+            Self::Popcount | Self::Clz | Self::Ctz | Self::Parity | Self::Ffs | Self::Clrsb
+        )
+    }
+
+    /// The type of the result.
+    pub(crate) const fn result(self) -> GenericBitResult {
+        match self {
+            | Self::Popcount | Self::Clz | Self::Ctz | Self::Parity | Self::Ffs | Self::Clrsb =>
+                GenericBitResult::Int,
+            | Self::HasSingleBit => GenericBitResult::Bool,
+            | Self::BitFloor | Self::BitCeil | Self::RotateLeft | Self::RotateRight =>
+                GenericBitResult::Operand,
+            | _ => GenericBitResult::UnsignedInt,
+        }
+    }
+}
+
+/// The result type of a [`GenericBit`] operation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum GenericBitResult {
+    Int,
+    UnsignedInt,
+    Bool,
+    /// The operand's own type.
+    Operand,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

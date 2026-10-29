@@ -527,3 +527,104 @@ BCC_ROUTINE float __bcc_bitint_to_bf16(const limb *a, unsigned bits, int is_sign
     result *= (float)(1ull << scale);
     return negative ? -result : result;
 }
+
+/* The type-generic bit builtins and <stdbit.h> (GCC manual, "Bit Operation
+   Builtins"; C23 7.18), on a's low `bits` bits: the counts lowering derives
+   the other operations from, and the operations whose result is a value of
+   a's type. A count is `bits` where every bit is the other one. */
+
+/* The number of one bits. */
+BCC_ROUTINE unsigned __bcc_bitint_popcount(const limb *a, unsigned bits) {
+    unsigned n = LIMBS(bits), count = 0;
+    for (unsigned i = 0; i < n; i++)
+        count += (unsigned)__builtin_popcountll(__bcc_bitint_limb(a, i, bits, 0));
+    return count;
+}
+
+/* The number of bits equal to `one`, from bit bits - 1 down. */
+BCC_ROUTINE unsigned __bcc_bitint_leading(const limb *a, unsigned bits, int one) {
+    unsigned n = LIMBS(bits), spare = n * 64u - bits;
+    limb flip = one ? ~0ull : 0;
+    for (unsigned i = n; i-- > 0;) {
+        limb x = __bcc_bitint_limb(a, i, bits, 0) ^ flip;
+        if (i == n - 1)
+            x &= ~0ull >> spare;
+        if (x)
+            return (n - 1 - i) * 64u + (unsigned)__builtin_clzll(x) - spare;
+    }
+    return bits;
+}
+
+/* The number of bits equal to `one`, from bit 0 up. */
+BCC_ROUTINE unsigned __bcc_bitint_trailing(const limb *a, unsigned bits, int one) {
+    unsigned n = LIMBS(bits);
+    limb flip = one ? ~0ull : 0;
+    for (unsigned i = 0; i < n; i++) {
+        limb x = __bcc_bitint_limb(a, i, bits, 0) ^ flip;
+        if (x) {
+            unsigned count = i * 64u + (unsigned)__builtin_ctzll(x);
+            return count < bits ? count : bits;
+        }
+    }
+    return bits;
+}
+
+/* The number of bits after the sign bit equal to it (__builtin_clrsbg). */
+BCC_ROUTINE unsigned __bcc_bitint_clrsb(const limb *a, unsigned bits) {
+    return __bcc_bitint_leading(a, bits, __bcc_bitint_negative(a, bits, 1)) - 1;
+}
+
+/* The largest power of two not above a, or 0 for 0 (stdc_bit_floor). */
+BCC_ROUTINE void __bcc_bitint_bit_floor(limb *d, const limb *a, unsigned bits) {
+    unsigned n = LIMBS(bits), length = bits - __bcc_bitint_leading(a, bits, 0);
+    for (unsigned i = 0; i < n; i++)
+        d[i] = 0;
+    if (length)
+        d[(length - 1) / 64] = 1ull << (length - 1) % 64;
+}
+
+/* The smallest power of two not below a, or 0 where that needs more than
+   `bits` bits (stdc_bit_ceil). */
+BCC_ROUTINE void __bcc_bitint_bit_ceil(limb *d, const limb *a, unsigned bits) {
+    unsigned n = LIMBS(bits), length = bits - __bcc_bitint_leading(a, bits, 0);
+    unsigned bit = length;
+    if (length == 0 || __bcc_bitint_popcount(a, bits) == 1)
+        bit = length ? length - 1 : 0;
+    for (unsigned i = 0; i < n; i++)
+        d[i] = 0;
+    if (bit < bits)
+        d[bit / 64] = 1ull << bit % 64;
+}
+
+/* a rotated left by `count`, below `bits` (stdc_rotate_left; a rotation
+   right is one left by bits - count). */
+BCC_ROUTINE void __bcc_bitint_rotate(limb *d, const limb *a, unsigned bits, limb count) {
+    unsigned n = LIMBS(bits);
+    /* Bit i of the result is bit `from` of a. */
+    limb from = count ? bits - count : 0;
+    for (unsigned i = 0; i < n; i++) {
+        limb out = 0;
+        for (unsigned k = 0; k < 64 && i * 64u + k < bits; k++) {
+            out |= (__bcc_bitint_limb(a, (unsigned)(from / 64), bits, 0) >> from % 64 & 1) << k;
+            if (++from == bits)
+                from = 0;
+        }
+        d[i] = out;
+    }
+}
+
+/* a modulo m, from 0 to m - 1 also for a negative a: a rotation count
+   reduced to the width m. The limbs of a, extended to whole limbs, are
+   2^(64n) + a for a negative a, so subtracting 2^(64n) mod m corrects
+   their residue. */
+BCC_ROUTINE limb __bcc_bitint_residue(const limb *a, unsigned bits, int is_signed, limb m) {
+    unsigned n = LIMBS(bits);
+    limb residue = 0, power = 1 % m;
+    for (unsigned i = n; i-- > 0;) {
+        residue = (limb)(((wide)residue << 64 | __bcc_bitint_limb(a, i, bits, is_signed)) % m);
+        power = (limb)(((wide)power << 64) % m);
+    }
+    if (__bcc_bitint_negative(a, bits, is_signed))
+        residue = (residue + m - power) % m;
+    return residue;
+}

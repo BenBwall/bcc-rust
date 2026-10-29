@@ -20,6 +20,7 @@ mod bit_field_alignment;
 mod bit_field_results;
 mod bit_int_types;
 mod bit_int_widths;
+mod bits;
 mod builtin_names;
 mod checked_builtins;
 mod compound_literal_statics;
