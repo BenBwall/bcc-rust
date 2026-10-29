@@ -305,57 +305,59 @@ mod tests {
             eprintln!("note: no host GCC with _BitInt; checking widths up to 4096 against Clang");
             ("-DBIT_INT_NONE", clang.clone())
         };
-        for identity in ["--compiler-identity=clang", "--compiler-identity=gcc"] {
-            for flags in [
-                &["--interpret", "--opt=none"][..],
-                &["--interpret", "--opt=bcc"],
-            ] {
-                let output = bcc(&[&[identity, "-std=c23", &source][..], flags].concat());
-                assert_eq!(
-                    output.status.code(),
-                    Some(0),
-                    "{identity} {flags:?}: {}",
-                    text(&output.stderr)
-                );
-                assert_lines(
-                    &text(&output.stdout),
-                    &clang,
-                    &format!("{identity} {flags:?}"),
-                );
-            }
-            for flags in [
-                &["-O0"][..],
-                &["-O2"],
-                &["--backend=native"],
-                &["--backend=native", "--opt=bcc"],
-            ] {
-                let executable = temporary("bit_int_wide.exe");
-                let built = bcc(&[
-                    &[
-                        identity,
-                        "-std=c23",
-                        define,
-                        &source,
-                        "-o",
-                        executable.to_str().unwrap(),
-                    ][..],
-                    flags,
-                ]
-                .concat());
-                assert!(
-                    built.status.success(),
-                    "{identity} {flags:?}: {}",
-                    text(&built.stderr)
-                );
-                let run = run_native(&mut Command::new(&executable)).unwrap();
-                assert_eq!(run.status.code(), Some(0), "{identity} {flags:?}");
-                assert_lines(
-                    &text(&run.stdout),
-                    &expected,
-                    &format!("{identity} {flags:?}"),
-                );
-                std::fs::remove_file(executable).unwrap();
-            }
+        // The identities differ in no line of this program, so each back
+        // end runs once, under one identity or the other.
+        let clang_identity = "--compiler-identity=clang";
+        let gcc_identity = "--compiler-identity=gcc";
+        for (identity, flags) in [
+            (clang_identity, &["--interpret", "--opt=none"][..]),
+            (gcc_identity, &["--interpret", "--opt=bcc"]),
+        ] {
+            let output = bcc(&[&[identity, "-std=c23", &source][..], flags].concat());
+            assert_eq!(
+                output.status.code(),
+                Some(0),
+                "{identity} {flags:?}: {}",
+                text(&output.stderr)
+            );
+            assert_lines(
+                &text(&output.stdout),
+                &clang,
+                &format!("{identity} {flags:?}"),
+            );
+        }
+        for (identity, flags) in [
+            (gcc_identity, &["-O0"][..]),
+            (clang_identity, &["-O2"]),
+            (clang_identity, &["--backend=native"]),
+            (gcc_identity, &["--backend=native", "--opt=bcc"]),
+        ] {
+            let executable = temporary("bit_int_wide.exe");
+            let built = bcc(&[
+                &[
+                    identity,
+                    "-std=c23",
+                    define,
+                    &source,
+                    "-o",
+                    executable.to_str().unwrap(),
+                ][..],
+                flags,
+            ]
+            .concat());
+            assert!(
+                built.status.success(),
+                "{identity} {flags:?}: {}",
+                text(&built.stderr)
+            );
+            let run = run_native(&mut Command::new(&executable)).unwrap();
+            assert_eq!(run.status.code(), Some(0), "{identity} {flags:?}");
+            assert_lines(
+                &text(&run.stdout),
+                &expected,
+                &format!("{identity} {flags:?}"),
+            );
+            std::fs::remove_file(executable).unwrap();
         }
     }
 
