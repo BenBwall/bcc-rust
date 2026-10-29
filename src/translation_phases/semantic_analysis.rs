@@ -1606,22 +1606,42 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 ));
             },
             | Work::Eval(expression) => self.evaluate(expression),
-            | Work::Unary(op, source) => {
+            | Work::Unary(op, source, ty) => {
                 let value = self.integers.pop().flatten();
-                let result = value.and_then(|v| v.unary(op));
-                if value.is_some() && result.is_none() {
+                let result = value
+                    .and_then(|v| v.unary(op))
+                    .and_then(|v| self.bit_int_result(v, ty));
+                if value.is_some_and(Integer::wide) && result.is_none() {
+                    self.wide_constant(source);
+                } else if value.is_some() && result.is_none() {
                     self.exceptional_constant(source);
                 }
                 self.integers.push(result);
             },
-            | Work::Binary(op, source) => {
+            | Work::Binary(op, source, ty) => {
                 let right = self.integers.pop().flatten();
                 let left = self.integers.pop().flatten();
                 // Expression typing has already reported a sign-bit shift.
-                let result = left
-                    .zip(right)
-                    .and_then(|(l, r)| l.binary(op, r).or_else(|| l.sign_bit_shift(op, r)));
-                if left.is_some() && right.is_some() && result.is_none() {
+                let result =
+                    left.zip(right)
+                        .and_then(|(l, r)| match self.bit_int_shift(op, l, r, ty) {
+                            | Some((result, _)) => result,
+                            | None => l
+                                .binary(op, r)
+                                .or_else(|| l.sign_bit_shift(op, r))
+                                .and_then(|v| self.bit_int_result(v, ty)),
+                        });
+                // A division by zero is undefined at any width.
+                let by_zero = matches!(op, BinaryOperator::Division | BinaryOperator::Modulo)
+                    && right.is_some_and(|r| r.value == 0);
+                if left.is_some()
+                    && right.is_some()
+                    && (left.is_some_and(Integer::wide) || right.is_some_and(Integer::wide))
+                    && result.is_none()
+                    && !by_zero
+                {
+                    self.wide_constant(source);
+                } else if left.is_some() && right.is_some() && result.is_none() {
                     self.exceptional_constant(source);
                 }
                 self.integers.push(result);
@@ -1636,7 +1656,8 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                             .push(Some(Integer::int(i128::from(l.value != 0))));
                     } else {
                         self.integers.push(left);
-                        self.work.push(Work::Binary(op, source));
+                        let int = self.types.scalar(Scalar::Int);
+                        self.work.push(Work::Binary(op, source, int));
                         self.work.push(Work::Eval(right));
                     }
                 } else {
@@ -1645,20 +1666,27 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             },
             | Work::Conditional(c) =>
                 if let Some(value) = self.integers.pop().flatten() {
-                    if let Some((bits, signed)) = self.conditional_model(c) {
-                        self.work.push(Work::ConvertInteger(bits, signed));
-                    }
-                    self.work.push(Work::Eval(if value.value != 0 {
+                    let selected = if value.value != 0 {
                         c.then_expression
                     } else {
                         c.else_expression
-                    }));
+                    };
+                    if let Some((bits, signed)) = self.conditional_model(c) {
+                        self.work
+                            .push(Work::ConvertInteger(bits, signed, selected.source_vectors));
+                    }
+                    self.work.push(Work::Eval(selected));
                 } else {
                     self.integers.push(None);
                 },
-            | Work::ConvertInteger(bits, signed) => {
+            | Work::ConvertInteger(bits, signed, source) => {
                 let value = self.integers.pop().flatten();
-                self.integers.push(value.map(|v| v.cast(bits, signed)));
+                // An arm whose conversion a wide pattern cannot hold.
+                if value.is_some_and(|v| v.convert(bits, signed).is_none()) {
+                    self.wide_constant(source);
+                }
+                self.integers
+                    .push(value.and_then(|v| v.convert(bits, signed)));
             },
             | Work::CastBase(operand, source) => {
                 let ty = self.take_type();
@@ -1691,19 +1719,29 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 self.work.push(Work::CastDone(ty, source));
                 self.work.push(Work::Eval(operand));
             },
-            | Work::CastDone(ty, _source) => {
+            | Work::CastDone(ty, source) => {
                 let value = self.integers.pop().flatten();
-                let result = value.zip(self.integer_type(ty)).map(|(v, (bits, signed))| {
-                    if matches!(self.types.nodes[ty.index], TypeKind::Scalar(Scalar::Bool)) {
-                        Integer {
-                            value:  i128::from(v.value != 0),
-                            bits:   1,
-                            signed: false,
+                // An unsigned 128-bit value with its top bit set, converted
+                // to a wider `_BitInt`, has no folded value yet.
+                if let Some(v) = value
+                    && let Some((bits, signed)) = self.integer_type(ty)
+                    && v.convert(bits, signed).is_none()
+                {
+                    self.wide_constant(source);
+                }
+                let result = value
+                    .zip(self.integer_type(ty))
+                    .and_then(|(v, (bits, signed))| {
+                        if matches!(self.types.nodes[ty.index], TypeKind::Scalar(Scalar::Bool)) {
+                            Some(Integer {
+                                value:  i128::from(v.value != 0),
+                                bits:   1,
+                                signed: false,
+                            })
+                        } else {
+                            v.convert(bits, signed)
                         }
-                    } else {
-                        v.cast(bits, signed)
-                    }
-                });
+                    });
                 self.integers.push(result);
             },
             | Work::SizeofDone(align, source) => {
@@ -1899,13 +1937,15 @@ enum Work<'tu, 's> {
     ),
     EnumeratorDone(usize, ArenaList<'tu, Enumerator<'tu>>, usize, usize, bool),
     Eval(&'tu Expression<'tu>),
-    Unary(UnaryOperator, SourceVectors),
-    Binary(BinaryOperator, SourceVectors),
+    /// An operator of an integer constant expression, with its result
+    /// type, to which a bit-precise result converts.
+    Unary(UnaryOperator, SourceVectors, TypeId),
+    Binary(BinaryOperator, SourceVectors, TypeId),
     Logical(BinaryOperator, &'tu Expression<'tu>, SourceVectors),
     Conditional(&'tu ConditionalExpression<'tu>),
     CastBase(&'tu Expression<'tu>, SourceVectors),
     CastDone(TypeId, SourceVectors),
-    ConvertInteger(u32, bool),
+    ConvertInteger(u32, bool, SourceVectors),
     SizeofDone(bool, SourceVectors),
     Atomic(SourceVectors),
     TypeofDone(&'tu ExtendedType<'tu>),

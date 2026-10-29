@@ -7,6 +7,8 @@
 
 use super::{
     Analyzer,
+    ArenaVec,
+    ConstantClass,
     SemanticError,
     SemanticErrorKind,
 };
@@ -14,6 +16,10 @@ use crate::{
     translation_phases::{
         SourceVectors,
         TranslationError,
+        parsing::syntax::{
+            Expression,
+            ExpressionType,
+        },
     },
     util::string_cache::StringCacheId,
 };
@@ -136,6 +142,74 @@ impl Analyzer<'_, '_, '_> {
                 },
             );
         }
+    }
+
+    /// Reports arithmetic on a bit-precise value wider than the constant
+    /// evaluator's 128 bits where an integer constant expression is
+    /// required ([`super::Integer::convert`]). An array bound reports it
+    /// too: GCC and Clang take such a bound as a constant, not as a
+    /// variable length array's.
+    /// C23: §6.6 paragraph 6, p. 95; PDF p. 108.
+    pub(super) fn wide_constant(&mut self, source: SourceVectors) {
+        self.error(
+            SemanticErrorKind::UnsupportedWideConstant,
+            source,
+            None,
+            None,
+        );
+    }
+
+    /// Whether `expression` failed to fold because an operand has a
+    /// bit-precise type wider than the constant model: some arithmetic
+    /// constant in it has no folded value though it has such a type or
+    /// such an operand ([`super::Integer::convert`]). A context that
+    /// requires a constant reports [`Self::wide_constant`] for it instead
+    /// of its own error.
+    /// C23: §6.6 paragraph 6, p. 95; PDF p. 108.
+    pub(super) fn wide_unfolded(&self, expression: &Expression<'_>) -> bool {
+        let info = |expression: &Expression<'_>| {
+            self.expression_indices
+                .get(&std::ptr::from_ref(expression).addr())
+                .map(|&index| &self.expressions[index])
+        };
+        let wide = |expression: &Expression<'_>| {
+            info(expression).is_some_and(|info| {
+                self.integer_type(info.ty)
+                    .is_some_and(|(bits, _)| bits > 128)
+            })
+        };
+        let mut pending = ArenaVec::new_in(self.scratch);
+        pending.push(expression);
+        while let Some(expression) = pending.pop() {
+            let mut operands = ArenaVec::new_in(self.scratch);
+            match expression.kind {
+                | ExpressionType::Parenthesized { expression }
+                | ExpressionType::Unary {
+                    operand_expression: expression,
+                    ..
+                }
+                | ExpressionType::Cast {
+                    operand_expression: expression,
+                    ..
+                } => operands.push(expression),
+                | ExpressionType::Binary {
+                    left_expression,
+                    right_expression,
+                    ..
+                } => operands.extend([left_expression, right_expression]),
+                | ExpressionType::Conditional(c) | ExpressionType::OmittedConditional(c) =>
+                    operands.extend([c.condition_expression, c.then_expression, c.else_expression]),
+                | _ => {},
+            }
+            if info(expression).is_some_and(|info| {
+                info.constant == ConstantClass::Arithmetic && info.integer.is_none()
+            }) && (wide(expression) || operands.iter().any(|&operand| wide(operand)))
+            {
+                return true;
+            }
+            pending.extend(operands);
+        }
+        false
     }
 
     /// Exceptional evaluation violates the representability constraint where

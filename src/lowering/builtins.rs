@@ -109,6 +109,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         let operand = if operation == VaOperation::Arg {
             if types::repr(&self.unit.sema.types, ty)
                 .is_ok_and(|r| matches!(r, types::Repr::Aggregate | types::Repr::Complex { .. }))
+                || types::limb_argument(&self.unit.sema.types, ty)
             {
                 let signature = self
                     .unit
@@ -130,14 +131,18 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     Ok(types::Repr::Complex { .. })
                 ) {
                     self.load_complex(address, ty, source)?
+                } else if types::limb_argument(&self.unit.sema.types, ty) {
+                    Operand::Value(self.load_limbs(address, ty, source)?)
                 } else {
                     Operand::Aggregate(address)
                 };
                 self.push_item(operand, ty);
                 return Ok(());
             }
+            let representation = self.repr(ty, source)?;
             let result_type = self.value_type(ty, source)?;
-            Operand::Value(self.convert(Opcode::VaArg, result_type, first))
+            let value = self.convert(Opcode::VaArg, result_type, first);
+            Operand::Value(self.normalize(value, representation))
         } else {
             let data = if let Some(second) = second {
                 InstData::Binary {
@@ -565,7 +570,25 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         let (negative, magnitude, carry) = if op == OverflowOperation::Mul {
             let sign = self.plain(Opcode::Xor, an, bn);
             let value = self.plain(Opcode::Imul, av, bv);
-            let carry = self.overflow_inst(Opcode::UmulOverflow, av, bv);
+            let carry = if self.value_type(a.ty, source)?.bits() <= 64
+                && self.value_type(b.ty, source)?.bits() <= 64
+            {
+                // Two magnitudes below 2^64 multiply within 128 bits.
+                false_value
+            } else if self.unit.target.is_wasm() {
+                // The WebAssembly back end has no 128-bit `umul_overflow`:
+                // the product wrapped if dividing it by a nonzero `av`
+                // does not give `bv` back.
+                let one = self.iconst(Type::I128, 1);
+                let zero_a = self.icmp(IntCC::Eq, av, zero);
+                let divisor = self.choose(zero_a, one, av);
+                let quotient = self.plain(Opcode::Udiv, value, divisor);
+                let differs = self.icmp(IntCC::Ne, quotient, bv);
+                let nonzero_a = self.plain(Opcode::Xor, zero_a, true_value);
+                self.plain(Opcode::And, differs, nonzero_a)
+            } else {
+                self.overflow_inst(Opcode::UmulOverflow, av, bv)
+            };
             (sign, value, carry)
         } else {
             let same = self.icmp(IntCC::Eq, an, bn);
@@ -584,7 +607,8 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         };
         let repr = self.repr(destination, source)?;
         let ty = self.value_type(destination, source)?;
-        let bits = bit_width.unwrap_or(ty.bits());
+        // A narrow bit-precise destination holds only its width.
+        let bits = bit_width.unwrap_or(repr.narrow().map_or(ty.bits(), |(_, _, width)| width));
         let limit = if repr.signed() {
             let negative_limit = self.iconst(Type::I128, i128::MIN >> (128 - bits));
             // Use unsigned magnitude, not the negative two's-complement limit.
@@ -611,7 +635,8 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         }
         let negated = self.plain(Opcode::Isub, zero, magnitude);
         let value = self.choose(negative, negated, magnitude);
-        Ok((self.extend(value, false, ty), overflow))
+        let value = self.extend(value, false, ty);
+        Ok((self.normalize(value, repr), overflow))
     }
 
     fn magnitude(

@@ -205,7 +205,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         };
         let mut info = Self::expression_result(e, ty);
         info.unfolded_binary128 = operand.unfolded_binary128;
-        info.integer = operand.integer.and_then(|v| v.unary(op));
+        info.integer = operand
+            .integer
+            .and_then(|v| v.unary(op))
+            .and_then(|v| self.bit_int_result(v, ty));
         if op == U::LogicalNot {
             info.integer =
                 Self::constant_truth(operand).map(|truth| Integer::int(i128::from(!truth)));
@@ -630,7 +633,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 info.integer = Self::floating_comparison(op, left_value, right_value);
             }
             info.ice = left.ice && right.ice;
-            if !floating && let Some((l, r)) = left.integer.zip(right.integer) {
+            let mut sign_bit = false;
+            if !floating
+                && let Some((l, r)) = left.integer.zip(right.integer)
+                && let Some((value, into_sign_bit)) = self.bit_int_shift(op, l, r, info.ty)
+            {
+                info.integer = value;
+                sign_bit = into_sign_bit;
+            } else if !floating && let Some((l, r)) = left.integer.zip(right.integer) {
                 info.integer = l.binary(op, r);
                 if info.integer.is_none()
                     && let Some(value) = l.sign_bit_shift(op, r)
@@ -656,8 +666,28 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         }))
                     });
             }
+            if !matches!(
+                op,
+                B::LessThan
+                    | B::LessThanOrEqual
+                    | B::GreaterThan
+                    | B::GreaterThanOrEqual
+                    | B::Equal
+                    | B::NotEqual
+                    | B::LogicalAnd
+                    | B::LogicalOr
+            ) {
+                info.integer = info.integer.and_then(|v| self.bit_int_result(v, info.ty));
+            }
+            if sign_bit && !self.tainted {
+                self.context.report_extension(
+                    crate::configuration::Feature::SignBitShifts,
+                    "left shift into the sign bit",
+                    e.operator_source_vectors.unwrap_or(e.source_vectors),
+                );
+            }
             if let Some((bits, signed)) = self.integer_type(info.ty) {
-                info.integer = info.integer.map(|v| v.cast(bits, signed));
+                info.integer = info.integer.and_then(|v| v.convert(bits, signed));
             }
             if left.constant == ConstantClass::Arithmetic
                 && right.constant == ConstantClass::Arithmetic
@@ -782,7 +812,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 info.set_floating(self.converted_floating(selected, ty));
             }
             if let Some((bits, signed)) = self.integer_type(ty) {
-                info.integer = info.integer.map(|v| v.cast(bits, signed));
+                info.integer = info.integer.and_then(|v| v.convert(bits, signed));
             }
             if condition.constant == ConstantClass::Arithmetic {
                 info.constant = if self.address_value(selected) {
@@ -980,27 +1010,6 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     /// C99: §6.5.2.3p1-4, pp. 72-73; PDF pp. 84-85.
-    /// The type of `member` of the unanalyzed `record`: the recovery type,
-    /// unless the record names the member directly with a `_BitInt`, whose
-    /// width a pointer cast warning reads.
-    /// C99: §6.5.2.3 paragraph 3, p. 73; PDF p. 85.
-    fn unanalyzed_member_type(&mut self, record: TypeId, member: Identifier) -> TypeId {
-        if let TypeKind::Tag(id) = self.types.nodes[self.types.non_atomic(record).index]
-            && let Some(field) = self.types.tags[id]
-                .members
-                .get()
-                .iter()
-                .find(|field| field.name.is_some_and(|name| name.name == member.name))
-            && matches!(
-                self.types.nodes[field.ty.index],
-                TypeKind::Unmodeled(super::super::types::UnmodeledType::BitInt { .. })
-            )
-        {
-            return field.ty;
-        }
-        self.types.recovery_type(&[record])
-    }
-
     pub(super) fn type_member(
         &mut self,
         e: &'tu Expression<'tu>,
@@ -1009,7 +1018,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         indirect: bool,
     ) -> ExpressionInfo<'tu> {
         if self.types.unanalyzed(base.ty) {
-            let ty = self.unanalyzed_member_type(base.ty, member);
+            let ty = self.types.recovery_type(&[base.ty]);
             return Self::expression_result(e, ty);
         }
         let mut ty = base.ty;
@@ -1020,14 +1029,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             };
             // An unanalyzed pointee may be a record; its members are unknown.
             if self.types.unanalyzed(target) {
-                let ty = self.unanalyzed_member_type(target, member);
+                let ty = self.types.recovery_type(&[target]);
                 return Self::expression_result(e, ty);
             }
             ty = target;
         }
         // C99 §6.5.2.3p2: defer the record constraint for an unmodeled target.
         if self.types.unanalyzed(ty) {
-            let ty = self.unanalyzed_member_type(ty, member);
+            let ty = self.types.recovery_type(&[ty]);
             return Self::expression_result(e, ty);
         }
         let TypeKind::Tag(id) = self.types.nodes[ty.index] else {
@@ -1135,18 +1144,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let operand = self.resolve_function_value(operand, Some(target));
         let from = self.converted(operand);
         if self.types.unanalyzed(target) || self.types.unanalyzed(from) {
-            // A `_BitInt`, unmodeled otherwise, has the width a pointer
-            // cast warning compares.
-            self.pointer_integer_cast_warning(target, from, operand, e.source_vectors);
-            // A cast to a `_BitInt` has the width it names.
-            let ty = if matches!(
-                self.types.nodes[target.index],
-                TypeKind::Unmodeled(super::super::types::UnmodeledType::BitInt { .. })
-            ) {
-                target.unqualified()
-            } else {
-                self.types.recovery_type(&[target, from])
-            };
+            let ty = self.types.recovery_type(&[target, from]);
             return Self::expression_result(e, ty);
         }
         // GNU: a structure or union cast to its own type is its value, an
@@ -1340,14 +1338,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         value
                     })
             } else {
-                operand.integer.map(|v| {
+                operand.integer.and_then(|v| {
                     if matches!(
                         self.types.nodes[target.index],
                         TypeKind::Scalar(Scalar::Bool)
                     ) {
-                        Integer::int(i128::from(v.value != 0)).cast(1, false)
+                        Some(Integer::int(i128::from(v.value != 0)).cast(1, false))
                     } else {
-                        v.cast(bits, signed)
+                        v.convert(bits, signed)
                     }
                 })
             };
@@ -1915,7 +1913,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     /// C99: §6.3.1.1p2, pp. 42-43; PDF pp. 54-55. Bit-field width can promote
     /// an unsigned int field to int when all its values fit. Clang's
-    /// storage-only `__fp16` promotes to `float` the same way.
+    /// storage-only `__fp16` promotes to `float` the same way. A bit-precise
+    /// type, even a bit-field's, keeps its type.
+    /// C23: §6.3.1.1 paragraph 2, pp. 46-47; PDF pp. 59-60.
     pub(in crate::translation_phases::semantic_analysis) fn promote(
         &mut self,
         info: ExpressionInfo<'tu>,
@@ -1923,6 +1923,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     ) -> TypeId {
         if self.storage_half(ty) {
             return self.types.scalar(Scalar::Float);
+        }
+        if matches!(self.types.nodes[ty.index], TypeKind::BitInt { .. }) {
+            return ty.unqualified();
         }
         // An enumeration's compatible type has at least the rank of int, so
         // the enumeration promotes to that type unless it is a narrow
@@ -1984,8 +1987,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     ) -> TypeId {
         let lt = self.promote(left, lt);
         let rt = self.promote(right, rt);
-        let ls = self.scalar_representation(lt);
-        let rs = self.scalar_representation(rt);
+        // A bit-precise type takes part as an integer type, which `int`
+        // stands for in choosing a floating type.
+        let bit_int = |ty: TypeId| matches!(self.types.nodes[ty.index], TypeKind::BitInt { .. });
+        let (lb, rb) = (bit_int(lt), bit_int(rt));
+        let ls = self.scalar_representation(lt).or(lb.then_some(Scalar::Int));
+        let rs = self.scalar_representation(rt).or(rb.then_some(Scalar::Int));
         let (Some(ls), Some(rs)) = (ls, rs) else {
             return self.types.unknown();
         };
@@ -1995,6 +2002,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let float_rank = |s: Scalar| s.floating_rank(long_double_class);
         let rank = float_rank(ls).max(float_rank(rs));
         let complex = ls.complex() || rs.complex();
+        if rank == 0 && (lb || rb) {
+            let ty = self.bit_int_common(lt, rt);
+            self.convert(left.expression, ty, ConversionKind::Arithmetic);
+            self.convert(right.expression, ty, ConversionKind::Arithmetic);
+            return ty;
+        }
         let scalar = if rank != 0 {
             let real = if float_rank(ls) >= float_rank(rs) {
                 ls
@@ -2082,6 +2095,150 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             ConversionKind::Arithmetic,
         );
         ty
+    }
+
+    /// The folded result `value` of an operator whose result has type `ty`:
+    /// the integer constant arithmetic computes a narrow operand in `int`,
+    /// where a bit-precise type is not promoted, so a signed bit-precise
+    /// result outside its type's range overflowed, which is undefined and
+    /// no constant, and an unsigned one wraps, converted to its type.
+    /// C99: §6.5 paragraph 5, p. 67; PDF p. 79.
+    /// C23: §6.3.1.1 paragraph 2, pp. 46-47; PDF pp. 59-60.
+    pub(in crate::translation_phases::semantic_analysis) fn bit_int_result(
+        &self,
+        value: Integer,
+        ty: TypeId,
+    ) -> Option<Integer> {
+        let TypeKind::BitInt { width, signed } = self.types.nodes[ty.index] else {
+            return Some(value);
+        };
+        if signed && width < 128 && !value.wide() {
+            let low = i128::MIN >> (128 - width);
+            let high = i128::MAX >> (128 - width);
+            if !value.to_i128().is_some_and(|v| v >= low && v <= high) {
+                return None;
+            }
+        }
+        value.convert(width, signed)
+    }
+
+    /// A shift whose left operand, and so its result, has the bit-precise
+    /// type `ty`, folded at that type's width N rather than at the `int` the
+    /// constant arithmetic promotes a narrow operand to: a count of N or
+    /// more, a negative value shifted left or a signed result past the sign
+    /// bit is undefined and no constant. A nonnegative value shifted into
+    /// (not past) the sign bit folds to its two's-complement result, as for
+    /// `int` ([`Integer::sign_bit_shift`]), which the second result reports.
+    /// Above 128 bits the shift folds where the model's pattern holds its
+    /// result ([`Integer::convert`]). `None` for any other shift.
+    /// C99: §6.5.7 paragraphs 3-5, p. 85; PDF p. 97. GNU extension: GCC
+    /// manual, "Integers".
+    pub(in crate::translation_phases::semantic_analysis) fn bit_int_shift(
+        &self,
+        op: BinaryOperator,
+        left: Integer,
+        right: Integer,
+        ty: TypeId,
+    ) -> Option<(Option<Integer>, bool)> {
+        if !matches!(op, BinaryOperator::LeftShift | BinaryOperator::RightShift) {
+            return None;
+        }
+        let TypeKind::BitInt { width, signed } = self.types.nodes[ty.index] else {
+            return None;
+        };
+        let mut sign_bit = false;
+        let mut fold = || {
+            let count = u32::try_from(right.to_i128()?)
+                .ok()
+                .filter(|&count| count < width)?;
+            let value = left.convert(width, signed)?;
+            if value.wide() {
+                let shifted = if op == BinaryOperator::RightShift {
+                    if !signed && value.value < 0 {
+                        return None;
+                    }
+                    value.value >> count.min(127)
+                } else {
+                    if (signed && value.value < 0) || count >= 128 {
+                        return None;
+                    }
+                    let shifted = value.value << count;
+                    (shifted >> count == value.value).then_some(shifted)?
+                };
+                return value.convert(width, signed).map(|v| Integer {
+                    value: shifted,
+                    ..v
+                });
+            }
+            let raw = value.value.cast_unsigned() & (u128::MAX >> (128 - width));
+            let shifted = if op == BinaryOperator::RightShift {
+                if signed {
+                    (value.value >> count).cast_unsigned()
+                } else {
+                    raw >> count
+                }
+            } else {
+                if signed && (value.value < 0 || raw > (u128::MAX >> (128 - width)) >> count) {
+                    return None;
+                }
+                sign_bit = signed && (raw << count) >> (width - 1) & 1 == 1;
+                raw << count
+            };
+            Integer::int(shifted.cast_signed()).convert(width, signed)
+        };
+        let result = fold();
+        Some((result, sign_bit))
+    }
+
+    /// The common type of two promoted integer types, at least one of them
+    /// bit-precise. Ranks follow widths, and of a standard and a bit-precise
+    /// type of one width the standard type's is greater, so a wider type or
+    /// the standard one wins; a signed type wins over an unsigned one of
+    /// lower rank only if it is wider, and otherwise the unsigned type
+    /// corresponding to it is the common type.
+    /// C23: §6.3.1.1 paragraph 1, p. 46; PDF p. 59; §6.3.1.8 paragraph 1,
+    /// pp. 48-49; PDF pp. 61-62.
+    fn bit_int_common(&mut self, left: TypeId, right: TypeId) -> TypeId {
+        let facts = |this: &Self, ty: TypeId| {
+            let (width, signed) = this.integer_type(ty).unwrap_or((32, true));
+            let standard = !matches!(this.types.nodes[ty.index], TypeKind::BitInt { .. });
+            ((width, standard), signed)
+        };
+        let ((left_rank, left_signed), (right_rank, right_signed)) =
+            (facts(self, left), facts(self, right));
+        let (high, high_signed, low, low_signed) = if left_rank >= right_rank {
+            (left, left_signed, right, right_signed)
+        } else {
+            (right, right_signed, left, left_signed)
+        };
+        let width = |this: &Self, ty| this.integer_type(ty).map_or(0, |(width, _)| width);
+        let ty =
+            if high_signed == low_signed || !high_signed || width(self, high) > width(self, low) {
+                high
+            } else {
+                // A signed type of greater rank but no greater width than the
+                // unsigned one: only a standard type outranks a bit-precise
+                // type of its own width.
+                match self.scalar_representation(high) {
+                    | Some(Scalar::Long) => self.types.scalar(Scalar::UnsignedLong),
+                    | Some(Scalar::LongLong) => self.types.scalar(Scalar::UnsignedLongLong),
+                    | Some(Scalar::Int128) => self.types.scalar(Scalar::UnsignedInt128),
+                    | Some(_) => self.types.scalar(Scalar::UnsignedInt),
+                    | None => {
+                        let width = width(self, high);
+                        self.types.intern(TypeKind::BitInt {
+                            width,
+                            signed: false,
+                        })
+                    },
+                }
+            };
+        // An enumeration converts to its compatible type.
+        match self.scalar_representation(ty) {
+            | Some(scalar) if !matches!(self.types.nodes[ty.index], TypeKind::Scalar(_)) =>
+                self.types.scalar(scalar),
+            | _ => ty.unqualified(),
+        }
     }
 
     fn scalar_representation(&self, ty: TypeId) -> Option<Scalar> {

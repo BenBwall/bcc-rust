@@ -70,7 +70,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 return Self::expression_result(e, ty);
             }
             if !condition.ice || condition.integer.is_none() {
-                return self.invalid_expression(e, SemanticErrorKind::InvalidChooseCondition);
+                let kind = if self.wide_unfolded(condition.expression) {
+                    SemanticErrorKind::UnsupportedWideConstant
+                } else {
+                    SemanticErrorKind::InvalidChooseCondition
+                };
+                return self.invalid_expression(e, kind);
             }
             let selected = if condition.integer.is_some_and(|value| value.value != 0) {
                 yes

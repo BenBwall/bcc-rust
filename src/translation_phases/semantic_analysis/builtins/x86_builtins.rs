@@ -70,7 +70,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 let value = info.integer.filter(|_| info.ice).and_then(|value| {
                     let parameter = parameters.get(index)?;
                     let (bits, signed) = self.integer_type(*parameter)?;
-                    value.cast(bits, signed).to_i128()
+                    value.convert(bits, signed)?.to_i128()
                 });
                 if !value.is_some_and(|v| {
                     v >= i128::from(low)

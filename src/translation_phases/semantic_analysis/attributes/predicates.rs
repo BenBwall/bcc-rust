@@ -422,7 +422,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if let Some((bits, signed)) = self.integer_type(ty) {
             return match value {
                 | PredicateConstant::Integer(value) =>
-                    Some(PredicateConstant::Integer(value.cast(bits, signed))),
+                    value.convert(bits, signed).map(PredicateConstant::Integer),
                 | PredicateConstant::Floating(value) => self
                     .float_cast(
                         ty,

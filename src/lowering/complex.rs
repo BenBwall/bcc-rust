@@ -246,13 +246,13 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
                     source,
                 )?)
             },
-            | Repr::Int { ty, signed } => {
+            | representation @ Repr::Int { ty, signed, .. } => {
                 let mut real = self.complex_parts(item, source)?[0];
                 // A 16-bit part widens exactly first.
                 if self.draft.value_type(real).half_format().is_some() {
                     real = self.widen_half(real);
                 }
-                Operand::Value(self.convert(
+                let value = self.convert(
                     if signed {
                         Opcode::Fptosi
                     } else {
@@ -260,7 +260,8 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
                     },
                     ty,
                     real,
-                ))
+                );
+                Operand::Value(self.normalize(value, representation))
             },
             | _ => return Err(LoweringError::missing("invalid complex conversion", source)),
         };

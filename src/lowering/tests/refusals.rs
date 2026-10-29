@@ -93,8 +93,8 @@ fn compound_literals_with_static_or_thread_storage_name_themselves() {
 /// naming why, rather than as a type that "was not analyzed".
 #[test]
 fn unmodeled_extension_types_are_refused_as_unsupported() {
-    let message = refusal("int f(void) { _BitInt(9) b = 1; return b; }");
-    assert_eq!(message, "not yet supported by lowering: _BitInt types");
+    let message = refusal("int f(void) { _Decimal32 d; return 0; }");
+    assert_eq!(message, "not yet supported by lowering: _Decimal32 types");
 }
 
 #[test]
@@ -147,22 +147,6 @@ fn errors_point_at_their_syntax_and_render() {
 #[test]
 fn unsupported_type_diagnostics_retain_the_actual_construct() {
     for (source, construct) in [
-        ("_BitInt(9) value;", "_BitInt types"),
-        ("int f(void){return sizeof(_BitInt(9));}", "_BitInt types"),
-        ("int f(void){return _Alignof(_BitInt(9));}", "_BitInt types"),
-        ("__typeof__(sizeof(_BitInt(9))) value;", "_BitInt types"),
-        ("int f(void){return -(_BitInt(9))1;}", "_BitInt types"),
-        ("int f(void){return (_BitInt(9))1+1;}", "_BitInt types"),
-        ("int f(void){return 1?(_BitInt(9))1:1;}", "_BitInt types"),
-        ("int f(void){return (int)(_BitInt(9))1;}", "_BitInt types"),
-        (
-            "struct S {_BitInt(9) x;}; extern struct S s; int f(void){return s.x;}",
-            "_BitInt types",
-        ),
-        (
-            "typedef _BitInt(9) Small; Small values[2];",
-            "_BitInt types",
-        ),
         (
             "int f(void) { constexpr int value=1; return value; }",
             "constexpr objects",
@@ -182,10 +166,6 @@ fn unsupported_type_diagnostics_retain_the_actual_construct() {
         (
             "enum E : unsigned int { A }; enum E value;",
             "fixed-underlying enum types",
-        ),
-        (
-            "struct S { _BitInt(9) value; }; struct S object;",
-            "_BitInt types",
         ),
     ] {
         let errors = lower_with(
@@ -207,8 +187,8 @@ fn unsupported_type_diagnostics_retain_the_actual_construct() {
     }
     // These supported constructs were listed in the old generic refusal note.
     // They must still compile beside an unrelated unsupported type.
-    let message = refusal("_Thread_local int tls; __typeof__(int) ordinary; _BitInt(9) value;");
-    assert!(message.ends_with("_BitInt types"), "{message}");
+    let message = refusal("_Thread_local int tls; __typeof__(int) ordinary; _Decimal32 value;");
+    assert!(message.ends_with("_Decimal32 types"), "{message}");
 }
 
 #[test]

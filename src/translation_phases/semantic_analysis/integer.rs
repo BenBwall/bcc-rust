@@ -91,7 +91,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     | I::UnsignedLong(_) =>
                         self.types.target.integer(Scalar::UnsignedLong).unwrap(),
                     | I::UnsignedLongLong(_) => (64, false),
-                    | I::BitInt(..) | I::Imaginary(..) => {
+                    | I::BitInt(_, width, unsigned) => (u32::from(width), !unsigned),
+                    | I::Imaginary(..) => {
                         self.integers.push(None);
                         return;
                     },
@@ -146,7 +147,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     return;
                 }
                 self.work
-                    .push(Work::Unary(operator, expression.source_vectors));
+                    .push(Work::Unary(operator, expression.source_vectors, info.ty));
                 self.work.push(Work::Eval(operand_expression));
             },
             | E::Binary {
@@ -183,7 +184,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     self.integers.push(None);
                 } else {
                     self.work
-                        .push(Work::Binary(operator, expression.source_vectors));
+                        .push(Work::Binary(operator, expression.source_vectors, info.ty));
                     self.work.push(Work::Eval(right_expression));
                     self.work.push(Work::Eval(left_expression));
                 }
@@ -519,7 +520,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         value: super::super::preprocessing::FloatTokenType,
     ) -> Option<Integer> {
         use super::super::preprocessing::FloatTokenType as F;
-        let (bits, signed) = self.integer_type(ty)?;
+        // A conversion to a bit-precise type wider than the constant model
+        // is not folded.
+        let (bits, signed) = self.integer_type(ty).filter(|&(bits, _)| bits <= 128)?;
         let (negative, mantissa, shift) = match value {
             | F::Float(value) | F::Float32(value) => float_parts(f64::from(value)),
             | F::Float16(value) => float_parts(f64::from(
@@ -622,7 +625,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         width: Option<u32>,
     ) -> Option<(Integer, bool)> {
         use super::super::preprocessing::FloatTokenType as F;
-        let (bits, signed) = self.integer_type(ty)?;
+        let (bits, signed) = self.integer_type(ty).filter(|&(bits, _)| bits <= 128)?;
         let bits = width.unwrap_or(bits).min(bits);
         let (negative, nan) = match value {
             | F::Float(value) | F::Float32(value) => (value.is_sign_negative(), value.is_nan()),
@@ -696,16 +699,22 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     pub(super) fn conversion_spelling(&self, ty: TypeId) -> &'static str {
         match self.types.nodes[self.types.non_atomic(ty).index] {
             | TypeKind::Scalar(scalar) => scalar.spelling(),
+            | TypeKind::BitInt { signed: true, .. } => "_BitInt",
+            | TypeKind::BitInt { signed: false, .. } => "unsigned _BitInt",
             | TypeKind::Tag(_) => "enum",
             | _ => "integer",
         }
     }
 
+    /// The width and signedness of an integer type; a bit-precise type's
+    /// width is the N it names, not its storage's.
     /// C99: §6.2.5p2-9, pp. 33-34; PDF pp. 45-46.
+    /// C23: §6.2.5 paragraphs 5-8, p. 39; PDF p. 52.
     pub(super) fn integer_type(&self, ty: TypeId) -> Option<(u32, bool)> {
         let ty = self.types.non_atomic(ty);
         match self.types.nodes[ty.index] {
             | TypeKind::Scalar(Scalar::Bool) => Some((1, false)),
+            | TypeKind::BitInt { width, signed } => Some((width, signed)),
             | TypeKind::Scalar(s) => self.types.target.integer(s),
             | TypeKind::Tag(id)
                 if self.types.tags[id].kind == TagKind::Enum
@@ -733,10 +742,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         while let Some(expression) = pending.pop() {
             match expression.kind {
                 | ExpressionType::Constant(
-                    Constant::Integer(
-                        super::super::preprocessing::IntegerTokenType::BitInt(..)
-                        | super::super::preprocessing::IntegerTokenType::Imaginary(..),
-                    )
+                    Constant::Integer(super::super::preprocessing::IntegerTokenType::Imaginary(..))
                     | Constant::Float(
                         super::super::preprocessing::FloatTokenType::ImaginaryFloat(_)
                         | super::super::preprocessing::FloatTokenType::ImaginaryDouble(_)
@@ -831,6 +837,21 @@ impl Integer {
     /// p. 94.
     pub(crate) fn binary(self, op: BinaryOperator, right: Self) -> Option<Self> {
         use BinaryOperator as B;
+        // A wide shift count is read by its value; a wide left operand's
+        // shifts take its type (`Analyzer::bit_int_shift`).
+        if !self.wide() && right.wide() && matches!(op, B::LeftShift | B::RightShift) {
+            return self.binary(
+                op,
+                Self {
+                    bits:   128,
+                    signed: true,
+                    value:  right.to_i128()?,
+                },
+            );
+        }
+        if self.wide() || right.wide() {
+            return self.wide_binary(op, right);
+        }
         let (mut l, mut r) = (self.promote(), right.promote());
         if matches!(op, B::LogicalAnd | B::LogicalOr) {
             return Some(Self::int(i128::from(if op == B::LogicalAnd {
@@ -901,8 +922,88 @@ impl Integer {
         l.checked(value)
     }
 
+    /// [`Self::binary`] with an operand of a bit-precise type wider than
+    /// the model's 128 bits, whose value stands for its 128-bit pattern
+    /// sign-extended to that width ([`Self::convert`]). Such patterns are
+    /// closed under the bitwise operators, and an addition, subtraction or
+    /// multiplication that does not overflow `i128` gives the pattern of the
+    /// exact result, which wraps modulo 2^N for an unsigned type just as
+    /// the pattern does; so does a division of values a signed type or a
+    /// nonnegative pattern stands for. An unsigned pattern with its top bit
+    /// set stands for a value above every nonnegative one. Anything else,
+    /// and shifts ([`Analyzer::bit_int_shift`]), is not folded.
+    /// C23: §6.2.5 paragraph 8, p. 39; PDF p. 52; §6.3.1.8 paragraph 1,
+    /// pp. 48-49; PDF pp. 61-62.
+    fn wide_binary(self, op: BinaryOperator, right: Self) -> Option<Self> {
+        use BinaryOperator as B;
+        if matches!(op, B::LogicalAnd | B::LogicalOr) {
+            return Some(Self::int(i128::from(if op == B::LogicalAnd {
+                self.value != 0 && right.value != 0
+            } else {
+                self.value != 0 || right.value != 0
+            })));
+        }
+        let (bits, signed) = common((self.bits, self.signed), (right.bits, right.signed));
+        let (l, r) = (self.convert(bits, signed)?, right.convert(bits, signed)?);
+        let key = |v: Self| (!v.signed && v.value < 0, v.value);
+        let comparison = key(l).cmp(&key(r));
+        let predicate = match op {
+            | B::LessThan => Some(comparison.is_lt()),
+            | B::LessThanOrEqual => Some(!comparison.is_gt()),
+            | B::GreaterThan => Some(comparison.is_gt()),
+            | B::GreaterThanOrEqual => Some(!comparison.is_lt()),
+            | B::Equal => Some(comparison.is_eq()),
+            | B::NotEqual => Some(!comparison.is_eq()),
+            | _ => None,
+        };
+        if let Some(result) = predicate {
+            return Some(Self::int(i128::from(result)));
+        }
+        let value = match op {
+            | B::Addition => l.value.checked_add(r.value)?,
+            | B::Subtraction => l.value.checked_sub(r.value)?,
+            | B::Multiplication => l.value.checked_mul(r.value)?,
+            | B::Division | B::Modulo => {
+                if r.value == 0 || (!signed && (l.value < 0 || r.value < 0)) {
+                    return None;
+                }
+                if op == B::Division {
+                    l.value.checked_div(r.value)?
+                } else {
+                    l.value.checked_rem(r.value)?
+                }
+            },
+            | B::BitwiseAnd => l.value & r.value,
+            | B::BitwiseOr => l.value | r.value,
+            | B::BitwiseXor => l.value ^ r.value,
+            | _ => return None,
+        };
+        Some(Self {
+            value,
+            bits,
+            signed,
+        })
+    }
+
     /// C99: §6.5.3.3p1-5, p. 79; PDF p. 91.
     pub(crate) fn unary(self, op: UnaryOperator) -> Option<Self> {
+        // A wide value's pattern negates and inverts as its own
+        // ([`Self::wide_binary`]).
+        if self.wide() {
+            return match op {
+                | UnaryOperator::Plus | UnaryOperator::Extension => Some(self),
+                | UnaryOperator::Minus => Some(Self {
+                    value: self.value.checked_neg()?,
+                    ..self
+                }),
+                | UnaryOperator::BitwiseNot => Some(Self {
+                    value: !self.value,
+                    ..self
+                }),
+                | UnaryOperator::LogicalNot => Some(Self::int(i128::from(self.value == 0))),
+                | _ => None,
+            };
+        }
         let v = self.promote();
         match op {
             | UnaryOperator::Plus | UnaryOperator::Extension => Some(v),
@@ -916,12 +1017,62 @@ impl Integer {
 
     /// C99: §6.3.1.3p1-3, p. 43; PDF p. 55.
     pub(crate) fn cast(self, bits: u32, signed: bool) -> Self {
+        debug_assert!(
+            bits <= 128,
+            "a conversion to a wider bit-precise type uses Integer::convert"
+        );
         Self {
             bits,
             signed,
             ..self
         }
         .cast_value(self.value)
+    }
+
+    /// The value converted to an integer type of `bits` width and
+    /// `signed`ness, which may be a bit-precise type wider than this
+    /// model's 128 bits. There a value stands for its two's-complement
+    /// pattern sign-extended from bit 127 to the type's width: every value
+    /// of a signed type converts, as does a nonnegative value of an unsigned
+    /// type of at most 127 bits, or a value of a wide type converted to a
+    /// type no wider; an unsigned value whose pattern has bit 127 set,
+    /// converted to a wider type, is zero-extended, which no such pattern
+    /// stands for, and is not folded. Arithmetic on wide values folds
+    /// where its result keeps the pattern ([`Self::wide_binary`]).
+    /// C99: §6.3.1.3p1-3, p. 43; PDF p. 55.
+    /// C23: §6.2.5 paragraph 8, p. 39; PDF p. 52.
+    pub(crate) fn convert(self, bits: u32, signed: bool) -> Option<Self> {
+        if bits <= 128 {
+            return Some(self.cast(bits, signed));
+        }
+        // A negative pattern of an unsigned type stands for 2^width - k,
+        // whose zero extension to a wider type no sign-extended pattern
+        // holds; within its width or narrower, it truncates as a pattern.
+        (self.signed || self.value >= 0 || (self.bits > 128 && bits <= self.bits)).then_some(Self {
+            value: self.value,
+            bits,
+            signed,
+        })
+    }
+
+    /// This value as one of at most 128 bits with the same mathematical
+    /// value: itself, or for a wide value its value as `__int128` where
+    /// that holds it.
+    pub(crate) fn exact(self) -> Option<Self> {
+        if !self.wide() {
+            return Some(self);
+        }
+        Some(Self {
+            value:  self.to_i128()?,
+            bits:   128,
+            signed: true,
+        })
+    }
+
+    /// Whether this value belongs to a bit-precise type wider than the
+    /// model's 128 bits ([`Self::convert`]).
+    pub(crate) const fn wide(self) -> bool {
+        self.bits > 128
     }
 
     /// C99: §6.3.1.1p2, pp. 42-43; PDF pp. 54-55.
@@ -936,6 +1087,12 @@ impl Integer {
     /// The next implicit enumerator value, which never wraps.
     /// C99: §6.7.2.2p3, p. 105; PDF p. 117.
     pub(crate) fn increment(self) -> Option<Self> {
+        if self.wide() {
+            return (self.signed || self.value >= 0).then_some(Self {
+                value: self.value.checked_add(1)?,
+                ..self
+            });
+        }
         if self.signed {
             self.checked(self.value.checked_add(1)?)
         } else {
@@ -974,6 +1131,9 @@ impl Integer {
     /// <https://gcc.gnu.org/onlinedocs/gcc/Integers-implementation.html>
     /// C99: §6.5.7 paragraph 4, p. 85; PDF p. 97.
     pub(crate) fn sign_bit_shift(self, op: BinaryOperator, right: Self) -> Option<Self> {
+        if self.wide() || right.wide() {
+            return None;
+        }
         let (l, r) = (self.promote(), right.promote());
         if op != BinaryOperator::LeftShift || !l.signed || l.value < 0 {
             return None;
@@ -1039,6 +1199,7 @@ fn unanalyzed_extended(specifiers: super::TypeSpecifiers<'_>) -> bool {
                 extended,
                 super::ExtendedType::MsInteger { .. }
                     | super::ExtendedType::Int128 { .. }
+                    | super::ExtendedType::BitInt { .. }
                     | super::ExtendedType::Atomic(_)
                     | super::ExtendedType::Float128 { .. }
                     | super::ExtendedType::InterchangeFloat { .. }

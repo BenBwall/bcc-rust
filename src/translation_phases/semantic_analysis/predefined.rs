@@ -415,6 +415,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                                 );
                             },
                             | TypeKind::Nullptr => break (Base::Text("nullptr_t"), ty.qualifiers),
+                            | TypeKind::BitInt { width, signed } =>
+                                break (
+                                    Base::Text(format_in!(
+                                        scratch,
+                                        "{}_BitInt({width})",
+                                        if signed { "" } else { "unsigned " }
+                                    )),
+                                    ty.qualifiers,
+                                ),
                             | TypeKind::Unknown | TypeKind::Unmodeled(_) =>
                                 break (Base::Text("int"), ty.qualifiers),
                             | TypeKind::Scalar(scalar) =>

@@ -432,15 +432,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             });
         }
         let integer = info.integer?;
-        let magnitude = if integer.signed {
-            integer.value.unsigned_abs()
-        } else {
-            integer.value.cast_unsigned()
-        };
-        Some(Binary128Value::real(Binary128::from_integer(
-            integer.signed && integer.value < 0,
-            magnitude,
-        )))
+        // A wide unsigned pattern with bit 127 set stands for 2^N - k.
+        let bits = crate::float_parsing::bits::from_bit_precise(
+            integer.value,
+            integer.bits,
+            integer.signed,
+            crate::ir::Type::F128,
+        )?;
+        Some(Binary128Value::real(Binary128::from_bits(bits)))
     }
 
     /// Records `operand`'s arithmetic constant converted to `ty` in `info`
@@ -473,10 +472,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             if matches!(self.types.nodes[ty.index], TypeKind::Scalar(Scalar::Bool)) {
                 info.integer = Some(Integer::int(i128::from(value.truth())).cast(1, false));
             } else if let Some((bits, signed)) = self.integer_type(ty) {
-                info.integer = value
-                    .real
-                    .to_integer(signed, bits)
-                    .map(|bits_value| Integer::int(bits_value.cast_signed()).cast(bits, signed));
+                info.integer = value.real.to_integer(signed, bits).and_then(|bits_value| {
+                    Integer::int(bits_value.cast_signed()).convert(bits, signed)
+                });
             } else if self.arithmetic(ty) {
                 // A real operand's imaginary part is +0, whatever sign
                 // negating it gave the folded zero (C99 §6.3.1.7p1).
@@ -650,11 +648,7 @@ pub(super) fn integer_value(integer: Integer, ty: crate::ir::Type) -> Option<Lon
         float_parsing::bits,
         ir::Type,
     };
-    let bits = if integer.signed {
-        bits::from_integer(integer.value, ty)?
-    } else {
-        bits::from_unsigned(integer.value.cast_unsigned(), ty)?
-    };
+    let bits = bits::from_bit_precise(integer.value, integer.bits, integer.signed, ty)?;
     let narrow = |bits: u128| u32::try_from(bits).ok();
     Some(match ty {
         | Type::F16 | Type::BF16 => {

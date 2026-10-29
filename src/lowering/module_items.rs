@@ -839,7 +839,10 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
         let result_representation = repr(types, result)?;
         let result = match result_representation {
             | Repr::Void => None,
-            | Repr::Aggregate | Repr::Complex { .. } => {
+            | representation
+                if matches!(representation, Repr::Aggregate | Repr::Complex { .. })
+                    || types::limb_argument(types, result) =>
+            {
                 params.push(Type::Ptr);
                 aggregates.push(AggregateParam {
                     index: 0,
@@ -851,7 +854,10 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
         };
         for parameter in parameters {
             match repr(types, parameter)? {
-                | Repr::Aggregate | Repr::Complex { .. } => {
+                | representation
+                    if matches!(representation, Repr::Aggregate | Repr::Complex { .. })
+                        || types::limb_argument(types, parameter) =>
+                {
                     let index = u32::try_from(params.len())
                         .map_err(|_| LoweringErrorKind::MissingFact("too many parameters"))?;
                     // Ordinary aggregates constrain only the caller-owned
@@ -1611,8 +1617,8 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
                 | _ if let Some(value) = info.binary128() =>
                     floats::binary128_bits(value.real, component),
                 | (Some(value), _) => floats::constant_bits(&value.real, component),
-                | (_, Some(value)) if value.signed => floats::from_integer(value.value, component),
-                | (_, Some(value)) => floats::from_unsigned(value.value as u128, component),
+                | (_, Some(value)) =>
+                    floats::from_bit_precise(value.value, value.bits, value.signed, component),
                 | _ => None,
             }
             .ok_or_else(unsupported)?;
@@ -1641,11 +1647,7 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
                     floats::binary128_bits(folded.real, float),
                 | (Some(folded), _) => floats::constant_bits(&folded.real, float),
                 | (None, Some(value)) =>
-                    if value.signed {
-                        floats::from_integer(value.value, float)
-                    } else {
-                        floats::from_unsigned(u128::from_le_bytes(value.value.to_le_bytes()), float)
-                    },
+                    floats::from_bit_precise(value.value, value.bits, value.signed, float),
                 | (None, None) => None,
             }
             .ok_or_else(unsupported)?;
@@ -1685,8 +1687,13 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
         if let Some(value) = value {
             let value = match representation {
                 | Repr::Bool => i128::from(value != 0),
+                // A narrow bit-precise object stores its padding bits
+                // extended from its width, as GCC and Clang do.
                 | Repr::Int { .. } | Repr::Pointer => {
-                    let bits = u32::try_from(size * 8).map_err(|_| unsupported())?;
+                    let bits = match representation.narrow() {
+                        | Some((_, _, width)) => width,
+                        | None => u32::try_from(size * 8).map_err(|_| unsupported())?,
+                    };
                     Integer::int(value)
                         .cast(bits, representation.signed())
                         .value
@@ -2224,8 +2231,9 @@ fn string_form(literal: StringTokenType) -> (LiteralId, u8) {
 /// converts to directly, so an `unsigned __int128` takes values from 2^127
 /// up (C99 §6.3.1.4 paragraph 1, p. 43; PDF p. 55).
 fn integer_destination(representation: Repr) -> (u32, bool) {
-    (
-        representation.value_type().map_or(128, Type::bits),
-        representation.signed(),
-    )
+    let width = match representation.narrow() {
+        | Some((_, _, width)) => width,
+        | None => representation.value_type().map_or(128, Type::bits),
+    };
+    (width, representation.signed())
 }

@@ -158,6 +158,23 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     | IntegerTokenType::UnsignedLong(_) => Scalar::UnsignedLong,
                     | IntegerTokenType::LongLong(_) => Scalar::LongLong,
                     | IntegerTokenType::UnsignedLongLong(_) => Scalar::UnsignedLongLong,
+                    // C23 §6.4.4.2p6: a `wb` constant has the narrowest
+                    // bit-precise type that holds its value (and a sign bit).
+                    | IntegerTokenType::BitInt(_, width, unsigned) => {
+                        info.ty = self.types.intern(TypeKind::BitInt {
+                            width:  u32::from(width),
+                            signed: !unsigned,
+                        });
+                        info.integer = Some(Integer {
+                            value:  value.into(),
+                            bits:   u32::from(width),
+                            signed: !unsigned,
+                        });
+                        info.ice = true;
+                        info.constant = ConstantClass::Arithmetic;
+                        self.retain_expression(info);
+                        return;
+                    },
                     | _ => {
                         self.retain_expression(info);
                         return;

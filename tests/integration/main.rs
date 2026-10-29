@@ -20,6 +20,7 @@ mod native;
 mod atomic_compound;
 mod bench_corpus;
 mod binary128;
+mod bit_int;
 mod call_diagnostics;
 mod cli;
 mod code_generation_cli;

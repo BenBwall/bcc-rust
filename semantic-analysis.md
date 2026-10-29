@@ -423,7 +423,7 @@ Stage-1 boundaries, with their current disposition:
 
 - Stage 2 types sizeof/alignof expression operands and evaluates their modeled
   constant sizes. VLA sizes remain runtime expressions.
-- Extension-derived and inferred types, fixed-underlying enums, decimal/bit-precise
+- Extension-derived and inferred types, fixed-underlying enums, decimal
   types and layout-changing extensions are unanalyzed. MSVC `__int8`,
   `__int16`, `__int32` and `__int64` are not: as in Clang, they are `char`,
   `short`, `int` and `long long`, and `signed` or `unsigned` selects that

@@ -395,7 +395,7 @@ impl<'tu, 's> TypeInterner<'tu, 's> {
     /// C99: §5.1.1.3p1, p. 11; PDF p. 23 (diagnostic identification).
     pub(crate) fn recovery_type(&mut self, operands: &[TypeId]) -> TypeId {
         match operands.iter().find_map(|&ty| self.unmodeled_type(ty)) {
-            | Some(reason) => self.unmodeled(reason.anonymous()),
+            | Some(reason) => self.unmodeled(reason),
             | None => self.unknown(),
         }
     }
@@ -486,11 +486,9 @@ pub(crate) struct TypeInterner<'tu, 's> {
 /// C99: §4p6, p. 7; PDF p. 19 (extensions must be identified accurately).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum UnmodeledType {
-    /// A `_BitInt(N)`, with its width once checked (0 before), which casts
-    /// to and from pointers read (`Analyzer::pointer_integer_cast_warning`).
-    BitInt {
-        width: u32,
-    },
+    /// A `_BitInt(N)` whose width could not be checked, because it reads
+    /// an unanalyzed construct; a checked width gives [`TypeKind::BitInt`].
+    BitInt,
     Constexpr,
     Decimal32,
     Decimal64,
@@ -502,18 +500,9 @@ pub(crate) enum UnmodeledType {
 }
 
 impl UnmodeledType {
-    /// The reason without a `_BitInt`'s width, which a record or an
-    /// expression built on one does not have.
-    pub(crate) const fn anonymous(self) -> Self {
-        match self {
-            | Self::BitInt { .. } => Self::BitInt { width: 0 },
-            | reason => reason,
-        }
-    }
-
     pub(crate) const fn description(self) -> &'static str {
         match self {
-            | Self::BitInt { .. } => "_BitInt types",
+            | Self::BitInt => "_BitInt types of an unanalyzed width",
             | Self::Constexpr => "constexpr objects",
             | Self::Decimal32 => "_Decimal32 types",
             | Self::Decimal64 => "_Decimal64 types",
@@ -560,6 +549,15 @@ pub(crate) enum TypeKind<'tu> {
     /// An atomic type is distinct from its corresponding non-atomic type.
     /// C11: §6.2.5 paragraph 27, p. 43; PDF p. 61.
     Atomic(TypeId),
+    /// A bit-precise integer type `_BitInt(N)` or `unsigned _BitInt(N)`,
+    /// with its checked width N.
+    /// C23: §6.2.5 paragraphs 5-8, p. 39; PDF p. 52; §6.7.3.1 paragraph 4,
+    /// p. 104; PDF p. 117. An extension to C99 §6.2.5, pp. 33-37; PDF
+    /// pp. 45-49.
+    BitInt {
+        width:  u32,
+        signed: bool,
+    },
     /// GCC Vector Extensions: arithmetic element, lane count and ABI alignment.
     /// GNU extension: GCC manual, "Vector Extensions".
     /// <https://gcc.gnu.org/onlinedocs/gcc/Vector-Extensions.html>
@@ -748,6 +746,7 @@ fn layout(
                 };
             },
             | TypeKind::Pointer(_) | TypeKind::Nullptr => break target.pointer,
+            | TypeKind::BitInt { width, .. } => break bit_int_layout(width),
             | TypeKind::Tag(id) => break tags[id].layout.get()?,
             | TypeKind::Array(element, ArrayBound::Constant(n)) => {
                 count = count.checked_mul(n)?;
@@ -780,6 +779,27 @@ fn layout(
             u64::from(alignment)
         },
     })
+}
+
+/// The size and alignment of `_BitInt(width)`, the same on every target
+/// bcc supports: up to 64 bits, those of the smallest of `char`, `short`,
+/// `int` and `long long` that holds it; beyond, an array of 64-bit limbs,
+/// 8-byte aligned. The x86-64 psABI (§3.1.2, "_BitInt(N)") fixes this for
+/// System V; Clang lays it out the same way for the Microsoft x64 and
+/// WebAssembly targets.
+/// C23: §6.2.6.2 paragraphs 1-2, pp. 42-43; PDF pp. 55-56 (the padding
+/// bits are implementation-defined).
+pub(crate) const fn bit_int_layout(width: u32) -> Layout {
+    let size = match width {
+        | 0..=8 => 1,
+        | 9..=16 => 2,
+        | 17..=32 => 4,
+        | _ => (width as u64).div_ceil(64) * 8,
+    };
+    Layout {
+        size,
+        align: if size < 8 { size } else { 8 },
+    }
 }
 
 pub(crate) fn align_up(value: u64, align: u64) -> Option<u64> {

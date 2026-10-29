@@ -44,8 +44,9 @@
 //!   GNU `__builtin_va_arg_pack ()` made for its calls; `places.rs` lvalues,
 //!   loads and stores; `alignment.rs` owns backing-place guarantees and all
 //!   memory and allocation alignment; `bit_fields.rs` bit-field reads and
-//!   writes; `initializers.rs` walks braced initializers; `assembly.rs` lowers
-//!   GNU `asm` statements; `vla.rs` evaluates saved array extents and runs the
+//!   writes; `bit_int.rs` the bit-precise integers calls pass in memory;
+//!   `initializers.rs` walks braced initializers; `assembly.rs` lowers GNU
+//!   `asm` statements; `vla.rs` evaluates saved array extents and runs the
 //!   cleanups of the regions an exit leaves: dynamic stack restores, and GNU
 //!   cleanup calls from `cleanup.rs`.
 //! - Construction: `ssa.rs` holds the draft function and its SSA variables;
@@ -71,6 +72,7 @@ mod alignment;
 mod argument_pack;
 mod assembly;
 mod bit_fields;
+mod bit_int;
 mod builtin_effects;
 mod builtins;
 mod cleanup;

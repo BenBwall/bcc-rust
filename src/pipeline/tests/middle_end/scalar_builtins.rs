@@ -504,8 +504,9 @@ fn gcc_scalar_builtins_emit_matching_llvm_intrinsics() {
     let source = "int f(unsigned x){return \
                   __builtin_clz(x)+__builtin_ctz(x)+__builtin_popcount(x)+__builtin_bswap32(x);} \
                   int g(unsigned x,unsigned y,unsigned *p){return \
-                  __builtin_add_overflow(x,y,p)+__builtin_mul_overflow(x,y,p);} void *h(unsigned \
-                  n){return __builtin_alloca(n);} void t(void){__builtin_trap();}";
+                  __builtin_add_overflow(x,y,p)+__builtin_mul_overflow((unsigned \
+                  __int128)x,y,p);} void *h(unsigned n){return __builtin_alloca(n);} void \
+                  t(void){__builtin_trap();}";
     for target in [Target::LinuxGnu, Target::WindowsGnu] {
         with_module(source, target, false, Profile::PostAbi, |module, target| {
             let mut text = String::new();

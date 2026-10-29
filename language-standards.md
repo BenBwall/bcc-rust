@@ -1301,7 +1301,7 @@ backend work before they can be enabled.
 | `_MSVC_TRADITIONAL` | Traditional Microsoft preprocessing is not implemented; bcc uses its conforming preprocessor. |
 | `_M_FP_CONTRACT` | MS floating code-generation modes are not implemented. |
 | `_M_FP_PRECISE` | MS floating code-generation modes are not implemented. |
-| `__BITINT_MAXWIDTH__` | Extended integer syntax exists but these widths lack semantic types. |
+| `__BITINT_MAXWIDTH__` | The widest _BitInt follows the compiler identity; defined beside the identity macros. |
 | `__CONSTANT_CFSTRINGS__` | Objective-C and CoreFoundation string intrinsics are not implemented. |
 | `__FPCLASS_NEGINF` | Floating classification intrinsics are not implemented. |
 | `__FPCLASS_NEGNORMAL` | Floating classification intrinsics are not implemented. |
@@ -2341,18 +2341,134 @@ Clang's on x86-64, and as Clang's 128 on WebAssembly, which GCC does not
 target (`CompilerConfiguration::bit_int_max_width`). The frozen Clang target tables keep excluding the macro, which is
 defined beside the identity macros instead.
 
-`_BitInt` types themselves stay unmodeled, so lowering still refuses them,
-but a checked type records its width, which a declaration, a member (each
-its own), a parameter, a cast to the type and, under GCC's rules, an
-`_Atomic` one keep. A cast between it and a pointer takes the pointer-cast
-warnings below (`(void *)(_BitInt(32))x`, `(_BitInt(32))p`), as both
-compilers report; a constant cast to a `_BitInt` (`(_BitInt(32))3`) is an
-integer constant expression there. `sizeof` of a `_BitInt` stays
-unanalyzed, so a width that contains one
-(`_BitInt(sizeof(_BitInt(16)) * 65536)`, which GCC rejects, or `* 0`, which
-Clang rejects) is not range-checked. The check
-is `Analyzer::bit_int_width`; the `sema-bitint-width-{gcc,clang}` goldens
-and `semantic_analysis/tests/bit_int_widths.rs` pin it.
+A cast between a `_BitInt` and a pointer takes the pointer-cast warnings
+below (`(void *)(_BitInt(32))x`, `(_BitInt(32))p`), as both compilers
+report; a constant cast to a `_BitInt` (`(_BitInt(32))3`) is an integer
+constant expression there. A width that contains a `sizeof` of a `_BitInt`
+is range-checked like any other (`_BitInt(sizeof(_BitInt(16)) * 65536)` is
+too large for GCC, `* 0` too small for both). The check is
+`Analyzer::bit_int_width`; the `sema-bitint-width-{gcc,clang}` goldens and
+`semantic_analysis/tests/bit_int_widths.rs` pin it. A width that reads an
+unanalyzed construct leaves the type unmodeled.
+
+### `_BitInt` types
+
+A checked `_BitInt(N)` or `unsigned _BitInt(N)` is an integer type of its
+own (`TypeKind::BitInt`), distinct for each width and signedness, so
+`_Generic` tells them apart (C23 §6.2.5p5-8). Its layout is the same on
+every bcc target, as the x86-64 psABI (§3.1.2) fixes it and Clang follows it
+on Win64 and WebAssembly:
+
+| Width N | Size | Alignment |
+| --- | --- | --- |
+| 1-8 | 1 | 1 |
+| 9-16 | 2 | 2 |
+| 17-32 | 4 | 4 |
+| 33-64 | 8 | 8 |
+| 65 and up | 8 per 64-bit limb, ceil(N / 64) limbs | 8 |
+
+Semantics follow C23:
+
+- **Promotions and conversions.** A bit-precise type is not promoted, not
+  even from a bit-field: the bit-field `_BitInt(40) a : 10` computes in
+  `_BitInt(40)` (§6.3.1.1p2). In the usual arithmetic conversions ranks
+  follow widths, and a standard type outranks a bit-precise type of its own
+  width, so `(_BitInt(32))x + 1` is `int`, `(_BitInt(33))x + 1U` is
+  `_BitInt(33)` and `(_BitInt(40))x + (unsigned _BitInt(40))y` is
+  `unsigned _BitInt(40)` (§6.3.1.1p1, §6.3.1.8p1). Both compilers agree,
+  including `__int128`, which outranks `_BitInt(128)`.
+- **Constants.** `wb` and `uwb` constants take the narrowest width that holds
+  the value and, for `wb`, a sign bit (`3wb` is `_BitInt(3)`, `0uwb`
+  `unsigned _BitInt(1)`; §6.4.4.2p6); the lexer reads at most 64 bits of
+  magnitude. Folding computes at the type's width: an unsigned result wraps
+  modulo 2^N and a signed one outside the type's range overflowed and is no
+  constant. A shift checks its count and result against N, not against
+  the `int` a narrow operand computes in: a count of N or more and a signed
+  result past the sign bit are undefined and no constant (`(_BitInt(31))3
+  << 30`, which both compilers warn "requires 33 bits", and
+  `(unsigned _BitInt(8))1 << 8`, which Clang folds to 0x80 and GCC to 0,
+  are refused as `1u << 32` is), while a nonnegative value shifted into
+  (not past) the sign bit folds to its two's-complement result, as for
+  `int` (`(_BitInt(8))1 << 7` is -128 in both compilers). Values of widths
+  above 128 bits exceed the 128-bit constant model (`Integer`), which
+  holds such a value as its 128-bit pattern sign-extended to N bits: every
+  signed value converts, and so does an unsigned one below 2^127, or one of
+  another wide type converted to a type no wider (an unsigned pattern with
+  bit 127 set stands for 2^N - k, whose zero extension to a wider type no
+  such pattern holds). Converted to a floating type, 2^N - k rounds once
+  from its top 128 bits and a sticky bit (`bits::from_bit_precise`). Arithmetic folds whenever `__int128` arithmetic on the
+  patterns does not overflow, which gives the exact result modulo 2^N:
+  `+`, `-`, `*`, the bitwise operators, `~`, unary `-`, comparisons, a
+  division or remainder of signed values (or of unsigned ones below 2^127),
+  and shifts whose result stays in the pattern. Where a constant is
+  required, a result the pattern cannot hold is refused with "not yet
+  supported: folding this _BitInt constant of more than 128 bits"
+  (`UnsupportedWideConstant`): an unsigned value with bit 127 set converted
+  to a wider type (`(unsigned _BitInt(129))(unsigned __int128)-1`,
+  `(_BitInt(200))(unsigned _BitInt(150))-1`), a huge unsigned value divided
+  or shifted right, a shift past bit 127. Both compilers fold these. The error replaces the generic
+  one of every context: enumerators, case labels, array bounds (a variable
+  length array at block scope), bit-field widths, `_Alignas`, static
+  assertions and initializers, and `__builtin_choose_expr`.
+- **Bit-fields** take a `_BitInt` of at most its width; the record lays the
+  field out in storage units of the declared type, as both compilers do.
+- **Overflow builtins** accept bit-precise operands and results and check
+  the result's width N.
+- **Atomics.** Clang rejects `_Atomic _BitInt(N)` ("_Atomic cannot be
+  applied to integer type"), the `__atomic` builtins on a `_BitInt`
+  object except `__atomic_test_and_set` and `__atomic_clear` ("argument to
+  atomic builtin of type '_BitInt' is not supported"), and the `__sync`
+  builtins unless N is a power of two ("atomic memory operand must have a
+  power-of-two size"); the Clang identity does the same, with Clang's
+  wording. GCC accepts all of them, and its results wrap at the width. Both
+  refuse a `__sync` builtin on a `_BitInt` of more than 16 bytes (Clang:
+  "address argument to atomic builtin must be a pointer to 1,2,4,8 or 16
+  byte type").
+  Two refusals predate `_BitInt` and hold for every type under every
+  identity: an `_Atomic` object in the `__atomic` builtins, which GCC
+  accepts and Clang refuses, and `__atomic_clear` on an object other than
+  `_Bool` or a character type, which both accept (storing one byte).
+- **`_Generic` of a bit-field.** GCC types the bit-field `_BitInt(40) a : 10`
+  as `_BitInt(10)` for `_Generic`; bcc, like Clang, keeps `_BitInt(40)`.
+
+Lowering holds a `_BitInt` of up to 128 bits in the IR integer of its
+storage (`i8` to `i128`), extended from N bits by its signedness after
+every operation that can reach the bits above N, atomic ones included
+(`Repr::narrow`, `FunctionLowerer::normalize`), so every IR operation reads
+its value and the back ends need nothing new. Static initializers store the
+value extended from N bits too. The padding bits are implementation-defined
+(§6.2.6.2p1-2) and the psABI leaves them unspecified. Both compilers store
+them extended in memory; in registers GCC extends a result to its type
+(a `_BitInt(7)` only within its byte) and Clang returns a signed
+`_BitInt(33)` zero-extended to 64 bits and the high word of a
+`_BitInt(65)` unextended, and passes `_BitInt(N)` of up to 16 bits
+`signext`/`zeroext` as `char` and `short`. Neither reads them: GCC
+re-extends every incoming value. bcc stores and passes values extended and
+extends again everything it reads (loads, parameters, call results,
+`va_arg`), so it interoperates with both.
+
+Calls follow each target's convention as Clang implements it:
+
+| Width N | System V x86-64 | Microsoft x64 | WebAssembly |
+| --- | --- | --- | --- |
+| up to 64 | as the integer type of its size | as the integer type of its size | as the integer type of its size |
+| 65-128 | two general registers, else the stack 8-aligned (unlike `__int128`'s 16); results in RAX:RDX | by reference to a caller copy; results through `sret` | as an `i128` (two `i64`) |
+| 129 and up | in memory, as an array of limbs | by reference; `sret` | not available (Clang's limit is 128) |
+
+`lowering/bit_int.rs` gives the x86-64 conventions' 65-128-bit values to ABI
+lowering as the structure of their two limbs, storing and loading them at
+the call (`types::limb_argument`).
+
+bcc does not yet lower `_BitInt` of more than 128 bits on any back end:
+lowering stops with "not yet supported by lowering: _BitInt types of more
+than 128 bits". The remaining work is the limb legalization of their
+operations (with helpers equivalent to libgcc's `__mulbitint3`,
+`__divmodbitint4`, `__floatbitint*` and `__fix*bitint`, which GCC 13's
+libgcc lacks, so bcc must carry its own), folding at those widths, and `wb`
+constants of more than 64 bits. `tests/integration/bit_int.rs` compares
+every operator, conversion and folded constant at widths 1-128 with the
+bundled Clang and GCC 15 on every back end, and with wasi-sdk's Clang on
+`wasm32-wasip1`, and links calls between bcc, Clang and GCC objects.
 
 ### Imaginary interchange constants
 
