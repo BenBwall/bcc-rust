@@ -498,11 +498,10 @@ enum Part<'tu> {
     Function(&'tu [TypeId], bool, bool),
 }
 
-/// Deeper nesting is shown by a `[depth=N]` prefix rather than more spaces,
-/// as in syntax inspection, so output stays linear in the item count.
 /// Appends ` @line:column` for `source`, naming its file when that is not
-/// the main file, as `--syntax-tree --syntax-locations` does. Implicit
-/// entities such as `__func__` have no source and get nothing.
+/// the main file, as `--syntax-tree --syntax-locations` does. A function's
+/// implicit `__func__` takes the place of the function's name; an entity
+/// with no source at all gets nothing.
 fn write_location(out: &mut ArenaString<'_>, source: SourceVectors, context: &Context<'_>) {
     if source.length() == 0 {
         return;
@@ -524,6 +523,8 @@ fn write_location(out: &mut ArenaString<'_>, source: SourceVectors, context: &Co
     }
 }
 
+/// Deeper nesting is shown by a `[depth=N]` prefix rather than more spaces,
+/// as in syntax inspection, so output stays linear in the item count.
 const MAXIMUM_INDENT: usize = 32;
 
 fn indent(out: &mut ArenaString<'_>, depth: usize) {
