@@ -467,7 +467,8 @@ impl<'tu> SemanticTranslationUnit<'tu> {
         reason = "The exact model of wide values keeps their limbs in the unit."
     )]
     pub(crate) fn integer_limbs(&self, value: Integer, limbs: &mut [u64]) {
-        // A wide value is its 128-bit pattern sign-extended (`Integer::convert`).
+        // A wide value is its 128-bit pattern sign-extended
+        // (`Integer::convert`).
         let fill = if (value.signed || value.wide()) && value.value < 0 {
             u64::MAX
         } else {

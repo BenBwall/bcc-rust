@@ -389,11 +389,15 @@ fn clang_refuses_wide_signed_overflow_products() {
         ("__builtin_sub_overflow(a, 1, &r)", false),
     ] {
         let source = format!(
-            "_BitInt(200) a, r; unsigned _BitInt(200) u; _BitInt(128) n; int i;\n\
-             int f(void) {{ return {call}; }}"
+            "_BitInt(200) a, r; unsigned _BitInt(200) u; _BitInt(128) n; int i;\nint f(void) {{ \
+             return {call}; }}"
         );
         assert_eq!(
-            kinds(&source, CompilerIdentity::Gcc, crate::target::Target::LinuxGnu),
+            kinds(
+                &source,
+                CompilerIdentity::Gcc,
+                crate::target::Target::LinuxGnu
+            ),
             [],
             "{source}"
         );
@@ -403,7 +407,11 @@ fn clang_refuses_wide_signed_overflow_products() {
             &[]
         };
         assert_eq!(
-            kinds(&source, CompilerIdentity::Clang, crate::target::Target::LinuxGnu),
+            kinds(
+                &source,
+                CompilerIdentity::Clang,
+                crate::target::Target::LinuxGnu
+            ),
             expected,
             "{source}"
         );
