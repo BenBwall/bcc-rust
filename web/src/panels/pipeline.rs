@@ -226,10 +226,10 @@ fn StopBanner(compilation: Memo<Option<Compilation>>) -> impl IntoView {
     }
 }
 
-/// The stages as tabs, in two rows of five: the front end, then the middle
-/// and back ends, each row under the headings of its parts. Each front-end
-/// stage names the C99 translation phases it shows. A stage an error kept
-/// from running is marked.
+/// The stages as tabs, in two rows: the six of the front end, then the five
+/// of the middle and back ends, each row under the headings of its parts. Each
+/// front-end stage names the C99 translation phases it shows. A stage an error
+/// kept from running is marked.
 #[component]
 fn StageStrip(stage: RwSignal<Stage>, compilation: Memo<Option<Compilation>>) -> impl IntoView {
     let stopped = move |entry: Stage| {

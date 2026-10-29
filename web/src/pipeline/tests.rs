@@ -52,7 +52,7 @@ fn links_token_and_syntax_lines_to_source_lines() {
   function main type=\"int (void)\" linkage=external @1:5
   scope 1 function
     object total type=int duration=automatic size=4 align=4 @2:9
-    object __func__ type=\"const char [5]\" duration=static size=5 align=1
+    object __func__ type=\"const char [5]\" duration=static size=5 align=1 @1:5
 expression 0 type=int category=rvalue value=0 ice constant=arithmetic @2:17"
                 .into(),
         ),
@@ -60,10 +60,12 @@ expression 0 type=int category=rvalue value=0 ice constant=arithmetic @2:17"
     };
     let exact = links(Stage::SemanticTypes, &semantic, "", false);
     assert_eq!(exact.outputs_for(2), [4, 6]);
+    // A function's `__func__` is placed at the function's name.
+    assert_eq!(exact.outputs_for(1), [2, 5]);
     assert_eq!(
-        exact.sources_for(5),
+        exact.sources_for(3),
         Vec::<usize>::new(),
-        "__func__ has no source"
+        "a scope line has no place of its own"
     );
 }
 

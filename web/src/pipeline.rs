@@ -462,10 +462,13 @@ impl Stage {
                  it, and a storage duration that says how long it lives: static for the whole run, \
                  automatic for one execution of its block. Objects get their size and alignment in \
                  bytes. Then every expression gets a type and a category: an lvalue designates an \
-                 object, an rvalue is just a value. The convert lines are the implicit conversions \
-                 C inserts, such as reading an lvalue (lvalue conversion), an array becoming a \
-                 pointer, or an int becoming a long. Rules the grammar cannot express, such as \
-                 assigning to a const or calling with the wrong arguments, are checked here.",
+                 object (a modifiable-lvalue is one you may assign to, unlike a const or an \
+                 array), a function-designator names a function, and an rvalue is just a value. \
+                 The convert lines are the implicit conversions C inserts, such as reading an \
+                 lvalue (lvalue conversion), an array becoming a pointer, or an int becoming a \
+                 long. Rules the grammar cannot express, such as assigning to a const or calling \
+                 with the wrong arguments, are checked here; a type written <unanalyzed> is one \
+                 bcc could not work out, usually because of an error earlier in the program.",
             | Self::Ir =>
                 "bcc lowers the typed tree into its own intermediate representation. Each value \
                  (v1, v2, …) is assigned exactly once (static single assignment), control flow is \
