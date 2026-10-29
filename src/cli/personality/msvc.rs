@@ -115,9 +115,15 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
             state.sources.push(Source::new(argument, false));
             continue;
         }
-        if option == "?" || option == "help" {
+        if matches!(option, "?" | "help" | "HELP") {
             return Ok(Plan::print(help(&invocation.name)));
         }
+        if clang_cl && let Some(plan) = clang_cl_query(invocation, text) {
+            return Ok(plan);
+        }
+        // clang-cl's `-v` and `-###` print its version even without an
+        // input; with one they reach bcc's driver.
+        state.verbose |= clang_cl && matches!(text, "-v" | "-###");
         if clang_cl && let Some(clang) = option.strip_prefix("clang:") {
             // `/clang:OPTION` gives clang-cl a Clang option; bcc reads most.
             clang_options.push(clang.into());
@@ -252,6 +258,13 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         // clang-cl refuses a command line without inputs, as Clang does.
         // `cl` alone prints its usage to stdout after its banner; with
         // options and no file it stops with error D8003.
+        if clang_cl && state.verbose {
+            plan.steps.push(Step::Print {
+                text:   version::verbose(invocation.personality, target),
+                stderr: true,
+            });
+            return Ok(plan);
+        }
         if clang_cl {
             invocation.error(format_args!("no input files"));
             return Err(MainError::Reported(error_status(invocation.personality)));
@@ -419,6 +432,46 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
     Ok(plan)
 }
 
+/// What clang-cl's driver answers itself, without inputs, for one of its
+/// query options: `--version` (to stdout, with the target), the target
+/// triple, and the directories it searches for programs and its resource
+/// libraries, which are the bundled LLVM's that bcc's driver runs.
+fn clang_cl_query(invocation: &Invocation, text: &str) -> Option<Plan> {
+    let target = || {
+        invocation
+            .target
+            .unwrap_or_else(|| host_target(invocation.personality))
+    };
+    match text {
+        | "--version" => Some(Plan::print(version::banner(
+            invocation.personality,
+            &invocation.name,
+            target(),
+        ))),
+        | "-print-target-triple" | "-print-effective-triple" =>
+            Some(Plan::print(format!("{}\n", target().triple()))),
+        | "-print-search-dirs" => {
+            let linker = PathBuf::from(version::program_name("lld-link"));
+            let programs = linker.parent().unwrap_or_else(|| Path::new(""));
+            let major = version::CLANG_VERSION
+                .split('.')
+                .next()
+                .unwrap_or(version::CLANG_VERSION);
+            let libraries = programs
+                .parent()
+                .unwrap_or(programs)
+                .join("lib/clang")
+                .join(major);
+            Some(Plan::print(format!(
+                "programs: ={}\nlibraries: ={}\n",
+                programs.display(),
+                libraries.display()
+            )))
+        },
+        | _ => None,
+    }
+}
+
 /// Whether `option` is one of `cl`'s own options that clang-cl does not
 /// know, which the `cl` personality keeps reading as options where paths
 /// start with `/` (clang-cl reads `/Zf` as a file).
@@ -569,6 +622,8 @@ struct State {
     /// Microsoft extensions: `/Ze` (the default) or `/Za`, the last wins.
     extensions:              bool,
     nologo:                  bool,
+    /// clang-cl's `-v` or `-###`, which print its version without inputs.
+    verbose:                 bool,
     ignore_include_variable: bool,
     standard:                &'static str,
     diagnostics:             &'static str,
@@ -599,6 +654,7 @@ impl Default for State {
             runtime:                 None,
             extensions:              true,
             nologo:                  false,
+            verbose:                 false,
             ignore_include_variable: false,
             standard:                "c17",
             diagnostics:             "msvc",

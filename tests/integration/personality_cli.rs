@@ -665,6 +665,48 @@ mod tests {
             assert_eq!(clang_cl.status.code(), Some(1));
             assert_eq!(stderr(&clang_cl), "clang-cl: error: no input files\n");
         }
+        // Queries need no input: clang-cl prints its version for
+        // `--version` (stdout) and `-v` or `-###` (stderr), as build systems
+        // probe it, and both compilers print help for `/HELP`.
+        for (arguments, stream) in [
+            (&["--version"][..], "stdout"),
+            (&["/nologo", "--version"], "stdout"),
+            (&["-v"], "stderr"),
+            (&["-###"], "stderr"),
+        ] {
+            let clang_cl = directory.bcc("--clang-cl-mode", arguments);
+            succeeds(&clang_cl);
+            let text = if stream == "stdout" {
+                stdout(&clang_cl)
+            } else {
+                stderr(&clang_cl)
+            };
+            assert!(
+                text.starts_with("clang version 23.1.1 (bcc ")
+                    && text.contains("\nTarget: x86_64-pc-windows-msvc\n"),
+                "{arguments:?}: {text}"
+            );
+        }
+        let triple = directory.bcc("--clang-cl-mode", &["-print-target-triple"]);
+        succeeds(&triple);
+        assert_eq!(stdout(&triple), "x86_64-pc-windows-msvc\n");
+        let search = directory.bcc("--clang-cl-mode", &["-print-search-dirs"]);
+        succeeds(&search);
+        assert!(
+            stdout(&search).starts_with("programs: =")
+                && stdout(&search).contains("\nlibraries: ="),
+            "{}",
+            stdout(&search)
+        );
+        for mode in ["--msvc-mode", "--clang-cl-mode"] {
+            let help = directory.bcc(mode, &["/nologo", "/HELP"]);
+            succeeds(&help);
+            assert!(
+                stdout(&help).starts_with("usage: "),
+                "{mode}: {}",
+                stdout(&help)
+            );
+        }
     }
 
     #[test]

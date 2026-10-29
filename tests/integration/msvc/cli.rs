@@ -87,6 +87,8 @@ const CASES: &[(&[&str], Expect)] = &[
     // LLD writes an import library for a DLL without exports.
     (&["/LD", "b.c"], Expect::Documented),
     (&[], Expect::Output),
+    // Help is a complete action; the texts differ.
+    (&["/HELP"], Expect::Results),
     // The banners differ by design.
     (&["-c", "a.c"], Expect::Results),
 ];

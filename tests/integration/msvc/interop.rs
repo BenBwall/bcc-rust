@@ -234,10 +234,11 @@ fn objects_link_with_cl_objects_in_both_directions() {
     differences.assert_none("ABI");
 }
 
-/// Two units that both leave `int shared;` a tentative definition, built
-/// by each pair of compilers and linked by `cl` (or bcc for two bcc
-/// objects): whether the link succeeds tells whether each compiler makes
-/// the definition a communal symbol, as `-fcommon` does.
+/// Two units that both leave `shared` a tentative definition, built by
+/// each pair of compilers and linked by `cl` (or bcc for two bcc objects):
+/// whether the link succeeds, and what the program returns, tells whether
+/// each compiler makes the definition a communal symbol, as `-fcommon`
+/// does, and with which alignment.
 #[test]
 fn tentative_definitions_link_as_cl_links_them() {
     let Some(msvc) = msvc() else {
@@ -245,56 +246,126 @@ fn tentative_definitions_link_as_cl_links_them() {
         return;
     };
     let root = scratch("common");
-    fs::write(
-        root.join("left.c"),
-        "int shared;\nint get(void) { return shared; }\n",
-    )
-    .unwrap();
-    fs::write(
-        root.join("right.c"),
-        "int shared;\nint get(void);\nint main(void) { shared = 4; return get(); }\n",
-    )
-    .unwrap();
     let mut differences = Differences::default();
-    let mut expected = None;
-    for left in [Compiler::Cl, Compiler::Bcc] {
-        for right in [Compiler::Cl, Compiler::Bcc] {
-            for (unit, compiler) in [("left", left), ("right", right)] {
-                build(
-                    msvc.compiler(compiler).args([
+    for (index, &(declaration, read, write, options, checked)) in TENTATIVE.iter().enumerate() {
+        let directory = root.join(index.to_string());
+        fs::create_dir_all(&directory).unwrap();
+        fs::write(
+            directory.join("left.c"),
+            format!("{declaration}\nint get(void) {{ return {read}; }}\n"),
+        )
+        .unwrap();
+        fs::write(
+            directory.join("right.c"),
+            format!("{declaration}\nint get(void);\nint main(void) {{ {write} return get(); }}\n"),
+        )
+        .unwrap();
+        let mut expected = None;
+        for left in [Compiler::Cl, Compiler::Bcc] {
+            for right in [Compiler::Cl, Compiler::Bcc] {
+                let label = format!(
+                    "{declaration:?}: left by {}, right by {}",
+                    left.label(),
+                    right.label()
+                );
+                let compiled = [("left", left), ("right", right)].into_iter().try_for_each(
+                    |(unit, compiler)| {
+                        build(
+                            msvc.compiler(compiler)
+                                .args(["/nologo", "/c"])
+                                .args(options)
+                                .args([
+                                    &format!("{unit}.c"),
+                                    &format!("/Fo{unit}-{}.obj", compiler.label()),
+                                ]),
+                            &directory,
+                        )
+                    },
+                );
+                if let Err(error) = compiled {
+                    println!("TENTATIVE UNCOMPILED {label}: {error}");
+                    if checked {
+                        differences.push(format!("{label}: {error}"));
+                    }
+                    continue;
+                }
+                let executable = format!("common-{}-{}.exe", left.label(), right.label());
+                let linker = if left == Compiler::Cl || right == Compiler::Cl {
+                    Compiler::Cl
+                } else {
+                    Compiler::Bcc
+                };
+                // The status, or `None` when the link fails.
+                let status = build(
+                    msvc.compiler(linker).args([
                         "/nologo",
-                        "/c",
-                        &format!("{unit}.c"),
-                        &format!("/Fo{unit}-{}.obj", compiler.label()),
+                        &format!("left-{}.obj", left.label()),
+                        &format!("right-{}.obj", right.label()),
+                        &format!("/Fe{executable}"),
                     ]),
-                    &root,
+                    &directory,
                 )
-                .unwrap();
-            }
-            let label = format!("left by {}, right by {}", left.label(), right.label());
-            let executable = format!("common-{}-{}.exe", left.label(), right.label());
-            let linker = if left == Compiler::Cl || right == Compiler::Cl {
-                Compiler::Cl
-            } else {
-                Compiler::Bcc
-            };
-            let result = build(
-                msvc.compiler(linker).args([
-                    "/nologo",
-                    &format!("left-{}.obj", left.label()),
-                    &format!("right-{}.obj", right.label()),
-                    &format!("/Fe{executable}"),
-                ]),
-                &root,
-            )
-            .and_then(|()| outcome(&root.join(&executable)));
-            println!("{label}: {result:?}");
-            match (left, right, result) {
-                | (Compiler::Cl, Compiler::Cl, result) => expected = Some(result.is_ok()),
-                | (.., result) => differences.compare(&label, &expected, &Some(result.is_ok())),
+                .and_then(|()| outcome(&directory.join(&executable)))
+                .ok()
+                .and_then(|outcome| outcome.status);
+                match (left, right) {
+                    | (Compiler::Cl, Compiler::Cl) => expected = Some(status),
+                    | _ => {
+                        let Some(expected) = expected else {
+                            continue;
+                        };
+                        let verdict = if status == expected {
+                            "MATCH"
+                        } else {
+                            "DIFFER"
+                        };
+                        println!("TENTATIVE {verdict} {label}: cl {expected:?}, bcc {status:?}");
+                        if checked {
+                            differences.compare(&label, &expected, &status);
+                        }
+                    },
+                }
             }
         }
     }
     drop(fs::remove_dir_all(root));
     differences.assert_none("tentative definition");
 }
+
+/// Each tentative definition, how `get` reads it and `main` writes it, the
+/// options both units are compiled with (`cl` knows `_Alignas` only from
+/// `/std:c11`), and whether a difference from `cl` fails the test; the
+/// others are reported (`TENTATIVE MATCH`, `DIFFER` or `UNCOMPILED`) and
+/// driver-modes.md records them.
+const TENTATIVE: [(&str, &str, &str, &[&str], bool); 6] = [
+    ("int shared;", "shared", "shared = 4;", &[], true),
+    (
+        "double shared[100];",
+        "(int)shared[99]",
+        "shared[99] = 5;",
+        &[],
+        false,
+    ),
+    (
+        "struct __declspec(align(64)) S { int v; };\nstruct S shared;",
+        "(int)((unsigned long long)&shared % 64) + shared.v",
+        "shared.v = 6;",
+        &[],
+        false,
+    ),
+    (
+        "struct S { _Alignas(64) int v; };\nstruct S shared;",
+        "(int)((unsigned long long)&shared % 64) + shared.v",
+        "shared.v = 6;",
+        &["/std:c11"],
+        false,
+    ),
+    (
+        "__declspec(dllexport) int shared;",
+        "shared",
+        "shared = 7;",
+        &[],
+        false,
+    ),
+    ("const int shared;", "shared", "", &[], false),
+];

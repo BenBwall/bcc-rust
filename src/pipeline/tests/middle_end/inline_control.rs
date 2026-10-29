@@ -235,9 +235,8 @@ fn timestamp_and_breakpoint_intrinsics_lower() {
 /// Microsoft's `__va_start(&ap, last)`, through which `<vadefs.h>` defines
 /// `va_start` on x64, starts the list `ap` points to, and stays the
 /// intrinsic, as `__debugbreak` does, when a header declares it with a
-/// compatible type, as the MSVC headers do. An incompatible declaration
-/// names an ordinary function, and without Microsoft extensions the name
-/// is ordinary too.
+/// compatible type, as the MSVC headers do. Without Microsoft extensions
+/// the name is ordinary.
 #[test]
 fn declared_microsoft_intrinsics_stay_intrinsics() {
     let source = r"typedef char *va_list;
@@ -274,17 +273,18 @@ int main(void) { return sum(3, 1, 2, 30) - 33; }
             },
         );
     }
-    let incompatible = "int __va_start(int);\nint f(void) { return __va_start(1); }\n";
-    for configuration in [configuration, configuration.with_msvc_extensions(false)] {
-        with_configured_module(
-            incompatible,
-            Target::WindowsMsvc,
-            false,
-            Profile::PostAbi,
-            configuration,
-            |module, _| assert!(calls_from(module, "f", "__va_start"), "{module}"),
-        );
-    }
+    // Without Microsoft extensions the names are ordinary; with them a
+    // declaration of another type is an error
+    // (`semantic_analysis::tests::declarations`).
+    let ordinary = "int __va_start(int);\nint f(void) { return __va_start(1); }\n";
+    with_configured_module(
+        ordinary,
+        Target::WindowsMsvc,
+        false,
+        Profile::PostAbi,
+        configuration.with_msvc_extensions(false),
+        |module, _| assert!(calls_from(module, "f", "__va_start"), "{module}"),
+    );
 }
 
 /// Whether `function` in `module` calls `callee` directly.

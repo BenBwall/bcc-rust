@@ -1036,3 +1036,55 @@ fn annotation_takes_wide_string_literals() {
         );
     }
 }
+
+/// A Microsoft intrinsic that a header declares with its own type stays the
+/// intrinsic; a declaration of another type and a definition are errors,
+/// as Clang's `conflicting types for '__va_start'` and `definition of
+/// builtin function '__debugbreak'`. Without Microsoft extensions the names
+/// are ordinary.
+#[test]
+fn microsoft_intrinsics_refuse_conflicting_declarations_and_definitions() {
+    let microsoft = CompilerConfiguration::default()
+        .with_target(crate::target::Target::WindowsMsvc)
+        .with_msvc_extensions(true);
+    let header = "typedef char *va_list;\n";
+    for (source, expected) in [
+        (
+            "void __va_start(va_list *, ...);\nvoid __debugbreak(void);\nvoid __va_start(va_list \
+             *, ...);\n",
+            &[][..],
+        ),
+        (
+            "int __debugbreak(void);\n",
+            &[SemanticErrorKind::IncompatibleIntrinsicDeclaration],
+        ),
+        (
+            "void __va_start(void *, ...);\n",
+            &[SemanticErrorKind::IncompatibleIntrinsicDeclaration],
+        ),
+        (
+            "void __va_start();\n",
+            &[SemanticErrorKind::IncompatibleIntrinsicDeclaration],
+        ),
+        (
+            "int __va_start(va_list *, ...);\n",
+            &[SemanticErrorKind::IncompatibleIntrinsicDeclaration],
+        ),
+        (
+            "void __debugbreak(void) { }\nvoid f(void) { __debugbreak(); }\n",
+            &[SemanticErrorKind::IntrinsicDefinition],
+        ),
+        (
+            "void __debugbreak(void);\nvoid __debugbreak(void) { }\n",
+            &[SemanticErrorKind::IntrinsicDefinition],
+        ),
+    ] {
+        let source = format!("{header}{source}");
+        assert_eq!(kinds(&source, microsoft), expected, "{source}");
+        assert_eq!(
+            kinds(&source, microsoft.with_msvc_extensions(false)),
+            [],
+            "{source}"
+        );
+    }
+}

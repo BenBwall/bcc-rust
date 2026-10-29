@@ -1951,6 +1951,15 @@ was run):
   Microsoft's debug-information annotation with Microsoft extensions: its
   arguments must be wide string literals and it does not execute (bcc emits
   no CodeView annotation).
+  `__va_start(&ap, last)`, through which the MSVC `<vadefs.h>` defines
+  `va_start` on x64, is Microsoft's `va_start` of the list its first
+  operand points to, with Microsoft extensions (`void (char **, ...)`, as
+  in Clang). A header's declaration of one of these Microsoft intrinsics
+  with a compatible type keeps it the intrinsic, as Clang keeps a
+  redeclared builtin; a declaration of another type is an error (Clang's
+  `conflicting types for '__va_start'`), and so is a definition (Clang's
+  `definition of builtin function`). Without Microsoft extensions the names
+  are ordinary.
 
 ## GNU labels as values (2026-10-14)
 

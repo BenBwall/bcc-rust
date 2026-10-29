@@ -403,7 +403,7 @@ several sources it prints `Generating Code...` to stdout, also when one was
 missing. `cl` alone prints its banner and, to stdout, `usage: cl [
 option... ] filename... [ /link linkoption... ]`, and succeeds; with options
 but no file it stops with `cl : Command line error D8003 : missing source
-filename` and status 2.
+filename` and status 2. `/?`, `/help` and `/HELP` print bcc's help.
 
 **Mapping.**
 
@@ -505,8 +505,17 @@ with `ucrt.lib` and `kernel32.lib`), and no `lld-link` or `clang-cl` on
   `double`, `long long`, pointer and structure variadic arguments and a
   `va_list` passed on; `__int64` arithmetic; callbacks taking a structure;
   `_Bool`, `signed char`, `unsigned short`, `float` and `long double`
-  results; and tentative definitions of one object in both units. bcc
-  refuses `__vectorcall` (and `/Gv`), so it is not compared.
+  results. bcc refuses `__vectorcall` (and `/Gv`), so it is not compared.
+- **Tentative definitions.** `int shared;` and `double shared[100];` in two
+  units are communal symbols in `cl` and, under the personality's
+  `-fcommon`, in bcc: every pairing links and runs alike. An object of a
+  `struct __declspec(align(64))` type is a strong definition in both, so
+  every pairing fails alike (`right-cl.obj : error LNK2005: shared already
+  defined in left-cl.obj`), as Clang's MSVC rule for required alignment
+  says. A record with an `_Alignas(64)` member (which `cl` reads only under
+  `/std:c11`), a `__declspec(dllexport)` object and a `const` one were not
+  compared on Windows: the test that surveys them first ran with the
+  `_Alignas` case compiled without `/std:c11`.
 - **Command lines.** `/c`, `/Fo` naming a file or a directory, `/Fe`,
   `/link /OUT:`, `/std:c11`, `/std:c17`, `/O2`, `/Zi`, no source file
   (D8003), `/Fo` for several sources (D8036), an unknown option (D9002)
@@ -548,8 +557,12 @@ stand, so `/clang:-fsigned-char /J` leaves `char` signed, and ignores a
 bare `-fsigned-char` or `-funsigned-char` with the same warning. The
 identity keeps the Clang macros and drops the GNU ones, as clang-cl does. It
 prints no banner and no source names. As Clang's driver does, it refuses a
-command line without inputs (`clang-cl: error: no input files`, status 1)
-and a missing source before compiling any (`clang-cl: error: no such file or
+command line without inputs (`clang-cl: error: no input files`, status 1),
+except for the queries it answers without one: `--version` (to stdout),
+`-v` and `-###` (the same lines to stderr), `-print-target-triple`,
+`-print-search-dirs` (the bundled LLVM's programs and resource libraries)
+and `/help`, `/HELP` or `-help`; and it refuses
+a missing source before compiling any (`clang-cl: error: no such file or
 directory: 'missing.c'`; also an input for the linker whose name starts
 with `/`, with `; did you mean '/Brepro'?` when an option is one edit
 away), warns that a stage before linking leaves an input

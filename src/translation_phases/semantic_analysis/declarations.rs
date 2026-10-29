@@ -1103,9 +1103,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// a Microsoft compiler intrinsic stays one when the declaration's type
     /// is compatible with the intrinsic's, as in `cl` and Clang, whose
     /// headers declare the intrinsics they call (`<vadefs.h>` declares
-    /// `__va_start`, `<intrin.h>` `__debugbreak`); any other declaration
-    /// names an ordinary function.
-    /// C99: §6.2.7 paragraph 1, p. 35; PDF p. 47 (compatible types).
+    /// `__va_start`, `<intrin.h>` `__debugbreak`), and a declaration of
+    /// another type is an error, as Clang's `conflicting types`; any other
+    /// declaration names an ordinary function. `function_body` refuses a
+    /// definition of an intrinsic.
+    /// C99: §6.2.7 paragraph 2, p. 40; PDF p. 52 (compatible types).
     /// MSVC extension: Microsoft Learn, "Compiler intrinsics".
     fn redeclared_intrinsic(&mut self, name: Identifier, ty: TypeId) -> super::BindingOrigin {
         let descriptor =
@@ -1115,15 +1117,20 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     && self.context.configuration.msvc_compatibility()
                     && descriptor.availability.accepted(self.context.configuration)
             });
-        match descriptor {
-            | Some(descriptor)
-                if {
-                    let intrinsic = self.descriptor_type(descriptor);
-                    self.types.composite(intrinsic, ty).is_some()
-                } =>
-                super::BindingOrigin::Intrinsic(descriptor.id),
-            | _ => super::BindingOrigin::User,
+        let Some(descriptor) = descriptor else {
+            return super::BindingOrigin::User;
+        };
+        let intrinsic = self.descriptor_type(descriptor);
+        if self.types.composite(intrinsic, ty).is_some() {
+            return super::BindingOrigin::Intrinsic(descriptor.id);
         }
+        self.error(
+            SemanticErrorKind::IncompatibleIntrinsicDeclaration,
+            name.source_vectors,
+            Some(name.name),
+            None,
+        );
+        super::BindingOrigin::User
     }
 
     /// System V packs non-straddling fields at the bit cursor. Microsoft
