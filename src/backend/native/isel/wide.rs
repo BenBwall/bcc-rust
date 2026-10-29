@@ -359,6 +359,50 @@ impl Selector<'_, '_, '_> {
         }
     }
 
+    /// `popcount`, `clz` and `ctz` of an `i128`, and the latter's forms
+    /// defined at zero: the counts of its halves, combined. A leading
+    /// count is the high half's, or 64 more than the low half's where the
+    /// high half is zero; a trailing count the reverse. Each half's count
+    /// is the defined one, so the whole is 128 for zero, which the
+    /// undefined forms may also give.
+    pub(super) fn wide_bit_count(&mut self, inst: Inst, opcode: Opcode, arg: Value) {
+        let (low, high) = self.pair(arg);
+        let dst = self.result_pair(inst);
+        if opcode == Opcode::Popcount {
+            let other = self.vreg();
+            self.popcount_reg(Type::I64, dst.0, low);
+            self.popcount_reg(Type::I64, other, high);
+            self.alu2(AluOp::Add, dst.0, other);
+        } else {
+            let (defined, first, second) = if matches!(opcode, Opcode::Clz | Opcode::ClzDefined) {
+                (Opcode::ClzDefined, high, low)
+            } else {
+                (Opcode::CtzDefined, low, high)
+            };
+            self.bit_scan_reg(defined, Type::I64, dst.0, first);
+            let rest = self.vreg();
+            self.bit_scan_reg(defined, Type::I64, rest, second);
+            self.emit(MInst::Alu {
+                op:    AluOp::Add,
+                width: Width::B64,
+                dst:   rest,
+                src:   Operand::Imm(64),
+            });
+            self.emit(MInst::Test {
+                width: Width::B64,
+                lhs:   first,
+                rhs:   first,
+            });
+            self.emit(MInst::Cmov {
+                cond:  Cond::E,
+                width: Width::B64,
+                dst:   dst.0,
+                src:   rest,
+            });
+        }
+        self.constant(dst.1, 0, Type::I64);
+    }
+
     /// Conversions to and from `i128` that are not aliases.
     pub(super) fn wide_conversion(
         &mut self,

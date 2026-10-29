@@ -703,7 +703,7 @@ fn unsupported_constructs_are_refused_with_their_function() {
         "abi lowered
 function @g(i128) -> i128 external {
 block0(v0: i128):
-    v1 = clz.i128 v0
+    v1 = bswap.i128 v0
     return v1
 }
 ",
@@ -711,7 +711,7 @@ block0(v0: i128):
     );
     assert_eq!(
         message,
-        "not yet supported by the native back end: the `clz` instruction (in @g)"
+        "not yet supported by the native back end: the `bswap` instruction (in @g)"
     );
     let message = refusal(
         "abi lowered
