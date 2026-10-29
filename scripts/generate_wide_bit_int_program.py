@@ -330,31 +330,36 @@ def emit_type(ty, operands, entries):
 
 
 def conversions(sections, rng):
-    lines = ["static void conversions(void) {"]
+    """One function per value converted and per kind of source, each small:
+    LLVM's GVN and MemCpyOpt slow down sharply on one function of tens of
+    thousands of instructions."""
+    lines = []
+    calls = []
     plain = [ty for ty, is_huge, _ in sections if not is_huge]
     for ty, is_huge, operands in sections:
         t = ty.tag
-        body = [f"    printf(\"conversions {t}\\n\");"]
+        functions = []
         others = plain if not is_huge else [o for o in plain if o.width in (129, 4096)]
         for index, value in enumerate(operands):
-            body.append(f"    {{ {t} v; memcpy(&v, {t}_v{index}, sizeof v);")
+            body = [f"    {t} v; memcpy(&v, {t}_v{index}, sizeof v);"]
             for _, spelling, width, _ in STANDARD:
-                body.append(f"      p128((u128)({spelling})v);")
+                body.append(f"    p128((u128)({spelling})v);")
             for width, signed in NARROW:
                 spelling = ("" if signed else "unsigned ") + f"_BitInt({width})"
-                body.append(f"      p128((u128)({spelling})v);")
+                body.append(f"    p128((u128)({spelling})v);")
             for tag, spelling, _, _, size in FLOATING:
                 # Clang 23 converts an unsigned value with its top bit set
                 # to x87 and binary128 as if it were negative.
                 if tag in ("ld", "f128") and not ty.signed and value >> (ty.width - 1):
                     continue
-                body.append(f"      {{ {spelling} f = v; bytes(&f, {size}); }}")
+                body.append(f"    {{ {spelling} f = v; bytes(&f, {size}); }}")
             for other in others:
-                body.append(f"      SHOW({other.spelling}, {other.width}, ({other.spelling})v);")
+                body.append(f"    SHOW({other.spelling}, {other.width}, ({other.spelling})v);")
             if is_huge:
-                body.append(f"      SHOW({ty.spelling}, {ty.width}, ({ty.spelling})({BitInt(HUGE, not ty.signed).spelling})v);")
-            body.append("    }")
+                body.append(f"    SHOW({ty.spelling}, {ty.width}, ({ty.spelling})({BitInt(HUGE, not ty.signed).spelling})v);")
+            functions.append((f"conversions_{t}_{index}", body))
         # From the standard integer types.
+        body = []
         for tag, spelling, width, signed in STANDARD:
             if tag == "bool":
                 continue
@@ -364,8 +369,10 @@ def conversions(sections, rng):
                     f"    {{ volatile {spelling} v = ({spelling}){literal_of(value)};"
                     f" SHOW({ty.spelling}, {ty.width}, v); }}"
                 )
+        functions.append((f"conversions_{t}_integers", body))
         # From the floating types, values in range only, whole and
         # truncated.
+        body = []
         for value in floating_values(ty, rng):
             for tag, spelling, precision, max_exponent, _ in FLOATING:
                 if not representable(value, precision, max_exponent):
@@ -374,9 +381,22 @@ def conversions(sections, rng):
                     f"    {{ volatile {spelling} v = ({spelling}){float_literal(value)};"
                     f" SHOW({ty.spelling}, {ty.width}, v); }}"
                 )
+        functions.append((f"conversions_{t}_floating", body))
+        section = []
+        for name, body in functions:
+            section += [f"static void {name}(void) {{"] + body + ["}"]
+        section.append(f"static void conversions_{t}(void) {{")
+        section.append(f"    printf(\"conversions {t}\\n\");")
+        section += [f"    {name}();" for name, _ in functions]
+        section.append("}")
+        call = f"    conversions_{t}();"
         if is_huge:
-            body = ["#ifdef BIT_INT_65535"] + body + ["#endif"]
-        lines.extend(body)
+            section = ["#ifdef BIT_INT_65535"] + section + ["#endif"]
+            call = f"#ifdef BIT_INT_65535\n{call}\n#endif"
+        lines += section
+        calls.append(call)
+    lines.append("static void conversions(void) {")
+    lines += calls
     lines.append("}")
     lines.append("")
     return lines

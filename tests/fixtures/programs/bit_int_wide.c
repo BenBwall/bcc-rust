@@ -1130,378 +1130,387 @@ static void run_bu65535(void) {
 }
 
 #endif
-static void conversions(void) {
-    printf("conversions bs129\n");
-    { bs129 v; memcpy(&v, bs129_v0, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bs129 v; memcpy(&v, bs129_v1, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bs129 v; memcpy(&v, bs129_v2, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bs129 v; memcpy(&v, bs129_v3, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bs129 v; memcpy(&v, bs129_v4, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bs129 v; memcpy(&v, bs129_v5, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bs129 v; memcpy(&v, bs129_v6, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bs129 v; memcpy(&v, bs129_v7, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bs129 v; memcpy(&v, bs129_v8, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bs129 v; memcpy(&v, bs129_v9, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
+static void conversions_bs129_0(void) {
+    bs129 v; memcpy(&v, bs129_v0, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bs129_1(void) {
+    bs129 v; memcpy(&v, bs129_v1, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bs129_2(void) {
+    bs129 v; memcpy(&v, bs129_v2, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bs129_3(void) {
+    bs129 v; memcpy(&v, bs129_v3, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bs129_4(void) {
+    bs129 v; memcpy(&v, bs129_v4, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bs129_5(void) {
+    bs129 v; memcpy(&v, bs129_v5, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bs129_6(void) {
+    bs129 v; memcpy(&v, bs129_v6, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bs129_7(void) {
+    bs129 v; memcpy(&v, bs129_v7, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bs129_8(void) {
+    bs129 v; memcpy(&v, bs129_v8, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bs129_9(void) {
+    bs129 v; memcpy(&v, bs129_v9, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bs129_integers(void) {
     { volatile signed char v = (signed char)(-128LL); SHOW(_BitInt(129), 129, v); }
     { volatile signed char v = (signed char)(-1LL); SHOW(_BitInt(129), 129, v); }
     { volatile signed char v = (signed char)127ULL; SHOW(_BitInt(129), 129, v); }
@@ -1529,6 +1538,8 @@ static void conversions(void) {
     { volatile unsigned __int128 v = (unsigned __int128)0ULL; SHOW(_BitInt(129), 129, v); }
     { volatile unsigned __int128 v = (unsigned __int128)1ULL; SHOW(_BitInt(129), 129, v); }
     { volatile unsigned __int128 v = (unsigned __int128)(((unsigned __int128)0xffffffffffffffffULL << 64) | 0xffffffffffffffffULL); SHOW(_BitInt(129), 129, v); }
+}
+static void conversions_bs129_floating(void) {
     { volatile _Float16 v = (_Float16)0.0; SHOW(_BitInt(129), 129, v); }
     { volatile float v = (float)0.0; SHOW(_BitInt(129), 129, v); }
     { volatile double v = (double)0.0; SHOW(_BitInt(129), 129, v); }
@@ -1566,299 +1577,323 @@ static void conversions(void) {
     { volatile double v = (double)(-1023.0 / 8); SHOW(_BitInt(129), 129, v); }
     { volatile long double v = (long double)(-1023.0 / 8); SHOW(_BitInt(129), 129, v); }
     { volatile __float128 v = (__float128)(-1023.0 / 8); SHOW(_BitInt(129), 129, v); }
-    printf("conversions bu129\n");
-    { bu129 v; memcpy(&v, bu129_v0, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bu129 v; memcpy(&v, bu129_v1, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bu129 v; memcpy(&v, bu129_v2, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bu129 v; memcpy(&v, bu129_v3, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bu129 v; memcpy(&v, bu129_v4, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bu129 v; memcpy(&v, bu129_v5, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bu129 v; memcpy(&v, bu129_v6, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bu129 v; memcpy(&v, bu129_v7, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
+}
+static void conversions_bs129(void) {
+    printf("conversions bs129\n");
+    conversions_bs129_0();
+    conversions_bs129_1();
+    conversions_bs129_2();
+    conversions_bs129_3();
+    conversions_bs129_4();
+    conversions_bs129_5();
+    conversions_bs129_6();
+    conversions_bs129_7();
+    conversions_bs129_8();
+    conversions_bs129_9();
+    conversions_bs129_integers();
+    conversions_bs129_floating();
+}
+static void conversions_bu129_0(void) {
+    bu129 v; memcpy(&v, bu129_v0, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bu129_1(void) {
+    bu129 v; memcpy(&v, bu129_v1, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bu129_2(void) {
+    bu129 v; memcpy(&v, bu129_v2, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bu129_3(void) {
+    bu129 v; memcpy(&v, bu129_v3, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bu129_4(void) {
+    bu129 v; memcpy(&v, bu129_v4, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bu129_5(void) {
+    bu129 v; memcpy(&v, bu129_v5, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bu129_6(void) {
+    bu129 v; memcpy(&v, bu129_v6, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bu129_7(void) {
+    bu129 v; memcpy(&v, bu129_v7, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bu129_integers(void) {
     { volatile signed char v = (signed char)(-128LL); SHOW(unsigned _BitInt(129), 129, v); }
     { volatile signed char v = (signed char)(-1LL); SHOW(unsigned _BitInt(129), 129, v); }
     { volatile signed char v = (signed char)127ULL; SHOW(unsigned _BitInt(129), 129, v); }
@@ -1886,6 +1921,8 @@ static void conversions(void) {
     { volatile unsigned __int128 v = (unsigned __int128)0ULL; SHOW(unsigned _BitInt(129), 129, v); }
     { volatile unsigned __int128 v = (unsigned __int128)1ULL; SHOW(unsigned _BitInt(129), 129, v); }
     { volatile unsigned __int128 v = (unsigned __int128)(((unsigned __int128)0xffffffffffffffffULL << 64) | 0xffffffffffffffffULL); SHOW(unsigned _BitInt(129), 129, v); }
+}
+static void conversions_bu129_floating(void) {
     { volatile _Float16 v = (_Float16)0.0; SHOW(unsigned _BitInt(129), 129, v); }
     { volatile float v = (float)0.0; SHOW(unsigned _BitInt(129), 129, v); }
     { volatile double v = (double)0.0; SHOW(unsigned _BitInt(129), 129, v); }
@@ -1909,340 +1946,363 @@ static void conversions(void) {
     { volatile double v = (double)(7.0 / 4); SHOW(unsigned _BitInt(129), 129, v); }
     { volatile long double v = (long double)(7.0 / 4); SHOW(unsigned _BitInt(129), 129, v); }
     { volatile __float128 v = (__float128)(7.0 / 4); SHOW(unsigned _BitInt(129), 129, v); }
-    printf("conversions bs192\n");
-    { bs192 v; memcpy(&v, bs192_v0, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bs192 v; memcpy(&v, bs192_v1, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bs192 v; memcpy(&v, bs192_v2, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bs192 v; memcpy(&v, bs192_v3, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bs192 v; memcpy(&v, bs192_v4, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bs192 v; memcpy(&v, bs192_v5, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bs192 v; memcpy(&v, bs192_v6, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bs192 v; memcpy(&v, bs192_v7, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bs192 v; memcpy(&v, bs192_v8, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
+}
+static void conversions_bu129(void) {
+    printf("conversions bu129\n");
+    conversions_bu129_0();
+    conversions_bu129_1();
+    conversions_bu129_2();
+    conversions_bu129_3();
+    conversions_bu129_4();
+    conversions_bu129_5();
+    conversions_bu129_6();
+    conversions_bu129_7();
+    conversions_bu129_integers();
+    conversions_bu129_floating();
+}
+static void conversions_bs192_0(void) {
+    bs192 v; memcpy(&v, bs192_v0, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bs192_1(void) {
+    bs192 v; memcpy(&v, bs192_v1, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bs192_2(void) {
+    bs192 v; memcpy(&v, bs192_v2, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bs192_3(void) {
+    bs192 v; memcpy(&v, bs192_v3, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bs192_4(void) {
+    bs192 v; memcpy(&v, bs192_v4, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bs192_5(void) {
+    bs192 v; memcpy(&v, bs192_v5, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bs192_6(void) {
+    bs192 v; memcpy(&v, bs192_v6, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bs192_7(void) {
+    bs192 v; memcpy(&v, bs192_v7, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bs192_8(void) {
+    bs192 v; memcpy(&v, bs192_v8, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bs192_integers(void) {
     { volatile signed char v = (signed char)(-128LL); SHOW(_BitInt(192), 192, v); }
     { volatile signed char v = (signed char)(-1LL); SHOW(_BitInt(192), 192, v); }
     { volatile signed char v = (signed char)127ULL; SHOW(_BitInt(192), 192, v); }
@@ -2270,6 +2330,8 @@ static void conversions(void) {
     { volatile unsigned __int128 v = (unsigned __int128)0ULL; SHOW(_BitInt(192), 192, v); }
     { volatile unsigned __int128 v = (unsigned __int128)1ULL; SHOW(_BitInt(192), 192, v); }
     { volatile unsigned __int128 v = (unsigned __int128)(((unsigned __int128)0xffffffffffffffffULL << 64) | 0xffffffffffffffffULL); SHOW(_BitInt(192), 192, v); }
+}
+static void conversions_bs192_floating(void) {
     { volatile _Float16 v = (_Float16)0.0; SHOW(_BitInt(192), 192, v); }
     { volatile float v = (float)0.0; SHOW(_BitInt(192), 192, v); }
     { volatile double v = (double)0.0; SHOW(_BitInt(192), 192, v); }
@@ -2304,297 +2366,320 @@ static void conversions(void) {
     { volatile double v = (double)(-1023.0 / 8); SHOW(_BitInt(192), 192, v); }
     { volatile long double v = (long double)(-1023.0 / 8); SHOW(_BitInt(192), 192, v); }
     { volatile __float128 v = (__float128)(-1023.0 / 8); SHOW(_BitInt(192), 192, v); }
-    printf("conversions bu192\n");
-    { bu192 v; memcpy(&v, bu192_v0, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bu192 v; memcpy(&v, bu192_v1, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bu192 v; memcpy(&v, bu192_v2, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bu192 v; memcpy(&v, bu192_v3, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bu192 v; memcpy(&v, bu192_v4, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bu192 v; memcpy(&v, bu192_v5, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bu192 v; memcpy(&v, bu192_v6, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bu192 v; memcpy(&v, bu192_v7, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
+}
+static void conversions_bs192(void) {
+    printf("conversions bs192\n");
+    conversions_bs192_0();
+    conversions_bs192_1();
+    conversions_bs192_2();
+    conversions_bs192_3();
+    conversions_bs192_4();
+    conversions_bs192_5();
+    conversions_bs192_6();
+    conversions_bs192_7();
+    conversions_bs192_8();
+    conversions_bs192_integers();
+    conversions_bs192_floating();
+}
+static void conversions_bu192_0(void) {
+    bu192 v; memcpy(&v, bu192_v0, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bu192_1(void) {
+    bu192 v; memcpy(&v, bu192_v1, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bu192_2(void) {
+    bu192 v; memcpy(&v, bu192_v2, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bu192_3(void) {
+    bu192 v; memcpy(&v, bu192_v3, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bu192_4(void) {
+    bu192 v; memcpy(&v, bu192_v4, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bu192_5(void) {
+    bu192 v; memcpy(&v, bu192_v5, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bu192_6(void) {
+    bu192 v; memcpy(&v, bu192_v6, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bu192_7(void) {
+    bu192 v; memcpy(&v, bu192_v7, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bu192_integers(void) {
     { volatile signed char v = (signed char)(-128LL); SHOW(unsigned _BitInt(192), 192, v); }
     { volatile signed char v = (signed char)(-1LL); SHOW(unsigned _BitInt(192), 192, v); }
     { volatile signed char v = (signed char)127ULL; SHOW(unsigned _BitInt(192), 192, v); }
@@ -2622,6 +2707,8 @@ static void conversions(void) {
     { volatile unsigned __int128 v = (unsigned __int128)0ULL; SHOW(unsigned _BitInt(192), 192, v); }
     { volatile unsigned __int128 v = (unsigned __int128)1ULL; SHOW(unsigned _BitInt(192), 192, v); }
     { volatile unsigned __int128 v = (unsigned __int128)(((unsigned __int128)0xffffffffffffffffULL << 64) | 0xffffffffffffffffULL); SHOW(unsigned _BitInt(192), 192, v); }
+}
+static void conversions_bu192_floating(void) {
     { volatile _Float16 v = (_Float16)0.0; SHOW(unsigned _BitInt(192), 192, v); }
     { volatile float v = (float)0.0; SHOW(unsigned _BitInt(192), 192, v); }
     { volatile double v = (double)0.0; SHOW(unsigned _BitInt(192), 192, v); }
@@ -2643,377 +2730,401 @@ static void conversions(void) {
     { volatile double v = (double)(7.0 / 4); SHOW(unsigned _BitInt(192), 192, v); }
     { volatile long double v = (long double)(7.0 / 4); SHOW(unsigned _BitInt(192), 192, v); }
     { volatile __float128 v = (__float128)(7.0 / 4); SHOW(unsigned _BitInt(192), 192, v); }
-    printf("conversions bs255\n");
-    { bs255 v; memcpy(&v, bs255_v0, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bs255 v; memcpy(&v, bs255_v1, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bs255 v; memcpy(&v, bs255_v2, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bs255 v; memcpy(&v, bs255_v3, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bs255 v; memcpy(&v, bs255_v4, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bs255 v; memcpy(&v, bs255_v5, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bs255 v; memcpy(&v, bs255_v6, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bs255 v; memcpy(&v, bs255_v7, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bs255 v; memcpy(&v, bs255_v8, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bs255 v; memcpy(&v, bs255_v9, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
+}
+static void conversions_bu192(void) {
+    printf("conversions bu192\n");
+    conversions_bu192_0();
+    conversions_bu192_1();
+    conversions_bu192_2();
+    conversions_bu192_3();
+    conversions_bu192_4();
+    conversions_bu192_5();
+    conversions_bu192_6();
+    conversions_bu192_7();
+    conversions_bu192_integers();
+    conversions_bu192_floating();
+}
+static void conversions_bs255_0(void) {
+    bs255 v; memcpy(&v, bs255_v0, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bs255_1(void) {
+    bs255 v; memcpy(&v, bs255_v1, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bs255_2(void) {
+    bs255 v; memcpy(&v, bs255_v2, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bs255_3(void) {
+    bs255 v; memcpy(&v, bs255_v3, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bs255_4(void) {
+    bs255 v; memcpy(&v, bs255_v4, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bs255_5(void) {
+    bs255 v; memcpy(&v, bs255_v5, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bs255_6(void) {
+    bs255 v; memcpy(&v, bs255_v6, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bs255_7(void) {
+    bs255 v; memcpy(&v, bs255_v7, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bs255_8(void) {
+    bs255 v; memcpy(&v, bs255_v8, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bs255_9(void) {
+    bs255 v; memcpy(&v, bs255_v9, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bs255_integers(void) {
     { volatile signed char v = (signed char)(-128LL); SHOW(_BitInt(255), 255, v); }
     { volatile signed char v = (signed char)(-1LL); SHOW(_BitInt(255), 255, v); }
     { volatile signed char v = (signed char)127ULL; SHOW(_BitInt(255), 255, v); }
@@ -3041,6 +3152,8 @@ static void conversions(void) {
     { volatile unsigned __int128 v = (unsigned __int128)0ULL; SHOW(_BitInt(255), 255, v); }
     { volatile unsigned __int128 v = (unsigned __int128)1ULL; SHOW(_BitInt(255), 255, v); }
     { volatile unsigned __int128 v = (unsigned __int128)(((unsigned __int128)0xffffffffffffffffULL << 64) | 0xffffffffffffffffULL); SHOW(_BitInt(255), 255, v); }
+}
+static void conversions_bs255_floating(void) {
     { volatile _Float16 v = (_Float16)0.0; SHOW(_BitInt(255), 255, v); }
     { volatile float v = (float)0.0; SHOW(_BitInt(255), 255, v); }
     { volatile double v = (double)0.0; SHOW(_BitInt(255), 255, v); }
@@ -3075,299 +3188,323 @@ static void conversions(void) {
     { volatile double v = (double)(-1023.0 / 8); SHOW(_BitInt(255), 255, v); }
     { volatile long double v = (long double)(-1023.0 / 8); SHOW(_BitInt(255), 255, v); }
     { volatile __float128 v = (__float128)(-1023.0 / 8); SHOW(_BitInt(255), 255, v); }
-    printf("conversions bu255\n");
-    { bu255 v; memcpy(&v, bu255_v0, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bu255 v; memcpy(&v, bu255_v1, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bu255 v; memcpy(&v, bu255_v2, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bu255 v; memcpy(&v, bu255_v3, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bu255 v; memcpy(&v, bu255_v4, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bu255 v; memcpy(&v, bu255_v5, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bu255 v; memcpy(&v, bu255_v6, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bu255 v; memcpy(&v, bu255_v7, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
+}
+static void conversions_bs255(void) {
+    printf("conversions bs255\n");
+    conversions_bs255_0();
+    conversions_bs255_1();
+    conversions_bs255_2();
+    conversions_bs255_3();
+    conversions_bs255_4();
+    conversions_bs255_5();
+    conversions_bs255_6();
+    conversions_bs255_7();
+    conversions_bs255_8();
+    conversions_bs255_9();
+    conversions_bs255_integers();
+    conversions_bs255_floating();
+}
+static void conversions_bu255_0(void) {
+    bu255 v; memcpy(&v, bu255_v0, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bu255_1(void) {
+    bu255 v; memcpy(&v, bu255_v1, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bu255_2(void) {
+    bu255 v; memcpy(&v, bu255_v2, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bu255_3(void) {
+    bu255 v; memcpy(&v, bu255_v3, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bu255_4(void) {
+    bu255 v; memcpy(&v, bu255_v4, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bu255_5(void) {
+    bu255 v; memcpy(&v, bu255_v5, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bu255_6(void) {
+    bu255 v; memcpy(&v, bu255_v6, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bu255_7(void) {
+    bu255 v; memcpy(&v, bu255_v7, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bu255_integers(void) {
     { volatile signed char v = (signed char)(-128LL); SHOW(unsigned _BitInt(255), 255, v); }
     { volatile signed char v = (signed char)(-1LL); SHOW(unsigned _BitInt(255), 255, v); }
     { volatile signed char v = (signed char)127ULL; SHOW(unsigned _BitInt(255), 255, v); }
@@ -3395,6 +3532,8 @@ static void conversions(void) {
     { volatile unsigned __int128 v = (unsigned __int128)0ULL; SHOW(unsigned _BitInt(255), 255, v); }
     { volatile unsigned __int128 v = (unsigned __int128)1ULL; SHOW(unsigned _BitInt(255), 255, v); }
     { volatile unsigned __int128 v = (unsigned __int128)(((unsigned __int128)0xffffffffffffffffULL << 64) | 0xffffffffffffffffULL); SHOW(unsigned _BitInt(255), 255, v); }
+}
+static void conversions_bu255_floating(void) {
     { volatile _Float16 v = (_Float16)0.0; SHOW(unsigned _BitInt(255), 255, v); }
     { volatile float v = (float)0.0; SHOW(unsigned _BitInt(255), 255, v); }
     { volatile double v = (double)0.0; SHOW(unsigned _BitInt(255), 255, v); }
@@ -3416,377 +3555,401 @@ static void conversions(void) {
     { volatile double v = (double)(7.0 / 4); SHOW(unsigned _BitInt(255), 255, v); }
     { volatile long double v = (long double)(7.0 / 4); SHOW(unsigned _BitInt(255), 255, v); }
     { volatile __float128 v = (__float128)(7.0 / 4); SHOW(unsigned _BitInt(255), 255, v); }
-    printf("conversions bs256\n");
-    { bs256 v; memcpy(&v, bs256_v0, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bs256 v; memcpy(&v, bs256_v1, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bs256 v; memcpy(&v, bs256_v2, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bs256 v; memcpy(&v, bs256_v3, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bs256 v; memcpy(&v, bs256_v4, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bs256 v; memcpy(&v, bs256_v5, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bs256 v; memcpy(&v, bs256_v6, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bs256 v; memcpy(&v, bs256_v7, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bs256 v; memcpy(&v, bs256_v8, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bs256 v; memcpy(&v, bs256_v9, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
+}
+static void conversions_bu255(void) {
+    printf("conversions bu255\n");
+    conversions_bu255_0();
+    conversions_bu255_1();
+    conversions_bu255_2();
+    conversions_bu255_3();
+    conversions_bu255_4();
+    conversions_bu255_5();
+    conversions_bu255_6();
+    conversions_bu255_7();
+    conversions_bu255_integers();
+    conversions_bu255_floating();
+}
+static void conversions_bs256_0(void) {
+    bs256 v; memcpy(&v, bs256_v0, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bs256_1(void) {
+    bs256 v; memcpy(&v, bs256_v1, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bs256_2(void) {
+    bs256 v; memcpy(&v, bs256_v2, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bs256_3(void) {
+    bs256 v; memcpy(&v, bs256_v3, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bs256_4(void) {
+    bs256 v; memcpy(&v, bs256_v4, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bs256_5(void) {
+    bs256 v; memcpy(&v, bs256_v5, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bs256_6(void) {
+    bs256 v; memcpy(&v, bs256_v6, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bs256_7(void) {
+    bs256 v; memcpy(&v, bs256_v7, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bs256_8(void) {
+    bs256 v; memcpy(&v, bs256_v8, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bs256_9(void) {
+    bs256 v; memcpy(&v, bs256_v9, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bs256_integers(void) {
     { volatile signed char v = (signed char)(-128LL); SHOW(_BitInt(256), 256, v); }
     { volatile signed char v = (signed char)(-1LL); SHOW(_BitInt(256), 256, v); }
     { volatile signed char v = (signed char)127ULL; SHOW(_BitInt(256), 256, v); }
@@ -3814,6 +3977,8 @@ static void conversions(void) {
     { volatile unsigned __int128 v = (unsigned __int128)0ULL; SHOW(_BitInt(256), 256, v); }
     { volatile unsigned __int128 v = (unsigned __int128)1ULL; SHOW(_BitInt(256), 256, v); }
     { volatile unsigned __int128 v = (unsigned __int128)(((unsigned __int128)0xffffffffffffffffULL << 64) | 0xffffffffffffffffULL); SHOW(_BitInt(256), 256, v); }
+}
+static void conversions_bs256_floating(void) {
     { volatile _Float16 v = (_Float16)0.0; SHOW(_BitInt(256), 256, v); }
     { volatile float v = (float)0.0; SHOW(_BitInt(256), 256, v); }
     { volatile double v = (double)0.0; SHOW(_BitInt(256), 256, v); }
@@ -3848,297 +4013,321 @@ static void conversions(void) {
     { volatile double v = (double)(-1023.0 / 8); SHOW(_BitInt(256), 256, v); }
     { volatile long double v = (long double)(-1023.0 / 8); SHOW(_BitInt(256), 256, v); }
     { volatile __float128 v = (__float128)(-1023.0 / 8); SHOW(_BitInt(256), 256, v); }
-    printf("conversions bu256\n");
-    { bu256 v; memcpy(&v, bu256_v0, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bu256 v; memcpy(&v, bu256_v1, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bu256 v; memcpy(&v, bu256_v2, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bu256 v; memcpy(&v, bu256_v3, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bu256 v; memcpy(&v, bu256_v4, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bu256 v; memcpy(&v, bu256_v5, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bu256 v; memcpy(&v, bu256_v6, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bu256 v; memcpy(&v, bu256_v7, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
+}
+static void conversions_bs256(void) {
+    printf("conversions bs256\n");
+    conversions_bs256_0();
+    conversions_bs256_1();
+    conversions_bs256_2();
+    conversions_bs256_3();
+    conversions_bs256_4();
+    conversions_bs256_5();
+    conversions_bs256_6();
+    conversions_bs256_7();
+    conversions_bs256_8();
+    conversions_bs256_9();
+    conversions_bs256_integers();
+    conversions_bs256_floating();
+}
+static void conversions_bu256_0(void) {
+    bu256 v; memcpy(&v, bu256_v0, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bu256_1(void) {
+    bu256 v; memcpy(&v, bu256_v1, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bu256_2(void) {
+    bu256 v; memcpy(&v, bu256_v2, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bu256_3(void) {
+    bu256 v; memcpy(&v, bu256_v3, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bu256_4(void) {
+    bu256 v; memcpy(&v, bu256_v4, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bu256_5(void) {
+    bu256 v; memcpy(&v, bu256_v5, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bu256_6(void) {
+    bu256 v; memcpy(&v, bu256_v6, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bu256_7(void) {
+    bu256 v; memcpy(&v, bu256_v7, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bu256_integers(void) {
     { volatile signed char v = (signed char)(-128LL); SHOW(unsigned _BitInt(256), 256, v); }
     { volatile signed char v = (signed char)(-1LL); SHOW(unsigned _BitInt(256), 256, v); }
     { volatile signed char v = (signed char)127ULL; SHOW(unsigned _BitInt(256), 256, v); }
@@ -4166,6 +4355,8 @@ static void conversions(void) {
     { volatile unsigned __int128 v = (unsigned __int128)0ULL; SHOW(unsigned _BitInt(256), 256, v); }
     { volatile unsigned __int128 v = (unsigned __int128)1ULL; SHOW(unsigned _BitInt(256), 256, v); }
     { volatile unsigned __int128 v = (unsigned __int128)(((unsigned __int128)0xffffffffffffffffULL << 64) | 0xffffffffffffffffULL); SHOW(unsigned _BitInt(256), 256, v); }
+}
+static void conversions_bu256_floating(void) {
     { volatile _Float16 v = (_Float16)0.0; SHOW(unsigned _BitInt(256), 256, v); }
     { volatile float v = (float)0.0; SHOW(unsigned _BitInt(256), 256, v); }
     { volatile double v = (double)0.0; SHOW(unsigned _BitInt(256), 256, v); }
@@ -4187,377 +4378,401 @@ static void conversions(void) {
     { volatile double v = (double)(7.0 / 4); SHOW(unsigned _BitInt(256), 256, v); }
     { volatile long double v = (long double)(7.0 / 4); SHOW(unsigned _BitInt(256), 256, v); }
     { volatile __float128 v = (__float128)(7.0 / 4); SHOW(unsigned _BitInt(256), 256, v); }
-    printf("conversions bs257\n");
-    { bs257 v; memcpy(&v, bs257_v0, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bs257 v; memcpy(&v, bs257_v1, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bs257 v; memcpy(&v, bs257_v2, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bs257 v; memcpy(&v, bs257_v3, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bs257 v; memcpy(&v, bs257_v4, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bs257 v; memcpy(&v, bs257_v5, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bs257 v; memcpy(&v, bs257_v6, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bs257 v; memcpy(&v, bs257_v7, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bs257 v; memcpy(&v, bs257_v8, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bs257 v; memcpy(&v, bs257_v9, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
+}
+static void conversions_bu256(void) {
+    printf("conversions bu256\n");
+    conversions_bu256_0();
+    conversions_bu256_1();
+    conversions_bu256_2();
+    conversions_bu256_3();
+    conversions_bu256_4();
+    conversions_bu256_5();
+    conversions_bu256_6();
+    conversions_bu256_7();
+    conversions_bu256_integers();
+    conversions_bu256_floating();
+}
+static void conversions_bs257_0(void) {
+    bs257 v; memcpy(&v, bs257_v0, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bs257_1(void) {
+    bs257 v; memcpy(&v, bs257_v1, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bs257_2(void) {
+    bs257 v; memcpy(&v, bs257_v2, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bs257_3(void) {
+    bs257 v; memcpy(&v, bs257_v3, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bs257_4(void) {
+    bs257 v; memcpy(&v, bs257_v4, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bs257_5(void) {
+    bs257 v; memcpy(&v, bs257_v5, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bs257_6(void) {
+    bs257 v; memcpy(&v, bs257_v6, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bs257_7(void) {
+    bs257 v; memcpy(&v, bs257_v7, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bs257_8(void) {
+    bs257 v; memcpy(&v, bs257_v8, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bs257_9(void) {
+    bs257 v; memcpy(&v, bs257_v9, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bs257_integers(void) {
     { volatile signed char v = (signed char)(-128LL); SHOW(_BitInt(257), 257, v); }
     { volatile signed char v = (signed char)(-1LL); SHOW(_BitInt(257), 257, v); }
     { volatile signed char v = (signed char)127ULL; SHOW(_BitInt(257), 257, v); }
@@ -4585,6 +4800,8 @@ static void conversions(void) {
     { volatile unsigned __int128 v = (unsigned __int128)0ULL; SHOW(_BitInt(257), 257, v); }
     { volatile unsigned __int128 v = (unsigned __int128)1ULL; SHOW(_BitInt(257), 257, v); }
     { volatile unsigned __int128 v = (unsigned __int128)(((unsigned __int128)0xffffffffffffffffULL << 64) | 0xffffffffffffffffULL); SHOW(_BitInt(257), 257, v); }
+}
+static void conversions_bs257_floating(void) {
     { volatile _Float16 v = (_Float16)0.0; SHOW(_BitInt(257), 257, v); }
     { volatile float v = (float)0.0; SHOW(_BitInt(257), 257, v); }
     { volatile double v = (double)0.0; SHOW(_BitInt(257), 257, v); }
@@ -4619,262 +4836,285 @@ static void conversions(void) {
     { volatile double v = (double)(-1023.0 / 8); SHOW(_BitInt(257), 257, v); }
     { volatile long double v = (long double)(-1023.0 / 8); SHOW(_BitInt(257), 257, v); }
     { volatile __float128 v = (__float128)(-1023.0 / 8); SHOW(_BitInt(257), 257, v); }
-    printf("conversions bu257\n");
-    { bu257 v; memcpy(&v, bu257_v0, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bu257 v; memcpy(&v, bu257_v1, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bu257 v; memcpy(&v, bu257_v2, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bu257 v; memcpy(&v, bu257_v3, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bu257 v; memcpy(&v, bu257_v4, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bu257 v; memcpy(&v, bu257_v5, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bu257 v; memcpy(&v, bu257_v6, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
+}
+static void conversions_bs257(void) {
+    printf("conversions bs257\n");
+    conversions_bs257_0();
+    conversions_bs257_1();
+    conversions_bs257_2();
+    conversions_bs257_3();
+    conversions_bs257_4();
+    conversions_bs257_5();
+    conversions_bs257_6();
+    conversions_bs257_7();
+    conversions_bs257_8();
+    conversions_bs257_9();
+    conversions_bs257_integers();
+    conversions_bs257_floating();
+}
+static void conversions_bu257_0(void) {
+    bu257 v; memcpy(&v, bu257_v0, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bu257_1(void) {
+    bu257 v; memcpy(&v, bu257_v1, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bu257_2(void) {
+    bu257 v; memcpy(&v, bu257_v2, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bu257_3(void) {
+    bu257 v; memcpy(&v, bu257_v3, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bu257_4(void) {
+    bu257 v; memcpy(&v, bu257_v4, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bu257_5(void) {
+    bu257 v; memcpy(&v, bu257_v5, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bu257_6(void) {
+    bu257 v; memcpy(&v, bu257_v6, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bu257_integers(void) {
     { volatile signed char v = (signed char)(-128LL); SHOW(unsigned _BitInt(257), 257, v); }
     { volatile signed char v = (signed char)(-1LL); SHOW(unsigned _BitInt(257), 257, v); }
     { volatile signed char v = (signed char)127ULL; SHOW(unsigned _BitInt(257), 257, v); }
@@ -4902,6 +5142,8 @@ static void conversions(void) {
     { volatile unsigned __int128 v = (unsigned __int128)0ULL; SHOW(unsigned _BitInt(257), 257, v); }
     { volatile unsigned __int128 v = (unsigned __int128)1ULL; SHOW(unsigned _BitInt(257), 257, v); }
     { volatile unsigned __int128 v = (unsigned __int128)(((unsigned __int128)0xffffffffffffffffULL << 64) | 0xffffffffffffffffULL); SHOW(unsigned _BitInt(257), 257, v); }
+}
+static void conversions_bu257_floating(void) {
     { volatile _Float16 v = (_Float16)0.0; SHOW(unsigned _BitInt(257), 257, v); }
     { volatile float v = (float)0.0; SHOW(unsigned _BitInt(257), 257, v); }
     { volatile double v = (double)0.0; SHOW(unsigned _BitInt(257), 257, v); }
@@ -4923,340 +5165,362 @@ static void conversions(void) {
     { volatile double v = (double)(7.0 / 4); SHOW(unsigned _BitInt(257), 257, v); }
     { volatile long double v = (long double)(7.0 / 4); SHOW(unsigned _BitInt(257), 257, v); }
     { volatile __float128 v = (__float128)(7.0 / 4); SHOW(unsigned _BitInt(257), 257, v); }
-    printf("conversions bs512\n");
-    { bs512 v; memcpy(&v, bs512_v0, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bs512 v; memcpy(&v, bs512_v1, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bs512 v; memcpy(&v, bs512_v2, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bs512 v; memcpy(&v, bs512_v3, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bs512 v; memcpy(&v, bs512_v4, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bs512 v; memcpy(&v, bs512_v5, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bs512 v; memcpy(&v, bs512_v6, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bs512 v; memcpy(&v, bs512_v7, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bs512 v; memcpy(&v, bs512_v8, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
+}
+static void conversions_bu257(void) {
+    printf("conversions bu257\n");
+    conversions_bu257_0();
+    conversions_bu257_1();
+    conversions_bu257_2();
+    conversions_bu257_3();
+    conversions_bu257_4();
+    conversions_bu257_5();
+    conversions_bu257_6();
+    conversions_bu257_integers();
+    conversions_bu257_floating();
+}
+static void conversions_bs512_0(void) {
+    bs512 v; memcpy(&v, bs512_v0, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bs512_1(void) {
+    bs512 v; memcpy(&v, bs512_v1, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bs512_2(void) {
+    bs512 v; memcpy(&v, bs512_v2, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bs512_3(void) {
+    bs512 v; memcpy(&v, bs512_v3, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bs512_4(void) {
+    bs512 v; memcpy(&v, bs512_v4, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bs512_5(void) {
+    bs512 v; memcpy(&v, bs512_v5, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bs512_6(void) {
+    bs512 v; memcpy(&v, bs512_v6, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bs512_7(void) {
+    bs512 v; memcpy(&v, bs512_v7, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bs512_8(void) {
+    bs512 v; memcpy(&v, bs512_v8, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bs512_integers(void) {
     { volatile signed char v = (signed char)(-128LL); SHOW(_BitInt(512), 512, v); }
     { volatile signed char v = (signed char)(-1LL); SHOW(_BitInt(512), 512, v); }
     { volatile signed char v = (signed char)127ULL; SHOW(_BitInt(512), 512, v); }
@@ -5284,6 +5548,8 @@ static void conversions(void) {
     { volatile unsigned __int128 v = (unsigned __int128)0ULL; SHOW(_BitInt(512), 512, v); }
     { volatile unsigned __int128 v = (unsigned __int128)1ULL; SHOW(_BitInt(512), 512, v); }
     { volatile unsigned __int128 v = (unsigned __int128)(((unsigned __int128)0xffffffffffffffffULL << 64) | 0xffffffffffffffffULL); SHOW(_BitInt(512), 512, v); }
+}
+static void conversions_bs512_floating(void) {
     { volatile _Float16 v = (_Float16)0.0; SHOW(_BitInt(512), 512, v); }
     { volatile float v = (float)0.0; SHOW(_BitInt(512), 512, v); }
     { volatile double v = (double)0.0; SHOW(_BitInt(512), 512, v); }
@@ -5318,297 +5584,320 @@ static void conversions(void) {
     { volatile double v = (double)(-1023.0 / 8); SHOW(_BitInt(512), 512, v); }
     { volatile long double v = (long double)(-1023.0 / 8); SHOW(_BitInt(512), 512, v); }
     { volatile __float128 v = (__float128)(-1023.0 / 8); SHOW(_BitInt(512), 512, v); }
-    printf("conversions bu512\n");
-    { bu512 v; memcpy(&v, bu512_v0, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bu512 v; memcpy(&v, bu512_v1, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bu512 v; memcpy(&v, bu512_v2, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bu512 v; memcpy(&v, bu512_v3, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bu512 v; memcpy(&v, bu512_v4, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bu512 v; memcpy(&v, bu512_v5, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bu512 v; memcpy(&v, bu512_v6, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bu512 v; memcpy(&v, bu512_v7, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
+}
+static void conversions_bs512(void) {
+    printf("conversions bs512\n");
+    conversions_bs512_0();
+    conversions_bs512_1();
+    conversions_bs512_2();
+    conversions_bs512_3();
+    conversions_bs512_4();
+    conversions_bs512_5();
+    conversions_bs512_6();
+    conversions_bs512_7();
+    conversions_bs512_8();
+    conversions_bs512_integers();
+    conversions_bs512_floating();
+}
+static void conversions_bu512_0(void) {
+    bu512 v; memcpy(&v, bu512_v0, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bu512_1(void) {
+    bu512 v; memcpy(&v, bu512_v1, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bu512_2(void) {
+    bu512 v; memcpy(&v, bu512_v2, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bu512_3(void) {
+    bu512 v; memcpy(&v, bu512_v3, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bu512_4(void) {
+    bu512 v; memcpy(&v, bu512_v4, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bu512_5(void) {
+    bu512 v; memcpy(&v, bu512_v5, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bu512_6(void) {
+    bu512 v; memcpy(&v, bu512_v6, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bu512_7(void) {
+    bu512 v; memcpy(&v, bu512_v7, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bu512_integers(void) {
     { volatile signed char v = (signed char)(-128LL); SHOW(unsigned _BitInt(512), 512, v); }
     { volatile signed char v = (signed char)(-1LL); SHOW(unsigned _BitInt(512), 512, v); }
     { volatile signed char v = (signed char)127ULL; SHOW(unsigned _BitInt(512), 512, v); }
@@ -5636,6 +5925,8 @@ static void conversions(void) {
     { volatile unsigned __int128 v = (unsigned __int128)0ULL; SHOW(unsigned _BitInt(512), 512, v); }
     { volatile unsigned __int128 v = (unsigned __int128)1ULL; SHOW(unsigned _BitInt(512), 512, v); }
     { volatile unsigned __int128 v = (unsigned __int128)(((unsigned __int128)0xffffffffffffffffULL << 64) | 0xffffffffffffffffULL); SHOW(unsigned _BitInt(512), 512, v); }
+}
+static void conversions_bu512_floating(void) {
     { volatile _Float16 v = (_Float16)0.0; SHOW(unsigned _BitInt(512), 512, v); }
     { volatile float v = (float)0.0; SHOW(unsigned _BitInt(512), 512, v); }
     { volatile double v = (double)0.0; SHOW(unsigned _BitInt(512), 512, v); }
@@ -5657,377 +5948,401 @@ static void conversions(void) {
     { volatile double v = (double)(7.0 / 4); SHOW(unsigned _BitInt(512), 512, v); }
     { volatile long double v = (long double)(7.0 / 4); SHOW(unsigned _BitInt(512), 512, v); }
     { volatile __float128 v = (__float128)(7.0 / 4); SHOW(unsigned _BitInt(512), 512, v); }
-    printf("conversions bs1000\n");
-    { bs1000 v; memcpy(&v, bs1000_v0, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bs1000 v; memcpy(&v, bs1000_v1, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bs1000 v; memcpy(&v, bs1000_v2, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bs1000 v; memcpy(&v, bs1000_v3, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bs1000 v; memcpy(&v, bs1000_v4, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bs1000 v; memcpy(&v, bs1000_v5, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bs1000 v; memcpy(&v, bs1000_v6, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bs1000 v; memcpy(&v, bs1000_v7, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bs1000 v; memcpy(&v, bs1000_v8, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bs1000 v; memcpy(&v, bs1000_v9, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
+}
+static void conversions_bu512(void) {
+    printf("conversions bu512\n");
+    conversions_bu512_0();
+    conversions_bu512_1();
+    conversions_bu512_2();
+    conversions_bu512_3();
+    conversions_bu512_4();
+    conversions_bu512_5();
+    conversions_bu512_6();
+    conversions_bu512_7();
+    conversions_bu512_integers();
+    conversions_bu512_floating();
+}
+static void conversions_bs1000_0(void) {
+    bs1000 v; memcpy(&v, bs1000_v0, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bs1000_1(void) {
+    bs1000 v; memcpy(&v, bs1000_v1, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bs1000_2(void) {
+    bs1000 v; memcpy(&v, bs1000_v2, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bs1000_3(void) {
+    bs1000 v; memcpy(&v, bs1000_v3, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bs1000_4(void) {
+    bs1000 v; memcpy(&v, bs1000_v4, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bs1000_5(void) {
+    bs1000 v; memcpy(&v, bs1000_v5, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bs1000_6(void) {
+    bs1000 v; memcpy(&v, bs1000_v6, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bs1000_7(void) {
+    bs1000 v; memcpy(&v, bs1000_v7, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bs1000_8(void) {
+    bs1000 v; memcpy(&v, bs1000_v8, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bs1000_9(void) {
+    bs1000 v; memcpy(&v, bs1000_v9, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bs1000_integers(void) {
     { volatile signed char v = (signed char)(-128LL); SHOW(_BitInt(1000), 1000, v); }
     { volatile signed char v = (signed char)(-1LL); SHOW(_BitInt(1000), 1000, v); }
     { volatile signed char v = (signed char)127ULL; SHOW(_BitInt(1000), 1000, v); }
@@ -6055,6 +6370,8 @@ static void conversions(void) {
     { volatile unsigned __int128 v = (unsigned __int128)0ULL; SHOW(_BitInt(1000), 1000, v); }
     { volatile unsigned __int128 v = (unsigned __int128)1ULL; SHOW(_BitInt(1000), 1000, v); }
     { volatile unsigned __int128 v = (unsigned __int128)(((unsigned __int128)0xffffffffffffffffULL << 64) | 0xffffffffffffffffULL); SHOW(_BitInt(1000), 1000, v); }
+}
+static void conversions_bs1000_floating(void) {
     { volatile _Float16 v = (_Float16)0.0; SHOW(_BitInt(1000), 1000, v); }
     { volatile float v = (float)0.0; SHOW(_BitInt(1000), 1000, v); }
     { volatile double v = (double)0.0; SHOW(_BitInt(1000), 1000, v); }
@@ -6089,301 +6406,325 @@ static void conversions(void) {
     { volatile double v = (double)(-1023.0 / 8); SHOW(_BitInt(1000), 1000, v); }
     { volatile long double v = (long double)(-1023.0 / 8); SHOW(_BitInt(1000), 1000, v); }
     { volatile __float128 v = (__float128)(-1023.0 / 8); SHOW(_BitInt(1000), 1000, v); }
-    printf("conversions bu1000\n");
-    { bu1000 v; memcpy(&v, bu1000_v0, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bu1000 v; memcpy(&v, bu1000_v1, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bu1000 v; memcpy(&v, bu1000_v2, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bu1000 v; memcpy(&v, bu1000_v3, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bu1000 v; memcpy(&v, bu1000_v4, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bu1000 v; memcpy(&v, bu1000_v5, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bu1000 v; memcpy(&v, bu1000_v6, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bu1000 v; memcpy(&v, bu1000_v7, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
+}
+static void conversions_bs1000(void) {
+    printf("conversions bs1000\n");
+    conversions_bs1000_0();
+    conversions_bs1000_1();
+    conversions_bs1000_2();
+    conversions_bs1000_3();
+    conversions_bs1000_4();
+    conversions_bs1000_5();
+    conversions_bs1000_6();
+    conversions_bs1000_7();
+    conversions_bs1000_8();
+    conversions_bs1000_9();
+    conversions_bs1000_integers();
+    conversions_bs1000_floating();
+}
+static void conversions_bu1000_0(void) {
+    bu1000 v; memcpy(&v, bu1000_v0, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bu1000_1(void) {
+    bu1000 v; memcpy(&v, bu1000_v1, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bu1000_2(void) {
+    bu1000 v; memcpy(&v, bu1000_v2, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bu1000_3(void) {
+    bu1000 v; memcpy(&v, bu1000_v3, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bu1000_4(void) {
+    bu1000 v; memcpy(&v, bu1000_v4, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bu1000_5(void) {
+    bu1000 v; memcpy(&v, bu1000_v5, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bu1000_6(void) {
+    bu1000 v; memcpy(&v, bu1000_v6, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bu1000_7(void) {
+    bu1000 v; memcpy(&v, bu1000_v7, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bu1000_integers(void) {
     { volatile signed char v = (signed char)(-128LL); SHOW(unsigned _BitInt(1000), 1000, v); }
     { volatile signed char v = (signed char)(-1LL); SHOW(unsigned _BitInt(1000), 1000, v); }
     { volatile signed char v = (signed char)127ULL; SHOW(unsigned _BitInt(1000), 1000, v); }
@@ -6411,6 +6752,8 @@ static void conversions(void) {
     { volatile unsigned __int128 v = (unsigned __int128)0ULL; SHOW(unsigned _BitInt(1000), 1000, v); }
     { volatile unsigned __int128 v = (unsigned __int128)1ULL; SHOW(unsigned _BitInt(1000), 1000, v); }
     { volatile unsigned __int128 v = (unsigned __int128)(((unsigned __int128)0xffffffffffffffffULL << 64) | 0xffffffffffffffffULL); SHOW(unsigned _BitInt(1000), 1000, v); }
+}
+static void conversions_bu1000_floating(void) {
     { volatile _Float16 v = (_Float16)0.0; SHOW(unsigned _BitInt(1000), 1000, v); }
     { volatile float v = (float)0.0; SHOW(unsigned _BitInt(1000), 1000, v); }
     { volatile double v = (double)0.0; SHOW(unsigned _BitInt(1000), 1000, v); }
@@ -6432,377 +6775,401 @@ static void conversions(void) {
     { volatile double v = (double)(7.0 / 4); SHOW(unsigned _BitInt(1000), 1000, v); }
     { volatile long double v = (long double)(7.0 / 4); SHOW(unsigned _BitInt(1000), 1000, v); }
     { volatile __float128 v = (__float128)(7.0 / 4); SHOW(unsigned _BitInt(1000), 1000, v); }
-    printf("conversions bs4096\n");
-    { bs4096 v; memcpy(&v, bs4096_v0, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bs4096 v; memcpy(&v, bs4096_v1, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bs4096 v; memcpy(&v, bs4096_v2, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bs4096 v; memcpy(&v, bs4096_v3, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bs4096 v; memcpy(&v, bs4096_v4, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bs4096 v; memcpy(&v, bs4096_v5, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bs4096 v; memcpy(&v, bs4096_v6, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bs4096 v; memcpy(&v, bs4096_v7, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bs4096 v; memcpy(&v, bs4096_v8, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bs4096 v; memcpy(&v, bs4096_v9, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
+}
+static void conversions_bu1000(void) {
+    printf("conversions bu1000\n");
+    conversions_bu1000_0();
+    conversions_bu1000_1();
+    conversions_bu1000_2();
+    conversions_bu1000_3();
+    conversions_bu1000_4();
+    conversions_bu1000_5();
+    conversions_bu1000_6();
+    conversions_bu1000_7();
+    conversions_bu1000_integers();
+    conversions_bu1000_floating();
+}
+static void conversions_bs4096_0(void) {
+    bs4096 v; memcpy(&v, bs4096_v0, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bs4096_1(void) {
+    bs4096 v; memcpy(&v, bs4096_v1, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bs4096_2(void) {
+    bs4096 v; memcpy(&v, bs4096_v2, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bs4096_3(void) {
+    bs4096 v; memcpy(&v, bs4096_v3, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bs4096_4(void) {
+    bs4096 v; memcpy(&v, bs4096_v4, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bs4096_5(void) {
+    bs4096 v; memcpy(&v, bs4096_v5, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bs4096_6(void) {
+    bs4096 v; memcpy(&v, bs4096_v6, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bs4096_7(void) {
+    bs4096 v; memcpy(&v, bs4096_v7, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bs4096_8(void) {
+    bs4096 v; memcpy(&v, bs4096_v8, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bs4096_9(void) {
+    bs4096 v; memcpy(&v, bs4096_v9, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bs4096_integers(void) {
     { volatile signed char v = (signed char)(-128LL); SHOW(_BitInt(4096), 4096, v); }
     { volatile signed char v = (signed char)(-1LL); SHOW(_BitInt(4096), 4096, v); }
     { volatile signed char v = (signed char)127ULL; SHOW(_BitInt(4096), 4096, v); }
@@ -6830,6 +7197,8 @@ static void conversions(void) {
     { volatile unsigned __int128 v = (unsigned __int128)0ULL; SHOW(_BitInt(4096), 4096, v); }
     { volatile unsigned __int128 v = (unsigned __int128)1ULL; SHOW(_BitInt(4096), 4096, v); }
     { volatile unsigned __int128 v = (unsigned __int128)(((unsigned __int128)0xffffffffffffffffULL << 64) | 0xffffffffffffffffULL); SHOW(_BitInt(4096), 4096, v); }
+}
+static void conversions_bs4096_floating(void) {
     { volatile _Float16 v = (_Float16)0.0; SHOW(_BitInt(4096), 4096, v); }
     { volatile float v = (float)0.0; SHOW(_BitInt(4096), 4096, v); }
     { volatile double v = (double)0.0; SHOW(_BitInt(4096), 4096, v); }
@@ -6861,299 +7230,323 @@ static void conversions(void) {
     { volatile double v = (double)(-1023.0 / 8); SHOW(_BitInt(4096), 4096, v); }
     { volatile long double v = (long double)(-1023.0 / 8); SHOW(_BitInt(4096), 4096, v); }
     { volatile __float128 v = (__float128)(-1023.0 / 8); SHOW(_BitInt(4096), 4096, v); }
-    printf("conversions bu4096\n");
-    { bu4096 v; memcpy(&v, bu4096_v0, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bu4096 v; memcpy(&v, bu4096_v1, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bu4096 v; memcpy(&v, bu4096_v2, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bu4096 v; memcpy(&v, bu4096_v3, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bu4096 v; memcpy(&v, bu4096_v4, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bu4096 v; memcpy(&v, bu4096_v5, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bu4096 v; memcpy(&v, bu4096_v6, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
-    { bu4096 v; memcpy(&v, bu4096_v7, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(192), 192, (_BitInt(192))v);
-      SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
-      SHOW(_BitInt(255), 255, (_BitInt(255))v);
-      SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
-      SHOW(_BitInt(256), 256, (_BitInt(256))v);
-      SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
-      SHOW(_BitInt(257), 257, (_BitInt(257))v);
-      SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
-      SHOW(_BitInt(512), 512, (_BitInt(512))v);
-      SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
-      SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
-      SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-    }
+}
+static void conversions_bs4096(void) {
+    printf("conversions bs4096\n");
+    conversions_bs4096_0();
+    conversions_bs4096_1();
+    conversions_bs4096_2();
+    conversions_bs4096_3();
+    conversions_bs4096_4();
+    conversions_bs4096_5();
+    conversions_bs4096_6();
+    conversions_bs4096_7();
+    conversions_bs4096_8();
+    conversions_bs4096_9();
+    conversions_bs4096_integers();
+    conversions_bs4096_floating();
+}
+static void conversions_bu4096_0(void) {
+    bu4096 v; memcpy(&v, bu4096_v0, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bu4096_1(void) {
+    bu4096 v; memcpy(&v, bu4096_v1, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bu4096_2(void) {
+    bu4096 v; memcpy(&v, bu4096_v2, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bu4096_3(void) {
+    bu4096 v; memcpy(&v, bu4096_v3, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bu4096_4(void) {
+    bu4096 v; memcpy(&v, bu4096_v4, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bu4096_5(void) {
+    bu4096 v; memcpy(&v, bu4096_v5, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bu4096_6(void) {
+    bu4096 v; memcpy(&v, bu4096_v6, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bu4096_7(void) {
+    bu4096 v; memcpy(&v, bu4096_v7, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(192), 192, (_BitInt(192))v);
+    SHOW(unsigned _BitInt(192), 192, (unsigned _BitInt(192))v);
+    SHOW(_BitInt(255), 255, (_BitInt(255))v);
+    SHOW(unsigned _BitInt(255), 255, (unsigned _BitInt(255))v);
+    SHOW(_BitInt(256), 256, (_BitInt(256))v);
+    SHOW(unsigned _BitInt(256), 256, (unsigned _BitInt(256))v);
+    SHOW(_BitInt(257), 257, (_BitInt(257))v);
+    SHOW(unsigned _BitInt(257), 257, (unsigned _BitInt(257))v);
+    SHOW(_BitInt(512), 512, (_BitInt(512))v);
+    SHOW(unsigned _BitInt(512), 512, (unsigned _BitInt(512))v);
+    SHOW(_BitInt(1000), 1000, (_BitInt(1000))v);
+    SHOW(unsigned _BitInt(1000), 1000, (unsigned _BitInt(1000))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+}
+static void conversions_bu4096_integers(void) {
     { volatile signed char v = (signed char)(-128LL); SHOW(unsigned _BitInt(4096), 4096, v); }
     { volatile signed char v = (signed char)(-1LL); SHOW(unsigned _BitInt(4096), 4096, v); }
     { volatile signed char v = (signed char)127ULL; SHOW(unsigned _BitInt(4096), 4096, v); }
@@ -7181,6 +7574,8 @@ static void conversions(void) {
     { volatile unsigned __int128 v = (unsigned __int128)0ULL; SHOW(unsigned _BitInt(4096), 4096, v); }
     { volatile unsigned __int128 v = (unsigned __int128)1ULL; SHOW(unsigned _BitInt(4096), 4096, v); }
     { volatile unsigned __int128 v = (unsigned __int128)(((unsigned __int128)0xffffffffffffffffULL << 64) | 0xffffffffffffffffULL); SHOW(unsigned _BitInt(4096), 4096, v); }
+}
+static void conversions_bu4096_floating(void) {
     { volatile _Float16 v = (_Float16)0.0; SHOW(unsigned _BitInt(4096), 4096, v); }
     { volatile float v = (float)0.0; SHOW(unsigned _BitInt(4096), 4096, v); }
     { volatile double v = (double)0.0; SHOW(unsigned _BitInt(4096), 4096, v); }
@@ -7200,190 +7595,211 @@ static void conversions(void) {
     { volatile double v = (double)(7.0 / 4); SHOW(unsigned _BitInt(4096), 4096, v); }
     { volatile long double v = (long double)(7.0 / 4); SHOW(unsigned _BitInt(4096), 4096, v); }
     { volatile __float128 v = (__float128)(7.0 / 4); SHOW(unsigned _BitInt(4096), 4096, v); }
+}
+static void conversions_bu4096(void) {
+    printf("conversions bu4096\n");
+    conversions_bu4096_0();
+    conversions_bu4096_1();
+    conversions_bu4096_2();
+    conversions_bu4096_3();
+    conversions_bu4096_4();
+    conversions_bu4096_5();
+    conversions_bu4096_6();
+    conversions_bu4096_7();
+    conversions_bu4096_integers();
+    conversions_bu4096_floating();
+}
 #ifdef BIT_INT_65535
-    printf("conversions bs65535\n");
-    { bs65535 v; memcpy(&v, bs65535_v0, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-      SHOW(_BitInt(65535), 65535, (_BitInt(65535))(unsigned _BitInt(65535))v);
-    }
-    { bs65535 v; memcpy(&v, bs65535_v1, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-      SHOW(_BitInt(65535), 65535, (_BitInt(65535))(unsigned _BitInt(65535))v);
-    }
-    { bs65535 v; memcpy(&v, bs65535_v2, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-      SHOW(_BitInt(65535), 65535, (_BitInt(65535))(unsigned _BitInt(65535))v);
-    }
-    { bs65535 v; memcpy(&v, bs65535_v3, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-      SHOW(_BitInt(65535), 65535, (_BitInt(65535))(unsigned _BitInt(65535))v);
-    }
-    { bs65535 v; memcpy(&v, bs65535_v4, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-      SHOW(_BitInt(65535), 65535, (_BitInt(65535))(unsigned _BitInt(65535))v);
-    }
-    { bs65535 v; memcpy(&v, bs65535_v5, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-      SHOW(_BitInt(65535), 65535, (_BitInt(65535))(unsigned _BitInt(65535))v);
-    }
-    { bs65535 v; memcpy(&v, bs65535_v6, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-      SHOW(_BitInt(65535), 65535, (_BitInt(65535))(unsigned _BitInt(65535))v);
-    }
+static void conversions_bs65535_0(void) {
+    bs65535 v; memcpy(&v, bs65535_v0, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+    SHOW(_BitInt(65535), 65535, (_BitInt(65535))(unsigned _BitInt(65535))v);
+}
+static void conversions_bs65535_1(void) {
+    bs65535 v; memcpy(&v, bs65535_v1, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+    SHOW(_BitInt(65535), 65535, (_BitInt(65535))(unsigned _BitInt(65535))v);
+}
+static void conversions_bs65535_2(void) {
+    bs65535 v; memcpy(&v, bs65535_v2, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+    SHOW(_BitInt(65535), 65535, (_BitInt(65535))(unsigned _BitInt(65535))v);
+}
+static void conversions_bs65535_3(void) {
+    bs65535 v; memcpy(&v, bs65535_v3, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+    SHOW(_BitInt(65535), 65535, (_BitInt(65535))(unsigned _BitInt(65535))v);
+}
+static void conversions_bs65535_4(void) {
+    bs65535 v; memcpy(&v, bs65535_v4, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+    SHOW(_BitInt(65535), 65535, (_BitInt(65535))(unsigned _BitInt(65535))v);
+}
+static void conversions_bs65535_5(void) {
+    bs65535 v; memcpy(&v, bs65535_v5, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+    SHOW(_BitInt(65535), 65535, (_BitInt(65535))(unsigned _BitInt(65535))v);
+}
+static void conversions_bs65535_6(void) {
+    bs65535 v; memcpy(&v, bs65535_v6, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+    SHOW(_BitInt(65535), 65535, (_BitInt(65535))(unsigned _BitInt(65535))v);
+}
+static void conversions_bs65535_integers(void) {
     { volatile signed char v = (signed char)(-128LL); SHOW(_BitInt(65535), 65535, v); }
     { volatile signed char v = (signed char)(-1LL); SHOW(_BitInt(65535), 65535, v); }
     { volatile signed char v = (signed char)127ULL; SHOW(_BitInt(65535), 65535, v); }
@@ -7411,6 +7827,8 @@ static void conversions(void) {
     { volatile unsigned __int128 v = (unsigned __int128)0ULL; SHOW(_BitInt(65535), 65535, v); }
     { volatile unsigned __int128 v = (unsigned __int128)1ULL; SHOW(_BitInt(65535), 65535, v); }
     { volatile unsigned __int128 v = (unsigned __int128)(((unsigned __int128)0xffffffffffffffffULL << 64) | 0xffffffffffffffffULL); SHOW(_BitInt(65535), 65535, v); }
+}
+static void conversions_bs65535_floating(void) {
     { volatile _Float16 v = (_Float16)0.0; SHOW(_BitInt(65535), 65535, v); }
     { volatile float v = (float)0.0; SHOW(_BitInt(65535), 65535, v); }
     { volatile double v = (double)0.0; SHOW(_BitInt(65535), 65535, v); }
@@ -7436,135 +7854,153 @@ static void conversions(void) {
     { volatile double v = (double)(-1023.0 / 8); SHOW(_BitInt(65535), 65535, v); }
     { volatile long double v = (long double)(-1023.0 / 8); SHOW(_BitInt(65535), 65535, v); }
     { volatile __float128 v = (__float128)(-1023.0 / 8); SHOW(_BitInt(65535), 65535, v); }
+}
+static void conversions_bs65535(void) {
+    printf("conversions bs65535\n");
+    conversions_bs65535_0();
+    conversions_bs65535_1();
+    conversions_bs65535_2();
+    conversions_bs65535_3();
+    conversions_bs65535_4();
+    conversions_bs65535_5();
+    conversions_bs65535_6();
+    conversions_bs65535_integers();
+    conversions_bs65535_floating();
+}
 #endif
 #ifdef BIT_INT_65535
-    printf("conversions bu65535\n");
-    { bu65535 v; memcpy(&v, bu65535_v0, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-      SHOW(unsigned _BitInt(65535), 65535, (unsigned _BitInt(65535))(_BitInt(65535))v);
-    }
-    { bu65535 v; memcpy(&v, bu65535_v1, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-      SHOW(unsigned _BitInt(65535), 65535, (unsigned _BitInt(65535))(_BitInt(65535))v);
-    }
-    { bu65535 v; memcpy(&v, bu65535_v2, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-      SHOW(unsigned _BitInt(65535), 65535, (unsigned _BitInt(65535))(_BitInt(65535))v);
-    }
-    { bu65535 v; memcpy(&v, bu65535_v3, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-      SHOW(unsigned _BitInt(65535), 65535, (unsigned _BitInt(65535))(_BitInt(65535))v);
-    }
-    { bu65535 v; memcpy(&v, bu65535_v4, sizeof v);
-      p128((u128)(bool)v);
-      p128((u128)(signed char)v);
-      p128((u128)(unsigned char)v);
-      p128((u128)(short)v);
-      p128((u128)(int)v);
-      p128((u128)(unsigned)v);
-      p128((u128)(long)v);
-      p128((u128)(unsigned long long)v);
-      p128((u128)(__int128)v);
-      p128((u128)(unsigned __int128)v);
-      p128((u128)(_BitInt(7))v);
-      p128((u128)(unsigned _BitInt(64))v);
-      p128((u128)(_BitInt(65))v);
-      p128((u128)(unsigned _BitInt(128))v);
-      { _Float16 f = v; bytes(&f, 2); }
-      { float f = v; bytes(&f, 4); }
-      { double f = v; bytes(&f, 8); }
-      { long double f = v; bytes(&f, 10); }
-      { __float128 f = v; bytes(&f, 16); }
-      SHOW(_BitInt(129), 129, (_BitInt(129))v);
-      SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
-      SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
-      SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
-      SHOW(unsigned _BitInt(65535), 65535, (unsigned _BitInt(65535))(_BitInt(65535))v);
-    }
+static void conversions_bu65535_0(void) {
+    bu65535 v; memcpy(&v, bu65535_v0, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+    SHOW(unsigned _BitInt(65535), 65535, (unsigned _BitInt(65535))(_BitInt(65535))v);
+}
+static void conversions_bu65535_1(void) {
+    bu65535 v; memcpy(&v, bu65535_v1, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+    SHOW(unsigned _BitInt(65535), 65535, (unsigned _BitInt(65535))(_BitInt(65535))v);
+}
+static void conversions_bu65535_2(void) {
+    bu65535 v; memcpy(&v, bu65535_v2, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+    SHOW(unsigned _BitInt(65535), 65535, (unsigned _BitInt(65535))(_BitInt(65535))v);
+}
+static void conversions_bu65535_3(void) {
+    bu65535 v; memcpy(&v, bu65535_v3, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+    SHOW(unsigned _BitInt(65535), 65535, (unsigned _BitInt(65535))(_BitInt(65535))v);
+}
+static void conversions_bu65535_4(void) {
+    bu65535 v; memcpy(&v, bu65535_v4, sizeof v);
+    p128((u128)(bool)v);
+    p128((u128)(signed char)v);
+    p128((u128)(unsigned char)v);
+    p128((u128)(short)v);
+    p128((u128)(int)v);
+    p128((u128)(unsigned)v);
+    p128((u128)(long)v);
+    p128((u128)(unsigned long long)v);
+    p128((u128)(__int128)v);
+    p128((u128)(unsigned __int128)v);
+    p128((u128)(_BitInt(7))v);
+    p128((u128)(unsigned _BitInt(64))v);
+    p128((u128)(_BitInt(65))v);
+    p128((u128)(unsigned _BitInt(128))v);
+    { _Float16 f = v; bytes(&f, 2); }
+    { float f = v; bytes(&f, 4); }
+    { double f = v; bytes(&f, 8); }
+    { long double f = v; bytes(&f, 10); }
+    { __float128 f = v; bytes(&f, 16); }
+    SHOW(_BitInt(129), 129, (_BitInt(129))v);
+    SHOW(unsigned _BitInt(129), 129, (unsigned _BitInt(129))v);
+    SHOW(_BitInt(4096), 4096, (_BitInt(4096))v);
+    SHOW(unsigned _BitInt(4096), 4096, (unsigned _BitInt(4096))v);
+    SHOW(unsigned _BitInt(65535), 65535, (unsigned _BitInt(65535))(_BitInt(65535))v);
+}
+static void conversions_bu65535_integers(void) {
     { volatile signed char v = (signed char)(-128LL); SHOW(unsigned _BitInt(65535), 65535, v); }
     { volatile signed char v = (signed char)(-1LL); SHOW(unsigned _BitInt(65535), 65535, v); }
     { volatile signed char v = (signed char)127ULL; SHOW(unsigned _BitInt(65535), 65535, v); }
@@ -7592,6 +8028,8 @@ static void conversions(void) {
     { volatile unsigned __int128 v = (unsigned __int128)0ULL; SHOW(unsigned _BitInt(65535), 65535, v); }
     { volatile unsigned __int128 v = (unsigned __int128)1ULL; SHOW(unsigned _BitInt(65535), 65535, v); }
     { volatile unsigned __int128 v = (unsigned __int128)(((unsigned __int128)0xffffffffffffffffULL << 64) | 0xffffffffffffffffULL); SHOW(unsigned _BitInt(65535), 65535, v); }
+}
+static void conversions_bu65535_floating(void) {
     { volatile _Float16 v = (_Float16)0.0; SHOW(unsigned _BitInt(65535), 65535, v); }
     { volatile float v = (float)0.0; SHOW(unsigned _BitInt(65535), 65535, v); }
     { volatile double v = (double)0.0; SHOW(unsigned _BitInt(65535), 65535, v); }
@@ -7607,6 +8045,40 @@ static void conversions(void) {
     { volatile double v = (double)(7.0 / 4); SHOW(unsigned _BitInt(65535), 65535, v); }
     { volatile long double v = (long double)(7.0 / 4); SHOW(unsigned _BitInt(65535), 65535, v); }
     { volatile __float128 v = (__float128)(7.0 / 4); SHOW(unsigned _BitInt(65535), 65535, v); }
+}
+static void conversions_bu65535(void) {
+    printf("conversions bu65535\n");
+    conversions_bu65535_0();
+    conversions_bu65535_1();
+    conversions_bu65535_2();
+    conversions_bu65535_3();
+    conversions_bu65535_4();
+    conversions_bu65535_integers();
+    conversions_bu65535_floating();
+}
+#endif
+static void conversions(void) {
+    conversions_bs129();
+    conversions_bu129();
+    conversions_bs192();
+    conversions_bu192();
+    conversions_bs255();
+    conversions_bu255();
+    conversions_bs256();
+    conversions_bu256();
+    conversions_bs257();
+    conversions_bu257();
+    conversions_bs512();
+    conversions_bu512();
+    conversions_bs1000();
+    conversions_bu1000();
+    conversions_bs4096();
+    conversions_bu4096();
+#ifdef BIT_INT_65535
+    conversions_bs65535();
+#endif
+#ifdef BIT_INT_65535
+    conversions_bu65535();
 #endif
 }
 
