@@ -100,6 +100,7 @@ pub(crate) use token::{
     Token,
     TokenType,
 };
+pub(crate) use token_conversion::bit_precise_magnitude;
 
 use crate::{
     translation_phases::{

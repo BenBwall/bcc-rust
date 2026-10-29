@@ -175,6 +175,44 @@ fn bit_int_constants_have_the_narrowest_width() {
 }
 
 #[test]
+fn bit_int_constants_wider_than_64_bits_have_exact_values() {
+    holds_on_x86_64(concat!(
+        "#define IS(e, t) _Static_assert(_Generic((e), t: 1, default: 0), #e)\n",
+        "IS(18446744073709551616wb, _BitInt(66));\n",
+        "IS(18446744073709551616uwb, unsigned _BitInt(65));\n",
+        "IS(0x1'0000'0000'0000'0000'0000wb, _BitInt(82));\n",
+        "IS(02000000000000000000000000000000WB, _BitInt(93));\n",
+        "IS(0b10000000000000000000000000000000000000000000000000000000000000000000000uwb, \
+         unsigned _BitInt(71));\n",
+        "IS(1606938044258990275541962092341162602522202993782792835301376wb, _BitInt(202));\n",
+        "_Static_assert(18446744073709551616wb == (_BitInt(66))1 << 64, \"\");\n",
+        "_Static_assert(0x1'0000'0000'0000'0000'0000wb == (_BitInt(82))1 << 80, \"\");\n",
+        "_Static_assert(02000000000000000000000000000000WB == (_BitInt(93))1 << 91, \"\");\n",
+        "_Static_assert(1606938044258990275541962092341162602522202993782792835301376wb == \
+         (_BitInt(202))1 << 200, \"\");\n",
+        "_Static_assert(-340282366920938463463374607431768211455wb + 1 == \
+         -(_BitInt(129))((unsigned __int128)-1 - 1), \"\");\n",
+    ));
+    // Past `BITINT_MAXWIDTH` it is too large: 65535 bits for GCC, 8388608
+    // for Clang.
+    let source = format!("int x = (int)0x1{}wb;", "0".repeat(16384));
+    for (identity, expected) in [(CompilerIdentity::Gcc, 1), (CompilerIdentity::Clang, 0)] {
+        with_configuration(
+            &source,
+            CompilerConfiguration::new(CStandard::C23, ExtensionPolicy::Allow)
+                .with_compiler_identity(identity),
+            |context, _| {
+                assert_eq!(
+                    context.take_pending_errors().len(),
+                    expected,
+                    "{identity:?}"
+                );
+            },
+        );
+    }
+}
+
+#[test]
 fn constants_fold_at_their_width() {
     holds(
         "_Static_assert((unsigned _BitInt(7))0 - (unsigned _BitInt(7))1 == 127, \

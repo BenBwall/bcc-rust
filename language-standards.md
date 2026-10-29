@@ -21,8 +21,8 @@ feature matrix, is implemented through the batch pipeline. These limits remain:
   constant bounds and typedefs naming unions wait for analysis.
 - Decimal type keywords parse, but the decimal floating suffixes `df`, `dd` and
   `dl` and decimal values are not implemented.
-- Integer constants are limited to 64-bit magnitudes. A signed `wb` constant may
-  take a 65-bit type for a 64-bit magnitude; larger magnitudes are diagnosed.
+- Integer constants are limited to 64-bit magnitudes, except `wb` and `uwb`
+  constants, which reach `BITINT_MAXWIDTH`; larger magnitudes are diagnosed.
   Preprocessing expressions use a 64-bit intmax/uintmax model.
 - C2y is the subset listed under [Decisions](#decisions), not every current or
   future draft change.
@@ -2379,8 +2379,12 @@ Semantics follow C23:
   including `__int128`, which outranks `_BitInt(128)`.
 - **Constants.** `wb` and `uwb` constants take the narrowest width that holds
   the value and, for `wb`, a sign bit (`3wb` is `_BitInt(3)`, `0uwb`
-  `unsigned _BitInt(1)`; §6.4.4.2p6); the lexer reads at most 64 bits of
-  magnitude. Folding computes at the type's width: an unsigned result wraps
+  `unsigned _BitInt(1)`; §6.4.4.2p6), in every radix and up to
+  `BITINT_MAXWIDTH` (`18446744073709551616wb` is `_BitInt(66)`); one wider
+  is "too large", as GCC reports it. A token of more than 64 bits keeps
+  its spelling, which semantic analysis reads into the exact value
+  (`IntegerTokenType::WideBitInt`, `preprocessing::bit_precise_magnitude`).
+  Folding computes at the type's width: an unsigned result wraps
   modulo 2^N and a signed one outside the type's range overflowed and is no
   constant. A shift checks its count and result against N, not against
   the `int` a narrow operand computes in: a count of N or more and a signed
@@ -2458,8 +2462,7 @@ lowering stops with "not yet supported by lowering: _BitInt types of more
 than 128 bits". The remaining work is the limb legalization of their
 operations (with helpers equivalent to libgcc's `__mulbitint3`,
 `__divmodbitint4`, `__floatbitint*` and `__fix*bitint`, which GCC 13's
-libgcc lacks, so bcc must carry its own) and `wb` constants of more than
-64 bits. `tests/integration/bit_int.rs` compares
+libgcc lacks, so bcc must carry its own). `tests/integration/bit_int.rs` compares
 every operator, conversion and folded constant at widths 1-128 with the
 bundled Clang and GCC 15 on every back end, and with wasi-sdk's Clang on
 `wasm32-wasip1`, and links calls between bcc, Clang and GCC objects.

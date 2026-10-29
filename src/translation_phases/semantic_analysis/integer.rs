@@ -92,6 +92,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         self.types.target.integer(Scalar::UnsignedLong).unwrap(),
                     | I::UnsignedLongLong(_) => (64, false),
                     | I::BitInt(_, width, unsigned) => (u32::from(width), !unsigned),
+                    | I::WideBitInt(spelling, width, unsigned) => {
+                        let spelling = self.context.string_cache.at(spelling);
+                        let value = self.wide.literal(spelling, width, !unsigned);
+                        self.integers.push(Some(value));
+                        return;
+                    },
                     | I::Imaginary(..) => {
                         self.integers.push(None);
                         return;

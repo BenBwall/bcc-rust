@@ -303,6 +303,12 @@ pub(crate) enum IntegerTokenType {
     UnsignedLongLong(Packed<u64>),
     /// C23 bit-precise suffix: magnitude, minimum width, unsignedness.
     BitInt(Packed<u64>, u8, bool),
+    /// C23 bit-precise suffix on a magnitude of more than 64 bits: the
+    /// constant's spelling, its minimum width and unsignedness. Semantic
+    /// analysis reads the value from the spelling
+    /// ([`super::bit_precise_magnitude`]).
+    /// C23: §6.4.4.2 paragraph 6, p. 64; PDF p. 77.
+    WideBitInt(StringCacheId, u32, bool),
     /// GNU imaginary integer constant.
     Imaginary(Packed<u64>, ImaginaryIntegerKind),
 }
@@ -1307,6 +1313,9 @@ impl From<IntegerTokenType> for i128 {
             | IntegerTokenType::Long(v) | IntegerTokenType::LongLong(v) => i128::from(v.get()),
             | IntegerTokenType::UnsignedInt(v) => i128::from(v),
             | IntegerTokenType::Int(v) => i128::from(v),
+            // Above every 64-bit value, which is all a reader of the token
+            // alone may need; the exact value is the spelling's.
+            | IntegerTokenType::WideBitInt(..) => i128::MAX,
         }
     }
 }

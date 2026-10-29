@@ -84,6 +84,15 @@ pub(crate) fn describe_token<'a>(
                     );
                     return line.into_str();
                 },
+                // The spelling is the value of a constant wider than 64 bits.
+                | IntegerTokenType::WideBitInt(_, width, unsigned) => {
+                    _ = write!(
+                        line,
+                        "integer constant `{spelling}` ({}_BitInt({width}))",
+                        if unsigned { "unsigned " } else { "" }
+                    );
+                    return line.into_str();
+                },
                 | IntegerTokenType::Imaginary(value, component) => {
                     // GNU imaginary integer constants extend C99 §6.4.4.1
                     // under §4p6; preserve the imaginary component as for

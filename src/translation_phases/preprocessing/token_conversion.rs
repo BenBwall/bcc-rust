@@ -932,6 +932,40 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
         failed
     }
 
+    /// A `wb` or `uwb` constant whose magnitude needs more than 64 bits:
+    /// its type is the narrowest bit-precise type that holds it, with a
+    /// sign bit for `wb`; `None` when that is wider than `BITINT_MAXWIDTH`,
+    /// which leaves the constant too large, as GCC and Clang report it.
+    /// C23: §6.4.4.2 paragraphs 2 and 6, pp. 63-64; PDF pp. 76-77.
+    fn wide_bit_int(&mut self, token: PreprocessorToken, unsigned: bool) -> Option<Token> {
+        let spelling = self.context.string_cache.at(token.contents);
+        // At most four bits per digit, plus a limb of slack.
+        let limbs = spelling.len() / 16 + 2;
+        let magnitude = self
+            .context
+            .tu_arena()
+            .alloc_slice_fill_iter(std::iter::repeat_n(0_u64, limbs));
+        bit_precise_magnitude(spelling, magnitude);
+        let length = magnitude
+            .iter()
+            .rposition(|&limb| limb != 0)
+            .map_or(0, |top| {
+                64 * top as u64 + u64::from(64 - magnitude[top].leading_zeros())
+            });
+        let width = length + u64::from(!unsigned);
+        if width > self.context.configuration.bit_int_max_width() {
+            return None;
+        }
+        Some(Self::build_token(
+            token,
+            TokenType::Integer(IntegerTokenType::WideBitInt(
+                token.contents,
+                u32::try_from(width).ok()?,
+                unsigned,
+            )),
+        ))
+    }
+
     /// Converts an integer pp-number in `radix`, giving it the first type of
     /// the list for its radix and suffix that holds the value under
     /// `representation`.
@@ -996,6 +1030,26 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
             (result, did_overflow)
         };
         let missing_digits = index == start_index && (radix != 8 || start_index == 2);
+        let contents = self.context.string_cache.at(token.contents);
+        let tail = &contents[index..contents.len() - 1];
+        let bit_precise = self.context.configuration.accepts(Feature::BitIntSuffixes)
+            && matches!(
+                tail,
+                "wb" | "WB" | "uwb" | "Uwb" | "uWB" | "UWB" | "wbu" | "wbU" | "WBu" | "WBU"
+            )
+            && !missing_digits;
+        let unsigned = tail.contains(['u', 'U']);
+        let long_long = matches!(
+            tail,
+            "ll" | "LL" | "ull" | "Ull" | "uLL" | "ULL" | "llu" | "llU" | "LLu" | "LLU"
+        );
+        if did_overflow
+            && bit_precise
+            && representation == IntegerRepresentation::Target
+            && let Some(token) = self.wide_bit_int(token, unsigned)
+        {
+            return token;
+        }
         if did_overflow {
             self.context.preprocessor_error(PreprocessorError {
                 error_type:     PreprocessorErrorType::IntegerLiteralOverflow,
@@ -1003,15 +1057,7 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
             });
         }
         let contents = self.context.string_cache.at(token.contents);
-        let tail = &contents[index..contents.len() - 1];
-        let bitint_unsigned = if self.context.configuration.accepts(Feature::BitIntSuffixes)
-            && matches!(
-                tail,
-                "wb" | "WB" | "uwb" | "Uwb" | "uWB" | "UWB" | "wbu" | "wbU" | "WBu" | "WBU"
-            )
-            && !missing_digits
-        {
-            let unsigned = tail.contains(['u', 'U']);
+        let bitint_unsigned = if bit_precise {
             if representation == IntegerRepresentation::Target {
                 let width = (64 - result.leading_zeros()).max(1) + u32::from(!unsigned);
                 return Self::build_token(
@@ -1032,10 +1078,7 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
         } else {
             None
         };
-        if matches!(
-            tail,
-            "ll" | "LL" | "ull" | "Ull" | "uLL" | "ULL" | "llu" | "llU" | "LLu" | "LLU"
-        ) {
+        if long_long {
             self.context.report_extension(
                 Feature::LongLong,
                 "long long integer constant",
@@ -1781,4 +1824,58 @@ fn interchange_suffix(contents: &str) -> Option<(InterchangeFloat, usize)> {
     })?;
     // The significand must remain: `1.f32` keeps `1.`.
     (spelling.len() > length).then_some((format, length))
+}
+
+/// Writes the magnitude of the integer constant `spelling` (a decimal,
+/// octal, hexadecimal or binary pp-number, with digit separators and a
+/// suffix) to `limbs` as little-endian 64-bit limbs, truncated to their
+/// length: how a `wb` constant of more than 64 bits keeps its value.
+/// C23: §6.4.4.2 paragraphs 1-4, p. 63; PDF p. 76.
+pub(crate) fn bit_precise_magnitude(spelling: &str, limbs: &mut [u64]) {
+    let bytes = spelling.as_bytes();
+    let (radix, start) = match bytes {
+        | [b'0', b'x' | b'X', ..] => (16, 2),
+        | [b'0', b'b' | b'B', ..] => (2, 2),
+        | [b'0', ..] => (8, 1),
+        | _ => (10, 0),
+    };
+    limbs.fill(0);
+    // Digits gather into chunks below 2^64, each folded in with one pass
+    // over the limbs in use.
+    let mut used = 0;
+    let (mut chunk, mut scale) = (0_u64, 1_u64);
+    let mut fold = |chunk: u64, scale: u64, used: &mut usize| {
+        let mut carry = u128::from(chunk);
+        for limb in &mut limbs[..*used] {
+            let product = u128::from(*limb) * u128::from(scale) + carry;
+            *limb = low_limb(product);
+            carry = product >> 64;
+        }
+        if carry != 0
+            && let Some(limb) = limbs.get_mut(*used)
+        {
+            *limb = low_limb(carry);
+            *used += 1;
+        }
+    };
+    for &byte in &bytes[start..] {
+        if byte == b'\'' {
+            continue;
+        }
+        let Some(digit) = char::from(byte).to_digit(radix) else {
+            break;
+        };
+        if scale.checked_mul(u64::from(radix)).is_none() {
+            fold(chunk, scale, &mut used);
+            (chunk, scale) = (0, 1);
+        }
+        chunk = chunk * u64::from(radix) + u64::from(digit);
+        scale *= u64::from(radix);
+    }
+    fold(chunk, scale, &mut used);
+}
+
+/// The low 64 bits of a double-limb intermediate.
+fn low_limb(value: u128) -> u64 {
+    u64::try_from(value & u128::from(u64::MAX)).unwrap_or(0)
 }

@@ -176,6 +176,18 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         self.retain_expression(info);
                         return;
                     },
+                    | IntegerTokenType::WideBitInt(spelling, width, unsigned) => {
+                        info.ty = self.types.intern(TypeKind::BitInt {
+                            width,
+                            signed: !unsigned,
+                        });
+                        let spelling = self.context.string_cache.at(spelling);
+                        info.integer = Some(self.wide.literal(spelling, width, !unsigned));
+                        info.ice = true;
+                        info.constant = ConstantClass::Arithmetic;
+                        self.retain_expression(info);
+                        return;
+                    },
                     | _ => {
                         self.retain_expression(info);
                         return;

@@ -50,9 +50,12 @@ use super::{
 use crate::{
     float_parsing::bits,
     ir::Type,
-    translation_phases::parsing::syntax::{
-        BinaryOperator,
-        UnaryOperator,
+    translation_phases::{
+        parsing::syntax::{
+            BinaryOperator,
+            UnaryOperator,
+        },
+        preprocessing::bit_precise_magnitude,
     },
     util::{
         bump::Bump,
@@ -339,6 +342,18 @@ impl WideIntegers<'_> {
                 return self.finish(result, bits, true, true, scratch).is_none();
             }
             limbs::negative(result) || limbs::bit_length(result) > u64::from(bits)
+        })
+    }
+
+    /// The value of a `wb` or `uwb` constant of more than 64 bits, read
+    /// from its `spelling`, in its type of `bits` width and `signed`ness,
+    /// which holds it.
+    /// C23: §6.4.4.2 paragraph 6, p. 64; PDF p. 77.
+    pub(crate) fn literal(&self, spelling: &str, bits: u32, signed: bool) -> Integer {
+        self.with_scratch(|scratch| {
+            let magnitude = zeroed(scratch, limb_count(bits) + 1);
+            bit_precise_magnitude(spelling, magnitude);
+            self.canonical(magnitude, bits, signed)
         })
     }
 
