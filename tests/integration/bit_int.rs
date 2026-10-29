@@ -287,7 +287,9 @@ mod tests {
     /// `scripts/generate_wide_bit_int_program.py`), which bcc keeps in
     /// memory and computes with its own runtime routines. Width 65535 is
     /// built with `-DBIT_INT_65535` and compared with GCC alone, as Clang
-    /// compiles it slowly; the rest must print what Clang's build prints.
+    /// compiles it slowly, and only in compiled programs, which run it in
+    /// well under a second where the interpreter takes a minute; the rest
+    /// must print what Clang's build prints.
     #[test]
     fn wide_bit_int_programs_match_clang_and_gcc() {
         if !linux_x86_64() {
@@ -301,14 +303,14 @@ mod tests {
             ("-DBIT_INT_65535", full)
         } else {
             eprintln!("note: no host GCC with _BitInt; checking widths up to 4096 against Clang");
-            ("-DBIT_INT_NONE", clang)
+            ("-DBIT_INT_NONE", clang.clone())
         };
         for identity in ["--compiler-identity=clang", "--compiler-identity=gcc"] {
             for flags in [
                 &["--interpret", "--opt=none"][..],
                 &["--interpret", "--opt=bcc"],
             ] {
-                let output = bcc(&[&[identity, "-std=c23", define, &source][..], flags].concat());
+                let output = bcc(&[&[identity, "-std=c23", &source][..], flags].concat());
                 assert_eq!(
                     output.status.code(),
                     Some(0),
@@ -317,7 +319,7 @@ mod tests {
                 );
                 assert_lines(
                     &text(&output.stdout),
-                    &expected,
+                    &clang,
                     &format!("{identity} {flags:?}"),
                 );
             }

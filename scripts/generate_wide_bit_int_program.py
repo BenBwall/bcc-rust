@@ -42,8 +42,8 @@ BINARY = [
     ("and", "a & b"),
     ("or", "a | b"),
     ("xor", "a ^ b"),
-    ("shl", "a << b"),
-    ("shr", "a >> b"),
+    ("shl", "a << ({t})k"),
+    ("shr", "a >> ({t})k"),
     ("shlk", "a << k"),
     ("shrk", "a >> k"),
     ("cmp", None),
@@ -230,29 +230,22 @@ def generate():
             if is_huge and name in ("mul", "div", "rem", "mul="):
                 pairs = pairs[:: max(1, len(pairs) // 6)]
             for a, b in pairs:
+                # A shift count is the value of `k`, converted to the
+                # shifted type for the operators that take one of it.
                 k = 0
-                if name in ("shl", "shr", "shr="):
-                    b = (b % ty.width) if b >= 0 else 0
-                if name in ("shlk", "shrk"):
+                if name in ("shl", "shr", "shr=", "shlk", "shrk"):
                     k = abs(b) % ty.width
                     b = 0
-                if name in ("shlk", "shrk") and not defined(ty, name, a, k):
+                    if not defined(ty, name, a, k):
+                        continue
+                elif not defined(ty, name, a, b):
                     continue
-                if name not in ("shlk", "shrk") and not defined(ty, name, a, b):
-                    continue
-                entries.append((code, operands.index(a), operands.index(b) if b in operands else -1, k, a, b))
+                entries.append((code, operands.index(a), operands.index(b), k))
         for offset, (name, _) in enumerate(UNARY):
             for a in operands:
                 if defined(ty, name, a, 0):
-                    entries.append((len(BINARY) + offset, operands.index(a), 0, 0, a, 0))
-        # A shift count that is no operand value is stored beside the table.
-        counts = []
-        for i, entry in enumerate(entries):
-            code, ia, ib, k, a, b = entry
-            if ib == -1:
-                counts.append(b)
-                entries[i] = (code, ia, len(operands) + len(counts) - 1, k, a, b)
-        section = emit_type(ty, operands, counts, entries)
+                    entries.append((len(BINARY) + offset, operands.index(a), 0, 0))
+        section = emit_type(ty, operands, entries)
         if is_huge:
             section = ["#ifdef BIT_INT_65535"] + section + ["#endif"]
         lines.extend(section)
@@ -270,14 +263,14 @@ def generate():
     OUTPUT.write_text("\n".join(lines) + "\n")
 
 
-def emit_type(ty, operands, counts, entries):
+def emit_type(ty, operands, entries):
     t, s = ty.tag, ty.spelling
     lines = [f"typedef {s} {t};"]
-    for index, value in enumerate(operands + counts):
+    for index, value in enumerate(operands):
         limbs = ", ".join(f"{limb:#x}" for limb in ty.image(value))
         lines.append(f"static const limb {t}_v{index}[{ty.limbs}] = {{{limbs}}};")
     lines.append(f"static const limb *const {t}_v[] = {{")
-    lines.append("    " + ", ".join(f"{t}_v{i}" for i in range(len(operands) + len(counts))))
+    lines.append("    " + ", ".join(f"{t}_v{i}" for i in range(len(operands))))
     lines.append("};")
     for column, pick in (("op", 0), ("a", 1), ("b", 2)):
         lines.append(f"static const unsigned short {t}_{column}[] = {{")
@@ -305,11 +298,11 @@ def emit_type(ty, operands, counts, entries):
         elif name == "mul=":
             body = "r = a; r *= b"
         elif name == "shr=":
-            body = "r = a; r >>= b"
+            body = f"r = a; r >>= ({t})k"
         elif name == "cond":
             body = "r = a ? b : a; s = a < b ? a : b; r ^= s"
         else:
-            body = f"r = {expression}"
+            body = f"r = {expression.format(t=t)}"
         lines.append(f"        case {code}: {body}; break;")
     for offset, (name, expression) in enumerate(UNARY):
         code = len(BINARY) + offset
@@ -395,6 +388,8 @@ def folded(sections, rng):
         count = 0
         for a, b in picks:
             for name, expression in BINARY + UNARY:
+                if name in ("shl", "shr"):
+                    expression = "a << b" if name == "shl" else "a >> b"
                 if expression is None or "k" in expression:
                     continue
                 operand_b = (b % ty.width if b >= 0 else 0) if name in ("shl", "shr") else b
