@@ -140,6 +140,16 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             self.push_item(Operand::Value(value), info.ty);
             return Ok(());
         }
+        // A wide one is a constant object of its limbs.
+        if info.ice
+            && !info.runtime_query
+            && let Some(value) = info.integer
+            && self.wide_bit_int(info.ty).is_some()
+        {
+            let address = self.wide_constant(value, info.ty, source)?;
+            self.push_item(Operand::Aggregate(address), info.ty);
+            return Ok(());
+        }
         // A folded floating value replaces a value's evaluation, never an
         // lvalue's: a compound literal Clang reads (§6.6p10) is still an
         // object whose address may be taken or that may be assigned.
@@ -905,6 +915,9 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 return self.convert_excess(item, to, target, source),
             | _ => self.settle(item),
         };
+        if self.wide_bit_int(to).is_some() || self.wide_bit_int(item.ty).is_some() {
+            return self.wide_convert(item, to, source);
+        }
         let types = &self.unit.sema.types;
         if matches!(target, Repr::Complex { .. })
             || matches!(repr(types, item.ty), Ok(Repr::Complex { .. }))
@@ -1120,6 +1133,9 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             | Operand::Value(value) if self.draft.value_type(value).half_format().is_some() =>
                 self.widen_half(value),
             | Operand::Excess(value) | Operand::Value(value) => value,
+            | Operand::Aggregate(address) | Operand::Place(Place::Memory(address))
+                if self.wide_bit_int(item.ty).is_some() =>
+                return self.wide_truth(address, item.ty, source),
             | _ => return Err(LoweringError::missing("a condition has no value", source)),
         };
         let ty = self.draft.value_type(value);
@@ -1519,7 +1535,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
 
     /// A binary operator on converted operands, with result type `ty`.
     /// C99: §6.5.5-§6.5.12, pp. 82-88; PDF pp. 94-100.
-    fn binary(
+    pub(super) fn binary(
         &mut self,
         operator: BinaryOperator,
         left: Item,
@@ -1537,6 +1553,15 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             return self.half_binary(operator, left, right, ty, source);
         }
         let (left, right) = (self.settle(left), self.settle(right));
+        // An operand of more than 128 bits is in memory; a wide right
+        // operand comes back as its low bits' value.
+        if self.wide_bit_int(left.ty).is_some()
+            || self.wide_bit_int(ty).is_some()
+            || (self.wide_bit_int(right.ty).is_some()
+                && !matches!(right.operand, Operand::Value(_)))
+        {
+            return self.wide_binary(operator, left, right, ty, source);
+        }
         if matches!(left.operand, Operand::Complex(_))
             || matches!(right.operand, Operand::Complex(_))
         {
@@ -1752,6 +1777,11 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         } else {
             self.pop()
         };
+        if matches!(operator, U::Minus | U::BitwiseNot) && self.wide_bit_int(info.ty).is_some() {
+            let result = self.wide_unary(operator, operand, info.ty, source)?;
+            self.operands.push(result);
+            return Ok(());
+        }
         let result = match operator {
             | U::AddressOf => match operand.operand {
                 | Operand::Place(Place::Memory(address)) => Operand::Value(address),
@@ -1845,6 +1875,15 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     self.push_item(result.operand, info.ty);
                     return Ok(());
                 }
+                // A wide operand's value is its object, which the store
+                // replaces; a postfix operator yields a copy.
+                let operand = if self.wide_bit_int(operand.ty).is_some()
+                    && matches!(operator, U::PostIncrement | U::PostDecrement)
+                {
+                    self.wide_snapshot(operand, source)?
+                } else {
+                    operand
+                };
                 let updated = self.step_value(operand, increment, false, source)?;
                 let stored = self.write(place, updated, source)?;
                 if matches!(operator, U::PreIncrement | U::PreDecrement) {
@@ -1872,6 +1911,9 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         atomic: bool,
         source: SourceVectors,
     ) -> Result<Item, LoweringError> {
+        if self.wide_bit_int(item.ty).is_some() {
+            return self.wide_step(item, increment, source);
+        }
         let value = self.value(item, source)?;
         let operand = match self.repr(item.ty, source)? {
             | Repr::Bool if increment => Operand::Value(self.iconst(Type::I8, 1)),

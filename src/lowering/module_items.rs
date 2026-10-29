@@ -1162,6 +1162,31 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
         Ok(global)
     }
 
+    /// A fresh internal constant global named after `stem`, holding `bytes`
+    /// at an alignment of `align` bytes.
+    pub(super) fn internal_constant(&mut self, stem: &'a str, bytes: &[u8], align: u64) -> GlobalId {
+        let name = self.unique_name(stem);
+        let global = self.module.declare_global(
+            name,
+            GlobalDecl {
+                linkage: IrLinkage::Internal,
+                size: bytes.len() as u64,
+                align: Align::from_bytes(align).unwrap_or(Align::BYTE),
+                constant: true,
+                thread_local: false,
+            },
+        );
+        self.module.define_global(
+            global,
+            GlobalInit::Bytes {
+                bytes,
+                relocations: &[],
+            },
+        );
+        _ = self.generated_globals.insert(global);
+        global
+    }
+
     /// Encodes a literal and its terminator in the target's character units.
     /// C99: §6.4.5p5, pp. 62-63; PDF pp. 74-75;
     /// §6.7.8p14-15, p. 126; PDF p. 138.
@@ -1612,6 +1637,21 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
                     TypeKind::Pointer(_) | TypeKind::Array(..)
                 )
         });
+        // A wide bit-precise object stores its limbs, its padding bits
+        // extended from its width.
+        if let Some((width, signed)) = super::wide_bit_int::wide_bit_int(&self.sema.types, ty) {
+            let (Some(value), None) = (integer, bit_field) else {
+                return Err(unsupported());
+            };
+            let mut limbs = ArenaVec::with_capacity_in(size / 8, self.tables);
+            limbs.resize(size / 8, 0_u64);
+            self.sema.integer_limbs(value, &mut limbs);
+            super::wide_bit_int::extend_limbs(&mut limbs, width, signed);
+            for (target, limb) in bytes[start..start + size].chunks_exact_mut(8).zip(&limbs) {
+                target.copy_from_slice(&limb.to_le_bytes());
+            }
+            return Ok(());
+        }
         if let Repr::Complex { component } = representation {
             let real = match (info.floating(), integer) {
                 | _ if let Some(value) = info.binary128() =>

@@ -101,6 +101,9 @@ pub(crate) enum Construct {
     LargeAutomaticObject,
     /// A bit-precise integer type of more than 128 bits.
     WideBitInt,
+    /// A conversion between a `_BitInt` of more than 128 bits and a
+    /// complex type.
+    WideBitIntConversion,
 }
 
 /// The errors of one translation unit, in the `'ir` arena.
@@ -165,6 +168,8 @@ impl Construct {
             | Self::Extension => "this extension",
             | Self::LargeAutomaticObject => "automatic objects of 4 GiB or more",
             | Self::WideBitInt => "_BitInt types of more than 128 bits",
+            | Self::WideBitIntConversion =>
+                "conversions between complex types and _BitInt types of more than 128 bits",
             | Self::CompoundLiteralStorage =>
                 "compound literals with static or thread storage duration",
         }

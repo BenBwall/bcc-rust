@@ -45,6 +45,8 @@
 //!   loads and stores; `alignment.rs` owns backing-place guarantees and all
 //!   memory and allocation alignment; `bit_fields.rs` bit-field reads and
 //!   writes; `bit_int.rs` the bit-precise integers calls pass in memory;
+//!   `wide_bit_int.rs` those of more than 128 bits, which live in memory
+//!   and compute in the C runtime beside it;
 //!   `initializers.rs` walks braced initializers; `assembly.rs` lowers GNU
 //!   `asm` statements; `vla.rs` evaluates saved array extents and runs the
 //!   cleanups of the regions an exit leaves: dynamic stack restores, and GNU
@@ -86,6 +88,7 @@ mod places;
 mod recursive;
 mod statements;
 mod vla;
+mod wide_bit_int;
 mod work;
 
 // Construction
@@ -109,6 +112,7 @@ pub(crate) use errors::{
     LoweringErrorKind,
     LoweringErrors,
 };
+pub(crate) use wide_bit_int::runtime as wide_bit_int_runtime;
 use module_items::Unit;
 use ssa::Draft;
 use work::{

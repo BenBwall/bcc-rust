@@ -183,8 +183,9 @@ fn scalar_repr(types: &Types<'_>, scalar: Scalar) -> Result<Repr, LoweringErrorK
 /// lowered.
 /// C23: §6.2.5 paragraphs 5-8, p. 39; PDF p. 52.
 fn bit_int_repr(width: u32, signed: bool) -> Result<Repr, LoweringErrorKind> {
+    // A wider one lives in memory as its limbs (`wide_bit_int.rs`).
     let Some(width) = u8::try_from(width).ok().filter(|&width| width <= 128) else {
-        return Err(LoweringErrorKind::Unsupported(Construct::WideBitInt));
+        return Ok(Repr::Aggregate);
     };
     Ok(Repr::Int {
         ty: int_type(u32::from(width)),
