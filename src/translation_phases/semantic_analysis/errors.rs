@@ -437,6 +437,11 @@ pub(crate) enum SemanticErrorKind {
     /// Clang extension: the error "address argument to atomic builtin must
     /// be a pointer to 1,2,4,8 or 16 byte type".
     AtomicOperandBytes,
+    /// Clang: `__builtin_mul_overflow` with a signed `_BitInt` operand or
+    /// result of more than 128 bits, which GCC accepts.
+    /// Clang extension: the error "__builtin_mul_overflow does not support
+    /// 'signed _BitInt' operands of more than 128 bits".
+    OverflowBuiltinBitInt,
     /// Clang diagnoses invalid constant orders as warnings.
     /// GNU extension: GCC manual, "__atomic Builtins".
     /// <https://gcc.gnu.org/onlinedocs/gcc/_005f_005fatomic-Builtins.html>
@@ -906,6 +911,7 @@ impl SemanticErrorKind {
             | Self::AtomicBuiltinBitInt => "a _BitInt object",
             | Self::AtomicOperandSize => "not a power-of-two size",
             | Self::AtomicOperandBytes => "more than 16 bytes",
+            | Self::OverflowBuiltinBitInt => "a signed _BitInt of more than 128 bits",
             | Self::InvalidAtomicOrder => "invalid memory order",
             | Self::InvalidAtomicFailureOrder => "invalid failure memory order",
             | Self::AtomicBufferQualifiers => "pointer conversion discards qualifiers",
@@ -1123,6 +1129,12 @@ impl SemanticErrorKind {
             | Self::AtomicOperandBytes => (
                 "address argument to atomic builtin must be a pointer to 1,2,4,8 or 16 byte type",
                 "the __sync builtins operate on objects of at most 16 bytes, in Clang and GCC",
+            ),
+            | Self::OverflowBuiltinBitInt => (
+                "__builtin_mul_overflow does not support 'signed _BitInt' operands of more \
+                 than 128 bits",
+                "Clang's __builtin_mul_overflow multiplies at most 128 bits of a signed \
+                 _BitInt; GCC accepts any width",
             ),
             | Self::AtomicOperandSize => (
                 "atomic memory operand must have a power-of-two size",

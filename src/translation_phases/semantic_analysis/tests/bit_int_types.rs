@@ -373,6 +373,43 @@ fn atomic_builtins_take_a_bit_int_as_each_compiler_does() {
     }
 }
 
+/// Clang refuses `__builtin_mul_overflow` with a signed `_BitInt` of more
+/// than 128 bits among its operands and result; GCC accepts every one, as
+/// both accept the unsigned ones, narrower ones and the other operations.
+#[test]
+fn clang_refuses_wide_signed_overflow_products() {
+    for (call, refused) in [
+        ("__builtin_mul_overflow(a, a, &r)", true),
+        ("__builtin_mul_overflow(1, 2, &r)", true),
+        ("__builtin_mul_overflow(1, a, &i)", true),
+        ("__builtin_mul_overflow(u, 2, &i)", false),
+        ("__builtin_mul_overflow(1, 2, &u)", false),
+        ("__builtin_mul_overflow(n, n, &n)", false),
+        ("__builtin_add_overflow(a, a, &r)", false),
+        ("__builtin_sub_overflow(a, 1, &r)", false),
+    ] {
+        let source = format!(
+            "_BitInt(200) a, r; unsigned _BitInt(200) u; _BitInt(128) n; int i;\n\
+             int f(void) {{ return {call}; }}"
+        );
+        assert_eq!(
+            kinds(&source, CompilerIdentity::Gcc, crate::target::Target::LinuxGnu),
+            [],
+            "{source}"
+        );
+        let expected: &[SemanticErrorKind] = if refused {
+            &[SemanticErrorKind::OverflowBuiltinBitInt]
+        } else {
+            &[]
+        };
+        assert_eq!(
+            kinds(&source, CompilerIdentity::Clang, crate::target::Target::LinuxGnu),
+            expected,
+            "{source}"
+        );
+    }
+}
+
 /// Asserts that `source` has no semantic errors for either identity on
 /// Linux x86-64.
 fn holds_on_x86_64(source: &str) {

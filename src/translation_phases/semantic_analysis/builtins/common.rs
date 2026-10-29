@@ -242,6 +242,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     .insert(std::ptr::from_ref(e).addr(), size);
             },
             | CommonBuiltin::Overflow(operation, scalar, predicate) => {
+                if let Some(arg) = self.wide_signed_product(operation, args) {
+                    self.error(
+                        SemanticErrorKind::OverflowBuiltinBitInt,
+                        arg.source_vectors,
+                        None,
+                        None,
+                    );
+                    return Some(Self::expression_result(e, self.types.unknown()));
+                }
                 for &arg in &args[..2] {
                     if let Some(scalar) = scalar {
                         let ty = self.types.scalar(scalar);
@@ -344,6 +353,40 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | CommonBuiltin::Unsupported(_) => {},
         }
         Some(info)
+    }
+
+    /// Under the Clang identity, the first operand or result of a
+    /// `__builtin_mul_overflow` that is a signed `_BitInt` of more than 128
+    /// bits, which Clang refuses (its runtime multiplies at most 128 bits);
+    /// an unsigned one is accepted, and GCC accepts both.
+    /// Clang extension: the error "__builtin_mul_overflow does not support
+    /// 'signed _BitInt' operands of more than 128 bits".
+    fn wide_signed_product(
+        &mut self,
+        operation: OverflowOperation,
+        args: &[&'tu Expression<'tu>],
+    ) -> Option<&'tu Expression<'tu>> {
+        if operation != OverflowOperation::Mul
+            || self.context.configuration.bit_int_rules() != crate::configuration::RuleSet::Clang
+        {
+            return None;
+        }
+        args.iter().take(3).enumerate().find_map(|(index, &arg)| {
+            let ty = self.converted(self.expression_info(arg));
+            let ty = if index == 2 {
+                match self.types.nodes[ty.index] {
+                    | TypeKind::Pointer(target) => target,
+                    | _ => return None,
+                }
+            } else {
+                ty
+            };
+            matches!(
+                self.types.nodes[ty.index],
+                TypeKind::BitInt { width, signed: true } if width > 128
+            )
+            .then_some(arg)
+        })
     }
 
     /// Apply compatibility before the descriptor's converted/original constant
