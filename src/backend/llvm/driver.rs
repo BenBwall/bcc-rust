@@ -573,7 +573,7 @@ fn concat_os(prefix: &str, value: &OsStr) -> std::ffi::OsString {
 /// The MinGW installation: `MINGW_ROOT`, else the parent of a `PATH`
 /// directory holding `gcc.exe` whose installation has `windows.h`. This is
 /// the search `build_support/native.rs` makes for the C helper.
-fn mingw_root() -> Option<PathBuf> {
+pub(crate) fn mingw_root() -> Option<PathBuf> {
     if let Some(root) = std::env::var_os("MINGW_ROOT") {
         return Some(PathBuf::from(root));
     }

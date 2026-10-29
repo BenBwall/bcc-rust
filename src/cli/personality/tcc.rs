@@ -1180,7 +1180,11 @@ fn search_directories(target: Target) -> String {
         .unwrap_or_default();
     _ = writeln!(text, "install: {}", install.display());
     text.push_str("include:\n");
-    for directory in crate::cli::search::library_directories(target, None) {
+    for directory in crate::cli::search::library_directories(
+        target,
+        None,
+        crate::configuration::CompilerIdentity::Tcc,
+    ) {
         _ = writeln!(text, "  {}", directory.display());
     }
     text.push_str("libraries:\n");

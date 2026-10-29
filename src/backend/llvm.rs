@@ -42,6 +42,7 @@ pub(crate) use driver::{
     Toolchain,
     compile_module,
     compile_module_checked,
+    mingw_root,
     needs_atomic_runtime,
     operand,
     print_commands,
