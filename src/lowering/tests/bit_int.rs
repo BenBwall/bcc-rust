@@ -83,9 +83,7 @@ fn wide_bit_ints_are_objects_that_call_the_runtime() {
 /// its padding bits extended, and a static object stores its limbs.
 #[test]
 fn wide_constants_are_objects_of_their_limbs() {
-    let text = lowered(
-        "_BitInt(129) g = -2;\n_BitInt(129) f(void) { return (_BitInt(129))-3; }",
-    );
+    let text = lowered("_BitInt(129) g = -2;\n_BitInt(129) f(void) { return (_BitInt(129))-3; }");
     assert!(
         text.contains(
             "global @g external size 24, align 8 = bytes \
@@ -130,13 +128,9 @@ fn wide_complex_conversions_are_refused() {
 #[test]
 fn the_middle_end_links_the_routines_a_module_calls() {
     let tu = Bump::new();
-    let source = tu.alloc_str(
-        "_BitInt(300) f(_BitInt(300) a, _BitInt(300) b) { return a / b; }\n",
-    );
-    let mut context = Context::with_configuration(
-        &tu,
-        crate::configuration::CompilerConfiguration::default(),
-    );
+    let source = tu.alloc_str("_BitInt(300) f(_BitInt(300) a, _BitInt(300) b) { return a / b; }\n");
+    let mut context =
+        Context::with_configuration(&tu, crate::configuration::CompilerConfiguration::default());
     let unit = parse_translation_unit(
         &mut context,
         Path::new("<test>"),
@@ -165,8 +159,10 @@ fn the_middle_end_links_the_routines_a_module_calls() {
         module
             .functions()
             .filter(|(_, function)| function.name.starts_with("__bcc_bitint_"))
-            .all(|(_, function)| function.linkage == crate::ir::Linkage::Internal
-                && function.body.is_some()),
+            .all(
+                |(_, function)| function.linkage == crate::ir::Linkage::Internal
+                    && function.body.is_some()
+            ),
         "{module}"
     );
 }

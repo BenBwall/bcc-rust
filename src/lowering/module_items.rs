@@ -1164,15 +1164,20 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
 
     /// A fresh internal constant global named after `stem`, holding `bytes`
     /// at an alignment of `align` bytes.
-    pub(super) fn internal_constant(&mut self, stem: &'a str, bytes: &[u8], align: u64) -> GlobalId {
+    pub(super) fn internal_constant(
+        &mut self,
+        stem: &'a str,
+        bytes: &[u8],
+        align: u64,
+    ) -> GlobalId {
         let name = self.unique_name(stem);
         let global = self.module.declare_global(
             name,
             GlobalDecl {
-                linkage: IrLinkage::Internal,
-                size: bytes.len() as u64,
-                align: Align::from_bytes(align).unwrap_or(Align::BYTE),
-                constant: true,
+                linkage:      IrLinkage::Internal,
+                size:         bytes.len() as u64,
+                align:        Align::from_bytes(align).unwrap_or(Align::BYTE),
+                constant:     true,
                 thread_local: false,
             },
         );
@@ -1671,7 +1676,12 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
                 }
                 return Ok(());
             }
-            for (target, limb) in bytes[start..start + size].chunks_exact_mut(8).zip(&limbs) {
+            for (target, limb) in bytes[start..start + size]
+                .as_chunks_mut::<8>()
+                .0
+                .iter_mut()
+                .zip(&limbs)
+            {
                 target.copy_from_slice(&limb.to_le_bytes());
             }
             return Ok(());

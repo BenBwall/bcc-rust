@@ -106,8 +106,8 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
             return self.binary(operator, left, right, ty, source);
         };
         if let Some(cc) = comparison(operator) {
-            let a = self.wide_address(left, source)?;
-            let b = self.wide_address(right, source)?;
+            let a = wide_address(left, source)?;
+            let b = wide_address(right, source)?;
             let bits = self.iconst(Type::I32, i128::from(width));
             let sign = self.iconst(Type::I32, i128::from(signed));
             let order = self.wide_call(Helper::Compare, &[a, b, bits, sign], source)?;
@@ -126,7 +126,7 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
                 ty,
             });
         }
-        let a = self.wide_address(left, source)?;
+        let a = wide_address(left, source)?;
         let bits = self.iconst(Type::I32, i128::from(width));
         let sign = self.iconst(Type::I32, i128::from(signed));
         let result = self.wide_object(left.ty, source)?;
@@ -135,7 +135,7 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
             // below N, which a `u64` holds.
             let count = match self.wide_bit_int(right.ty) {
                 | Some(_) => {
-                    let address = self.wide_address(right, source)?;
+                    let address = wide_address(right, source)?;
                     self.load_limbs_value(address, Type::I64)
                 },
                 | None => {
@@ -170,7 +170,7 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
                     source,
                 )),
         };
-        let b = self.wide_address(right, source)?;
+        let b = wide_address(right, source)?;
         _ = self.wide_call(helper, &[result, a, b, bits, sign], source)?;
         Ok(Item {
             operand: Operand::Aggregate(result),
@@ -184,11 +184,15 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
     /// an unsigned integer, which they read no wider.
     /// C99: §6.5.2.1 paragraph 2, p. 70; PDF p. 82; §6.5.7 paragraph 3,
     /// p. 84; PDF p. 96.
-    pub(super) fn wide_index(&mut self, item: Item, source: SourceVectors) -> Result<Item, LoweringError> {
+    pub(super) fn wide_index(
+        &mut self,
+        item: Item,
+        source: SourceVectors,
+    ) -> Result<Item, LoweringError> {
         if self.wide_bit_int(item.ty).is_none() || matches!(item.operand, Operand::Value(_)) {
             return Ok(item);
         }
-        let address = self.wide_address(item, source)?;
+        let address = wide_address(item, source)?;
         let low = self.load_limbs_value(address, Type::I64);
         Ok(Item {
             operand: Operand::Value(low),
@@ -217,7 +221,7 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
                     source,
                 )),
         };
-        let a = self.wide_address(operand, source)?;
+        let a = wide_address(operand, source)?;
         let result = self.wide_object(ty, source)?;
         let bits = self.iconst(Type::I32, i128::from(width));
         let sign = self.iconst(Type::I32, i128::from(signed));
@@ -246,8 +250,12 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
         let sign = self.iconst(Type::I32, i128::from(signed));
         let low = self.iconst(Type::I64, 1);
         let high = self.iconst(Type::I64, 0);
-        _ = self.wide_call(Helper::FromInteger, &[one, bits, sign, low, high, sign], source)?;
-        let a = self.wide_address(item, source)?;
+        _ = self.wide_call(
+            Helper::FromInteger,
+            &[one, bits, sign, low, high, sign],
+            source,
+        )?;
+        let a = wide_address(item, source)?;
         let result = self.wide_object(item.ty, source)?;
         let helper = if increment {
             Helper::Add
@@ -257,7 +265,7 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
         _ = self.wide_call(helper, &[result, a, one, bits, sign], source)?;
         Ok(Item {
             operand: Operand::Aggregate(result),
-            ty: item.ty,
+            ty:      item.ty,
         })
     }
 
@@ -270,7 +278,7 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
         item: Item,
         source: SourceVectors,
     ) -> Result<Item, LoweringError> {
-        let from = self.wide_address(item, source)?;
+        let from = wide_address(item, source)?;
         let layout =
             types::layout(&self.unit.sema.types, item.ty).map_err(|kind| at(kind, source))?;
         let copy = self.wide_object(item.ty, source)?;
@@ -357,7 +365,11 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
         };
         // The result, then back to the exact width.
         let (result, back) = if self.wide_bit_int(destination).is_some() {
-            let result = self.fresh_object(size.max(u64::from(to_width.div_ceil(64)) * 8), align, source)?;
+            let result = self.fresh_object(
+                size.max(u64::from(to_width.div_ceil(64)) * 8),
+                align,
+                source,
+            )?;
             let args = [
                 result,
                 self.iconst(Type::I32, i128::from(to_width)),
@@ -412,7 +424,7 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
         let bits = self.iconst(Type::I32, i128::from(width));
         let one = self.iconst(Type::I32, 1);
         if let Some((from_width, from_signed)) = self.wide_bit_int(item.ty) {
-            let from = self.wide_address(item, source)?;
+            let from = wide_address(item, source)?;
             let args = [
                 address,
                 bits,
@@ -441,14 +453,21 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
     }
 
     /// The width and signedness of the integer type `ty`.
-    fn integer_width(&self, ty: TypeId, source: SourceVectors) -> Result<(u32, bool), LoweringError> {
+    fn integer_width(
+        &self,
+        ty: TypeId,
+        source: SourceVectors,
+    ) -> Result<(u32, bool), LoweringError> {
         if let Some(wide) = self.wide_bit_int(ty) {
             return Ok(wide);
         }
         match self.repr(ty, source)? {
             | Repr::Int { signed, width, .. } => Ok((u32::from(width), signed)),
             | Repr::Bool => Ok((1, false)),
-            | _ => Err(LoweringError::missing("an overflow operand is no integer", source)),
+            | _ => Err(LoweringError::missing(
+                "an overflow operand is no integer",
+                source,
+            )),
         }
     }
 
@@ -489,7 +508,7 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
         ty: TypeId,
         source: SourceVectors,
     ) -> Result<Operand, LoweringError> {
-        let from = self.wide_address(value, source)?;
+        let from = wide_address(value, source)?;
         // The bytes the field shares with its neighbours are read and kept,
         // so each is frozen first, as narrow bit-field stores freeze theirs.
         for byte in [0, field.span - 1] {
@@ -587,14 +606,12 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
         source: SourceVectors,
     ) -> Result<Value, LoweringError> {
         self.constant_object(ty, source, |limbs| {
-            let pattern = value.cast_unsigned();
             let fill = if value < 0 { u64::MAX } else { 0 };
+            let bytes = value.to_le_bytes();
+            let (low, high) = bytes.as_chunks::<8>().0.split_at(1);
+            let halves = [u64::from_le_bytes(low[0]), u64::from_le_bytes(high[0])];
             for (index, limb) in limbs.iter_mut().enumerate() {
-                *limb = match index {
-                    | 0 => pattern as u64,
-                    | 1 => (pattern >> 64) as u64,
-                    | _ => fill,
-                };
+                *limb = halves.get(index).copied().unwrap_or(fill);
             }
         })
     }
@@ -665,7 +682,7 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
         let operand = match (from, into) {
             | (Some(from), Some(into)) if from == into => item.operand,
             | (Some((from_width, from_signed)), Some((width, signed))) => {
-                let a = self.wide_address(item, source)?;
+                let a = wide_address(item, source)?;
                 let result = self.wide_object(to, source)?;
                 let args = [
                     result,
@@ -755,7 +772,7 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
         target: Repr,
         source: SourceVectors,
     ) -> Result<Operand, LoweringError> {
-        let address = self.wide_address(item, source)?;
+        let address = wide_address(item, source)?;
         Ok(match target {
             | Repr::Bool => {
                 let truth = self.wide_truth(address, item.ty, source)?;
@@ -789,7 +806,8 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
                 };
                 let bits = self.iconst(Type::I32, i128::from(width));
                 let sign = self.iconst(Type::I32, i128::from(signed));
-                let value = self.wide_call(Helper::ToFloat(compute), &[address, bits, sign], source)?;
+                let value =
+                    self.wide_call(Helper::ToFloat(compute), &[address, bits, sign], source)?;
                 Operand::Value(if compute == ty {
                     value
                 } else {
@@ -818,18 +836,14 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
         )
     }
 
-    /// The address of the object holding the wide value `item`.
-    fn wide_address(&mut self, item: Item, source: SourceVectors) -> Result<Value, LoweringError> {
-        match item.operand {
-            | Operand::Aggregate(address) | Operand::Place(Place::Memory(address)) => Ok(address),
-            | _ => Err(LoweringError::missing("a wide value has no address", source)),
-        }
-    }
-
     /// A fresh object of the wide type `ty`.
     fn wide_object(&mut self, ty: TypeId, source: SourceVectors) -> Result<Value, LoweringError> {
         let layout = types::layout(&self.unit.sema.types, ty).map_err(|kind| at(kind, source))?;
-        self.fresh_object(layout.size, Align::from_bytes(8).unwrap_or(Align::BYTE), source)
+        self.fresh_object(
+            layout.size,
+            Align::from_bytes(8).unwrap_or(Align::BYTE),
+            source,
+        )
     }
 
     /// Calls the runtime routine `helper` with `args`, declaring it on its
@@ -871,7 +885,6 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
         let result = self.draft.push(Op::Call(function, args), helper.result());
         Ok(result.unwrap_or_else(|| self.iconst(Type::I32, 0)))
     }
-
 }
 
 /// The width and signedness of `ty`, after its qualifiers and atomicity,
@@ -883,6 +896,17 @@ pub(super) fn wide_bit_int(
     match types.kind(types.non_atomic(ty)) {
         | TypeKind::BitInt { width, signed } if width > 128 => Some((width, signed)),
         | _ => None,
+    }
+}
+
+/// The address of the object holding the wide value `item`.
+fn wide_address(item: Item, source: SourceVectors) -> Result<Value, LoweringError> {
+    match item.operand {
+        | Operand::Aggregate(address) | Operand::Place(Place::Memory(address)) => Ok(address),
+        | _ => Err(LoweringError::missing(
+            "a wide value has no address",
+            source,
+        )),
     }
 }
 
@@ -911,7 +935,7 @@ type FloatParts = (bool, u128, i32);
 /// and significand with the explicit integer bit; `None` for an infinity or
 /// a NaN.
 pub(super) fn x87_parts((sign, exponent, significand): (bool, u16, u64)) -> Option<FloatParts> {
-    (exponent != 0x7fff).then(|| {
+    (exponent != 0x7FFF).then(|| {
         (
             sign,
             u128::from(significand),
@@ -923,9 +947,9 @@ pub(super) fn x87_parts((sign, exponent, significand): (bool, u16, u64)) -> Opti
 /// The parts of the binary128 value with encoding `bits`; `None` for an
 /// infinity or a NaN.
 pub(super) fn binary128_parts(bits: u128) -> Option<FloatParts> {
-    let exponent = i32::try_from(bits >> 112 & 0x7fff).unwrap_or(0x7fff);
+    let exponent = i32::try_from(bits >> 112 & 0x7FFF).unwrap_or(0x7FFF);
     let fraction = bits & ((1 << 112) - 1);
-    (exponent != 0x7fff).then(|| {
+    (exponent != 0x7FFF).then(|| {
         let significand = if exponent == 0 {
             fraction
         } else {
@@ -1073,9 +1097,8 @@ impl Helper {
             | Self::Not | Self::Negate | Self::Compare => &[Ptr, Ptr, I32, I32],
             | Self::ShiftLeft | Self::ShiftRight => &[Ptr, Ptr, I64, I32, I32],
             | Self::Test => &[Ptr, I32],
-            | Self::Convert => &[Ptr, I32, I32, Ptr, I32, I32],
+            | Self::Convert | Self::FieldGet => &[Ptr, I32, I32, Ptr, I32, I32],
             | Self::FromInteger => &[Ptr, I32, I32, I64, I64, I32],
-            | Self::FieldGet => &[Ptr, I32, I32, Ptr, I32, I32],
             | Self::FieldSet => &[Ptr, I32, I32, Ptr],
             | Self::ToFloat(_) => &[Ptr, I32, I32],
             | Self::FromFloat(F32) => &[Ptr, I32, I32, F32],

@@ -462,19 +462,21 @@ impl<'tu> SemanticTranslationUnit<'tu> {
     /// more than 128 bits in memory, padding bits extended as GCC and Clang
     /// store them.
     /// C23: §6.2.6.2 paragraphs 1-2, pp. 42-43; PDF pp. 55-56.
+    #[expect(
+        clippy::unused_self,
+        reason = "The exact model of wide values keeps their limbs in the unit."
+    )]
     pub(crate) fn integer_limbs(&self, value: Integer, limbs: &mut [u64]) {
         let fill = if value.signed && value.value < 0 {
             u64::MAX
         } else {
             0
         };
-        let pattern = value.value as u128;
+        let bytes = value.value.to_le_bytes();
+        let (low, high) = bytes.as_chunks::<8>().0.split_at(1);
+        let halves = [u64::from_le_bytes(low[0]), u64::from_le_bytes(high[0])];
         for (index, limb) in limbs.iter_mut().enumerate() {
-            *limb = match index {
-                | 0 => pattern as u64,
-                | 1 => (pattern >> 64) as u64,
-                | _ => fill,
-            };
+            *limb = halves.get(index).copied().unwrap_or(fill);
         }
     }
 }

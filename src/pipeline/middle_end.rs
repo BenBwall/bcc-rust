@@ -17,29 +17,29 @@ use crate::{
         AbiError,
         lower_abi,
     },
-    ir::{
-        Module,
-        Profile,
-    },
     configuration::{
         CStandard,
         CompilerConfiguration,
         ExtensionPolicy,
     },
     headers::HeaderSearch,
+    ir::{
+        Module,
+        Profile,
+    },
     lowering::{
         LoweringErrors,
         wide_bit_int_runtime,
-    },
-    pipeline::{
-        analyze_translation_unit,
-        parse_translation_unit,
     },
     optimizer::{
         OptimizerOptions,
         optimize,
         resolve_inline_copies,
         resolve_object_sizes,
+    },
+    pipeline::{
+        analyze_translation_unit,
+        parse_translation_unit,
     },
     translation_phases::{
         Context,

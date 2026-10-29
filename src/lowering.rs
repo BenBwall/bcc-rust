@@ -45,12 +45,11 @@
 //!   loads and stores; `alignment.rs` owns backing-place guarantees and all
 //!   memory and allocation alignment; `bit_fields.rs` bit-field reads and
 //!   writes; `bit_int.rs` the bit-precise integers calls pass in memory;
-//!   `wide_bit_int.rs` those of more than 128 bits, which live in memory
-//!   and compute in the C runtime beside it;
-//!   `initializers.rs` walks braced initializers; `assembly.rs` lowers GNU
-//!   `asm` statements; `vla.rs` evaluates saved array extents and runs the
-//!   cleanups of the regions an exit leaves: dynamic stack restores, and GNU
-//!   cleanup calls from `cleanup.rs`.
+//!   `wide_bit_int.rs` those of more than 128 bits, which live in memory and
+//!   compute in the C runtime beside it; `initializers.rs` walks braced
+//!   initializers; `assembly.rs` lowers GNU `asm` statements; `vla.rs`
+//!   evaluates saved array extents and runs the cleanups of the regions an exit
+//!   leaves: dynamic stack restores, and GNU cleanup calls from `cleanup.rs`.
 //! - Construction: `ssa.rs` holds the draft function and its SSA variables;
 //!   `emit.rs` copies a finished draft into the module; `types.rs` maps C types
 //!   to IR types; shared `crate::float_parsing::bits` turns folded floating
@@ -112,9 +111,9 @@ pub(crate) use errors::{
     LoweringErrorKind,
     LoweringErrors,
 };
-pub(crate) use wide_bit_int::runtime as wide_bit_int_runtime;
 use module_items::Unit;
 use ssa::Draft;
+pub(crate) use wide_bit_int::runtime as wide_bit_int_runtime;
 use work::{
     Item,
     JumpTargets,
