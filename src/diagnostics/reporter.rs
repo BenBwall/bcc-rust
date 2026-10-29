@@ -157,15 +157,22 @@ impl<'r, 'tu> DiagnosticReporter<'r, 'tu> {
         self.last_parser = None;
         self.last_other = None;
         self.other_errors.clear();
+        // TCC stops compiling at the first error, so nothing follows it.
+        let stops_at_error = context.configuration.diagnostic_format()
+            == crate::configuration::DiagnosticFormat::Tcc;
         for PendingDiagnostic { diagnostic, .. } in self.pending.drain(..) {
             if diagnostic.severity == ErrorSeverity::Warning
                 && context.configuration.suppress_warnings()
             {
                 continue;
             }
+            let stopped = stops_at_error && self.errors != 0;
             match diagnostic.severity {
                 | ErrorSeverity::Error => self.errors += 1,
                 | ErrorSeverity::Warning => self.warnings += 1,
+            }
+            if stopped {
+                continue;
             }
             let text = self.renderer.render_text(&diagnostic, context);
             if let Some(observer) = &mut self.observer {

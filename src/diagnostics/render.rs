@@ -72,10 +72,11 @@ impl Renderer {
             self.paint(severity, severity_style),
             self.paint(diagnostic.message, Style::new().bold()),
         );
-        if matches!(
-            format,
-            DiagnosticFormat::Msvc { caret: false, .. } | DiagnosticFormat::Tcc
-        ) {
+        // TCC writes the message line alone.
+        if format == DiagnosticFormat::Tcc {
+            return out.into_str();
+        }
+        if matches!(format, DiagnosticFormat::Msvc { caret: false, .. }) {
             for item in diagnostic.notes.iter().chain(&diagnostic.help) {
                 for line in item.lines() {
                     let _ = writeln!(out, "        {line}");

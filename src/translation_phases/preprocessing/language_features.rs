@@ -1173,8 +1173,12 @@ fn write_gcc_floating_point_macros(configuration: CompilerConfiguration, out: &m
 /// defines neither GNU nor Clang macros, `_MSVC_TRADITIONAL` as 0 for bcc's
 /// conforming preprocessor (MSVC's `/Zc:preprocessor`) and `_MT` for the
 /// default static runtime; clang-cl keeps the Clang macros. TCC 0.9.27
-/// defines `__TINYC__` and no GNU or Clang macros. The target's definitions,
-/// such as `__x86_64__`, stay, as clang-cl keeps them.
+/// defines `__TINYC__`, no GNU or Clang macros, none for the `__int128` and
+/// `__float128` it lacks, neither `linux` nor `__NO_INLINE__`, and glibc's
+/// `__REDIRECT` family, which glibc's `<sys/cdefs.h>` defines only for GCC,
+/// so its headers rename functions with assembler labels (`fscanf` as
+/// `__isoc99_fscanf`), as with TCC. The target's definitions, such as
+/// `__x86_64__`, stay, as clang-cl keeps them.
 /// C99: §6.10.8 paragraph 4, p. 161; PDF p. 173; extension to §4
 /// paragraph 6, p. 7; PDF p. 19.
 fn identity_claim(identity: CompilerIdentity) -> &'static str {
@@ -1211,7 +1215,12 @@ fn identity_claim(identity: CompilerIdentity) -> &'static str {
              __llvm__\n#undef __VERSION__\n",
             "#undef __GNUC__\n#undef __GNUC_MINOR__\n#undef __GNUC_PATCHLEVEL__\n",
             "#undef __GNUC_STDC_INLINE__\n#undef __GNUC_GNU_INLINE__\n",
+            "#undef __SIZEOF_INT128__\n#undef __SIZEOF_FLOAT128__\n#undef __FLOAT128__\n",
+            "#undef __NO_INLINE__\n#undef linux\n",
             "#define __TINYC__ 927\n",
+            "#define __REDIRECT(name,proto,alias) name proto __asm__(#alias)\n",
+            "#define __REDIRECT_NTH(name,proto,alias) name proto __asm__(#alias)__THROW\n",
+            "#define __REDIRECT_NTHNL(name,proto,alias) name proto __asm__(#alias)__THROWNL\n",
         ),
     }
 }

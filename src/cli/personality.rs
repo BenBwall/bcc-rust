@@ -90,15 +90,31 @@ pub(super) fn run(
                 print(&text, stderr);
                 0
             },
-            | Step::Run { program, arguments } =>
-                match Command::new(&program).args(arguments).status() {
+            | Step::Run {
+                program,
+                arguments,
+                stdin,
+            } => {
+                let mut command = Command::new(&program);
+                _ = command.args(arguments);
+                let status = match stdin.map(std::fs::File::open).transpose() {
+                    | Ok(stdin) => {
+                        if let Some(stdin) = stdin {
+                            _ = command.stdin(stdin);
+                        }
+                        command.status()
+                    },
+                    | Err(error) => Err(error),
+                };
+                match status {
                     | Ok(status) => exit_status(status),
                     | Err(error) => {
                         invocation
                             .error(format_args!("cannot run '{}': {error}", program.display()));
                         1
                     },
-                },
+                }
+            },
         };
         if status == 0 {
             status = step_status;
@@ -322,10 +338,12 @@ enum Step {
     Link(Vec<OsString>),
     /// Print text.
     Print { text: String, stderr: bool },
-    /// Run a program bcc built and exit with its status.
+    /// Run a program (one bcc built, or a bundled tool) and exit with its
+    /// status, with its standard input read from `stdin` if given.
     Run {
         program:   PathBuf,
         arguments: Vec<OsString>,
+        stdin:     Option<PathBuf>,
     },
 }
 

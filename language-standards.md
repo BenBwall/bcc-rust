@@ -156,8 +156,9 @@ GNU and Clang macros and the inline-semantics macro, and defines `_MT` and
 `_MSVC_TRADITIONAL` `0` (bcc's preprocessor is conforming, like `cl
 /Zc:preprocessor`); `_MSC_VER` still needs `-fms-extensions` on the MSVC
 target, which the `cl` personality selects. `clang-cl` removes the GNU macros
-and keeps Clang's. `tcc` removes the GNU and Clang macros and defines
-`__TINYC__` `927` (TCC 0.9.27). Every identity keeps `__bcc__`, the ISO
+and keeps Clang's. `tcc` removes the GNU and Clang macros, the `__int128`
+and `__float128` size macros, `linux` and `__NO_INLINE__`, and defines
+`__TINYC__` `927` (TCC 0.9.27) and glibc's `__REDIRECT` family, as TCC does. Every identity keeps `__bcc__`, the ISO
 macros and the target's definitions, as clang-cl keeps `__x86_64__`.
 
 Several options change rules the mode otherwise fixes. `-ftrigraphs` and
