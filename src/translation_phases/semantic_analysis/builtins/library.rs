@@ -81,7 +81,7 @@ impl Analyzer<'_, '_, '_> {
             | T::Unsigned(_) => "unsigned long long",
             | T::VaList => "va_list",
             | T::File => "FILE *",
-            | T::Vector(..) | T::VectorPointer(..) | T::Opaque =>
+            | T::Vector(..) | T::VectorPointer(..) | T::VaListPointer | T::Opaque =>
                 unreachable!("ordinary library prototypes use C library types"),
         }
     }

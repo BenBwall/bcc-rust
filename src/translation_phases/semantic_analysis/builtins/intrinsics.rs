@@ -97,6 +97,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | TypeKind::Pointer(_) => list,
             | _ => unreachable!("target va_list is an array or pointer"),
         };
+        // Microsoft's `__va_start` takes the list's address as a value.
+        let (pointer, requires_lvalue) = if operation == crate::builtins::VaOperation::StartAt {
+            (self.types.intern(TypeKind::Pointer(list)), false)
+        } else {
+            (pointer, self.types.target.va_list_is_pointer)
+        };
         let mut failed_operand = false;
         for (index, &operand) in operands.iter().enumerate() {
             if index != 0 && operation != crate::builtins::VaOperation::Copy {
@@ -105,7 +111,6 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             {
                 let info = self.expression_info(operand);
                 let ty = self.converted(info);
-                let requires_lvalue = self.types.target.va_list_is_pointer;
                 if self.types.unanalyzed(ty) {
                     failed_operand = true;
                 } else if ty != pointer
@@ -122,7 +127,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 }
             }
         }
-        if operation == crate::builtins::VaOperation::Start {
+        if matches!(
+            operation,
+            crate::builtins::VaOperation::Start | crate::builtins::VaOperation::StartAt
+        ) {
             let variadic = self
                 .functions
                 .current

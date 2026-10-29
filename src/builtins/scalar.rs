@@ -1526,6 +1526,27 @@ pub(super) const BUILTINS: &[BuiltinDescriptor] = &[
         &[],
         0,
     ),
+    // Microsoft's `void __va_start(va_list *, ...)`, with Microsoft
+    // extensions: `<vadefs.h>`'s `va_start` on x64.
+    descriptor(
+        Id::MsVaStart,
+        "__va_start",
+        B::Varargs(VaOperation::StartAt),
+        Signature {
+            result:     T::Scalar(S::Void),
+            parameters: &[T::VaListPointer],
+            prototype:  true,
+            variadic:   true,
+        },
+        &[
+            A {
+                diagnostic: D::VaList,
+                ..A::evaluation(E::AdjustedPointer)
+            },
+            A::evaluation(E::Unevaluated),
+        ],
+        2,
+    ),
     // Microsoft's `void __debugbreak(void)`, with Microsoft extensions.
     descriptor(
         Id::Debugbreak,
@@ -1685,7 +1706,7 @@ const fn descriptor(
             feature,
             naming: match id {
                 | Id::PlainAlloca => NamingPolicy::GnuOrdinary,
-                | Id::Debugbreak | Id::Annotation => NamingPolicy::Microsoft,
+                | Id::Debugbreak | Id::Annotation | Id::MsVaStart => NamingPolicy::Microsoft,
                 | _ => NamingPolicy::Reserved,
             },
         },
