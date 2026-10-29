@@ -221,6 +221,11 @@ fn emit(request: &DependencyRequest, text: &str) -> Result<(), MainError> {
     }
 }
 
+/// How Clang begins the name of a header it reached from a main file in
+/// the working directory: that directory, `.`, appended to with the host's
+/// separator (`llvm::sys::path::append`), so `.\sub/s.h` on Windows.
+const HERE: &str = if cfg!(windows) { ".\\" } else { "./" };
+
 /// Prints `Note: including file:` and the header to stderr for each
 /// `#include` that entered one, as `cl /showIncludes` does, with a space
 /// more before the path for each level of nesting; Ninja reads the path
@@ -234,7 +239,7 @@ pub(super) fn show_includes(context: &Context<'_>) {
             text,
             "Note: including file:{:width$}{}{}",
             "",
-            if clang && entry.here { "./" } else { "" },
+            if clang && entry.here { HERE } else { "" },
             context.get_source_file(entry.file).display(),
             width = entry.depth as usize,
         );
@@ -245,7 +250,9 @@ pub(super) fn show_includes(context: &Context<'_>) {
 /// Prints the header each `#include` entered to stderr for `-H`, after a
 /// dot per level of nesting, as GCC and Clang do. Clang names a header
 /// reached from a main file in the working directory through its
-/// includers' directories `./a.h` or `./sub/../b.h`, GCC `a.h`.
+/// includers' directories `./a.h` or `./sub/../b.h` ([`HERE`]), GCC `a.h`.
+/// Clang escapes the name as a string literal's contents
+/// (`Lexer::Stringify`), so `.\\sub\\t.h` on Windows; GCC prints it as is.
 pub(super) fn header_tree(context: &Context<'_>) {
     let arena = Bump::new();
     let mut text = ArenaString::new_in(&arena);
@@ -254,9 +261,23 @@ pub(super) fn header_tree(context: &Context<'_>) {
         for _ in 0..entry.depth {
             text.push('.');
         }
-        let path = context.get_source_file(entry.file);
-        let here = clang && entry.here;
-        _ = writeln!(text, " {}{}", if here { "./" } else { "" }, path.display());
+        text.push(' ');
+        let mut name = ArenaString::new_in(&arena);
+        if clang && entry.here {
+            name.push_str(HERE);
+        }
+        _ = write!(name, "{}", context.get_source_file(entry.file).display());
+        if clang {
+            for character in name.chars() {
+                if matches!(character, '\\' | '"') {
+                    text.push('\\');
+                }
+                text.push(character);
+            }
+        } else {
+            text.push_str(&name);
+        }
+        text.push('\n');
     }
     drop(io::stderr().lock().write_all(text.as_bytes()));
 }

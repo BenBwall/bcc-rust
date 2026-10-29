@@ -17,6 +17,7 @@ use std::{
 
 use crate::{
     configuration::{
+        CompilerIdentity,
         ExtensionPolicy,
         Feature,
     },
@@ -241,12 +242,13 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
         let depth = u32::try_from(depth).expect("the include nesting limit is small");
         // Found beside an includer that is itself in, or reached from, the
         // working directory: Clang names that directory `.`.
+        let separator = self.path_separator();
         let includer_path = self.context.get_source_file(includer);
         let path = self.context.get_source_file(file);
         let mut buffer = ArenaVec::new_in(self.scratch);
         let local = !angled
             && includer_path.parent().is_some_and(|directory| {
-                join_path(&mut buffer, directory, Path::new(name)) == path
+                join_path(&mut buffer, directory, Path::new(name), separator) == path
             });
         let Some(entries) = &mut self.context.include_entries else {
             return;
@@ -372,11 +374,25 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
         }
         // Each candidate is spelled in the expansion arena and taken back
         // before the next one, so a lookup leaves nothing there.
+        let separator = self.path_separator();
         let mut buffer = ArenaVec::new_in(self.scratch);
-        let candidate = join_path(&mut buffer, directory, path);
+        let candidate = join_path(&mut buffer, directory, path, separator);
         self.context
             .file_exists(candidate)
             .then(|| self.context.intern_source_file(candidate))
+    }
+
+    /// The separator a header lookup joins a directory and a name with,
+    /// which `-H` and the dependency rules then print: `/` for GCC, whose
+    /// `append_file_to_dir` writes it on every host, and TCC; the host's
+    /// for Clang, whose `llvm::sys::path::append` writes `\` on Windows,
+    /// and for `cl`.
+    fn path_separator(&self) -> &'static str {
+        match self.context.configuration.compiler_identity() {
+            | CompilerIdentity::Gcc | CompilerIdentity::Tcc => "/",
+            | CompilerIdentity::Clang | CompilerIdentity::ClangCl | CompilerIdentity::Msvc =>
+                std::path::MAIN_SEPARATOR_STR,
+        }
     }
 
     /// Resolves an include name through [`Self::header_search_places`], as
@@ -1110,7 +1126,7 @@ fn header_name_from_source<'a>(
 
 /// `directory.join(path)`, spelled in `buffer` instead of a `PathBuf`.
 ///
-/// A plain relative `path` joins a directory by a separator, which is how
+/// A plain relative `path` joins a directory by `separator`, which is how
 /// every ordinary include lookup joins. Other forms, such as a Windows `path`
 /// with a drive or root, or a verbatim or bare-drive `directory`, follow
 /// `PathBuf::push`'s platform rules, so they are joined by std and copied.
@@ -1120,7 +1136,12 @@ fn header_name_from_source<'a>(
               std's `PathBuf::push` rules, so this rare fallback joins with std and copies the \
               result into the arena."
 )]
-fn join_path<'b>(buffer: &'b mut ArenaVec<'_, u8>, directory: &Path, path: &Path) -> &'b Path {
+fn join_path<'b>(
+    buffer: &'b mut ArenaVec<'_, u8>,
+    directory: &Path,
+    path: &Path,
+    separator: &str,
+) -> &'b Path {
     let plain_path = matches!(
         path.components().next(),
         Some(Component::Normal(_) | Component::CurDir | Component::ParentDir)
@@ -1139,7 +1160,7 @@ fn join_path<'b>(buffer: &'b mut ArenaVec<'_, u8>, directory: &Path, path: &Path
             .last()
             .is_some_and(|&byte| !std::path::is_separator(char::from(byte)))
         {
-            buffer.extend_from_slice(std::path::MAIN_SEPARATOR_STR.as_bytes());
+            buffer.extend_from_slice(separator.as_bytes());
         }
         buffer.extend_from_slice(path.as_os_str().as_encoded_bytes());
     } else {
