@@ -12,6 +12,7 @@ use super::{
         TokenOutput,
         print_preprocessor_output_in,
     },
+    preprocessed::print_preprocessed,
     *,
 };
 use crate::{
@@ -21,6 +22,11 @@ use crate::{
     },
     diagnostics::ColorChoice as RenderColor,
     headers::HeaderSearch,
+    pipeline::TextOptions,
+    test_support::{
+        committed_peak,
+        macro_heavy_source,
+    },
     translation_phases::Context,
     util::bump::{
         ArenaString,
@@ -182,3 +188,44 @@ fn token_reporter_arena_stays_bounded_across_diagnostic_batches() {
     let twice = token_reporter_high_water(2_000);
     assert_eq!(once, twice);
 }
+
+/// The bytes `-E` commits at its peak for `lines` macro-heavy declarations,
+/// and its output tokens.
+fn preprocessed_text_peak(lines: usize) -> (usize, usize) {
+    let source = macro_heavy_source(lines);
+    committed_peak(|| {
+        let tu = Bump::new();
+        let mut context = Context::new(&tu);
+        let source = tu.alloc_str(&source);
+        let failed = print_preprocessed(
+            &mut context,
+            Path::new("<input>"),
+            source,
+            HeaderSearch::default(),
+            TextOptions::default(),
+            &mut io::sink(),
+        )
+        .expect("the text is written");
+        assert!(!failed);
+        context.preprocessed_tokens
+    })
+}
+
+/// `-E` formats each token's text as the token is produced, so what it
+/// keeps per token is about the text alone, between 400 and 800 lines.
+#[test]
+fn preprocessed_text_commits_little_more_than_its_text_per_token() {
+    let (small, small_tokens) = preprocessed_text_peak(400);
+    let (large, large_tokens) = preprocessed_text_peak(800);
+    let per_token = (large - small) / (large_tokens - small_tokens);
+    assert!(
+        per_token <= MAX_TEXT_BYTES_PER_TOKEN,
+        "{per_token} bytes per token ({small} for {small_tokens} tokens, {large} for \
+         {large_tokens})"
+    );
+}
+
+/// Bytes per token `-E` may commit: the text takes under two for this input.
+/// Keeping every token, its position and its provenance until the end took
+/// 141.
+const MAX_TEXT_BYTES_PER_TOKEN: usize = 16;
