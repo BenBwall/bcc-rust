@@ -957,7 +957,9 @@ constants before C23 report the C23 origin. GNU imaginary `i`/`j` suffixes keep
 the real component's precision and signedness, in either order with ordinary
 floating suffixes; an integer takes no `f` suffix. Dollar identifiers, including
 continuations, report GNU policy diagnostics, except inside a written
-`#include <...>` name. C89 long-long suffixes and hexadecimal floating constants
+`#include <...>` name; `-fno-dollars-in-identifiers` makes `$` an ordinary
+character outside identifiers, as GCC, Clang and TCC do, and
+`-fdollars-in-identifiers` restores the default. C89 long-long suffixes and hexadecimal floating constants
 report C99 policy diagnostics while keeping their values.
 
 A C23 `'` continues a pp-number only before a digit or an ASCII nondigit, even

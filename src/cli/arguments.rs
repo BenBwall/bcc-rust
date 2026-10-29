@@ -575,6 +575,8 @@ enum LanguageFlag {
     },
     /// `-trigraphs` or `-ftrigraphs` (true), or `-fno-trigraphs`.
     Trigraphs(bool),
+    /// `-fdollars-in-identifiers` (true) or `-fno-dollars-in-identifiers`.
+    DollarIdentifiers(bool),
     /// `-fwrapv` (true), or `-fno-wrapv` and `-fstrict-overflow`.
     Wrapv(bool),
     /// `-fpack-struct=N`.
@@ -652,6 +654,8 @@ impl LanguageFlag {
             | "-fno-floatn-types" => return Some(Self::InterchangeFloatTypes(false)),
             | "-trigraphs" | "-ftrigraphs" => return Some(Self::Trigraphs(true)),
             | "-fno-trigraphs" => return Some(Self::Trigraphs(false)),
+            | "-fdollars-in-identifiers" => return Some(Self::DollarIdentifiers(true)),
+            | "-fno-dollars-in-identifiers" => return Some(Self::DollarIdentifiers(false)),
             // `-f[no-]strict-overflow` also sets the pointer option, which
             // `Cli::code_assumptions` reads.
             | "-fwrapv" | "-fno-strict-overflow" => return Some(Self::Wrapv(true)),
@@ -755,6 +759,7 @@ impl LanguageFlag {
                     })
             },
             | Self::Trigraphs(enabled) => configuration.with_trigraphs(enabled),
+            | Self::DollarIdentifiers(enabled) => configuration.with_dollar_identifiers(enabled),
             | Self::Wrapv(enabled) => configuration.with_wrapv(enabled),
             | Self::PackStruct(alignment) => configuration.with_default_pack(alignment),
             | Self::PackAll(true) => configuration.with_pack_structures(true),
