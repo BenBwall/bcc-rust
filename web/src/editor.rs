@@ -239,6 +239,56 @@ mod monaco {
             .map_err(|error| format!("{error:?}"))
     }
 
+    /// Wait until the page needs the editor bundle: Monaco is by far the
+    /// largest download, and the editors start below the fold, so the first
+    /// one loads it when its host scrolls into the window or a key is
+    /// pressed (a shortcut steps the program from anywhere). Until then its
+    /// fallback shows the highlighted text. Once the bundle is requested,
+    /// later editors do not wait.
+    async fn wanted(host: &web_sys::HtmlElement) {
+        use std::rc::Rc;
+
+        use web_sys::{
+            IntersectionObserver,
+            IntersectionObserverEntry,
+        };
+
+        if MODULE.with(|module| module.borrow().is_some()) {
+            return;
+        }
+        let (sender, receiver) = futures_channel::oneshot::channel::<()>();
+        let sender = Rc::new(RefCell::new(Some(sender)));
+        let wake = move || {
+            if let Some(sender) = sender.borrow_mut().take() {
+                _ = sender.send(());
+            }
+        };
+        let seen = Closure::<dyn FnMut(js_sys::Array)>::new({
+            let wake = wake.clone();
+            move |entries: js_sys::Array| {
+                if entries.iter().any(|entry| {
+                    entry
+                        .unchecked_into::<IntersectionObserverEntry>()
+                        .is_intersecting()
+                }) {
+                    wake();
+                }
+            }
+        });
+        let observer = IntersectionObserver::new(seen.as_ref().unchecked_ref()).ok();
+        if let Some(observer) = &observer {
+            observer.observe(host);
+        } else {
+            wake();
+        }
+        let key = window_event_listener(leptos::ev::keydown, move |_| wake());
+        _ = receiver.await;
+        key.remove();
+        if let Some(observer) = observer {
+            observer.disconnect();
+        }
+    }
+
     fn bundle_url() -> String {
         let document = web_sys::window().and_then(|window| window.document());
         let recorded = document.as_ref().and_then(|document| {
@@ -322,6 +372,7 @@ mod monaco {
             };
             let owner = owner.clone();
             spawn_local(async move {
+                wanted(&element).await;
                 let module = module().await;
                 // The view may have unmounted while the bundle loaded; its
                 // owner's cleanup disposed the slot, so create nothing.

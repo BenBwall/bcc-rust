@@ -108,8 +108,10 @@ for the editor: `js/bridge.js`, a one-line dynamic `import()` that wasm-bindgen
 binds (Rust cannot express one), and the Monaco glue in `editor/src/` (editor
 creation, decorations and events behind a small plain-data API, the Monarch
 grammars and the themes). `src/editor.rs` holds the wasm-bindgen bindings and
-decides everything the editor shows. Monaco loads after hydration; until then,
-and without JavaScript, the code views show Rust-highlighted text.
+decides everything the editor shows. Monaco is the page's largest download
+(about 820 KB compressed), so it loads only once an editor scrolls into the
+window or a key is pressed; until then, and without JavaScript, the code views
+show Rust-highlighted text.
 
 ## Deploy
 
@@ -121,11 +123,21 @@ or under any path prefix, provided the page is requested at a URL ending in
 `/` (or as `index.html`). All files must share an origin, because browsers
 only start Workers from the page's origin.
 
-Every file except `index.html` has a content hash or version in its URL, so a
-new build never reuses a URL for different bytes. Suggested caching:
-`index.html` with `Cache-Control: no-cache`; everything else with
-`public, max-age=31536000, immutable`. Upload the hashed files before
-`index.html`.
+Every file except `index.html` and wasm-bindgen's snippet (`snippets/`) has a
+content hash or version in its URL, so a new build never reuses a URL for
+different bytes. Suggested caching: those two with `Cache-Control: no-cache`;
+everything else with `public, max-age=31536000, immutable`. `_headers`
+(copied into `dist/`) states exactly that for hosts that read one, such as
+Cloudflare Pages and Netlify; GitHub Pages ignores it. Serve the text files and
+the Wasm modules compressed: gzip shrinks the first load from 2.1 MB to about
+840 KB. Upload the hashed files before `index.html`.
+
+What a first visit fetches: the page, its stylesheet, the two web fonts, the
+page's Wasm (the largest part, 540 KB gzip) and the abstract machine's Worker
+(180 KB gzip). The Monaco bundle follows when the workbench scrolls into view,
+the compiler's Worker (1.4 MB gzip) when a program is first compiled (an edit,
+or the pipeline or WebAssembly view), and Monaco's icon font (150 KB) with the
+first read-only listing, whose folding arrows use it.
 
 ## Interface
 
