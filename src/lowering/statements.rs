@@ -1072,6 +1072,7 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
             switch_blocks: ArenaVec::new_in(scratch),
             switch_starts: ArenaVec::new_in(scratch),
             wide_temporaries: ArenaVec::new_in(scratch),
+            wide_holds: 0,
             result: record.result.unqualified(),
             bounds: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, scratch),
             vla_tokens: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, scratch),

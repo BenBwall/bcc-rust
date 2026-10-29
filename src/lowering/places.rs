@@ -297,6 +297,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     }),
                     None,
                 );
+                self.release_wide(value);
                 Operand::Aggregate(address)
             },
             | (Place::Variable(var), _) => {

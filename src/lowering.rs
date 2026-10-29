@@ -591,10 +591,12 @@ struct FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
     switch_blocks:      ArenaVec<'s, Block>,
     /// Where each open switch's blocks start in `switch_blocks`.
     switch_starts:      ArenaVec<'s, usize>,
-    /// The stack slots of wide `_BitInt` results, by size, and whether a
-    /// live value holds each; a statement begun with no operand pending
-    /// frees them all (`wide_bit_int.rs`).
-    wide_temporaries:   ArenaVec<'s, (u64, crate::ir::StackSlot, bool)>,
+    /// The stack slots of wide `_BitInt` results, and the address of the
+    /// live value each holds (`wide_bit_int.rs`).
+    wide_temporaries:   ArenaVec<'s, wide_bit_int::Temporary>,
+    /// While positive, a consumed wide result keeps its slot: the code
+    /// being lowered runs more than once (an atomic update's retry loop).
+    wide_holds:         u32,
     /// The unqualified result type that `return` converts to.
     result:             TypeId,
     bounds:             ArenaMap<'s, usize, ssa::Var>,

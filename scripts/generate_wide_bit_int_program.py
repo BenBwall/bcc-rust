@@ -253,6 +253,7 @@ def generate():
     lines.extend(conversions(sections, rng))
     lines.extend(folded(sections, rng))
     lines.extend(EXTRAS.splitlines())
+    lines.extend(long_expressions())
     lines.append("int main(void) {")
     for ty, is_huge, _ in sections:
         call = f"    run_{ty.tag}();"
@@ -260,6 +261,9 @@ def generate():
     lines.append("    conversions();")
     lines.append("    folded();")
     lines.append("    extras();")
+    lines.append("#ifdef BIT_INT_65535")
+    lines.append("    long_expressions();")
+    lines.append("#endif")
     lines.append("    return 0;")
     lines.append("}")
     OUTPUT.write_text("\n".join(lines) + "\n")
@@ -462,6 +466,17 @@ static void extras(void) {
     printf("extras\n");
     /* Folded wide values whose low 128 bits are zero are not zero. */
     struct flags f = {(_BitInt(200))1 << 128, (int)((_BitInt(200))1 << 130), 5};
+    /* GNU `x ?: y` with a wide condition or result. */
+    {
+        volatile int zero = 0, five = 5;
+        _BitInt(200) g = (_BitInt(200))five << 150, z = 0;
+        SHOW(_BitInt(200), 200, g ?: 9);
+        SHOW(_BitInt(200), 200, z ?: (_BitInt(200))1 << 150);
+        SHOW(_BitInt(200), 200, zero ?: g * 3);
+        SHOW(_BitInt(200), 200, (z * 7) ?: g + 1);
+        int r = g ?: 4, r2 = z ?: 4;
+        printf("%d %d %d %d\n", r, r2, (z ?: 0) ? 1 : 0, (g ?: 0) ? 1 : 0);
+    }
     _Bool t = (_BitInt(200))1 << 150;
     static _Bool st = (_BitInt(200))1 << 150;
     static struct flags sf = {(_BitInt(200))1 << 128, (int)((_BitInt(200))1 << 130), 5};
@@ -490,6 +505,35 @@ static void extras(void) {
 #endif
 }
 """
+
+
+def long_expressions():
+    """A 1024-term chain and a 1024-leaf balanced tree of 65535-bit
+    operations, each a single expression: their results must share stack
+    slots as they are consumed, or the frame outgrows the stack."""
+    terms = 1024
+
+    def tree(low, high):
+        if high - low == 1:
+            return f"v[{low % 8}]"
+        middle = (low + high) // 2
+        return f"({tree(low, middle)} {'+-^|'[(low + high) % 4]} {tree(middle, high)})"
+
+    chain = "v[0]" + "".join(f" {'+-^'[i % 3]} v[{i % 8}]" for i in range(1, terms))
+    return [
+        "#ifdef BIT_INT_65535",
+        f"static _BitInt(65535) long_chain(_BitInt(65535) *v) {{ return {chain}; }}",
+        f"static _BitInt(65535) long_tree(_BitInt(65535) *v) {{ return {tree(0, 1024)}; }}",
+        "static void long_expressions(void) {",
+        "    printf(\"long expressions\\n\");",
+        "    _BitInt(65535) v[8];",
+        "    for (int i = 0; i < 8; i++)",
+        "        v[i] = (_BitInt(65535))(i * 977 + 1) << (i * 8000);",
+        "    SHOW(_BitInt(65535), 65535, long_chain(v));",
+        "    SHOW(_BitInt(65535), 65535, long_tree(v));",
+        "}",
+        "#endif",
+    ]
 
 
 def literal_of(value):

@@ -66,9 +66,9 @@ fn wide_bit_ints_are_objects_that_call_the_runtime() {
         for wanted in [
             "ptr result(size 32, align 8)",
             "ptr aggregate(size 32, align 8) noundef",
-            "call @__bcc_bitint_mul(",
-            "call @__bcc_bitint_add(",
-            "function @__bcc_bitint_mul(ptr, ptr, ptr, i32, i32) internal",
+            "call @bcc.bitint.mul(",
+            "call @bcc.bitint.add(",
+            "function @bcc.bitint.mul(ptr, ptr, ptr, i32, i32) internal",
         ] {
             assert!(text.contains(wanted), "{target:?} {wanted}\n{text}");
         }
@@ -107,7 +107,7 @@ fn wide_switches_compare_with_each_case() {
         "int f(_BitInt(300) x) { switch (x) { case 1: return 1; case 5: case 9: return 2; \
          default: return 0; } }",
     );
-    assert_eq!(text.matches("call @__bcc_bitint_cmp(").count(), 3, "{text}");
+    assert_eq!(text.matches("call @bcc.bitint.cmp(").count(), 3, "{text}");
 }
 
 /// A conversion between a wide integer and a complex type is refused.
@@ -128,7 +128,11 @@ fn wide_complex_conversions_are_refused() {
 #[test]
 fn the_middle_end_links_the_routines_a_module_calls() {
     let tu = Bump::new();
-    let source = tu.alloc_str("_BitInt(300) f(_BitInt(300) a, _BitInt(300) b) { return a / b; }\n");
+    // A program's function named as a routine of `runtime.c` keeps its name.
+    let source = tu.alloc_str(
+        "void __bcc_bitint_div(int x) { (void)x; }\n_BitInt(300) f(_BitInt(300) a, _BitInt(300) \
+         b) { __bcc_bitint_div(1); return a / b; }\n",
+    );
     let mut context =
         Context::with_configuration(&tu, crate::configuration::CompilerConfiguration::default());
     let unit = parse_translation_unit(
@@ -153,12 +157,13 @@ fn the_middle_end_links_the_routines_a_module_calls() {
             .functions()
             .any(|(_, function)| function.name == name && function.body.is_some())
     };
+    assert!(defined("bcc.bitint.div"), "{module}");
     assert!(defined("__bcc_bitint_div"), "{module}");
-    assert!(!defined("__bcc_bitint_mul"), "{module}");
+    assert!(!defined("bcc.bitint.mul"), "{module}");
     assert!(
         module
             .functions()
-            .filter(|(_, function)| function.name.starts_with("__bcc_bitint_"))
+            .filter(|(_, function)| function.name.starts_with("bcc.bitint."))
             .all(
                 |(_, function)| function.linkage == crate::ir::Linkage::Internal
                     && function.body.is_some()
@@ -177,8 +182,8 @@ fn wide_bfloat_conversions_round_as_each_compiler_does() {
     };
     let source = "__bf16 f(_BitInt(300) x) { return x; }";
     for (identity, routine) in [
-        (CompilerIdentity::Gcc, "call @__bcc_bitint_to_bf16("),
-        (CompilerIdentity::Clang, "call @__bcc_bitint_to_f32("),
+        (CompilerIdentity::Gcc, "call @bcc.bitint.to_bf16("),
+        (CompilerIdentity::Clang, "call @bcc.bitint.to_f32("),
     ] {
         let configuration = CompilerConfiguration::default().with_compiler_identity(identity);
         let text = lower_with(source, configuration).expect("lowers");
@@ -199,4 +204,53 @@ fn wide_results_share_slots_between_statements() {
     let text = lowered(&source);
     let slots = text.matches("stack_slot").count();
     assert!(slots <= 4, "{slots} slots\n{text}");
+}
+
+/// Within one expression a wide result frees its slot once read, so a long
+/// chain takes a few slots and a balanced tree one per level.
+#[test]
+fn wide_results_share_slots_within_an_expression() {
+    let chain = (1..200).fold(String::from("v[0]"), |chain, index| {
+        format!("{chain} {} v[{}]", ["+", "-", "^"][index % 3], index % 8)
+    });
+    let text = lowered(&format!(
+        "_BitInt(300) f(_BitInt(300) *v) {{ return {chain}; }}"
+    ));
+    let slots = text.matches("stack_slot").count();
+    assert!(slots <= 3, "{slots} slots\n{text}");
+}
+
+/// A GNU `x ?: y` with a wide condition or result passes the tested
+/// value's object to the merge.
+#[test]
+fn wide_omitted_conditionals_lower() {
+    for source in [
+        "_BitInt(200) f(_BitInt(200) g) { return g ?: 9; }",
+        "_BitInt(200) f(int c, _BitInt(200) y) { return c ?: y; }",
+        "int f(_BitInt(200) g) { return g ?: 4; }",
+        "int f(_BitInt(200) g) { if (g ?: 0) return 1; return 0; }",
+    ] {
+        drop(lowered(source));
+    }
+}
+
+/// A function whose wide results would need more stack than a default
+/// thread has is refused, not compiled to overflow its stack.
+#[test]
+fn wide_results_beyond_the_stack_are_refused() {
+    use crate::configuration::{
+        CompilerConfiguration,
+        CompilerIdentity,
+    };
+    let source = "typedef _BitInt(8388608) H; H g(H, H, H, H, H, H, H);\nH f(H a) { return g(a * \
+                  2, a * 3, a * 4, a * 5, a * 6, a * 7, a * 8); }";
+    let configuration =
+        CompilerConfiguration::default().with_compiler_identity(CompilerIdentity::Clang);
+    let errors = lower_with(source, configuration).expect_err("refused");
+    assert!(
+        errors.iter().all(|error| error
+            == "not yet supported by lowering: functions whose wide _BitInt results need more \
+                than 6 MiB of stack"),
+        "{errors:?}"
+    );
 }

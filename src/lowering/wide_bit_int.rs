@@ -57,6 +57,7 @@ use crate::{
         Linkage,
         Opcode,
         Signature,
+        StackSlot,
         Symbol,
         Type,
         Value,
@@ -111,6 +112,8 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
             let bits = self.iconst(Type::I32, i128::from(width));
             let sign = self.iconst(Type::I32, i128::from(signed));
             let order = self.wide_call(Helper::Compare, &[a, b, bits, sign], source)?;
+            self.release_wide(left);
+            self.release_wide(right);
             let zero = self.iconst(Type::I32, 0);
             // The three-way result orders as the operands do.
             let cc = match cc {
@@ -150,6 +153,8 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
                 Helper::ShiftRight
             };
             _ = self.wide_call(helper, &[result, a, count, bits, sign], source)?;
+            self.release_wide(left);
+            self.release_wide(right);
             return Ok(Item {
                 operand: Operand::Aggregate(result),
                 ty,
@@ -172,6 +177,8 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
         };
         let b = wide_address(right, source)?;
         _ = self.wide_call(helper, &[result, a, b, bits, sign], source)?;
+        self.release_wide(left);
+        self.release_wide(right);
         Ok(Item {
             operand: Operand::Aggregate(result),
             ty,
@@ -194,6 +201,7 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
         }
         let address = wide_address(item, source)?;
         let low = self.load_limbs_value(address, Type::I64);
+        self.release_wide(item);
         Ok(Item {
             operand: Operand::Value(low),
             ty:      item.ty,
@@ -226,6 +234,7 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
         let bits = self.iconst(Type::I32, i128::from(width));
         let sign = self.iconst(Type::I32, i128::from(signed));
         _ = self.wide_call(helper, &[result, a, bits, sign], source)?;
+        self.release_wide(operand);
         Ok(Item {
             operand: Operand::Aggregate(result),
             ty,
@@ -245,16 +254,9 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
         let (width, signed) = self
             .wide_bit_int(item.ty)
             .ok_or_else(|| LoweringError::missing("a wide operand has no width", source))?;
-        let one = self.wide_object(item.ty, source)?;
+        let one = self.wide_limbs_constant(1, item.ty, source)?;
         let bits = self.iconst(Type::I32, i128::from(width));
         let sign = self.iconst(Type::I32, i128::from(signed));
-        let low = self.iconst(Type::I64, 1);
-        let high = self.iconst(Type::I64, 0);
-        _ = self.wide_call(
-            Helper::FromInteger,
-            &[one, bits, sign, low, high, sign],
-            source,
-        )?;
         let a = wide_address(item, source)?;
         let result = self.wide_object(item.ty, source)?;
         let helper = if increment {
@@ -350,6 +352,8 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
         self.exact_operand(left, exact, a, source)?;
         let right = self.fresh_object(size, align, source)?;
         self.exact_operand(right, exact, b, source)?;
+        self.release_wide(a);
+        self.release_wide(b);
         let value = self.fresh_object(size, align, source)?;
         let helper = match operation {
             | OverflowOperation::Add => Helper::Add,
@@ -542,6 +546,7 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
             from,
         ];
         _ = self.wide_call(Helper::FieldSet, &args, source)?;
+        self.release_wide(value);
         self.wide_bit_field_read(address, field, ty, source)
     }
 
@@ -694,15 +699,29 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
                     self.iconst(Type::I32, i128::from(from_signed)),
                 ];
                 _ = self.wide_call(Helper::Convert, &args, source)?;
+                self.release_wide(item);
                 Operand::Aggregate(result)
             },
             | (Some((width, signed)), None) =>
                 self.narrow_from_wide(item, (width, signed), target, source)?,
             | (None, Some((width, signed))) => {
+                let from = self.repr(item.ty, source)?;
+                // A constant becomes a constant object.
+                if matches!(from, Repr::Int { .. } | Repr::Bool | Repr::Pointer)
+                    && let Operand::Value(value) = item.operand
+                    && let Some(constant) = self.draft.constant(value)
+                {
+                    let ty = self.draft.value_type(value);
+                    let constant = self.cast_constant(constant, ty, from.signed(), Type::I128);
+                    let address = self.wide_limbs_constant(constant, to, source)?;
+                    return Ok(Item {
+                        operand: Operand::Aggregate(address),
+                        ty:      to,
+                    });
+                }
                 let result = self.wide_object(to, source)?;
                 let bits = self.iconst(Type::I32, i128::from(width));
                 let sign = self.iconst(Type::I32, i128::from(signed));
-                let from = self.repr(item.ty, source)?;
                 match from {
                     | Repr::Float { ty } => {
                         let (value, ty) = if ty.half_format().is_some() {
@@ -719,17 +738,6 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
                     },
                     | Repr::Int { .. } | Repr::Bool | Repr::Pointer => {
                         let value = self.value(item, source)?;
-                        // A constant becomes a constant object.
-                        if let Some(constant) = self.draft.constant(value) {
-                            let ty = self.draft.value_type(value);
-                            let constant =
-                                self.cast_constant(constant, ty, from.signed(), Type::I128);
-                            let address = self.wide_limbs_constant(constant, to, source)?;
-                            return Ok(Item {
-                                operand: Operand::Aggregate(address),
-                                ty:      to,
-                            });
-                        }
                         let value = if from == Repr::Pointer {
                             self.convert(Opcode::Ptrtoint, Type::I64, value)
                         } else {
@@ -774,9 +782,25 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
         source: SourceVectors,
     ) -> Result<Operand, LoweringError> {
         let address = wide_address(item, source)?;
+        let operand =
+            self.narrow_from_address(address, item.ty, (width, signed), target, source)?;
+        self.release_wide(item);
+        Ok(operand)
+    }
+
+    /// [`Self::narrow_from_wide`] of the wide value of type `ty` at
+    /// `address`.
+    fn narrow_from_address(
+        &mut self,
+        address: Value,
+        ty: TypeId,
+        (width, signed): (u32, bool),
+        target: Repr,
+        source: SourceVectors,
+    ) -> Result<Operand, LoweringError> {
         Ok(match target {
             | Repr::Bool => {
-                let truth = self.wide_truth(address, item.ty, source)?;
+                let truth = self.wide_truth(address, ty, source)?;
                 Operand::Value(self.extend(truth, false, Type::I8))
             },
             // The low bits of the value, extended again from a narrow
@@ -844,42 +868,74 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
     }
 
     /// A fresh object of the wide type `ty`, for a result: a stack slot of
-    /// its size that no live value holds, or a new one.
+    /// its size that no live value holds, or a new one. A function whose
+    /// wide results would take more than [`TEMPORARY_LIMIT`] bytes of stack
+    /// is refused, where it could only exhaust the stack at run time.
     fn wide_object(&mut self, ty: TypeId, source: SourceVectors) -> Result<Value, LoweringError> {
         let layout = types::layout(&self.unit.sema.types, ty).map_err(|kind| at(kind, source))?;
-        let slot = match self
+        let index = match self
             .wide_temporaries
-            .iter_mut()
-            .find(|(size, _, live)| *size == layout.size && !*live)
+            .iter()
+            .position(|temporary| temporary.size == layout.size && temporary.address.is_none())
         {
-            | Some((_, slot, live)) => {
-                *live = true;
-                *slot
-            },
+            | Some(index) => index,
             | None => {
-                let size = u32::try_from(layout.size).map_err(|_| {
-                    LoweringError::unsupported(Construct::LargeAutomaticObject, source)
-                })?;
+                let total = self
+                    .wide_temporaries
+                    .iter()
+                    .map(|temporary| temporary.size)
+                    .sum::<u64>()
+                    + layout.size;
+                let size = u32::try_from(layout.size)
+                    .ok()
+                    .filter(|_| total <= TEMPORARY_LIMIT)
+                    .ok_or_else(|| {
+                        LoweringError::unsupported(Construct::WideBitIntTemporaries, source)
+                    })?;
                 let slot = self.object_slot(size, Align::from_bytes(8).unwrap_or(Align::BYTE));
-                self.wide_temporaries.push((layout.size, slot, true));
-                slot
+                self.wide_temporaries.push(Temporary {
+                    size: layout.size,
+                    slot,
+                    address: None,
+                });
+                self.wide_temporaries.len() - 1
             },
         };
-        Ok(self.inst(InstData::StackAddr { slot }, Type::Ptr))
+        let slot = self.wide_temporaries[index].slot;
+        let address = self.inst(InstData::StackAddr { slot }, Type::Ptr);
+        self.wide_temporaries[index].address = Some(address);
+        Ok(address)
     }
 
-    /// Frees the wide results' stack slots when a statement or declaration
+    /// Frees the slot of the wide result `item` once an operation has read
+    /// it for the last time, so a chain of operations takes a slot or two
+    /// and a balanced tree of them one per level. A value that is no
+    /// result, or whose code runs again in a loop, keeps its object.
+    pub(super) fn release_wide(&mut self, item: Item) {
+        if self.wide_holds > 0 {
+            return;
+        }
+        if let Operand::Aggregate(address) = item.operand
+            && let Some(temporary) = self
+                .wide_temporaries
+                .iter_mut()
+                .find(|temporary| temporary.address == Some(address))
+        {
+            temporary.address = None;
+        }
+    }
+
+    /// Frees every wide result's slot when a statement or declaration
     /// begins with no operand pending: a result lives only within its full
     /// expression, and one that a statement expression yields to the
     /// expression around it is that expression's pending operand, as is
-    /// every other value still to be used. Each slot then serves one
-    /// result per full expression instead of a function holding one per
-    /// operation, which at 65535 bits would exhaust the stack.
+    /// every other value still to be used. Results that were never read
+    /// as operands (a discarded comma operand, a `?:` arm) are freed here.
     /// C99: §6.8 paragraph 4, p. 131; PDF p. 143 (full expressions).
     pub(super) fn free_wide_temporaries(&mut self) {
         if self.operands.is_empty() {
-            for (_, _, live) in &mut self.wide_temporaries {
-                *live = false;
+            for temporary in &mut self.wide_temporaries {
+                temporary.address = None;
             }
         }
     }
@@ -923,6 +979,20 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
         let result = self.draft.push(Op::Call(function, args), helper.result());
         Ok(result.unwrap_or_else(|| self.iconst(Type::I32, 0)))
     }
+}
+
+/// The most stack the wide results of one function may take: with the
+/// runtime's division at Clang's widest type (2 MB), it fits a default 8 MB
+/// stack.
+const TEMPORARY_LIMIT: u64 = 6 << 20;
+
+/// A stack slot for wide results, and the address of the live result it
+/// holds, if any.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct Temporary {
+    size:    u64,
+    slot:    StackSlot,
+    address: Option<Value>,
 }
 
 /// The width and signedness of `ty`, after its qualifiers and atomicity,
@@ -1079,33 +1149,33 @@ enum Helper {
 impl Helper {
     fn name(self, source: SourceVectors) -> Result<&'static str, LoweringError> {
         Ok(match self {
-            | Self::Add => "__bcc_bitint_add",
-            | Self::Subtract => "__bcc_bitint_sub",
-            | Self::Multiply => "__bcc_bitint_mul",
-            | Self::Divide => "__bcc_bitint_div",
-            | Self::Remainder => "__bcc_bitint_rem",
-            | Self::And => "__bcc_bitint_and",
-            | Self::Or => "__bcc_bitint_or",
-            | Self::Xor => "__bcc_bitint_xor",
-            | Self::Not => "__bcc_bitint_not",
-            | Self::Negate => "__bcc_bitint_neg",
-            | Self::ShiftLeft => "__bcc_bitint_shl",
-            | Self::ShiftRight => "__bcc_bitint_shr",
-            | Self::Compare => "__bcc_bitint_cmp",
-            | Self::Test => "__bcc_bitint_test",
-            | Self::Convert => "__bcc_bitint_convert",
-            | Self::FromInteger => "__bcc_bitint_from_int",
-            | Self::FieldGet => "__bcc_bitint_field_get",
-            | Self::FieldSet => "__bcc_bitint_field_set",
-            | Self::ToFloat(Type::F32) => "__bcc_bitint_to_f32",
-            | Self::ToBfloat => "__bcc_bitint_to_bf16",
-            | Self::ToFloat(Type::F64) => "__bcc_bitint_to_f64",
-            | Self::ToFloat(Type::F80) => "__bcc_bitint_to_f80",
-            | Self::ToFloat(Type::F128) => "__bcc_bitint_to_f128",
-            | Self::FromFloat(Type::F32) => "__bcc_bitint_from_f32",
-            | Self::FromFloat(Type::F64) => "__bcc_bitint_from_f64",
-            | Self::FromFloat(Type::F80) => "__bcc_bitint_from_f80",
-            | Self::FromFloat(Type::F128) => "__bcc_bitint_from_f128",
+            | Self::Add => "bcc.bitint.add",
+            | Self::Subtract => "bcc.bitint.sub",
+            | Self::Multiply => "bcc.bitint.mul",
+            | Self::Divide => "bcc.bitint.div",
+            | Self::Remainder => "bcc.bitint.rem",
+            | Self::And => "bcc.bitint.and",
+            | Self::Or => "bcc.bitint.or",
+            | Self::Xor => "bcc.bitint.xor",
+            | Self::Not => "bcc.bitint.not",
+            | Self::Negate => "bcc.bitint.neg",
+            | Self::ShiftLeft => "bcc.bitint.shl",
+            | Self::ShiftRight => "bcc.bitint.shr",
+            | Self::Compare => "bcc.bitint.cmp",
+            | Self::Test => "bcc.bitint.test",
+            | Self::Convert => "bcc.bitint.convert",
+            | Self::FromInteger => "bcc.bitint.from_int",
+            | Self::FieldGet => "bcc.bitint.field_get",
+            | Self::FieldSet => "bcc.bitint.field_set",
+            | Self::ToFloat(Type::F32) => "bcc.bitint.to_f32",
+            | Self::ToBfloat => "bcc.bitint.to_bf16",
+            | Self::ToFloat(Type::F64) => "bcc.bitint.to_f64",
+            | Self::ToFloat(Type::F80) => "bcc.bitint.to_f80",
+            | Self::ToFloat(Type::F128) => "bcc.bitint.to_f128",
+            | Self::FromFloat(Type::F32) => "bcc.bitint.from_f32",
+            | Self::FromFloat(Type::F64) => "bcc.bitint.from_f64",
+            | Self::FromFloat(Type::F80) => "bcc.bitint.from_f80",
+            | Self::FromFloat(Type::F128) => "bcc.bitint.from_f128",
             | Self::ToFloat(_) | Self::FromFloat(_) =>
                 return Err(LoweringError::unsupported(
                     Construct::WideBitIntConversion,

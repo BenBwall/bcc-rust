@@ -45,7 +45,12 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
         self.draft.switch_to(retry);
         let expected = self.draft.block_params(retry)[0];
         let old = self.atomic_bits_item(expected, ty, source)?;
-        let desired = update(self, old)?;
+        // The update runs again on each retry, so the wide results it reads
+        // keep their slots.
+        self.wide_holds += 1;
+        let desired = update(self, old);
+        self.wide_holds -= 1;
+        let desired = desired?;
         let bits = self.atomic_item_bits(desired, bits_ty, source)?;
         let align = self.place_alignment(address, types::align(layout));
         let observed = self
@@ -107,7 +112,12 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
             operand: Operand::Aggregate(expected),
             ty,
         };
-        let desired = update(self, old)?;
+        // The update runs again on each retry, so the wide results it reads
+        // keep their slots.
+        self.wide_holds += 1;
+        let desired = update(self, old);
+        self.wide_holds -= 1;
+        let desired = desired?;
         let Operand::Aggregate(bytes) = desired.operand else {
             return Err(LoweringError::unsupported(
                 crate::lowering::Construct::Atomic,

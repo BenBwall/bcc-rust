@@ -1136,7 +1136,11 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             | Operand::Excess(value) | Operand::Value(value) => value,
             | Operand::Aggregate(address) | Operand::Place(Place::Memory(address))
                 if self.wide_bit_int(item.ty).is_some() =>
-                return self.wide_truth(address, item.ty, source),
+            {
+                let truth = self.wide_truth(address, item.ty, source)?;
+                self.release_wide(item);
+                return Ok(truth);
+            },
             | _ => return Err(LoweringError::missing("a condition has no value", source)),
         };
         let ty = self.draft.value_type(value);

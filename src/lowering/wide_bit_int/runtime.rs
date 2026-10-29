@@ -8,6 +8,7 @@
 //! global, function address or assembly, which [`link`] checks.
 
 use crate::{
+    diagnostics::format_in,
     ir::{
         Body,
         FuncId,
@@ -25,8 +26,13 @@ use crate::{
 /// The runtime's C source.
 pub(crate) const SOURCE: &str = include_str!("runtime.c");
 
-/// The prefix of every runtime routine's name.
+/// The prefix of every runtime routine's name in `runtime.c`.
 const PREFIX: &str = "__bcc_bitint_";
+
+/// The prefix of the routines' names in a module that calls them. No C
+/// identifier contains a `.`, so a program's own function, even one named
+/// like a routine of `runtime.c`, never takes one of these names.
+const MODULE_PREFIX: &str = "bcc.bitint.";
 
 /// Whether `module` declares a runtime routine without defining it.
 pub(crate) fn needed(module: &Module<'_>) -> bool {
@@ -55,7 +61,10 @@ pub(crate) fn link<'ir>(
     );
     while let Some(target) = pending.pop() {
         let name = module.function(target).name;
-        let Some(Symbol::Function(source)) = runtime.symbol(name) else {
+        let Some(Symbol::Function(source)) = name
+            .strip_prefix(MODULE_PREFIX)
+            .and_then(|routine| runtime.symbol(format_in!(scratch, "{PREFIX}{routine}")))
+        else {
             return Err("a _BitInt runtime routine is missing");
         };
         let Some(mut body) = runtime.function_mut(source).body.take() else {
@@ -73,13 +82,17 @@ pub(crate) fn link<'ir>(
                         let callee = runtime.function(func);
                         let signature = module.intern(runtime.signature(callee.signature));
                         let defined = callee.body.is_some();
-                        let to = match module.symbol(callee.name) {
+                        let callee_name = match callee.name.strip_prefix(PREFIX) {
+                            | Some(routine) => &*format_in!(scratch, "{MODULE_PREFIX}{routine}"),
+                            | None => callee.name,
+                        };
+                        let to = match module.symbol(callee_name) {
                             | Some(Symbol::Function(to)) => to,
                             | Some(Symbol::Global(_)) =>
                                 return Err("a _BitInt runtime routine's callee names a global"),
                             | None => {
                                 let to = module.declare_function(
-                                    callee.name,
+                                    callee_name,
                                     signature,
                                     if defined {
                                         Linkage::Internal
@@ -118,7 +131,7 @@ pub(crate) fn link<'ir>(
 /// Whether a function is a runtime routine lowering declared and nothing
 /// has defined yet.
 fn declared(name: &str, body: Option<&Body<'_>>, linkage: Linkage) -> bool {
-    body.is_none() && linkage == Linkage::Internal && name.starts_with(PREFIX)
+    body.is_none() && linkage == Linkage::Internal && name.starts_with(MODULE_PREFIX)
 }
 
 /// Renumbers the direct calls of `body` from runtime functions to the
