@@ -921,7 +921,9 @@
   @media (max-width: 900px) {
     .wasm-row { grid-template-columns: minmax(0, 1fr); }
   }
-  @media (max-width: 700px) {
+  /* Four cards stay at least 220 px wide down to 960 px; below that, two
+     to a row keep both rows even. */
+  @media (max-width: 960px) {
     .lesson-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   }
   @media (max-width: 380px) {
@@ -955,6 +957,11 @@
     .memory-row:not(.is-words) .memory-byte:nth-child(4n):not(:last-child) { margin-right: 3px; }
     .memory-text { display: none; }
   }
+  /* Too narrow for the three view tabs on one line: let their labels wrap. */
+  @media (max-width: 440px) {
+    .mode-tab { white-space: normal; height: auto; min-height: 32px; padding-block: 4px; line-height: 1.25; text-align: center; }
+  }
+
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
   }
