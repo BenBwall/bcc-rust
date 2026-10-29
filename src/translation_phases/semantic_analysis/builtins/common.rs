@@ -22,6 +22,7 @@ use crate::{
         parsing::{
             declaration_syntax::TypeQualifiers,
             syntax::{
+                BinaryOperator,
                 Expression,
                 ExpressionType,
             },
@@ -232,7 +233,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 };
                 if let super::super::ObjectSize::Constant(size) = size {
                     let (bits, signed) = self.integer_type(result)?;
-                    info.integer = Integer::int(i128::from(size)).convert(bits, signed);
+                    info.integer = Some(self.wide.convert(
+                        Integer::int(i128::from(size)),
+                        bits,
+                        signed,
+                    ));
                     info.ice = true;
                     info.constant = ConstantClass::Arithmetic;
                 }
@@ -299,19 +304,25 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                                 crate::translation_phases::semantic_analysis::EffectContext::Value,
                             )
                             && let Some((a, b)) = a.integer.zip(b.integer)
-                            // A wide operand counts by its value, where the
-                            // model holds it exactly.
-                            && let Some(a) = Integer::exact(a)
-                            && let Some(b) = Integer::exact(b)
-                            // A wider bit-precise destination is not folded.
-                            && let Some((bits, signed)) = self
-                                .integer_type(destination)
-                                .filter(|&(bits, _)| bits <= 128)
+                            && let Some((bits, signed)) = self.integer_type(destination)
                         {
                             let bits = operand.bit_field.unwrap_or(bits);
-                            info.integer = Some(Integer::int(i128::from(constant_overflow(
-                                operation, a, b, bits, signed,
-                            ))));
+                            let overflows = if a.wide() || b.wide() || bits > 128 {
+                                self.wide.overflows(
+                                    match operation {
+                                        | OverflowOperation::Add => BinaryOperator::Addition,
+                                        | OverflowOperation::Sub => BinaryOperator::Subtraction,
+                                        | OverflowOperation::Mul => BinaryOperator::Multiplication,
+                                    },
+                                    a,
+                                    b,
+                                    bits,
+                                    signed,
+                                )
+                            } else {
+                                constant_overflow(operation, a, b, bits, signed)
+                            };
+                            info.integer = Some(Integer::int(i128::from(overflows)));
                             info.ice = true;
                             info.constant = ConstantClass::Arithmetic;
                         }
@@ -479,7 +490,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let info = self.expression_info(e);
         let value = info.integer.filter(|_| info.ice)?;
         let (bits, signed) = self.integer_type(ty)?;
-        value.convert(bits, signed)
+        Some(self.wide.convert(value, bits, signed))
     }
 }
 

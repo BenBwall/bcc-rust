@@ -218,8 +218,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             let value = |info| self.converted_floating(info, operand);
             if self.binary128_type(operand) {
                 result.set_binary128(
-                    Self::binary128_value(real)
-                        .zip(Self::binary128_value(imaginary))
+                    self.binary128_value(real)
+                        .zip(self.binary128_value(imaginary))
                         .map(|(re, im)| Binary128Value {
                             real: re.real,
                             imag: im.real,

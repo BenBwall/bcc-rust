@@ -70,14 +70,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 return Self::expression_result(e, ty);
             }
             if !condition.ice || condition.integer.is_none() {
-                let kind = if self.wide_unfolded(condition.expression) {
-                    SemanticErrorKind::UnsupportedWideConstant
-                } else {
-                    SemanticErrorKind::InvalidChooseCondition
-                };
-                return self.invalid_expression(e, kind);
+                return self.invalid_expression(e, SemanticErrorKind::InvalidChooseCondition);
             }
-            let selected = if condition.integer.is_some_and(|value| value.value != 0) {
+            let selected = if condition.integer.is_some_and(|value| !value.is_zero()) {
                 yes
             } else {
                 no
@@ -207,7 +202,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 let operand = |index: usize| {
                     arguments
                         .get(index)
-                        .and_then(|&argument| Self::binary128_value(self.expression_info(argument)))
+                        .and_then(|&argument| self.binary128_value(self.expression_info(argument)))
                         .map(|value| value.real)
                 };
                 let folded = match (nan, operation, count) {

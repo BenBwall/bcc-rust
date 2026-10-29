@@ -947,7 +947,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if !range {
             self.folded_case(statement, lower);
         }
-        if lower.order_key() > upper.order_key() {
+        if self.wide.compare(lower, upper).is_gt() {
             self.error(SemanticErrorKind::EmptyCaseRange, source, None, None);
             // GNU Case Ranges: no dispatch edge, but retain the label for
             // fallthrough. <https://gcc.gnu.org/onlinedocs/gcc/Case-Ranges.html>
@@ -987,7 +987,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 && (self.context.configuration.gnu_extensions() || info.folded_address())))
         .then_some(info.integer)
         .flatten()
-        .and_then(|v| v.convert(bits, signed))
+        .map(|v| self.wide.convert(v, bits, signed))
     }
 
     /// Sort once at switch exit rather than scanning preceding cases for each
@@ -1001,9 +1001,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         cases.extend(
             list.iter()
                 .copied()
-                .filter(|case| case.lower.order_key() <= case.upper.order_key()),
+                .filter(|case| self.wide.compare(case.lower, case.upper).is_le()),
         );
-        cases.sort_unstable_by_key(|c| (c.lower.order_key(), c.ordinal));
+        cases.sort_unstable_by(|a, b| {
+            self.wide
+                .compare(a.lower, b.lower)
+                .then(a.ordinal.cmp(&b.ordinal))
+        });
         let mut previous: Option<Case<'tu>> = None;
         if let Some(statement) = self
             .control
@@ -1032,7 +1036,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         upper: case.upper,
                         range: case.range,
                         ordinal: facts.len(),
-                        dispatch: (case.lower.order_key() <= case.upper.order_key())
+                        dispatch: self
+                            .wide
+                            .compare(case.lower, case.upper)
+                            .is_le()
                             .then(|| Transition::empty(dispatch.region)),
                     });
                 }
@@ -1068,7 +1075,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
         for case in cases {
             if let Some(prior) = previous
-                && case.lower.order_key() <= prior.upper.order_key()
+                && self.wide.compare(case.lower, prior.upper).is_le()
             {
                 let (later, earlier) = if case.ordinal > prior.ordinal {
                     (case, prior)
@@ -1082,7 +1089,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     Some(earlier.source),
                 );
             }
-            if previous.is_none_or(|p| case.upper.order_key() > p.upper.order_key()) {
+            if previous.is_none_or(|p| self.wide.compare(case.upper, p.upper).is_gt()) {
                 previous = Some(case);
             }
         }

@@ -185,8 +185,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             if matches!(rule.constraint, ConstantConstraint::OriginalIntegerRange(_)) {
                 return Some(value);
             }
-            self.integer_type(ty)
-                .map_or(Some(value), |(bits, signed)| value.convert(bits, signed))
+            self.integer_type(ty).map_or(Some(value), |(bits, signed)| {
+                Some(self.wide.convert(value, bits, signed))
+            })
         });
         let floating = self.converted_floating(info, ty);
         BuiltinOperand {

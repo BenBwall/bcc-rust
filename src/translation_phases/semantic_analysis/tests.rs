@@ -298,6 +298,7 @@ fn integer_operations_apply_width_signedness_and_short_circuit_rules() {
             value:  i128::from(u32::MAX),
             bits:   32,
             signed: false,
+            wide:   None,
         }
         .binary(BinaryOperator::Addition, Integer::int(1))
         .unwrap()
@@ -327,11 +328,13 @@ fn integer_division_truncates_toward_zero_across_the_64_bit_range() {
         value:  i128::from(u64::MAX),
         bits:   64,
         signed: false,
+        wide:   None,
     };
     let three = Integer {
         value:  3,
         bits:   64,
         signed: false,
+        wide:   None,
     };
     assert_eq!(
         unsigned_max
@@ -344,6 +347,7 @@ fn integer_division_truncates_toward_zero_across_the_64_bit_range() {
         value:  i128::from(i64::MIN),
         bits:   64,
         signed: true,
+        wide:   None,
     };
     assert_eq!(
         long_min

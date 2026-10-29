@@ -11,6 +11,7 @@ use std::cmp::Ordering;
 
 use super::{
     Analyzer,
+    WideStore,
     expressions::{
         ConstantClass,
         ExpressionInfo,
@@ -140,7 +141,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
         // The x87 carrier's 64 bits, rounded once; a conversion to a
         // narrower type reads the integer itself (`converted_floating`).
-        integer_value(info.integer?, crate::ir::Type::F80).map(Floating::real)
+        self.integer_value(info.integer?, crate::ir::Type::F80)
+            .map(Floating::real)
     }
 
     /// `info`'s value converted to the arithmetic type `ty`. An integer
@@ -172,9 +174,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             return None;
         };
         match self.carrier_type(scalar.real_type()) {
-            | Some(format) => integer_value(integer, format).map(Floating::real),
+            | Some(format) => self.integer_value(integer, format).map(Floating::real),
             // Binary128 constants fold apart; the carrier is the nearest.
-            | None => integer_value(integer, crate::ir::Type::F80)
+            | None => self
+                .integer_value(integer, crate::ir::Type::F80)
                 .map(Floating::real)
                 .and_then(|value| self.round_floating(value, ty)),
         }
@@ -200,7 +203,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// C99: §6.5.15 paragraph 4, p. 90; PDF p. 102.
     pub(super) fn constant_truth(info: ExpressionInfo<'tu>) -> Option<bool> {
         info.integer
-            .map(|v| v.value != 0)
+            .map(|v| !v.is_zero())
             .or_else(|| info.floating().map(Floating::truth))
             .or_else(|| info.binary128().map(Binary128Value::truth))
     }
@@ -366,7 +369,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 | (false, HalfFormat::Binary16) => crate::ir::Type::F16,
                 | (false, HalfFormat::BFloat16) => crate::ir::Type::BF16,
             };
-            return integer_value(integer, to).map(Floating::real);
+            return self.integer_value(integer, to).map(Floating::real);
         }
         let value = self.floating_value(info)?;
         Some(if self.half_in_float() {
@@ -421,7 +424,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// or its integer value rounded to nearest.
     /// C99: §6.3.1.4 paragraph 2, pp. 43-44; PDF pp. 55-56; §6.3.1.5
     /// paragraph 1, p. 44; PDF p. 56.
-    pub(super) fn binary128_value(info: ExpressionInfo<'tu>) -> Option<Binary128Value> {
+    pub(super) fn binary128_value(&self, info: ExpressionInfo<'tu>) -> Option<Binary128Value> {
         if let Some(value) = info.binary128() {
             return Some(value);
         }
@@ -431,14 +434,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 imag: binary128_from_carrier(value.imag)?,
             });
         }
-        let integer = info.integer?;
-        // A wide unsigned pattern with bit 127 set stands for 2^N - k.
-        let bits = crate::float_parsing::bits::from_bit_precise(
-            integer.value,
-            integer.bits,
-            integer.signed,
-            crate::ir::Type::F128,
-        )?;
+        let bits = self.wide.float_bits(info.integer?, crate::ir::Type::F128)?;
         Some(Binary128Value::real(Binary128::from_bits(bits)))
     }
 
@@ -461,7 +457,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 self.types.nodes[ty.index],
                 TypeKind::Scalar(Scalar::ComplexFloat128)
             );
-            info.set_binary128(Self::binary128_value(operand).map(|value| {
+            info.set_binary128(self.binary128_value(operand).map(|value| {
                 if complex {
                     value
                 } else {
@@ -472,9 +468,28 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             if matches!(self.types.nodes[ty.index], TypeKind::Scalar(Scalar::Bool)) {
                 info.integer = Some(Integer::int(i128::from(value.truth())).cast(1, false));
             } else if let Some((bits, signed)) = self.integer_type(ty) {
-                info.integer = value.real.to_integer(signed, bits).and_then(|bits_value| {
-                    Integer::int(bits_value.cast_signed()).convert(bits, signed)
-                });
+                info.integer = if bits > 128 {
+                    match value.real.class() {
+                        | crate::binary128::Class::Zero =>
+                            Some(self.wide.convert(Integer::int(0), bits, signed)),
+                        | crate::binary128::Class::Finite {
+                            exponent,
+                            significand,
+                        } => self.wide.truncated(
+                            value.real.is_negative(),
+                            significand,
+                            exponent,
+                            bits,
+                            signed,
+                        ),
+                        | _ => None,
+                    }
+                } else {
+                    value
+                        .real
+                        .to_integer(signed, bits)
+                        .map(|bits_value| Integer::int(bits_value.cast_signed()).cast(bits, signed))
+                };
             } else if self.arithmetic(ty) {
                 // A real operand's imaginary part is +0, whatever sign
                 // negating it gave the folded zero (C99 §6.3.1.7p1).
@@ -639,26 +654,28 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 }
 
-/// The exact binary128 value of a standard floating constant's carrier.
-/// The value of `integer` rounded once to the floating format `ty`, held
-/// exactly in the x87 carrier.
-/// C99: §6.3.1.4 paragraph 2, pp. 43-44; PDF pp. 55-56.
-pub(super) fn integer_value(integer: Integer, ty: crate::ir::Type) -> Option<LongDouble> {
-    use crate::{
-        float_parsing::bits,
-        ir::Type,
-    };
-    let bits = bits::from_bit_precise(integer.value, integer.bits, integer.signed, ty)?;
-    let narrow = |bits: u128| u32::try_from(bits).ok();
-    Some(match ty {
-        | Type::F16 | Type::BF16 => {
-            let format = ty.half_format()?;
-            LongDouble::from_double(f64::from(format.widen(u16::try_from(bits).ok()?)))
-        },
-        | Type::F32 => LongDouble::from_double(f64::from(f32::from_bits(narrow(bits)?))),
-        | Type::F64 => LongDouble::from_double(f64::from_bits(u64::try_from(bits).ok()?)),
-        | _ => LongDouble::from_x87(X87::from_bits(bits))?,
-    })
+impl Analyzer<'_, '_, '_> {
+    /// The value of `integer` rounded once to the floating format `ty`, held
+    /// exactly in the x87 carrier.
+    /// C99: §6.3.1.4 paragraph 2, pp. 43-44; PDF pp. 55-56.
+    pub(super) fn integer_value(
+        &self,
+        integer: Integer,
+        ty: crate::ir::Type,
+    ) -> Option<LongDouble> {
+        use crate::ir::Type;
+        let bits = self.wide.float_bits(integer, ty)?;
+        let narrow = |bits: u128| u32::try_from(bits).ok();
+        Some(match ty {
+            | Type::F16 | Type::BF16 => {
+                let format = ty.half_format()?;
+                LongDouble::from_double(f64::from(format.widen(u16::try_from(bits).ok()?)))
+            },
+            | Type::F32 => LongDouble::from_double(f64::from(f32::from_bits(narrow(bits)?))),
+            | Type::F64 => LongDouble::from_double(f64::from_bits(u64::try_from(bits).ok()?)),
+            | _ => LongDouble::from_x87(X87::from_bits(bits))?,
+        })
+    }
 }
 
 /// Both parts of `value` rounded to binary16 or bfloat16.

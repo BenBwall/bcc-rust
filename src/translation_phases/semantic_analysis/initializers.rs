@@ -33,6 +33,7 @@ use super::{
     ScopeKind,
     SemanticErrorKind,
     Subobject,
+    WideStore,
     expressions::{
         ConstantClass,
         ConstantFolding,
@@ -780,18 +781,9 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 ) && info.ice
                     && info.integer.is_some())
         };
-        // Arithmetic on a `_BitInt` wider than the constant model is not
-        // folded yet.
-        let wide = self.wide_unfolded(e)
-            || (info.constant == ConstantClass::Arithmetic
-                && self
-                    .integer_type(target)
-                    .is_some_and(|(bits, _)| bits > 128));
         if !valid {
             self.error(
-                if wide {
-                    SemanticErrorKind::UnsupportedWideConstant
-                } else if info.constant == ConstantClass::Arithmetic {
+                if info.constant == ConstantClass::Arithmetic {
                     SemanticErrorKind::ConstantOverflow
                 } else {
                     SemanticErrorKind::NonConstantInitializer
@@ -846,7 +838,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 "overflow in conversion from `{}` to `{}` changes value to {}",
                 self.conversion_spelling(info.ty),
                 self.conversion_spelling(target),
-                stored
+                self.wide.display(stored)
             );
             let text = self.context.string_cache.intern(text);
             self.group_diagnostic(
@@ -1835,9 +1827,9 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             // conversion rather than truncating to its one-bit model.
             self.bindings[index].value =
                 if matches!(self.types.nodes[ty.index], TypeKind::Scalar(Scalar::Bool)) {
-                    Some(Integer::int(i128::from(value.value != 0)).cast(bits, signed))
+                    Some(Integer::int(i128::from(!value.is_zero())).cast(bits, signed))
                 } else {
-                    value.convert(bits, signed)
+                    Some(self.wide.convert(value, bits, signed))
                 };
         }
     }

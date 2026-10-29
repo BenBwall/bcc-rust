@@ -274,6 +274,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             value: i128::from(offset),
             bits,
             signed,
+            wide: None,
         });
         info.ice = true;
         info.constant = ConstantClass::Arithmetic;

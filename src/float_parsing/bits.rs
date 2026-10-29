@@ -108,34 +108,20 @@ pub(crate) fn from_unsigned(value: u128, ty: Type) -> Option<u128> {
     from_magnitude(false, value, ty)
 }
 
-/// The bits of an integer constant of `width` bits and the given
-/// signedness, as semantic analysis folds it (`Integer`), rounded to
-/// nearest even. Above 128 bits a value stands for its pattern
-/// sign-extended to `width` bits, so an unsigned one with bit 127 set is
-/// 2^width - k: the top 128 bits of its ones and its low half, with every
-/// bit below them folded into the last (a sticky bit), round once to any of
-/// these formats, whose precisions are below 126 bits, and then scale.
+/// The bits of the integer `window * 2^scale`, negated for `sign`, rounded
+/// once to nearest even. A wider integer (a `_BitInt` of more than 128
+/// bits) passes its top 128 bits from its leading one as `window`, with
+/// every bit below them folded into the window's lowest bit (a sticky bit):
+/// the precisions of these formats are below 126 bits, so that bit only
+/// breaks ties, and scaling is exact once the window has rounded. The x87
+/// format saturates to infinity past its exponent range.
 /// C99: §6.3.1.4 paragraph 2, pp. 43-44; PDF pp. 55-56.
 /// C23: §6.2.5 paragraph 8, p. 39; PDF p. 52.
-pub(crate) fn from_bit_precise(value: i128, width: u32, signed: bool, ty: Type) -> Option<u128> {
-    if signed {
-        return from_integer(value, ty);
+pub(crate) fn from_scaled(sign: bool, window: u128, scale: u32, ty: Type) -> Option<u128> {
+    if scale == 0 {
+        return from_magnitude(sign, window, ty);
     }
-    if width <= 128 || value >= 0 {
-        return from_unsigned(value.cast_unsigned(), ty);
-    }
-    let low = value.cast_unsigned();
-    let above = width - 128;
-    let (window, sticky) = if above >= 128 {
-        (u128::MAX, true)
-    } else {
-        (
-            u128::MAX << (128 - above) | low >> above,
-            low & ((1 << above) - 1) != 0,
-        )
-    };
-    let window = window | u128::from(sticky);
-    let scale = i64::from(above);
+    let scale = i64::from(scale);
     let (mantissa_bits, exponent_bits) = match ty {
         | Type::F16 => (10, 5),
         | Type::BF16 => (7, 8),
@@ -144,25 +130,21 @@ pub(crate) fn from_bit_precise(value: i128, width: u32, signed: bool, ty: Type) 
         | Type::F80 => {
             let bits = x87_from_magnitude(false, window);
             let exponent = i64::try_from(bits >> 64 & 0x7FFF).ok()? + scale;
+            let sign = u128::from(sign) << 79;
             return Some(if exponent >= 0x7FFF {
-                0x7FFF_u128 << 64 | 1 << 63
+                sign | 0x7FFF_u128 << 64 | 1 << 63
             } else {
-                bits & u128::from(u64::MAX) | u128::try_from(exponent).ok()? << 64
+                sign | bits & u128::from(u64::MAX) | u128::try_from(exponent).ok()? << 64
             });
         },
-        | Type::F128 =>
-            return Some(
-                Binary128::from_integer(false, window)
-                    .scale(scale)
-                    .to_bits(),
-            ),
+        | Type::F128 => return Some(Binary128::from_integer(sign, window).scale(scale).to_bits()),
         | _ => return None,
     };
     let format = Format {
         mantissa_bits,
         exponent_bits,
     };
-    Some(format.round(window, scale))
+    Some(format.signed(sign, format.round(window, scale)))
 }
 
 fn from_magnitude(sign: bool, magnitude: u128, ty: Type) -> Option<u128> {

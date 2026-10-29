@@ -940,7 +940,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                             predicate.expression,
                             binding,
                         )
-                        .is_some_and(|value| value.value != 0)
+                        .is_some_and(|value| !value.is_zero())
                 {
                     self.call_attribute_diagnostic(
                         identifier.source_vectors,
