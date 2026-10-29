@@ -6,7 +6,8 @@
 //! is what wasi-sdk's Clang build prints for `wasm32-wasip1`.
 //! `bit_int_abi.c` links halves built by bcc's back ends, Clang and GCC in
 //! every pairing, and `bit_int_objects.c` prints the bytes of `_BitInt`
-//! objects, padding included.
+//! objects, padding included. `bit_int_wide.c` and `bit_int_wide_abi.c` do
+//! the same for widths of more than 128 bits.
 
 #[cfg(test)]
 #[expect(
@@ -279,7 +280,102 @@ mod tests {
         if !linux_x86_64() {
             return;
         }
-        let source = fixture("bit_int_abi.c");
+        link_halves("bit_int_abi.c");
+    }
+
+    /// The same for widths of more than 128 bits (`bit_int_wide.c`, from
+    /// `scripts/generate_wide_bit_int_program.py`), which bcc keeps in
+    /// memory and computes with its own runtime routines. Width 65535 is
+    /// built with `-DBIT_INT_65535` and compared with GCC alone, as Clang
+    /// compiles it slowly; the rest must print what Clang's build prints.
+    #[test]
+    fn wide_bit_int_programs_match_clang_and_gcc() {
+        if !linux_x86_64() {
+            return;
+        }
+        let source = fixture("bit_int_wide.c");
+        let clang = reference(CLANG, &source);
+        let (define, expected) = if host_gcc_compiles(&source) {
+            assert_eq!(reference("gcc", &source), clang, "GCC agrees with Clang");
+            let full = reference_with("gcc", &source, &["-DBIT_INT_65535"]);
+            ("-DBIT_INT_65535", full)
+        } else {
+            eprintln!("note: no host GCC with _BitInt; checking widths up to 4096 against Clang");
+            ("-DBIT_INT_NONE", clang)
+        };
+        for identity in ["--compiler-identity=clang", "--compiler-identity=gcc"] {
+            for flags in [
+                &["--interpret", "--opt=none"][..],
+                &["--interpret", "--opt=bcc"],
+            ] {
+                let output = bcc(&[&[identity, "-std=c23", define, &source][..], flags].concat());
+                assert_eq!(
+                    output.status.code(),
+                    Some(0),
+                    "{identity} {flags:?}: {}",
+                    text(&output.stderr)
+                );
+                assert_lines(
+                    &text(&output.stdout),
+                    &expected,
+                    &format!("{identity} {flags:?}"),
+                );
+            }
+            for flags in [
+                &["-O0"][..],
+                &["-O2"],
+                &["--backend=native"],
+                &["--backend=native", "--opt=bcc"],
+            ] {
+                let executable = temporary("bit_int_wide.exe");
+                let built = bcc(&[
+                    &[
+                        identity,
+                        "-std=c23",
+                        define,
+                        &source,
+                        "-o",
+                        executable.to_str().unwrap(),
+                    ][..],
+                    flags,
+                ]
+                .concat());
+                assert!(
+                    built.status.success(),
+                    "{identity} {flags:?}: {}",
+                    text(&built.stderr)
+                );
+                let run = run_native(&mut Command::new(&executable)).unwrap();
+                assert_eq!(run.status.code(), Some(0), "{identity} {flags:?}");
+                assert_lines(
+                    &text(&run.stdout),
+                    &expected,
+                    &format!("{identity} {flags:?}"),
+                );
+                std::fs::remove_file(executable).unwrap();
+            }
+        }
+    }
+
+    /// Arguments and results of more than 128 bits, which both compilers
+    /// pass in memory (System V: copied to the stack 8-aligned, results
+    /// through a hidden pointer), between halves built by bcc, Clang and
+    /// GCC, beside register and stack arguments, floating ones, in a
+    /// structure, through `...` and through a function pointer.
+    #[test]
+    fn wide_bit_int_arguments_link_with_clang_and_gcc() {
+        if !linux_x86_64() {
+            return;
+        }
+        link_halves("bit_int_wide_abi.c");
+    }
+
+    /// Links the `CALLEE_ONLY` and `CALLER_ONLY` halves of the fixture
+    /// `name` built by every pair of Clang, GCC (when present) and bcc's
+    /// back ends, and checks each program's output against Clang's whole
+    /// build; then the whole program under bcc's interpreter.
+    fn link_halves(name: &str) {
+        let source = fixture(name);
         let expected = reference(CLANG, &source);
         let gcc = host_gcc_compiles(&source);
         if gcc {
@@ -394,8 +490,14 @@ mod tests {
     /// The output of `source` built by `compiler`; GCC calls libatomic for
     /// 16-byte atomic objects.
     fn reference(compiler: &str, source: &str) -> String {
+        reference_with(compiler, source, &[])
+    }
+
+    /// [`reference`] with extra compiler arguments.
+    fn reference_with(compiler: &str, source: &str, extra: &[&str]) -> String {
         let executable = temporary("reference.exe");
         let built = Command::new(compiler)
+            .args(extra)
             .args([source, "-std=c23", "-O0", "-w", "-o"])
             .arg(&executable)
             .args(if compiler == "gcc" {
