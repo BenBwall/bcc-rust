@@ -1486,6 +1486,23 @@ impl<'id> Session<'id> {
         }
     }
 
+    /// `!{!"name"}` as a value, the operand naming a register to
+    /// `llvm.read_register`.
+    pub(super) fn metadata_name(&self, name: &str) -> Val<'id> {
+        // SAFETY: The context is live; LLVM copies the name bytes.
+        let mut string = unsafe {
+            llvm_sys::core::LLVMMDStringInContext2(self.context, name.as_ptr().cast(), name.len())
+        };
+        // SAFETY: The context and the string operand are live.
+        let node =
+            unsafe { llvm_sys::core::LLVMMDNodeInContext2(self.context, &raw mut string, 1) };
+        // SAFETY: The context and its metadata node are live.
+        Val(
+            unsafe { llvm_sys::core::LLVMMetadataAsValue(self.context, node) },
+            PhantomData,
+        )
+    }
+
     /// Adds the string attribute `key`=`value` to the function `function`.
     pub(super) fn string_attribute(&self, function: Val<'id>, key: &str, value: &str) {
         let key_length = u32::try_from(key.len()).expect("attribute key fits in u32");
