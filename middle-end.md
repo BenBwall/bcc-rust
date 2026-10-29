@@ -1048,7 +1048,9 @@ is refused. After lowering, the middle end compiles that C
 runtime with bcc for the unit's target when a module calls one of them and
 moves the bodies the module reaches into it
 (`wide_bit_int::runtime::link`), before the optimizer runs, so every back
-end sees ordinary internal functions. `language-standards.md` ("`_BitInt`
+end sees ordinary internal functions. They are `noinline`: each is a loop
+over limbs, and expanding one at every wide operation made LLVM's `-O2`
+spend most of its time on the copies. `language-standards.md` ("`_BitInt`
 types") records the semantics and the GCC and Clang ABI facts.
 
 Complex scalars use two immutable SSA component values retained in a sparse
