@@ -98,6 +98,8 @@ pub(crate) struct CompilerConfiguration {
     interchange_float_types: Option<bool>,
     /// `-ftrigraphs` or `-fno-trigraphs`, over the mode's default.
     trigraphs: Option<bool>,
+    /// `$` may appear in identifiers (`-f[no-]dollars-in-identifiers`).
+    dollar_identifiers: bool,
     /// Signed integer overflow wraps (`-fwrapv`).
     wrapv: bool,
     /// Every structure is packed and `#pragma pack` ignored (`-fpack-struct`

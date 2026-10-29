@@ -1093,10 +1093,11 @@ mod tests {
                 "-frounding-math",
                 "clang: error: '-frounding-math' is not supported",
             ),
+            // An option TCC implements and bcc does not.
             (
                 "--tcc-mode",
-                "-fshort-enums",
-                "tcc: error: '-fshort-enums' is not supported",
+                "-mno-sse",
+                "tcc: error: '-mno-sse' is not supported",
             ),
         ] {
             let output = directory.bcc(mode, &["-c", option, "x.c"]);
@@ -1140,9 +1141,14 @@ mod tests {
             assert!(warnings.contains(line), "{warnings}");
         }
         assert_eq!(warnings.lines().count(), 3, "{warnings}");
-        let tcc = directory.bcc("--tcc-mode", &["-c", "-fstack-protector", "x.c"]);
+        // TCC ignores the options it does not know, so they change nothing
+        // in the program it builds either.
+        let tcc = directory.bcc(
+            "--tcc-mode",
+            &["-c", "-fstack-protector", "-fshort-enums", "x.c"],
+        );
         succeeds(&tcc);
-        assert!(stderr(&tcc).contains("tcc: warning: '-fstack-protector' is ignored"));
+        assert_eq!(stderr(&tcc), "");
     }
 
     #[test]
@@ -2584,6 +2590,529 @@ mod tests {
             "{}",
             stderr(&output)
         );
+    }
+
+    /// The TCC personality reads its command line as `tcc_parse_args`
+    /// does: TCC's table in TCC's order, `@FILE`, `-Wp,`, the last of
+    /// `-c`, `-E`, `-r`, `-shared` and `-run` winning with TCC's warning,
+    /// and the options TCC ignores accepted silently.
+    #[test]
+    fn tcc_reads_its_command_line_as_tcc_does() {
+        let directory = Directory::new();
+        directory.write("x.c", "int x = X;\n");
+        directory.write("inc.h", "#define VALUE 7\n");
+        directory.write("args.txt", "-c \"x.c\" -DX=2 -o fromfile.o\n");
+        let output = directory.bcc("--tcc-mode", &["@args.txt"]);
+        succeeds(&output);
+        assert!(directory.path("fromfile.o").is_file());
+        let output = directory.bcc("--tcc-mode", &["@missing.txt"]);
+        assert_eq!(output.status.code(), Some(1));
+        assert_eq!(
+            stderr(&output),
+            "tcc: error: listfile 'missing.txt' not found\n"
+        );
+        // TCC never ends a listfile that names itself; bcc stops.
+        directory.write("self.txt", "@self.txt\n");
+        let output = directory.bcc("--tcc-mode", &["@self.txt"]);
+        assert_eq!(output.status.code(), Some(1));
+        assert_eq!(
+            stderr(&output),
+            "tcc: error: listfile 'self.txt' not read: more than 4096 listfiles (does one name \
+             itself?)\n"
+        );
+        directory.write("two.txt", "@two.txt @two.txt\n");
+        let output = directory.bcc("--tcc-mode", &["@two.txt"]);
+        assert_eq!(output.status.code(), Some(1));
+        // A value that starts with `-` stays a value, as in TCC: here a
+        // directory named `-c`.
+        std::fs::create_dir(directory.path("-c")).unwrap();
+        directory.write("-c/dash.h", "#define X 4\n");
+        directory.write("dash.c", "#include \"dash.h\"\nint x = X;\n");
+        for args in [
+            &["-I", "-c", "-c", "dash.c"][..],
+            &["-isystem", "-c", "-c", "dash.c"][..],
+        ] {
+            let output = directory.bcc("--tcc-mode", args);
+            succeeds(&output);
+            assert_eq!(stderr(&output), "", "{args:?}");
+        }
+        // `-Wp,` splits its operand into options; `-ofile` is joined.
+        let output = directory.bcc("--tcc-mode", &["-Wp,-DX=3,-UY", "-c", "x.c", "-ojoined.o"]);
+        succeeds(&output);
+        assert!(directory.path("joined.o").is_file());
+        // The last action wins, with a warning for each after the first.
+        let output = directory.bcc("--tcc-mode", &["-DX=1", "-E", "-c", "x.c"]);
+        succeeds(&output);
+        assert_eq!(
+            stderr(&output),
+            "tcc: warning: -c: overriding compiler action already specified\n"
+        );
+        assert!(directory.path("x.o").is_file());
+        let output = directory.bcc(
+            "--tcc-mode",
+            &["-DX=1", "-c", "-c", "x.c", "-o", "a.o", "-o", "b.o"],
+        );
+        succeeds(&output);
+        assert_eq!(
+            stderr(&output),
+            "tcc: warning: -c: overriding compiler action already specified\ntcc: warning: \
+             multiple -o option\n"
+        );
+        assert!(directory.path("b.o").is_file());
+        // TCC's no-op options, and the ones it does not know, are ignored;
+        // `-Wunsupported` names them.
+        let ignored = [
+            "-pedantic",
+            "-pipe",
+            "-s",
+            "-traditional",
+            "-C",
+            "--param",
+            "x=1",
+            "-arch",
+            "x86_64",
+            "-pie",
+            "-fbogus",
+            "-mbogus",
+            "-Wbogus",
+            "-g3",
+            "-gdwarf-4",
+            "-O2",
+            "-Os",
+        ];
+        let mut args = ignored.to_vec();
+        args.extend(["-DX=1", "-c", "x.c"]);
+        let output = directory.bcc("--tcc-mode", &args);
+        succeeds(&output);
+        assert_eq!(stderr(&output), "");
+        let output = directory.bcc(
+            "--tcc-mode",
+            &["-Wunsupported", "-fbogus", "-pipe", "-DX=1", "-c", "x.c"],
+        );
+        succeeds(&output);
+        assert_eq!(
+            stderr(&output),
+            "tcc: warning: unsupported option '-fbogus'\ntcc: warning: unsupported option \
+             '-pipe'\n"
+        );
+        // An option TCC's table does not hold, as TCC words it.
+        for (args, message) in [
+            (
+                &["-MT", "x", "x.c"][..],
+                "tcc: error: invalid option -- '-MT'\n",
+            ),
+            (
+                &["-pedantic-errors", "x.c"][..],
+                "tcc: error: invalid option -- '-pedantic-errors'\n",
+            ),
+            (&["-o"][..], "tcc: error: argument to '-o' is missing\n"),
+            (&["x.c", "-h"][..], "tcc: error: cannot parse -h here\n"),
+            (&["-run"][..], "tcc: error: no input files\n"),
+            (&["-c"][..], "tcc: error: no input files\n"),
+        ] {
+            let output = directory.bcc("--tcc-mode", args);
+            assert_eq!(output.status.code(), Some(1), "{args:?}");
+            assert_eq!(stderr(&output), message, "{args:?}");
+        }
+        // No arguments print the help; `-v` alone the version; `-vv` alone
+        // the version and the search directories; `-dumpmachine`, as `mob`.
+        let output = directory.bcc("--tcc-mode", &[]);
+        succeeds(&output);
+        assert!(
+            stdout(&output).contains("Usage: tcc [options...]"),
+            "{}",
+            stdout(&output)
+        );
+        let output = directory.bcc("--tcc-mode", &["-vv"]);
+        succeeds(&output);
+        let text = stdout(&output);
+        assert!(text.starts_with("tcc version 0.9.27 "), "{text}");
+        assert!(
+            text.contains("\ninstall: ") && text.contains("\ninclude:\n"),
+            "{text}"
+        );
+        let output = directory.bcc("--tcc-mode", &["-dumpmachine"]);
+        succeeds(&output);
+        if cfg!(all(target_os = "linux", target_env = "gnu")) {
+            assert_eq!(stdout(&output), "x86_64-pc-linux-gnu\n");
+        }
+        // `-v` with inputs says what it reads and writes, on stdout.
+        let output = directory.bcc("--tcc-mode", &["-v", "-DX=1", "-c", "x.c"]);
+        succeeds(&output);
+        assert!(
+            stdout(&output).ends_with("\n-> x.c\n<- x.o\n"),
+            "{}",
+            stdout(&output)
+        );
+    }
+
+    /// TCC names its outputs after its inputs (`a.c` → `a.o`, standard
+    /// input → `a.out`), compiles each `-c` input on its own and stops at
+    /// the first that fails, and writes make rules one file to a line.
+    #[test]
+    fn tcc_names_outputs_and_rules_as_tcc_does() {
+        use std::io::Write as _;
+        let directory = Directory::new();
+        directory.write("a.c", "int b(void);\nint main(void) { return b(); }\n");
+        directory.write("b.c", "#include \"inc.h\"\nint b(void) { return VALUE; }\n");
+        directory.write("inc.h", "#define VALUE 7\n");
+        directory.write("bad.c", "int f(void) { return y; }\n");
+        let output = directory.bcc("--tcc-mode", &["-c", "a.c", "b.c"]);
+        succeeds(&output);
+        assert!(directory.path("a.o").is_file() && directory.path("b.o").is_file());
+        // A failing input stops the others, and says so once.
+        let output = directory.bcc("--tcc-mode", &["-c", "bad.c", "b.c", "-MD"]);
+        assert_eq!(output.status.code(), Some(1));
+        assert_eq!(
+            stderr(&output),
+            "bad.c:1: error: identifier has no visible declaration: `y`\n"
+        );
+        let output = directory.bcc("--tcc-mode", &["-c", "a.c", "-lm"]);
+        assert_eq!(output.status.code(), Some(1));
+        assert_eq!(
+            stderr(&output),
+            "tcc: error: cannot specify libraries with -c\n"
+        );
+        // Standard input's object is `a.out`, as TCC names it.
+        let mut child = Command::new(env!("CARGO_BIN_EXE_bcc-rust"))
+            .args(["--tcc-mode", "-c", "-"])
+            .current_dir(&directory.0)
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(b"int f(void) { return 1; }\n")
+            .unwrap();
+        assert!(child.wait().unwrap().success());
+        let object = std::fs::read(directory.path("a.out")).unwrap();
+        // An ELF relocatable object (`e_type` 1).
+        if cfg!(target_os = "linux") {
+            assert_eq!(&object[..4], b"\x7fELF");
+            assert_eq!(object[16], 1);
+        }
+        // `-r` links the inputs into one relocatable object.
+        if cfg!(target_os = "linux") {
+            let output = directory.bcc("--tcc-mode", &["-r", "a.c", "b.c", "-o", "r.o"]);
+            succeeds(&output);
+            let merged = std::fs::read(directory.path("r.o")).unwrap();
+            assert_eq!(merged[16], 1);
+            let output = directory.bcc("--tcc-mode", &["r.o", "-o", "linked"]);
+            succeeds(&output);
+            let run = Command::new(directory.path("linked")).output().unwrap();
+            assert_eq!(run.status.code(), Some(7));
+        }
+        // TCC's rules: a file to a line, named after the output.
+        let output = directory.bcc("--tcc-mode", &["-M", "b.c"]);
+        succeeds(&output);
+        assert_eq!(stdout(&output), "b.o: \\\n  b.c \\\n  inc.h\n");
+        let output = directory.bcc("--tcc-mode", &["-MD", "-MP", "-c", "b.c", "-o", "out.o"]);
+        succeeds(&output);
+        assert_eq!(
+            std::fs::read_to_string(directory.path("out.d")).unwrap(),
+            "out.o: \\\n  b.c \\\n  inc.h\ninc.h:\n"
+        );
+        let output = directory.bcc("--tcc-mode", &["-MMD", "b.c", "a.c", "-o", "prog"]);
+        succeeds(&output);
+        let output = directory.bcc("--tcc-mode", &["-MD", "b.c", "-shared", "-o", "lib.so"]);
+        succeeds(&output);
+        assert_eq!(
+            std::fs::read_to_string(directory.path("lib.d")).unwrap(),
+            "lib.so: \\\n  b.c \\\n  inc.h\n"
+        );
+    }
+
+    /// `-run FILE ARGS...` reads the options before FILE as its own, gives
+    /// the program the arguments after it, and `tcc FILES -run -- ARGS`
+    /// runs FILES; `-rstdin` gives the program a file as its input.
+    #[test]
+    fn tcc_run_reads_options_and_arguments_as_tcc_does() {
+        let directory = Directory::new();
+        directory.write(
+            "args.c",
+            "#include <stdio.h>\nint main(int argc, char **argv) {\n  int c, n = 0;\n  while ((c \
+             = getchar()) != EOF) n++;\n  printf(\"%d %d %s\\n\", N, n, argv[argc - 1]);\n  \
+             return argc;\n}\n",
+        );
+        directory.write("input.txt", "abc");
+        directory.write(
+            "name.c",
+            "#include <stdio.h>\nint main(int argc, char **argv) { puts(argv[0]); return 0; }\n",
+        );
+        // The program's `argv[0]` is the argument TCC stopped at.
+        for (args, name) in [
+            (&["-run", "name.c", "x"][..], "name.c\n"),
+            (&["name.c", "-run", "--", "x"][..], "--\n"),
+        ] {
+            let output = directory.bcc("--tcc-mode", args);
+            succeeds(&output);
+            if cfg!(unix) {
+                assert_eq!(stdout(&output), name, "{args:?}");
+            }
+        }
+        // TCC opens `-rstdin`'s file before it compiles anything.
+        let output = directory.bcc("--tcc-mode", &["-rstdin", "nope.txt", "-run", "name.c"]);
+        assert_eq!(output.status.code(), Some(1));
+        assert_eq!(
+            stderr(&output),
+            "tcc: error: failed to reopen stdin from 'nope.txt'\n"
+        );
+        let output = directory.bcc(
+            "--tcc-mode",
+            &[
+                "-run",
+                "-DN=4",
+                "-rstdin",
+                "input.txt",
+                "args.c",
+                "-v",
+                "last",
+            ],
+        );
+        assert_eq!(output.status.code(), Some(3), "{}", stderr(&output));
+        assert_eq!(stdout(&output), "4 3 last\n");
+        directory.write("n.c", "#define N 5\n#include \"args.c\"\n");
+        let output = directory.bcc("--tcc-mode", &["n.c", "-run", "--", "x", "y"]);
+        assert_eq!(output.status.code(), Some(3), "{}", stderr(&output));
+        assert_eq!(stdout(&output), "5 0 y\n");
+        // A `#!/usr/bin/tcc -run -DN=6` line hands its options over as one
+        // argument.
+        let output = directory.bcc("--tcc-mode", &["-run -DN=6", "args.c", "z"]);
+        assert_eq!(output.status.code(), Some(2), "{}", stderr(&output));
+        assert_eq!(stdout(&output), "6 0 z\n");
+    }
+
+    /// The TCC identity claims what TCC claims and keeps TCC's warnings:
+    /// glibc's `__REDIRECT` family, no `__int128` size macros, Microsoft's
+    /// anonymous members by default, pointer/integer assignments as
+    /// warnings, and one line per diagnostic up to the first error.
+    #[test]
+    fn tcc_identity_follows_tcc() {
+        let tcc = macros("--tcc-mode");
+        assert_eq!(
+            defines(&tcc, "__REDIRECT(name,proto,alias)").as_deref(),
+            Some("name proto __asm__(#alias)")
+        );
+        for name in [
+            "__SIZEOF_INT128__",
+            "__SIZEOF_FLOAT128__",
+            "__FLOAT128__",
+            "linux",
+            "__NO_INLINE__",
+        ] {
+            assert_eq!(defines(&tcc, name), None, "{name}");
+        }
+        assert_eq!(defines(&tcc, "__unix__").as_deref(), Some("1"));
+        let c11 = macros_with("--tcc-mode", &["-std=c11"]);
+        assert_eq!(
+            defines(&c11, "__STDC_VERSION__").as_deref(),
+            Some("201112L")
+        );
+        let directory = Directory::new();
+        directory.write(
+            "ms.c",
+            "struct A { int x; };\nstruct B { struct A; int y; };\nint main(void) { struct B b = \
+             { { 1 }, 2 }; return b.x + b.y; }\n",
+        );
+        let output = directory.bcc("--tcc-mode", &["-run", "ms.c"]);
+        assert_eq!(output.status.code(), Some(3), "{}", stderr(&output));
+        let output = directory.bcc("--tcc-mode", &["-fno-ms-extensions", "-c", "ms.c"]);
+        assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+        // TCC warns where GCC 14 stops; `-Werror` stops again.
+        directory.write(
+            "ptr.c",
+            "int main(void) { int i = 0; int *p = 5; char *q = &i; return 0; }\n",
+        );
+        let output = directory.bcc("--tcc-mode", &["-c", "ptr.c"]);
+        succeeds(&output);
+        assert_eq!(
+            stderr(&output),
+            "ptr.c:1: warning: incompatible integer and pointer conversion \
+             [-Wint-conversion]\nptr.c:1: warning: incompatible pointer types in conversion \
+             [-Wincompatible-pointer-types]\n"
+        );
+        let output = directory.bcc("--tcc-mode", &["-Werror", "-c", "ptr.c"]);
+        assert_eq!(output.status.code(), Some(1));
+        assert_eq!(
+            stderr(&output),
+            "ptr.c:1: error: incompatible integer and pointer conversion [-Wint-conversion]\n"
+        );
+        // `$` follows `-f[no-]dollars-in-identifiers`, in every personality.
+        directory.write("dollar.c", "int a$b = 3;\n");
+        succeeds(&directory.bcc("--tcc-mode", &["-c", "dollar.c"]));
+        for mode in ["--tcc-mode", "--gcc-mode", "--clang-mode"] {
+            let output = directory.bcc(mode, &["-fno-dollars-in-identifiers", "-c", "dollar.c"]);
+            assert_eq!(output.status.code(), Some(1), "{mode}: {}", stderr(&output));
+        }
+    }
+
+    /// `tcc -ar` runs the bundled archiver with the rest of the command
+    /// line, as TCC runs its own.
+    #[test]
+    fn tcc_archives_with_the_bundled_archiver() {
+        let directory = Directory::new();
+        directory.write("lib.c", "int value(void) { return 42; }\n");
+        directory.write(
+            "use.c",
+            "int value(void);\nint main(void) { return value(); }\n",
+        );
+        succeeds(&directory.bcc("--tcc-mode", &["-c", "lib.c"]));
+        let output = directory.bcc("--tcc-mode", &["-ar", "rcs", "libv.a", "lib.o"]);
+        succeeds(&output);
+        assert!(directory.path("libv.a").is_file());
+        let output = directory.bcc("--tcc-mode", &["-c", "-ar", "rcs", "x.a"]);
+        assert_eq!(stderr(&output), "tcc: error: cannot parse -ar here\n");
+        if cfg!(target_os = "linux") {
+            succeeds(&directory.bcc("--tcc-mode", &["use.c", "-L.", "-lv", "-o", "use"]));
+            let run = Command::new(directory.path("use")).output().unwrap();
+            assert_eq!(run.status.code(), Some(42));
+        }
+    }
+
+    /// With `BCC_TCC` naming a real `tcc`, compares it with the TCC
+    /// personality on the command lines where they are meant to agree:
+    /// exit status, stdout, stderr, the files written, and what the
+    /// programs built print. CI has no TCC, so the test passes without
+    /// one; `docs/design/driver-modes.md` lists the differences that
+    /// remain.
+    #[test]
+    fn tcc_parity_with_a_real_tcc() {
+        let Some(tcc) = std::env::var_os("BCC_TCC") else {
+            eprintln!("skipping: BCC_TCC names no tcc binary");
+            return;
+        };
+        let fixtures: &[(&str, &str)] = &[
+            (
+                "hello.c",
+                "#include <stdio.h>\nint main(int argc, char **argv) {\n  for (int i = 1; i < \
+                 argc; i++) printf(\"%s\\n\", argv[i]);\n  return argc;\n}\n",
+            ),
+            ("a.c", "int b(void);\nint main(void) { return b(); }\n"),
+            ("b.c", "#include \"inc.h\"\nint b(void) { return VALUE; }\n"),
+            ("inc.h", "#define VALUE 7\n"),
+            (
+                "macros.c",
+                "#ifdef FOO\nint foo = FOO;\n#endif\nint v = __STDC_VERSION__;\nint main(void) { \
+                 char c = (char)200; return c < 0; }\n",
+            ),
+            (
+                "ms.c",
+                "struct A { int x; };\nstruct B { struct A; int y; };\nint main(void) { struct B \
+                 b; b.x = 1; b.y = 2; return b.x + b.y; }\n",
+            ),
+            ("dollar.c", "int a$b = 3;\nint main(void) { return a$b; }\n"),
+            (
+                "script.c",
+                "#!/usr/bin/tcc -run\n#include <stdio.h>\nint main(int argc, char **argv) { \
+                 printf(\"script %d\\n\", argc); return 0; }\n",
+            ),
+            ("lib.c", "int libval(void) { return 42; }\n"),
+            ("args.txt", "-c hello.c -o fromfile.o\n"),
+        ];
+        let cases: &[&[&str]] = &[
+            &["-c"],
+            &["hello.c"],
+            &["hello.c", "-o", "prog"],
+            &["-c", "hello.c"],
+            &["-c", "a.c", "b.c"],
+            &["-c", "a.c", "b.c", "-o", "x.o"],
+            &["a.c", "b.c"],
+            &["-r", "a.c", "b.c", "-o", "r.o"],
+            &["missing.c"],
+            &["-c", "a.c", "missing.c", "b.c"],
+            &["missing.o", "a.c"],
+            &["-E", "-P", "b.c"],
+            &["-MD", "-c", "b.c"],
+            &["-MD", "-MF", "deps.txt", "-c", "b.c"],
+            &["-run", "hello.c", "one", "-v"],
+            &["-run"],
+            &["-run", "missing.c"],
+            &["-run", "script.c", "a"],
+            &["-DFOO=1", "-run", "macros.c"],
+            &["-funsigned-char", "-run", "macros.c"],
+            &["-std=c11", "-E", "-P", "macros.c"],
+            &["-std=c17", "-E", "-P", "macros.c"],
+            &["-run", "ms.c"],
+            &["-run", "dollar.c"],
+            &["-shared", "lib.c", "-o", "libx.so"],
+            &["-soname", "libq.so", "-shared", "lib.c", "-o", "libq.so"],
+            &[
+                "-Wbogus",
+                "-fbogus",
+                "-mbogus",
+                "-fshort-enums",
+                "-c",
+                "hello.c",
+            ],
+            &[
+                "-pedantic",
+                "-pipe",
+                "-s",
+                "-traditional",
+                "--param",
+                "x=1",
+                "-c",
+                "hello.c",
+            ],
+            &["-q", "hello.c"],
+            &["--bogus", "hello.c"],
+            &["-o"],
+            &["-c", "-c", "hello.c"],
+            &["@args.txt"],
+            &["-Wp,-DFOO=5", "-E", "-P", "macros.c"],
+            &["-I", "-c", "-c", "hello.c"],
+        ];
+        let run = |program: &std::ffi::OsStr, mode: Option<&str>, args: &[&str]| {
+            let directory = Directory::new();
+            for (name, text) in fixtures {
+                directory.write(name, text);
+            }
+            let output = Command::new(program)
+                .args(mode)
+                .args(args)
+                .current_dir(&directory.0)
+                .env("NO_COLOR", "1")
+                .output()
+                .unwrap();
+            let mut written: Vec<String> = std::fs::read_dir(&directory.0)
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+                .filter(|name| {
+                    !fixtures
+                        .iter()
+                        .any(|(fixture, _)| *fixture == name.as_str())
+                })
+                .collect();
+            written.sort();
+            let mut ran = Vec::new();
+            for name in &written {
+                if name == "a.out" || name == "prog" {
+                    let program = Command::new(directory.path(name)).output().unwrap();
+                    ran.push((program.status.code(), stdout(&program)));
+                }
+            }
+            // 0.9.27 ends `no input files` with an empty line.
+            let stderr = stderr(&output).trim_end().to_owned();
+            (output.status.code(), stdout(&output), stderr, written, ran)
+        };
+        let mut failures = Vec::new();
+        for args in cases {
+            let expected = run(&tcc, None, args);
+            let actual = run(
+                std::ffi::OsStr::new(env!("CARGO_BIN_EXE_bcc-rust")),
+                Some("--tcc-mode"),
+                args,
+            );
+            if expected != actual {
+                failures.push(format!(
+                    "tcc {}:\n  tcc: {expected:?}\n  bcc: {actual:?}",
+                    args.join(" ")
+                ));
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 
     /// `-###` prints each step as GCC and Clang print a subprocess, naming

@@ -162,10 +162,6 @@ const REFUSED: &[(&str, &str)] = &[
         "bcc writes wide strings in the target's encoding only",
     ),
     (
-        "-fno-dollars-in-identifiers",
-        "bcc accepts $ in identifiers",
-    ),
-    (
         "-fno-extended-identifiers",
         "bcc accepts extended identifiers",
     ),
@@ -512,7 +508,6 @@ const IGNORED: &[&str] = &[
     "-freg-struct-return",
     "-fno-pcc-struct-return",
     "-fno-merge-all-constants",
-    "-fdollars-in-identifiers",
     "-fextended-identifiers",
     "-fdigraphs",
     "-fno-raw-string-literals",

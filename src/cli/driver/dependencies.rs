@@ -1,7 +1,8 @@
 //! Writes make dependency rules for a translation unit (`-M`, `-MM`,
 //! `-MD`, `-MMD`), as GCC writes them: the target, a colon, the source and
 //! each header it read, wrapped with backslash-newlines, and with `-MP` an
-//! empty rule for each header.
+//! empty rule for each header. Under TCC's identity they take TCC's form
+//! (`gen_makedeps` in `tcctools.c`): every file on a line of its own.
 //!
 //! The rules describe the source files a translation unit was read from,
 //! C99: §5.1.1.1 paragraph 1, p. 9; PDF p. 21; source file inclusion,
@@ -31,7 +32,10 @@ use super::{
     output_or_stem,
 };
 use crate::{
-    configuration::RuleSet,
+    configuration::{
+        CompilerIdentity,
+        RuleSet,
+    },
     headers::HeaderSearch,
     translation_phases::Context,
     util::bump::{
@@ -155,6 +159,33 @@ pub(super) fn write(
     let headers = files
         .iter()
         .map(|(_, path)| escape(&arena, &path.to_string_lossy()));
+    if context.configuration.compiler_identity() == CompilerIdentity::Tcc {
+        // `target: \`, then `  file \` per file, the last without the
+        // backslash; `-MP` adds `file:` for each file after the source.
+        text.clear();
+        let mut targets = args.driver.dependency_target.iter();
+        match targets.next() {
+            | Some(first) => {
+                text.push_str(first);
+                for target in targets {
+                    text.push(' ');
+                    text.push_str(target);
+                }
+            },
+            | None => text.push_str(&default),
+        }
+        text.push(':');
+        let mut phony = ArenaString::new_in(&arena);
+        for (index, header) in headers.enumerate() {
+            _ = write!(text, " \\\n  {header}");
+            if index != 0 && args.driver.phony_dependencies {
+                _ = writeln!(phony, "{header}:");
+            }
+        }
+        text.push('\n');
+        text.push_str(&phony);
+        return emit(request, &text);
+    }
     let mut first = true;
     let mut phony = ArenaString::new_in(&arena);
     for header in headers {
@@ -166,6 +197,11 @@ pub(super) fn write(
     }
     text.push('\n');
     text.push_str(&phony);
+    emit(request, &text)
+}
+
+/// Writes the rules `text` where `request` sends them.
+fn emit(request: &DependencyRequest, text: &str) -> Result<(), MainError> {
     match &request.destination {
         | Some(path) => std::fs::write(path, text.as_bytes()).map_err(|source| {
             MainError::WriteOutputFileError {

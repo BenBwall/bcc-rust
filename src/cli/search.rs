@@ -70,7 +70,7 @@ impl CliHeaderSearch {
     clippy::disallowed_macros,
     reason = "Startup owns the directories beside clap's arguments as `PathBuf`s."
 )]
-fn library_directories(target: Target, sysroot: Option<&Path>) -> Vec<PathBuf> {
+pub(in crate::cli) fn library_directories(target: Target, sysroot: Option<&Path>) -> Vec<PathBuf> {
     // WASI's C library is bcc's own, embedded beside the resource headers.
     if target == Target::Wasm32Wasi && sysroot.is_none() {
         return vec![PathBuf::from(crate::headers::WASI_DIRECTORY)];

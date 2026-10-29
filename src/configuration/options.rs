@@ -62,6 +62,7 @@ impl CompilerConfiguration {
                     | Some(enabled) => enabled,
                     | None => !self.gnu && (self.standard as u8) <= CStandard::C17 as u8,
                 },
+                | Feature::DollarIdentifiers => self.dollar_identifiers,
                 | Feature::InterchangeFloatTypes => self.interchange_float_types(),
                 | Feature::Float16 | Feature::BFloat16 => self.half_precision_types(),
                 | Feature::Fp16 => self.storage_half_type(),
@@ -337,6 +338,15 @@ impl CompilerConfiguration {
         self.derive_features()
     }
 
+    /// Whether `$` may appear in identifiers, as GCC's, Clang's and TCC's
+    /// `-f[no-]dollars-in-identifiers` decide; it may by default, as in
+    /// all three. Extension: C99 §6.4.2.1 paragraph 3, p. 51; PDF p. 63
+    /// permits other implementation-defined characters.
+    pub(crate) const fn with_dollar_identifiers(mut self, enabled: bool) -> Self {
+        self.dollar_identifiers = enabled;
+        self.derive_features()
+    }
+
     /// Makes signed integer overflow wrap in two's complement instead of
     /// being undefined, as GCC's `-fwrapv` does. Extension:
     /// C99 §6.5 paragraph 5, p. 67; PDF p. 79 leaves the overflow undefined.
@@ -520,6 +530,7 @@ impl CompilerConfiguration {
             char_signed: None,
             interchange_float_types: None,
             trigraphs: None,
+            dollar_identifiers: true,
             wrapv: false,
             default_pack: 0,
             pack_structures: false,

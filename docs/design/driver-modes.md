@@ -144,7 +144,9 @@ TCC and clang-cl personalities pass on, override either default.
 ## Options a compiler knows and bcc does not implement
 
 Each personality sorts these into three kinds (`personality/unimplemented.rs`
-for GCC, Clang and TCC; `msvc.rs` for `cl` and clang-cl):
+for GCC, Clang and TCC; `msvc.rs` for `cl` and clang-cl). TCC ignores
+every option it does not know, so its personality applies the kinds only
+to the options TCC itself implements; see [TCC](#tcc).
 
 - **Ignored**, when bcc's output already means what the option asks for:
   warnings and diagnostics formatting, debug information (`-g*`,
@@ -523,34 +525,192 @@ D9002, and `--` is an unknown option too.
 
 ## TCC
 
-**Command line.** GCC's short options: `-c`, `-o`, `-E`, `-I`, `-D`, `-U`,
-`-l`, `-L`, `-Wl,`, `-shared`, `-static`, `-rdynamic`, `-nostdlib`, `-g`,
-`-w`, `-M`, `-MD`, `-MF`, `-dM`, `-P`, `-x`, `-std=c99|c11`, plus `-run
-FILE ARGS...` (compile FILE and run it with ARGS), `-b` (bounds checking),
-`-bt` (backtraces), `-B` (library directory), `-v`, `-vv`, `-dumpversion`,
-`-print-search-dirs`. TCC ignores the `-W`, `-f` and `-m` options it does
-not know, and rejects any other unknown option (`invalid option -- '-q'`).
+The personality was compared with two real TCCs on x86-64 Linux (glibc
+2.43): TinyCC built from the `mob` branch (`tcc version 0.9.28rc
+2026-10-16 mob@e23dabed`) and Ubuntu's `tcc` 0.9.27+git20200814.62c30a4a,
+which prints `tcc version 0.9.27`. bcc claims the 0.9.27 release
+(`__TINYC__ 927`, `-dumpversion`), and reads the options `mob` added
+where they only extend 0.9.27's command line: `-dumpmachine`, `-M`, `-MM`,
+`-MMD`, `-MP`, `-std=gnu11`, `-run --` and `-rstdin`. The opt-in test
+`tcc_parity_with_a_real_tcc` in `tests/integration/personality_cli.rs`
+repeats the comparison when `BCC_TCC` names a `tcc` binary.
 
-**Mapping.** `-run` builds the program in a temporary directory, runs it with
-the remaining arguments and exits with its status (the signal number plus 128
-when it is killed). `-b` and `-bt` are accepted with a warning; bcc has no
-bounds checker. `-B` is ignored. Of the `-f` and `-m` options TCC ignores,
-those GCC knows are treated as the GCC personality treats them, so one that
-would change the program (`-fshort-enums`) is refused rather than silently
-dropped. `-std=c11` and `gnu11` select `gnu11`, any
-other value `gnu99`, as TCC sets `__STDC_VERSION__`. TCC reads its inputs
+**Command line.** TCC reads its arguments with `tcc_parse_args`
+(`libtcc.c`), and so does the personality: an option is the first entry
+of TCC's table, in TCC's order, that the argument starts with and whose
+operand rule it satisfies, so `-ofile`, `-xc`, `-Ifoo`, `-runFILE` and
+`-gdwarf` are options with joined values and `-MT` is `invalid option --
+'-MT'`. `@FILE` is replaced by the arguments FILE holds, split at blanks
+with double quotes grouping and a backslash escaping a quote (`tcc: error:
+listfile 'x' not found`). TCC reads listfiles without a limit, so one
+that names itself makes TCC hang; bcc stops after 4096 (`tcc: error:
+listfile 'self.txt' not read: more than 4096 listfiles (does one name
+itself?)`). `-Wp,A,B` reads `A` and `B` as options. An option's value is
+the next argument even when that starts with `-`, so `tcc -I -c -c a.c`
+searches a directory named `-c`.
+`-c`, `-E`, `-r`, `-shared` and `-run` choose what is built: the last one
+wins, and each one after the first draws `tcc: warning: -c: overriding
+compiler action already specified` (also `-c -c`). A second `-o` draws
+`tcc: warning: multiple -o option`. TCC rejects any option it does not
+know (`tcc: error: invalid option -- '-q'`, exit status 1), but ignores the
+`-W`, `-f` and `-m` options it does not know and its no-op options
+`-arch`, `-C`, `--param`, `-pedantic`, `-pie`, `-no-pie`, `-pipe`, `-s` and
+`-traditional`, and the unknown `-d` letters, warning only under
+`-Wunsupported` (`tcc: warning: unsupported option '-fbogus'`). With no
+arguments, or with `-h`, it prints its help and exits with status 0; `-hh`
+prints more; `-v` alone prints the version, `-vv` alone the version and
+`-print-search-dirs`; `-v` with inputs prints the version first and then
+`-> FILE` for each input before it is compiled and `<- OUTPUT` after the
+output is written, all to stdout. `-h`, `-hh`, `-print-search-dirs` and
+`-ar` must come first (`tcc: error: cannot parse -h here`);
+`-dumpversion` and `-dumpmachine` print at once wherever they stand.
+
+**Outputs.** As TCC names them (`default_outputfile` in `tcc.c`): `-c`
+writes an object per input, named after its base name with `.o` for its
+extension, or `a.out` for standard input and a name without an
+extension; a link, `-shared` and `-r` write `a.out`. `-c` stops at the
+first input that fails, as TCC does, and refuses `-o` with several inputs
+(`tcc: error: cannot specify output file with -c many files`) and any
+`-l` (`tcc: error: cannot specify libraries with -c`). TCC reads its inputs
 in order and stops at the first it cannot add, so the inputs after one it
 cannot open, missing or unreadable, are dropped and the run fails with
 `tcc: error: file 'missing.c' not found` (exit status 1), after compiling
-the C sources before it. `-c` and `-o` with several inputs is `tcc: error:
-cannot specify output file with -c many files`. Under the TCC identity a
-`#!` line that starts a file is skipped, as TCC skips it, so a script
-starting `#!/usr/bin/tcc -run` runs; elsewhere the line stays a
-non-directive, which GCC and Clang reject.
+the C sources before it. `-run FILE ARGS...` compiles FILE, with the options
+between `-run` and FILE, and runs it with ARGS; `tcc FILES -run -- ARGS`
+runs FILES; `-run` with no input is `tcc: error: no input files`. The
+program's `argv[0]` is the argument TCC stopped at, FILE or `--`, and its
+exit status is the command's. `-rstdin FILE` gives the program FILE as its
+standard input; a FILE that cannot be opened is `tcc: error: failed to
+reopen stdin from 'FILE'` before anything is compiled, as in `mob`. Under the TCC identity a `#!` line that starts
+a file is skipped, as TCC skips it, so a script starting `#!/usr/bin/tcc
+-run` runs; elsewhere the line stays a non-directive, which GCC and Clang
+reject.
+
+**Mapping.**
+
+| TCC | bcc |
+| --- | --- |
+| `-c`, `-E`, `-o`, `-I`, `-D`, `-U`, `-include`, `-isystem`, `-nostdinc`, `-w`, `-pthread` | the same |
+| `-l`, `-L`, `-Wl,`, `-static`, `-rdynamic`, `-nostdlib`, `-shared` | the same, in order with the inputs; `-soname NAME` is `-Wl,-soname,NAME` |
+| `-r` | `-no-pie -nostdlib -Wl,-r`: one relocatable object from every input |
+| `-run` | a build in a temporary directory, then the program |
+| `-std=c11`, `-std=gnu11` | `-std=gnu11`; any other `-std=` leaves `gnu99`, as TCC sets `__STDC_VERSION__` only for those two (0.9.27 only for `c11`) |
+| `-O`, `-Os`, `-O1`... | `-O1`, or `-ON` for a digit (TCC defines only `__OPTIMIZE__`) |
+| `-xc`, `-xa`, `-xn` (first letter) | `-x c`, `-x assembler-with-cpp`, `-x none`; another is `tcc: warning: unsupported language 'X'`; `-xb` is refused |
+| `-P`, `-P1`, `-dM` (with `-E`) | `-P`; `-P1` keeps GNU line markers; `-dM` |
+| `-dD` | `-dM`, with `tcc: warning: '-dD' is treated as '-dM'` |
+| `-M`, `-MM`, `-MD`, `-MMD`, `-MD,FILE`, `-MF`, `-MP` | the same, with `-MT` and `-MF` naming the rule and file after TCC's output (`a.out`, `a.d` for a link of one source) |
+| `-funsigned-char`, `-fsigned-char`, `-f[no-]common`, `-f[no-]gnu89-inline`, `-f[no-]dollars-in-identifiers` | the same |
+| `-f[no-]ms-extensions` | `-f[no-]ms-anonymous-structs`: TCC's flag allows only anonymous `struct` and `union` members, and is on by default |
+| `-fleading-underscore`, `-ftest-coverage`, `-mno-sse`, `-mms-bitfields` on Linux, `-m32` | refused, as the GCC personality refuses them |
+| `-freverse-funcargs` | ignored with a warning: C leaves the order unspecified |
+| `-fasynchronous-unwind-tables`, `-msse`, `-m64`, `-g*`, `-B` | ignored |
+| `-b`, `-bt[N]`, `-bench` | ignored with a warning: bcc has no bounds checker, no backtraces and no statistics |
+| `-Werror`, `-Wdiscarded-qualifiers`, `-Wunsupported` | `-Werror`, `-Wincompatible-pointer-types-discards-qualifiers`; `-Wunsupported` makes the personality warn about ignored options |
+| `-Wall`, `-Wwrite-strings`, `-Wimplicit-function-declaration` | ignored: bcc's `-Wall` reports more than TCC's, and it has neither of the others |
+| any other `-W`, `-f` or `-m` | ignored, as TCC ignores it; the `-f` options that only bring bcc's code closer to TCC's (`-fwrapv`, `-fno-strict-overflow`, `-fwrapv-pointer`, `-fno-strict-aliasing`, `-fno-delete-null-pointer-checks`, `-fno-builtin*`) and the `-fpic` family are passed on |
+| `-ar ARGS...` | the bundled `llvm-ar ARGS...` |
+| `-dumpmachine` | `x86_64-pc-linux-gnu` (`-musl`, or `x86_64-pc-mingw32`), as `mob` prints it |
+| `-print-search-dirs` | TCC's layout: bcc's directory, the C library's header directories, the bundled clang's library and start-file directories, and the dynamic linker; there is no `libtcc1` |
+
+TCC itself ignores an option it does not know, so a `-f` or `-m` option
+GCC knows changes nothing in the program TCC builds, and the personality
+builds the same one by ignoring it too: `-fshort-enums`, `-fpack-struct`,
+`-fstack-protector` and `-fsanitize=address` are ignored silently, as in
+TCC (they were refused or warned about before TCC was surveyed). An option
+TCC implements and bcc does not is refused.
+
+TCC keeps three kinds of diagnostic that GCC 14 and Clang make errors as
+warnings: an assignment between a pointer and an integer, between
+incompatible object pointers, or between incompatible function pointers
+(`warn.c:1: warning: assignment makes pointer from integer without a
+cast`). The personality passes `-Wno-error=int-conversion`,
+`-Wno-error=incompatible-pointer-types` and
+`-Wno-error=incompatible-function-pointer-types`, unless `-Werror` is
+given, which makes them errors again in both.
 
 **Identity.** `__TINYC__ 927` (TCC 0.9.27), no GNU or Clang macro, and
-`__STDC_VERSION__ 199901L` by default. glibc's headers take their portable
-paths. TCC's diagnostics are `file:line: error: message`.
+`__STDC_VERSION__ 199901L` by default (`201112L` with `-std=c11`). Like
+both TCCs it defines glibc's `__REDIRECT`, `__REDIRECT_NTH` and
+`__REDIRECT_NTHNL` (`mob`'s spelling), which glibc's `<sys/cdefs.h>` defines
+only for GCC, so glibc renames functions with assembler labels (`fscanf`
+as `__isoc99_fscanf`) as it does under TCC; and it defines neither
+`__SIZEOF_INT128__`, `__SIZEOF_FLOAT128__` nor `__FLOAT128__` (TCC has no
+`__int128` or `__float128`), nor `linux` or `__NO_INLINE__`, which neither
+TCC defines. `-dM` lists bcc's target macros besides, which TCC lacks
+(`__ATOMIC_*`, `__FLT_*`, `__GCC_ATOMIC_*`, `__SSE2__`, `__ELF__`,
+`__PIC__`...): bcc's own `<float.h>`, `<stdint.h>` and `<stdatomic.h>`
+read them, where TCC's headers spell the values out. Types keep Clang's
+spelling (`__SIZE_TYPE__ long unsigned int` for TCC's `unsigned long`,
+`__INT_MAX__ 2147483647` for `0x7fffffff`). TCC's diagnostics are
+`file:line: error: message`, one line each with no notes, and TCC stops at
+the first error, so bcc prints the warnings before the first error and
+that error alone in this format.
+
+**Language.** 107 probes of TCC's documented extensions and quirks, run
+with `-run` under both TCCs and the personality, agree in what is accepted
+and what runs, except where noted:
+
+| Feature | TCC (both) | bcc `--tcc-mode` |
+| --- | --- | --- |
+| Statement expressions, `typeof`, `&&label` and computed `goto`, case ranges, `?:` without a middle operand, zero-length arrays, `__attribute__((packed, aligned, section, weak, alias, constructor, cleanup))`, `asm` with operands, `__builtin_expect`, `__builtin_constant_p`, `__builtin_types_compatible_p`, `__builtin_offsetof`, `__builtin_alloca`, VLAs, `_Generic`, `_Static_assert`, `_Alignas`, `_Noreturn`, anonymous members, `$` in identifiers, K&R definitions, implicit `int`, designated initializers with ranges, compound literals, `void *` arithmetic, empty structures (size 0) | accepted | same |
+| Nested functions | `error: cannot use local functions` | refused (`not yet supported by lowering`) |
+| `asm goto` | `mob` only | accepted |
+| `__attribute__((vector_size))` | `'}' expected` | refused (`not yet supported by lowering: vector types`) |
+| `__builtin_clz`, `__builtin_bswap32`, `__builtin_add_overflow` | link error (`unresolved reference`) | builtins |
+| `_Complex` | `error: _Complex is not yet supported` (`mob`), parse error (0.9.27) | supported |
+| `_Atomic`, `<stdatomic.h>` | `mob` only | supported |
+| `__int128`, `__float128` | undeclared | types, with no size macros |
+| `_Thread_local`, `__thread` | `mob`: refused with `-run`; 0.9.27: parse error | supported |
+| `__VA_OPT__`, C23 `[[attributes]]`, `#embed` | refused (TCC warns that `#embed` is an unknown directive and ignores it) | accepted, as GCC accepts them in `gnu99` |
+| `bool`, `nullptr`, `constexpr`, `typeof_unqual`, `static_assert(1)`, `u8""`, digit separators | refused | refused |
+| `0b1011`, `auto x = 3.5` (implicit `int`) | accepted | same |
+| `long double` | 16 bytes, 64-bit significand | same |
+| Bit-field layout and packing (`packed`, `#pragma pack`, `:0`, 40-bit `long long` fields) | GCC's | same |
+| `alignas(32)` on a local | not always honoured (`mob` and 0.9.27 print 0 for the address test about one run in three) | honoured |
+| Plain C99 `inline` definition with no external one | a local function (`nm`: `t f`), so the program links | GCC's rule: no external definition, `undefined symbol: f` at link time |
+| Assignment to a `const` object, `return 1;` in a `void` function | warnings (`assignment of read-only location`, `void function returns a value`) | errors |
+| Implicit function declaration | `warning: implicit declaration of function 'foo'` | no diagnostic |
+| Missing `return` in a non-`void` function | `warning: function might return no value: 'f'` | no diagnostic |
+
+Diagnostics keep bcc's wording. The common ones read:
+
+| Error | TCC (`mob`; 0.9.27 quotes the token with `"`) | bcc |
+| --- | --- | --- |
+| undeclared identifier | `'y' undeclared` | `identifier has no visible declaration: `y`` |
+| missing `;` | `';' expected (got 'return')` | `expected an operator, found keyword `return`` |
+| member | `field not found: b` | `member access requires a declared record member` |
+| arguments | `too few arguments to function` | `function call has the wrong number of arguments` |
+| redeclaration | `incompatible types for redefinition of 'a'` | `redeclaration has an incompatible type: `a`` |
+| lvalue | `lvalue expected` | `operator requires a modifiable lvalue` |
+| header | `include file 'nope.h' not found` | `cannot find header `nope.h`` |
+| `break` | `cannot break` | `break is outside an iteration or switch statement` |
+| `goto` | `label 'nowhere' used but not defined` | `goto target label is not defined: `nowhere`` |
+| link | `tcc: error: unresolved reference to 'f'` (0.9.27: `undefined symbol 'f'`) | `tcc: error: cannot build `a.out`: clang failed` and `ld.lld: error: undefined symbol: f` |
+
+Of the repository's `tests/fixtures/programs`, those both TCCs compile
+(the `long double`, `<math.h>`, `scanf`, `stdio`, wide-stream, POSIX
+console and `setjmp` programs) print the same as under bcc with `mob`;
+0.9.27 differs in `gamma_functions.c` and `long_double_math.c`, where it
+prints `ffff:c000000000000000` (a negative NaN) for `lgammal` and `fmal`
+results that `mob`, GCC and bcc give as positive NaNs or zero. The others
+use features TCC lacks.
+
+**ABI.** Objects from `--tcc-mode -c` link with TCC's (with TCC as the
+linker, or with bcc given TCC's `libtcc1.a`, which TCC's objects call for
+`__va_arg` and friends) and agree on scalars, `long double`, varargs of
+scalars and `long double`, structures in memory (larger than 16 bytes, or
+holding a `long double`), structures of one class (`{int, int}`, `{float,
+float}`, `{short, char[5]}`), `_Bool` and narrow parameters, and the
+layout and passing of bit-field structures. They do not agree on the
+structures of at most 16 bytes that mix integer and floating members or
+hold an array of floats (`{double, long}`, `{int, double}`, `{char,
+double}`, `{float[3]}`), passed or returned directly or through `...`: TCC
+classifies such a structure as a whole (`classify_x86_64_inner` in
+`x86_64-gen.c` merges the members' classes) rather than by eightbyte as
+the x86-64 psABI requires, so `{double, long}` travels in two integer
+registers. bcc follows the psABI and agrees with GCC there, as both TCCs
+disagree with GCC; it does not copy TCC's classification.
 
 ## Identity policy
 
@@ -596,9 +756,17 @@ helper calls one of them rather than matching on identities:
 A rule that compares with `CompilerIdentity::Gcc` alone is equivalent where
 the feature it governs exists only under GCC's identity among those that
 follow GCC's rules (the `_Float16` pedantic reports in the lexer and
-parser). Neither TCC's nor `cl`'s behaviour was surveyed for these rules:
-there is no TCC or MSVC on the machines that produced them, and Microsoft
-documents too little of `cl`'s.
+parser). TCC was surveyed for these rules later (both TCCs of the
+[TCC](#tcc) section): its pointer/integer cast warnings fall on exactly the
+casts GCC 15 warns about (`cast between pointer and integer of different
+size` for `(void *)int`, `(void *)short`, `(int)p` and `(char)p`, none for
+`(void *)5` or `(unsigned long long)p`), and it folds compound literals in
+static initializers as GCC does; it has no `_Float16` or `_BitInt` and
+rejects array compound literals and out-of-range floating conversions in
+static initializers (`initializer element is not constant`), so GCC's
+rules stay the closer model. `cl`'s behaviour was not surveyed: there is
+no MSVC on the machines that produced them, and Microsoft documents too
+little of it.
 
 ## Decisions
 
@@ -613,7 +781,10 @@ documents too little of `cl`'s.
   would build a different program than the one asked for, without saying
   so. Hardening warns. The lists are frozen from the compilers themselves,
   so "known" means what the compiler accepts, and unknown spellings still
-  fail as they would there.
+  fail as they would there. TCC is the exception that proves the rule: it
+  ignores every `-W`, `-f` and `-m` option it does not know, so ignoring
+  one builds the program TCC builds, and only the options TCC implements
+  are refused when bcc lacks them.
 - **Claim the compiler mimicked.** The GCC and TCC personalities claim GCC and
   TCC in the predefined macros rather than Clang, because build systems and
   headers choose their paths from them (CMake reads `__GNUC__` and
@@ -722,12 +893,46 @@ These driver behaviours still differ from the compilers mimicked:
   `.S`) words it; a missing object or library at link time likewise in
   clang's words rather than `ld`'s and `collect2`'s, or `LINK`'s fatal error
   LNK1181 for `cl`.
-- TCC stops at the first input that fails to compile, not only at a missing
-  one; bcc compiles the others under `-c`, as GCC does. A missing input
-  that is not a C source is reported before the C sources ahead of it are
-  compiled, so under `-c` their objects are not written.
+- A missing TCC input that is not a C source is reported before the C
+  sources ahead of it are compiled, so under `-c` their objects are not
+  written.
 - TCC's `-run` builds the program into a temporary directory with the
   bundled clang's linker and runs it, rather than compiling it in memory.
+  A program killed by a signal makes TCC itself die by that signal (`tcc
+  -run` of a `raise(SIGSEGV)` is killed by signal 11); bcc exits with the
+  signal number plus 128 (139), which is what a shell reports for both.
+- TCC's `-E` writes `# 1 "<command line>" 1` and flagged markers for every
+  header, and names standard input `-`; bcc writes its GNU markers and
+  `<stdin>`. TCC's `-P1` writes `#line` directives, which bcc writes as GNU
+  markers. TCC's `-dD` writes the macro definitions with the text; bcc
+  writes only the definitions, as `-dM`. With an input that cannot be
+  found, TCC's `-E` also writes an empty line to stdout.
+- `tcc -vv FILE` lists every file TCC opens, start files and headers
+  included, nested by indentation; bcc prints `-> FILE` and `<- OUTPUT`
+  as for `-v`. `-print-search-dirs` lists bcc's directories, not TCC's,
+  and has no `libtcc1:` entry.
+- TCC links with its own linker: `-Wl,` options it does not know
+  (`tcc: error: unsupported linker option '-zfoo'`), a missing library
+  (`tcc: error: library 'nope' not found`) and an undefined symbol
+  (`tcc: error: unresolved reference to 'f'`; 0.9.27: `undefined symbol
+  'f'`) are its errors, where bcc passes the options to LLD and reports
+  its errors in its own words (`tcc: error: cannot build `a.out`: clang
+  failed` with LLD's lines). bcc also links `libm` for a hosted Linux
+  program, so `sqrt` links without `-lm`, and `-static` links where both
+  TCCs fail against this host's static glibc (`unresolved reference to
+  '_Unwind_GetCFA'`; 0.9.27: `Unknown relocation type for got: 23`).
+- `-M` and `-MD` for a link of several sources write one rule per source
+  (`a.d` with `a.o: a.c`, and `b.d`), where TCC writes one rule for the
+  link named after its output (`a.d` with `a.out: a.c b.c inc.h`). TCC's
+  `-M` of standard input lists `-` as a dependency, and its `-M` lists
+  the headers of its own include directory, where bcc's are embedded.
+- TCC's `-c` given an object rewrites that object (`tcc -c a.c b.o`
+  writes `a.o` and relinks `b.o` into itself); bcc warns that the
+  object is unused, as GCC does.
+- `-ar` runs the bundled `llvm-ar`, whose messages are its own
+  (`llvm-ar: error: lib.o: No such file or directory`, exit status 1, for
+  TCC's `tcc: ar: can't open file lib.o`, exit status 2).
+- `-B` is ignored: bcc's headers are embedded, and it has no `libtcc1.a`.
 
 ## Gaps in the compiler these modes expose
 
@@ -740,6 +945,23 @@ would use:
   `-fno-semantic-interposition`, so the option is refused.
 - Decimal floating types, and with them GCC's C23 `<float.h>` `DEC*`
   names; `FLT16_SNAN` and GCC's other `__builtin_*f16` constant builtins.
+- `__BASE_FILE__`, which GCC, Clang and TCC define (TCC lists it in
+  `-dM`), is undefined in every identity.
+- A translation unit with no declaration is an error in every mode
+  (`translation unit is empty`); TCC, GCC and Clang accept it, the last
+  two with a warning under `-pedantic`, so `tcc -x c header.h -c` of a
+  header holding only macros fails.
+- TCC's warnings for an implicit function declaration (`implicit
+  declaration of function 'foo'`) and a function that may return no value
+  (`function might return no value: 'f'`) have no bcc counterpart, and the
+  constraint violations TCC only warns about, an assignment to a `const`
+  object (`assignment of read-only location`) and `return 1;` in a `void`
+  function (`void function returns a value`), are errors in bcc, as in
+  GCC.
+- A C99 `inline` definition with no external one: TCC emits it as a local
+  function, so a program calling it links; bcc follows GCC and Clang and
+  leaves the call to an external definition, so the link fails (`ld.lld:
+  error: undefined symbol: f`). C99 §6.7.4p6 allows either.
 - Whether `cl` makes a C tentative definition a communal symbol by
   default is unverified: no MSVC was available, and Microsoft documents no
   option for it. The `cl` personality keeps bcc's `-fno-common` default;
