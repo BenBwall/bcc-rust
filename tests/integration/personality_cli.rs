@@ -2457,18 +2457,21 @@ mod tests {
             }
         }
         // Run under another name, the driver uses that name.
-        let gcc = directory.path("x86_64-linux-gnu-gcc");
-        if std::os::unix::fs::symlink(env!("CARGO_BIN_EXE_bcc-rust"), &gcc).is_ok() {
-            let output = Command::new(&gcc)
-                .args(["-c", "a.c", "b.o"])
-                .current_dir(&directory.0)
-                .output()
-                .unwrap();
-            succeeds(&output);
-            assert_eq!(
-                stderr(&output),
-                format!("x86_64-linux-gnu-gcc: warning: {message}")
-            );
+        #[cfg(unix)]
+        {
+            let gcc = directory.path("x86_64-linux-gnu-gcc");
+            if std::os::unix::fs::symlink(env!("CARGO_BIN_EXE_bcc-rust"), &gcc).is_ok() {
+                let output = Command::new(&gcc)
+                    .args(["-c", "a.c", "b.o"])
+                    .current_dir(&directory.0)
+                    .output()
+                    .unwrap();
+                succeeds(&output);
+                assert_eq!(
+                    stderr(&output),
+                    format!("x86_64-linux-gnu-gcc: warning: {message}")
+                );
+            }
         }
     }
 
