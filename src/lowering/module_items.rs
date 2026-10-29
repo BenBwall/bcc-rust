@@ -764,6 +764,16 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
     /// PDF p. 131. An unprototyped type has no fixed parameters.
     fn signature_for_binding(&mut self, binding: usize) -> Result<SigId, LoweringErrorKind> {
         let ty = self.sema.bindings[binding].ty;
+        if self.msvc_setjmp(binding)
+            && let TypeKind::Function {
+                result, parameters, ..
+            } = self.sema.types.kind(ty)
+        {
+            // The frame argument is a pointer, as the buffer is.
+            let parameters = [parameters[0], parameters[0]];
+            let signature = self.signature_of(parameters, result, false, self.tables)?;
+            return Ok(self.module.intern(signature));
+        }
         let Some(extension) = self.sema.function_extensions.function(binding) else {
             return self.signature(ty);
         };
@@ -790,6 +800,29 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
         let signature =
             self.signature_of(expanded.iter().copied(), result, variadic, self.tables)?;
         Ok(self.module.intern(signature))
+    }
+
+    /// Whether `binding` is the Microsoft C runtime's x64 `_setjmp` or
+    /// `_setjmpex`, which `<setjmp.h>` declares with the buffer alone but
+    /// which takes in its second argument register the frame its `longjmp`
+    /// unwinds to, 0 for none. `cl` treats them as intrinsics that pass the
+    /// caller's frame, and Clang passes `llvm.frameaddress(0)`, so a call
+    /// gets that argument too ([`Self::signature_for_binding`]); without it
+    /// `longjmp` unwinds to whatever the register held.
+    /// MSVC extension: Microsoft Learn, "setjmp" (x64 unwinding);
+    /// C99: §7.13.1.1, p. 243; PDF p. 255.
+    pub(super) fn msvc_setjmp(&self, binding: usize) -> bool {
+        self.target == Target::WindowsMsvc
+            && matches!(self.symbol_name(binding), "_setjmp" | "_setjmpex")
+            && matches!(
+                self.sema.types.kind(self.sema.bindings[binding].ty),
+                TypeKind::Function {
+                    parameters: [_],
+                    prototype: true,
+                    variadic: false,
+                    ..
+                }
+            )
     }
 
     pub(super) fn signature(&mut self, ty: TypeId) -> Result<SigId, LoweringErrorKind> {

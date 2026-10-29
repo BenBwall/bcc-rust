@@ -184,6 +184,42 @@ fn returns_twice_marks_declarations_from_the_retained_fact() {
     );
 }
 
+/// The MSVC runtime's x64 `_setjmp` and `_setjmpex`, which its
+/// `<setjmp.h>` declares with the buffer alone, also take the caller's
+/// frame, as `cl` passes it and Clang passes `llvm.frameaddress(0)`; the
+/// same declaration for MinGW-w64, whose header passes the frame itself,
+/// keeps one parameter. C99 §7.13.1.1.
+#[test]
+fn msvc_setjmp_takes_the_callers_frame() {
+    let source = "typedef struct { unsigned long long p[2]; } F; typedef F jmp_buf[16];\nint \
+                  _setjmp(jmp_buf); int _setjmpex(jmp_buf);\nvoid longjmp(jmp_buf, int) \
+                  __attribute__((noreturn));\njmp_buf b, c;\nint main(void) { volatile int n = \
+                  1;\nif (_setjmp(b) == 0) { n = 5; longjmp(b, 3); }\nreturn n + _setjmpex(c); }";
+    for (target, parameters) in [
+        (Target::WindowsMsvc, "(ptr noundef, ptr noundef)"),
+        (Target::WindowsGnu, "(ptr noundef)"),
+    ] {
+        let text = lower_for(source, target).unwrap_or_else(|e| panic!("{source}: {e:?}"));
+        for name in ["_setjmp", "_setjmpex"] {
+            assert_eq!(
+                header(&text, name),
+                format!("function @{name}{parameters} -> i32 external returns_twice"),
+                "{text}"
+            );
+        }
+        assert_eq!(
+            text.matches("frame_address").count(),
+            if target == Target::WindowsMsvc { 2 } else { 0 },
+            "{text}"
+        );
+        assert_eq!(
+            run_text(&text, "main").result.unwrap().termination,
+            Termination::Returned(Some(RuntimeValue::Int(5))),
+            "{text}"
+        );
+    }
+}
+
 #[test]
 fn nondefault_calling_conventions_are_refused() {
     for (target, attribute) in [

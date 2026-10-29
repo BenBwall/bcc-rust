@@ -2143,10 +2143,21 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 items = expanded;
             }
         }
+        // Microsoft's x64 `_setjmp(buffer)` also takes the caller's frame.
+        let frame_argument = !open_external
+            && items.len() == 1
+            && direct.is_some_and(|binding| self.unit.msvc_setjmp(binding));
+        if frame_argument {
+            let frame = self.nullary(Opcode::FrameAddress);
+            items.push(Item {
+                operand: Operand::Value(frame),
+                ty:      items[0].ty,
+            });
+        }
         let fixed = if open_external {
             0
         } else {
-            call.fixed + hidden_count
+            call.fixed + hidden_count + usize::from(frame_argument)
         };
         let variadic = open_external || (call.prototype && call.variadic);
         let described = items[fixed..].iter().any(|item| {
