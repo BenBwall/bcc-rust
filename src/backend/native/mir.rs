@@ -579,8 +579,9 @@ pub(crate) enum FrameObject {
     OutgoingEnd,
     /// The return address the call pushed, at the CFA minus 8.
     ReturnAddress,
-    /// Where a frame pointer saves the caller's `%rbp`, the CFA minus 16: the
-    /// value of `__builtin_frame_address (0)` with a frame pointer.
+    /// The value of `__builtin_frame_address (0)`: where a frame pointer
+    /// saves the caller's `%rbp`, the CFA minus 16, or on Win64 the
+    /// establisher frame, `%rsp` after the prologue.
     FrameAddress,
 }
 

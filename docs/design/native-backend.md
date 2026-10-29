@@ -271,7 +271,7 @@ The selector's per-opcode table for stage 1:
 | `return` | value to `%rax` (extended per `signext`/`zeroext`), epilogue, `ret` |
 | `trap`, `unreachable` | `ud2` |
 | `return_address` | `movq` from the CFA minus 8 |
-| `frame_address` | `leaq` of the CFA minus 16, where the prologue then pushes `%rbp` first, as a frame pointer would save it |
+| `frame_address` | `leaq` of the CFA minus 16, where the prologue then pushes `%rbp` first, as a frame pointer would save it; on Win64, `%rsp` after the prologue, the establisher frame the unwind information names, as LLVM returns it and as the C runtime's `_setjmp` needs it for `longjmp` to unwind to |
 
 ### Block parameters become parallel copies
 
