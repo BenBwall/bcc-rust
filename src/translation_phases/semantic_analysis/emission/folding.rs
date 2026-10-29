@@ -52,6 +52,7 @@ use super::super::{
     TagKind,
     TypeId,
     TypeKind,
+    WideIntegers,
     types::Scalar,
 };
 use crate::{
@@ -138,7 +139,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         &mut self,
         condition: &'tu Expression<'tu>,
     ) -> Option<bool> {
-        self.folded_integer(condition).map(|value| value.value != 0)
+        self.folded_integer(condition).map(|value| !value.is_zero())
     }
 
     /// Clang's `Expr::isEvaluatable`: whether `expression` evaluates to a
@@ -403,8 +404,8 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     else {
                         return None;
                     };
-                    value
-                        .unary(operator)
+                    self.wide
+                        .unary(value, operator)
                         .map(|value| self.converted_value(Value::Integer(value), expression))
                 },
                 | _ => None,
@@ -470,12 +471,10 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             self.types.nodes[self.types.non_atomic(ty).index],
             TypeKind::Scalar(Scalar::Bool)
         ) {
-            return Value::Integer(Integer::int(i128::from(integer.value != 0)).cast(8, false));
+            return Value::Integer(Integer::int(i128::from(!integer.is_zero())).cast(8, false));
         }
         self.integer_type(ty).map_or(value, |(bits, signed)| {
-            integer
-                .convert(bits, signed)
-                .map_or(Value::Other, Value::Integer)
+            Value::Integer(self.wide.convert(integer, bits, signed))
         })
     }
 
@@ -510,7 +509,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             },
             | (Value::String(..), Value::Integer(zero))
             | (Value::Integer(zero), Value::String(..))
-                if zero.value == 0 && matches!(operator, B::Equal | B::NotEqual) =>
+                if zero.is_zero() && matches!(operator, B::Equal | B::NotEqual) =>
                 Some(Value::Integer(Integer::int(i128::from(
                     operator == B::NotEqual,
                 )))),
@@ -529,12 +528,12 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 .then(|| Value::Integer(Integer::int(i128::from(operator == B::NotEqual)))),
             | (Value::CastString(..), Value::Integer(zero))
             | (Value::Integer(zero), Value::CastString(..))
-                if zero.value == 0 && matches!(operator, B::Equal | B::NotEqual) =>
+                if zero.is_zero() && matches!(operator, B::Equal | B::NotEqual) =>
                 Some(Value::Integer(Integer::int(i128::from(
                     operator == B::NotEqual,
                 )))),
             | (Value::Integer(left), Value::Integer(right)) =>
-                left.binary(operator, right).map(Value::Integer),
+                self.wide.binary(left, operator, right).map(Value::Integer),
             | (Value::Address(a, x), Value::Address(b, y))
                 if a == b && matches!(operator, B::Equal | B::NotEqual) =>
                 Some(Value::Integer(Integer::int(i128::from(
@@ -542,7 +541,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 )))),
             | (Value::Address(..), Value::Integer(zero))
             | (Value::Integer(zero), Value::Address(..))
-                if zero.value == 0 && matches!(operator, B::Equal | B::NotEqual) =>
+                if zero.is_zero() && matches!(operator, B::Equal | B::NotEqual) =>
                 Some(Value::Integer(Integer::int(i128::from(
                     operator == B::NotEqual,
                 )))),
@@ -613,7 +612,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 .truth()
                 .map(|truth| Value::Integer(Integer::int(i128::from(truth)).cast(8, false))),
             | TypeKind::Pointer(_) => match value {
-                | Value::Integer(zero) if zero.value == 0 => Some(Value::Integer(zero)),
+                | Value::Integer(zero) if zero.is_zero() => Some(Value::Integer(zero)),
                 | Value::Address(..) | Value::CastString(..) => Some(value),
                 // A conversion to a pointer to another type invalidates the
                 // evaluator's designator: the literal is no longer read
@@ -637,9 +636,10 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             | _ => {
                 let (bits, signed) = self.integer_type(ty)?;
                 match value {
-                    | Value::Integer(integer) => integer.convert(bits, signed).map(Value::Integer),
+                    | Value::Integer(integer) =>
+                        Some(Value::Integer(self.wide.convert(integer, bits, signed))),
                     | Value::Floating(floating) =>
-                        floating_integer(floating, bits, signed).map(Value::Integer),
+                        floating_integer(&self.wide, floating, bits, signed).map(Value::Integer),
                     | _ => None,
                 }
             },
@@ -1394,7 +1394,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             else {
                 return None;
             };
-            if unit.value == 0 {
+            if unit.is_zero() {
                 return Some(Value::Integer(Integer::int(i128::from(index))));
             }
         }
@@ -2027,7 +2027,7 @@ impl Value {
     /// The truth of a scalar value, if known.
     fn truth(self) -> Option<bool> {
         match self {
-            | Self::Integer(integer) => Some(integer.value != 0),
+            | Self::Integer(integer) => Some(!integer.is_zero()),
             | Self::Address(..) | Self::String(..) | Self::CastString(..) => Some(true),
             | Self::Floating(floating) => Some(floating.truth()),
             | Self::Other => None,
@@ -2045,10 +2045,12 @@ fn not_a_number(value: LongDouble) -> bool {
 /// The integer a real floating value converts to, truncated toward zero:
 /// none when it does not fit, which is undefined.
 /// C99: §6.3.1.4 paragraph 1, p. 43; PDF p. 55.
-fn floating_integer(value: Floating, bits: u32, signed: bool) -> Option<Integer> {
-    if bits > 128 {
-        return None;
-    }
+fn floating_integer(
+    wide: &WideIntegers<'_>,
+    value: Floating,
+    bits: u32,
+    signed: bool,
+) -> Option<Integer> {
     let (negative, exponent, mantissa) = value.real.x87_parts()?;
     if exponent == 0x7FFF {
         return None;
@@ -2056,6 +2058,9 @@ fn floating_integer(value: Floating, bits: u32, signed: bool) -> Option<Integer>
     // The x87 significand holds its integer bit: value = m * 2^(e - 16383 -
     // 63).
     let shift = i32::from(exponent) - 16383 - 63;
+    if bits > 128 {
+        return wide.truncated(negative, u128::from(mantissa), shift, bits, signed);
+    }
     let magnitude = if mantissa == 0 || shift <= -64 {
         0
     } else if shift < 0 {

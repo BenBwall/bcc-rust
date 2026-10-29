@@ -63,10 +63,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let Some((bits, signed)) = self.integer_type(ty) else {
             return;
         };
-        // A bit-precise value wider than the constant model is not folded.
         let Some(value) = condition
             .and_then(|condition| self.folded_integer(condition))
-            .and_then(|value| value.convert(bits, signed))
+            .map(|value| self.wide.convert(value, bits, signed))
         else {
             if let Some(condition) = condition
                 && self.switch_labels(switch).is_some()
@@ -181,7 +180,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | Phase::Collecting | Phase::Ended => fold.tentative,
             | Phase::Unfolded => false,
         };
-        if !undecided || value.order_key() != fold.value.order_key() {
+        if !undecided || self.wide.compare(value, fold.value).is_ne() {
             return;
         }
         let position = self.label_position(label);

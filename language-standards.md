@@ -21,8 +21,8 @@ feature matrix, is implemented through the batch pipeline. These limits remain:
   constant bounds and typedefs naming unions wait for analysis.
 - Decimal type keywords parse, but the decimal floating suffixes `df`, `dd` and
   `dl` and decimal values are not implemented.
-- Integer constants are limited to 64-bit magnitudes. A signed `wb` constant may
-  take a 65-bit type for a 64-bit magnitude; larger magnitudes are diagnosed.
+- Integer constants are limited to 64-bit magnitudes, except `wb` and `uwb`
+  constants, which reach `BITINT_MAXWIDTH`; larger magnitudes are diagnosed.
   Preprocessing expressions use a 64-bit intmax/uintmax model.
 - C2y is the subset listed under [Decisions](#decisions), not every current or
   future draft change.
@@ -2379,8 +2379,12 @@ Semantics follow C23:
   including `__int128`, which outranks `_BitInt(128)`.
 - **Constants.** `wb` and `uwb` constants take the narrowest width that holds
   the value and, for `wb`, a sign bit (`3wb` is `_BitInt(3)`, `0uwb`
-  `unsigned _BitInt(1)`; §6.4.4.2p6); the lexer reads at most 64 bits of
-  magnitude. Folding computes at the type's width: an unsigned result wraps
+  `unsigned _BitInt(1)`; §6.4.4.2p6), in every radix and up to
+  `BITINT_MAXWIDTH` (`18446744073709551616wb` is `_BitInt(66)`); one wider
+  is "too large", as GCC reports it. A token of more than 64 bits keeps
+  its spelling, which semantic analysis reads into the exact value
+  (`IntegerTokenType::WideBitInt`, `preprocessing::bit_precise_magnitude`).
+  Folding computes at the type's width: an unsigned result wraps
   modulo 2^N and a signed one outside the type's range overflowed and is no
   constant. A shift checks its count and result against N, not against
   the `int` a narrow operand computes in: a count of N or more and a signed
@@ -2390,26 +2394,20 @@ Semantics follow C23:
   are refused as `1u << 32` is), while a nonnegative value shifted into
   (not past) the sign bit folds to its two's-complement result, as for
   `int` (`(_BitInt(8))1 << 7` is -128 in both compilers). Values of widths
-  above 128 bits exceed the 128-bit constant model (`Integer`), which
-  holds such a value as its 128-bit pattern sign-extended to N bits: every
-  signed value converts, and so does an unsigned one below 2^127, or one of
-  another wide type converted to a type no wider (an unsigned pattern with
-  bit 127 set stands for 2^N - k, whose zero extension to a wider type no
-  such pattern holds). Converted to a floating type, 2^N - k rounds once
-  from its top 128 bits and a sticky bit (`bits::from_bit_precise`). Arithmetic folds whenever `__int128` arithmetic on the
-  patterns does not overflow, which gives the exact result modulo 2^N:
-  `+`, `-`, `*`, the bitwise operators, `~`, unary `-`, comparisons, a
-  division or remainder of signed values (or of unsigned ones below 2^127),
-  and shifts whose result stays in the pattern. Where a constant is
-  required, a result the pattern cannot hold is refused with "not yet
-  supported: folding this _BitInt constant of more than 128 bits"
-  (`UnsupportedWideConstant`): an unsigned value with bit 127 set converted
-  to a wider type (`(unsigned _BitInt(129))(unsigned __int128)-1`,
-  `(_BitInt(200))(unsigned _BitInt(150))-1`), a huge unsigned value divided
-  or shifted right, a shift past bit 127. Both compilers fold these. The error replaces the generic
-  one of every context: enumerators, case labels, array bounds (a variable
-  length array at block scope), bit-field widths, `_Alignas`, static
-  assertions and initializers, and `__builtin_choose_expr`.
+  above 128 bits, up to `BITINT_MAXWIDTH`, fold exactly: `Integer` keeps a
+  value `i128` holds in place, and any other names its two's-complement
+  64-bit limbs, interned in the unit's table (`WideIntegers`, which
+  `SemanticTranslationUnit::integer_limbs` reads for lowering). Every
+  operator, conversion and context folds as at narrow widths, with the
+  same rules at N bits: products are schoolbook and quotients Knuth's
+  algorithm D (a release build checks 600 assertions with about 5,000
+  operations on 65535-bit values in 0.6 s). A wide value converts to a floating type rounded
+  once to nearest even (its top 128 bits from the leading one and a sticky
+  bit, `bits::from_scaled`), and a floating value converts to a wide type
+  truncated exactly (`double` reaches 2^1024, `long double` and
+  `__float128` 2^16384); out of range it is no constant, as for narrow
+  types. The overflow builtins compare the exact result with the
+  destination's range at any width.
 - **Bit-fields** take a `_BitInt` of at most its width; the record lays the
   field out in storage units of the declared type, as both compilers do.
 - **Overflow builtins** accept bit-precise operands and results and check
@@ -2493,8 +2491,7 @@ _BitInt types of more than 128 bits").
 Clang 23 converts an `unsigned _BitInt(N)` of more than 128 bits whose
 top bit is set to `long double` or `__float128` as if it were negative
 (GCC does not); bcc converts its value, as GCC does, under both
-identities. The remaining work is `wb` constants of more than 64 bits.
-`tests/integration/bit_int.rs` compares every operator, conversion and
+identities. `tests/integration/bit_int.rs` compares every operator, conversion and
 folded constant at widths 1-128 (`bit_int.c`) and at widths 129, 192, 255,
 256, 257, 512, 1000 and 4096, and 65535 for GCC (`bit_int_wide.c`, from
 `scripts/generate_wide_bit_int_program.py`), with the bundled Clang and GCC

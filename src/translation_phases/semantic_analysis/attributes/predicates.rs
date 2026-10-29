@@ -304,8 +304,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 },
                 | Step::Unary(operator) => {
                     let value = values.pop().flatten().and_then(|value| match value {
-                        | PredicateConstant::Integer(value) =>
-                            value.unary(operator).map(PredicateConstant::Integer),
+                        | PredicateConstant::Integer(value) => self
+                            .wide
+                            .unary(value, operator)
+                            .map(PredicateConstant::Integer),
                         | PredicateConstant::Floating(value) => match operator {
                             | UnaryOperator::LogicalNot => Some(PredicateConstant::Integer(
                                 Integer::int(i128::from(!value.truth())),
@@ -421,8 +423,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
         if let Some((bits, signed)) = self.integer_type(ty) {
             return match value {
-                | PredicateConstant::Integer(value) =>
-                    value.convert(bits, signed).map(PredicateConstant::Integer),
+                | PredicateConstant::Integer(value) => Some(PredicateConstant::Integer(
+                    self.wide.convert(value, bits, signed),
+                )),
                 | PredicateConstant::Floating(value) => self
                     .float_cast(
                         ty,
@@ -440,18 +443,18 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 .integer_floating(integer, ty)
                 .map(PredicateConstant::Floating);
         }
-        Self::predicate_float(value)
+        self.predicate_float(value)
             .and_then(|value| self.round_floating(value, ty))
             .map(PredicateConstant::Floating)
     }
 
     /// An operand's value in the x87 carrier, an integer rounded once.
-    fn predicate_float(value: PredicateConstant) -> Option<Floating> {
+    fn predicate_float(&self, value: PredicateConstant) -> Option<Floating> {
         match value {
             | PredicateConstant::Floating(value) => Some(value),
-            | PredicateConstant::Integer(value) =>
-                super::super::constants::integer_value(value, crate::ir::Type::F80)
-                    .map(Floating::real),
+            | PredicateConstant::Integer(value) => self
+                .integer_value(value, crate::ir::Type::F80)
+                .map(Floating::real),
             | PredicateConstant::NonNullAddress(_) => None,
         }
     }
@@ -480,7 +483,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         | (PredicateConstant::Integer(value), PredicateConstant::NonNullAddress(_)) =
             (left, right)
         {
-            return (value.value == 0
+            return (value.is_zero()
                 && matches!(operator, BinaryOperator::Equal | BinaryOperator::NotEqual))
             .then(|| {
                 PredicateConstant::Integer(Integer::int(i128::from(
@@ -490,13 +493,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
         if let (PredicateConstant::Integer(left), PredicateConstant::Integer(right)) = (left, right)
         {
-            return left
-                .binary(operator, right)
+            return self
+                .wide
+                .binary(left, operator, right)
                 .or_else(|| left.sign_bit_shift(operator, right))
                 .map(PredicateConstant::Integer);
         }
-        let left = Self::predicate_float(left)?;
-        let right = Self::predicate_float(right)?;
+        let left = self.predicate_float(left)?;
+        let right = self.predicate_float(right)?;
         Self::floating_comparison(operator, left, right)
             .map(PredicateConstant::Integer)
             .or_else(|| {
@@ -521,7 +525,7 @@ enum PredicateConstant {
 impl PredicateConstant {
     fn truth(self) -> bool {
         match self {
-            | Self::Integer(value) => value.value != 0,
+            | Self::Integer(value) => !value.is_zero(),
             | Self::Floating(value) => value.truth(),
             | Self::NonNullAddress(_) => true,
         }

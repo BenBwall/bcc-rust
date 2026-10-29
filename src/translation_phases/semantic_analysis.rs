@@ -80,6 +80,7 @@ mod constants;
 mod excess;
 mod integer;
 mod types;
+mod wide_integers;
 
 // Language extensions and builtin calls
 mod assembly;
@@ -161,6 +162,12 @@ pub(crate) use types::{
     TypeKind,
     Types,
     UnmodeledType,
+};
+pub(crate) use wide_integers::{
+    WideId,
+    WideIntegers,
+    WideStore,
+    WideValues,
 };
 
 use super::{
@@ -317,6 +324,7 @@ pub(crate) fn analyze<'tu>(
         declaration_sites: analyzer.declaration_sites,
         size_query_sites: analyzer.size_query_sites,
         tag_declarations: analyzer.tag_declarations.leak(),
+        wide_integers: analyzer.wide.into_values(),
         errors: analyzer.error_diagnostics,
     };
     result.entities = EntityFacts::retain(context, &result, &scratch, unit_arena, &symbol_requests);
@@ -630,7 +638,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                             None,
                         );
                     } else if let Some(assertion) = assertion
-                        && value.is_some_and(|v| v.value == 0)
+                        && value.is_some_and(Integer::is_zero)
                     {
                         let message = assertion.message.map(|token| {
                             let text = match token.kind {
@@ -959,7 +967,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                         self.values.push(self.types.unknown());
                         return;
                     }
-                    if value.value == 0 {
+                    if value.is_zero() {
                         let mut literal = expression;
                         while let ExpressionType::Parenthesized { expression, .. } = literal.kind {
                             literal = expression;
@@ -1609,11 +1617,9 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             | Work::Unary(op, source, ty) => {
                 let value = self.integers.pop().flatten();
                 let result = value
-                    .and_then(|v| v.unary(op))
+                    .and_then(|v| self.wide.unary(v, op))
                     .and_then(|v| self.bit_int_result(v, ty));
-                if value.is_some_and(Integer::wide) && result.is_none() {
-                    self.wide_constant(source);
-                } else if value.is_some() && result.is_none() {
+                if value.is_some() && result.is_none() {
                     self.exceptional_constant(source);
                 }
                 self.integers.push(result);
@@ -1626,22 +1632,13 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     left.zip(right)
                         .and_then(|(l, r)| match self.bit_int_shift(op, l, r, ty) {
                             | Some((result, _)) => result,
-                            | None => l
-                                .binary(op, r)
+                            | None => self
+                                .wide
+                                .binary(l, op, r)
                                 .or_else(|| l.sign_bit_shift(op, r))
                                 .and_then(|v| self.bit_int_result(v, ty)),
                         });
-                // A division by zero is undefined at any width.
-                let by_zero = matches!(op, BinaryOperator::Division | BinaryOperator::Modulo)
-                    && right.is_some_and(|r| r.value == 0);
-                if left.is_some()
-                    && right.is_some()
-                    && (left.is_some_and(Integer::wide) || right.is_some_and(Integer::wide))
-                    && result.is_none()
-                    && !by_zero
-                {
-                    self.wide_constant(source);
-                } else if left.is_some() && right.is_some() && result.is_none() {
+                if left.is_some() && right.is_some() && result.is_none() {
                     self.exceptional_constant(source);
                 }
                 self.integers.push(result);
@@ -1649,11 +1646,11 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             | Work::Logical(op, right, source) => {
                 let left = self.integers.pop().flatten();
                 if let Some(l) = left {
-                    if (op == BinaryOperator::LogicalAnd && l.value == 0)
-                        || (op == BinaryOperator::LogicalOr && l.value != 0)
+                    if (op == BinaryOperator::LogicalAnd && l.is_zero())
+                        || (op == BinaryOperator::LogicalOr && !l.is_zero())
                     {
                         self.integers
-                            .push(Some(Integer::int(i128::from(l.value != 0))));
+                            .push(Some(Integer::int(i128::from(!l.is_zero()))));
                     } else {
                         self.integers.push(left);
                         let int = self.types.scalar(Scalar::Int);
@@ -1666,27 +1663,22 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             },
             | Work::Conditional(c) =>
                 if let Some(value) = self.integers.pop().flatten() {
-                    let selected = if value.value != 0 {
-                        c.then_expression
-                    } else {
+                    let selected = if value.is_zero() {
                         c.else_expression
+                    } else {
+                        c.then_expression
                     };
                     if let Some((bits, signed)) = self.conditional_model(c) {
-                        self.work
-                            .push(Work::ConvertInteger(bits, signed, selected.source_vectors));
+                        self.work.push(Work::ConvertInteger(bits, signed));
                     }
                     self.work.push(Work::Eval(selected));
                 } else {
                     self.integers.push(None);
                 },
-            | Work::ConvertInteger(bits, signed, source) => {
+            | Work::ConvertInteger(bits, signed) => {
                 let value = self.integers.pop().flatten();
-                // An arm whose conversion a wide pattern cannot hold.
-                if value.is_some_and(|v| v.convert(bits, signed).is_none()) {
-                    self.wide_constant(source);
-                }
                 self.integers
-                    .push(value.and_then(|v| v.convert(bits, signed)));
+                    .push(value.map(|v| self.wide.convert(v, bits, signed)));
             },
             | Work::CastBase(operand, source) => {
                 let ty = self.take_type();
@@ -1719,29 +1711,20 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 self.work.push(Work::CastDone(ty, source));
                 self.work.push(Work::Eval(operand));
             },
-            | Work::CastDone(ty, source) => {
+            | Work::CastDone(ty, _source) => {
                 let value = self.integers.pop().flatten();
-                // An unsigned 128-bit value with its top bit set, converted
-                // to a wider `_BitInt`, has no folded value yet.
-                if let Some(v) = value
-                    && let Some((bits, signed)) = self.integer_type(ty)
-                    && v.convert(bits, signed).is_none()
-                {
-                    self.wide_constant(source);
-                }
-                let result = value
-                    .zip(self.integer_type(ty))
-                    .and_then(|(v, (bits, signed))| {
-                        if matches!(self.types.nodes[ty.index], TypeKind::Scalar(Scalar::Bool)) {
-                            Some(Integer {
-                                value:  i128::from(v.value != 0),
-                                bits:   1,
-                                signed: false,
-                            })
-                        } else {
-                            v.convert(bits, signed)
+                let result = value.zip(self.integer_type(ty)).map(|(v, (bits, signed))| {
+                    if matches!(self.types.nodes[ty.index], TypeKind::Scalar(Scalar::Bool)) {
+                        Integer {
+                            value:  i128::from(!v.is_zero()),
+                            bits:   1,
+                            signed: false,
+                            wide:   None,
                         }
-                    });
+                    } else {
+                        self.wide.convert(v, bits, signed)
+                    }
+                });
                 self.integers.push(result);
             },
             | Work::SizeofDone(align, source) => {
@@ -1771,6 +1754,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     value:  i128::from(value),
                     bits:   64,
                     signed: false,
+                    wide:   None,
                 }));
             },
         }
@@ -1945,7 +1929,7 @@ enum Work<'tu, 's> {
     Conditional(&'tu ConditionalExpression<'tu>),
     CastBase(&'tu Expression<'tu>, SourceVectors),
     CastDone(TypeId, SourceVectors),
-    ConvertInteger(u32, bool, SourceVectors),
+    ConvertInteger(u32, bool),
     SizeofDone(bool, SourceVectors),
     Atomic(SourceVectors),
     TypeofDone(&'tu ExtendedType<'tu>),
@@ -1983,6 +1967,9 @@ struct Analyzer<'a, 'tu, 's> {
     work:                    ArenaVec<'s, Work<'tu, 's>>,
     values:                  ArenaVec<'s, TypeId>,
     integers:                ArenaVec<'s, Option<Integer>>,
+    /// The exact values of folded constants of bit-precise types wider
+    /// than 128 bits that `i128` does not hold.
+    wide:                    WideIntegers<'tu>,
     tainted:                 bool,
     function_name:           Option<Identifier>,
     old_parameter_mode:      bool,

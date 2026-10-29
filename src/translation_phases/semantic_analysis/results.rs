@@ -5,6 +5,7 @@
 //! §6.7, pp. 97-124; PDF pp. 109-136.
 
 use super::{
+    WideStore,
     expressions::{
         Conversion,
         ExpressionInfo,
@@ -97,6 +98,9 @@ pub(crate) struct SemanticTranslationUnit<'tu> {
     /// result follow the last run.
     pub(super) conversion_starts:       &'tu [usize],
     pub(crate) tag_declarations:        &'tu [(usize, usize)],
+    /// The exact values of folded constants of bit-precise types wider than
+    /// 128 bits that `i128` does not hold; see [`Self::integer_limbs`].
+    pub(super) wide_integers:           super::WideValues<'tu>,
     /// Error-severity diagnostics semantic analysis reported; warnings and
     /// diagnostics suppressed inside recovered syntax are not counted.
     pub(crate) errors:                  usize,
@@ -462,24 +466,20 @@ impl<'tu> SemanticTranslationUnit<'tu> {
     /// more than 128 bits in memory, padding bits extended as GCC and Clang
     /// store them.
     /// C23: §6.2.6.2 paragraphs 1-2, pp. 42-43; PDF pp. 55-56.
-    #[expect(
-        clippy::unused_self,
-        reason = "The exact model of wide values keeps their limbs in the unit."
-    )]
     pub(crate) fn integer_limbs(&self, value: Integer, limbs: &mut [u64]) {
-        // A wide value is its 128-bit pattern sign-extended
-        // (`Integer::convert`).
-        let fill = if (value.signed || value.wide()) && value.value < 0 {
-            u64::MAX
-        } else {
-            0
-        };
-        let bytes = value.value.to_le_bytes();
-        let (low, high) = bytes.as_chunks::<8>().0.split_at(1);
-        let halves = [u64::from_le_bytes(low[0]), u64::from_le_bytes(high[0])];
-        for (index, limb) in limbs.iter_mut().enumerate() {
-            *limb = halves.get(index).copied().unwrap_or(fill);
-        }
+        self.wide_integers.write_limbs(value, limbs);
+    }
+
+    /// The bits of the folded integer `value` converted to the floating
+    /// format `ty`, rounded once to nearest even from its exact value.
+    /// C99: §6.3.1.4 paragraph 2, pp. 43-44; PDF pp. 55-56.
+    pub(crate) fn integer_float_bits(&self, value: Integer, ty: crate::ir::Type) -> Option<u128> {
+        self.wide_integers.float_bits(value, ty)
+    }
+
+    /// The folded integer `value` in decimal.
+    pub(crate) fn integer_display(&self, value: Integer) -> impl std::fmt::Display {
+        self.wide_integers.display(value)
     }
 }
 

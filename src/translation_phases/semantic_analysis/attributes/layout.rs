@@ -529,17 +529,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     {
                         requested = requested.max(u32::try_from(value).unwrap_or(0));
                     } else {
-                        let wide = matches!(
-                            operand,
-                            super::super::SyntaxOperand::Expression(expression)
-                                if self.wide_unfolded(expression)
-                        );
                         self.error(
-                            if wide {
-                                SemanticErrorKind::UnsupportedWideConstant
-                            } else {
-                                SemanticErrorKind::InvalidStandardAlignment
-                            },
+                            SemanticErrorKind::InvalidStandardAlignment,
                             item.source_vectors,
                             None,
                             None,

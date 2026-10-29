@@ -35,6 +35,27 @@ fn kinds(
     result
 }
 
+/// The semantic error kinds of `source` in GNU C23 under `identity` on
+/// Linux x86-64, where GCC's folding extensions apply.
+fn gnu_kinds(source: &str, identity: CompilerIdentity) -> Vec<SemanticErrorKind> {
+    let mut result = Vec::new();
+    with_configuration(
+        source,
+        CompilerConfiguration::new(CStandard::C23, ExtensionPolicy::Allow)
+            .with_gnu_extensions(true)
+            .with_compiler_identity(identity)
+            .with_target(crate::target::Target::LinuxGnu),
+        |context, _| {
+            for error in context.take_pending_errors() {
+                if let TranslationError::Semantic(error) = error {
+                    result.push(error.kind);
+                }
+            }
+        },
+    );
+    result
+}
+
 /// Asserts that `source` has no semantic errors for any identity on any
 /// target.
 fn holds(source: &str) {
@@ -154,6 +175,44 @@ fn bit_int_constants_have_the_narrowest_width() {
 }
 
 #[test]
+fn bit_int_constants_wider_than_64_bits_have_exact_values() {
+    holds_on_x86_64(concat!(
+        "#define IS(e, t) _Static_assert(_Generic((e), t: 1, default: 0), #e)\n",
+        "IS(18446744073709551616wb, _BitInt(66));\n",
+        "IS(18446744073709551616uwb, unsigned _BitInt(65));\n",
+        "IS(0x1'0000'0000'0000'0000'0000wb, _BitInt(82));\n",
+        "IS(02000000000000000000000000000000WB, _BitInt(93));\n",
+        "IS(0b10000000000000000000000000000000000000000000000000000000000000000000000uwb, \
+         unsigned _BitInt(71));\n",
+        "IS(1606938044258990275541962092341162602522202993782792835301376wb, _BitInt(202));\n",
+        "_Static_assert(18446744073709551616wb == (_BitInt(66))1 << 64, \"\");\n",
+        "_Static_assert(0x1'0000'0000'0000'0000'0000wb == (_BitInt(82))1 << 80, \"\");\n",
+        "_Static_assert(02000000000000000000000000000000WB == (_BitInt(93))1 << 91, \"\");\n",
+        "_Static_assert(1606938044258990275541962092341162602522202993782792835301376wb == \
+         (_BitInt(202))1 << 200, \"\");\n",
+        "_Static_assert(-340282366920938463463374607431768211455wb + 1 == \
+         -(_BitInt(129))((unsigned __int128)-1 - 1), \"\");\n",
+    ));
+    // Past `BITINT_MAXWIDTH` it is too large: 65535 bits for GCC, 8388608
+    // for Clang.
+    let source = format!("int x = (int)0x1{}wb;", "0".repeat(16384));
+    for (identity, expected) in [(CompilerIdentity::Gcc, 1), (CompilerIdentity::Clang, 0)] {
+        with_configuration(
+            &source,
+            CompilerConfiguration::new(CStandard::C23, ExtensionPolicy::Allow)
+                .with_compiler_identity(identity),
+            |context, _| {
+                assert_eq!(
+                    context.take_pending_errors().len(),
+                    expected,
+                    "{identity:?}"
+                );
+            },
+        );
+    }
+}
+
+#[test]
 fn constants_fold_at_their_width() {
     holds(
         "_Static_assert((unsigned _BitInt(7))0 - (unsigned _BitInt(7))1 == 127, \
@@ -252,38 +311,55 @@ fn arithmetic_wider_than_128_bits_folds_where_the_model_holds_it() {
 }
 
 #[test]
-fn wide_constants_the_model_cannot_hold_are_refused_clearly() {
+fn wide_constants_fold_in_every_constant_context() {
     use SemanticErrorKind::{
         ConstantOverflow as Overflow,
-        UnsupportedWideConstant as Wide,
+        InvalidConstant as Invalid,
     };
     // A huge unsigned value divided, shifted right or past 128 bits, and an
-    // unsigned 128-bit value with its top bit set, zero-extended, have no
-    // folded value; every context that requires a constant says so. `H`
-    // stands for such a constant.
+    // unsigned 128-bit value with its top bit set, zero-extended, fold
+    // exactly in every context that requires a constant. `H` stands for
+    // such a constant, which is 1.
     for (source, expected) in [
-        ("enum { E = H };", &[Wide][..]),
-        ("int a[H + 1];", &[Wide]),
-        ("struct S { int a[H + 1]; };", &[Wide]),
+        ("enum { E = H };", &[][..]),
+        ("int a[H + 1];", &[]),
+        ("struct S { int a[H + 1]; };", &[]),
+        ("int f(void) { static int b[H + 1]; return sizeof b; }", &[]),
+        ("_Alignas(H ? 8 : 16) int x;", &[]),
+        ("static long long m = H;", &[]),
+        ("int c = __builtin_choose_expr(H, 1, 2);", &[]),
+        ("_Static_assert(sizeof(int[H + 1]) == 8, \"\");", &[]),
+        ("struct T { int x : H + 1; };", &[]),
         (
-            "int f(void) { static int b[H + 1]; return sizeof b; }",
-            &[Wide],
-        ),
-        ("_Alignas(H ? 8 : 16) int x;", &[Wide]),
-        ("static long long m = H;", &[Wide]),
-        ("int c = __builtin_choose_expr(H, 1, 2);", &[Wide]),
-        ("_Static_assert(sizeof(int[H + 1]) == 8, \"\");", &[Wide]),
-        ("struct T { int x : H + 1; };", &[Wide]),
-        (
-            "int f(int x) { switch (x) { case (_BitInt(200))1 << 150: return 1; } return 0; }",
-            &[Wide],
+            "int f(int x) { switch (x) { case (int)((_BitInt(200))1 << 150 >> 149): return 1; } \
+             return 0; }",
+            &[],
         ),
         (
             "_Static_assert((unsigned _BitInt(129))(unsigned __int128)-1 != 0, \"\");",
-            &[Wide],
+            &[],
         ),
         // Undefined at any width.
         ("enum { E = (int)((_BitInt(200))1 / 0) };", &[Overflow]),
+        ("enum { E = (int)((_BitInt(200))1 % 0) };", &[Overflow]),
+        (
+            "enum { E = (int)(-((_BitInt(200))1 << 199) / -1) };",
+            &[Overflow],
+        ),
+        (
+            "enum { E = (int)(((_BitInt(200))1 << 198) * 2) };",
+            &[Overflow],
+        ),
+        (
+            "enum { E = (int)(-(-((_BitInt(200))1 << 199))) };",
+            &[Overflow],
+        ),
+        ("enum { E = (int)((_BitInt(200))1 << 200) };", &[Overflow]),
+        ("enum { E = (int)((_BitInt(200))-1 << 1) };", &[Overflow]),
+        ("enum { E = (int)((_BitInt(200))3 << 199) };", &[Overflow]),
+        // A floating value out of range is no constant, as for `(int)1e70`.
+        ("enum { E = (int)(_BitInt(200))1e70 };", &[Invalid]),
+        ("enum { E = (int)(unsigned _BitInt(200))-1.0 };", &[Invalid]),
         // Conversions fold, so these are constants.
         ("enum { F = (_BitInt(200))1 };", &[]),
         ("int a[(_BitInt(200))3 ? 2 : 1];", &[]),
@@ -437,47 +513,188 @@ fn generated_wide_constants_fold_to_their_exact_values() {
     holds_on_x86_64(include_str!(
         "../../../../tests/fixtures/semantic/bit_int_wide_folded.c"
     ));
-    // These the pattern model cannot hold: each is refused, none folds to
-    // a wrong value.
+}
+
+#[test]
+fn a_wide_unsigned_value_zero_extends() {
+    // `(unsigned _BitInt(150))-1` is 2^150 - 1: converted to a wider type
+    // it zero-extends, within its width or narrower it truncates.
+    holds_on_x86_64(
+        "typedef unsigned _BitInt(150) u150;\n_Static_assert((_BitInt(200))(u150)-1 > 0, \
+         \"\");\n_Static_assert((unsigned _BitInt(256))(u150)-1 != (unsigned _BitInt(256))-1, \
+         \"\");\n_Static_assert((unsigned _BitInt(256))(u150)-1 == ((unsigned _BitInt(256))1 << \
+         150) - 1, \"\");\n_Static_assert((unsigned _BitInt(150))-1 > 0, \
+         \"\");\n_Static_assert((unsigned long long)(unsigned _BitInt(150))-1 == -1ULL, \
+         \"\");\n_Static_assert((_BitInt(200))(_BitInt(150))-1 < 0, \"\");",
+    );
+}
+
+#[test]
+fn wide_values_fold_exactly_up_to_the_maximum_width() {
+    // Division takes Knuth's algorithm D: quotients and remainders of
+    // multi-limb operands, with a divisor whose top limb needs normalizing,
+    // put back together exactly.
+    holds_on_x86_64(
+        "typedef unsigned _BitInt(4096) u;\ntypedef _BitInt(4096) s;\n#define A (((u)1 << 2500) - \
+         12345)\n#define D (((u)1 << 1200) + ((u)1 << 600) + 7)\n#define R (((u)1 << 1100) + \
+         99)\n_Static_assert((A * D + R) / D == A && (A * D + R) % D == R, \
+         \"\");\n_Static_assert((s)-A / (s)D == -(s)(A / D) && (s)-A % (s)D == -(s)(A % D), \
+         \"\");\n_Static_assert(A / A == 1 && A % A == 0 && D / A == 0 && D % A == D, \
+         \"\");\n_Static_assert((((u)1 << 4095) / ((u)1 << 2047)) == (u)1 << 2048, \
+         \"\");\n_Static_assert(((u)-1 >> 4000) == ((u)1 << 96) - 1 && ((s)-1 >> 4000) == -1, \
+         \"\");\n_Static_assert((u)-1 * (u)-1 == 1 && (u)0 - 1 == (u)-1, \"\");",
+    );
+    // GCC's limit: 1024 limbs.
     for identity in [CompilerIdentity::Gcc, CompilerIdentity::Clang] {
-        let errors = kinds(
-            include_str!("../../../../tests/fixtures/semantic/bit_int_wide_refused.c"),
-            identity,
-            crate::target::Target::LinuxGnu,
-        );
-        assert!(errors.len() >= 40, "{identity:?}: {errors:?}");
-        assert!(
-            errors
-                .iter()
-                .all(|&kind| kind == SemanticErrorKind::UnsupportedWideConstant),
-            "{identity:?}: {errors:?}"
+        assert_eq!(
+            kinds(
+                "typedef unsigned _BitInt(65535) u;\n_Static_assert(((u)1 << 65534) / ((u)1 << \
+                 32767) == (u)1 << 32767, \"\");\n_Static_assert((u)-1 % 3 == 1 && (u)-1 / 3 * 3 \
+                 + 1 == (u)-1, \"\");\n_Static_assert((_BitInt(65535))((u)1 << 65534) < 0, \
+                 \"\");\n_Static_assert(-(_BitInt(65535))((u)1 << 65533) * 2 < 0, \"\");",
+                identity,
+                crate::target::Target::LinuxGnu
+            ),
+            [],
+            "{identity:?}"
         );
     }
 }
 
 #[test]
-fn a_wide_unsigned_pattern_zero_extends() {
-    // `(unsigned _BitInt(150))-1` is 2^150 - 1: converted to a wider type
-    // it zero-extends, which no sign-extended 128-bit pattern holds, so it
-    // is refused rather than folded as -1 (GCC and Clang give E=1, g=0).
-    for source in [
-        "typedef unsigned _BitInt(150) u150; enum { E = (_BitInt(200))(u150)-1 > 0 };",
-        "typedef unsigned _BitInt(150) u150; static const int g = (unsigned _BitInt(256))(u150)-1 \
-         == (unsigned _BitInt(256))-1;",
-    ] {
-        for identity in [CompilerIdentity::Gcc, CompilerIdentity::Clang] {
-            assert_eq!(
-                kinds(source, identity, crate::target::Target::LinuxGnu),
-                [SemanticErrorKind::UnsupportedWideConstant],
-                "{identity:?}: {source}"
-            );
-        }
+fn wide_values_convert_to_and_from_floating_types_exactly() {
+    // Negated floating constants and floating comparisons are GNU folding
+    // extensions in an integer constant expression (C99 §6.6p6).
+    let source =
+        "typedef unsigned _BitInt(2000) u;\ntypedef _BitInt(16500) s;\n_Static_assert((u)0x1p1023 \
+         == (u)1 << 1023, \"\");\n_Static_assert((u)0x1.fffffffffffffp1023 == ((u)1 << 1024) - \
+         ((u)1 << 971), \"\");\n_Static_assert((_BitInt(2000))-0x1.0000000000001p200 == \
+         -(((_BitInt(2000))1 << 200) + ((_BitInt(2000))1 << 148)), \
+         \"\");\n_Static_assert((s)0x1p16383L == (s)1 << 16383, \
+         \"\");\n_Static_assert((s)-0x1.8p16000L == -((s)3 << 15999), \
+         \"\");\n_Static_assert((_BitInt(300))-0x1.0000000000000000000000000001p200Q == \
+         -(((_BitInt(300))1 << 200) + ((_BitInt(300))1 << 88)), \
+         \"\");\n_Static_assert((_BitInt(200))-1.5 == -1 && (unsigned _BitInt(200))0.9 == 0, \
+         \"\");\n_Static_assert((double)((u)1 << 1023) == 0x1p1023 && (double)(((u)1 << 1024) - \
+         ((u)1 << 970)) > 0x1.fffffffffffffp1023, \"\");\n_Static_assert((float)(((u)1 << 100) + \
+         ((u)1 << 76)) == 0x1p100f && (float)(((u)1 << 100) + ((u)1 << 76) + 1) > 0x1p100f, \
+         \"\");\n_Static_assert((long double)-((s)1 << 16000) == -0x1p16000L, \"\");";
+    for identity in [CompilerIdentity::Gcc, CompilerIdentity::Clang] {
+        assert_eq!(gnu_kinds(source, identity), [], "{identity:?}");
     }
-    // Within its own width, or narrower, the pattern still folds.
-    holds_on_x86_64(
-        "_Static_assert((unsigned _BitInt(150))-1 > 0, \"\");\n_Static_assert((unsigned long \
-         long)(unsigned _BitInt(150))-1 == -1ULL, \
-         \"\");\n_Static_assert((_BitInt(200))(_BitInt(150))-1 < 0, \"\");",
+    // Out of range is undefined, so no constant, as for `(int)1e10`.
+    for source in [
+        "enum { A = (int)(_BitInt(1024))0x1p1023 };",
+        "enum { B = (int)(unsigned _BitInt(1023))0x1p1023 };",
+        "enum { C = (int)(_BitInt(200))-0x1.0000000000001p199 };",
+    ] {
+        assert_eq!(
+            gnu_kinds(source, CompilerIdentity::Gcc),
+            [SemanticErrorKind::InvalidConstant],
+            "{source}"
+        );
+    }
+    assert_eq!(
+        gnu_kinds(
+            "enum { C = (int)((_BitInt(200))-0x1p199 < 0) };",
+            CompilerIdentity::Gcc
+        ),
+        []
+    );
+}
+
+#[test]
+fn overflow_builtins_check_wide_results_exactly() {
+    // Clang has no `__builtin_*_overflow_p`.
+    let source = "typedef unsigned _BitInt(300) u;\n_Static_assert(!__builtin_add_overflow_p((u)1 \
+                  << 298, (u)1 << 298, (u)0), \
+                  \"\");\n_Static_assert(__builtin_add_overflow_p((u)1 << 299, (u)1 << 299, \
+                  (u)0), \"\");\n_Static_assert(__builtin_mul_overflow_p((u)1 << 150, (u)1 << \
+                  150, (u)0), \"\");\n_Static_assert(!__builtin_mul_overflow_p((u)1 << 150, (u)1 \
+                  << 149, (u)0), \"\");\n_Static_assert(__builtin_sub_overflow_p((u)0, (u)1, \
+                  (u)0), \"\");\n_Static_assert(!__builtin_sub_overflow_p((u)0, (u)1, \
+                  (_BitInt(300))0), \"\");\n_Static_assert(__builtin_mul_overflow_p((u)1 << 150, \
+                  (u)1 << 149, (_BitInt(300))0), \
+                  \"\");\n_Static_assert(__builtin_add_overflow_p((u)1 << 200, 0, 0LL), \"\");";
+    assert_eq!(
+        kinds(
+            source,
+            CompilerIdentity::Gcc,
+            crate::target::Target::LinuxGnu
+        ),
+        []
+    );
+}
+
+#[test]
+fn wide_case_labels_compare_exactly() {
+    // The labels share their low 128 bits: neither is a duplicate of the
+    // other, and the ranges order by the whole value.
+    let switch = |labels: &str| {
+        format!(
+            "typedef unsigned _BitInt(200) u;\nint f(u x) {{ switch (x) {{ {labels} return 1; }} \
+             return 0; }}"
+        )
+    };
+    for (labels, expected) in [
+        (
+            "case 1: case ((u)1 << 150) + 1: case ((u)1 << 160) ... ((u)1 << 161):",
+            &[][..],
+        ),
+        (
+            "case ((u)1 << 150) + 1: case ((u)1 << 150) + 1:",
+            &[SemanticErrorKind::DuplicateCase],
+        ),
+        (
+            "case ((u)1 << 160) ... ((u)1 << 161): case ((u)1 << 160) + 5:",
+            &[SemanticErrorKind::DuplicateCase],
+        ),
+        (
+            "case ((u)1 << 161) ... ((u)1 << 160):",
+            &[SemanticErrorKind::EmptyCaseRange],
+        ),
+    ] {
+        assert_eq!(
+            gnu_kinds(&switch(labels), CompilerIdentity::Gcc),
+            expected,
+            "{labels}"
+        );
+    }
+}
+
+#[test]
+fn folded_wide_values_reach_lowering_as_limbs() {
+    with_configuration(
+        "static const unsigned _BitInt(200) k = ((unsigned _BitInt(200))1 << 150) - 3;\nstatic \
+         const _BitInt(300) m = -((_BitInt(300))1 << 200) + 5;\nstatic const _BitInt(300) n = -7;",
+        CompilerConfiguration::new(CStandard::C23, ExtensionPolicy::Allow),
+        |context, sema| {
+            let value = |name: &str| {
+                sema.bindings
+                    .iter()
+                    .find(|b| context.string_cache.at(b.name.name) == name)
+                    .and_then(|b| b.value)
+                    .unwrap()
+            };
+            let mut limbs = [0_u64; 5];
+            sema.integer_limbs(value("k"), &mut limbs);
+            assert_eq!(limbs, [u64::MAX - 2, u64::MAX, (1 << 22) - 1, 0, 0]);
+            sema.integer_limbs(value("m"), &mut limbs);
+            assert_eq!(limbs, [5, 0, 0, 0xFFFF_FFFF_FFFF_FF00, u64::MAX]);
+            sema.integer_limbs(value("n"), &mut limbs);
+            assert_eq!(
+                limbs,
+                [-7_i64 as u64, u64::MAX, u64::MAX, u64::MAX, u64::MAX]
+            );
+            assert_eq!(
+                format!("{}", sema.integer_display(value("k"))),
+                "1427247692705959881058285969449495136382746621"
+            );
+            assert_eq!(
+                format!("{}", sema.integer_display(value("m"))),
+                "-1606938044258990275541962092341162602522202993782792835301371"
+            );
+        },
     );
 }
 

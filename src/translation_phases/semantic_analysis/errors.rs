@@ -377,11 +377,6 @@ pub(crate) enum SemanticErrorKind {
     InvalidConstant,
     /// C99: §6.6p4; 6.5p5, p. 95; 67; PDF p. 107; 79.
     ConstantOverflow,
-    /// Arithmetic on a `_BitInt` wider than the constant evaluator's 128
-    /// bits where an integer constant expression is required: valid C23,
-    /// which GCC and Clang fold, but not yet folded here.
-    /// C23: §6.6 paragraph 6, p. 95; PDF p. 108.
-    UnsupportedWideConstant,
     /// C99: §6.7.2.2p4, p. 105; PDF p. 117. Values outside int that share
     /// one 64-bit type are the policy extension of §6.7.2.2p2.
     EnumeratorRange,
@@ -851,7 +846,6 @@ impl SemanticErrorKind {
             | Self::InvalidConstant | Self::InvalidChooseCondition =>
                 "not an integer constant expression",
             | Self::ConstantOverflow => "overflow or invalid operation",
-            | Self::UnsupportedWideConstant => "computed in more than 128 bits",
             | Self::EnumeratorRange => "no supported enum type holds this value with the others",
             | Self::InvalidMember => "incomplete member type",
             | Self::DuplicateMember => "member declared again here",
@@ -1758,12 +1752,6 @@ impl SemanticErrorKind {
             | Self::InvalidConstant => (
                 "an integer constant expression is required",
                 "C99 §6.6p3 and p6: integer constant expressions restrict operators and operands",
-            ),
-            | Self::UnsupportedWideConstant => (
-                "not yet supported: folding this _BitInt constant of more than 128 bits",
-                "C23 §6.6p6: this is an integer constant expression, but the constant evaluator \
-                 holds a value of a wider bit-precise type only as the sign extension of 128 \
-                 bits, which this result is not",
             ),
             | Self::ConstantOverflow => (
                 "constant expression overflows or has an invalid operation",

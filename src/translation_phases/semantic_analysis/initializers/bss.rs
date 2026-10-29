@@ -336,7 +336,7 @@ fn scalar<'tu>(
         if s.integer() {
             let value = if s == Scalar::Bool {
                 if let Some(value) = info.integer {
-                    i128::from(value.value != 0)
+                    i128::from(!value.is_zero())
                 } else if let Some(value) = info.floating() {
                     i128::from(!value.real.is_zero() || !value.imag.is_zero())
                 } else if let Some(value) = info.binary128() {
@@ -385,7 +385,7 @@ fn scalar<'tu>(
             bits::constant_bits(&value.real, float)?
         } else {
             let value = integer?;
-            bits::from_bit_precise(value.value, value.bits, value.signed, float)?
+            sema.integer_float_bits(value, float)?
         };
         let component = if complex { width / 2 } else { width };
         image.bits(start, component, real)?;

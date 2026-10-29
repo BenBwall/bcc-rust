@@ -1691,8 +1691,7 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
                 | _ if let Some(value) = info.binary128() =>
                     floats::binary128_bits(value.real, component),
                 | (Some(value), _) => floats::constant_bits(&value.real, component),
-                | (_, Some(value)) =>
-                    floats::from_bit_precise(value.value, value.bits, value.signed, component),
+                | (_, Some(value)) => self.sema.integer_float_bits(value, component),
                 | _ => None,
             }
             .ok_or_else(unsupported)?;
@@ -1720,8 +1719,7 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
                 | _ if let Some(folded) = info.binary128() =>
                     floats::binary128_bits(folded.real, float),
                 | (Some(folded), _) => floats::constant_bits(&folded.real, float),
-                | (None, Some(value)) =>
-                    floats::from_bit_precise(value.value, value.bits, value.signed, float),
+                | (None, Some(value)) => self.sema.integer_float_bits(value, float),
                 | (None, None) => None,
             }
             .ok_or_else(unsupported)?;
