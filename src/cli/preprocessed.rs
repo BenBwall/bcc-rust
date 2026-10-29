@@ -32,14 +32,20 @@ use crate::{
         Context,
         TranslationError,
     },
-    util::{
-        bump::Bump,
-        region_vec::RegionVec,
+    util::bump::{
+        ArenaVec,
+        Bump,
     },
 };
 
 /// Preprocesses the input and writes its text to `out`. Diagnostics go to
 /// stderr. Returns whether an error was reported.
+///
+/// Each token's text is written as the token is produced, while its
+/// provenance is still current, so no token outlives its turn. Diagnostics
+/// are reported once preprocessing ends, as the preprocessor may still
+/// withdraw or suppress one it queued; [`Step`] records where each one goes
+/// between the flushes of the text.
 pub(super) fn print_preprocessed<'tu>(
     context: &mut Context<'tu>,
     source_filename: &Path,
@@ -49,58 +55,86 @@ pub(super) fn print_preprocessed<'tu>(
     out: &mut dyn Write,
 ) -> io::Result<bool> {
     let tu = context.tu_arena();
-    let (items, macros) = with_preprocessor(
+    let text_arena = Bump::new();
+    let steps_arena = Bump::new();
+    let mut steps = ArenaVec::new_in(&steps_arena);
+    let (writer, macros) = with_preprocessor(
         context,
         source_filename,
         input_string,
         search,
         |mut preprocessor, context, _pp| {
-            let mut tokens = RegionVec::new();
-            preprocessor.for_each_iterator_item_read_at(context, |context, mut token, at| {
-                token.source_vectors = context.retain_token_source(token.source_vectors);
-                tokens.push((token, at, context.pending_error_count()));
+            let main_file = context.intern_source_file(source_filename);
+            let mut writer = TextWriter::new(&text_arena, options, main_file);
+            let mut pragmas = Pragmas::default();
+            let mut ordinal = 0;
+            let mut diagnosed = 0;
+            let mut flushed = 0;
+            preprocessor.for_each_iterator_item_read_at(context, |context, token, at| {
+                let errors_before = context.pending_error_count();
+                if errors_before != diagnosed {
+                    steps.push(Step::Report(errors_before));
+                    diagnosed = errors_before;
+                }
+                if !options.macros {
+                    pragmas.write_before(context, ordinal, &mut writer);
+                    _ = writer.token(context, token, at);
+                    if writer.text.len() - flushed >= FLUSH_BYTES {
+                        flushed = writer.text.len();
+                        steps.push(Step::Flush(flushed));
+                    }
+                }
+                ordinal += 1;
             });
+            if !options.macros {
+                pragmas.write_before(context, usize::MAX, &mut writer);
+                writer.finish();
+            }
             let macros = options
                 .macros
                 .then(|| preprocessor.macro_listing_in(context, tu));
-            (tokens, macros)
+            (writer, macros)
         },
     );
     let reporter_arena = Bump::new();
     let mut reporter = DiagnosticReporter::new(&reporter_arena, tu, RenderColor::for_stderr());
     let stderr = &mut io::stderr();
-    let text_arena = Bump::new();
-    let main_file = context.intern_source_file(source_filename);
-    let mut writer = TextWriter::new(&text_arena, options, main_file);
     let mut diagnosed = 0;
-    let mut pragmas = Pragmas::default();
-    for (ordinal, (token, at, errors_before)) in items.into_iter().enumerate() {
-        while diagnosed < errors_before {
-            report_next(&mut reporter, context);
-            diagnosed += 1;
-        }
-        if macros.is_none() {
-            pragmas.write_before(context, ordinal, &mut writer);
-            _ = writer.token(context, token, at);
-            if writer.text.len() >= FLUSH_BYTES {
-                out.write_all(writer.text.as_bytes())?;
-                writer.text.clear();
-            }
+    let mut written = 0;
+    for step in steps {
+        match step {
+            | Step::Report(errors_before) =>
+                while diagnosed < errors_before {
+                    report_next(&mut reporter, context);
+                    diagnosed += 1;
+                },
+            | Step::Flush(end) => {
+                out.write_all(&writer.text.as_bytes()[written..end])?;
+                written = end;
+            },
         }
     }
     while let Some(error) = context.pop_pending_error() {
         reporter.report(&error, context);
     }
-    if let Some(macros) = macros {
-        out.write_all(macros.as_bytes())?;
-    } else {
-        pragmas.write_before(context, usize::MAX, &mut writer);
-        writer.finish();
-        out.write_all(writer.text.as_bytes())?;
+    match macros {
+        | Some(macros) => out.write_all(macros.as_bytes())?,
+        | None => out.write_all(&writer.text.as_bytes()[written..])?,
     }
     out.flush()?;
     drop(reporter.finish(context, stderr));
     Ok(reporter.errors != 0)
+}
+
+/// What [`print_preprocessed`] does at a point in the token stream once
+/// preprocessing has ended, in order.
+#[derive(Clone, Copy)]
+enum Step {
+    /// Report diagnostics until this many have been reported: those queued
+    /// before the next token was produced.
+    Report(usize),
+    /// Write the text up to this byte offset.
+    Flush(usize),
 }
 
 /// Reports the next pending diagnostic.
