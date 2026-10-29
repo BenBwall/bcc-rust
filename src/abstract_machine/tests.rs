@@ -658,6 +658,13 @@ fn subscripts_span_their_bracket_and_narration_agrees_in_number() {
         address.explanation
     );
     assert_eq!(address.clauses[0].id, "6.5.3.2p3");
+    assert!(
+        address
+            .explanation
+            .contains("the element itself is never read"),
+        "{}",
+        address.explanation
+    );
     let subscript = event(EventKind::Subscript)[0];
     assert_eq!(text(subscript), "a[1]");
     assert!(
@@ -690,6 +697,72 @@ fn subscripts_span_their_bracket_and_narration_agrees_in_number() {
         call.explanation.starts_with("The call has no arguments"),
         "{}",
         call.explanation
+    );
+}
+
+/// The pointer-arithmetic events of `main`'s `int *q = INITIALIZER;`, each
+/// with the source text it covers and whether it is narrated as `&a[i]`.
+fn pointer_steps(initializer: &str) -> Vec<(String, bool, String)> {
+    let source = format!(
+        "int main(void) {{ int a[3] = {{1, 2, 3}}; int x = 0; int *q = {initializer}; return x; }}"
+    );
+    self::states(&source)
+        .into_iter()
+        .filter(|state| state.event.kind == EventKind::PointerArithmetic)
+        .map(|state| {
+            let event = state.event;
+            let text = source[event.range.start..event.range.end].to_owned();
+            let element = event.clauses.iter().any(|clause| clause.id == "6.5.3.2p3");
+            assert_eq!(
+                element,
+                event.explanation.contains("&a[i] as a + i"),
+                "{}",
+                event.explanation
+            );
+            (text, element, event.explanation)
+        })
+        .collect()
+}
+
+#[test]
+fn only_an_element_address_is_narrated_as_one() {
+    // C99 §6.5.3.2p3: the `&[]` node, not the source text, decides.
+    let steps = pointer_steps("&a[1] + 1");
+    assert_eq!(
+        steps
+            .iter()
+            .map(|(text, element, _)| (text.as_str(), *element))
+            .collect::<Vec<_>>(),
+        [("&a[1]", true), ("&a[1] + 1", false)]
+    );
+    assert!(steps[1].2.contains("moves 1 int forward"), "{}", steps[1].2);
+    let steps = pointer_steps("&x + 1");
+    assert_eq!(steps.len(), 1);
+    assert!(!steps[0].1, "{}", steps[0].2);
+    let steps = pointer_steps("&a[2] - 1");
+    assert_eq!(
+        steps
+            .iter()
+            .map(|(text, element, _)| (text.as_str(), *element))
+            .collect::<Vec<_>>(),
+        [("&a[2]", true), ("&a[2] - 1", false)]
+    );
+    assert!(steps[1].2.contains("moves 1 int back"), "{}", steps[1].2);
+    let steps = pointer_steps("(&a[2])");
+    assert_eq!(steps.len(), 1);
+    assert!(steps[0].1, "{}", steps[0].2);
+    // A negative index moves back.
+    let back =
+        self::states("int main(void) { int a[3] = {1, 2, 3}; int *p = a + 2; return p[-1]; }")
+            .into_iter()
+            .find(|state| state.event.kind == EventKind::Subscript)
+            .expect("p[-1] is a subscript")
+            .event;
+    assert!(
+        back.explanation
+            .contains("moves 1 element back and designates a[1]"),
+        "{}",
+        back.explanation
     );
 }
 

@@ -279,7 +279,7 @@ impl Parser<'_> {
                         let base = self.emit_expression(base, false)?;
                         let index = self.emit_expression(index, false)?;
                         let tree = self.tree("&[]", range, vec![base, index])?;
-                        self.emit_node(Op::Binary("+"), range, tree)?;
+                        self.emit_node(Op::ElementAddress, range, tree)?;
                         tree
                     },
                     | _ => {

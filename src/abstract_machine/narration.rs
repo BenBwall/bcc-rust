@@ -333,11 +333,13 @@ impl Machine {
         offset: i32,
     ) -> Event {
         let location = self.location(target, offset);
-        let steps = self.short_value(&index);
-        let elements = plural(&steps, "element");
+        let steps = match index {
+            | Value::Integer(index) => movement(index, "element"),
+            | _ => String::from("by the index"),
+        };
         let text = format!(
-            "Subscripting: a[i] means *(a + i). Starting from {}, the machine moves {steps} \
-             {elements} forward and designates {location}.",
+            "Subscripting: a[i] means *(a + i). Starting from {}, the machine moves {steps} and \
+             designates {location}.",
             self.value_text(&base),
         );
         let mut event = explained(
@@ -386,6 +388,8 @@ impl Machine {
         result(event, Operand::Value(output))
     }
 
+    /// The event for a binary operator; `&[]` is `&E1[E2]`, which C99
+    /// §6.5.3.2p3 evaluates as `E1 + E2` without the indirection.
     pub(super) fn binary(
         &self,
         range: SourceRange,
@@ -395,6 +399,10 @@ impl Machine {
         right: Value,
         output: Value,
     ) -> Event {
+        let (operator, element) = match operator {
+            | "&[]" => ("+", true),
+            | _ => (operator, false),
+        };
         let (a, b, shown) = (
             self.short_value(&left),
             self.short_value(&right),
@@ -424,15 +432,18 @@ impl Machine {
                     (&right, &left)
                 };
                 let written = snippet(source, range);
-                let distance = self.short_value(count);
-                let distance = distance.trim_start_matches('-');
-                let moved = format!("{distance} {}", plural(distance, "int"));
-                let mut text = if let Some(element) = written.strip_prefix('&') {
-                    // C99 §6.5.3.2p3: &E1[E2] is E1 + E2; nothing is read.
+                let moved = match count {
+                    | &Value::Integer(count) if operator == "-" =>
+                        movement(count.saturating_neg(), "int"),
+                    | &Value::Integer(count) => movement(count, "int"),
+                    | _ => String::from("by the count"),
+                };
+                let mut text = if element {
                     format!(
-                        "`&{element}` asks for an element's address, not its value, so nothing is \
-                         read: C defines &a[i] as a + i. Pointer arithmetic counts elements, not \
-                         bytes: {} {operator} {} moves {moved} and gives {}.",
+                        "`{written}` asks for an element's address, so the element itself is \
+                         never read: C defines &a[i] as a + i, which uses only the pointer and \
+                         the index. Pointer arithmetic counts elements, not bytes: {} {operator} \
+                         {} moves {moved} and gives {}.",
                         self.value_text(pointer),
                         self.short_value(count),
                         self.value_text(&output),
@@ -446,7 +457,7 @@ impl Machine {
                         self.value_text(&output),
                     )
                 };
-                let cited: &[Clause] = if written.starts_with('&') {
+                let cited: &[Clause] = if element {
                     &[clauses::ADDRESS_OPERATOR, clauses::POINTER_ARITHMETIC]
                 } else {
                     &[clauses::POINTER_ARITHMETIC]
@@ -1082,13 +1093,17 @@ fn result(mut event: Event, operand: Operand) -> Event {
     event
 }
 
-/// `noun`, with an `s` unless `count` is one: "1 int", "3 ints".
-fn plural(count: &str, noun: &str) -> String {
-    if count == "1" {
-        noun.to_owned()
-    } else {
-        format!("{noun}s")
-    }
+/// How far an offset of `delta` elements moves a pointer: "0 ints",
+/// "1 int forward", "2 elements back".
+fn movement(delta: i32, noun: &str) -> String {
+    let count = delta.unsigned_abs();
+    let plural = if count == 1 { "" } else { "s" };
+    let direction = match delta.signum() {
+        | 1 => " forward",
+        | -1 => " back",
+        | _ => "",
+    };
+    format!("{count} {noun}{plural}{direction}")
 }
 
 fn snippet(source: &str, range: SourceRange) -> &str {
