@@ -40,8 +40,11 @@ them. Visitors pick a lesson (a small C program) and see it three ways:
   narration explains each instruction for programmers new to WebAssembly.
 
 Every variable keeps one colour across the source, the expression tree and the
-memory diagram. The page has light and dark themes and works down to tablet
-width.
+memory diagram. The page has light and dark themes and works down to phone
+width. At every width the line that runs and the narration of what it did are
+on screen together: down to 821 px the source stays beside the narration (a
+sticky column); narrower, the page is one column with the source sized so the
+narration follows it on the same screen, and only the toolbar stays at the top.
 
 The site is written in Rust with [Leptos](https://leptos.dev) and built by
 [Trunk](https://trunkrs.dev) into a static site in `web/dist/`. The page's

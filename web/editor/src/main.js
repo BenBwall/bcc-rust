@@ -102,7 +102,11 @@ class Editor {
       guides: { indentation: true },
       bracketPairColorization: { enabled: false },
       tabSize: 4,
-      wordWrap: 'off',
+      // The source wraps rather than hiding the ends of long lines (its
+      // comments, mostly) in the narrow columns of small screens; the
+      // listings keep one instruction per line.
+      wordWrap: options.readOnly ? 'off' : 'on',
+      wrappingIndent: 'indent',
       stickyScroll: { enabled: false },
       accessibilitySupport: 'auto',
       quickSuggestions: false,
@@ -268,10 +272,43 @@ class Editor {
     })));
   }
 
-  /** Scroll so `line` is visible, centring it only when it is off screen. */
-  revealLine(line) {
-    if (line > 0) {
-      this.editor.revealLineInCenterIfOutsideViewport(line, monaco.editor.ScrollType.Smooth);
+  /**
+   * Scroll so `line` is visible, centring it only when it is off screen.
+   * With `onPage`, also scroll the page as little as needed to bring the
+   * line clear of the sticky header and toolbar (the root's scroll
+   * padding) and above the window's bottom, provided part of the editor is
+   * already on screen: a reader who scrolled away to the memory diagram
+   * stays there.
+   */
+  revealLine(line, onPage) {
+    if (line <= 0) {
+      return;
+    }
+    const editor = this.editor;
+    const lineHeight = editor.getOption(monaco.editor.EditorOption.lineHeight);
+    const height = editor.getLayoutInfo().height;
+    const scrollTop = editor.getScrollTop();
+    const top = editor.getTopForLineNumber(line);
+    const inside = top >= scrollTop && top + lineHeight <= scrollTop + height;
+    editor.revealLineInCenterIfOutsideViewport(line, monaco.editor.ScrollType.Smooth);
+    if (!onPage) {
+      return;
+    }
+    // Where the line ends up in the editor: where it is, or where the
+    // (smooth) reveal is taking it, centred as far as the text allows.
+    const centred = Math.min(Math.max(0, top - (height - lineHeight) / 2), Math.max(0, editor.getContentHeight() - height));
+    const offset = top - (inside ? scrollTop : centred);
+    const host = editor.getContainerDomNode().getBoundingClientRect();
+    const clear = parseFloat(getComputedStyle(document.documentElement).scrollPaddingTop) || 0;
+    const bottom = innerHeight - 8;
+    if (host.bottom <= clear || host.top >= bottom) {
+      return;
+    }
+    const lineTop = host.top + offset;
+    if (lineTop < clear) {
+      scrollBy({ top: lineTop - clear });
+    } else if (lineTop + lineHeight > bottom) {
+      scrollBy({ top: lineTop + lineHeight - bottom });
     }
   }
 

@@ -30,6 +30,12 @@
     --radius-m: 10px;
     --radius-l: 16px;
     --header-height: 60px;
+    /* What sticks to the top of the window: the header (static on narrow
+       screens), then the workbench's toolbar, whose height the page
+       measures as its controls wrap (Toolbar in src/app.rs). */
+    --sticky-top: var(--header-height);
+    --toolbar-height: 64px;
+    --sticky-bottom: calc(var(--sticky-top) + var(--toolbar-height));
     --ease: cubic-bezier(.2, .7, .2, 1);
 
     --bg: #0a0e15;
@@ -115,7 +121,9 @@
 
 @layer base {
   * { box-sizing: border-box; }
-  html { scroll-behavior: smooth; scroll-padding-top: calc(var(--header-height) + 16px); }
+  /* Whatever is scrolled into view (a link's target, the focus, the
+     current line) lands below the sticky header and toolbar. */
+  html { scroll-behavior: smooth; scroll-padding-top: calc(var(--sticky-bottom) + 12px); }
   body {
     margin: 0;
     min-height: 100vh;
@@ -169,6 +177,8 @@
 
   .workbench {
     margin-top: 28px;
+    /* The toolbar is the workbench's own top, so a link to it stops there. */
+    scroll-margin-top: calc(-1 * var(--toolbar-height));
     border: 1px solid var(--border);
     border-radius: var(--radius-l);
     background: color-mix(in srgb, var(--surface) 92%, transparent);
@@ -180,12 +190,14 @@
     gap: 0;
     align-items: start;
   }
+  /* The source stays beside the narration while the insight column
+     scrolls: the explanation of a step never leaves its code. */
   .source-pane {
-    position: sticky; top: calc(var(--header-height) + 64px);
+    position: sticky; top: var(--sticky-bottom);
     padding: 18px;
     border-right: 1px solid var(--border);
   }
-  .insight { min-width: 0; padding: 18px; display: flex; flex-direction: column; gap: 16px; }
+  .insight { min-width: 0; padding: 18px; display: flex; flex-direction: column; gap: 16px; container: insight / inline-size; }
 }
 
 @layer components {
@@ -289,7 +301,7 @@
 
   /* Toolbar */
   .toolbar {
-    position: sticky; top: var(--header-height); z-index: 20;
+    position: sticky; top: var(--sticky-top); z-index: 20;
     display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
     min-height: 64px; padding: 12px 18px;
     border-bottom: 1px solid var(--border);
@@ -306,6 +318,8 @@
   .mode-tab:hover { color: var(--text); }
   .mode-tab[aria-selected="true"] { background: var(--surface); color: var(--text); box-shadow: 0 1px 2px #0003, 0 0 0 1px var(--border); }
   .mode-icon { color: var(--accent); font-size: 14px; }
+  /* Phones show the short label (the responsive layer). */
+  .mode-label-short { display: none; }
   .transport { display: flex; align-items: center; gap: 6px; margin-left: auto; }
   .run-status { display: flex; align-items: center; gap: 14px; }
   .status-pill {
@@ -333,6 +347,11 @@
   .swatch-target { width: 10px; height: 10px; border-radius: 50%; background: var(--cat-lifetime); }
   .swatch-link { background: color-mix(in srgb, var(--accent) 16%, transparent); outline: 1px solid color-mix(in srgb, var(--accent) 45%, transparent); }
   .swatch-squiggle { height: 4px; border-radius: 0; align-self: flex-end; margin-bottom: 4px; background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='6' height='4'%3E%3Cpath d='M0 3.5l3-3 3 3' fill='none' stroke='%23f14c4c' stroke-width='1.2'/%3E%3C/svg%3E") repeat-x; }
+  /* As tall as the program, at most what the window leaves below the
+     toolbar beside the pane's header and legend. */
+  .source-pane > .code-editor {
+    --editor-height: clamp(240px, min(calc(var(--source-lines) * 22px + 30px), calc(100svh - var(--sticky-bottom) - 150px)), 640px);
+  }
   .edit-hint { margin-top: 12px; padding: 10px 12px; border-radius: var(--radius-s); background: color-mix(in srgb, var(--cat-lifetime) 12%, transparent); color: var(--text-2); font-size: 13.5px; }
 
   /* Code views */
@@ -713,16 +732,17 @@
   .wasm-chip.is-breakpoint { color: var(--danger); background: var(--danger-soft); }
   .breakpoint-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--danger); }
 
-  /* In WebAssembly mode the source pane holds the C source, sized to fit
-     it, and the listing below, filling the rest of the window. */
-  .source-pane.is-wasm { display: flex; flex-direction: column; height: calc(100vh - var(--header-height) - 80px); }
-  .source-pane.is-wasm > .code-editor { flex: none; --editor-height: min(calc(var(--source-lines) * 22px + 30px), 40vh); }
+  /* In WebAssembly mode the source pane fills the window below the
+     toolbar: the C source, sized to fit it up to a quarter of the window,
+     and the listing being stepped, which takes the rest. */
+  .source-pane.is-wasm { display: flex; flex-direction: column; height: calc(100svh - var(--sticky-bottom)); }
+  .source-pane.is-wasm > .code-editor { flex: none; --editor-height: min(calc(var(--source-lines) * 22px + 30px), max(132px, 24svh)); }
   .wat-pane { display: flex; flex-direction: column; flex: 1; min-height: 0; margin-top: 14px; }
   .wat-header { margin-bottom: 10px; }
   .wat-chip { margin: 0; font-size: 13px; }
   .wat-producer { color: var(--faint); font-size: 12.5px; }
   .wat-pane .stage-note { margin: 0 0 10px; }
-  .wat-editor { flex: 1; min-height: 240px; }
+  .wat-editor { flex: 1; min-height: 200px; }
   .wat-editor .code-editor { height: 100%; }
   .wat-legend { margin-top: 12px; }
   .swatch-arrow { width: 0; height: 0; border-radius: 0; border: 5px solid transparent; border-left: 8px solid var(--accent); margin-right: -6px; }
@@ -898,27 +918,28 @@
 }
 
 @layer responsive {
+  /* Down to tablet width the source and the insight column stay side by
+     side, in even halves: the current line and the narration of the step
+     that ran it are on screen together. */
   @media (max-width: 1180px) {
-    .workbench-grid { grid-template-columns: minmax(0, 1fr); }
-    .source-pane { position: static; border-right: 0; border-bottom: 1px solid var(--border); }
-    .source-pane.is-wasm { height: auto; }
-    .source-pane.is-wasm > .code-editor { --editor-height: min(calc(var(--source-lines) * 22px + 30px), 480px); }
-    .wat-editor .code-editor { height: 460px; }
-    .code-editor { --editor-height: 440px; }
+    .workbench-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .about-grid { grid-template-columns: minmax(0, 1fr); }
   }
-  @media (max-width: 1000px) {
+  @container insight (max-width: 800px) {
     .stage-row { column-gap: 10px; }
     .stage-item:not(:last-child)::after { right: -9px; }
   }
-  @media (max-width: 640px) {
+  /* The stage strip folds to three columns where its column is narrow:
+     beside the source, or on a phone. */
+  @container insight (max-width: 600px) {
     .stage-row, .stage-row:first-child { grid-template-columns: repeat(3, minmax(0, 1fr)); }
     .stage-group-label[data-phase="Middle end"], .stage-group-label[data-phase="Back end"] { grid-column: auto / span 3; }
     .stage-group-label[data-phase="Back end"] { grid-row: 3; }
     .stage-row:last-child .stage-item:nth-of-type(n + 4) { grid-row: 4; }
     .stage-item::after, .stage-row:first-child .stage-item:last-child::after { display: none; }
   }
-  @media (max-width: 900px) {
+  /* The WebAssembly state cards pair up only where the column has room. */
+  @container insight (max-width: 600px) {
     .wasm-row { grid-template-columns: minmax(0, 1fr); }
   }
   /* Four cards stay at least 220 px wide down to 960 px; below that, two
@@ -929,17 +950,32 @@
   @media (max-width: 380px) {
     .lesson-list { grid-template-columns: minmax(0, 1fr); }
   }
+  /* Tablets and phones: one column, in reading order. The header scrolls
+     away and only the toolbar sticks, so Step stays in reach; the source
+     is sized so that, with the toolbar at the top of the window, its
+     current line and the narration below it fit on one screen. */
   @media (max-width: 820px) {
+    :root { --sticky-top: 0px; }
     main { padding: 0 16px 40px; }
-    .site-header { gap: 14px; padding: 0 16px; }
+    .site-header { position: relative; gap: 14px; padding: 0 16px; }
     .site-nav { display: none; }
     .header-actions { margin-left: auto; }
     .brand-subtitle, .brand-divider { display: none; }
     .hero { padding-top: 40px; }
-    .transport { margin-left: 0; width: 100%; }
+    .workbench-grid { grid-template-columns: minmax(0, 1fr); }
+    .source-pane { position: static; border-right: 0; border-bottom: 1px solid var(--border); }
+    .source-pane > .code-editor {
+      --editor-height: min(calc(var(--source-lines) * 22px + 30px), max(176px, calc(100svh - var(--toolbar-height) - 420px)));
+    }
+    .source-pane.is-wasm { height: auto; }
+    .source-pane.is-wasm > .code-editor { --editor-height: min(calc(var(--source-lines) * 22px + 30px), max(110px, 18svh)); }
+    .wat-editor { flex: none; min-height: 0; }
+    .wat-editor .code-editor { height: max(198px, 30svh); }
+    /* The status shares the tabs' row; the controls take the next. */
+    .toolbar { gap: 8px 12px; padding: 10px 14px; }
+    .toolbar .run-status { order: 1; margin-left: auto; }
+    .transport { order: 2; margin-left: 0; width: 100%; }
     .transport .button { flex: 1; padding: 0 8px; }
-    .run-status { width: 100%; justify-content: space-between; }
-    .toolbar { position: static; }
     .narration-title { font-size: 19px; }
   }
   /* Phones and narrow windows: the WebAssembly controls wrap three to a
@@ -948,8 +984,28 @@
     .mode-tabs { width: 100%; }
     .mode-tab { flex: 1; justify-content: center; padding-inline: 6px; white-space: nowrap; font-size: 13px; }
     .mode-icon { display: none; }
+    /* Short tab labels and icon-only controls keep the sticky toolbar to
+       three slim rows; the full names stay the buttons' accessible names
+       and titles, and Step keeps its label. */
+    .mode-label-long { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+    .mode-label-short { display: inline; }
+    .transport .button:not(.primary) .button-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+    .transport .button { flex: 1 1 0; min-width: 36px; padding: 0 6px; }
+    .transport .button.primary { flex: 1.6 1 0; }
+    .transport .toggle-chip { margin-top: 0; height: 36px; }
     .wasm-transport { flex-wrap: wrap; }
-    .wasm-transport .button { flex: 1 1 30%; min-width: 0; }
+    .run-status { gap: 10px; }
+    .status-pill { height: 24px; font-size: 12px; }
+    .source-pane { padding: 14px; }
+    .pane-header { margin-bottom: 8px; }
+    .source-legend { gap: 2px 12px; margin-top: 8px; font-size: 12px; }
+    .source-pane > .code-editor {
+      --editor-height: min(calc(var(--source-lines) * 22px + 30px), max(176px, calc(100svh - var(--toolbar-height) - 380px)));
+    }
+    .source-pane.is-wasm > .code-editor { --editor-height: min(calc(var(--source-lines) * 22px + 30px), max(110px, 15svh)); }
+    .wat-pane { margin-top: 10px; }
+    .wat-header { margin-bottom: 6px; }
+    .wat-editor .code-editor { height: max(176px, 25svh); }
     .memory-grid { font-size: 11.5px; }
     .memory-row { gap: 8px; padding: 2px 8px; }
     .memory-cells { grid-template-columns: repeat(16, 2.3ch); gap: 2px; }
@@ -958,8 +1014,9 @@
     .memory-text { display: none; }
   }
   /* Too narrow for the three view tabs on one line: let their labels wrap. */
-  @media (max-width: 440px) {
-    .mode-tab { white-space: normal; height: auto; min-height: 32px; padding-block: 4px; line-height: 1.25; text-align: center; }
+  /* Hover links mean nothing without a pointer that hovers. */
+  @media (hover: none) {
+    .source-legend .legend-hover { display: none; }
   }
 
   @media (prefers-reduced-motion: reduce) {

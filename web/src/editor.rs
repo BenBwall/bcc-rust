@@ -100,6 +100,11 @@ pub fn CodeEditor(
     /// A line to scroll into view.
     #[prop(optional)]
     reveal: Option<Signal<Option<usize>>>,
+    /// Also scroll the page to a revealed line, when part of the editor is
+    /// on screen, so it never sits under the sticky toolbar or below the
+    /// window: for the views that follow execution, not for hover links.
+    #[prop(optional)]
+    follow_on_page: Option<Signal<bool>>,
     /// The gutter's label for each line, in place of its number; empty
     /// numbers the lines as usual.
     #[prop(optional)]
@@ -122,10 +127,12 @@ pub fn CodeEditor(
         on_hover_line,
         on_gutter_click,
         reveal,
+        follow_on_page,
         line_numbers,
     });
     #[cfg(not(feature = "hydrate"))]
     let _ = (
+        follow_on_page,
         theme,
         read_only,
         decorations,
@@ -201,7 +208,7 @@ mod monaco {
         #[wasm_bindgen(method, js_name = setMarkers)]
         fn set_markers(this: &Editor, items: &JsValue);
         #[wasm_bindgen(method, js_name = revealLine)]
-        fn reveal_line(this: &Editor, line: usize);
+        fn reveal_line(this: &Editor, line: usize, on_page: bool);
         #[wasm_bindgen(method, js_name = setLineNumbers)]
         fn set_line_numbers(this: &Editor, labels: &JsValue);
         #[wasm_bindgen(method, js_name = onChange)]
@@ -265,6 +272,7 @@ mod monaco {
         pub on_hover_line:   Option<Callback<usize>>,
         pub on_gutter_click: Option<Callback<usize>>,
         pub reveal:          Option<Signal<Option<usize>>>,
+        pub follow_on_page:  Option<Signal<bool>>,
         pub line_numbers:    Option<Signal<Vec<String>>>,
     }
 
@@ -389,6 +397,7 @@ mod monaco {
             decorations,
             markers,
             reveal,
+            follow_on_page,
             line_numbers,
             ..
         } = mount;
@@ -448,10 +457,11 @@ mod monaco {
         if let Some(reveal) = reveal {
             Effect::new(move || {
                 let line = reveal.get();
+                let on_page = follow_on_page.is_some_and(|follow| follow.get());
                 if ready.get()
                     && let Some(line) = line
                 {
-                    with(&|editor| editor.reveal_line(line));
+                    with(&|editor| editor.reveal_line(line, on_page));
                 }
             });
         }
