@@ -370,8 +370,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// `__builtin_mul_overflow` that is a signed `_BitInt` of more than 128
     /// bits, which Clang refuses (its runtime multiplies at most 128 bits);
     /// an unsigned one is accepted, and GCC accepts both.
-    /// Clang extension: the error "__builtin_mul_overflow does not support
-    /// 'signed _BitInt' operands of more than 128 bits".
+    /// Clang extension: the error "`__builtin_mul_overflow` does not support
+    /// 'signed `_BitInt`' operands of more than 128 bits".
     fn wide_signed_product(
         &mut self,
         operation: OverflowOperation,

@@ -434,8 +434,8 @@ pub(crate) enum SemanticErrorKind {
     AtomicOperandBytes,
     /// Clang: `__builtin_mul_overflow` with a signed `_BitInt` operand or
     /// result of more than 128 bits, which GCC accepts.
-    /// Clang extension: the error "__builtin_mul_overflow does not support
-    /// 'signed _BitInt' operands of more than 128 bits".
+    /// Clang extension: the error "`__builtin_mul_overflow` does not support
+    /// 'signed `_BitInt`' operands of more than 128 bits".
     OverflowBuiltinBitInt,
     /// Clang diagnoses invalid constant orders as warnings.
     /// GNU extension: GCC manual, "__atomic Builtins".
