@@ -180,6 +180,8 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             return self.atomic_read(address, ty, to, source);
         }
         let operand = match (place, self.repr(ty, source)?) {
+            | (Place::BitField(address, field), _) if self.wide_bit_int(ty).is_some() =>
+                self.wide_bit_field_read(address, field, ty, source)?,
             | (Place::BitField(address, field), _) => {
                 let result = self.value_type(ty, source)?;
                 Operand::Value(self.load_bit_field(address, field, types::is_volatile(ty), result))
@@ -302,6 +304,8 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 self.draft.def_var(var, value);
                 Operand::Value(value)
             },
+            | (Place::BitField(address, field), _) if self.wide_bit_int(ty).is_some() =>
+                self.wide_bit_field_write(address, field, value, ty, source)?,
             | (Place::BitField(address, field), _) => {
                 let value = self.value(value, source)?;
                 let result = self.value_type(ty, source)?;

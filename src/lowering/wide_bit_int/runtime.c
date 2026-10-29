@@ -177,6 +177,44 @@ void __bcc_bitint_convert(limb *d, unsigned dbits, int dsigned, const limb *a, u
     __bcc_bitint_extend(d, dbits, dsigned);
 }
 
+/* The `width`-bit field at bit `shift` of the bytes at p, read as a
+   _BitInt(bits) of the field's signedness, which is the type's. */
+void __bcc_bitint_field_get(limb *d, unsigned bits, int is_signed, const unsigned char *p,
+                            unsigned shift, unsigned width) {
+    unsigned n = LIMBS(bits);
+    for (unsigned i = 0; i < n; i++)
+        d[i] = 0;
+    for (unsigned i = 0; i < width; i++) {
+        unsigned at = shift + i;
+        d[i / 64] |= (limb)(p[at / 8] >> at % 8 & 1) << i % 64;
+    }
+    if (is_signed && d[(width - 1) / 64] >> (width - 1) % 64 & 1) {
+        for (unsigned i = width; i < n * 64; i++)
+            d[i / 64] |= 1ull << i % 64;
+    }
+    __bcc_bitint_extend(d, bits, is_signed);
+}
+
+/* Stores the low `width` bits of a into the field at bit `shift` of the
+   bytes at p, leaving the bits around it: a byte the field covers is
+   written whole, without reading it, and only the partly covered first and
+   last bytes are read (which lowering freezes). */
+void __bcc_bitint_field_set(unsigned char *p, unsigned shift, unsigned width, const limb *a) {
+    unsigned end = shift + width;
+    for (unsigned byte = shift / 8; byte * 8 < end; byte++) {
+        unsigned low = byte * 8 < shift ? shift : byte * 8;
+        unsigned high = byte * 8 + 8 < end ? byte * 8 + 8 : end;
+        unsigned char value = 0, mask = 0;
+        for (unsigned at = low; at < high; at++) {
+            unsigned i = at - shift;
+            mask |= (unsigned char)(1u << at % 8);
+            if (a[i / 64] >> i % 64 & 1)
+                value |= (unsigned char)(1u << at % 8);
+        }
+        p[byte] = mask == 0xff ? value : (unsigned char)((p[byte] & ~mask) | value);
+    }
+}
+
 /* The 128-bit value low | high << 64, already extended by its own
    signedness, converted to a _BitInt(bits). */
 void __bcc_bitint_from_int(limb *d, unsigned bits, int is_signed, limb low, limb high) {

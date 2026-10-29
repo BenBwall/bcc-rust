@@ -40,6 +40,7 @@ use super::{
         Repr,
     },
     work::{
+        BitField,
         Item,
         Operand,
         Place,
@@ -435,6 +436,80 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
         }
     }
 
+    /// The value of the bit-field `field` at `address`, whose declared
+    /// type `ty` is wide, in a fresh object of that type.
+    /// C99: §6.7.2.1 paragraph 9, p. 102; PDF p. 114.
+    pub(super) fn wide_bit_field_read(
+        &mut self,
+        address: Value,
+        field: BitField,
+        ty: TypeId,
+        source: SourceVectors,
+    ) -> Result<Operand, LoweringError> {
+        let (width, signed) = self
+            .wide_bit_int(ty)
+            .ok_or_else(|| LoweringError::missing("a wide bit-field has no width", source))?;
+        let result = self.wide_object(ty, source)?;
+        let args = [
+            result,
+            self.iconst(Type::I32, i128::from(width)),
+            self.iconst(Type::I32, i128::from(signed)),
+            address,
+            self.iconst(Type::I32, i128::from(field.shift)),
+            self.iconst(Type::I32, i128::from(field.width)),
+        ];
+        _ = self.wide_call(Helper::FieldGet, &args, source)?;
+        Ok(Operand::Aggregate(result))
+    }
+
+    /// Stores the wide `value` into the bit-field `field` at `address`,
+    /// of declared type `ty`, and returns the field's new value.
+    /// C99: §6.5.16.1 paragraph 2, p. 92; PDF p. 104.
+    pub(super) fn wide_bit_field_write(
+        &mut self,
+        address: Value,
+        field: BitField,
+        value: Item,
+        ty: TypeId,
+        source: SourceVectors,
+    ) -> Result<Operand, LoweringError> {
+        let from = self.wide_address(value, source)?;
+        // The bytes the field shares with its neighbours are read and kept,
+        // so each is frozen first, as narrow bit-field stores freeze theirs.
+        for byte in [0, field.span - 1] {
+            let at = self.offset_address(address, u64::from(byte));
+            let old = self.inst(
+                InstData::Load {
+                    ty:    Type::I8,
+                    flags: InstFlags::empty(),
+                    align: Align::BYTE,
+                    tag:   None,
+                    addr:  at,
+                },
+                Type::I8,
+            );
+            let frozen = self.convert(Opcode::Freeze, Type::I8, old);
+            _ = self.draft.push(
+                self.memory_op(InstData::Store {
+                    ty:    Type::I8,
+                    flags: InstFlags::empty(),
+                    align: Align::BYTE,
+                    tag:   None,
+                    args:  [frozen, at],
+                }),
+                None,
+            );
+        }
+        let args = [
+            address,
+            self.iconst(Type::I32, i128::from(field.shift)),
+            self.iconst(Type::I32, i128::from(field.width)),
+            from,
+        ];
+        _ = self.wide_call(Helper::FieldSet, &args, source)?;
+        self.wide_bit_field_read(address, field, ty, source)
+    }
+
     /// Dispatches a `switch` on the wide value at `address`, of type `ty`:
     /// a comparison with each case's constant, or two with a GNU case
     /// range's bounds, in source order, and `default` when none matches.
@@ -785,6 +860,8 @@ enum Helper {
     Test,
     Convert,
     FromInteger,
+    FieldGet,
+    FieldSet,
     ToFloat(Type),
     FromFloat(Type),
 }
@@ -808,6 +885,8 @@ impl Helper {
             | Self::Test => "__bcc_bitint_test",
             | Self::Convert => "__bcc_bitint_convert",
             | Self::FromInteger => "__bcc_bitint_from_int",
+            | Self::FieldGet => "__bcc_bitint_field_get",
+            | Self::FieldSet => "__bcc_bitint_field_set",
             | Self::ToFloat(Type::F32) => "__bcc_bitint_to_f32",
             | Self::ToFloat(Type::F64) => "__bcc_bitint_to_f64",
             | Self::ToFloat(Type::F80) => "__bcc_bitint_to_f80",
@@ -850,6 +929,8 @@ impl Helper {
             | Self::Test => &[Ptr, I32],
             | Self::Convert => &[Ptr, I32, I32, Ptr, I32, I32],
             | Self::FromInteger => &[Ptr, I32, I32, I64, I64],
+            | Self::FieldGet => &[Ptr, I32, I32, Ptr, I32, I32],
+            | Self::FieldSet => &[Ptr, I32, I32, Ptr],
             | Self::ToFloat(_) => &[Ptr, I32, I32],
             | Self::FromFloat(F32) => &[Ptr, I32, I32, F32],
             | Self::FromFloat(F64) => &[Ptr, I32, I32, F64],

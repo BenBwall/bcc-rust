@@ -69,7 +69,8 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
     ) -> Result<BitField, LoweringError> {
         let types = &self.unit.sema.types;
         let representation = self.repr(ty, source)?;
-        if !matches!(representation, Repr::Int { .. } | Repr::Bool) {
+        let wide = self.wide_bit_int(ty);
+        if !matches!(representation, Repr::Int { .. } | Repr::Bool) && wide.is_none() {
             return Err(LoweringError::missing(
                 "a bit-field is not an integer",
                 source,
@@ -80,7 +81,7 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
         // its storage span wider, up to 135 bits for a 128-bit field.
         if bits.width == 0
             || u64::from(bits.width) > declared.size * 8
-            || bits.width > 128
+            || (bits.width > 128 && wide.is_none())
             || bits.bit_offset >= 8
         {
             return Err(LoweringError::missing(
@@ -94,7 +95,7 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
             span: end.div_ceil(8),
             shift: bits.bit_offset,
             width: bits.width,
-            signed: representation.signed(),
+            signed: wide.map_or(representation.signed(), |(_, signed)| signed),
             align,
         })
     }

@@ -1640,13 +1640,26 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
         // A wide bit-precise object stores its limbs, its padding bits
         // extended from its width.
         if let Some((width, signed)) = super::wide_bit_int::wide_bit_int(&self.sema.types, ty) {
-            let (Some(value), None) = (integer, bit_field) else {
+            let Some(value) = integer else {
                 return Err(unsupported());
             };
             let mut limbs = ArenaVec::with_capacity_in(size / 8, self.tables);
             limbs.resize(size / 8, 0_u64);
             self.sema.integer_limbs(value, &mut limbs);
             super::wide_bit_int::extend_limbs(&mut limbs, width, signed);
+            if let Some(field) = bit_field {
+                for bit in 0..field.width as usize {
+                    let at = field.bit_offset as usize + bit;
+                    let byte = bytes.get_mut(start + at / 8).ok_or_else(unsupported)?;
+                    let mask = 1_u8 << (at % 8);
+                    if limbs[bit / 64] >> (bit % 64) & 1 == 1 {
+                        *byte |= mask;
+                    } else {
+                        *byte &= !mask;
+                    }
+                }
+                return Ok(());
+            }
             for (target, limb) in bytes[start..start + size].chunks_exact_mut(8).zip(&limbs) {
                 target.copy_from_slice(&limb.to_le_bytes());
             }
