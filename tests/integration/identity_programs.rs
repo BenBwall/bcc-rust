@@ -53,6 +53,13 @@ mod tests {
         matches_the_claimed_compiler("imaginary_interchange_constants.c");
     }
 
+    /// Signed left shifts that wrap, and `__LINE__` as a macro argument in
+    /// a replacement list.
+    #[test]
+    fn torture_semantics_match_the_claimed_compiler() {
+        matches_the_claimed_compiler("torture_semantics.c");
+    }
+
     /// Each identity's value of `fixture` matches its compiler's build,
     /// interpreted before and after optimization and built through LLVM
     /// and the native back end.

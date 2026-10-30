@@ -53,7 +53,7 @@ impl Expander<'_, '_, '_, '_> {
             // C99 §6.10.8p1: each built-in expands to an ordinary
             // token spelled as C source, located at the invocation.
             | "__FILE__" => {
-                let invocation = self.invocation_location(token);
+                let invocation = self.current_line_location(token);
                 let file = self.context.get_source_file(invocation.source_file_index);
                 let contents =
                     intern_string_literal(self.context, self.scratch, &file.to_string_lossy());
@@ -64,7 +64,7 @@ impl Expander<'_, '_, '_, '_> {
                 })
             },
             | "__LINE__" => {
-                let invocation = self.invocation_location(token);
+                let invocation = self.current_line_location(token);
                 let contents = intern_line_number(self.context, self.scratch, invocation.line);
                 Some(PreprocessorToken {
                     kind: PreprocessorTokenType::Number,
