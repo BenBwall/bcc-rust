@@ -310,6 +310,39 @@ mod tests {
         ]));
     }
 
+    /// C23's `va_start` takes only the list, also in a function without
+    /// named parameters, and leaves a second argument unevaluated, as GCC
+    /// 15's and Clang's headers define it (gcc.dg/c23-stdarg-4.c). GCC
+    /// accepts further arguments; Clang's builtin rejects a third.
+    #[test]
+    fn c23_va_start_takes_only_the_list() {
+        let program = |extra: &str| {
+            format!(
+                "#include <stdarg.h>\nint first(...) {{ va_list ap; va_start(ap); int v = \
+                 va_arg(ap, int); va_end(ap); return v; }}\nint second(int n, ...) {{ va_list ap; \
+                 va_start(ap, n{extra}); int v = va_arg(ap, int); va_end(ap); return v; }}\nint \
+                 main(void) {{ return first(40) + second(0, 2) - 42; }}\n"
+            )
+        };
+        for standard in ["-std=c23", "-std=gnu2x"] {
+            for identity in ["--compiler-identity=clang", "--compiler-identity=gcc"] {
+                let output = bcc(&[standard, identity, "--interpret", "--input", &program("")]);
+                assert!(output.status.success(), "{standard} {identity}: {output:?}");
+            }
+            let extra = program(", never ! evaluated");
+            let output = bcc(&[
+                standard,
+                "--compiler-identity=gcc",
+                "--interpret",
+                "--input",
+                &extra,
+            ]);
+            assert!(output.status.success(), "{standard}: {output:?}");
+            let output = bcc(&[standard, "--compiler-identity=clang", "--input", &extra]);
+            assert!(!output.status.success(), "{standard}: {output:?}");
+        }
+    }
+
     #[test]
     fn varargs_have_real_types_and_diagnose_invalid_operands() {
         clean(&bcc(&[

@@ -29,7 +29,27 @@ typedef __builtin_va_list va_list;
 #endif
 #ifdef __need_va_arg
 #ifndef va_arg
+/* C23 §7.16.1.4p1,p4 (N3220 p. 290; PDF p. 303): va_start takes only ap,
+   and further arguments are not evaluated. GCC 15 and Clang choose this
+   form after C17 too. GCC accepts any number of further arguments; Clang's
+   builtin takes at most one, so under Clang a third is an error. */
+#if defined(__STDC_VERSION__) && __STDC_VERSION__ > 201710L
+#ifdef __clang__
+#define __bcc_va_start_1(ap) __builtin_va_start(ap, 0)
+#define __bcc_va_start_2(ap, last) __builtin_va_start(ap, 0)
+#define __bcc_va_start_more(...) __builtin_va_start(__VA_ARGS__)
+#define __bcc_va_start_select(_1, _2, _3, _4, _5, _6, _7, _8, name, ...) name
+#define va_start(...)                                                          \
+  __bcc_va_start_select(__VA_ARGS__, __bcc_va_start_more, __bcc_va_start_more, \
+                        __bcc_va_start_more, __bcc_va_start_more,              \
+                        __bcc_va_start_more, __bcc_va_start_more,              \
+                        __bcc_va_start_2, __bcc_va_start_1, )(__VA_ARGS__)
+#else
+#define va_start(ap, ...) __builtin_va_start(ap, 0)
+#endif
+#else
 #define va_start(ap, last) __builtin_va_start(ap, last)
+#endif
 #define va_arg(ap, type) __builtin_va_arg(ap, type)
 #define va_end(ap) __builtin_va_end(ap)
 #endif
