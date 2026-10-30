@@ -30,9 +30,12 @@
 #define _MM_FROUND_NEARBYINT (_MM_FROUND_NO_EXC | _MM_FROUND_CUR_DIRECTION)
 
 /* `__x` rounded to an integer as the ROUNDPS immediate `__m` asks: by the
- * current mode, or to nearest even, down, up or toward zero. */
+ * current mode, or to nearest even, down, up or toward zero. A NaN comes
+ * back quiet, as from the instruction. */
 __BCC_SSE double __bcc_round(double __x, int __m) {
   double __r;
+  if (__x != __x)
+    return __x + __x;
   if (__m & 4)
     return __builtin_nearbyint(__x);
   switch (__m & 3) {
@@ -429,9 +432,12 @@ __BCC_SSE __m128i __bcc_string_mask(int __result, int __m) {
     return (__m128i)__r;
   }
 }
+/* The two entry points are out of line: inlined, each of a program's
+ * string comparisons would copy the whole comparison into its caller. */
+#define __BCC_SSE_OUTLINE static __attribute__((__noinline__, __unused__, __nodebug__))
 /* What one string-comparison intrinsic returns: `__what` 0 the index, 1 the
  * mask's low word (unused), 2-7 the flags A, C, O, S, Z. */
-__BCC_SSE int __bcc_string(__m128i __a, long long __la, __m128i __b, long long __lb, int __m,
+__BCC_SSE_OUTLINE int __bcc_string(__m128i __a, long long __la, __m128i __b, long long __lb, int __m,
                            int __what) {
   int __flags, __lena, __lenb, __result;
   __lena = __bcc_string_length(__a, __la, __m);
@@ -446,7 +452,7 @@ __BCC_SSE int __bcc_string(__m128i __a, long long __la, __m128i __b, long long _
   default: return (__flags >> 1) & 1;
   }
 }
-__BCC_SSE __m128i __bcc_string_masked(__m128i __a, long long __la, __m128i __b, long long __lb,
+__BCC_SSE_OUTLINE __m128i __bcc_string_masked(__m128i __a, long long __la, __m128i __b, long long __lb,
                                       int __m) {
   int __flags, __lena, __lenb;
   __lena = __bcc_string_length(__a, __la, __m);

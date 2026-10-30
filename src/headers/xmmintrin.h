@@ -84,10 +84,29 @@ __BCC_SSE __m128 _mm_sqrt_ps(__m128 __a) {
 
 /* RCPPS and RSQRTPS approximate within 1.5 * 2^-12; these give the
  * correctly rounded values, which lie within that bound but differ from
- * a processor's table. */
-__BCC_SSE __m128 _mm_rcp_ps(__m128 __a) { return (__m128)(1.0f / (__v4sf)__a); }
+ * a processor's table. Like the instructions, they read a subnormal as a
+ * zero of its sign, and RCPPS gives a zero for a magnitude of 2^126 or
+ * more, whose reciprocal is subnormal. */
+__BCC_SSE float __bcc_rcp(float __x) {
+  float __m = __builtin_fabsf(__x);
+  if (__m < 0x1p-126f)
+    return __builtin_copysignf(__builtin_inff(), __x);
+  if (__m >= 0x1p126f && __m <= 0x1.fffffep127f)
+    return __builtin_copysignf(0.0f, __x);
+  return 1.0f / __x;
+}
+__BCC_SSE float __bcc_rsqrt(float __x) {
+  if (__builtin_fabsf(__x) < 0x1p-126f)
+    return __builtin_copysignf(__builtin_inff(), __x);
+  return 1.0f / __builtin_sqrtf(__x);
+}
+__BCC_SSE __m128 _mm_rcp_ps(__m128 __a) {
+  return (__m128){__bcc_rcp(__a[0]), __bcc_rcp(__a[1]), __bcc_rcp(__a[2]), __bcc_rcp(__a[3])};
+}
 __BCC_SSE __m128 _mm_rcp_ss(__m128 __a) { return __bcc_low_ss(__a, _mm_rcp_ps(__a)); }
-__BCC_SSE __m128 _mm_rsqrt_ps(__m128 __a) { return _mm_rcp_ps(_mm_sqrt_ps(__a)); }
+__BCC_SSE __m128 _mm_rsqrt_ps(__m128 __a) {
+  return (__m128){__bcc_rsqrt(__a[0]), __bcc_rsqrt(__a[1]), __bcc_rsqrt(__a[2]), __bcc_rsqrt(__a[3])};
+}
 __BCC_SSE __m128 _mm_rsqrt_ss(__m128 __a) { return __bcc_low_ss(__a, _mm_rsqrt_ps(__a)); }
 
 /* MINPS and MAXPS return the second operand when either is a NaN or both

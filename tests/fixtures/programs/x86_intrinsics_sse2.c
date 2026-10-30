@@ -146,5 +146,8 @@ int main(void) {
   { __m128 r = _mm_rcp_ps(b), s = _mm_rsqrt_ps(_mm_set_ps(4, 2, 0.25f, 9)); int ok = 1;
     for (int i = 0; i < 4; i++) ok &= fabsf(r[i] * b[i] - 1) < 0x1.8p-12f;
     ok &= fabsf(s[0] - 1.0f/3) < 0x1p-12f && fabsf(s[3] - 0.5f) < 0x1p-12f; PI("rcp_rsqrt_close", ok); }
+  /* ... but read a subnormal as zero and flush a subnormal reciprocal */
+  { __m128 t = _mm_set_ps(1e-40f, -1e-45f, 0x1p126f, -0x1.fffffep127f);
+    P("rcp_special", _mm_rcp_ps(t)); P("rsqrt_special", _mm_rsqrt_ps(_mm_set_ps(1e-40f, -1e-45f, 0.0f, -0.0f))); }
   return 0;
 }

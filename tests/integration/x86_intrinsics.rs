@@ -47,6 +47,52 @@ mod tests {
         check("x86_intrinsics_sse4.c", &["-msse4.2"]);
     }
 
+    /// An out-of-range immediate is Clang's default-error
+    /// `-Wargument-outside-range`, which `-w` silences, while GCC's
+    /// `_mm_shuffle_pd` takes any constant; a variable is an error for both.
+    /// `__m64` holds two `int`s for GCC and one `long long` for Clang.
+    #[test]
+    fn immediates_and_m64_follow_each_identity() {
+        let source = temporary("immediates.c");
+        std::fs::write(
+            &source,
+            "#include <emmintrin.h>\n__m128d f(__m128d a, __m128d b) { return _mm_shuffle_pd(a, \
+             b, 0xab); }\n#ifdef VARIABLE\n__m128d g(__m128d a, __m128d b, int i) { return \
+             _mm_shuffle_pd(a, b, i); }\n#endif\n#ifdef \
+             __clang__\n_Static_assert(sizeof(((__m64){0})[0]) == 8, \
+             \"\");\n#else\n_Static_assert(sizeof(((__m64){0})[0]) == 4, \"\");\n__m64_u u; \
+             __v2sf w;\n#endif\n",
+        )
+        .unwrap();
+        let source = source.to_str().unwrap();
+        for (flags, accepted) in [
+            (&["--compiler-identity=gcc"][..], true),
+            (&["--compiler-identity=gcc", "-DVARIABLE"], false),
+            (&["--compiler-identity=clang"], false),
+            (&["--compiler-identity=clang", "-w"], true),
+            (
+                &["--compiler-identity=clang", "-Wno-argument-outside-range"],
+                true,
+            ),
+            (&["--compiler-identity=clang", "-w", "-DVARIABLE"], false),
+        ] {
+            let output = bcc(&[&["-fsyntax-only", source][..], flags].concat());
+            assert_eq!(
+                output.status.success(),
+                accepted,
+                "{flags:?}: {}",
+                text(&output.stderr)
+            );
+            if flags == ["--compiler-identity=clang"] {
+                assert!(
+                    text(&output.stderr).contains("-Wargument-outside-range"),
+                    "{}",
+                    text(&output.stderr)
+                );
+            }
+        }
+    }
+
     /// Builds `name` with the host GCC (`gcc_flags` enable its instruction
     /// sets) and compares every bcc arm's output with that build's.
     fn check(name: &str, gcc_flags: &[&str]) {

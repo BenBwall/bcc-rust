@@ -11,7 +11,14 @@
 #error "This header is only meant to be used on x86 and x64 architecture"
 #endif
 
+/* GCC's `__m64` holds two `int`s, Clang's one `long long`. */
+#if defined(__clang__)
 typedef long long __m64 __attribute__((__vector_size__(8), __aligned__(8)));
+#else
+typedef int __m64 __attribute__((__vector_size__(8), __may_alias__));
+typedef int __m64_u __attribute__((__vector_size__(8), __may_alias__, __aligned__(1)));
+typedef float __v2sf __attribute__((__vector_size__(8)));
+#endif
 
 typedef long long __v1di __attribute__((__vector_size__(8)));
 typedef int __v2si __attribute__((__vector_size__(8)));
@@ -39,8 +46,8 @@ __BCC_MMX void _mm_empty(void) {}
 
 __BCC_MMX __m64 _mm_cvtsi32_si64(int __i) { return (__m64)(__v2si){__i, 0}; }
 __BCC_MMX int _mm_cvtsi64_si32(__m64 __m) { return ((__v2si)__m)[0]; }
-__BCC_MMX __m64 _mm_cvtsi64_m64(long long __i) { return (__m64){__i}; }
-__BCC_MMX long long _mm_cvtm64_si64(__m64 __m) { return __m[0]; }
+__BCC_MMX __m64 _mm_cvtsi64_m64(long long __i) { return (__m64)(__v1di){__i}; }
+__BCC_MMX long long _mm_cvtm64_si64(__m64 __m) { return ((__v1di)__m)[0]; }
 
 /* Packs and unpacks */
 
@@ -196,7 +203,7 @@ __BCC_MMX __m64 _mm_srai_pi32(__m64 __m, int __n) {
   return (__m64)((__v2si)__m >> ((unsigned)__n > 31 ? 31 : __n));
 }
 __BCC_MMX int __bcc_mmx_count(__m64 __c, unsigned __limit) {
-  unsigned long long __n = (unsigned long long)__c[0];
+  unsigned long long __n = ((__v1du)__c)[0];
   return __n > __limit ? (int)__limit + 1 : (int)__n;
 }
 __BCC_MMX __m64 _mm_sll_pi16(__m64 __m, __m64 __c) { return _mm_slli_pi16(__m, __bcc_mmx_count(__c, 15)); }
