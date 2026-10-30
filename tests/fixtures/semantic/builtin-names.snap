@@ -707,6 +707,7 @@ __builtin_scalbn has=1111 intrinsic double(double,int) [InvalidArgumentCount] +0
 __builtin_scalbnf has=1111 intrinsic float(float,int) [InvalidArgumentCount] +0
 __builtin_scalbnl has=1111 intrinsic long double(long double,int) [InvalidArgumentCount] +0
 __builtin_setjmp has=1111 intrinsic int(void*) [InvalidArgumentCount] +0
+__builtin_shuffle has=0000 intrinsic ?(unprototyped) [] +0
 __builtin_shufflevector has=1111 intrinsic ?(unprototyped) [InvalidVectorBuiltin] +0
 __builtin_signbit has=1111 intrinsic int(unprototyped) [InvalidArgumentCount] +0
 __builtin_signbitf has=1111 intrinsic int(float) [InvalidArgumentCount] +0

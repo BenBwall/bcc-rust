@@ -81,6 +81,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 }
                 return Some(self.shuffle_vector_builtin(e, arguments));
             },
+            | crate::builtins::TypeRule::GnuShuffle => {
+                if let Some(feature) = descriptor.availability.feature {
+                    self.context.report_extension(
+                        feature,
+                        descriptor.spelling,
+                        name.source_vectors,
+                    );
+                }
+                return Some(self.gnu_shuffle_builtin(e, arguments));
+            },
             | crate::builtins::TypeRule::VectorOverload(operation) =>
                 return Some(self.vector_overload(e, name, operation, arguments)),
             | crate::builtins::TypeRule::TypeClassify =>

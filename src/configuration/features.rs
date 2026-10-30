@@ -231,12 +231,15 @@ pub(crate) enum Feature {
     /// Language Extensions, "Half-Precision Floating Point",
     /// <https://clang.llvm.org/docs/LanguageExtensions.html#half-precision-floating-point>.
     Fp16,
-    /// GCC 14's `__builtin_parityg`, `__builtin_ffsg` and
-    /// `__builtin_clrsbg`, which exist for the GCC identity only: Clang 23
-    /// has the other type-generic bit builtins but not these.
+    /// The builtins that exist for the GCC identity only: GCC 14's
+    /// `__builtin_parityg`, `__builtin_ffsg` and `__builtin_clrsbg` (Clang
+    /// 23 has the other type-generic bit builtins but not these), and the
+    /// vector shuffle `__builtin_shuffle`, which Clang lacks.
     /// GNU extension: GCC manual, "Bit Operation Builtins",
-    /// <https://gcc.gnu.org/onlinedocs/gcc/Bit-Operation-Builtins.html>.
-    GccBitBuiltins,
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Bit-Operation-Builtins.html>, and
+    /// "Vector Extensions",
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Vector-Extensions.html>.
+    GccOnlyBuiltins,
 }
 
 impl Feature {
@@ -369,7 +372,7 @@ impl Feature {
             | Self::ForwardEnumReference
             | Self::BFloat16
             | Self::Fp16
-            | Self::GccBitBuiltins => FeatureOrigin::Gnu,
+            | Self::GccOnlyBuiltins => FeatureOrigin::Gnu,
 
             | Self::MsDeclspec => FeatureOrigin::Msvc(MsvcFeature::Declspec),
             | Self::MsIntTypes => FeatureOrigin::Msvc(MsvcFeature::IntTypes),
@@ -527,7 +530,7 @@ impl Feature {
         Self::Float16,
         Self::BFloat16,
         Self::Fp16,
-        Self::GccBitBuiltins,
+        Self::GccOnlyBuiltins,
     ];
 }
 

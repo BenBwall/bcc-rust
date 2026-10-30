@@ -66,7 +66,7 @@ impl CompilerConfiguration {
                 | Feature::InterchangeFloatTypes => self.interchange_float_types(),
                 | Feature::Float16 | Feature::BFloat16 => self.half_precision_types(),
                 | Feature::Fp16 => self.storage_half_type(),
-                | Feature::GccBitBuiltins => matches!(self.identity, super::CompilerIdentity::Gcc),
+                | Feature::GccOnlyBuiltins => matches!(self.identity, super::CompilerIdentity::Gcc),
                 | _ => true,
             };
             if accepted {

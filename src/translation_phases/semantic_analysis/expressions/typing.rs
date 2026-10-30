@@ -91,7 +91,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             let operand = self.resolve_function_value(operand, None);
             // Anything may write a parameter through its address.
             self.note_parameter_write(operand.binding);
-            if operand.vector_element {
+            // GCC lets a vector element's address be taken; Clang does
+            // not ("address of vector element requested").
+            if operand.vector_element
+                && self.context.configuration.compiler_identity().rules()
+                    != crate::configuration::RuleSet::Gcc
+            {
                 return self.vector_error(e);
             }
             let indirect = matches!(
@@ -134,6 +139,21 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             if matches!(op, U::Plus | U::Minus)
                 || (op == U::BitwiseNot && self.integer_type(element).is_some())
             {
+                // GCC's opaque comparison mask stays opaque.
+                let mut result = Self::expression_result(e, ty);
+                result.opaque_vector = operand.opaque_vector;
+                return result;
+            }
+            // GCC steps every lane of a vector lvalue; Clang refuses.
+            // GNU extension: GCC manual, "Vector Extensions".
+            if matches!(
+                op,
+                U::PreIncrement | U::PreDecrement | U::PostIncrement | U::PostDecrement
+            ) && self.context.configuration.compiler_identity().rules()
+                == crate::configuration::RuleSet::Gcc
+                && operand.category == ValueCategory::ModifiableLvalue
+            {
+                self.note_parameter_write(operand.binding);
                 return Self::expression_result(e, ty);
             }
             return self.vector_error(e);
@@ -742,10 +762,25 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             self.common_arithmetic(left, right, lt, rt)
         } else if self.vector(lt).is_some() && self.vector(rt).is_some() {
             // GNU vectors extend the compatible alternatives of C99 §6.5.15p3.
-            let Some(ty) = self.types.composite(lt.unqualified(), rt.unqualified()) else {
-                return self.invalid_expression(e, SemanticErrorKind::InvalidConditionalOperands);
-            };
-            ty
+            // Clang's lax vector conversions also take a vector of another
+            // type of the same size, which then reads as the first's.
+            match self.types.composite(lt.unqualified(), rt.unqualified()) {
+                | Some(ty) => ty,
+                | None if self.context.configuration.compiler_identity().rules()
+                    == crate::configuration::RuleSet::Clang
+                    && self.vector_width(lt) == self.vector_width(rt) =>
+                {
+                    self.convert(
+                        right.expression,
+                        lt.unqualified(),
+                        ConversionKind::Assignment,
+                    );
+                    lt.unqualified()
+                },
+                | None =>
+                    return self
+                        .invalid_expression(e, SemanticErrorKind::InvalidConditionalOperands),
+            }
         } else if (self.nullptr_type(lt) && self.nullptr_type(rt))
             || (matches!(self.types.nodes[lt.index], TypeKind::Scalar(Scalar::Void))
                 && matches!(self.types.nodes[rt.index], TypeKind::Scalar(Scalar::Void)))
@@ -1571,6 +1606,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             promotion_width: None,
             register: false,
             vector_element: false,
+            opaque_vector: false,
             static_address: false,
             unfolded_binary128: false,
             folded: None,
@@ -2286,7 +2322,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     TypeKind::Scalar(Scalar::Bool)
                 );
         }
-        if self.vector_assignment(target, from) {
+        if self.vector_value_assignment(target, source, from) {
             return true;
         }
         if self.arithmetic(target) && self.arithmetic(from) {

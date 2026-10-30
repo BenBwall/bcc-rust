@@ -1,10 +1,11 @@
 //! Clang vector builtins: the lane shuffle, the lane conversion and bit-cast
 //! special forms, and the operand-overloaded elementwise and non-temporal
-//! calls. None has a single C prototype, so each names a family
-//! [`TypeRule`] that `semantic_analysis/vectors.rs` and
-//! `semantic_analysis/builtins/x86_builtins.rs` check. Lowering has no
-//! vector instructions yet; [`UnsupportedReason::Vector`] keeps the existing
-//! refusal rather than an external call.
+//! calls; and GCC's run-time shuffle `__builtin_shuffle`. None has a single C
+//! prototype, so each names a family [`TypeRule`] that
+//! `semantic_analysis/vectors.rs` and `semantic_analysis/builtins/x86_builtins.
+//! rs` check. Lowering expands the shuffles, the lane conversion and the bit
+//! cast inline (`lowering/vectors.rs`) and refuses the others
+//! ([`UnsupportedReason::Vector`]) rather than calling an external symbol.
 //!
 //! Clang extension: Clang Language Extensions, "Vectors and Extended
 //! Vectors" and "Builtin Functions".
@@ -49,6 +50,19 @@ pub(super) const BUILTINS: &[BuiltinDescriptor] = &[
         TypeRule::BitCast,
         (2, 2),
     ),
+    BuiltinDescriptor {
+        availability: Availability {
+            feature: Some(Feature::GccOnlyBuiltins),
+            naming:  NamingPolicy::Reserved,
+        },
+        ..descriptor(
+            Id::Shuffle,
+            "__builtin_shuffle",
+            SyntaxForm::OrdinaryCall,
+            TypeRule::GnuShuffle,
+            (2, 3),
+        )
+    },
     overload(Id::ElementwiseAbs, "__builtin_elementwise_abs", O::Abs),
     overload(Id::ElementwiseSqrt, "__builtin_elementwise_sqrt", O::Sqrt),
     overload(

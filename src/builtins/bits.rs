@@ -110,7 +110,7 @@ const fn descriptor(id: Id, spelling: &'static str, operation: G) -> BuiltinDesc
         (1, 1)
     };
     let feature = if matches!(operation, G::Parity | G::Ffs | G::Clrsb) {
-        Feature::GccBitBuiltins
+        Feature::GccOnlyBuiltins
     } else {
         Feature::GnuBuiltins
     };

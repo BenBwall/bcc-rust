@@ -659,6 +659,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
                 name,
                 &[
                     "aligned",
+                    "vector_size",
                     "constructor",
                     "destructor",
                     "nonnull",
