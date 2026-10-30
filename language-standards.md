@@ -900,7 +900,10 @@ goto labels; file assembly and declarator assembly labels have explicit AST
 variants. Semantic analysis checks statement-level assembly (constraints,
 operand lvalues and constants, clobbers, template references and goto
 labels) and retains it for lowering; see
-[middle-end.md](middle-end.md#gnu-inline-assembly-2026-10-26). Builtins keep their type/expression operands and `__builtin_offsetof`
+[middle-end.md](middle-end.md#gnu-inline-assembly-2026-10-26). A declarator
+assembly label on a `register` automatic object makes a GNU local register
+variable under both identities, as in GCC and Clang: an ordinary object that a
+general-register `asm` operand places in the named register. Builtins keep their type/expression operands and `__builtin_offsetof`
 member paths. Statement expressions, local labels, label addresses, computed
 goto, omitted conditional operands, GNU initializers and nested definitions
 also have inspectable syntax nodes.

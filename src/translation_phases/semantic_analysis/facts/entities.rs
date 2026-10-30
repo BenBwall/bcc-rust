@@ -50,12 +50,26 @@ use crate::{
 /// definitions and still keys private inline bodies by semantic identity.
 #[derive(Debug)]
 pub(crate) struct EntityFacts<'tu> {
-    records:             &'tu mut [EntityRecord<'tu>],
-    functions:           &'tu mut [(usize, FunctionPolicy)],
+    records: &'tu mut [EntityRecord<'tu>],
+    functions: &'tu mut [(usize, FunctionPolicy)],
     pub(crate) refusals: &'tu [SymbolRefusal],
+    /// GNU local register variables, `register int x asm("reg")`: each
+    /// automatic object's binding and the register it names, sorted by
+    /// binding. Only an `asm` operand places one in its register.
+    /// GNU extension: GCC manual, "Local Register Variables".
+    pub(crate) register_variables: &'tu [(usize, &'tu str)],
 }
 
 impl<'tu> EntityFacts<'tu> {
+    /// The register a GNU local register variable names, if `binding` is
+    /// one.
+    pub(crate) fn register_variable(&self, binding: usize) -> Option<&'tu str> {
+        self.register_variables
+            .binary_search_by_key(&binding, |&(variable, _)| variable)
+            .ok()
+            .map(|index| self.register_variables[index].1)
+    }
+
     pub(crate) fn entity(&self, id: EntityId) -> Option<Entity<'tu>> {
         let record = &self.records[record_index(self.records, id)?];
         let cold = record.cold.as_deref();
@@ -110,9 +124,10 @@ impl<'tu> EntityFacts<'tu> {
 
     pub(in crate::translation_phases::semantic_analysis) fn empty(_tu: &'tu Bump) -> Self {
         Self {
-            records:   &mut [],
-            functions: &mut [],
-            refusals:  &[],
+            records:            &mut [],
+            functions:          &mut [],
+            refusals:           &[],
+            register_variables: &[],
         }
     }
 
@@ -239,6 +254,7 @@ impl<'tu> EntityFacts<'tu> {
         // vector grows in place. Retain only the actual refusals, not a slot
         // for every valid assembler request.
         let mut refusals = ArenaVec::new_in(scratch);
+        let mut register_variables = ArenaVec::new_in(scratch);
         for request in requests {
             let binding = sema
                 .correspondence
@@ -254,6 +270,15 @@ impl<'tu> EntityFacts<'tu> {
                 continue;
             };
             let data = sema.bindings[binding];
+            // An automatic object's label names a register.
+            if data.kind == BindingKind::Object
+                && data.linkage == Linkage::None
+                && !data.duration.is_static_or_thread()
+                && let Some(name) = request.name
+            {
+                register_variables.push((binding, name));
+                continue;
+            }
             let name = request.name.filter(|_| {
                 matches!(data.kind, BindingKind::Object | BindingKind::Function)
                     && (data.linkage != Linkage::None || data.duration.is_static_or_thread())
@@ -372,6 +397,10 @@ impl<'tu> EntityFacts<'tu> {
             records,
             functions: tu.alloc_slice_fill_iter(functions.iter().map(|p| (p.0, p.2))),
             refusals: tu.alloc_slice_copy(&refusals),
+            register_variables: {
+                register_variables.sort_unstable_by_key(|&(binding, _)| binding);
+                tu.alloc_slice_copy(&register_variables)
+            },
         }
     }
 }

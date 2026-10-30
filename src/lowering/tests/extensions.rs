@@ -356,7 +356,6 @@ fn unsupported_asm_labels_are_refused() {
     for source in [
         "int f(void) __asm__(\"g\\0tail\"); int main(void){return f();}",
         "int f(void) __asm__(\"\"); int main(void){return f();}",
-        "int main(void){int a __asm__(\"b\")=42; return a;}",
         "int f(void) __asm__(\"g\"); int f(void){return 1;} int g(void){return 2;}",
         "int b=1; int main(void){static int a __asm__(\"b\")=42; return a;}",
         "int a __asm__(\"b\")=1; int b=2; int main(void){return a;}",
@@ -369,6 +368,20 @@ fn unsupported_asm_labels_are_refused() {
                 .any(|e| e.contains("not yet supported by lowering: assembler labels")),
             "{source}: {errors:?}"
         );
+    }
+}
+
+/// An automatic object's label names a register: a GNU local register
+/// variable, an ordinary object outside `asm` operands. Without `register`
+/// GCC and Clang ignore the label.
+#[test]
+fn automatic_asm_labels_are_local_register_variables() {
+    for source in [
+        "int main(void){int a __asm__(\"b\")=42; return a;}",
+        "int main(void){register int a __asm__(\"rdi\")=42; return a;}",
+    ] {
+        let text = lowered(source);
+        assert!(text.contains("iconst.i32 42"), "{source}: {text}");
     }
 }
 

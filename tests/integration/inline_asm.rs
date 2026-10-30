@@ -219,6 +219,45 @@ int main(void) {
         }
     }
 
+    /// A GNU local register variable is an ordinary object whose register
+    /// places it when it is an `asm` operand, under both identities: the
+    /// templates name the registers themselves.
+    #[test]
+    fn local_register_variables_pin_their_operands() {
+        let Some(target) = host() else {
+            eprintln!("skipping: the host is not an x86-64 target bcc supports");
+            return;
+        };
+        let source = "#include <stdio.h>\nint main(void) {\nregister long a __asm__(\"rdi\") = \
+                      42;\nregister long b __asm__(\"%rsi\") = 7;\nregister long c \
+                      __asm__(\"r9\") = 5;\nlong sum;\n__asm__(\"lea (%%rdi,%%rsi), %0\\n\\tadd \
+                      %%r9, %0\" : \"=r\"(sum) : \"r\"(a), \"r\"(b), \"r\"(c));\nregister long d \
+                      __asm__(\"rcx\");\n__asm__(\"mov $11, %%ecx\" : \"=r\"(d));\na = a + \
+                      1;\nprintf(\"%ld %ld %ld\\n\", sum, d, a);\nreturn 0;\n}\n";
+        for identity in ["--compiler-identity=clang", "--compiler-identity=gcc"] {
+            for flags in [
+                &["--backend=llvm"][..],
+                &["--backend=llvm", "-O2"][..],
+                &["--backend=native"][..],
+            ] {
+                let executable = temporary("register-variables.exe");
+                let built = bcc(
+                    source,
+                    &[
+                        &[identity, target, "-o", executable.to_str().unwrap()][..],
+                        flags,
+                    ]
+                    .concat(),
+                );
+                assert!(built.status.success(), "{flags:?}: {}", text(&built.stderr));
+                let run = run_native(&mut Command::new(&executable)).unwrap();
+                assert_eq!(run.status.code(), Some(0), "{identity} {flags:?}");
+                assert_eq!(text(&run.stdout), "54 11 43\n", "{identity} {flags:?}");
+                std::fs::remove_file(executable).unwrap();
+            }
+        }
+    }
+
     /// The template reaches LLVM with Clang's constraints: results for
     /// register outputs, `elementtype` memory operands with a `+m` one also
     /// read, and the flags every x86 statement clobbers.
