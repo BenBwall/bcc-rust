@@ -2,19 +2,15 @@ name: Set up Rust and MinGW-w64 on Windows
 description: >-
   Install the pinned Rust toolchain for x86_64-pc-windows-gnu and the pinned
   MinGW-w64 installation (Strawberry Perl 5.40.0.1's GCC 13.2.0 UCRT build),
-  and export RUSTUP_TOOLCHAIN, MINGW_ROOT and PATH for later steps.
+  and export RUSTUP_TOOLCHAIN, MINGW_ROOT and PATH for later steps. MinGW's
+  bin directory comes after the image's tools on PATH.
 
 runs:
   using: composite
   steps:
-    - name: Restore MinGW-w64
-      id: mingw
-      uses: actions/cache@v4
-      with:
-        path: ${{ runner.tool_cache }}/strawberry-5.40.0.1
-        key: mingw-strawberry-5.40.0.1-754f3e2a8e473dc6
+    # Strawberry's archive is 300 MB; downloading it each run keeps the
+    # cache for LLVM, which takes the longest to rebuild.
     - name: Install MinGW-w64
-      if: steps.mingw.outputs.cache-hit != 'true'
       shell: pwsh
       run: |
         $ErrorActionPreference = 'Stop'
@@ -31,7 +27,9 @@ runs:
         $ErrorActionPreference = 'Stop'
         $mingw = "$env:RUNNER_TOOL_CACHE\strawberry-5.40.0.1\c"
         "MINGW_ROOT=$mingw" >> $env:GITHUB_ENV
-        "$mingw\bin" >> $env:GITHUB_PATH
+        # After the image's tools: Strawberry's bin also holds a CMake and a
+        # Ninja, which must not replace the image's.
+        "PATH=$env:PATH;$mingw\bin" >> $env:GITHUB_ENV
         "RUSTUP_TOOLCHAIN=1.99.0-x86_64-pc-windows-gnu" >> $env:GITHUB_ENV
         rustup toolchain install 1.99.0-x86_64-pc-windows-gnu --profile minimal --component clippy,llvm-tools
         if ($LASTEXITCODE -ne 0) { throw 'rustup failed' }
@@ -40,5 +38,4 @@ runs:
       run: |
         rustc -vV
         gcc --version
-        cmake --version
-        python --version
+        Get-Command gcc, cmake, ninja, python -ErrorAction Continue | Format-Table -AutoSize Name, Source
