@@ -1738,9 +1738,11 @@ and compiles a valid signature assertion/call for every entry on all four
 supported targets. This avoids handwritten per-instruction semantic branches
 and does not need the missing Clang builtin definition sources.
 
-The embedded resources adapt Clang 23.1.1's MMX/3DNow, SSE through SSE4.2,
-AES/PCLMUL, AVX/AVX2, population-count, CRC, CPUID and MSVC intrin/intrin0/ADC
-headers, retaining their Apache-2.0 WITH LLVM-exception notices. The adaptations remove
+The embedded resources adapt Clang 23.1.1's 3DNow, AES/PCLMUL, AVX/AVX2,
+population-count, CPUID and MSVC intrin/intrin0/ADC headers, retaining their
+Apache-2.0 WITH LLVM-exception notices; the MMX through SSE4.2 and CRC32
+headers are bcc's own plain-C implementations since 2026-10-30
+(language-standards.md, "x86 intrinsic headers"). The adaptations remove
 half/bfloat typedefs, omit Clang module-building conditions, spell GNU asm
 unambiguously when MS extensions are enabled, and give MSVC inline forward
 declarations the linkage of their definitions. bcc's umbrella

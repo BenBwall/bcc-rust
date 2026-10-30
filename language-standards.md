@@ -354,7 +354,7 @@ still follows the configured extension policy.
 | `stdatomic.h` | C11 atomic typedefs, `memory_order`, `atomic_flag`, initialization, fences, lock-free queries and all generic operation macros. Hosted, it defers to a following system header except with `_MSC_VER` in C mode, matching the pinned Clang resource header. C17 marks `ATOMIC_VAR_INIT` deprecated through `#pragma clang deprecated`; `_CLANG_DISABLE_CRT_DEPRECATION_WARNINGS` suppresses that marker. C23 removes `ATOMIC_VAR_INIT` and adds `atomic_char8_t` and `ATOMIC_CHAR8_T_LOCK_FREE`. No `__STDC_NO_ATOMICS__` is defined or interpreted, as in Clang. |
 | `stdbit.h` | C23's `<stdbit.h>` (§7.18): `__STDC_VERSION_STDBIT_H__` (`202311L`), `__STDC_ENDIAN_LITTLE__` (1234), `__STDC_ENDIAN_BIG__` (4321), `__STDC_ENDIAN_NATIVE__` (little), the 70 `stdc_*_u{c,s,i,l,ll}` functions and the 14 type-generic macros. Wherever the C library has the header (glibc 2.39 and later, whose macros use the `__builtin_stdc_*` builtins when the compiler has them) it defers to it, freestanding too, as GCC and Clang find it there. Otherwise it declares the functions with external linkage and defines each as a macro over its builtin, converting the argument as the prototype does; the same text is the `<stdbit.h>` of bcc's WASI C library, which defines the functions (`backend/wasm/runtime/stdbit.c`). Elsewhere a call that suppresses a macro needs a C library that defines them. Neither GCC nor Clang ships the header, so for the Clang and clang-cl identities the resource directory has none (`headers::provides`): without a C library's (`-nostdlibinc`), `#include <stdbit.h>` finds no header, as in Clang. |
 | `stdnoreturn.h` | Like Clang: `noreturn` and `__noreturn_is_defined` in every mode, retained in C23 despite deprecation. |
-| `mm_malloc.h` | Not ISO C; GCC and Clang ship it, and MinGW-w64's `<malloc.h>` includes it. Like Clang's, it includes `<stdlib.h>` and defines `static __inline__` `_mm_malloc` and `_mm_free`: through `__mingw_aligned_malloc` for MinGW-w64, `_aligned_malloc` for the MSVC runtime (from its `<malloc.h>`, unless that defines `_mm_malloc` as a macro), and `posix_memalign`, which it declares, elsewhere. An alignment of 1 uses `malloc`, and a smaller power of two is raised to a pointer's alignment. The x86 intrinsic headers (`x86intrin.h`, `emmintrin.h`, `immintrin.h`, `cpuid.h` and their family) need vector types and target builtins and are not provided. |
+| `mm_malloc.h` | Not ISO C; GCC and Clang ship it, and MinGW-w64's `<malloc.h>` includes it. Like Clang's, it includes `<stdlib.h>` and defines `static __inline__` `_mm_malloc` and `_mm_free`: through `__mingw_aligned_malloc` for MinGW-w64, `_aligned_malloc` for the MSVC runtime (from its `<malloc.h>`, unless that defines `_mm_malloc` as a macro), and `posix_memalign`, which it declares, elsewhere. An alignment of 1 uses `malloc`, and a smaller power of two is raised to a pointer's alignment. The x86 intrinsic headers (`x86intrin.h`, `emmintrin.h`, `immintrin.h`, `cpuid.h` and their family) are provided; MMX through SSE4.2 compile and run (see [x86 intrinsic headers](#x86-intrinsic-headers-2026-10-30)). |
 
 Reserved `__builtin_va_arg`, `__builtin_va_start`, `__builtin_va_end`,
 `__builtin_va_copy`, `__builtin_va_list` and `__builtin_offsetof` support the
@@ -1717,6 +1717,37 @@ GCC accepts a braced initializer for an `_Atomic` vector and refuses a
 vector element in a vector initializer (`{a}`) or braces around a lane
 (`{1, {2}}`); bcc follows Clang in all three.
 
+
+### x86 intrinsic headers (2026-10-30)
+
+`<mmintrin.h>` (MMX), `<xmmintrin.h>` (SSE), `<emmintrin.h>` (SSE2),
+`<pmmintrin.h>` (SSE3), `<tmmintrin.h>` (SSSE3), `<smmintrin.h>` (SSE4.1 and
+SSE4.2, with `<crc32intrin.h>`) are bcc's own: written for bcc from Intel's
+definitions of each intrinsic, not derived from GCC's or Clang's headers,
+and under bcc's licence. Every intrinsic GCC 15 and Clang 23 declare in
+them is plain C over GNU vector operations (and, for MMX, 8-byte vectors),
+so it compiles and runs on the interpreter, LLVM and the native back end
+with no x86 builtin lowered: saturating, horizontal and widening arithmetic
+loop over lanes; conversions round by the current rounding mode through
+`nearbyint` and give the integer indefinite value out of range; `min` and
+`max` keep the second operand for NaNs; the string comparisons
+(`_mm_cmpistri` and family) follow the SDM's PCMPxSTRx definition. An
+intrinsic with an immediate operand is a macro that also names the GCC/Clang
+builtin inside `sizeof`, which is not evaluated, so semantic analysis still
+checks the immediate as before. `tests/integration/x86_intrinsics.rs`
+compares two programs covering every intrinsic with the host GCC's builds,
+which run the instructions, under both identities on every native arm.
+
+Differences: `_mm_rcp_ps` and `_mm_rsqrt_ps` return the correctly rounded
+reciprocal (within the instructions' 1.5 * 2^-12 bound, but not a
+processor's table); `_mm_undefined_*` return zero; non-temporal stores are
+ordinary stores; `_mm_getcsr`, `_mm_setcsr`, the fences, `_mm_pause`,
+`_mm_clflush`, `_mm_monitor` and `_mm_mwait` are inline assembly, which the
+interpreter cannot run. The AVX, AVX2, AES, PCLMUL, 3DNow!, ADX and CPUID
+headers are still Clang 23.1.1's (Apache-2.0 WITH LLVM-exception,
+`src/headers/LICENSE-LLVM`): they type-check, and their intrinsics that are
+generic vector code run, but those that call `__builtin_ia32_*` builtins are
+refused by lowering. The headers are x86 only, as GCC's and Clang's are.
 
 ### Common GCC scalar intrinsics (2026-10-12)
 

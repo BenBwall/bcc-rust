@@ -63,3 +63,4 @@ mod torture_regressions;
 mod vector_types;
 mod windows_dll_flow;
 mod windows_dll_interop;
+mod x86_intrinsics;
