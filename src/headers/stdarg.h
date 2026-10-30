@@ -29,7 +29,14 @@ typedef __builtin_va_list va_list;
 #endif
 #ifdef __need_va_arg
 #ifndef va_arg
+/* C23 §7.16.1.4p1,p4 (N3220 p. 290; PDF p. 303): va_start takes only ap,
+   and further arguments are not evaluated. GCC 15 and Clang choose this
+   form after C17 too. */
+#if defined(__STDC_VERSION__) && __STDC_VERSION__ > 201710L
+#define va_start(ap, ...) __builtin_va_start(ap, 0)
+#else
 #define va_start(ap, last) __builtin_va_start(ap, last)
+#endif
 #define va_arg(ap, type) __builtin_va_arg(ap, type)
 #define va_end(ap) __builtin_va_end(ap)
 #endif
