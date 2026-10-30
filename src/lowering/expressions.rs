@@ -1688,9 +1688,12 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 let count_signed = self.repr(right.ty, source)?.signed();
                 b = self.extend(b, count_signed, self.draft.value_type(a));
                 match operator {
-                    // C99 §6.5.7p4: a signed left shift that overflows is
-                    // undefined.
-                    | B::LeftShift => (Opcode::Shl, wrap),
+                    // C99 §6.5.7p4 leaves a signed left shift that overflows
+                    // undefined, but GCC documents that it does not use that
+                    // latitude ("Integers implementation") and Clang emits a
+                    // plain shift too: code such as `addr <<= 8` relies on the
+                    // bits shifting into the sign. Only the count is bounded.
+                    | B::LeftShift => (Opcode::Shl, InstFlags::empty()),
                     | _ if signed => (Opcode::Ashr, InstFlags::empty()),
                     | _ => (Opcode::Lshr, InstFlags::empty()),
                 }

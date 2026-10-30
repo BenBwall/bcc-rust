@@ -165,10 +165,11 @@ Several options change rules the mode otherwise fixes. `-ftrigraphs` and
 `-fno-trigraphs` (also GCC's `-trigraphs`) turn phase 1 trigraph replacement
 on or off whatever the mode; the `cl` personality turns it off, as `cl`
 replaces trigraphs only under `/Zc:trigraphs`. `-fwrapv` makes signed integer
-`+`, `-`, `*`, `<<`, negation and `++`/`--` wrap in two's complement, so
-lowering marks none of them `nsw`; pointer arithmetic is unaffected, as in
-GCC. `-fpack-struct=N` (1, 2, 4, 8 or 16) sets the packing in effect before
-any `#pragma pack`, which `#pragma pack()` restores, as GCC documents and
+`+`, `-`, `*`, negation and `++`/`--` wrap in two's complement, so lowering
+marks none of them `nsw`; pointer arithmetic is unaffected, as in GCC. A
+signed `<<` wraps in every mode: GCC documents that it does not treat its
+overflow as undefined, and Clang emits a plain shift. `-fpack-struct=N` (1,
+2, 4, 8 or 16) sets the packing in effect before any `#pragma pack`, which `#pragma pack()` restores, as GCC documents and
 `cl /ZpN` does. `-fpack-struct` without a value instead packs every
 structure and union as the `packed` attribute does (an `aligned` member keeps
 its alignment) and ignores `#pragma pack` with GCC's warning, as GCC 15.2
