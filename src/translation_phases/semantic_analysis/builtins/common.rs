@@ -154,7 +154,23 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | CommonBuiltin::Float(operation, scalar) => {
                 return Some(self.floating_builtin(e, args, operation, scalar));
             },
-            | CommonBuiltin::Complex => return Some(self.complex_builtin(e, args)),
+            | CommonBuiltin::Complex => {
+                // GCC reports the complex type it forms before C99 ("ISO C90
+                // does not support complex types"); Clang does not.
+                // C99: §6.2.5 paragraph 11, p. 34; PDF p. 46.
+                if !matches!(
+                    self.context.configuration.compiler_identity(),
+                    crate::configuration::CompilerIdentity::Clang
+                        | crate::configuration::CompilerIdentity::ClangCl
+                ) {
+                    self.context.report_extension(
+                        crate::configuration::Feature::Complex,
+                        descriptor.spelling,
+                        name.source_vectors,
+                    );
+                }
+                return Some(self.complex_builtin(e, args));
+            },
             | CommonBuiltin::FloatConstant(scalar, nan) => {
                 if nan {
                     // A dynamic tag lowers as a library call. Retain its

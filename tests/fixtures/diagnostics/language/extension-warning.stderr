@@ -1,7 +1,7 @@
-warning: '__int128' is a GNU extension [-Wpedantic]
+warning: '__auto_type' is a GNU extension [-Wpedantic]
  --> <input>:1:14
   |
-1 | #define WIDE __int128
-  |              ^^^^^^^^
+1 | #define AUTO __auto_type
+  |              ^^^^^^^^^^^
 
 1 warning generated.

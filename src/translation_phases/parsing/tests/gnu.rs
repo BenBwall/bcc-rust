@@ -240,7 +240,11 @@ fn reserved_gnu_syntax_keeps_ast_under_every_policy_and_mode() {
             ] {
                 with_parse_configuration(
                     source,
-                    CompilerConfiguration::new(standard, policy).with_gnu_extensions(gnu),
+                    // GCC's choices where the compilers differ: `__int128`
+                    // and `__label__` reported, `__auto_type` not.
+                    CompilerConfiguration::new(standard, policy)
+                        .with_gnu_extensions(gnu)
+                        .with_compiler_identity(crate::configuration::CompilerIdentity::Gcc),
                     |p| {
                         assert_eq!(
                             parser_errors(p).count(),
@@ -256,7 +260,6 @@ fn reserved_gnu_syntax_keeps_ast_under_every_policy_and_mode() {
                             for spelling in [
                                 "__int128",
                                 "zero-length array",
-                                "__auto_type",
                                 "empty struct",
                                 "__label__",
                                 "label address",
@@ -276,6 +279,7 @@ fn reserved_gnu_syntax_keeps_ast_under_every_policy_and_mode() {
                                 "__typeof__",
                                 "__asm__",
                                 "__builtin_choose_expr",
+                                "__auto_type",
                             ] {
                                 assert!(
                                     !extensions.iter().any(|x| x.contains(spelling)),
@@ -428,7 +432,9 @@ fn extension_marker_suppresses_only_its_operand_or_declaration() {
                   z; z ?: 1; }); return ({2;}); }\n";
     with_parse_configuration(
         source,
-        CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Deny),
+        // GCC reports `__int128`; Clang does not.
+        CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Deny)
+            .with_compiler_identity(crate::configuration::CompilerIdentity::Gcc),
         |p| {
             assert_eq!(parser_errors(p).count(), 0, "{:?}", p.errors);
             let extensions = super::extensions(p);
@@ -662,7 +668,8 @@ fn macro_extension_suppression_preserves_unsuppressed_occurrences() {
     let source = "#define GNU __int128\n__extension__ GNU a;\nGNU b;\n";
     with_parse_configuration(
         source,
-        CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Warn),
+        CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Warn)
+            .with_compiler_identity(crate::configuration::CompilerIdentity::Gcc),
         |p| {
             assert_eq!(p.errors.len(), 1, "{:?}", p.errors);
             assert!(p.errors[0].to_string().contains("__int128"));
@@ -869,7 +876,8 @@ fn many_extension_markers_preserve_occurrence_order_and_later_diagnostics() {
     source.push_str("WIDE unsuppressed;\n__extension__ WIDE another;\nWIDE last;\n");
     with_parse_configuration(
         &source,
-        CompilerConfiguration::new(CStandard::C17, ExtensionPolicy::Warn),
+        CompilerConfiguration::new(CStandard::C17, ExtensionPolicy::Warn)
+            .with_compiler_identity(crate::configuration::CompilerIdentity::Gcc),
         |p| {
             assert_eq!(p.items.len(), 4_099);
             assert_eq!(p.errors.len(), 2, "{:?}", p.errors);

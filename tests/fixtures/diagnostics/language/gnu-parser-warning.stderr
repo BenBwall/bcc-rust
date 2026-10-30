@@ -1,9 +1,3 @@
-warning: '__int128' is a GNU extension [-Wpedantic]
- --> <input>:1:23
-  |
-1 | __attribute__((used)) __int128 wide[0];
-  |                       ^^^^^^^^
-
 warning: 'zero-length array' is a GNU extension [-Wpedantic]
  --> <input>:1:37
   |
@@ -27,12 +21,6 @@ warning: 'array range designator' is a GNU extension [-Wpedantic]
   |
 4 | union U { int i; }; int ranges[4]={[1 ... 3]=2};
   |                                       ^^^
-
-warning: '__label__' is a GNU extension [-Wpedantic]
- --> <input>:6:5
-  |
-6 |     __label__ L;
-  |     ^^^^^^^^^
 
 warning: 'nested function definition' is a GNU extension [-Wpedantic]
  --> <input>:7:23
@@ -82,4 +70,4 @@ warning: 'omitted conditional operand' is a GNU extension [-Wpedantic]
 16 |     return ({ b+__real__ u.i+__imag__ u.i; }) ?: 2;
    |                                                ^
 
-1 error and 13 warnings generated.
+1 error and 11 warnings generated.

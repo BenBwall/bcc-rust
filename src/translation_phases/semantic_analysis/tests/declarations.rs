@@ -1103,3 +1103,47 @@ fn microsoft_intrinsics_refuse_conflicting_declarations_and_definitions() {
         );
     }
 }
+
+/// `__builtin_complex` forms a complex type, which GCC reports before C99
+/// and Clang does not; the reserved vector builtins are reported by
+/// neither.
+#[test]
+fn reserved_builtin_reports_follow_the_identity() {
+    use crate::configuration::CompilerIdentity;
+    let complex = "double _Complex z = __builtin_complex(1.0, 2.0);";
+    let gcc = pedantic(CStandard::C89, true).with_compiler_identity(CompilerIdentity::Gcc);
+    let reports = extensions(complex, gcc);
+    assert!(
+        reports
+            .iter()
+            .any(|report| report == "'__builtin_complex' is a C99 extension"),
+        "{reports:?}"
+    );
+    let reports = extensions(complex, pedantic(CStandard::C89, true));
+    assert!(
+        !reports
+            .iter()
+            .any(|report| report.contains("__builtin_complex")),
+        "{reports:?}"
+    );
+    assert_eq!(
+        extensions(
+            complex,
+            pedantic(CStandard::C99, false).with_compiler_identity(CompilerIdentity::Gcc)
+        ),
+        Vec::<String>::new()
+    );
+    let vectors = "typedef int V __attribute__((vector_size(8))); typedef float W \
+                   __attribute__((vector_size(8))); W f(V v) { return __builtin_convertvector(v, \
+                   W); } double g(long x) { return __builtin_bit_cast(double, x); }";
+    for identity in [CompilerIdentity::Clang, CompilerIdentity::Gcc] {
+        assert_eq!(
+            extensions(
+                vectors,
+                pedantic(CStandard::C17, false).with_compiler_identity(identity)
+            ),
+            Vec::<String>::new(),
+            "{identity:?}"
+        );
+    }
+}

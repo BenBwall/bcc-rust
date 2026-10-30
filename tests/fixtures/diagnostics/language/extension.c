@@ -1,2 +1,2 @@
-#define WIDE __int128
-WIDE x;
+#define AUTO __auto_type
+AUTO x = 1;

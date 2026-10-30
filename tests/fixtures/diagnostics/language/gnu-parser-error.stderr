@@ -1,20 +1,8 @@
-error: '__int128' is a GNU extension [-Wpedantic]
- --> <input>:1:23
-  |
-1 | __attribute__((used)) __int128 wide[0];
-  |                       ^^^^^^^^
-
 error: '__auto_type' is a GNU extension [-Wpedantic]
  --> <input>:2:24
   |
 2 | __typeof__(wide) copy; __auto_type value=1; struct Empty {};
   |                        ^^^^^^^^^^^
-
-error: '__label__' is a GNU extension [-Wpedantic]
- --> <input>:6:5
-  |
-6 |     __label__ L;
-  |     ^^^^^^^^^
 
 error: 'zero-length array' is a GNU extension [-Wpedantic]
  --> <input>:1:37
@@ -82,4 +70,4 @@ error: 'omitted conditional operand' is a GNU extension [-Wpedantic]
 16 |     return ({ b+__real__ u.i+__imag__ u.i; }) ?: 2;
    |                                                ^
 
-14 errors generated.
+12 errors generated.

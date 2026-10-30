@@ -850,6 +850,11 @@ impl KeywordTokenType {
                     ambiguous_asm: true,
                 });
             }
+            let clang = matches!(
+                configuration.compiler_identity(),
+                crate::configuration::CompilerIdentity::Clang
+                    | crate::configuration::CompilerIdentity::ClangCl
+            );
             let (enabled, origin) = match kind {
                 | Self::Inline => (
                     configuration.accepts(Feature::Inline),
@@ -934,15 +939,16 @@ impl KeywordTokenType {
                 ),
                 | Self::BuiltinTypesCompatible =>
                     (configuration.accepts(Feature::BuiltinTypesCompatible), None),
-                | Self::BuiltinConvertVector | Self::BuiltinBitCast => (
-                    configuration.accepts(Feature::VectorBuiltins),
-                    Some(Feature::VectorBuiltins.origin()),
-                ),
+                | Self::BuiltinConvertVector | Self::BuiltinBitCast =>
+                    (configuration.accepts(Feature::VectorBuiltins), None),
                 | Self::BuiltinChooseExpr =>
                     (configuration.accepts(Feature::BuiltinChooseExpr), None),
+                // GCC reports `__label__` and `__int128` under `-pedantic`
+                // and Clang does not; Clang reports `__auto_type` and GCC
+                // does not.
                 | Self::LocalLabel => (
                     configuration.accepts(Feature::LocalLabels),
-                    Some(Feature::LocalLabels.origin()),
+                    (!clang).then(|| Feature::LocalLabels.origin()),
                 ),
                 | Self::Float128 => (
                     configuration.accepts(Feature::Float128),
@@ -974,11 +980,11 @@ impl KeywordTokenType {
                 | Self::Fp16 => (configuration.accepts(Feature::Fp16), None),
                 | Self::Int128 => (
                     configuration.accepts(Feature::Int128),
-                    Some(Feature::Int128.origin()),
+                    (!clang).then(|| Feature::Int128.origin()),
                 ),
                 | Self::AutoType => (
                     configuration.accepts(Feature::AutoType),
-                    Some(Feature::AutoType.origin()),
+                    clang.then(|| Feature::AutoType.origin()),
                 ),
                 | Self::Real | Self::Imag => (configuration.accepts(Feature::RealImag), None),
 

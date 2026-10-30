@@ -497,7 +497,9 @@ fn local_label_declaration_is_not_a_statement_before_declarations() {
     let source = "int f(void){ __label__ L; int x = 0; L: return x; }\n";
     with_parse_configuration(
         source,
-        mode(CStandard::C89, true, ExtensionPolicy::Warn),
+        // GCC reports `__label__`; Clang does not.
+        mode(CStandard::C89, true, ExtensionPolicy::Warn)
+            .with_compiler_identity(crate::configuration::CompilerIdentity::Gcc),
         |p| {
             assert_clean_parse(p, source);
             let extensions = extensions(p);
