@@ -100,6 +100,31 @@ fn wide_constants_are_objects_of_their_limbs() {
     );
 }
 
+/// An unsigned 128-bit constant of 2^127 or more converts to a wide type
+/// with zero limbs above it, not copies of its top bit (GCC's torture test
+/// gcc.dg/torture/bitint-43.c passes `(unsigned _BitInt(128))-1` this way).
+#[test]
+fn unsigned_128_bit_constants_zero_extend_into_wide_types() {
+    let text = lowered(
+        "_BitInt(156) f(void) { return (unsigned __int128)-1; }\n_BitInt(156) g(void) { return \
+         (__int128)-1; }",
+    );
+    assert!(
+        text.contains(
+            "global @.bitint internal constant size 24, align 8 = bytes \
+             \"ffffffffffffffffffffffffffffffff0000000000000000\""
+        ),
+        "{text}"
+    );
+    assert!(
+        text.contains(
+            "global @.bitint.1 internal constant size 24, align 8 = bytes \
+             \"ffffffffffffffffffffffffffffffffffffffffffffffff\""
+        ),
+        "{text}"
+    );
+}
+
 /// A switch on a wide value compares it with each case in turn.
 #[test]
 fn wide_switches_compare_with_each_case() {
