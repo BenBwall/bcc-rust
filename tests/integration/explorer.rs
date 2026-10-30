@@ -194,7 +194,8 @@ mod tests {
     fn check_machine_code(name: &str, source: &str, level: &[&str], output: &ExplorerOutput) {
         let functions = output.machine_code.as_ref().expect("machine code");
         assert!(!functions.is_empty(), "{name}");
-        let object = temporary(&format!("{}.o", name.replace(['/', '.'], "-")));
+        // A Windows path names a fixture with either separator.
+        let object = temporary(&format!("{}.o", name.replace(['/', '\\', '.'], "-")));
         let mut arguments = vec![
             "--std=c17",
             "--backend=native",

@@ -1232,8 +1232,13 @@ mod tests {
     #[test]
     fn default_nesting_limit_accepts_deep_generated_input() {
         // Far deeper than GCC or Clang accept on default stacks; the
-        // reserved compilation stack holds it without a diagnostic.
-        let output = run(&["--input", &nested_initializer(20_000)]);
+        // reserved compilation stack holds it without a diagnostic. The
+        // source is a file: as an argument it would pass Windows' limit of
+        // 32,767 characters on a command line.
+        let path = std::env::temp_dir().join(format!("bcc-deep-{}.c", std::process::id()));
+        std::fs::write(&path, nested_initializer(20_000)).unwrap();
+        let output = run(&[path.to_str().unwrap()]);
+        std::fs::remove_file(&path).unwrap();
         assert!(output.status.success(), "{output:?}");
         assert!(output.stderr.is_empty(), "{output:?}");
     }

@@ -26,7 +26,8 @@ mod tests {
 
     use crate::native::run_native;
 
-    /// Exits with 0, or with the number of the first check that fails.
+    /// Exits with 0, or with the number of the first check that fails. The
+    /// 64-bit operands are `long long`, which `long` is not on Windows.
     const PROGRAM: &str = r#"
 static unsigned long long rdtsc(void) {
     unsigned lo, hi;
@@ -47,7 +48,7 @@ static int matching(int a) { int r; __asm__("leal 7(%1), %0" : "=r"(r) : "0"(a),
 static long widened(short s) { long r; __asm__("" : "=r"(r) : "0"(s)); return r; }
 static int equal(int a, int b) { int eq; __asm__("cmpl %2, %1" : "=@ccz"(eq) : "r"(a), "r"(b)); return eq; }
 static double fadd(double a, double b) { __asm__("addsd %1, %0" : "+x"(a) : "x"(b)); return a; }
-static long swapped(long v) { __asm__("bswap %0" : "+r"(v)); return v; }
+static long long swapped(long long v) { __asm__("bswap %0" : "+r"(v)); return v; }
 static unsigned char high(unsigned v) { unsigned char r; __asm__("movb %h1, %0" : "=q"(r) : "Q"(v)); return r; }
 static int doubled(int x) {
     int r;
@@ -94,7 +95,7 @@ static int alternatives(void) {
             : "=a,b"(x), "=b,a"(y));
     return x * 10 + y;
 }
-static int wide_match(long x, long *result) {
+static int wide_match(long long x, long long *result) {
     int out;
     __asm__("movq %q2, %1; movl $1, %0" : "=a"(out), "=&r"(*result) : "0"(x));
     return out;
@@ -104,12 +105,12 @@ static int wide_flag(int a) {
     __asm__("testl %1, %1" : "=@ccz"(eq) : "r"(a));
     return eq == 1;
 }
-static int sse_high(long x) {
+static int sse_high(long long x) {
     int y;
     __asm__("psrlq $32, %0" : "=x"(y) : "0"(x));
     return y;
 }
-static int suffix(long x) {
+static int suffix(long long x) {
     int y;
     __asm__("mov%z0 $1, %0" : "=a"(y) : "0"(x));
     return y;
@@ -150,7 +151,7 @@ int main(void) {
     if (widened(-3) != -3) return 8;
     if (equal(3, 3) != 1 || equal(3, 4) != 0) return 9;
     if (fadd(1.5, 2.25) != 3.75) return 10;
-    if (swapped(0x0102030405060708L) != 0x0807060504030201L) return 11;
+    if (swapped(0x0102030405060708LL) != 0x0807060504030201LL) return 11;
     if (high(0x1234) != 0x12) return 12;
     if (doubled(21) != 42) return 13;
     if (early(41) != 42) return 14;
@@ -164,11 +165,11 @@ int main(void) {
     if (bare() != 42) return 21;
     if (symbol() != &internal_target) return 22;
     if (alternatives() != 12) return 23;
-    long whole = 0;
-    if (wide_match(0x100000002L, &whole) != 1 || whole != 0x100000002L) return 24;
+    long long whole = 0;
+    if (wide_match(0x100000002LL, &whole) != 1 || whole != 0x100000002LL) return 24;
     if (!wide_flag(0) || wide_flag(1)) return 25;
-    if (sse_high(0x500000007L) != 5) return 26;
-    if (suffix(0x700000000L) != 1) return 27;
+    if (sse_high(0x500000007LL) != 5) return 26;
+    if (suffix(0x700000000LL) != 1) return 27;
     if (x87_copy(2.5) != 2.5 || x87_copy_float(1.25f) != 1.25f) return 28;
     if (increment_struct() != 42) return 29;
     return 0;
