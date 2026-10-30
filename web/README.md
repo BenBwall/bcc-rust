@@ -112,9 +112,11 @@ binds (Rust cannot express one), and the Monaco glue in `editor/src/` (editor
 creation, decorations and events behind a small plain-data API, the Monarch
 grammars and the themes). `src/editor.rs` holds the wasm-bindgen bindings and
 decides everything the editor shows. Monaco is the page's largest download
-(about 820 KB compressed), so it loads only once an editor scrolls into the
-window or a key is pressed; until then, and without JavaScript, the code views
-show Rust-highlighted text.
+(about 820 KB compressed), so it waits until the abstract machine's engine is
+ready and then loads while the browser is idle, or earlier when a key is
+pressed or an editor is pressed. Until then, and without JavaScript, the code
+views show Rust-highlighted text, which takes the focus and passes it on to
+Monaco.
 
 ## Deploy
 
@@ -137,8 +139,8 @@ the Wasm modules compressed: gzip shrinks the first load from 2.1 MB to about
 
 What a first visit fetches: the page, its stylesheet, the two web fonts, the
 page's Wasm (the largest part, 540 KB gzip) and the abstract machine's Worker
-(180 KB gzip). The Monaco bundle follows when the workbench scrolls into view,
-the compiler's Worker (1.4 MB gzip) when a program is first compiled (an edit,
+(180 KB gzip). The Monaco bundle follows once the engine is ready, the
+compiler's Worker (1.4 MB gzip) when a program is first compiled (an edit,
 or the pipeline or WebAssembly view), and Monaco's icon font (150 KB) with the
 first read-only listing, whose folding arrows use it.
 

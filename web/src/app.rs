@@ -379,6 +379,7 @@ impl State {
                 | Err(error) => self.show_unavailable(&error),
             }
             self.busy.set(false);
+            crate::editor::prefetch();
         });
     }
 
@@ -754,7 +755,7 @@ impl State {
             .and_then(|target| target.dyn_into::<web_sys::Element>().ok())
             .is_some_and(|element| {
                 element
-                    .closest("input, textarea, select, .monaco-editor, [contenteditable]")
+                    .closest("input, textarea, select, .code-editor, [contenteditable]")
                     .ok()
                     .flatten()
                     .is_some()

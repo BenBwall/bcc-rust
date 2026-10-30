@@ -369,6 +369,8 @@
   .fallback-line { display: block; padding-right: 16px; }
   .fallback-number { display: inline-block; width: 4.2ch; padding-right: 1.8ch; text-align: right; color: var(--faint); user-select: none; }
   .monaco-host { position: absolute; inset: 0; opacity: 0; transition: opacity .3s var(--ease); }
+  /* Until Monaco arrives, a press lands on the fallback (and asks for it). */
+  .code-editor:not(.is-ready) .monaco-host { pointer-events: none; }
   .code-editor.is-ready .monaco-host { opacity: 1; }
   /* Tab reaches the editors, so show which one has the focus. */
   .code-editor:focus-within { border-color: color-mix(in srgb, var(--accent) 60%, var(--border)); box-shadow: 0 0 0 3px var(--accent-soft); }

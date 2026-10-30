@@ -144,13 +144,41 @@ pub fn CodeEditor(
         line_numbers,
     );
     view! {
-        <div class="code-editor" class:is-ready=move || ready.get() data-language=move || language.get()>
-            <pre class="code-fallback" aria-label=label tabindex="0">
+        // A press on the fallback asks for the editor at once.
+        <div
+            class="code-editor"
+            class:is-ready=move || ready.get()
+            data-language=move || language.get()
+            on:pointerdown=move |_| {
+                #[cfg(feature = "hydrate")]
+                monaco::request();
+            }
+        >
+            // Until Monaco replaces it, Space would scroll the page under a
+            // reader who expects to type.
+            <pre
+                class="code-fallback"
+                aria-label=label
+                tabindex="0"
+                on:keydown=move |event| {
+                    if event.key() == " " {
+                        event.prevent_default();
+                    }
+                }
+            >
                 {move || text.with(|text| highlight::fallback(text, language.get()))}
             </pre>
             <div class="monaco-host" node_ref=host></div>
         </div>
     }
+}
+
+/// Load the editor bundle once the browser is idle. The page calls this
+/// when the engine is ready, so the bundle neither delays it nor waits for a
+/// reader to reach an editor.
+pub fn prefetch() {
+    #[cfg(feature = "hydrate")]
+    monaco::prefetch();
 }
 
 #[cfg(feature = "hydrate")]
@@ -218,75 +246,93 @@ mod monaco {
         #[wasm_bindgen(method, js_name = onGutterClick)]
         fn on_gutter_click(this: &Editor, callback: &js_sys::Function);
         #[wasm_bindgen(method)]
+        fn focus(this: &Editor);
+        #[wasm_bindgen(method)]
         fn dispose(this: &Editor);
     }
 
     thread_local! {
         static MODULE: RefCell<Option<Promise>> = const { RefCell::new(None) };
+        /// The editors waiting for the bundle to be requested.
+        static WAITING: RefCell<Vec<futures_channel::oneshot::Sender<()>>> =
+            const { RefCell::new(Vec::new()) };
     }
 
-    /// The editor bundle, loaded once per page.
+    /// The editor bundle, loaded once per page. A failed import (a stale
+    /// `editor-<hash>` after a redeploy) is forgotten, so the next editor
+    /// tries again.
     async fn module() -> Result<EditorModule, String> {
+        let result = JsFuture::from(bundle()).await;
+        if result.is_err() {
+            MODULE.with(|module| module.borrow_mut().take());
+        }
+        result
+            .map(JsCast::unchecked_into)
+            .map_err(|error| format!("{error:?}"))
+    }
+
+    /// Request the bundle (see `bundle`).
+    pub fn request() {
+        _ = bundle();
+    }
+
+    /// The bundle's import, started once, waking the editors waiting for it.
+    fn bundle() -> Promise {
         let promise = MODULE.with(|module| {
             module
                 .borrow_mut()
                 .get_or_insert_with(|| load_module(&bundle_url()))
                 .clone()
         });
-        JsFuture::from(promise)
-            .await
-            .map(JsCast::unchecked_into)
-            .map_err(|error| format!("{error:?}"))
+        for waiting in WAITING.with(RefCell::take) {
+            _ = waiting.send(());
+        }
+        promise
     }
 
-    /// Wait until the page needs the editor bundle: Monaco is by far the
-    /// largest download, and the editors start below the fold, so the first
-    /// one loads it when its host scrolls into the window or a key is
-    /// pressed (a shortcut steps the program from anywhere). Until then its
-    /// fallback shows the highlighted text. Once the bundle is requested,
-    /// later editors do not wait.
-    async fn wanted(host: &web_sys::HtmlElement) {
-        use std::rc::Rc;
-
-        use web_sys::{
-            IntersectionObserver,
-            IntersectionObserverEntry,
+    /// Request the bundle once the browser is idle (or after
+    /// `PREFETCH_TIMEOUT_MS` at the latest; Safari has no idle callback).
+    pub fn prefetch() {
+        let Some(window) = web_sys::window() else {
+            return;
         };
+        let options = web_sys::IdleRequestOptions::new();
+        options.set_timeout(PREFETCH_TIMEOUT_MS);
+        let idle = Closure::once_into_js(|| {
+            request();
+        });
+        if window
+            .request_idle_callback_with_options(idle.unchecked_ref(), &options)
+            .is_err()
+        {
+            gloo_timers::callback::Timeout::new(PREFETCH_TIMEOUT_MS, || {
+                request();
+            })
+            .forget();
+        }
+    }
 
+    /// The longest a prefetch waits for the browser to be idle.
+    const PREFETCH_TIMEOUT_MS: u32 = 2000;
+
+    /// Wait until the page wants the editor bundle. Monaco is by far the
+    /// largest download, so it must not compete with the page's Wasm and
+    /// the engine: the page prefetches it once the engine is ready
+    /// (`super::prefetch`), and before that a key press (the shortcuts step
+    /// the program from anywhere, and Tab reaches the editors) or a press
+    /// on an editor requests it. Until then the editors show their
+    /// highlighted fallback.
+    async fn wanted() {
         if MODULE.with(|module| module.borrow().is_some()) {
             return;
         }
         let (sender, receiver) = futures_channel::oneshot::channel::<()>();
-        let sender = Rc::new(RefCell::new(Some(sender)));
-        let wake = move || {
-            if let Some(sender) = sender.borrow_mut().take() {
-                _ = sender.send(());
-            }
-        };
-        let seen = Closure::<dyn FnMut(js_sys::Array)>::new({
-            let wake = wake.clone();
-            move |entries: js_sys::Array| {
-                if entries.iter().any(|entry| {
-                    entry
-                        .unchecked_into::<IntersectionObserverEntry>()
-                        .is_intersecting()
-                }) {
-                    wake();
-                }
-            }
+        WAITING.with(|waiting| waiting.borrow_mut().push(sender));
+        let key = window_event_listener(leptos::ev::keydown, |_| {
+            request();
         });
-        let observer = IntersectionObserver::new(seen.as_ref().unchecked_ref()).ok();
-        if let Some(observer) = &observer {
-            observer.observe(host);
-        } else {
-            wake();
-        }
-        let key = window_event_listener(leptos::ev::keydown, move |_| wake());
         _ = receiver.await;
         key.remove();
-        if let Some(observer) = observer {
-            observer.disconnect();
-        }
     }
 
     fn bundle_url() -> String {
@@ -372,7 +418,7 @@ mod monaco {
             };
             let owner = owner.clone();
             spawn_local(async move {
-                wanted(&element).await;
+                wanted().await;
                 let module = module().await;
                 // The view may have unmounted while the bundle loaded; its
                 // owner's cleanup disposed the slot, so create nothing.
@@ -402,7 +448,17 @@ mod monaco {
         let Ok(options) = serde_wasm_bindgen::to_value(&options) else {
             return;
         };
+        // Whoever had the keyboard focus on the fallback keeps it in the
+        // editor that replaces it.
+        let focused = document().active_element().is_some_and(|active| {
+            element
+                .parent_element()
+                .is_some_and(|editor| editor.contains(Some(&active)))
+        });
         let instance = module.create_editor(element, &options);
+        if focused {
+            instance.focus();
+        }
         let mut listeners = Vec::new();
         if let Some(callback) = mount.on_change {
             listeners.push(listen(
