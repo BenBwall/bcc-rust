@@ -46,7 +46,8 @@
 //!   memory and allocation alignment; `bit_fields.rs` bit-field reads and
 //!   writes; `bit_int.rs` the bit-precise integers calls pass in memory;
 //!   `wide_bit_int.rs` those of more than 128 bits, which live in memory and
-//!   compute in the C runtime beside it; `initializers.rs` walks braced
+//!   compute in the C runtime beside it; `vectors.rs` GNU vectors, which live
+//!   in memory and compute lane by lane; `initializers.rs` walks braced
 //!   initializers; `assembly.rs` lowers GNU `asm` statements; `vla.rs`
 //!   evaluates saved array extents and runs the cleanups of the regions an exit
 //!   leaves: dynamic stack restores, and GNU cleanup calls from `cleanup.rs`.
@@ -86,6 +87,7 @@ mod places;
 #[cfg(feature = "recursive-lowering-study")]
 mod recursive;
 mod statements;
+mod vectors;
 mod vla;
 mod wide_bit_int;
 mod work;
@@ -504,6 +506,7 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
             | Task::Convert { expression, skip } => self.convert_recorded(expression, skip),
             | Task::Finish(expression) => self.finish(expression),
             | Task::FinishBuiltin(expression, builtin) => self.finish_builtin(expression, builtin),
+            | Task::FinishVectorBuiltin(expression) => self.finish_vector_builtin(expression),
             | Task::OmittedConditional {
                 expression,
                 conditional,

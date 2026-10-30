@@ -38,6 +38,17 @@ use crate::ir::{
 /// the same size. Structs or unions of other sizes are passed as a pointer
 /// to memory allocated by the caller."
 pub(super) fn argument(layout: AggregateLayout<'_>) -> ArgPlan<'_> {
+    // A vector by reference, or a lone `float` or `double` lane in its XMM
+    // register, as Clang passes GNU vectors (`vectors.rs`).
+    if layout.flags.contains(AggregateFlags::VECTOR) {
+        return match layout.scalars {
+            | [only] => ArgPlan::Registers {
+                layout,
+                parts: Parts::one(only.ty),
+            },
+            | _ => ArgPlan::Keep,
+        };
+    }
     match integer(layout) {
         | Some(ty) => ArgPlan::Registers {
             layout,
@@ -55,6 +66,22 @@ pub(super) fn argument(layout: AggregateLayout<'_>) -> ArgPlan<'_> {
 /// 16, 32, or 64 bits. ... Otherwise, the caller must allocate memory for
 /// the return value and pass a pointer to it as the first argument."
 pub(super) fn result(layout: AggregateLayout<'_>) -> ResultPlan<'_> {
+    // A vector in XMM0, or XMM0 and XMM1, as Clang returns GNU vectors.
+    if layout.flags.contains(AggregateFlags::VECTOR) {
+        return match layout.scalars {
+            | [] => ResultPlan::Memory(layout),
+            | [first, rest @ ..] => ResultPlan::Registers {
+                layout,
+                registers: ResultRegisters {
+                    complex:       false,
+                    second_offset: rest.first().map_or(8, |second| second.offset),
+                    first:         first.ty,
+                    second:        rest.first().map(|second| second.ty),
+                    align:         layout.align,
+                },
+            },
+        };
+    }
     match integer(layout) {
         | Some(first) => ResultPlan::Registers {
             layout,

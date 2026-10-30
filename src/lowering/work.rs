@@ -161,6 +161,9 @@ pub(super) enum Task<'tu> {
         otherwise:   Block,
         merge:       Block,
     },
+    /// Complete a GNU vector builtin whose vector operands are on the
+    /// stack (`vectors.rs`).
+    FinishVectorBuiltin(&'tu Expression<'tu>),
     FinishBuiltin(
         &'tu Expression<'tu>,
         &'tu crate::translation_phases::semantic_analysis::BuiltinCallFacts<'tu>,

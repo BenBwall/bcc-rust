@@ -509,12 +509,21 @@ impl Selector<'_, '_, '_> {
             let mem = self.address(arg);
             if matches!(registers.first, Type::I128 | Type::F128) {
                 // Win64's `__int128` or System V's `__float128` result, all
-                // of `%xmm0`.
+                // of `%xmm0`, and a 32-byte vector's second half in `%xmm1`.
                 self.emit(MInst::Move128 {
                     load: false,
                     reg: Reg::Phys(PReg::Xmm0),
                     mem,
                 });
+                if matches!(registers.second, Some(Type::I128 | Type::F128)) {
+                    let offset =
+                        i32::try_from(registers.second_offset).expect("a part offset is small");
+                    self.emit(MInst::Move128 {
+                        load: false,
+                        reg:  Reg::Phys(PReg::Xmm1),
+                        mem:  mem.offset(offset),
+                    });
+                }
                 return Ok(());
             }
             if registers.first == Type::F80 {
@@ -584,8 +593,12 @@ impl Selector<'_, '_, '_> {
                         | ArgLocation::Stack(offset) => stack.push((offset, operand, class)),
                     }
                 },
-                | Passed::ByVal { src, size, align } =>
-                    copies.push((assigner.memory(size, align), src, size)),
+                | Passed::ByVal { src, size, align } => {
+                    // A copy aligned above the stack's 16 bytes needs the
+                    // frame to realign `%rsp` (`frame.rs`).
+                    self.func.outgoing_align = self.func.outgoing_align.max(u64::from(align));
+                    copies.push((assigner.memory(size, align), src, size));
+                },
                 | Passed::Pair(low, high) => match assigner.pair() {
                     | Ok((first, second)) => {
                         registers.push((first, Operand::Reg(low)));
@@ -727,6 +740,16 @@ impl Selector<'_, '_, '_> {
                     mem:  area,
                 });
                 uses = uses.with(PReg::Xmm0);
+                if matches!(registers.second, Some(Type::I128 | Type::F128)) {
+                    let offset =
+                        i32::try_from(registers.second_offset).expect("a part offset is small");
+                    self.emit(MInst::Move128 {
+                        load: true,
+                        reg:  Reg::Phys(PReg::Xmm1),
+                        mem:  area.offset(offset),
+                    });
+                    uses = uses.with(PReg::Xmm1);
+                }
             },
             | ResultArea::Registers { area, registers } if registers.first == Type::F80 => {
                 // A complex `long double` returns its imaginary part in

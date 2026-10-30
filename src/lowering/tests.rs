@@ -27,6 +27,7 @@ mod refusals;
 mod registry;
 mod resolved;
 mod review;
+mod vectors;
 mod void_and_incomplete;
 
 use std::path::Path;

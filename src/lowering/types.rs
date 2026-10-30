@@ -113,7 +113,9 @@ pub(super) fn repr(types: &Types<'_>, mut ty: TypeId) -> Result<Repr, LoweringEr
             }
         },
         | TypeKind::Atomic(_) => unreachable!("atomic wrappers were removed above"),
-        | TypeKind::Vector { .. } => unsupported(Construct::Vector),
+        // A GNU vector lives in memory like an array of its lanes; its
+        // operators work lane by lane (`vectors.rs`).
+        | TypeKind::Vector { .. } => Ok(Repr::Aggregate),
     }
 }
 
@@ -498,8 +500,13 @@ fn flattened_layout<'s>(
                         "an aggregate has a function member",
                     )),
                 | TypeKind::Atomic(value) => work.push((value, offset)),
-                | TypeKind::Vector { .. } =>
-                    return Err(LoweringErrorKind::Unsupported(Construct::Vector)),
+                // A vector member is classified as one unit, as Clang's
+                // `X86_64ABIInfo::classify` treats a `VectorType` field.
+                | TypeKind::Vector { .. } => push_scalar(
+                    &mut scalars,
+                    offset,
+                    super::vectors::member_leaf(types, ty)?,
+                )?,
             }
         }
     }
@@ -655,7 +662,9 @@ pub(super) fn object_layout<'s>(
 ) -> Result<AggregateLayout<'s>, LoweringErrorKind> {
     if matches!(repr(types, ty)?, Repr::Complex { .. }) {
         complex_layout(types, ty, scratch)
-    } else if matches!(types.kind(ty), TypeKind::BitInt { .. }) {
+    } else if matches!(types.kind(types.non_atomic(ty)), TypeKind::Vector { .. })
+        || matches!(types.kind(ty), TypeKind::BitInt { .. })
+    {
         flattened_layout(types, ty, layout(types, ty)?, scratch)
     } else {
         aggregate_layout(types, ty, scratch)

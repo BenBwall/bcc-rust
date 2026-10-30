@@ -854,16 +854,22 @@ bitflags! {
         /// ABI passes it as that scalar. Lowering records it for the
         /// targets whose convention asks (`TargetLayout::record_passing`).
         const SINGLE_ELEMENT = 1 << 3;
+        /// A top-level GNU vector. Its scalars are not its lanes but the
+        /// one or two registers lowering chose for it under the claimed
+        /// compiler's convention ([`AggregateLayout::scalars`]); none
+        /// means memory.
+        const VECTOR = 1 << 4;
     }
 }
 
 impl AggregateFlags {
     /// Each flag with its textual name, in printing order.
-    pub(crate) const NAMES: [(Self, &'static str); 4] = [
+    pub(crate) const NAMES: [(Self, &'static str); 5] = [
         (Self::UNALIGNED, "unaligned"),
         (Self::FLEXIBLE, "flexible"),
         (Self::COMPLEX, "complex"),
         (Self::SINGLE_ELEMENT, "single_element"),
+        (Self::VECTOR, "vector"),
     ];
 }
 
@@ -902,6 +908,13 @@ impl ResultRegisters {
     /// by ABI lowering, including the special complex x87 pair.
     pub(crate) fn valid_layout(self) -> bool {
         if self.first == Type::F80 && self.second == Some(Type::F80) {
+            return self.second_offset == 16 && self.align.bytes() >= 16;
+        }
+        // A 32-byte vector result in two vector registers.
+        if matches!(
+            (self.first, self.second),
+            (Type::F128, Some(Type::F128)) | (Type::I128, Some(Type::I128))
+        ) {
             return self.second_offset == 16 && self.align.bytes() >= 16;
         }
         if self.second_offset != Self::SECOND_OFFSET {

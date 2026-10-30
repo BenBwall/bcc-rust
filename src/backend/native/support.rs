@@ -257,10 +257,10 @@ impl Checker<'_, '_> {
         }
         for param in signature.aggregates {
             match param.abi {
-                | ParamAbi::ByVal(layout) if layout.align.bytes() > 16 =>
+                // The prologue realigns `%rsp` for a copy aligned above 16
+                // bytes, up to a page.
+                | ParamAbi::ByVal(layout) if layout.align.bytes() > 4096 =>
                     return Err(Construct::SlotAlignment(layout.align.bytes())),
-                | ParamAbi::Registers(registers) if registers.align.bytes() > 16 =>
-                    return Err(Construct::SlotAlignment(registers.align.bytes())),
                 | ParamAbi::Sret(_) | ParamAbi::ByVal(_) | ParamAbi::Indirect(_) => {},
                 // Win64's `__int128` result and System V's `__float128` one
                 // in `%xmm0`, and System V's `long double` in `%st0`, or a
@@ -268,6 +268,12 @@ impl Checker<'_, '_> {
                 | ParamAbi::Registers(registers)
                     if matches!(registers.first, Type::I128 | Type::F128 | Type::F80)
                         && registers.second.is_none() => {},
+                // A 32-byte GNU vector in `%xmm0` and `%xmm1`.
+                | ParamAbi::Registers(registers)
+                    if matches!(
+                        (registers.first, registers.second),
+                        (Type::F128, Some(Type::F128)) | (Type::I128, Some(Type::I128))
+                    ) => {},
                 | ParamAbi::Registers(registers)
                     if registers.first == Type::F80 && registers.second == Some(Type::F80) => {},
                 | ParamAbi::Registers(registers) =>

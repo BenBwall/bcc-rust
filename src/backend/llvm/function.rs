@@ -194,9 +194,24 @@ fn registers_type<'id>(api: &Session<'id>, registers: ResultRegisters) -> Ty<'id
     // LLVM structure places the second part at its explicit register offset.
     debug_assert!(registers.valid_layout(), "verified register return layout");
     match registers.second {
-        | Some(second) => api.structure(&[api.ty(registers.first), api.ty(second)], false),
-        | None if registers.first == Type::I128 => api.vector(api.ty(Type::I64), 2),
-        | None => api.ty(registers.first),
+        | Some(second) => api.structure(
+            &[
+                register_part_type(api, registers.first),
+                register_part_type(api, second),
+            ],
+            false,
+        ),
+        | None => register_part_type(api, registers.first),
+    }
+}
+
+/// The LLVM type of one result register: an `i128` one is all of a vector
+/// register (`<2 x i64>`), for Win64's `__int128` and GNU vector results.
+fn register_part_type<'id>(api: &Session<'id>, ty: Type) -> Ty<'id> {
+    if ty == Type::I128 {
+        api.vector(api.ty(Type::I64), 2)
+    } else {
+        api.ty(ty)
     }
 }
 
@@ -716,7 +731,7 @@ impl<'id, 'm> BodyBuilder<'_, 'id, 'm, '_> {
                 api.freeze(bytes)
             };
             let part_ty = if registers.second.is_some() {
-                api.ty(ty)
+                register_part_type(api, ty)
             } else {
                 result_ty
             };
