@@ -2657,9 +2657,10 @@ The native back end returns the `f128`/`i128` pair in XMM0 and XMM1, and
 passes a `byval` copy aligned above 16 bytes by realigning `%rsp` in the
 prologue (`andq $-align, %rsp`) with a frame pointer, as a moving stack
 does (`MFunction::outgoing_align`, `Frame::realign`), and again at each
-such call, since a dynamic allocation may have moved `%rsp` since. The LLVM
-back end at `-O0` misplaces such a variadic argument after a variable
-length array, as Clang's own build does.
+such call, since a dynamic allocation may have moved `%rsp` since. Only the
+native arms pass such a variadic argument correctly after a variable
+length array: the LLVM back end misplaces it at `-O0` and `-O2`, as Clang
+23's own builds do at `-O0`, `-O1` and `-O2`.
 
 **Evidence.** `tests/integration/vector_types.rs` runs
 `tests/fixtures/programs/vector_types.c` (every operator, conversion and

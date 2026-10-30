@@ -1694,7 +1694,7 @@ Where GCC 15.2 and Clang 23 differ, each identity follows its compiler
 
 | Rule | GCC identity | Clang identity |
 | --- | --- | --- |
-| Scalar operand of a vector operator | `scalar_to_vector`: an integer variable no wider than the lanes (sign changes allowed), an integer constant that fits (a negative one into unsigned lanes and an unsigned one into signed lanes allowed), an integer into floating lanes whose format holds its type's range, never a floating scalar into integer lanes, no `_Bool` or enumeration | `tryGCCVectorConvertAndSplat`: integers by rank (no sign change at equal rank) or a constant's significant bits; a floating scalar into integer lanes of its size; `_Bool` and enumerations as integers; otherwise a scalar as large as the whole vector reinterprets its bits (lax conversion), except as a compound assignment's right operand |
+| Scalar operand of a vector operator | `scalar_to_vector`: an integer variable no wider than the lanes (sign changes allowed), an integer constant that fits (a negative one into unsigned lanes and an unsigned one into signed lanes allowed), an integer into floating lanes whose format holds its type's range, never a floating scalar into integer lanes, no `_Bool` or enumeration, nothing into enumeration lanes | `tryGCCVectorConvertAndSplat`: integers by rank (no sign change at equal rank) or a constant's significant bits; a floating scalar into integer lanes of its size; `_Bool` and enumerations as integers; otherwise a scalar as large as the whole vector reinterprets its bits (lax conversion), except as a compound assignment's right operand |
 | Vectors of different types | binary operators need as many lanes of one kind and width, signedness aside; assignment, initialization, arguments, `return` and `?:` need compatible lane types | equal sizes suffice everywhere (lax vector conversions), the right operand reading as the left's type |
 | Comparison result | an opaque mask that converts to any vector of its size | the signed mask vector |
 | `++`, `--` | each lane | refused |
@@ -1702,7 +1702,7 @@ Where GCC 15.2 and Clang 23 differ, each identity follows its compiler
 | Lane count | power of two | any; the object rounds up |
 | `__builtin_shuffle` | provided | absent |
 | Two-operand `__builtin_shufflevector(v, mask)` | refused | run-time shuffle |
-| Atomic vector operands | read first, also with a scalar operand; `++`/`--` only where an `int` variable splats into the lanes | no scalar operand; two atomic operands only in a comparison; no `++`/`--` |
+| Atomic vector operands | read first, also with a scalar operand, which a compound assignment converts as a variable (`b += 1` into `float` lanes is refused); `++`/`--` only where an `int` variable splats into the lanes; `v[i]` of an lvalue is an `_Atomic` lane lvalue (`v[1] = 2`, `&v[1]` of type `_Atomic int *`) | no scalar operand; two atomic operands only in a comparison; no `++`/`--`; `v[i]` is a value |
 | Lane types besides integers and real floating types | `_Float16`, `__bf16`, enumerations; through pointer, array and function declarators to their element | `_Float16`, `__bf16`, `_BitInt(N)` of a power-of-two width of at least 8; never a pointer, array or function |
 
 Calls pass vectors as the claimed compiler does (middle-end.md). Known
@@ -1723,12 +1723,18 @@ does for arrays (C99 §6.7.8p2). Clang folds vector arithmetic, unary
 operators and subscripts of constant vectors in static initializers, which
 both bcc identities refuse, as GCC does. `__builtin_bit_cast` is accepted
 under the GCC identity too, though GCC provides it only for C++. A
-half-precision lane computes in `float` and rounds after each operation,
-as both compilers compute vector operations on them. A GCC-only builtin
+half-precision lane computes in `float`. Under the GCC identity it rounds
+after each operation, as GCC computes vector operations on them; under the
+Clang identity `+`, `-`, `*`, `/` and unary `-` keep the `float` excess to
+the end of the expression, as Clang promotes a `_Float16` or `__bf16`
+vector to a `float` one and as bcc already does for scalars, so
+`(a + b - b)[0]` with `a[0] == 1` and `b[0] == 2048` is 1, and a comparison
+reads the rounded lanes. A GCC-only builtin
 (`__builtin_shuffle`, `__builtin_parityg`, `__builtin_ffsg`,
 `__builtin_clrsbg`) called under another identity is an undeclared
-identifier, as Clang reports it. An `_Atomic` vector of more than 16 bytes
-updates through a byte-wise compare-exchange loop.
+identifier, as Clang reports it. An `_Atomic` vector of more than 16 bytes,
+or whose lanes leave padding (3 `int`s in 16 bytes), updates through a
+byte-wise compare-exchange loop.
 
 
 ### x86 intrinsic headers (2026-10-30)
@@ -1747,13 +1753,22 @@ loop over lanes; conversions round by the current rounding mode through
 (`_mm_cmpistri` and family) follow the SDM's PCMPxSTRx definition. An
 intrinsic with an immediate operand is a macro that also names the GCC/Clang
 builtin inside `sizeof`, which is not evaluated, so semantic analysis still
-checks the immediate as before. `tests/integration/x86_intrinsics.rs`
+checks the immediate as before: under the Clang identity an out-of-range
+constant is Clang's `-Wargument-outside-range`, an error that `-w` and
+`-Wno-argument-outside-range` silence, and under the GCC identity an error;
+GCC's `_mm_shuffle_pd` takes any constant and reads its low two bits.
+`__m64` is GCC's two-`int` vector (with `__m64_u` and `__v2sf`) under the
+GCC identity and Clang's one-`long long` vector under the Clang identity. `tests/integration/x86_intrinsics.rs`
 compares two programs covering every intrinsic with the host GCC's builds,
 which run the instructions, under both identities on every native arm.
 
 Differences: `_mm_rcp_ps` and `_mm_rsqrt_ps` return the correctly rounded
 reciprocal (within the instructions' 1.5 * 2^-12 bound, but not a
-processor's table); `_mm_undefined_*` return zero; non-temporal stores are
+processor's table), with the instructions' special cases: a subnormal
+input reads as a zero of its sign (±infinity), and `_mm_rcp_ps` of a
+magnitude of 2^126 or more is a zero; `_mm_cmpistr*` and `_mm_cmpestr*` call
+two out-of-line static helpers rather than inlining the whole string
+comparison at each call; `_mm_undefined_*` return zero; non-temporal stores are
 ordinary stores; `_mm_getcsr`, `_mm_setcsr`, the fences, `_mm_pause`,
 `_mm_clflush`, `_mm_monitor` and `_mm_mwait` are inline assembly, which the
 interpreter cannot run. The AVX, AVX2, AES, PCLMUL, 3DNow!, ADX and CPUID
