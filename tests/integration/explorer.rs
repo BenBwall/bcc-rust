@@ -23,6 +23,7 @@ mod tests {
     use bcc_rust::explorer::{
         ExplorerFile,
         ExplorerLineMapping,
+        ExplorerLineRange,
         ExplorerOptions,
         ExplorerOutput,
         compile,
@@ -267,15 +268,12 @@ mod tests {
         }
         // Each IR line that names a source line lies in a function of the
         // input and names a line of that function.
+        let ir: fn(&ExplorerLineMapping) -> Option<ExplorerLineRange> = |mapping| mapping.ir;
+        let ir_abi: fn(&ExplorerLineMapping) -> Option<ExplorerLineRange> =
+            |mapping| mapping.ir_abi;
         for (text, lines, range) in [
-            (
-                &output.ir,
-                &output.ir_lines,
-                (|mapping: &ExplorerLineMapping| mapping.ir) as fn(&_) -> _,
-            ),
-            (&output.ir_abi, &output.ir_abi_lines, |mapping| {
-                mapping.ir_abi
-            }),
+            (&output.ir, &output.ir_lines, ir),
+            (&output.ir_abi, &output.ir_abi_lines, ir_abi),
         ] {
             assert_eq!(
                 lines.len(),
