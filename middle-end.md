@@ -2129,8 +2129,8 @@ function, whose `indirect_br` lists all address-taken labels, so `n` gotos
 and `m` labels make `n + m` edges rather than `n * m`. A computed goto is a
 jump with an empty transition: like Clang, it releases no VLA storage it
 leaves before the function returns. GNU local labels lower as ordinary
-labels (only nested functions, still refused, could jump to them from
-elsewhere). `void *` arithmetic steps by one byte with byte alignment.
+labels (only nested functions could jump to them from elsewhere, which
+lowering refuses). `void *` arithmetic steps by one byte with byte alignment.
 
 **Evidence.** The conformance reproducer `computed_goto_table.c` interprets
 and runs natively in every arm. Of the 18 GCC 15.2.0 execute sources that use
@@ -2678,3 +2678,51 @@ GCC 15.2 at `-O0`) pass 132 of those 134 with bcc's LLVM `-O0` and `-O2`
 and native arms; the other two call `__builtin_assoc_barrier` and an
 `__builtin_ia32_*` builtin. The interpreter passes 104: most of the rest
 use inline assembly, which it does not run.
+
+## GNU nested functions (2026-10-30)
+
+Under GCC's identity a function defined in a block is a GNU nested function
+(`lowering/nested.rs`); Clang's identity rejects the definition when it
+parses it, as Clang does. Each nested function is an internal IR function
+named as GCC names it (`name.0`) whose last fixed parameter is its static
+chain: `Signature::chain` marks it, and the text form writes `chain` after
+that parameter. The chain is the address of the chain record of the
+function that defines it. A function with nested definitions builds its
+record on entry, after its parameters: word 0 holds its own static chain
+(null at file scope), and each later word the address of one of its
+objects a nested function uses, which therefore lives in a stack slot. A
+use reaches an object any number of functions out by following word 0 of
+each record. Definitions are lowered innermost first, so every capture is
+known, and the captured object is marked address-taken, before the function
+that owns it is lowered.
+
+A direct call passes the record as the chain, last among the fixed
+arguments; a call through another type goes indirect with the chained
+signature. Taking a nested function's address makes a trampoline in a
+32-byte, 16-aligned slot of the function that takes it, made again at each
+use: `trampoline storage, func, chain` writes it, and `adjust_trampoline
+storage` is the pointer to call, which reads it. A trampoline therefore
+lives as long as that function's frame, where GCC's lives as long as the
+defining function's.
+
+| Back end | Chain | Trampoline |
+|---|---|---|
+| LLVM | `nest` parameter and argument (`r10` on x86-64) | `llvm.init.trampoline` and `llvm.adjust.trampoline`; LLVM marks the stack executable |
+| Native | `r10`, taken first on entry and moved last before the `call` | `movabs $func, %r11; movabs $chain, %r10; jmp *%r11`, as GCC's; `.note.GNU-stack,"x"` |
+| Interpreter | an ordinary argument | a table from the storage to the function and chain, which an indirect call through it consults |
+| WebAssembly | an ordinary argument | refused: WebAssembly cannot run code from memory |
+
+An executable that uses trampolines links with `-z execstack`, which LLD
+will not infer; GCC's links get an executable stack from the objects' note.
+The native back end refuses a chain on `x86_64-pc-windows-msvc`, whose
+`__chkstk` clobbers `%r10`.
+
+Not yet supported, and refused: a `goto` out of a nested function to a label
+of a function around it (`__label__`), the address of such a label, a use
+of a variably modified object of an enclosing function, and a nested
+function whose own type is variably modified (its bounds are its definer's).
+
+**Evidence.** Of the 44 GCC 15.2 survey tests that stopped at nested
+functions, 30 now pass on LLVM at `-O0` and `-O2` and on the native back end;
+the rest need non-local gotos (9), label addresses across functions (2) or
+variably modified captures or types (3).

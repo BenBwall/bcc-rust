@@ -88,7 +88,12 @@ pub(crate) enum Construct {
     Attribute(UnsupportedAttribute),
     StructuredExceptionHandling,
     NamedJump,
-    NestedFunction,
+    /// A `goto` from a nested function to a label of a function around
+    /// it. GNU extension: GCC manual, "Nested Functions".
+    NonLocalGoto,
+    /// A nested function's use of a variably modified object of the
+    /// function around it, whose bounds that function keeps.
+    NestedVariablyModified,
     Builtin,
     StaticInitializer,
     Initializer,
@@ -159,7 +164,9 @@ impl Construct {
             | Self::Attribute(attribute) => attribute.description(),
             | Self::StructuredExceptionHandling => "structured exception handling",
             | Self::NamedJump => "named break and continue",
-            | Self::NestedFunction => "nested functions",
+            | Self::NonLocalGoto => "a jump out of a nested function",
+            | Self::NestedVariablyModified =>
+                "a nested function's use of a variably modified object of its definer",
             | Self::Builtin => "this builtin",
             | Self::StaticInitializer => "this static initializer",
             | Self::Initializer => "this initializer",

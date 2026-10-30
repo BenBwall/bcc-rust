@@ -74,6 +74,7 @@ pub(super) fn link(args: &Cli, inputs: &[Input<'_>]) -> Result<i32, MainError> {
     let mut temporaries = Vec::new();
     let mut status = 0;
     let mut atomic_runtime = false;
+    let mut executable_stack = false;
     for input in inputs {
         let object = match input {
             | Input::Link(_) => continue,
@@ -114,6 +115,7 @@ pub(super) fn link(args: &Cli, inputs: &[Input<'_>]) -> Result<i32, MainError> {
                 let generated = compile(args, source, Job::Generate(&job), dependencies)?;
                 status = combine(status, generated.status);
                 atomic_runtime |= generated.atomic_runtime;
+                executable_stack |= generated.executable_stack;
             },
         }
         temporaries.push(object);
@@ -132,9 +134,12 @@ pub(super) fn link(args: &Cli, inputs: &[Input<'_>]) -> Result<i32, MainError> {
     });
     let options = generation.llvm_options(target, args.configuration().code_options());
     let linked = Toolchain::bundled(target).and_then(|toolchain| {
-        toolchain
-            .with_sysroot(sysroot)
-            .link_inputs(ordered, output, options, atomic_runtime)
+        toolchain.with_sysroot(sysroot).link_inputs(
+            ordered,
+            output,
+            options,
+            (atomic_runtime, executable_stack),
+        )
     });
     match linked {
         | Ok(()) => Ok(0),

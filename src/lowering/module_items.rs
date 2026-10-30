@@ -175,6 +175,8 @@ pub(super) struct Unit<'a, 'tu, 'ir> {
     /// is taken, with their definitions, whose bodies
     /// `argument_pack::lower_live_copies` lowers if the address is live.
     pub(super) pack_addresses: ArenaMap<'a, FuncId, &'tu FunctionRecord<'tu>>,
+    /// The unit's GNU nested functions (`nested.rs`).
+    pub(super) nested: super::nested::NestedFunctions<'a>,
 }
 
 impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
@@ -251,6 +253,7 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             if record
                 .binding
                 .is_some_and(|binding| !self.reachable.contains(&binding))
+                && !self.nested_reachable(record)
             {
                 continue;
             }
@@ -509,10 +512,7 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
         };
         let scope = self.sema.bindings[binding].scope;
         if self.sema.scopes[scope].kind != ScopeKind::File {
-            return Err(LoweringError::unsupported(
-                Construct::NestedFunction,
-                source,
-            ));
+            return self.declare_nested(record, binding).map(Some);
         }
         // GNU extension: GCC manual, "Constructing Calls". Each direct call
         // gets its own copy of a body that uses the argument pack. A `used`
@@ -695,6 +695,9 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
     /// with the signature of the binding's type.
     pub(super) fn function(&mut self, binding: usize) -> Result<FuncId, LoweringErrorKind> {
         let data = self.sema.bindings[binding];
+        if let Some(func) = self.nested_function(binding) {
+            return Ok(func);
+        }
         if data.linkage == Linkage::Internal && !self.reachable.contains(&binding) {
             return Err(LoweringErrorKind::MissingFact(
                 "lowering referenced an omitted internal function",
@@ -976,6 +979,7 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             // Bundled Clang emits no C return noundef at -O0.
             result_noundef: false,
             variadic_noundef: variadic,
+            chain: false,
         })
     }
 
@@ -2359,6 +2363,7 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             pack_copies: ArenaVec::new_in(tables),
             pack_copy_index: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, tables),
             pack_addresses: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, tables),
+            nested: super::nested::NestedFunctions::new(tables),
         })
     }
 }

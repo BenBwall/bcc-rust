@@ -894,7 +894,7 @@ int labeled(void) {return ({int x=3;goto out;x=4;out:x;});}
                       __builtin_va_arg(ap,int)+__builtin_offsetof(struct \
                       S,x)+__builtin_types_compatible_p(int,long)+__builtin_choose_expr(1,\
                       __real__ value,__imag__ value); }) ?: 2;}\n";
-        let (summary, allocations) = count_compile(|| bcc_rust::parse_source(source));
+        let (summary, allocations) = count_compile(|| bcc_rust::parse_gcc_source(source));
         assert_eq!(summary.external_declarations, 6);
         assert_no_allocations("GNU syntax source", summary, &allocations);
     }

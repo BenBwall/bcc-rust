@@ -82,6 +82,7 @@ pub(super) fn prepare<'ir>(
         }
     }
     let mut atomic_runtime = false;
+    let mut executable_stack = false;
     let output = match (options.emit, &options.output_path) {
         | (Some(Emit::Ir | Emit::IrAbi), _) => {
             let mut text = ArenaString::new_in(arena);
@@ -168,6 +169,8 @@ pub(super) fn prepare<'ir>(
             atomic_runtime = options.backend == BackEnd::Llvm
                 && options.output_kind() == OutputKind::Object
                 && llvm::needs_atomic_runtime(module);
+            executable_stack =
+                options.output_kind() == OutputKind::Object && module.uses_trampolines();
             Output::Built
         },
         | (None, None) => {
@@ -191,6 +194,7 @@ pub(super) fn prepare<'ir>(
         output,
         diagnostics,
         atomic_runtime,
+        executable_stack,
     })
 }
 
@@ -209,10 +213,13 @@ pub(super) enum Output<'ir> {
 }
 
 pub(super) struct Prepared<'ir> {
-    pub(super) output:         Output<'ir>,
-    pub(super) diagnostics:    &'ir [CallDiagnostic],
+    pub(super) output:           Output<'ir>,
+    pub(super) diagnostics:      &'ir [CallDiagnostic],
     /// Whether the object written needs the atomic runtime when linked.
-    pub(super) atomic_runtime: bool,
+    pub(super) atomic_runtime:   bool,
+    /// The module makes trampolines, so an executable linked from its
+    /// object needs an executable stack.
+    pub(super) executable_stack: bool,
 }
 
 /// The WebAssembly back end's outputs: `--emit=wasm`, `--emit=wat` (and
@@ -306,6 +313,7 @@ fn wasm<'ir>(
         output,
         diagnostics,
         atomic_runtime: false,
+        executable_stack: false,
     }))
 }
 

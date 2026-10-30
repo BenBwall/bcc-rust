@@ -89,7 +89,8 @@ fn nested_function_parameter_bindings_extend_through_its_body() {
                   after_definition; } T outside;\n";
     with_parse_configuration(
         source,
-        mode(CStandard::C11, true, ExtensionPolicy::Allow),
+        mode(CStandard::C11, true, ExtensionPolicy::Allow)
+            .with_compiler_identity(crate::configuration::CompilerIdentity::Gcc),
         |p| {
             assert_clean_parse(p, source);
             assert_eq!(p.items.len(), 3);

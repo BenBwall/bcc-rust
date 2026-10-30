@@ -83,6 +83,7 @@ mod expressions;
 mod gnu;
 mod half;
 mod initializers;
+mod nested;
 mod places;
 #[cfg(feature = "recursive-lowering-study")]
 mod recursive;
@@ -258,6 +259,7 @@ fn lower_unit<'tu, 'ir>(
         .set_null_pointer_is_valid(context.code_assumptions.null_pointer_is_valid);
     let plain_inline = options.plain_inline && unit.lower_plain_inline_bodies();
     let functions = unit.declare_items(syntax, &mut errors);
+    let functions = nested::definition_order(&unit, &functions, arena);
     let mut function_sources = ArenaVec::new_in(arena);
     for record in functions {
         scratch.reset();
@@ -609,6 +611,14 @@ struct FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
     /// In a copy made for a call (`argument_pack.rs`), the anonymous
     /// arguments it received.
     pack:               Option<&'s [Item]>,
+    /// A nested function's static chain: its definer's record
+    /// (`nested.rs`).
+    chain_in:           Option<crate::ir::Value>,
+    /// This function's own chain record, if it defines nested functions.
+    chain_record:       Option<crate::ir::Value>,
+    /// The trampoline slot of each nested function whose address this
+    /// function takes.
+    trampolines:        ArenaMap<'s, FuncId, crate::ir::StackSlot>,
 }
 
 /// Traversal controls kept outside the AST and retained IR.

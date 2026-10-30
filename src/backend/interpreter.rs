@@ -280,6 +280,8 @@ struct Machine<'m, 'ir, 'a> {
     argument_abis:  ArenaVec<'a, Option<crate::ir::ParamAbi<'ir>>>,
     /// The types of a call's arguments, for its variadic ones.
     argument_types: ArenaVec<'a, Type>,
+    /// The static chain the next call through a trampoline passes.
+    pending_chain:  Option<RuntimeValue>,
     /// The values a host call's pre-ABI `va_list` operand has left.
     host_varargs:   ArenaVec<'a, RuntimeValue>,
     /// The address of each function, by `FuncId`.

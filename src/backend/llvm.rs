@@ -35,6 +35,7 @@ use api::{
 pub(crate) use driver::ClangError;
 pub(crate) use driver::{
     CommandStyle,
+    EXECUTABLE_STACK,
     LlvmOptions,
     OptLevel,
     OutputKind,

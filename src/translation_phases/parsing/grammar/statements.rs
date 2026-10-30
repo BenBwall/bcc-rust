@@ -1095,7 +1095,12 @@ impl<'tu> Parser<'_, 'tu, '_> {
                         suppressed |= item.kind == SpecifierExtensionKind::ExtensionMarker;
                         extension = item.next;
                     }
-                    if !suppressed && let Some(token) = self.cursor.current() {
+                    if self.context.configuration.nested_function_rules()
+                        == crate::configuration::RuleSet::Clang
+                    {
+                        let token = self.cursor.current();
+                        self.report(ParserErrorType::NestedFunctionDefinition, token);
+                    } else if !suppressed && let Some(token) = self.cursor.current() {
                         self.extension(
                             Feature::NestedFunctions,
                             "nested function definition",

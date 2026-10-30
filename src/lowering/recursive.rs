@@ -248,24 +248,14 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 std::ptr::eq(control.syntax, statement),
                 "statement syntax identity"
             );
-            // The machine schedules siblings in reverse and refuses a nested
-            // definition before executing any of them. Preserve that order.
-            for item in items.iter().rev() {
-                if let BlockItem::FunctionDefinition(definition) = item {
-                    return Err(LoweringError::unsupported(
-                        super::Construct::NestedFunction,
-                        definition.source_vectors,
-                    ));
-                }
-            }
             for item in items {
                 let task = match *item {
                     | BlockItem::Statement(child) if mode == StatementMode::Effects =>
                         Task::StatementEffects(child),
                     | BlockItem::Statement(child) => Task::Statement(child),
                     | BlockItem::Declaration(declaration) => Task::Declaration(declaration),
-                    | BlockItem::FunctionDefinition(_) =>
-                        unreachable!("nested functions refused above"),
+                    // A nested function is lowered as a function of its own.
+                    | BlockItem::FunctionDefinition(_) => continue,
                 };
                 self.recursive_task(task)?;
             }

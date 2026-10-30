@@ -338,6 +338,7 @@ mod tests {
 
     #[test]
     fn gnu_parser_policy_diagnostics_match_goldens() {
+        const GCC: &str = "--compiler-identity=gcc";
         let source = include_str!("../fixtures/diagnostics/language/gnu-parser.c");
         for (flag, expected) in [
             (
@@ -349,12 +350,13 @@ mod tests {
                 include_str!("../fixtures/diagnostics/language/gnu-parser-error.stderr"),
             ),
         ] {
-            let output = run(&["-std=c17", flag, "--input", source]);
+            // GNU nested functions exist under GCC's identity alone.
+            let output = run(&[GCC, "-std=c17", flag, "--input", source]);
             assert!(output.stdout.is_empty(), "{output:?}");
             assert_eq!(String::from_utf8_lossy(&output.stderr), expected);
         }
         for mode in ["-std=c17", "-std=gnu17"] {
-            let output = run(&[mode, "--syntax-tree", "--input", source]);
+            let output = run(&[GCC, mode, "--syntax-tree", "--input", source]);
             let tree = String::from_utf8_lossy(&output.stderr);
             assert!(!tree.contains("warning:"), "{mode}: {tree}");
             if mode == "-std=c17" {

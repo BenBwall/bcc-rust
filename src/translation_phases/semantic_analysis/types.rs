@@ -571,10 +571,6 @@ pub(crate) enum TypeKind<'tu> {
 /// Durable type graph, retained after semantic working storage is released.
 #[derive(Debug)]
 pub(crate) struct Types<'tu> {
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "Retained for the canonical VM predicate.")
-    )]
     variably_modified: &'tu [bool],
     pub(crate) nodes:  &'tu [TypeKind<'tu>],
     pub(crate) tags:   &'tu [&'tu Tag<'tu>],
@@ -893,14 +889,6 @@ fn unmodeled_type(
 impl<'tu> Types<'tu> {
     /// Retained classification from type interning, including pointers to VLAs.
     /// C99: §6.7.5p3, pp. 114-115; PDF pp. 126-127.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "Retained VM predicate is available beside size-query facts for later \
-                      consumers."
-        )
-    )]
     pub(crate) fn variably_modified(&self, ty: TypeId) -> bool {
         self.variably_modified[ty.index]
     }

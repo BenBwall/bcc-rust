@@ -42,6 +42,7 @@ fn empty_old_style_definition_matches_prior_prototype_count() {
 #[test]
 fn nested_function_definitions_reject_static_and_extern_storage() {
     let configuration = CompilerConfiguration::new(CStandard::C17, ExtensionPolicy::Allow)
+        .with_compiler_identity(crate::configuration::CompilerIdentity::Gcc)
         .with_gnu_extensions(true);
     for source in [
         "void f(void) { static int g(void) { return 0; } g(); }",

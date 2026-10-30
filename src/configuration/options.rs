@@ -317,6 +317,14 @@ impl CompilerConfiguration {
     }
 
     /// GCC's rules (TCC's and MSVC's too) or Clang's (clang-cl's too) for a
+    /// function definition in a block: a GNU nested function under GCC's
+    /// rules, and an error under Clang's, which has none.
+    /// GNU extension: GCC manual, "Nested Functions".
+    pub(crate) const fn nested_function_rules(self) -> super::RuleSet {
+        self.identity.rules()
+    }
+
+    /// GCC's rules (TCC's and MSVC's too) or Clang's (clang-cl's too) for a
     /// floating constant converted out of an integer's range: GCC's
     /// bit-field saturation, `-Woverflow` in static initializers and
     /// pedantic overflow report, `__builtin_constant_p` 0; or Clang's

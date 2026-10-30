@@ -231,7 +231,8 @@ impl Machine<'_, '_, '_> {
                     },
                     | Opcode::Fneg => float_negate(ty, value),
                     | Opcode::Freeze if value.is_poison() => RuntimeValue::zero(ty),
-                    | Opcode::Freeze => value,
+                    // A trampoline is called through its storage.
+                    | Opcode::Freeze | Opcode::AdjustTrampoline => value,
                     | Opcode::VaStart => {
                         self.va_start(value)?;
                         return Ok(None);
@@ -361,7 +362,9 @@ impl Machine<'_, '_, '_> {
             } => {
                 let destination = self.value(destination);
                 let (source, size) = (self.value(source), self.value(size));
-                if opcode == Opcode::Copy {
+                if opcode == Opcode::Trampoline {
+                    self.memory.make_trampoline(destination, source, size)?;
+                } else if opcode == Opcode::Copy {
                     let may_overlap = flags.contains(InstFlags::MAY_OVERLAP);
                     self.memory
                         .copy(destination, source, size, align, may_overlap)?;
@@ -396,8 +399,25 @@ impl Machine<'_, '_, '_> {
                     .value_list(args)
                     .split_first()
                     .expect("call_indirect names its callee");
-                let func = self.memory.function_at(self.value(callee))?;
+                let callee = self.value(callee);
                 let expected = self.module.signature(sig);
+                // A trampoline calls its nested function with the chain,
+                // whose signature is the caller's with the chain last.
+                if let Some((func, chain)) = self.memory.trampoline_at(callee) {
+                    let actual = self.module.function_signature(func);
+                    let Some((_, unchained)) = actual.params.split_last() else {
+                        return Err(UbKind::SignatureMismatch.into());
+                    };
+                    if expected.params != unchained
+                        || expected.result != actual.result
+                        || expected.variadic != actual.variadic
+                    {
+                        return Err(UbKind::SignatureMismatch.into());
+                    }
+                    self.pending_chain = Some(chain);
+                    return self.call(body, func, args, result, host, actual);
+                }
+                let func = self.memory.function_at(callee)?;
                 if !self.admits(body, func, expected, args) {
                     return Err(UbKind::SignatureMismatch.into());
                 }

@@ -12,6 +12,7 @@ mod labels;
 mod noundef;
 mod scalar_builtins;
 mod stack;
+mod static_chains;
 mod symbols;
 mod text;
 mod verifier;

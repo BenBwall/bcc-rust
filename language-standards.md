@@ -909,7 +909,11 @@ also have inspectable syntax nodes.
 numeric-constant tokens within its expression or declaration, including a
 function body or a parameter. Suppression ends at the owning production's boundary;
 later unsuppressed occurrences, including ones from macro expansions, keep their
-diagnostics. Nested functions isolate typedef, label and switch state. GNU empty
+diagnostics. Nested functions isolate typedef, label and switch state; under
+the Clang identity a function definition in a block is the error "function
+definition is not allowed here", as in Clang, and under GCC's identity it is a
+GNU nested function that code generation supports (`middle-end.md`, "GNU nested
+functions"). GNU empty
 structures and unions remain complete syntax under every policy.
 An extra `;` between external declarations or between members, such as the
 one an empty macro like the Windows SDK's `DEFINE_ENUM_FLAG_OPERATORS(T);`

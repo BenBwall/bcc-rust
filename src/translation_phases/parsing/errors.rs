@@ -496,6 +496,11 @@ pub(crate) enum ParserErrorType<'tu> {
     /// A switch body contained more than one `default` label.
     /// C99: §6.8.4.2 paragraph 3, p. 134; PDF p. 146.
     DuplicateDefaultLabel,
+    /// A function definition in a block, which Clang rejects; GCC accepts
+    /// it as a GNU nested function.
+    /// C99: §6.9.1 paragraph 1, p. 141; PDF p. 153 (function definitions
+    /// are external declarations).
+    NestedFunctionDefinition,
     /// A `do` body was not followed by `while`.
     /// C99: §6.8.5 paragraph 1, p. 135; PDF p. 147.
     ExpectedWhileAfterDoBody(Option<TokenType>),
@@ -910,7 +915,8 @@ impl ParserErrorType<'_> {
             | Self::TypeQualifiersBeforePointerInArrayAbstractDirectDeclarator
             | Self::KAndRFunctionDeclaratorMixedWithModernDeclarator
             | Self::DeclarationListAfterParameterTypeList
-            | Self::DuplicateDefaultLabel => ParserDiagnosticCode::Constraint,
+            | Self::DuplicateDefaultLabel
+            | Self::NestedFunctionDefinition => ParserDiagnosticCode::Constraint,
             | Self::EmptyTranslationUnit
             | Self::ExpectedFunctionBody(..)
             | Self::ExpectedOpeningCurlyBraceInCompoundStatement(..)
@@ -1099,7 +1105,8 @@ impl ParserErrorType<'_> {
             | Self::KAndRFunctionDeclaratorMixedWithModernDeclarator
             | Self::TypedefDeclaresNoName
             | Self::MemberDeclaresNothing
-            | Self::DuplicateDefaultLabel => ExpectedSyntax::None,
+            | Self::DuplicateDefaultLabel
+            | Self::NestedFunctionDefinition => ExpectedSyntax::None,
         }
     }
 
@@ -1263,6 +1270,9 @@ impl ParserErrorType<'_> {
                     "C99 §6.4.1p2 reserves `_Imaginary`; imaginary types are only defined by the \
                      optional Annex G (footnote 59)",
                 ),
+            | Self::NestedFunctionDefinition => new("function definition is not allowed here")
+                .label("a function defined in a block")
+                .note("GCC accepts this as a GNU nested function; Clang does not"),
             | Self::DuplicateDefaultLabel => new("multiple `default` labels in one `switch`")
                 .label("second `default` label")
                 .note("C99 §6.8.4.2p3: a `switch` body has at most one `default` label"),

@@ -170,6 +170,13 @@ impl<'m, 'ir> Machine<'m, 'ir, '_> {
             self.arguments.push(value);
             self.argument_types.push(body.value_type(arg));
         }
+        // A trampoline passes the static chain as the last fixed argument.
+        if let Some(chain) = self.pending_chain.take() {
+            let index = signature.fixed_count().saturating_sub(1);
+            self.arguments.insert(index, chain);
+            self.argument_types.insert(index, Type::Ptr);
+            self.argument_abis.insert(index, None);
+        }
         self.check_arguments(signature)?;
         let returns_twice = self.module.returns_twice(func);
         // An alias runs its target's body, which the call reaches as an
@@ -787,6 +794,7 @@ impl<'m, 'ir, 'a> Machine<'m, 'ir, 'a> {
             argument_abis: ArenaVec::new_in(arena),
             arguments: ArenaVec::new_in(arena),
             argument_types: ArenaVec::new_in(arena),
+            pending_chain: None,
             host_varargs: ArenaVec::new_in(arena),
             functions,
             labels,
