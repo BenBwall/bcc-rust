@@ -30,8 +30,9 @@ them. Visitors pick a lesson (a small C program) and see it three ways:
   type, at `-O0` or `-O2`, with a note on what the optimizer changed. Its
   errors appear as squiggles in the source and in a diagnostics list, and the
   view says which stage stopped and why. Hovering a source line highlights
-  what it became (line by line for the front-end stages, per function for
-  the IR and machine stages, whose output keeps no source locations), and
+  what it became (line by line for the front-end stages and for each
+  instruction of the IR, per function for LLVM IR and the machine stages,
+  whose output keeps no source locations), and
   the reverse.
 
 - **WebAssembly.** The program compiled to WebAssembly by bcc, in the

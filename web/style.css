@@ -713,6 +713,9 @@
   .stage-output { margin-top: 14px; }
   .stage-output .code-editor { --editor-height: clamp(360px, calc(100vh - 420px), 620px); }
   .stage-missing { margin-top: 14px; padding: 16px; border: 1px dashed var(--border-strong); border-radius: var(--radius-m); color: var(--text-2); }
+  .stage-missing-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; margin-top: 12px; }
+  .stage-missing-actions[hidden] { display: none; }
+  .stage-missing-actions .stage-command { margin: 0; }
   .diagnostics-card h3 { margin-bottom: 8px; }
   .diagnostics-clean { display: flex; gap: 10px; color: var(--text-2); font-size: 14px; }
   .check { flex: none; display: grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; background: var(--accent-soft); color: var(--accent); font-weight: 700; }

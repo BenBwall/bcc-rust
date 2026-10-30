@@ -147,6 +147,56 @@ fn links_the_other_stages_per_function() {
 }
 
 #[test]
+fn links_ir_instructions_to_their_lines() {
+    let source = "int square(int x) {\n    int y = x * x;\n    return y;\n}\n";
+    let function = |ir| FunctionLines {
+        name: "square".into(),
+        source: (1, 4),
+        ir: Some(ir),
+        ..FunctionLines::default()
+    };
+    let compilation = Compilation {
+        ir:
+            Some(
+                "target\n\nfunction @square(i32) -> i32 {\nblock0(v0: i32):\n    v1 = imul v0, \
+                 v0\n    return v1\n}\n"
+                    .into(),
+            ),
+        ir_lines: vec![0, 0, 0, 0, 2, 3, 0],
+        functions: vec![function((3, 7))],
+        ..Compilation::default()
+    };
+    let ir = links(Stage::Ir, &compilation, source, false);
+    assert!(ir.is_exact());
+    assert_eq!(
+        ir.outputs_for(2),
+        [3, 5, 7],
+        "the multiply, and the function's ends"
+    );
+    assert_eq!(ir.outputs_for(3), [3, 6, 7]);
+    assert_eq!(ir.sources_for(5), [2]);
+    assert_eq!(
+        ir.sources_for(3),
+        [1, 2, 3, 4],
+        "the header stands for the function"
+    );
+    assert_eq!(
+        ir.sources_for(4),
+        Vec::<usize>::new(),
+        "a block label links nowhere"
+    );
+    // A body the optimizer rebuilt has no lines left: it links per function.
+    let rebuilt = Compilation {
+        ir_lines: vec![0; 7],
+        ..compilation
+    };
+    assert_eq!(
+        links(Stage::Ir, &rebuilt, source, false).sources_for(5),
+        [1, 2, 3, 4]
+    );
+}
+
+#[test]
 fn the_optimizer_comparison_names_what_changed() {
     let plain = Compilation {
         ir: Some(
