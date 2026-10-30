@@ -34,8 +34,17 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
         let layout = types::layout(&self.unit.sema.types, place.ty)
             .map_err(|kind| crate::lowering::module_items::at(kind, source))?;
         // No register holds a wide bit-precise integer or a GNU vector of
-        // more than 16 bytes (or of a size no integer has).
-        if self.wide_bit_int(place.ty).is_some() || !matches!(layout.size, 1 | 2 | 4 | 8 | 16) {
+        // more than 16 bytes (or of a size no integer has). Nor does one
+        // whose lanes leave padding, like the last 4 bytes of a 3 x `int`
+        // vector's 16: no lane writes them, so a register's value would
+        // read bytes no one stored.
+        let padded = self
+            .vector(place.ty)
+            .is_some_and(|shape| shape.count * shape.stride < shape.size);
+        if self.wide_bit_int(place.ty).is_some()
+            || padded
+            || !matches!(layout.size, 1 | 2 | 4 | 8 | 16)
+        {
             return self.atomic_update_bytes(address, place.ty, source, update);
         }
         let ty = self.unit.sema.types.non_atomic(place.ty).unqualified();
