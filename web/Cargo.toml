@@ -65,7 +65,7 @@ web-sys = { version = "0.3", features = [
     "Blob", "console", "CssStyleDeclaration", "DedicatedWorkerGlobalScope", "Document", "DomRect", "Element", "ErrorEvent",
     "File", "FileList", "HtmlDivElement", "HtmlElement", "HtmlInputElement", "IntersectionObserver",
     "IntersectionObserverEntry", "KeyboardEvent", "MediaQueryList", "MessageEvent", "NodeList",
-    "ResizeObserver", "ScrollBehavior", "ScrollIntoViewOptions", "ScrollLogicalPosition", "Storage", "Url", "Window",
+    "ResizeObserver", "ScrollBehavior", "ScrollIntoViewOptions", "ScrollLogicalPosition", "ScrollToOptions", "Storage", "Url", "Window",
     "Worker", "WorkerOptions", "WorkerType",
 ] }
 

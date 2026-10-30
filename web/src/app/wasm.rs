@@ -1019,9 +1019,11 @@ pub(super) fn WasmTransport(state: State, hidden: Signal<bool>) -> impl IntoView
                 <span class="button-label">"Back"</span>
             </button>
             {button("Step", "Execute one instruction (→)", "primary", WasmRun::Step, "")}
-            {button("Over", "Step over: run a call to its return (O)", "", WasmRun::StepOver, "M4 13a6 6 0 0 1 11-3M15 6v4h-4")}
-            {button("Out", "Step out: run until this function returns (U)", "", WasmRun::StepOut, "M10 15V5M6 9l4-4 4 4")}
-            {button("Next line", "Run to the next C source line (N)", "", WasmRun::NextLine, "M4 6h12M4 10h8M4 14h12")}
+            // These three keep their words on phones: their icons alone
+            // would not say which is which.
+            {button("Over", "Step over: run a call to its return (O)", "labelled", WasmRun::StepOver, "M4 13a6 6 0 0 1 11-3M15 6v4h-4")}
+            {button("Out", "Step out: run until this function returns (U)", "labelled", WasmRun::StepOut, "M10 15V5M6 9l4-4 4 4")}
+            {button("Next line", "Run to the next C source line (N)", "labelled", WasmRun::NextLine, "M4 6h12M4 10h8M4 14h12")}
             <button
                 type="button"
                 class="button"
@@ -1050,19 +1052,21 @@ pub(super) fn WasmTransport(state: State, hidden: Signal<bool>) -> impl IntoView
             >
                 {move || format!("Run to line {}", state.target_line.get().unwrap_or_default())}
             </button>
-            <StartAtMain state />
         </div>
     }
 }
 
-/// Whether Reset starts at `main` or at the module's entry point.
+/// Whether Reset starts at `main` or at the module's entry point. A setting
+/// rather than a command, it sits outside the controls, beside the status on
+/// narrow screens.
 #[component]
-fn StartAtMain(state: State) -> impl IntoView {
+pub(super) fn StartAtMain(state: State, hidden: Signal<bool>) -> impl IntoView {
     let wasm = state.wasm;
     view! {
         <button
             type="button"
-            class="toggle-chip"
+            class="toggle-chip start-at-main"
+            hidden=move || hidden.get()
             aria-pressed=move || wasm.choice.with(|choice| !choice.from_entry).to_string()
             title="Begin at the first instruction of main, after the code that runs before it: the C library's startup and any constructors (Back still steps through it), or at the entry point's first instruction"
             disabled=move || wasm.locked_tracked()

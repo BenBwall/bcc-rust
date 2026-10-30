@@ -593,6 +593,7 @@ impl State {
     }
 
     fn set_mode(self, mode: Mode) {
+        hold_source_pane();
         self.mode.set(mode);
         // Loading the program compiles it, so the squiggles' compilation
         // waits for it rather than compiling the same text twice.
@@ -1669,6 +1670,7 @@ fn Toolbar(state: State) -> impl IntoView {
                 <span class="step-counter">"Step "<strong>{move || state.current.with(|s| s.as_ref().map_or_else(|| "–".into(), |s| s.step.to_string()))}</strong></span>
             </div>
             <wasm::WasmTransport state hidden=Signal::derive(move || state.mode.get() != Mode::Wasm) />
+            <wasm::StartAtMain state hidden=Signal::derive(move || state.mode.get() != Mode::Wasm) />
             <div class="run-status" hidden=move || state.mode.get() != Mode::Wasm>
                 <span class="status-pill" data-status=move || wasm::status(state.wasm).1>{move || wasm::status(state.wasm).0}</span>
                 <span class="step-counter">"Instruction "<strong>{move || state.wasm.current.with(|s| s.as_ref().map_or_else(|| "–".into(), |s| s.step.to_string()))}</strong></span>
@@ -1676,6 +1678,72 @@ fn Toolbar(state: State) -> impl IntoView {
         </div>
     }
 }
+
+/// Undo the browser's scroll anchoring while a change of view resizes the
+/// toolbar and the source pane above the narration (at once, and again when
+/// the WebAssembly listing arrives): anchoring keeps the narration in place,
+/// which scrolls the top of the source under the toolbar. A scroll by exactly
+/// the change in what lies above the narration is anchoring and is undone;
+/// any other scroll (the reader's, the focus being scrolled into view, a
+/// revealed line) ends the hold, as does `HOLD_MS` passing.
+fn hold_source_pane() {
+    use std::cell::{
+        Cell,
+        RefCell,
+    };
+
+    use gloo_timers::callback::Interval;
+
+    let document = document();
+    let (Some(window), Some(workbench), Some(insight)) = (
+        web_sys::window(),
+        document.get_element_by_id("workbench"),
+        document.get_element_by_id("insight"),
+    ) else {
+        return;
+    };
+    // What lies above the narration (the toolbar, and on narrow screens the
+    // source pane), and the page's scroll.
+    let measure = {
+        let window = window.clone();
+        move || {
+            (
+                insight.get_bounding_client_rect().top()
+                    - workbench.get_bounding_client_rect().top(),
+                window.scroll_y().unwrap_or_default(),
+            )
+        }
+    };
+    let last = Cell::new(measure());
+    let held = Cell::new(true);
+    let interval = Rc::new(RefCell::new(None));
+    *interval.borrow_mut() = Some(Interval::new(HOLD_CHECK_MS, move || {
+        if !held.get() {
+            return;
+        }
+        let ((height, scroll), (last_height, last_scroll)) = (measure(), last.get());
+        let (grown, scrolled) = (height - last_height, scroll - last_scroll);
+        if grown.abs() >= 1.0 && (scrolled - grown).abs() < 2.0 {
+            let options = web_sys::ScrollToOptions::new();
+            options.set_top(-scrolled);
+            options.set_behavior(web_sys::ScrollBehavior::Instant);
+            window.scroll_by_with_scroll_to_options(&options);
+            last.set((height, scroll - scrolled));
+        } else {
+            held.set(scrolled.abs() < 1.0);
+            last.set((height, scroll));
+        }
+    }));
+    Timeout::new(HOLD_MS, move || {
+        interval.borrow_mut().take();
+    })
+    .forget();
+}
+
+/// How long a change of view watches for scroll anchoring, at most.
+const HOLD_MS: u32 = 8000;
+/// How often the hold compares the narration's offset and the page's scroll.
+const HOLD_CHECK_MS: u32 = 50;
 
 /// Publish the toolbar's height as `--toolbar-height` on the root element
 /// whenever its controls wrap, so the sticky source pane, the WebAssembly

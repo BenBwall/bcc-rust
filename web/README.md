@@ -41,10 +41,13 @@ them. Visitors pick a lesson (a small C program) and see it three ways:
 
 Every variable keeps one colour across the source, the expression tree and the
 memory diagram. The page has light and dark themes and works down to phone
-width. At every width the line that runs and the narration of what it did are
-on screen together: down to 821 px the source stays beside the narration (a
-sticky column); narrower, the page is one column with the source sized so the
-narration follows it on the same screen, and only the toolbar stays at the top.
+width. At almost every size the line that runs and the narration of what it
+did are on screen together: down to 821 px the source stays beside the
+narration (a sticky column, sized to fit under the toolbar); narrower, the page
+is one column with the source sized so the narration follows it on the same
+screen, and only the toolbar stays at the top. Windows 600 px tall or less (a
+phone held sideways, a zoomed laptop) let the header scroll away and drop the
+source's legends.
 
 The site is written in Rust with [Leptos](https://leptos.dev) and built by
 [Trunk](https://trunkrs.dev) into a static site in `web/dist/`. The page's
