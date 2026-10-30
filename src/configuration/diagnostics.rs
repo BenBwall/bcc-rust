@@ -141,7 +141,12 @@ impl CompilerConfiguration {
         } else {
             group.default_severity()
         };
-        if self.suppress_warnings && default == ErrorSeverity::Warning {
+        // Clang 23's `-w` also silences its default-error
+        // `-Wargument-outside-range`, though not `-Wint-conversion` or
+        // `-Wincompatible-function-pointer-types`.
+        if self.suppress_warnings
+            && (default == ErrorSeverity::Warning || group == DiagnosticGroup::ArgumentOutsideRange)
+        {
             return None;
         }
         let error = option.error.unwrap_or(
@@ -234,6 +239,9 @@ diagnostic_groups! {
     PointerQualifiers => Some("incompatible-pointer-types-discards-qualifiers"), Warning, true;
     IncompatibleFunctionPointerTypes => Some("incompatible-function-pointer-types"), Error, true;
     IntConversion => Some("int-conversion"), Error, true;
+    /// Clang: an x86 builtin's immediate constant outside its range. A
+    /// non-constant one, and GCC's out-of-range one, is an error.
+    ArgumentOutsideRange => Some("argument-outside-range"), Error, false;
     PointerIntegerCompare => Some("pointer-integer-compare"), Warning, true;
     OrderedCompareFunctionPointers => Some("ordered-compare-function-pointers"), Warning, true;
     OrderedPointerIntegerCompare => None, Warning, true;

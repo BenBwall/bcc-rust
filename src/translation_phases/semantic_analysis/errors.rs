@@ -578,6 +578,10 @@ pub(crate) enum SemanticErrorKind {
     /// GNU extension: GCC manual, "x86 Built-in Functions".
     /// <https://gcc.gnu.org/onlinedocs/gcc/x86-Built-in-Functions.html>
     InvalidImmediate,
+    /// Clang `-Wargument-outside-range`, an error by default: an x86
+    /// builtin's immediate constant outside its range.
+    /// Clang extension: Clang Language Extensions, "Builtin Functions".
+    ImmediateOutOfRange,
     /// GNU extension: GCC manual, "Extended Asm"; C99 §J.5.10, p. 514;
     /// PDF p. 526.
     InvalidAsm(super::assembly::AsmFault),
@@ -715,6 +719,7 @@ impl SemanticErrorKind {
             | Self::DllImportDropped | Self::DllExportAdded =>
                 Some(DiagnosticGroup::InconsistentDllimport),
             | Self::CallAttributeWarning => Some(DiagnosticGroup::AttributeWarning),
+            | Self::ImmediateOutOfRange => Some(DiagnosticGroup::ArgumentOutsideRange),
             | Self::ConstantConversion(_) => Some(DiagnosticGroup::ConstantConversion),
             | Self::FloatOverflow(_) => Some(DiagnosticGroup::Overflow),
             | Self::PedanticOverflow => Some(DiagnosticGroup::PedanticOverflow),
@@ -762,6 +767,7 @@ impl SemanticErrorKind {
             | Self::InvalidVectorOperand => "invalid vector operands",
             | Self::InvalidVectorBuiltin => "invalid vector builtin operands",
             | Self::InvalidImmediate => "expected an integer constant expression in range",
+            | Self::ImmediateOutOfRange => "outside the builtin's valid range",
             | Self::InvalidAsm(fault) => fault.label(),
             | Self::CallAttribute | Self::CallAttributeWarning => "function attribute diagnostic",
             | Self::NoViableOverload => "no viable overload",
@@ -1060,6 +1066,7 @@ impl SemanticErrorKind {
                     | crate::configuration::DiagnosticGroup::VoidPointerToEnumCast
                     | crate::configuration::DiagnosticGroup::IntToPointerCast
                     | crate::configuration::DiagnosticGroup::IntToVoidPointerCast
+                    | crate::configuration::DiagnosticGroup::ArgumentOutsideRange
                     | crate::configuration::DiagnosticGroup::NewlineEof
                     | crate::configuration::DiagnosticGroup::Undef
                     | crate::configuration::DiagnosticGroup::PredefinedOutsideFunction
@@ -1326,6 +1333,11 @@ impl SemanticErrorKind {
                  indices; convertvector requires equal lane counts",
             ),
             | Self::InvalidAsm(fault) => fault.explanation(),
+            | Self::ImmediateOutOfRange => (
+                "argument value is outside the valid range",
+                "Clang x86 intrinsics: the immediate operand must lie in the builtin's \
+                 permitted range",
+            ),
             | Self::InvalidImmediate => (
                 "invalid intrinsic immediate operand",
                 "Clang x86 intrinsics: the immediate operand must be an integer constant \

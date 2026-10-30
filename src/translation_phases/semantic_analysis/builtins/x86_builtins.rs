@@ -16,6 +16,7 @@ use crate::{
         TypeRule,
         VectorOverload,
     },
+    configuration::RuleSet,
     translation_phases::{
         parsing::{
             declaration_syntax::TypeQualifiers,
@@ -77,6 +78,19 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         && v <= i128::from(high)
                         && (mask == 0 || (v < 16 && (mask & (1 << v)) != 0))
                 }) {
+                    // Clang's `-Wargument-outside-range` is an error by
+                    // default, which `-w` silences.
+                    if value.is_some()
+                        && self.context.configuration.compiler_identity().rules() == RuleSet::Clang
+                    {
+                        self.error(
+                            SemanticErrorKind::ImmediateOutOfRange,
+                            arg.source_vectors,
+                            None,
+                            None,
+                        );
+                        continue;
+                    }
                     self.error(
                         super::registry::diagnostic(rule.diagnostic),
                         arg.source_vectors,

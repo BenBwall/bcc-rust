@@ -248,8 +248,16 @@ __BCC_SSE int _mm_movemask_pd(__m128d __a) {
 __BCC_SSE __m128d __bcc_shuffle_pd(__m128d __a, __m128d __b, int __i) {
   return (__m128d){__a[__i & 1], __b[(__i >> 1) & 1]};
 }
+/* Clang takes a selector from 0 to 3, GCC any constant, of which the
+ * instruction reads the low two bits; the checked builtin has Clang's range. */
+#if defined(__clang__)
+#define __BCC_SHUFPD_IMMEDIATE(i) (i)
+#else
+#define __BCC_SHUFPD_IMMEDIATE(i) ((int)(i) & 3)
+#endif
 #define _mm_shuffle_pd(a, b, i)                                                 \
-  __BCC_IMMEDIATE(__builtin_ia32_shufpd((__v2df)(__m128d)(a), (__v2df)(__m128d)(b), (int)(i)), \
+  __BCC_IMMEDIATE(__builtin_ia32_shufpd((__v2df)(__m128d)(a), (__v2df)(__m128d)(b),        \
+                                        __BCC_SHUFPD_IMMEDIATE(i)),                         \
                   __bcc_shuffle_pd((__m128d)(a), (__m128d)(b), (int)(i)))
 #define _MM_SHUFFLE2(x, y) (((x) << 1) | (y))
 
