@@ -2025,7 +2025,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     /// C99: §6.3.1.8p1, pp. 44-45; PDF pp. 56-57. Preserve ranks even
     /// when long and long long have the same LP64 width.
-    fn common_arithmetic(
+    pub(in crate::translation_phases::semantic_analysis) fn common_arithmetic(
         &mut self,
         left: ExpressionInfo<'tu>,
         right: ExpressionInfo<'tu>,

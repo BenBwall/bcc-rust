@@ -151,8 +151,15 @@ representation (`float`, `double`, `double`, `long double`, `__float128`)
 instead, which are not distinct types. glibc's GCC fortify
 wrappers for the `printf` family, `open` and `syslog` forward their arguments
 with `__builtin_va_arg_pack`, which lowering expands at each call, so under
-this identity they reach the checked functions. `msvc` (`cl.exe`) removes the
-GNU and Clang macros and the inline-semantics macro, and defines `_MT` and
+this identity they reach the checked functions. Its `math.h` also defines
+`isgreater`, `isless`, `isunordered` and their siblings (C99 §7.12.14) as
+`__builtin_isgreater` and the like, and `issignaling` and C23's `roundeven`
+as `__builtin_issignaling` and `__builtin_roundeven`; bcc provides those
+builtins under every identity, with GCC's `__builtin_iseqsig` (whose
+"invalid" exception for a NaN operand bcc does not raise). The comparisons
+take two real operands, at least one floating, in their common real type, as
+GCC and Clang check them, and fold constant operands. `msvc` (`cl.exe`)
+removes the GNU and Clang macros and the inline-semantics macro, and defines `_MT` and
 `_MSVC_TRADITIONAL` `0` (bcc's preprocessor is conforming, like `cl
 /Zc:preprocessor`); `_MSC_VER` still needs `-fms-extensions` on the MSVC
 target, which the `cl` personality selects. `clang-cl` removes the GNU macros

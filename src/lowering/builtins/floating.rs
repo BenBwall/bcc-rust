@@ -11,7 +11,10 @@ use super::{
     types,
 };
 use crate::{
-    builtins::FloatOperation,
+    builtins::{
+        FloatCompare,
+        FloatOperation,
+    },
     ir::{
         Align,
         FloatCC,
@@ -40,7 +43,13 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
     ) -> Result<Operand, LoweringError> {
         let value = self.value(items[operation.operand_index()], source)?;
         let ty = self.draft.value_type(value);
-        let result = if matches!(
+        if let FloatOperation::Compare(compare) = operation {
+            let other = self.value(items[1], source)?;
+            return Ok(Operand::Value(self.floating_compare(compare, value, other)));
+        }
+        let result = if operation == FloatOperation::Issignaling {
+            self.issignaling(value, operand, source)?
+        } else if matches!(
             operation,
             FloatOperation::Signbit | FloatOperation::Copysign
         ) {
@@ -92,6 +101,79 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
             )?
         };
         Ok(Operand::Value(result))
+    }
+
+    /// Both operands already have their common real type. The ordered
+    /// predicates are false for a NaN operand, `uno` true, so no comparison
+    /// needs a separate NaN test; a 16-bit type compares exactly in `float`.
+    /// C99: §7.12.14.1-§7.12.14.6, pp. 240-242; PDF pp. 252-254.
+    fn floating_compare(&mut self, compare: FloatCompare, left: Value, right: Value) -> Value {
+        let (left, right) = if self.draft.value_type(left).half_format().is_some() {
+            (self.widen_half(left), self.widen_half(right))
+        } else {
+            (left, right)
+        };
+        let cc = match compare {
+            | FloatCompare::Greater => FloatCC::Ogt,
+            | FloatCompare::GreaterEqual => FloatCC::Oge,
+            | FloatCompare::Less => FloatCC::Olt,
+            | FloatCompare::LessEqual => FloatCC::Ole,
+            | FloatCompare::LessGreater => FloatCC::One,
+            | FloatCompare::Unordered => FloatCC::Uno,
+            | FloatCompare::EqualSignaling => FloatCC::Oeq,
+        };
+        let holds = self.fcmp(cc, left, right);
+        self.extend(holds, false, Type::I32)
+    }
+
+    /// A NaN whose quiet bit, the highest fraction bit, is clear. The bit is
+    /// read from the stored representation, which a register copy of a
+    /// signaling NaN keeps; the byte and mask locate it in each format.
+    /// C23: §7.12.3.8, pp. 240-241; PDF pp. 253-254 (N3220).
+    fn issignaling(
+        &mut self,
+        value: Value,
+        operand: TypeId,
+        source: SourceVectors,
+    ) -> Result<Value, LoweringError> {
+        let ty = self.draft.value_type(value);
+        let (offset, mask) = match ty {
+            | Type::F16 => (1, 0x02),
+            | Type::BF16 => (0, 0x40),
+            | Type::F32 => (2, 0x40),
+            | Type::F64 => (6, 0x08),
+            | Type::F80 => (7, 0x40),
+            | Type::F128 => (13, 0x80),
+            | _ =>
+                return Err(LoweringError::unsupported(
+                    super::super::Construct::Builtin,
+                    source,
+                )),
+        };
+        let (address, _) = self.floating_sign_byte(value, operand, source)?;
+        let address = self.offset_address(address, offset);
+        let byte = self.inst(
+            InstData::Load {
+                ty:    Type::I8,
+                flags: InstFlags::default(),
+                align: Align::BYTE,
+                tag:   None,
+                addr:  address,
+            },
+            Type::I8,
+        );
+        let mask = self.iconst(Type::I8, mask);
+        let quiet = self.plain(Opcode::And, byte, mask);
+        let zero = self.iconst(Type::I8, 0);
+        let signaling = self.icmp(IntCC::Eq, quiet, zero);
+        let wide = if ty.half_format().is_some() {
+            self.widen_half(value)
+        } else {
+            value
+        };
+        let nan = self.fcmp(FloatCC::Uno, wide, wide);
+        let both = self.plain(Opcode::And, nan, signaling);
+        Ok(self.extend(both, false, Type::I32))
     }
 
     /// Classifies with ordered comparisons against the format's infinities
@@ -189,7 +271,10 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
                 let ordered = self.choose(infinite, infinite_class, finite);
                 self.choose(nan, nan_class, ordered)
             },
-            | FloatOperation::Signbit | FloatOperation::Copysign =>
+            | FloatOperation::Signbit
+            | FloatOperation::Copysign
+            | FloatOperation::Issignaling
+            | FloatOperation::Compare(_) =>
                 return Err(LoweringError::missing("not a classification", source)),
         })
     }

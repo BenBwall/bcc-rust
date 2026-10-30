@@ -6,7 +6,10 @@
 
 use crate::{
     binary128::Binary128,
-    builtins::FloatOperation,
+    builtins::{
+        FloatCompare,
+        FloatOperation,
+    },
     float_parsing::LongDouble,
     translation_phases::{
         parsing::syntax::{
@@ -93,6 +96,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         operation: FloatOperation,
         scalar: Option<Scalar>,
     ) -> ExpressionInfo<'tu> {
+        if let FloatOperation::Compare(compare) = operation {
+            return self.floating_compare_builtin(expression, args, compare);
+        }
         let (classes, args) = args.split_at(operation.operand_index());
         let int = self.types.scalar(Scalar::Int);
         for &class in classes {
@@ -155,6 +161,58 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 self.classify_constant(operation, classes, operand, (sign, exponent, significand))
             {
                 result.integer = Some(Integer::int(value));
+                result.ice = true;
+                result.constant = ConstantClass::Arithmetic;
+            }
+        }
+        result
+    }
+
+    /// `__builtin_isless(x, y)` and its siblings: both operands are real,
+    /// at least one floating, and the usual arithmetic conversions bring
+    /// them to the type they are compared in, as GCC and Clang check them.
+    /// Constant operands fold, a NaN being unordered.
+    /// C99: §7.12.14p1, p. 240; PDF p. 252; §6.3.1.8p1, pp. 44-45;
+    /// PDF pp. 56-57.
+    fn floating_compare_builtin(
+        &mut self,
+        expression: &'tu Expression<'tu>,
+        args: &[&'tu Expression<'tu>],
+        compare: FloatCompare,
+    ) -> ExpressionInfo<'tu> {
+        let (left, right) = (self.expression_info(args[0]), self.expression_info(args[1]));
+        let (lt, rt) = (self.converted(left), self.converted(right));
+        if self.types.unanalyzed(lt) || self.types.unanalyzed(rt) {
+            return Self::expression_result(expression, self.types.unknown());
+        }
+        let floating = |this: &Self, ty: TypeId| {
+            matches!(
+                this.types.nodes[this.types.non_atomic(ty).index],
+                TypeKind::Scalar(s) if s.floating() && !s.complex()
+            )
+        };
+        if !(self.real(lt) && self.real(rt)) || !(floating(self, lt) || floating(self, rt)) {
+            return self.invalid_expression(expression, SemanticErrorKind::InvalidArgumentType);
+        }
+        let operand = self.common_arithmetic(left, right, lt, rt);
+        let mut result = Self::expression_result(expression, self.types.scalar(Scalar::Int));
+        result.operation_type = Some(operand);
+        if left.constant == ConstantClass::Arithmetic && right.constant == ConstantClass::Arithmetic
+        {
+            let ordering = if self.binary128_type(operand) {
+                self.binary128_value(left)
+                    .zip(self.binary128_value(right))
+                    .map(|(left, right)| left.real.compare(right.real))
+            } else {
+                self.converted_floating(left, operand)
+                    .zip(self.converted_floating(right, operand))
+                    .map(|(left, right)| match left.real.compare(right.real) {
+                        | 2 => None,
+                        | order => Some(order.cmp(&0)),
+                    })
+            };
+            if let Some(ordering) = ordering {
+                result.integer = Some(Integer::int(i128::from(compare.holds(ordering))));
                 result.ice = true;
                 result.constant = ConstantClass::Arithmetic;
             }
@@ -292,7 +350,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             } else {
                 3
             })?,
-            | FloatOperation::Copysign => return None,
+            // The quiet bit is the significand's highest fraction bit in
+            // every format, bit 62 of the x87 carrier.
+            | FloatOperation::Issignaling => i128::from(nan && significand & 1 << 62 == 0),
+            | FloatOperation::Copysign | FloatOperation::Compare(_) => return None,
         })
     }
 }

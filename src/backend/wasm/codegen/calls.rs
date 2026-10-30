@@ -398,8 +398,10 @@ impl<'ir> Codegen<'_, '_, '_, 'ir, '_> {
             | "ceilf" => op::F32_CEIL,
             | "trunc" => op::F64_TRUNC,
             | "truncf" => op::F32_TRUNC,
-            | "nearbyint" | "rint" => op::F64_NEAREST,
-            | "nearbyintf" | "rintf" => op::F32_NEAREST,
+            // WebAssembly has only the default rounding mode, so these are
+            // all its ties-to-even `nearest`.
+            | "nearbyint" | "rint" | "roundeven" => op::F64_NEAREST,
+            | "nearbyintf" | "rintf" | "roundevenf" => op::F32_NEAREST,
             | "copysign" => op::F64_COPYSIGN,
             | "copysignf" => op::F32_COPYSIGN,
             | _ => return None,

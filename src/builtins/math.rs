@@ -653,6 +653,24 @@ pub(super) const BUILTINS: &[BuiltinDescriptor] = &[
         LongDoubleUnary,
     ),
     descriptor(Id::LibraryRound, "__builtin_round", "round", DoubleUnary),
+    descriptor(
+        Id::LibraryRoundeven,
+        "__builtin_roundeven",
+        "roundeven",
+        DoubleUnary,
+    ),
+    descriptor(
+        Id::LibraryRoundevenf,
+        "__builtin_roundevenf",
+        "roundevenf",
+        FloatUnary,
+    ),
+    descriptor(
+        Id::LibraryRoundevenl,
+        "__builtin_roundevenl",
+        "roundevenl",
+        LongDoubleUnary,
+    ),
     descriptor(Id::LibraryRoundf, "__builtin_roundf", "roundf", FloatUnary),
     descriptor(
         Id::LibraryRoundl,
