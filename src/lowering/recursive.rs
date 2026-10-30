@@ -255,7 +255,10 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     | BlockItem::Statement(child) => Task::Statement(child),
                     | BlockItem::Declaration(declaration) => Task::Declaration(declaration),
                     // A nested function is lowered as a function of its own.
-                    | BlockItem::FunctionDefinition(_) => continue,
+                    | BlockItem::FunctionDefinition(definition) => {
+                        self.nested_definition(definition)?;
+                        continue;
+                    },
                 };
                 self.recursive_task(task)?;
             }

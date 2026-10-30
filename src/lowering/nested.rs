@@ -47,6 +47,7 @@ use crate::{
     },
     translation_phases::{
         SourceVectors,
+        parsing::syntax::FunctionDefinition,
         semantic_analysis::{
             BindingKind,
             FunctionRecord,
@@ -319,6 +320,34 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
             self.store_pointer(address, at);
         }
         self.chain_record = Some(record);
+        Ok(())
+    }
+
+    /// Checks a nested definition where its definer reaches it: the bounds
+    /// of a variably modified type there are the definer's, which GCC
+    /// evaluates at the definition and lowering does not yet.
+    pub(super) fn nested_definition(
+        &self,
+        definition: &FunctionDefinition<'_>,
+    ) -> Result<(), LoweringError> {
+        let variably_modified = self
+            .unit
+            .sema
+            .correspondence
+            .declaration(definition.declarator)
+            .and_then(|fact| fact.binding)
+            .is_some_and(|binding| {
+                self.unit
+                    .sema
+                    .types
+                    .variably_modified(self.unit.sema.bindings[binding].ty)
+            });
+        if variably_modified {
+            return Err(LoweringError::unsupported(
+                Construct::NestedVariablyModified,
+                definition.source_vectors,
+            ));
+        }
         Ok(())
     }
 

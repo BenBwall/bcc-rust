@@ -113,14 +113,19 @@ mod tests {
                  }\n",
                 "a nested function's use of a variably modified object of its definer",
             ),
+            // The definer refuses the definition too, rather than reaching
+            // the bound it would evaluate there (gcc.dg/nested-vla-2.c).
+            (
+                "char tmp[2]; int main(void) { int n = 1; __typeof__(char (*)[++n]) bar(void) { \
+                 return &tmp; } return sizeof *bar() != 2; }\n",
+                "a nested function's use of a variably modified object of its definer",
+            ),
         ] {
             let output = check(&[GCC, "--emit=ir"], source);
             assert!(!output.status.success(), "{source}");
-            assert!(
-                text(&output.stderr).contains(reason),
-                "{}",
-                text(&output.stderr)
-            );
+            let stderr = text(&output.stderr);
+            assert!(stderr.contains(reason), "{stderr}");
+            assert!(!stderr.contains("internal error"), "{stderr}");
         }
         let output = check(
             &[GCC, "--target=wasm32-wasip1", "--emit=asm"],

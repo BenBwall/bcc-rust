@@ -137,7 +137,10 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                         // A nested function is lowered as a function of
                         // its own (`nested.rs`); its definition runs
                         // nothing here.
-                        | BlockItem::FunctionDefinition(_) => continue,
+                        | BlockItem::FunctionDefinition(definition) => {
+                            self.nested_definition(definition)?;
+                            continue;
+                        },
                     });
                 },
             | S::Expression(slot) => {
