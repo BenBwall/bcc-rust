@@ -12,6 +12,7 @@
 
 #![expect(
     clippy::disallowed_types,
+    clippy::disallowed_macros,
     clippy::disallowed_methods,
     reason = "The explorer hands owned text and vectors across its interface, outside every arena."
 )]
