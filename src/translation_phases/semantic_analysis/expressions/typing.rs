@@ -1622,7 +1622,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// C99: §6.3.2.1p1, p. 46; PDF p. 58. A structure/union containing
     /// const members is not modifiable; arrays and incomplete types are
     /// excluded.
-    pub(super) fn object_category(&mut self, ty: TypeId) -> ValueCategory {
+    pub(in crate::translation_phases::semantic_analysis) fn object_category(
+        &mut self,
+        ty: TypeId,
+    ) -> ValueCategory {
         if self.complete_object(ty)
             && !matches!(self.types.nodes[ty.index], TypeKind::Array(..))
             && !self.contains_const(ty)

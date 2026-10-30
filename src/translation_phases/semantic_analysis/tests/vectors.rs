@@ -416,6 +416,17 @@ fn vector_rules_follow_each_identity() {
         ("a = av < av;", true, Some(true)),
         ("av++;", true, Some(false)),
         ("af++;", false, Some(false)),
+        // GCC converts a compound assignment's scalar into an atomic vector
+        // as a variable, and designates an atomic lane of one.
+        ("af += 1;", false, Some(false)),
+        ("af *= 2;", false, Some(false)),
+        ("af += 1.0f; af = af + 1;", true, Some(false)),
+        (
+            "av[1] = 2; av[2] += 1; av[3]++; _Atomic int *p = &av[0];",
+            true,
+            Some(false),
+        ),
+        ("i = av[1];", true, Some(true)),
         // Lane types: both take the half-precision types; Clang a
         // power-of-two bit-precise integer and no pointer or array lanes;
         // GCC an enumeration.
@@ -442,6 +453,27 @@ fn vector_rules_follow_each_identity() {
         (
             "typedef enum E e __attribute__((vector_size(16))); e x;",
             true,
+            Some(false),
+        ),
+        // No scalar operand converts to GCC's enumeration lanes.
+        (
+            "typedef enum E e __attribute__((vector_size(16))); e x, y; x = x + y;",
+            true,
+            Some(false),
+        ),
+        (
+            "typedef enum E e __attribute__((vector_size(16))); e x; x = x + 1;",
+            false,
+            Some(false),
+        ),
+        (
+            "typedef enum E e __attribute__((vector_size(16))); e x; x = 1 + x;",
+            false,
+            Some(false),
+        ),
+        (
+            "typedef enum E e __attribute__((vector_size(16))); e x; x = x << 1;",
+            false,
             Some(false),
         ),
         (

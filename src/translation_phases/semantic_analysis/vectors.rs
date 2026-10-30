@@ -99,11 +99,26 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 // C99 §6.3.2.1p2: the index is read; the vector stays an
                 // lvalue whose lane is designated.
                 _ = self.converted(right);
+                let atomic = matches!(self.types.nodes[left.ty.index], TypeKind::Atomic(_));
+                let rules = self.context.configuration.compiler_identity().rules();
+                if atomic && rules == RuleSet::Gcc && left.category != ValueCategory::Rvalue {
+                    // GCC designates an atomic lane of an atomic vector
+                    // lvalue: `a[1] = 2` stores it atomically, and `&a[1]`
+                    // has type `_Atomic int *`.
+                    let lane = self
+                        .types
+                        .intern(TypeKind::Atomic(element.unqualified()))
+                        .qualified(element.qualifiers | left.ty.qualifiers);
+                    let mut result = Self::expression_result(e, lane);
+                    result.category = self.object_category(lane);
+                    result.register = left.register;
+                    return Some(result);
+                }
                 let element = element.qualified(left.ty.qualifiers);
                 let mut result = Self::expression_result(e, element);
                 result.category = if left.category == ValueCategory::Rvalue {
                     ValueCategory::Rvalue
-                } else if matches!(self.types.nodes[left.ty.index], TypeKind::Atomic(_)) {
+                } else if atomic {
                     // C11 §6.3.2.1p2: a lane of an atomic vector is read
                     // from one atomic load of the whole.
                     _ = self.converted(left);
@@ -179,26 +194,29 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         && !compares(op)
                         && matches!(self.types.nodes[left.ty.index], TypeKind::Atomic(_))
                         && matches!(self.types.nodes[right.ty.index], TypeKind::Atomic(_))),
-            // A vector shifts by any integer count, which each lane takes.
-            | (Some(_), None) if shift => self.integer_type(rt).is_some(),
+            // A vector shifts by any integer count, which each lane takes;
+            // GCC's enumeration lanes take no scalar.
+            | (Some(_), None) if shift =>
+                self.integer_type(rt).is_some() && !self.gcc_enumeration_lanes(element, rules),
             // Clang's scalar splat wants an ordinary vector; GCC reads an
-            // atomic one first.
-            | (Some(_), None) =>
-                (rules == RuleSet::Gcc
-                    || !matches!(self.types.nodes[left.ty.index], TypeKind::Atomic(_)))
-                    && match self.scalar_to_vector(
-                        element,
-                        lt,
-                        ExpressionInfo { ty: rt, ..right },
-                        assignment,
-                        rules,
-                    ) {
+            // atomic one first, and converts the scalar operand of a
+            // compound assignment to it as a run-time value.
+            | (Some(_), None) => {
+                let atomic = matches!(self.types.nodes[left.ty.index], TypeKind::Atomic(_));
+                let scalar = if atomic && assignment {
+                    run_time(ExpressionInfo { ty: rt, ..right })
+                } else {
+                    ExpressionInfo { ty: rt, ..right }
+                };
+                (rules == RuleSet::Gcc || !atomic)
+                    && match self.scalar_to_vector(element, lt, scalar, assignment, rules) {
                         | Some(kind) => {
                             conversions[1] = Some(kind);
                             true
                         },
                         | None => false,
-                    },
+                    }
+            },
             // A scalar shifted by a vector: Clang converts any integer, GCC
             // only one the lanes hold.
             | (None, Some(_)) if shift =>
@@ -368,14 +386,20 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         element: TypeId,
         operand: ExpressionInfo<'tu>,
     ) -> bool {
-        let one = ExpressionInfo {
-            ty: self.types.scalar(Scalar::Int),
-            ice: false,
-            integer: None,
-            constant: super::ConstantClass::None,
-            ..operand
-        };
+        let ty = self.types.scalar(Scalar::Int);
+        let one = run_time(ExpressionInfo { ty, ..operand });
         self.splat_operand(element, one, RuleSet::Gcc)
+    }
+
+    /// Whether GCC's rules give a vector of lane type `element` lanes of an
+    /// enumeration, which no scalar operand converts to ("cannot convert a
+    /// value of type 'int' to vector type ... which has different size").
+    fn gcc_enumeration_lanes(&self, element: TypeId, rules: RuleSet) -> bool {
+        rules == RuleSet::Gcc
+            && matches!(
+                self.types.nodes[element.unqualified().index],
+                TypeKind::Tag(id) if self.types.tags[id].kind == super::TagKind::Enum
+            )
     }
 
     /// Whether a vector of type `from` converts implicitly to `to`, as in
@@ -730,6 +754,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// GNU extension: GCC manual, "Vector Extensions"; Clang Language
     /// Extensions, "Vectors and Extended Vectors".
     fn splat_operand(&self, element: TypeId, scalar: ExpressionInfo<'tu>, rules: RuleSet) -> bool {
+        if self.gcc_enumeration_lanes(element, rules) {
+            return false;
+        }
         let (Some(lane), Some(class)) = (self.scalar_class(element), self.scalar_class(scalar.ty))
         else {
             return false;
@@ -1155,6 +1182,16 @@ enum ScalarClass {
 /// the comparison of their ranks, where an unsigned type of a rank at
 /// least the signed one's is the greater.
 /// C99: §6.3.1.1 paragraph 1, p. 42; PDF p. 54 (integer conversion rank).
+/// `scalar` as GCC sees an operand it converts at run time: no constant.
+fn run_time(scalar: ExpressionInfo<'_>) -> ExpressionInfo<'_> {
+    ExpressionInfo {
+        ice: false,
+        integer: None,
+        constant: super::ConstantClass::None,
+        ..scalar
+    }
+}
+
 fn clang_integer_order(lane: ScalarClass, scalar: ScalarClass) -> i32 {
     let (
         ScalarClass::Integer {
