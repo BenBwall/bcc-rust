@@ -90,6 +90,7 @@ use crate::{
         IntCC,
         Module,
         Opcode,
+        ParamAbi,
         Signature,
         Symbol,
         Type,
@@ -164,7 +165,22 @@ pub(crate) fn select<'a>(
         })
     };
     let uses_va_start = uses(&[Opcode::VaStart]);
-    selector.func.dynamic = uses(&[Opcode::DynAlloca, Opcode::StackRestore]);
+    // A call that copies an argument aligned above 16 bytes to the stack
+    // realigns `%rsp` in the prologue, which then addresses the frame
+    // from `%rbp` as a moving stack does.
+    let over_aligned_byval = body.blocks().any(|block| {
+        body.block_insts(block).iter().any(|&inst| {
+            let sig = match *body.inst(inst) {
+                | InstData::Call { func, .. } => module.function(func).signature,
+                | InstData::CallIndirect { sig, .. } => sig,
+                | _ => return false,
+            };
+            module.signature(sig).aggregates.iter().any(
+                |param| matches!(param.abi, ParamAbi::ByVal(layout) if layout.align.bytes() > 16),
+            )
+        })
+    });
+    selector.func.dynamic = uses(&[Opcode::DynAlloca, Opcode::StackRestore]) || over_aligned_byval;
     for block in body.blocks() {
         if let Some(mblock) = selector.block_map[block.index()] {
             selector.current = mblock;

@@ -43,6 +43,7 @@ use crate::{
         },
         frame::REGISTER_SAVE_BYTES,
         mir::{
+            AluOp,
             Base,
             Callee,
             FrameObject,
@@ -509,12 +510,21 @@ impl Selector<'_, '_, '_> {
             let mem = self.address(arg);
             if matches!(registers.first, Type::I128 | Type::F128) {
                 // Win64's `__int128` or System V's `__float128` result, all
-                // of `%xmm0`.
+                // of `%xmm0`, and a 32-byte vector's second half in `%xmm1`.
                 self.emit(MInst::Move128 {
                     load: false,
                     reg: Reg::Phys(PReg::Xmm0),
                     mem,
                 });
+                if matches!(registers.second, Some(Type::I128 | Type::F128)) {
+                    let offset =
+                        i32::try_from(registers.second_offset).expect("a part offset is small");
+                    self.emit(MInst::Move128 {
+                        load: false,
+                        reg:  Reg::Phys(PReg::Xmm1),
+                        mem:  mem.offset(offset),
+                    });
+                }
                 return Ok(());
             }
             if registers.first == Type::F80 {
@@ -572,6 +582,7 @@ impl Selector<'_, '_, '_> {
         let mut stack = ArenaVec::new_in(self.arena);
         let mut copies = ArenaVec::new_in(self.arena);
         let mut vectors = ArenaVec::new_in(self.arena);
+        let mut call_align = 0_u32;
         for &arg in args {
             match arg {
                 | Passed::Scalar(operand) => {
@@ -584,8 +595,13 @@ impl Selector<'_, '_, '_> {
                         | ArgLocation::Stack(offset) => stack.push((offset, operand, class)),
                     }
                 },
-                | Passed::ByVal { src, size, align } =>
-                    copies.push((assigner.memory(size, align), src, size)),
+                | Passed::ByVal { src, size, align } => {
+                    // A copy aligned above the stack's 16 bytes needs the
+                    // frame to realign `%rsp` (`frame.rs`).
+                    self.func.outgoing_align = self.func.outgoing_align.max(u64::from(align));
+                    call_align = call_align.max(align);
+                    copies.push((assigner.memory(size, align), src, size));
+                },
                 | Passed::Pair(low, high) => match assigner.pair() {
                     | Ok((first, second)) => {
                         registers.push((first, Operand::Reg(low)));
@@ -613,6 +629,20 @@ impl Selector<'_, '_, '_> {
         let home = self.conv.home_area;
         self.func.calls = true;
         self.func.outgoing = self.func.outgoing.max(home + assigner.stack_bytes());
+        // A copy aligned above 16 bytes needs `%rsp`, where the outgoing
+        // arguments start, aligned as it is. The prologue aligns it; a
+        // dynamic allocation since may have moved it by 16 bytes, so each
+        // such call aligns it again. The frame is addressed from `%rbp`, and
+        // the space below the allocations is the outgoing area's.
+        if call_align > 16 {
+            let mask = i32::try_from(-i64::from(call_align)).unwrap_or(-4096);
+            self.emit(MInst::Alu {
+                op:    AluOp::And,
+                width: Width::B64,
+                dst:   Reg::Phys(PReg::Rsp),
+                src:   Operand::Imm(mask),
+            });
+        }
         let outgoing = |offset: u32| Mem::new(Base::Frame(FrameObject::Outgoing(home + offset)), 0);
         for (offset, src, size) in copies {
             let src = self.address(src);
@@ -727,6 +757,16 @@ impl Selector<'_, '_, '_> {
                     mem:  area,
                 });
                 uses = uses.with(PReg::Xmm0);
+                if matches!(registers.second, Some(Type::I128 | Type::F128)) {
+                    let offset =
+                        i32::try_from(registers.second_offset).expect("a part offset is small");
+                    self.emit(MInst::Move128 {
+                        load: true,
+                        reg:  Reg::Phys(PReg::Xmm1),
+                        mem:  area.offset(offset),
+                    });
+                    uses = uses.with(PReg::Xmm1);
+                }
             },
             | ResultArea::Registers { area, registers } if registers.first == Type::F80 => {
                 // A complex `long double` returns its imaginary part in

@@ -70,9 +70,9 @@ fn m4_missing_checked_instances_and_operands_report_provenance() {
 
 /// Registered families without lowering keep their refusal; none becomes a
 /// call to an external symbol of its spelling or a missing-fact error. A
-/// prototyped x86 call is an unsupported builtin; an overload or binary128
-/// binding keeps the opaque type it had before M6, which stops at its
-/// unanalyzed callee type.
+/// prototyped x86 call and an unexpanded vector builtin are unsupported
+/// builtins; a binary128 binding keeps the opaque type it had before M6,
+/// which stops at its unanalyzed callee type.
 #[test]
 fn m6_family_calls_remain_unsupported_builtins() {
     for (source, refusal) in [
@@ -82,7 +82,7 @@ fn m6_family_calls_remain_unsupported_builtins() {
         ),
         (
             "int f(int *p){return __builtin_nontemporal_load(p);}",
-            LoweringErrorKind::UnanalyzedType,
+            LoweringErrorKind::Unsupported(Construct::Builtin),
         ),
         (
             "double f(const char *tag){return __builtin_nans(tag);}",

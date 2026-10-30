@@ -43,7 +43,7 @@ fn m4_registry_ids_suffixes_and_preprocessing_support_agree() {
             .unwrap();
         }
     }
-    assert_eq!(ids.len(), 820);
+    assert_eq!(ids.len(), 821);
     source.push_str("int following;\n");
     for target in [
         Target::LinuxGnu,
@@ -364,6 +364,7 @@ fn m6_family_descriptors_retain_no_instance_and_keep_their_contracts() {
             descriptor.type_rule,
             TypeRule::X86Signature
                 | TypeRule::VectorShuffle
+                | TypeRule::GnuShuffle
                 | TypeRule::VectorOverload(_)
                 | TypeRule::ConvertVector
                 | TypeRule::BitCast

@@ -345,3 +345,184 @@ fn vector_fixture_regressions() {
         }
     }
 }
+
+/// Each identity accepts and refuses the vector operations its compiler
+/// does: the scalar splats GCC's `scalar_to_vector` and Clang's
+/// `tryGCCVectorConvertAndSplat` accept, GCC's strict and Clang's lax
+/// conversions between vectors, GCC's `++` and `&v[i]`, Clang's lax `?:`,
+/// GCC's power-of-two lane counts and its `__builtin_shuffle`. Each case was
+/// checked against GCC 15.2 and the pinned Clang.
+#[test]
+fn vector_rules_follow_each_identity() {
+    use crate::configuration::CompilerIdentity;
+    const PRELUDE: &str =
+        "typedef int v4si __attribute__((vector_size(16))); typedef unsigned v4su \
+         __attribute__((vector_size(16))); typedef float v4sf __attribute__((vector_size(16))); \
+         typedef signed char v16qi __attribute__((vector_size(16))); typedef long long v2di \
+         __attribute__((vector_size(16))); typedef int v2si __attribute__((vector_size(8))); enum \
+         E { E0 }; extern v4si a, b; extern v4su u; extern v4sf f; extern v16qi q; extern v2di l; \
+         extern v2si s2; extern int i; extern unsigned ui; extern long long ll; extern float fl; \
+         extern double db; extern long double ld; extern _Bool bo; extern enum E en; extern short \
+         sh; extern _Atomic v4si av; extern _Atomic v4sf af;\n";
+    // (statement, accepted by GCC, accepted by Clang)
+    for (body, gcc, clang) in [
+        ("f = f * 2;", true, Some(true)),
+        ("f = f * 16777217;", false, Some(false)),
+        ("f = f * i;", false, Some(false)),
+        ("f = f * sh;", true, Some(true)),
+        ("f = f * 0.1;", false, Some(false)),
+        ("f = f * 1.5;", true, Some(true)),
+        ("a = a + ui;", true, Some(false)),
+        ("a = a + fl;", false, Some(true)),
+        ("a = a + 1.0f;", false, Some(true)),
+        ("a = a + ld;", false, Some(true)),
+        ("a = a + bo;", false, Some(true)),
+        ("l = l + en;", false, Some(true)),
+        ("q = q + 200;", false, Some(true)),
+        ("q = q + 4294967295u;", true, Some(false)),
+        ("s2 = s2 + ll;", false, Some(true)),
+        ("s2 += ll;", false, Some(false)),
+        ("a = a << ll;", true, Some(true)),
+        ("a = ll << a;", false, Some(true)),
+        ("a = a + u;", true, Some(true)),
+        ("a = u;", false, Some(true)),
+        ("a = f;", false, Some(true)),
+        ("a = a + f;", false, Some(true)),
+        ("u = a < u;", true, Some(true)),
+        ("f = f == f;", true, Some(true)),
+        ("a = i ? a : u;", false, Some(true)),
+        ("a++; --a;", true, Some(false)),
+        ("int *p = &a[1];", true, Some(false)),
+        ("a = (v4si)l; ll = (long long)s2;", true, Some(true)),
+        ("db = (double)s2;", false, Some(false)),
+        (
+            "typedef int odd __attribute__((vector_size(12))); odd o;",
+            false,
+            Some(true),
+        ),
+        (
+            "typedef int V __attribute__((vector_size(sizeof(int) * 4))); V v = a;",
+            true,
+            Some(true),
+        ),
+        // Clang has no `__builtin_shuffle`.
+        ("a = __builtin_shuffle(a, b);", true, Some(false)),
+        ("a = __builtin_shuffle(a, f);", false, Some(false)),
+        // Atomic operands: GCC reads them first; Clang splats no scalar into
+        // one and refuses two in arithmetic, not in a comparison.
+        ("av *= 3; av ^= 5;", true, Some(false)),
+        ("av <<= 1; av += a;", true, Some(true)),
+        ("a = av + av;", true, Some(false)),
+        ("a = av < av;", true, Some(true)),
+        ("av++;", true, Some(false)),
+        ("af++;", false, Some(false)),
+        // GCC converts a compound assignment's scalar into an atomic vector
+        // as a variable, and designates an atomic lane of one.
+        ("af += 1;", false, Some(false)),
+        ("af *= 2;", false, Some(false)),
+        ("af += 1.0f; af = af + 1;", true, Some(false)),
+        (
+            "av[1] = 2; av[2] += 1; av[3]++; _Atomic int *p = &av[0];",
+            true,
+            Some(false),
+        ),
+        ("i = av[1];", true, Some(true)),
+        // A lane of a vector rvalue, or for Clang of an atomic vector, has
+        // no address; GCC's atomic lane is `_Atomic int`, no `int`.
+        ("int *p = &av[1];", false, Some(false)),
+        ("_Atomic int *p = &av[1];", true, Some(false)),
+        ("int *p = &(a + b)[1];", false, Some(false)),
+        // Lane types: both take the half-precision types; Clang a
+        // power-of-two bit-precise integer and no pointer or array lanes;
+        // GCC an enumeration.
+        (
+            "typedef _Float16 h __attribute__((vector_size(16))); h x; x = x * x;",
+            true,
+            Some(true),
+        ),
+        (
+            "typedef __bf16 h __attribute__((vector_size(16))); h x;",
+            true,
+            Some(true),
+        ),
+        (
+            "typedef _BitInt(32) b __attribute__((vector_size(16))); b x; x = x + x;",
+            false,
+            Some(true),
+        ),
+        (
+            "typedef _BitInt(24) b __attribute__((vector_size(12)));",
+            false,
+            Some(false),
+        ),
+        (
+            "typedef enum E e __attribute__((vector_size(16))); e x;",
+            true,
+            Some(false),
+        ),
+        // No scalar operand converts to GCC's enumeration lanes.
+        (
+            "typedef enum E e __attribute__((vector_size(16))); e x, y; x = x + y;",
+            true,
+            Some(false),
+        ),
+        (
+            "typedef enum E e __attribute__((vector_size(16))); e x; x = x + 1;",
+            false,
+            Some(false),
+        ),
+        (
+            "typedef enum E e __attribute__((vector_size(16))); e x; x = 1 + x;",
+            false,
+            Some(false),
+        ),
+        (
+            "typedef enum E e __attribute__((vector_size(16))); e x; x = x << 1;",
+            false,
+            Some(false),
+        ),
+        (
+            "typedef enum E e __attribute__((vector_size(16))); e x, y; x = x << y; x = x >> y;",
+            false,
+            Some(false),
+        ),
+        (
+            "typedef enum E e __attribute__((vector_size(16))); e x, y; x <<= y;",
+            false,
+            Some(false),
+        ),
+        (
+            "typedef enum E e __attribute__((vector_size(16))); e x; a = a << x;",
+            false,
+            Some(false),
+        ),
+        (
+            "typedef int *p __attribute__((vector_size(16)));",
+            true,
+            Some(false),
+        ),
+        ("a = __builtin_shufflevector(a, b);", false, Some(true)),
+    ] {
+        for (identity, accepted) in [
+            (CompilerIdentity::Gcc, Some(gcc)),
+            (CompilerIdentity::Clang, clang),
+        ] {
+            let Some(accepted) = accepted else {
+                continue;
+            };
+            let source = format!("{PRELUDE}void t(void) {{ {body} }}");
+            with_configuration(
+                &source,
+                CompilerConfiguration::default().with_compiler_identity(identity),
+                |context, _| {
+                    let errors = context.take_pending_errors();
+                    assert_eq!(
+                        errors.is_empty(),
+                        accepted,
+                        "{identity:?} {body}: {errors:?}"
+                    );
+                },
+            );
+        }
+    }
+}

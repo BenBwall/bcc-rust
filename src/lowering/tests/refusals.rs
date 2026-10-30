@@ -191,31 +191,6 @@ fn unsupported_type_diagnostics_retain_the_actual_construct() {
     assert!(message.ends_with("_Decimal32 types"), "{message}");
 }
 
-#[test]
-fn vector_values_are_refused_rather_than_missing_facts() {
-    // GNU extension: GCC manual, "Vector Extensions". Vector values have no
-    // IR representation yet (gcc.dg/pr118684.c, Wstringop-overflow-69.c);
-    // pointers to vectors and `sizeof` still lower.
-    for source in [
-        "typedef int V __attribute__((vector_size(16))); V x, y; void f(void) { x = y; }",
-        "typedef int V __attribute__((vector_size(16))); V x; void f(int *p) { x = *(V *)p; }",
-        "typedef char V __attribute__((vector_size(4))); char a[4]; void f(void) { *(V *)a = \
-         (V){0, 1, 2, 3}; }",
-        "typedef int V __attribute__((vector_size(16))); V x; int f(void) { return x[1]; }",
-    ] {
-        assert_eq!(
-            refusal(source),
-            "not yet supported by lowering: vector types",
-            "{source}"
-        );
-    }
-    let ir = lowered(
-        "typedef int V __attribute__((vector_size(16))); V x; V *f(void) { return &x; } unsigned \
-         long g(void) { return sizeof x; }",
-    );
-    assert!(ir.contains("global_addr @x"), "{ir}");
-}
-
 /// File-scope basic assembly reaches the module in source order, with
 /// concatenated literals joined, between whatever functions and objects
 /// surround it (GCC manual, "Basic Asm").

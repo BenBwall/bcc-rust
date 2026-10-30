@@ -1,0 +1,115 @@
+lax_cond: 5 6 7 8
+lax_scalar: 5 5
+float_scalar_int_lanes: 2 3 4 5
+struct_member: 6 8 10 12
+struct_member_a: 2 4
+select: 9 9 3 4
+add: 10 -3 93 -2147483647
+sub: 4 -13 107 2147483647
+mul: 21 -40 -700 -2147483648
+div: 2 -1 -14 -2147483648
+mod: 1 -3 2 0
+and: 3 0 96 0
+or: 7 -3 -3 -2147483647
+xor: 4 -3 -99 -2147483647
+shl: 14 -32 800 -2147483648
+shr: 3 -2 12 -1
+neg: -7 8 -100 -2147483648
+not: -8 7 -101 2147483647
+plus: 7 -8 100 -2147483648
+splat_add: 8 -7 101 -2147483647
+splat_mul: 21 -24 300 -2147483648
+splat_var_shl: 28 -32 400 0
+splat_var_shr: 1 -2 25 -536870912
+splat_sub: -5 10 -98 -2147483646
+ushr: 0 536870911 12 268435456
+udiv: 2 858993457 14 238609294
+umod: 7 8 0 8
+qmul: 30 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+qmul_splat: 30 60 90 120 -106 -76 -46 -16 14 44 74 104 -122 -92 -62 -32
+uqadd: 251 252 253 254 255 0 1 2 3 4 5 6 7 8 9 10
+hadd: -5536 4 6 8 -10 12 14 0
+hneg: -30000 -2 -3 -4 5 -6 -7 -32768
+hshr: 7500 0 0 1 -2 1 1 -8192
+uhshr: 7500 0 0 1 16382 1 1 8192
+ladd: 34359738368 -40
+lshr: 536870912 -1
+ulshr: 536870912 2305843009213693951
+fadd: 0x1.cp+1 -0x1p-1 0x1.8cccccp+1 0x1.93e594p+99
+fsub: -0x1p-1 -0x1.cp+1 -0x1.733334p+1 0x1.93e594p+99
+fmul: 0x1.8p+1 -0x1.8p+1 0x1.333334p-2 inf
+fdiv: 0x1.8p-1 -0x1.555556p+0 0x1.111112p-5 0x1.5af1d8p+66
+fneg: -0x1.8p+0 0x1p+1 -0x1.99999ap-4 -0x1.93e594p+99
+fsplat: 0x1.8p+1 -0x1p+2 0x1.99999ap-3 0x1.93e594p+100
+fsplat2: 0x1p+1 -0x1.8p+0 0x1.333334p-1 0x1.93e594p+99
+fsplatvar: 0x1.4p+0 -0x1.2p+1 -0x1.333334p-3 0x1.93e594p+99
+dmul: 0x1.c71c71c71c71cp-4 0x0p+0
+ddiv: 0x1.8618618618618p-5 -0x0p+0
+dsplat: 0x1.5555555555555p+0 0x1p+0
+v2sf: 0x1p+1 0x1.8p+2
+v4df: -0x1p-1 -0x1p+0 -0x1.8p+0 -0x1p+1
+eq: -1 0 0 0
+ne: 0 -1 -1 -1
+lt: 0 -1 0 -1
+le: -1 -1 0 -1
+gt: 0 0 -1 0
+ge: -1 0 -1 0
+ult: 0 -1 0 0
+lt_splat: -1 0 0 -1
+feq: -1 0 -1 0
+fne: 0 -1 0 -1
+flt: 0 0 0 0
+fge: -1 0 -1 -1
+deq: -1 0
+qgt: 0 0 0 0 0 0 0 0 -1 -1 -1 -1 -1 -1 -1 -1
+hle: -1 -1 -1 -1 0 0 0 0
+lne: 0 -1
+sub_write: 11 -2 42 -3
+sub_read: 42 -2
+fsub_write: 0x1.8p+0 0x1.8p+1 0x0p+0 0x0p+0
+member: 9 8 7 7
+ptr_sub: -99
+bitcast_f: 0x1p+0 0x1p+1 -0x1p-126 0x0p+0
+bitcast_q: 0 0 -128 63 0 0 0 64 0 0 -128 -128 0 0 0 0
+bitcast_l: 4611686019492741120 2155872256
+scalar_to_vec: 1 2
+vec_to_scalar: 12884901890
+v2si_to_v4hi: 1 0 2 0
+lax: 1 2 3 4
+shufflevector: 10 60 30 80
+shufflevector_narrow: 40 50
+shufflevector_wide: 10 20 30 40 40 30 20 10
+convertvector: 0x1.aaaaaap+1 0x1.aaaaaap+2 0x1.4p+3 0x1.aaaaaap+3
+convertvector_trunc: 1 -2 1000000000 0
+convertvector_df: 0x1.cp+0 -0x1.4p+1
+convertvector_di: 1 -3
+shuffle1: 40 10 30 20
+shuffle2: 40 10 70 60
+shufflef: -0x1.4p+1 -0x1.4p+1 0x1.cp+0 -0x1p-1
+sizes: 16 8 4 32 64 48 16
+aligns: 16 8 4 32 64 1
+sizeof_expr: 16 4
+unaligned_load: 0x1p+0 0x1p+1 0x1.8p+1 0x1p+2
+ 0 1 2 10 20 30 40 7 8
+array0: 1 0 0 0
+array1: 5 5 3 0
+03000000030000000300000000000000
+ptr_index: -4 -5 -3 0
+volatile: 6 7 8 9
+lit: 5 12 21 32
+lit_partial: 9 0 0 0
+lit_empty: 0 0 0 0
+lit_runtime: 4 5 16 -4
+nested: 2 0 6 0
+compound: 265 263 261 261
+fcompound: 0x1.555556p-2 0x1.555556p-1 0x1p+0 0x1.555556p+0
+cond_true: 1 2 3 4
+cond_false: 5 6 7 8
+cond_expr: 6 8 10 12
+comma: 5 6 7 8
+global: 1 -2 3 -4
+global_f: 0x1.8p+0 -0x1.2p+1 0x0p+0 0x0p+0
+global_d0: 0x1p+0 0x1p+1
+global_d1: 0x1.8p+1 0x0p+0
+global_struct: 9 8 7 6
+global_struct_f: 0x1p-1 0x1p-2

@@ -85,6 +85,9 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             })?;
             return self.schedule_instance(e, instance);
         }
+        if self.schedule_vector_keyword(e, b) {
+            return Ok(());
+        }
         Err(LoweringError::unsupported(
             super::Construct::Builtin,
             e.source_vectors,

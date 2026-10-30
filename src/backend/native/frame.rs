@@ -73,6 +73,9 @@ pub(crate) struct Frame<'a> {
     pub(crate) size:      u32,
     /// Whether `%rbp` addresses the fixed frame.
     pub(crate) rbp_based: bool,
+    /// The alignment the prologue rounds `%rsp` down to after setting
+    /// `%rbp`, for an argument copy aligned above 16 bytes; 0 for none.
+    pub(crate) realign:   u32,
     /// Whether the frame lies in the System V red zone, so the prologue
     /// leaves `%rsp` where the pushes put it.
     pub(crate) red_zone:  bool,
@@ -182,6 +185,11 @@ impl<'a> Frame<'a> {
             saved_xmm: saved_xmm_offsets,
             size: narrow(size),
             rbp_based: frame_pointer,
+            realign: if func.outgoing_align > 16 {
+                u32::try_from(func.outgoing_align).unwrap_or(4096)
+            } else {
+                0
+            },
             red_zone,
             slots: slot_offsets,
             spills: narrow(spills),

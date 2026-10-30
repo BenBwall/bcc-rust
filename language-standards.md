@@ -354,7 +354,7 @@ still follows the configured extension policy.
 | `stdatomic.h` | C11 atomic typedefs, `memory_order`, `atomic_flag`, initialization, fences, lock-free queries and all generic operation macros. Hosted, it defers to a following system header except with `_MSC_VER` in C mode, matching the pinned Clang resource header. C17 marks `ATOMIC_VAR_INIT` deprecated through `#pragma clang deprecated`; `_CLANG_DISABLE_CRT_DEPRECATION_WARNINGS` suppresses that marker. C23 removes `ATOMIC_VAR_INIT` and adds `atomic_char8_t` and `ATOMIC_CHAR8_T_LOCK_FREE`. No `__STDC_NO_ATOMICS__` is defined or interpreted, as in Clang. |
 | `stdbit.h` | C23's `<stdbit.h>` (§7.18): `__STDC_VERSION_STDBIT_H__` (`202311L`), `__STDC_ENDIAN_LITTLE__` (1234), `__STDC_ENDIAN_BIG__` (4321), `__STDC_ENDIAN_NATIVE__` (little), the 70 `stdc_*_u{c,s,i,l,ll}` functions and the 14 type-generic macros. Wherever the C library has the header (glibc 2.39 and later, whose macros use the `__builtin_stdc_*` builtins when the compiler has them) it defers to it, freestanding too, as GCC and Clang find it there. Otherwise it declares the functions with external linkage and defines each as a macro over its builtin, converting the argument as the prototype does; the same text is the `<stdbit.h>` of bcc's WASI C library, which defines the functions (`backend/wasm/runtime/stdbit.c`). Elsewhere a call that suppresses a macro needs a C library that defines them. Neither GCC nor Clang ships the header, so for the Clang and clang-cl identities the resource directory has none (`headers::provides`): without a C library's (`-nostdlibinc`), `#include <stdbit.h>` finds no header, as in Clang. |
 | `stdnoreturn.h` | Like Clang: `noreturn` and `__noreturn_is_defined` in every mode, retained in C23 despite deprecation. |
-| `mm_malloc.h` | Not ISO C; GCC and Clang ship it, and MinGW-w64's `<malloc.h>` includes it. Like Clang's, it includes `<stdlib.h>` and defines `static __inline__` `_mm_malloc` and `_mm_free`: through `__mingw_aligned_malloc` for MinGW-w64, `_aligned_malloc` for the MSVC runtime (from its `<malloc.h>`, unless that defines `_mm_malloc` as a macro), and `posix_memalign`, which it declares, elsewhere. An alignment of 1 uses `malloc`, and a smaller power of two is raised to a pointer's alignment. The x86 intrinsic headers (`x86intrin.h`, `emmintrin.h`, `immintrin.h`, `cpuid.h` and their family) need vector types and target builtins and are not provided. |
+| `mm_malloc.h` | Not ISO C; GCC and Clang ship it, and MinGW-w64's `<malloc.h>` includes it. Like Clang's, it includes `<stdlib.h>` and defines `static __inline__` `_mm_malloc` and `_mm_free`: through `__mingw_aligned_malloc` for MinGW-w64, `_aligned_malloc` for the MSVC runtime (from its `<malloc.h>`, unless that defines `_mm_malloc` as a macro), and `posix_memalign`, which it declares, elsewhere. An alignment of 1 uses `malloc`, and a smaller power of two is raised to a pointer's alignment. The x86 intrinsic headers (`x86intrin.h`, `emmintrin.h`, `immintrin.h`, `cpuid.h` and their family) are provided; MMX through SSE4.2 compile and run (see [x86 intrinsic headers](#x86-intrinsic-headers-2026-10-30)). |
 
 Reserved `__builtin_va_arg`, `__builtin_va_start`, `__builtin_va_end`,
 `__builtin_va_copy`, `__builtin_va_list` and `__builtin_offsetof` support the
@@ -597,7 +597,7 @@ mode gate and policy diagnostics (`Imaginary` reports an unsupported type); a
 | BuiltinVaArg | - | - | - | - | - | - | - | reserved intrinsic in all modes | parser/sema |
 | BuiltinOffsetof | - | - | - | - | - | - | - | reserved intrinsic in all modes | parser/sema |
 | BuiltinTypesCompatible | - | - | - | - | - | - | - | extension (GNU native) | parser/sema |
-| VectorBuiltins | - | - | - | - | - | - | - | extension (GNU native) | shuffle/convert/bitcast and x86 signatures |
+| VectorBuiltins | - | - | - | - | - | - | - | extension (GNU native) | shuffle/convert/bitcast and x86 signatures; the shuffles, `__builtin_convertvector` and `__builtin_bit_cast` lower |
 | BuiltinChooseExpr | - | - | - | - | - | - | - | extension (GNU native) | parser/sema |
 | LabelsAsValues | - | - | - | - | - | - | - | extension (GNU native) | parser, sema, lowering |
 | LocalLabels | - | - | - | - | - | - | - | extension (GNU native) | parser, sema, lowering |
@@ -1673,6 +1673,113 @@ constant for every type (also on `main`); GCC and Clang accept it.
 
 GNU vector semantics and x86 resource coverage follow [GCC Vector Extensions](https://gcc.gnu.org/onlinedocs/gcc/Vector-Extensions.html) and [Clang Language Extensions](https://clang.llvm.org/docs/LanguageExtensions.html); see semantic-analysis.md for the supported instruction families and constant-evaluation boundaries.
 
+### GNU vector values (2026-10-29)
+
+`vector_size` vectors compile and run on every back end (LLVM, native
+x86-64, interpreter, wasm32): declarations, initializers and compound
+literals (also in static initializers), assignment and loads and stores
+through vector pointers (aligned or `aligned(1)`), the arithmetic, bitwise,
+shift and comparison operators with vector or scalar operands, unary `+`,
+`-` and `~`, subscripts (read and write, constant or variable index), casts
+between vectors of one size and to and from scalars of that size,
+`__builtin_shufflevector`, `__builtin_convertvector`, `__builtin_bit_cast`,
+GCC's `__builtin_shuffle`, `sizeof`, `_Alignof`, vectors in structures and
+arrays, `_Atomic` vectors and `va_arg` of a vector. Lowering keeps a vector
+in memory and scalarizes every operator lane by lane (middle-end.md, "GNU
+vector values"). `vector_size` arguments are integer constant expressions
+(`vector_size(4 * sizeof(int))`).
+
+Where GCC 15.2 and Clang 23 differ, each identity follows its compiler
+(probed with both; `semantic_analysis/tests/vectors.rs` pins the cases):
+
+| Rule | GCC identity | Clang identity |
+| --- | --- | --- |
+| Scalar operand of a vector operator | `scalar_to_vector`: an integer variable no wider than the lanes (sign changes allowed), an integer constant that fits (a negative one into unsigned lanes and an unsigned one into signed lanes allowed), an integer into floating lanes whose format holds its type's range, never a floating scalar into integer lanes, no `_Bool` or enumeration, nothing into enumeration lanes, which also shift and count nothing | `tryGCCVectorConvertAndSplat`: integers by rank (no sign change at equal rank) or a constant's significant bits; a floating scalar into integer lanes of its size; `_Bool` and enumerations as integers; otherwise a scalar as large as the whole vector reinterprets its bits (lax conversion), except as a compound assignment's right operand |
+| Vectors of different types | binary operators need as many lanes of one kind and width, signedness aside; assignment, initialization, arguments, `return` and `?:` need compatible lane types | equal sizes suffice everywhere (lax vector conversions), the right operand reading as the left's type |
+| Comparison result | an opaque mask that converts to any vector of its size | the signed mask vector |
+| `++`, `--` | each lane | refused |
+| `&v[i]` | allowed | refused |
+| Lane count | power of two | any; the object rounds up |
+| `__builtin_shuffle` | provided | absent |
+| Two-operand `__builtin_shufflevector(v, mask)` | refused | run-time shuffle |
+| Atomic vector operands | read first, also with a scalar operand, which a compound assignment converts as a variable (`b += 1` into `float` lanes is refused); `++`/`--` only where an `int` variable splats into the lanes; `v[i]` of an lvalue is an `_Atomic` lane lvalue (`v[1] = 2`, `&v[1]` of type `_Atomic int *`) | no scalar operand; two atomic operands only in a comparison; no `++`/`--`; `v[i]` is a value |
+| Lane types besides integers and real floating types | `_Float16`, `__bf16`, enumerations; through pointer, array and function declarators to their element | `_Float16`, `__bf16`, `_BitInt(N)` of a power-of-two width of at least 8; never a pointer, array or function |
+
+Calls pass vectors as the claimed compiler does (middle-end.md). Known
+differences: GCC's `_Alignof` of a vector or structure aligned above 16
+bytes reports 16 without `-mavx` (`__alignof__` reports the alignment, and
+bcc reports it for both spellings); Clang returns a 64-byte vector in
+XMM0-XMM3, bcc through memory as GCC does; on Win64 Clang passes a 32- or
+64-byte vector argument as one pointer per 16 bytes, bcc as one pointer;
+on wasm32 Clang splits a vector argument into its lanes, bcc passes it by
+reference. The elementwise and non-temporal builtins
+(`__builtin_elementwise_*`, `__builtin_nontemporal_*`) are checked but not
+lowered (refused by name), as are the `__builtin_ia32_*` builtins.
+GCC accepts a braced initializer for an `_Atomic` vector and refuses a
+vector element in a vector initializer (`{a}`) or braces around a lane
+(`{1, {2}}`); bcc follows Clang in all three. Both compilers only warn
+about an excess element in a vector initializer, which bcc refuses, as it
+does for arrays (C99 §6.7.8p2). Clang folds vector arithmetic, unary
+operators and subscripts of constant vectors in static initializers, which
+both bcc identities refuse, as GCC does. `__builtin_bit_cast` is accepted
+under the GCC identity too, though GCC provides it only for C++. A
+half-precision lane computes in `float`. Under the GCC identity it rounds
+after each operation, as GCC computes vector operations on them; under the
+Clang identity `+`, `-`, `*`, `/` and unary `-` keep the `float` excess to
+the end of the expression, as Clang promotes a `_Float16` or `__bf16`
+vector to a `float` one and as bcc already does for scalars, so
+`(a + b - b)[0]` with `a[0] == 1` and `b[0] == 2048` is 1, and a comparison
+reads the rounded lanes. A GCC-only builtin
+(`__builtin_shuffle`, `__builtin_parityg`, `__builtin_ffsg`,
+`__builtin_clrsbg`) called under another identity is an undeclared
+identifier, as Clang reports it. An `_Atomic` vector of more than 16 bytes,
+or whose lanes leave padding (3 `int`s in 16 bytes), updates through a
+byte-wise compare-exchange loop.
+
+
+### x86 intrinsic headers (2026-10-30)
+
+`<mmintrin.h>` (MMX), `<xmmintrin.h>` (SSE), `<emmintrin.h>` (SSE2),
+`<pmmintrin.h>` (SSE3), `<tmmintrin.h>` (SSSE3), `<smmintrin.h>` (SSE4.1 and
+SSE4.2, with `<crc32intrin.h>`) are bcc's own: written for bcc from Intel's
+definitions of each intrinsic, not derived from GCC's or Clang's headers,
+and under bcc's licence. Every intrinsic GCC 15 and Clang 23 declare in
+them is plain C over GNU vector operations (and, for MMX, 8-byte vectors),
+so it compiles and runs on the interpreter, LLVM and the native back end
+with no x86 builtin lowered: saturating, horizontal and widening arithmetic
+loop over lanes; conversions round by the current rounding mode through
+`nearbyint` and give the integer indefinite value out of range; `min` and
+`max` keep the second operand for NaNs; the string comparisons
+(`_mm_cmpistri` and family) follow the SDM's PCMPxSTRx definition. An
+intrinsic with an immediate operand is a macro that also names the GCC/Clang
+builtin inside `sizeof`, which is not evaluated, so semantic analysis still
+checks the immediate as before, and the builtin, spelled in a system
+header's macro, is no `-pedantic` extension of the caller's code: under the
+Clang identity an out-of-range constant is Clang's
+`-Wargument-outside-range` ("argument value 256 is outside the valid range
+[0, 255]"), an error that `-w`, `-Wno-argument-outside-range` and
+`-Wno-error=argument-outside-range` relax, and under the GCC identity an
+error;
+GCC's `_mm_shuffle_pd` takes any constant and reads its low two bits.
+`__m64` is GCC's two-`int` vector (with `__m64_u` and `__v2sf`) under the
+GCC identity and Clang's one-`long long` vector under the Clang identity. `tests/integration/x86_intrinsics.rs`
+compares two programs covering every intrinsic with the host GCC's builds,
+which run the instructions, under both identities on every native arm.
+
+Differences: `_mm_rcp_ps` and `_mm_rsqrt_ps` return the correctly rounded
+reciprocal (within the instructions' 1.5 * 2^-12 bound, but not a
+processor's table), with the instructions' special cases: a subnormal
+input reads as a zero of its sign (±infinity), and `_mm_rcp_ps` of a
+magnitude of 2^126 or more is a zero; `_mm_cmpistr*` and `_mm_cmpestr*` call
+two out-of-line static helpers rather than inlining the whole string
+comparison at each call; `_mm_undefined_*` return zero; non-temporal stores are
+ordinary stores; `_mm_getcsr`, `_mm_setcsr`, the fences, `_mm_pause`,
+`_mm_clflush`, `_mm_monitor` and `_mm_mwait` are inline assembly, which the
+interpreter cannot run. The AVX, AVX2, AES, PCLMUL, 3DNow!, ADX and CPUID
+headers are still Clang 23.1.1's (Apache-2.0 WITH LLVM-exception,
+`src/headers/LICENSE-LLVM`): they type-check, and their intrinsics that are
+generic vector code run, but those that call `__builtin_ia32_*` builtins are
+refused by lowering. The headers are x86 only, as GCC's and Clang's are.
 
 ### Common GCC scalar intrinsics (2026-10-12)
 
@@ -2671,7 +2778,7 @@ optional result for zero), and the `__builtin_stdc_*` forms of C23's
 `__builtin_stdc_rotate_right`, exist for every identity under `GnuBuiltins`,
 as GCC 15 and Clang 23 provide them. GCC 14's `__builtin_parityg`,
 `__builtin_ffsg` and `__builtin_clrsbg` exist for the GCC identity only
-(`Feature::GccBitBuiltins`), as Clang 23 lacks them. Each computes at its
+(`Feature::GccOnlyBuiltins`, which also gates `__builtin_shuffle`), as Clang 23 lacks them. Each computes at its
 operand's width, for every unsigned integer type up to `unsigned __int128`
 and every `unsigned _BitInt(N)`. The registry shard is `src/builtins/bits.rs`;
 `semantic_analysis/builtins/bits.rs` types, checks and folds the calls.

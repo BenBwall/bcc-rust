@@ -1,11 +1,7 @@
-/*===---- tmmintrin.h - SSSE3 intrinsics -----------------------------------===
+/* tmmintrin.h - SSSE3 intrinsics for bcc.
  *
- * Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
- * See https://llvm.org/LICENSE.txt for license information.
- * SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
- *
- *===-----------------------------------------------------------------------===
- */
+ * Written for bcc; part of bcc and under its licence. Plain C over GNU
+ * vector operations, as in <xmmintrin.h>. */
 
 #ifndef __TMMINTRIN_H
 #define __TMMINTRIN_H
@@ -16,764 +12,158 @@
 
 #include <pmmintrin.h>
 
-/* Define the default attributes for the functions in this file. */
-#define __DEFAULT_FN_ATTRS                                                     \
-  __attribute__((__always_inline__, __nodebug__, __target__("ssse3"),          \
-                 __min_vector_width__(128)))
-
-#define __trunc64(x)                                                           \
-  (__m64) __builtin_shufflevector((__v2di)(x), __extension__(__v2di){}, 0)
-#define __zext128(x)                                                           \
-  (__m128i) __builtin_shufflevector((__v2si)(x), __extension__(__v2si){}, 0,   \
-                                    1, 2, 3)
-
-#if defined(__cplusplus) && (__cplusplus >= 201103L)
-#define __DEFAULT_FN_ATTRS_CONSTEXPR __DEFAULT_FN_ATTRS constexpr
-#else
-#define __DEFAULT_FN_ATTRS_CONSTEXPR __DEFAULT_FN_ATTRS
-#endif
-
-/// Computes the absolute value of each of the packed 8-bit signed
-///    integers in the source operand and stores the 8-bit unsigned integer
-///    results in the destination.
-///
-/// \headerfile <x86intrin.h>
-///
-/// This intrinsic corresponds to the \c PABSB instruction.
-///
-/// \param __a
-///    A 64-bit vector of [8 x i8].
-/// \returns A 64-bit integer vector containing the absolute values of the
-///    elements in the operand.
-static __inline__ __m64 __DEFAULT_FN_ATTRS_CONSTEXPR _mm_abs_pi8(__m64 __a) {
-  return (__m64)__builtin_elementwise_abs((__v8qs)__a);
+/* Absolute values; the most negative lane stays itself. */
+__BCC_SSE __m128i _mm_abs_epi8(__m128i __a) {
+  __v16qs __x = (__v16qs)__a;
+  return (__m128i)(__v16qs)((__v16qu)(__x < 0) & (__v16qu)-__x | (__v16qu)~(__x < 0) & (__v16qu)__x);
+}
+__BCC_SSE __m128i _mm_abs_epi16(__m128i __a) {
+  __v8hi __x = (__v8hi)__a;
+  return (__m128i)((__x < 0) & -__x | ~(__x < 0) & __x);
+}
+__BCC_SSE __m128i _mm_abs_epi32(__m128i __a) {
+  __v4si __x = (__v4si)__a;
+  return (__m128i)((__x < 0) & -__x | ~(__x < 0) & __x);
+}
+__BCC_SSE __m64 _mm_abs_pi8(__m64 __a) {
+  __v8qs __x = (__v8qs)__a, __r;
+  int __i;
+  for (__i = 0; __i < 8; ++__i)
+    __r[__i] = (signed char)(__x[__i] < 0 ? -__x[__i] : __x[__i]);
+  return (__m64)__r;
+}
+__BCC_SSE __m64 _mm_abs_pi16(__m64 __a) {
+  __v4hi __x = (__v4hi)__a, __r;
+  int __i;
+  for (__i = 0; __i < 4; ++__i)
+    __r[__i] = (short)(__x[__i] < 0 ? -__x[__i] : __x[__i]);
+  return (__m64)__r;
+}
+__BCC_SSE __m64 _mm_abs_pi32(__m64 __a) {
+  __v2su __x = (__v2su)__a;
+  return (__m64)(__v2su){(int)__x[0] < 0 ? 0u - __x[0] : __x[0], (int)__x[1] < 0 ? 0u - __x[1] : __x[1]};
 }
 
-/// Computes the absolute value of each of the packed 8-bit signed
-///    integers in the source operand and stores the 8-bit unsigned integer
-///    results in the destination.
-///
-/// \headerfile <x86intrin.h>
-///
-/// This intrinsic corresponds to the \c VPABSB instruction.
-///
-/// \param __a
-///    A 128-bit vector of [16 x i8].
-/// \returns A 128-bit integer vector containing the absolute values of the
-///    elements in the operand.
-static __inline__ __m128i __DEFAULT_FN_ATTRS_CONSTEXPR
-_mm_abs_epi8(__m128i __a) {
-  return (__m128i)__builtin_elementwise_abs((__v16qs)__a);
+/* Byte alignment: the bytes of `b` then `a` shifted right by `n` bytes. */
+__BCC_SSE __m128i __bcc_alignr(__m128i __a, __m128i __b, int __n) {
+  __v16qu __x = (__v16qu)__a, __y = (__v16qu)__b, __r;
+  int __i;
+  for (__i = 0; __i < 16; ++__i) {
+    int __at = __i + __n;
+    __r[__i] = __at < 16 ? __y[__at] : __at < 32 ? __x[__at - 16] : 0;
+  }
+  return (__m128i)__r;
 }
-
-/// Computes the absolute value of each of the packed 16-bit signed
-///    integers in the source operand and stores the 16-bit unsigned integer
-///    results in the destination.
-///
-/// \headerfile <x86intrin.h>
-///
-/// This intrinsic corresponds to the \c PABSW instruction.
-///
-/// \param __a
-///    A 64-bit vector of [4 x i16].
-/// \returns A 64-bit integer vector containing the absolute values of the
-///    elements in the operand.
-static __inline__ __m64 __DEFAULT_FN_ATTRS_CONSTEXPR _mm_abs_pi16(__m64 __a) {
-  return (__m64)__builtin_elementwise_abs((__v4hi)__a);
+#define _mm_alignr_epi8(a, b, n)                                                \
+  __BCC_IMMEDIATE(__builtin_ia32_palignr128((__v16qi)(__m128i)(a), (__v16qi)(__m128i)(b), (n)), \
+                  __bcc_alignr((__m128i)(a), (__m128i)(b), (int)(n) & 255))
+__BCC_SSE __m64 __bcc_alignr_pi8(__m64 __a, __m64 __b, int __n) {
+  __v8qu __x = (__v8qu)__a, __y = (__v8qu)__b, __r;
+  int __i;
+  for (__i = 0; __i < 8; ++__i) {
+    int __at = __i + __n;
+    __r[__i] = __at < 8 ? __y[__at] : __at < 16 ? __x[__at - 8] : 0;
+  }
+  return (__m64)__r;
 }
+#define _mm_alignr_pi8(a, b, n)                                                 \
+  __BCC_IMMEDIATE(__builtin_ia32_palignr128((__v16qi)(__m128i){}, (__v16qi)(__m128i){}, (n)), \
+                  __bcc_alignr_pi8((__m64)(a), (__m64)(b), (int)(n) & 255))
 
-/// Computes the absolute value of each of the packed 16-bit signed
-///    integers in the source operand and stores the 16-bit unsigned integer
-///    results in the destination.
-///
-/// \headerfile <x86intrin.h>
-///
-/// This intrinsic corresponds to the \c VPABSW instruction.
-///
-/// \param __a
-///    A 128-bit vector of [8 x i16].
-/// \returns A 128-bit integer vector containing the absolute values of the
-///    elements in the operand.
-static __inline__ __m128i __DEFAULT_FN_ATTRS_CONSTEXPR
-_mm_abs_epi16(__m128i __a) {
-  return (__m128i)__builtin_elementwise_abs((__v8hi)__a);
+/* Horizontal additions and subtractions of adjacent pairs, `a`'s first. */
+#define __BCC_HORIZONTAL(name, vector, lanes, type, op, saturate)               \
+  __BCC_SSE vector name(vector __a, vector __b) {                               \
+    type __x = (type)__a, __y = (type)__b, __r;                                 \
+    int __i;                                                                    \
+    for (__i = 0; __i < (lanes) / 2; ++__i) {                                   \
+      __r[__i] = saturate(__x[2 * __i] op __x[2 * __i + 1]);                    \
+      __r[__i + (lanes) / 2] = saturate(__y[2 * __i] op __y[2 * __i + 1]);      \
+    }                                                                           \
+    return (vector)__r;                                                         \
+  }
+#define __BCC_WRAP16(x) ((short)(x))
+#define __BCC_WRAP32(x) ((int)((unsigned)(x)))
+#define __BCC_SATURATE16(x) ((short)__BCC_CLAMP((x), -32768, 32767))
+__BCC_HORIZONTAL(_mm_hadd_epi16, __m128i, 8, __v8hi, +, __BCC_WRAP16)
+__BCC_HORIZONTAL(_mm_hsub_epi16, __m128i, 8, __v8hi, -, __BCC_WRAP16)
+__BCC_HORIZONTAL(_mm_hadds_epi16, __m128i, 8, __v8hi, +, __BCC_SATURATE16)
+__BCC_HORIZONTAL(_mm_hsubs_epi16, __m128i, 8, __v8hi, -, __BCC_SATURATE16)
+__BCC_HORIZONTAL(_mm_hadd_pi16, __m64, 4, __v4hi, +, __BCC_WRAP16)
+__BCC_HORIZONTAL(_mm_hsub_pi16, __m64, 4, __v4hi, -, __BCC_WRAP16)
+__BCC_HORIZONTAL(_mm_hadds_pi16, __m64, 4, __v4hi, +, __BCC_SATURATE16)
+__BCC_HORIZONTAL(_mm_hsubs_pi16, __m64, 4, __v4hi, -, __BCC_SATURATE16)
+__BCC_HORIZONTAL(_mm_hadd_epi32, __m128i, 4, __v4su, +, )
+__BCC_HORIZONTAL(_mm_hsub_epi32, __m128i, 4, __v4su, -, )
+__BCC_HORIZONTAL(_mm_hadd_pi32, __m64, 2, __v2su, +, )
+__BCC_HORIZONTAL(_mm_hsub_pi32, __m64, 2, __v2su, -, )
+
+/* Unsigned bytes of `a` times signed bytes of `b`, pairs added with
+ * saturation. */
+__BCC_SSE __m128i _mm_maddubs_epi16(__m128i __a, __m128i __b) {
+  __v16qu __x = (__v16qu)__a;
+  __v16qs __y = (__v16qs)__b;
+  __v8hi __r;
+  int __i;
+  for (__i = 0; __i < 8; ++__i)
+    __r[__i] = (short)__BCC_CLAMP(__x[2 * __i] * __y[2 * __i] + __x[2 * __i + 1] * __y[2 * __i + 1],
+                                  -32768, 32767);
+  return (__m128i)__r;
 }
-
-/// Computes the absolute value of each of the packed 32-bit signed
-///    integers in the source operand and stores the 32-bit unsigned integer
-///    results in the destination.
-///
-/// \headerfile <x86intrin.h>
-///
-/// This intrinsic corresponds to the \c PABSD instruction.
-///
-/// \param __a
-///    A 64-bit vector of [2 x i32].
-/// \returns A 64-bit integer vector containing the absolute values of the
-///    elements in the operand.
-static __inline__ __m64 __DEFAULT_FN_ATTRS_CONSTEXPR _mm_abs_pi32(__m64 __a) {
-  return (__m64)__builtin_elementwise_abs((__v2si)__a);
+__BCC_SSE __m64 _mm_maddubs_pi16(__m64 __a, __m64 __b) {
+  __v8qu __x = (__v8qu)__a;
+  __v8qs __y = (__v8qs)__b;
+  __v4hi __r;
+  int __i;
+  for (__i = 0; __i < 4; ++__i)
+    __r[__i] = (short)__BCC_CLAMP(__x[2 * __i] * __y[2 * __i] + __x[2 * __i + 1] * __y[2 * __i + 1],
+                                  -32768, 32767);
+  return (__m64)__r;
 }
-
-/// Computes the absolute value of each of the packed 32-bit signed
-///    integers in the source operand and stores the 32-bit unsigned integer
-///    results in the destination.
-///
-/// \headerfile <x86intrin.h>
-///
-/// This intrinsic corresponds to the \c VPABSD instruction.
-///
-/// \param __a
-///    A 128-bit vector of [4 x i32].
-/// \returns A 128-bit integer vector containing the absolute values of the
-///    elements in the operand.
-static __inline__ __m128i __DEFAULT_FN_ATTRS_CONSTEXPR
-_mm_abs_epi32(__m128i __a) {
-  return (__m128i)__builtin_elementwise_abs((__v4si)__a);
+/* High halves of the products, rounded: (a * b + 0x4000) >> 15. */
+__BCC_SSE __m128i _mm_mulhrs_epi16(__m128i __a, __m128i __b) {
+  __v8hi __x = (__v8hi)__a, __y = (__v8hi)__b, __r;
+  int __i;
+  for (__i = 0; __i < 8; ++__i)
+    __r[__i] = (short)(((__x[__i] * __y[__i] >> 14) + 1) >> 1);
+  return (__m128i)__r;
 }
-
-/// Concatenates the two 128-bit integer vector operands, and
-///    right-shifts the result by the number of bytes specified in the immediate
-///    operand.
-///
-/// \headerfile <x86intrin.h>
-///
-/// \code
-/// __m128i _mm_alignr_epi8(__m128i a, __m128i b, const int n);
-/// \endcode
-///
-/// This intrinsic corresponds to the \c PALIGNR instruction.
-///
-/// \param a
-///    A 128-bit vector of [16 x i8] containing one of the source operands.
-/// \param b
-///    A 128-bit vector of [16 x i8] containing one of the source operands.
-/// \param n
-///    An immediate operand specifying how many bytes to right-shift the result.
-/// \returns A 128-bit integer vector containing the concatenated right-shifted
-///    value.
-#define _mm_alignr_epi8(a, b, n) \
-  ((__m128i)__builtin_ia32_palignr128((__v16qi)(__m128i)(a), \
-                                      (__v16qi)(__m128i)(b), (n)))
-
-/// Concatenates the two 64-bit integer vector operands, and right-shifts
-///    the result by the number of bytes specified in the immediate operand.
-///
-/// \headerfile <x86intrin.h>
-///
-/// \code
-/// __m64 _mm_alignr_pi8(__m64 a, __m64 b, const int n);
-/// \endcode
-///
-/// This intrinsic corresponds to the \c PALIGNR instruction.
-///
-/// \param a
-///    A 64-bit vector of [8 x i8] containing one of the source operands.
-/// \param b
-///    A 64-bit vector of [8 x i8] containing one of the source operands.
-/// \param n
-///    An immediate operand specifying how many bytes to right-shift the result.
-/// \returns A 64-bit integer vector containing the concatenated right-shifted
-///    value.
-#define _mm_alignr_pi8(a, b, n)                                                \
-  ((__m64)__builtin_shufflevector(                                             \
-      (__v2di)__builtin_ia32_psrldqi128_byteshift(                             \
-          (__v16qi)__builtin_shufflevector((__v1di)(a), (__v1di)(b), 1, 0),    \
-          (n)),                                                                \
-      __extension__(__v2di){}, 0))
-
-/// Horizontally adds the adjacent pairs of values contained in 2 packed
-///    128-bit vectors of [8 x i16].
-///
-/// \headerfile <x86intrin.h>
-///
-/// This intrinsic corresponds to the \c VPHADDW instruction.
-///
-/// \param __a
-///    A 128-bit vector of [8 x i16] containing one of the source operands. The
-///    horizontal sums of the values are stored in the lower bits of the
-///    destination.
-/// \param __b
-///    A 128-bit vector of [8 x i16] containing one of the source operands. The
-///    horizontal sums of the values are stored in the upper bits of the
-///    destination.
-/// \returns A 128-bit vector of [8 x i16] containing the horizontal sums of
-///    both operands.
-static __inline__ __m128i __DEFAULT_FN_ATTRS_CONSTEXPR
-_mm_hadd_epi16(__m128i __a, __m128i __b) {
-  return (__m128i)__builtin_ia32_phaddw128((__v8hi)__a, (__v8hi)__b);
+__BCC_SSE __m64 _mm_mulhrs_pi16(__m64 __a, __m64 __b) {
+  __v4hi __x = (__v4hi)__a, __y = (__v4hi)__b, __r;
+  int __i;
+  for (__i = 0; __i < 4; ++__i)
+    __r[__i] = (short)(((__x[__i] * __y[__i] >> 14) + 1) >> 1);
+  return (__m64)__r;
 }
-
-/// Horizontally adds the adjacent pairs of values contained in 2 packed
-///    128-bit vectors of [4 x i32].
-///
-/// \headerfile <x86intrin.h>
-///
-/// This intrinsic corresponds to the \c VPHADDD instruction.
-///
-/// \param __a
-///    A 128-bit vector of [4 x i32] containing one of the source operands. The
-///    horizontal sums of the values are stored in the lower bits of the
-///    destination.
-/// \param __b
-///    A 128-bit vector of [4 x i32] containing one of the source operands. The
-///    horizontal sums of the values are stored in the upper bits of the
-///    destination.
-/// \returns A 128-bit vector of [4 x i32] containing the horizontal sums of
-///    both operands.
-static __inline__ __m128i __DEFAULT_FN_ATTRS_CONSTEXPR
-_mm_hadd_epi32(__m128i __a, __m128i __b) {
-  return (__m128i)__builtin_ia32_phaddd128((__v4si)__a, (__v4si)__b);
+/* PSHUFB: each byte of `b` selects a byte of `a` by its low bits, or zero
+ * when its top bit is set. */
+__BCC_SSE __m128i _mm_shuffle_epi8(__m128i __a, __m128i __b) {
+  __v16qu __x = (__v16qu)__a, __y = (__v16qu)__b, __r;
+  int __i;
+  for (__i = 0; __i < 16; ++__i)
+    __r[__i] = (__y[__i] & 0x80) ? 0 : __x[__y[__i] & 15];
+  return (__m128i)__r;
 }
-
-/// Horizontally adds the adjacent pairs of values contained in 2 packed
-///    64-bit vectors of [4 x i16].
-///
-/// \headerfile <x86intrin.h>
-///
-/// This intrinsic corresponds to the \c PHADDW instruction.
-///
-/// \param __a
-///    A 64-bit vector of [4 x i16] containing one of the source operands. The
-///    horizontal sums of the values are stored in the lower bits of the
-///    destination.
-/// \param __b
-///    A 64-bit vector of [4 x i16] containing one of the source operands. The
-///    horizontal sums of the values are stored in the upper bits of the
-///    destination.
-/// \returns A 64-bit vector of [4 x i16] containing the horizontal sums of both
-///    operands.
-static __inline__ __m64 __DEFAULT_FN_ATTRS_CONSTEXPR _mm_hadd_pi16(__m64 __a,
-                                                                   __m64 __b) {
-  return __trunc64(__builtin_ia32_phaddw128(
-      (__v8hi)__builtin_shufflevector(__a, __b, 0, 1), (__v8hi){}));
+__BCC_SSE __m64 _mm_shuffle_pi8(__m64 __a, __m64 __b) {
+  __v8qu __x = (__v8qu)__a, __y = (__v8qu)__b, __r;
+  int __i;
+  for (__i = 0; __i < 8; ++__i)
+    __r[__i] = (__y[__i] & 0x80) ? 0 : __x[__y[__i] & 7];
+  return (__m64)__r;
 }
-
-/// Horizontally adds the adjacent pairs of values contained in 2 packed
-///    64-bit vectors of [2 x i32].
-///
-/// \headerfile <x86intrin.h>
-///
-/// This intrinsic corresponds to the \c PHADDD instruction.
-///
-/// \param __a
-///    A 64-bit vector of [2 x i32] containing one of the source operands. The
-///    horizontal sums of the values are stored in the lower bits of the
-///    destination.
-/// \param __b
-///    A 64-bit vector of [2 x i32] containing one of the source operands. The
-///    horizontal sums of the values are stored in the upper bits of the
-///    destination.
-/// \returns A 64-bit vector of [2 x i32] containing the horizontal sums of both
-///    operands.
-static __inline__ __m64 __DEFAULT_FN_ATTRS_CONSTEXPR _mm_hadd_pi32(__m64 __a,
-                                                                   __m64 __b) {
-  return __trunc64(__builtin_ia32_phaddd128(
-      (__v4si)__builtin_shufflevector(__a, __b, 0, 1), (__v4si){}));
-}
-
-/// Horizontally adds, with saturation, the adjacent pairs of values contained
-///    in two packed 128-bit vectors of [8 x i16].
-///
-///    Positive sums greater than 0x7FFF are saturated to 0x7FFF. Negative sums
-///    less than 0x8000 are saturated to 0x8000.
-///
-/// \headerfile <x86intrin.h>
-///
-/// This intrinsic corresponds to the \c VPHADDSW instruction.
-///
-/// \param __a
-///    A 128-bit vector of [8 x i16] containing one of the source operands. The
-///    horizontal sums of the values are stored in the lower bits of the
-///    destination.
-/// \param __b
-///    A 128-bit vector of [8 x i16] containing one of the source operands. The
-///    horizontal sums of the values are stored in the upper bits of the
-///    destination.
-/// \returns A 128-bit vector of [8 x i16] containing the horizontal saturated
-///    sums of both operands.
-static __inline__ __m128i __DEFAULT_FN_ATTRS_CONSTEXPR
-_mm_hadds_epi16(__m128i __a, __m128i __b) {
-  return (__m128i)__builtin_ia32_phaddsw128((__v8hi)__a, (__v8hi)__b);
-}
-
-/// Horizontally adds, with saturation, the adjacent pairs of values contained
-///    in two packed 64-bit vectors of [4 x i16].
-///
-///    Positive sums greater than 0x7FFF are saturated to 0x7FFF. Negative sums
-///    less than 0x8000 are saturated to 0x8000.
-///
-/// \headerfile <x86intrin.h>
-///
-/// This intrinsic corresponds to the \c PHADDSW instruction.
-///
-/// \param __a
-///    A 64-bit vector of [4 x i16] containing one of the source operands. The
-///    horizontal sums of the values are stored in the lower bits of the
-///    destination.
-/// \param __b
-///    A 64-bit vector of [4 x i16] containing one of the source operands. The
-///    horizontal sums of the values are stored in the upper bits of the
-///    destination.
-/// \returns A 64-bit vector of [4 x i16] containing the horizontal saturated
-///    sums of both operands.
-static __inline__ __m64 __DEFAULT_FN_ATTRS_CONSTEXPR _mm_hadds_pi16(__m64 __a,
-                                                                    __m64 __b) {
-  return __trunc64(__builtin_ia32_phaddsw128(
-      (__v8hi)__builtin_shufflevector(__a, __b, 0, 1), (__v8hi){}));
-}
-
-/// Horizontally subtracts the adjacent pairs of values contained in 2
-///    packed 128-bit vectors of [8 x i16].
-///
-/// \headerfile <x86intrin.h>
-///
-/// This intrinsic corresponds to the \c VPHSUBW instruction.
-///
-/// \param __a
-///    A 128-bit vector of [8 x i16] containing one of the source operands. The
-///    horizontal differences between the values are stored in the lower bits of
-///    the destination.
-/// \param __b
-///    A 128-bit vector of [8 x i16] containing one of the source operands. The
-///    horizontal differences between the values are stored in the upper bits of
-///    the destination.
-/// \returns A 128-bit vector of [8 x i16] containing the horizontal differences
-///    of both operands.
-static __inline__ __m128i __DEFAULT_FN_ATTRS_CONSTEXPR
-_mm_hsub_epi16(__m128i __a, __m128i __b) {
-  return (__m128i)__builtin_ia32_phsubw128((__v8hi)__a, (__v8hi)__b);
-}
-
-/// Horizontally subtracts the adjacent pairs of values contained in 2
-///    packed 128-bit vectors of [4 x i32].
-///
-/// \headerfile <x86intrin.h>
-///
-/// This intrinsic corresponds to the \c VPHSUBD instruction.
-///
-/// \param __a
-///    A 128-bit vector of [4 x i32] containing one of the source operands. The
-///    horizontal differences between the values are stored in the lower bits of
-///    the destination.
-/// \param __b
-///    A 128-bit vector of [4 x i32] containing one of the source operands. The
-///    horizontal differences between the values are stored in the upper bits of
-///    the destination.
-/// \returns A 128-bit vector of [4 x i32] containing the horizontal differences
-///    of both operands.
-static __inline__ __m128i __DEFAULT_FN_ATTRS_CONSTEXPR
-_mm_hsub_epi32(__m128i __a, __m128i __b) {
-  return (__m128i)__builtin_ia32_phsubd128((__v4si)__a, (__v4si)__b);
-}
-
-/// Horizontally subtracts the adjacent pairs of values contained in 2
-///    packed 64-bit vectors of [4 x i16].
-///
-/// \headerfile <x86intrin.h>
-///
-/// This intrinsic corresponds to the \c PHSUBW instruction.
-///
-/// \param __a
-///    A 64-bit vector of [4 x i16] containing one of the source operands. The
-///    horizontal differences between the values are stored in the lower bits of
-///    the destination.
-/// \param __b
-///    A 64-bit vector of [4 x i16] containing one of the source operands. The
-///    horizontal differences between the values are stored in the upper bits of
-///    the destination.
-/// \returns A 64-bit vector of [4 x i16] containing the horizontal differences
-///    of both operands.
-static __inline__ __m64 __DEFAULT_FN_ATTRS_CONSTEXPR _mm_hsub_pi16(__m64 __a,
-                                                                   __m64 __b) {
-  return __trunc64(__builtin_ia32_phsubw128(
-      (__v8hi)__builtin_shufflevector(__a, __b, 0, 1), (__v8hi){}));
-}
-
-/// Horizontally subtracts the adjacent pairs of values contained in 2
-///    packed 64-bit vectors of [2 x i32].
-///
-/// \headerfile <x86intrin.h>
-///
-/// This intrinsic corresponds to the \c PHSUBD instruction.
-///
-/// \param __a
-///    A 64-bit vector of [2 x i32] containing one of the source operands. The
-///    horizontal differences between the values are stored in the lower bits of
-///    the destination.
-/// \param __b
-///    A 64-bit vector of [2 x i32] containing one of the source operands. The
-///    horizontal differences between the values are stored in the upper bits of
-///    the destination.
-/// \returns A 64-bit vector of [2 x i32] containing the horizontal differences
-///    of both operands.
-static __inline__ __m64 __DEFAULT_FN_ATTRS_CONSTEXPR _mm_hsub_pi32(__m64 __a,
-                                                                   __m64 __b) {
-  return __trunc64(__builtin_ia32_phsubd128(
-      (__v4si)__builtin_shufflevector(__a, __b, 0, 1), (__v4si){}));
-}
-
-/// Horizontally subtracts, with saturation, the adjacent pairs of values
-///    contained in two packed 128-bit vectors of [8 x i16].
-///
-///    Positive differences greater than 0x7FFF are saturated to 0x7FFF.
-///    Negative differences less than 0x8000 are saturated to 0x8000.
-///
-/// \headerfile <x86intrin.h>
-///
-/// This intrinsic corresponds to the \c VPHSUBSW instruction.
-///
-/// \param __a
-///    A 128-bit vector of [8 x i16] containing one of the source operands. The
-///    horizontal differences between the values are stored in the lower bits of
-///    the destination.
-/// \param __b
-///    A 128-bit vector of [8 x i16] containing one of the source operands. The
-///    horizontal differences between the values are stored in the upper bits of
-///    the destination.
-/// \returns A 128-bit vector of [8 x i16] containing the horizontal saturated
-///    differences of both operands.
-static __inline__ __m128i __DEFAULT_FN_ATTRS_CONSTEXPR
-_mm_hsubs_epi16(__m128i __a, __m128i __b) {
-  return (__m128i)__builtin_ia32_phsubsw128((__v8hi)__a, (__v8hi)__b);
-}
-
-/// Horizontally subtracts, with saturation, the adjacent pairs of values
-///    contained in two packed 64-bit vectors of [4 x i16].
-///
-///    Positive differences greater than 0x7FFF are saturated to 0x7FFF.
-///    Negative differences less than 0x8000 are saturated to 0x8000.
-///
-/// \headerfile <x86intrin.h>
-///
-/// This intrinsic corresponds to the \c PHSUBSW instruction.
-///
-/// \param __a
-///    A 64-bit vector of [4 x i16] containing one of the source operands. The
-///    horizontal differences between the values are stored in the lower bits of
-///    the destination.
-/// \param __b
-///    A 64-bit vector of [4 x i16] containing one of the source operands. The
-///    horizontal differences between the values are stored in the upper bits of
-///    the destination.
-/// \returns A 64-bit vector of [4 x i16] containing the horizontal saturated
-///    differences of both operands.
-static __inline__ __m64 __DEFAULT_FN_ATTRS_CONSTEXPR _mm_hsubs_pi16(__m64 __a,
-                                                                    __m64 __b) {
-  return __trunc64(__builtin_ia32_phsubsw128(
-      (__v8hi)__builtin_shufflevector(__a, __b, 0, 1), (__v8hi){}));
-}
-
-/// Multiplies corresponding pairs of packed 8-bit unsigned integer
-///    values contained in the first source operand and packed 8-bit signed
-///    integer values contained in the second source operand, adds pairs of
-///    contiguous products with signed saturation, and writes the 16-bit sums to
-///    the corresponding bits in the destination.
-///
-///    For example, bits [7:0] of both operands are multiplied, bits [15:8] of
-///    both operands are multiplied, and the sum of both results is written to
-///    bits [15:0] of the destination.
-///
-/// \headerfile <x86intrin.h>
-///
-/// This intrinsic corresponds to the \c VPMADDUBSW instruction.
-///
-/// \param __a
-///    A 128-bit integer vector containing the first source operand.
-/// \param __b
-///    A 128-bit integer vector containing the second source operand.
-/// \returns A 128-bit integer vector containing the sums of products of both
-///    operands: \n
-///    \a R0 := (\a __a0 * \a __b0) + (\a __a1 * \a __b1) \n
-///    \a R1 := (\a __a2 * \a __b2) + (\a __a3 * \a __b3) \n
-///    \a R2 := (\a __a4 * \a __b4) + (\a __a5 * \a __b5) \n
-///    \a R3 := (\a __a6 * \a __b6) + (\a __a7 * \a __b7) \n
-///    \a R4 := (\a __a8 * \a __b8) + (\a __a9 * \a __b9) \n
-///    \a R5 := (\a __a10 * \a __b10) + (\a __a11 * \a __b11) \n
-///    \a R6 := (\a __a12 * \a __b12) + (\a __a13 * \a __b13) \n
-///    \a R7 := (\a __a14 * \a __b14) + (\a __a15 * \a __b15)
-static __inline__ __m128i __DEFAULT_FN_ATTRS_CONSTEXPR
-_mm_maddubs_epi16(__m128i __a, __m128i __b) {
-  return (__m128i)__builtin_ia32_pmaddubsw128((__v16qi)__a, (__v16qi)__b);
-}
-
-/// Multiplies corresponding pairs of packed 8-bit unsigned integer
-///    values contained in the first source operand and packed 8-bit signed
-///    integer values contained in the second source operand, adds pairs of
-///    contiguous products with signed saturation, and writes the 16-bit sums to
-///    the corresponding bits in the destination.
-///
-///    For example, bits [7:0] of both operands are multiplied, bits [15:8] of
-///    both operands are multiplied, and the sum of both results is written to
-///    bits [15:0] of the destination.
-///
-/// \headerfile <x86intrin.h>
-///
-/// This intrinsic corresponds to the \c PMADDUBSW instruction.
-///
-/// \param __a
-///    A 64-bit integer vector containing the first source operand.
-/// \param __b
-///    A 64-bit integer vector containing the second source operand.
-/// \returns A 64-bit integer vector containing the sums of products of both
-///    operands: \n
-///    \a R0 := (\a __a0 * \a __b0) + (\a __a1 * \a __b1) \n
-///    \a R1 := (\a __a2 * \a __b2) + (\a __a3 * \a __b3) \n
-///    \a R2 := (\a __a4 * \a __b4) + (\a __a5 * \a __b5) \n
-///    \a R3 := (\a __a6 * \a __b6) + (\a __a7 * \a __b7)
-static __inline__ __m64 __DEFAULT_FN_ATTRS_CONSTEXPR
-_mm_maddubs_pi16(__m64 __a, __m64 __b) {
-  return __trunc64(__builtin_ia32_pmaddubsw128((__v16qi)__zext128(__a),
-                                               (__v16qi)__zext128(__b)));
-}
-
-/// Multiplies packed 16-bit signed integer values, truncates the 32-bit
-///    products to the 18 most significant bits by right-shifting, rounds the
-///    truncated value by adding 1, and writes bits [16:1] to the destination.
-///
-/// \headerfile <x86intrin.h>
-///
-/// This intrinsic corresponds to the \c VPMULHRSW instruction.
-///
-/// \param __a
-///    A 128-bit vector of [8 x i16] containing one of the source operands.
-/// \param __b
-///    A 128-bit vector of [8 x i16] containing one of the source operands.
-/// \returns A 128-bit vector of [8 x i16] containing the rounded and scaled
-///    products of both operands.
-static __inline__ __m128i __DEFAULT_FN_ATTRS_CONSTEXPR
-_mm_mulhrs_epi16(__m128i __a, __m128i __b) {
-  return (__m128i)__builtin_ia32_pmulhrsw128((__v8hi)__a, (__v8hi)__b);
-}
-
-/// Multiplies packed 16-bit signed integer values, truncates the 32-bit
-///    products to the 18 most significant bits by right-shifting, rounds the
-///    truncated value by adding 1, and writes bits [16:1] to the destination.
-///
-/// \headerfile <x86intrin.h>
-///
-/// This intrinsic corresponds to the \c PMULHRSW instruction.
-///
-/// \param __a
-///    A 64-bit vector of [4 x i16] containing one of the source operands.
-/// \param __b
-///    A 64-bit vector of [4 x i16] containing one of the source operands.
-/// \returns A 64-bit vector of [4 x i16] containing the rounded and scaled
-///    products of both operands.
-static __inline__ __m64 __DEFAULT_FN_ATTRS_CONSTEXPR
-_mm_mulhrs_pi16(__m64 __a, __m64 __b) {
-  return __trunc64(__builtin_ia32_pmulhrsw128((__v8hi)__zext128(__a),
-                                              (__v8hi)__zext128(__b)));
-}
-
-/// Copies the 8-bit integers from a 128-bit integer vector to the
-///    destination or clears 8-bit values in the destination, as specified by
-///    the second source operand.
-///
-/// \headerfile <x86intrin.h>
-///
-/// This intrinsic corresponds to the \c VPSHUFB instruction.
-///
-/// \param __a
-///    A 128-bit integer vector containing the values to be copied.
-/// \param __b
-///    A 128-bit integer vector containing control bytes corresponding to
-///    positions in the destination:
-///    Bit 7: \n
-///    1: Clear the corresponding byte in the destination. \n
-///    0: Copy the selected source byte to the corresponding byte in the
-///    destination. \n
-///    Bits [6:4] Reserved.  \n
-///    Bits [3:0] select the source byte to be copied.
-/// \returns A 128-bit integer vector containing the copied or cleared values.
-static __inline__ __m128i __DEFAULT_FN_ATTRS_CONSTEXPR
-_mm_shuffle_epi8(__m128i __a, __m128i __b) {
-  return (__m128i)__builtin_ia32_pshufb128((__v16qi)__a, (__v16qi)__b);
-}
-
-/// Copies the 8-bit integers from a 64-bit integer vector to the
-///    destination or clears 8-bit values in the destination, as specified by
-///    the second source operand.
-///
-/// \headerfile <x86intrin.h>
-///
-/// This intrinsic corresponds to the \c PSHUFB instruction.
-///
-/// \param __a
-///    A 64-bit integer vector containing the values to be copied.
-/// \param __b
-///    A 64-bit integer vector containing control bytes corresponding to
-///    positions in the destination:
-///    Bit 7: \n
-///    1: Clear the corresponding byte in the destination. \n
-///    0: Copy the selected source byte to the corresponding byte in the
-///    destination. \n
-///    Bits [2:0] select the source byte to be copied.
-/// \returns A 64-bit integer vector containing the copied or cleared values.
-static __inline__ __m64 __DEFAULT_FN_ATTRS_CONSTEXPR
-_mm_shuffle_pi8(__m64 __a, __m64 __b) {
-  return __trunc64(__builtin_ia32_pshufb128(
-      (__v16qi)__builtin_shufflevector((__v2si)(__a), __extension__(__v2si){},
-                                       0, 1, 0, 1),
-      (__v16qi)__zext128(__b)));
-}
-
-/// For each 8-bit integer in the first source operand, perform one of
-///    the following actions as specified by the second source operand.
-///
-///    If the byte in the second source is negative, calculate the two's
-///    complement of the corresponding byte in the first source, and write that
-///    value to the destination. If the byte in the second source is positive,
-///    copy the corresponding byte from the first source to the destination. If
-///    the byte in the second source is zero, clear the corresponding byte in
-///    the destination.
-///
-/// \headerfile <x86intrin.h>
-///
-/// This intrinsic corresponds to the \c VPSIGNB instruction.
-///
-/// \param __a
-///    A 128-bit integer vector containing the values to be copied.
-/// \param __b
-///    A 128-bit integer vector containing control bytes corresponding to
-///    positions in the destination.
-/// \returns A 128-bit integer vector containing the resultant values.
-static __inline__ __m128i __DEFAULT_FN_ATTRS_CONSTEXPR
-_mm_sign_epi8(__m128i __a, __m128i __b) {
-  return (__m128i)__builtin_ia32_psignb128((__v16qi)__a, (__v16qi)__b);
-}
-
-/// For each 16-bit integer in the first source operand, perform one of
-///    the following actions as specified by the second source operand.
-///
-///    If the word in the second source is negative, calculate the two's
-///    complement of the corresponding word in the first source, and write that
-///    value to the destination. If the word in the second source is positive,
-///    copy the corresponding word from the first source to the destination. If
-///    the word in the second source is zero, clear the corresponding word in
-///    the destination.
-///
-/// \headerfile <x86intrin.h>
-///
-/// This intrinsic corresponds to the \c VPSIGNW instruction.
-///
-/// \param __a
-///    A 128-bit integer vector containing the values to be copied.
-/// \param __b
-///    A 128-bit integer vector containing control words corresponding to
-///    positions in the destination.
-/// \returns A 128-bit integer vector containing the resultant values.
-static __inline__ __m128i __DEFAULT_FN_ATTRS_CONSTEXPR
-_mm_sign_epi16(__m128i __a, __m128i __b) {
-  return (__m128i)__builtin_ia32_psignw128((__v8hi)__a, (__v8hi)__b);
-}
-
-/// For each 32-bit integer in the first source operand, perform one of
-///    the following actions as specified by the second source operand.
-///
-///    If the doubleword in the second source is negative, calculate the two's
-///    complement of the corresponding word in the first source, and write that
-///    value to the destination. If the doubleword in the second source is
-///    positive, copy the corresponding word from the first source to the
-///    destination. If the doubleword in the second source is zero, clear the
-///    corresponding word in the destination.
-///
-/// \headerfile <x86intrin.h>
-///
-/// This intrinsic corresponds to the \c VPSIGND instruction.
-///
-/// \param __a
-///    A 128-bit integer vector containing the values to be copied.
-/// \param __b
-///    A 128-bit integer vector containing control doublewords corresponding to
-///    positions in the destination.
-/// \returns A 128-bit integer vector containing the resultant values.
-static __inline__ __m128i __DEFAULT_FN_ATTRS_CONSTEXPR
-_mm_sign_epi32(__m128i __a, __m128i __b) {
-  return (__m128i)__builtin_ia32_psignd128((__v4si)__a, (__v4si)__b);
-}
-
-/// For each 8-bit integer in the first source operand, perform one of
-///    the following actions as specified by the second source operand.
-///
-///    If the byte in the second source is negative, calculate the two's
-///    complement of the corresponding byte in the first source, and write that
-///    value to the destination. If the byte in the second source is positive,
-///    copy the corresponding byte from the first source to the destination. If
-///    the byte in the second source is zero, clear the corresponding byte in
-///    the destination.
-///
-/// \headerfile <x86intrin.h>
-///
-/// This intrinsic corresponds to the \c PSIGNB instruction.
-///
-/// \param __a
-///    A 64-bit integer vector containing the values to be copied.
-/// \param __b
-///    A 64-bit integer vector containing control bytes corresponding to
-///    positions in the destination.
-/// \returns A 64-bit integer vector containing the resultant values.
-static __inline__ __m64 __DEFAULT_FN_ATTRS_CONSTEXPR _mm_sign_pi8(__m64 __a,
-                                                                  __m64 __b) {
-  return __trunc64(__builtin_ia32_psignb128((__v16qi)__zext128(__a),
-                                            (__v16qi)__zext128(__b)));
-}
-
-/// For each 16-bit integer in the first source operand, perform one of
-///    the following actions as specified by the second source operand.
-///
-///    If the word in the second source is negative, calculate the two's
-///    complement of the corresponding word in the first source, and write that
-///    value to the destination. If the word in the second source is positive,
-///    copy the corresponding word from the first source to the destination. If
-///    the word in the second source is zero, clear the corresponding word in
-///    the destination.
-///
-/// \headerfile <x86intrin.h>
-///
-/// This intrinsic corresponds to the \c PSIGNW instruction.
-///
-/// \param __a
-///    A 64-bit integer vector containing the values to be copied.
-/// \param __b
-///    A 64-bit integer vector containing control words corresponding to
-///    positions in the destination.
-/// \returns A 64-bit integer vector containing the resultant values.
-static __inline__ __m64 __DEFAULT_FN_ATTRS_CONSTEXPR _mm_sign_pi16(__m64 __a,
-                                                                   __m64 __b) {
-  return __trunc64(
-      __builtin_ia32_psignw128((__v8hi)__zext128(__a), (__v8hi)__zext128(__b)));
-}
-
-/// For each 32-bit integer in the first source operand, perform one of
-///    the following actions as specified by the second source operand.
-///
-///    If the doubleword in the second source is negative, calculate the two's
-///    complement of the corresponding doubleword in the first source, and
-///    write that value to the destination. If the doubleword in the second
-///    source is positive, copy the corresponding doubleword from the first
-///    source to the destination. If the doubleword in the second source is
-///    zero, clear the corresponding doubleword in the destination.
-///
-/// \headerfile <x86intrin.h>
-///
-/// This intrinsic corresponds to the \c PSIGND instruction.
-///
-/// \param __a
-///    A 64-bit integer vector containing the values to be copied.
-/// \param __b
-///    A 64-bit integer vector containing two control doublewords corresponding
-///    to positions in the destination.
-/// \returns A 64-bit integer vector containing the resultant values.
-static __inline__ __m64 __DEFAULT_FN_ATTRS_CONSTEXPR _mm_sign_pi32(__m64 __a,
-                                                                   __m64 __b) {
-  return __trunc64(
-      __builtin_ia32_psignd128((__v4si)__zext128(__a), (__v4si)__zext128(__b)));
-}
-
-#undef __zext128
-#undef __trunc64
-#undef __DEFAULT_FN_ATTRS
-#undef __DEFAULT_FN_ATTRS_CONSTEXPR
+/* PSIGN: each lane of `a` negated, kept or zeroed by the sign of `b`'s. */
+#define __BCC_SIGN(name, vector, lanes, type)                                   \
+  __BCC_SSE vector name(vector __a, vector __b) {                               \
+    type __x = (type)__a, __y = (type)__b, __r;                                 \
+    int __i;                                                                    \
+    for (__i = 0; __i < (lanes); ++__i)                                         \
+      __r[__i] = __y[__i] < 0 ? 0 - (long long)__x[__i] : __y[__i] == 0 ? 0 : __x[__i]; \
+    return (vector)__r;                                                         \
+  }
+__BCC_SIGN(_mm_sign_epi8, __m128i, 16, __v16qs)
+__BCC_SIGN(_mm_sign_epi16, __m128i, 8, __v8hi)
+__BCC_SIGN(_mm_sign_epi32, __m128i, 4, __v4si)
+__BCC_SIGN(_mm_sign_pi8, __m64, 8, __v8qs)
+__BCC_SIGN(_mm_sign_pi16, __m64, 4, __v4hi)
+__BCC_SIGN(_mm_sign_pi32, __m64, 2, __v2si)
 
 #endif /* __TMMINTRIN_H */

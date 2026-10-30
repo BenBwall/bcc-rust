@@ -733,15 +733,16 @@ fn layout(
                 count,
                 align,
             } => {
-                let TypeKind::Scalar(scalar) = nodes[element.index] else {
-                    return None;
+                // A lane is an arithmetic scalar, a bit-precise integer
+                // (Clang) or an enumeration (GCC).
+                let lane = match nodes[element.index] {
+                    | TypeKind::Scalar(scalar) => target.scalar(scalar)?,
+                    | TypeKind::BitInt { width, .. } => bit_int_layout(width),
+                    | TypeKind::Tag(id) => target.scalar(tags[id].compatible.get())?,
+                    | _ => return None,
                 };
                 break Layout {
-                    size: target
-                        .scalar(scalar)?
-                        .size
-                        .checked_mul(count)?
-                        .checked_next_power_of_two()?,
+                    size: lane.size.checked_mul(count)?.checked_next_power_of_two()?,
                     align,
                 };
             },

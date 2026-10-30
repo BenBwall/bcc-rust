@@ -7,6 +7,7 @@ use super::{
     LoweringErrorKind,
 };
 use crate::{
+    configuration::RuleSet,
     ir::{
         AggregateFlags,
         AggregateLayout,
@@ -113,7 +114,9 @@ pub(super) fn repr(types: &Types<'_>, mut ty: TypeId) -> Result<Repr, LoweringEr
             }
         },
         | TypeKind::Atomic(_) => unreachable!("atomic wrappers were removed above"),
-        | TypeKind::Vector { .. } => unsupported(Construct::Vector),
+        // A GNU vector lives in memory like an array of its lanes; its
+        // operators work lane by lane (`vectors.rs`).
+        | TypeKind::Vector { .. } => Ok(Repr::Aggregate),
     }
 }
 
@@ -329,6 +332,7 @@ pub(super) fn is_volatile(ty: TypeId) -> bool {
 pub(super) fn aggregate_layout<'s>(
     types: &Types<'_>,
     ty: TypeId,
+    rules: RuleSet,
     scratch: &'s Bump,
 ) -> Result<AggregateLayout<'s>, LoweringErrorKind> {
     let whole = types
@@ -336,7 +340,7 @@ pub(super) fn aggregate_layout<'s>(
         .ok_or(LoweringErrorKind::MissingFact(
             "an aggregate value has no nominal layout",
         ))?;
-    flattened_layout(types, ty, whole, scratch)
+    flattened_layout(types, ty, whole, rules, scratch)
 }
 
 /// The facts an argument of type `ty` is passed by: those of
@@ -357,9 +361,10 @@ pub(super) fn argument_layout<'s>(
     types: &Types<'_>,
     target: Target,
     ty: TypeId,
+    rules: RuleSet,
     scratch: &'s Bump,
 ) -> Result<AggregateLayout<'s>, LoweringErrorKind> {
-    let union = object_layout(types, ty, scratch)?;
+    let union = object_layout(types, ty, rules, scratch)?;
     let first = types
         .tag(ty)
         .filter(|tag| {
@@ -372,7 +377,7 @@ pub(super) fn argument_layout<'s>(
         return Ok(union);
     };
     let member = layout(types, first.ty)?;
-    let classified = flattened_layout(types, first.ty, member, scratch)?;
+    let classified = flattened_layout(types, first.ty, member, rules, scratch)?;
     Ok(AggregateLayout {
         size: union.size,
         align: union.align,
@@ -390,6 +395,7 @@ fn flattened_layout<'s>(
     types: &Types<'_>,
     ty: TypeId,
     whole: Layout,
+    rules: RuleSet,
     scratch: &'s Bump,
 ) -> Result<AggregateLayout<'s>, LoweringErrorKind> {
     let mut flags = AggregateFlags::empty();
@@ -498,8 +504,12 @@ fn flattened_layout<'s>(
                         "an aggregate has a function member",
                     )),
                 | TypeKind::Atomic(value) => work.push((value, offset)),
-                | TypeKind::Vector { .. } =>
-                    return Err(LoweringErrorKind::Unsupported(Construct::Vector)),
+                // A vector member is classified as one unit, as Clang's
+                // `X86_64ABIInfo::classify` treats a `VectorType` field.
+                | TypeKind::Vector { .. } => match super::vectors::member_leaf(types, ty, rules)? {
+                    | Some(leaf) => push_scalar(&mut scalars, offset, leaf)?,
+                    | None => flags |= AggregateFlags::MEMORY,
+                },
             }
         }
     }
@@ -651,14 +661,17 @@ pub(super) fn complex_scalar_layout<'s>(
 pub(super) fn object_layout<'s>(
     types: &Types<'_>,
     ty: TypeId,
+    rules: RuleSet,
     scratch: &'s Bump,
 ) -> Result<AggregateLayout<'s>, LoweringErrorKind> {
     if matches!(repr(types, ty)?, Repr::Complex { .. }) {
         complex_layout(types, ty, scratch)
-    } else if matches!(types.kind(ty), TypeKind::BitInt { .. }) {
-        flattened_layout(types, ty, layout(types, ty)?, scratch)
+    } else if matches!(types.kind(types.non_atomic(ty)), TypeKind::Vector { .. })
+        || matches!(types.kind(ty), TypeKind::BitInt { .. })
+    {
+        flattened_layout(types, ty, layout(types, ty)?, rules, scratch)
     } else {
-        aggregate_layout(types, ty, scratch)
+        aggregate_layout(types, ty, rules, scratch)
     }
 }
 

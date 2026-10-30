@@ -226,10 +226,10 @@ fn pretty_function_spells_the_signature_as_clang_does() {
             "void f(__int128, unsigned __int128, _Atomic(int) *)",
         ),
         (
-            "void f(int x __attribute__((vector_size(16))), long long *y \
+            "void f(int x __attribute__((vector_size(16))), long long y \
              __attribute__((vector_size(8)))) { __PRETTY_FUNCTION__; }",
             "void f(__attribute__((__vector_size__(4 * sizeof(int)))) int, \
-             __attribute__((__vector_size__(1 * sizeof(long long)))) long long *)",
+             __attribute__((__vector_size__(1 * sizeof(long long)))) long long)",
         ),
     ] {
         assert_eq!(one(source), expected, "{source}");

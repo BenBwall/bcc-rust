@@ -292,8 +292,9 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                                 && element.designation.is_none()
                                 && let InitializerType::AssignmentExpression(e) =
                                     element.initializer.kind
-                                && self.vector_assignment(
+                                && self.vector_value_assignment(
                                     target,
+                                    self.expression_info(e),
                                     self.types.non_atomic(self.expression_info(e).ty),
                                 )
                             {
@@ -1046,7 +1047,11 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         );
         let (e, reference) = self.peel_compound_literal(target, e, peel)?;
         let literal = self.expression_info(e).ty;
-        let fits = record || self.compatible_value(literal, target);
+        // A GNU vector literal gives a vector object its lanes as a record
+        // literal gives a record its members (GCC and Clang).
+        let fits = record
+            || self.vector_assignment(target, literal)
+            || self.compatible_value(literal, target);
         let fits = match reference {
             // Clang reads an atomic literal only as a whole initializer.
             | Some(_) if self.context.configuration.folds_compound_literals() =>
@@ -1072,7 +1077,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             TypeKind::Tag(id) if self.types.tags[id].kind != TagKind::Enum
         );
         let scalar = !record && self.scalar_type(target);
-        if !record && !scalar {
+        if !record && !scalar && self.vector(target).is_none() {
             return None;
         }
         // GCC folds a pair of conversions away only where the literal has
@@ -1891,7 +1896,8 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 | _ => false,
             };
         }
-        if self.vector_assignment(target, self.expression_info(e).ty) {
+        let info = self.expression_info(e);
+        if self.vector_value_assignment(target, info, info.ty) {
             return true;
         }
         // GCC: an array compound literal initializes an array element or

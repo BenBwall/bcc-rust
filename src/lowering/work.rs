@@ -161,6 +161,9 @@ pub(super) enum Task<'tu> {
         otherwise:   Block,
         merge:       Block,
     },
+    /// Complete a GNU vector builtin whose vector operands are on the
+    /// stack (`vectors.rs`).
+    FinishVectorBuiltin(&'tu Expression<'tu>),
     FinishBuiltin(
         &'tu Expression<'tu>,
         &'tu crate::translation_phases::semantic_analysis::BuiltinCallFacts<'tu>,
@@ -243,6 +246,10 @@ pub(super) enum Operand {
     /// A `_Float16` value held as an `f32` with the range and precision it
     /// is evaluated to, not yet rounded to `_Float16`; see `half.rs`.
     Excess(Value),
+    /// For Clang, a vector of `_Float16` or `__bf16` lanes evaluated in
+    /// `float`: the address of an object of its `f32` lanes, 4 bytes
+    /// apart, not yet rounded; see `vectors.rs`.
+    VectorExcess(Value),
     /// An lvalue or function designator.
     Place(Place),
     /// A structure or union rvalue names its backing place. The alignment

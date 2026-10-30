@@ -50,6 +50,10 @@ pub(super) fn argument<'s>(
         layout,
         align: raised(layout, Align::from_bytes(8).expect("8 is a power of two")).align,
     };
+    // A vector's registers were chosen by lowering; none means memory.
+    if layout.flags.contains(AggregateFlags::VECTOR) && layout.scalars.is_empty() {
+        return Ok(stack);
+    }
     let classes = match classify(layout) {
         | Classification::Memory => return Ok(stack),
         | Classification::Classes(classes) => classes,
@@ -103,6 +107,25 @@ pub(super) fn result<'s>(
                 align:         layout.align,
             },
         });
+    }
+    if layout.flags.contains(AggregateFlags::VECTOR) {
+        match layout.scalars {
+            | [] => return Ok(memory(registers)),
+            // Clang's 32-byte vector result without AVX: XMM0 and XMM1.
+            | [low, high] => {
+                return Ok(ResultPlan::Registers {
+                    layout,
+                    registers: ResultRegisters {
+                        complex:       false,
+                        first:         low.ty,
+                        second:        Some(high.ty),
+                        second_offset: high.offset,
+                        align:         layout.align,
+                    },
+                });
+            },
+            | _ => {},
+        }
     }
     let classes = match classify(layout) {
         | Classification::Memory => return Ok(memory(registers)),
@@ -271,7 +294,8 @@ pub(crate) enum Classification {
 ///
 /// An aggregate larger than two eightbytes is MEMORY, since without vector
 /// types no larger one is passed in registers; so is one with a misaligned
-/// member or a flexible array member, as Clang decides. Otherwise each
+/// member or a flexible array member, as Clang decides, or with a one-lane
+/// vector member that the claimed compiler classifies as MEMORY. Otherwise each
 /// scalar's classes merge into the eightbytes it covers, and the clean-up
 /// runs.
 /// psABI §3.2.3, "Classification", rules 1-5.
@@ -279,9 +303,9 @@ pub(crate) fn classify(layout: AggregateLayout<'_>) -> Classification {
     // A transparent union's first member is classified in its place.
     let size = layout.first.map_or(layout.size, |first| first.size);
     if size > AggregateLayout::MAX_SCALAR_BYTES
-        || layout
-            .flags
-            .intersects(AggregateFlags::UNALIGNED | AggregateFlags::FLEXIBLE)
+        || layout.flags.intersects(
+            AggregateFlags::UNALIGNED | AggregateFlags::FLEXIBLE | AggregateFlags::MEMORY,
+        )
     {
         return Classification::Memory;
     }

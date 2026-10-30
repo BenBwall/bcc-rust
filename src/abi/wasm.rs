@@ -45,6 +45,17 @@ use crate::ir::{
 /// structs/unions"; "Lower single-element structs to just pass a regular
 /// value"; otherwise `DefaultABIInfo` passes it indirectly (`byval`).
 pub(super) fn argument(layout: AggregateLayout<'_>) -> ArgPlan<'_> {
+    // A one-lane `float` or `double` vector travels as its lane; another
+    // vector by reference (`vectors.rs`).
+    if layout.flags.contains(AggregateFlags::VECTOR) {
+        return match layout.scalars {
+            | [only] => ArgPlan::Registers {
+                layout,
+                parts: Parts::one(only.ty),
+            },
+            | _ => ArgPlan::Keep,
+        };
+    }
     if layout.size == 0 {
         return ArgPlan::Ignore(layout);
     }
@@ -61,6 +72,21 @@ pub(super) fn argument(layout: AggregateLayout<'_>) -> ArgPlan<'_> {
 /// through a hidden pointer.
 /// Clang `WebAssemblyABIInfo::classifyReturnType`.
 pub(super) fn result(layout: AggregateLayout<'_>) -> ResultPlan<'_> {
+    if layout.flags.contains(AggregateFlags::VECTOR) && layout.scalars.is_empty() {
+        return ResultPlan::Memory(layout);
+    }
+    if layout.flags.contains(AggregateFlags::VECTOR) {
+        return ResultPlan::Registers {
+            layout,
+            registers: ResultRegisters {
+                complex:       false,
+                second_offset: 8,
+                first:         layout.scalars[0].ty,
+                second:        None,
+                align:         layout.align,
+            },
+        };
+    }
     if layout.size == 0 {
         return ResultPlan::Ignore(layout);
     }

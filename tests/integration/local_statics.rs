@@ -480,12 +480,11 @@ mod tests {
         );
         assert!(!used_helper.status.success());
         let used = bcc(
-            "typedef int vector __attribute__((vector_size(16)));int main(void){static vector q \
-             __attribute__((used))={1,2,3,4};return 0;}",
+            "int main(void){static _Decimal32 q __attribute__((used));return 0;}",
             &["--emit=llvm"],
         );
         assert!(!used.status.success());
-        assert!(text(&used.stderr).contains("vector types"));
+        assert!(text(&used.stderr).contains("_Decimal32 types"));
     }
 
     #[test]

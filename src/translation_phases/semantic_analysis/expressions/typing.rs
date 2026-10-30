@@ -91,7 +91,17 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             let operand = self.resolve_function_value(operand, None);
             // Anything may write a parameter through its address.
             self.note_parameter_write(operand.binding);
-            if operand.vector_element {
+            // A lane of a vector rvalue, or for Clang of an atomic vector,
+            // is a value ("cannot take the address of an rvalue").
+            if operand.vector_element && operand.category == ValueCategory::Rvalue {
+                return self.invalid_expression(e, SemanticErrorKind::InvalidAddressOperand);
+            }
+            // GCC lets a vector element's address be taken; Clang does
+            // not ("address of vector element requested").
+            if operand.vector_element
+                && self.context.configuration.compiler_identity().rules()
+                    != crate::configuration::RuleSet::Gcc
+            {
                 return self.vector_error(e);
             }
             let indirect = matches!(
@@ -134,6 +144,23 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             if matches!(op, U::Plus | U::Minus)
                 || (op == U::BitwiseNot && self.integer_type(element).is_some())
             {
+                // GCC's opaque comparison mask stays opaque.
+                let mut result = Self::expression_result(e, ty);
+                result.opaque_vector = operand.opaque_vector;
+                return result;
+            }
+            // GCC steps every lane of a vector lvalue; Clang refuses.
+            // GNU extension: GCC manual, "Vector Extensions".
+            if matches!(
+                op,
+                U::PreIncrement | U::PreDecrement | U::PostIncrement | U::PostDecrement
+            ) && self.context.configuration.compiler_identity().rules()
+                == crate::configuration::RuleSet::Gcc
+                && operand.category == ValueCategory::ModifiableLvalue
+                && (!matches!(self.types.nodes[operand.ty.index], TypeKind::Atomic(_))
+                    || self.gcc_steps_atomic_vector(element, operand))
+            {
+                self.note_parameter_write(operand.binding);
                 return Self::expression_result(e, ty);
             }
             return self.vector_error(e);
@@ -742,10 +769,25 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             self.common_arithmetic(left, right, lt, rt)
         } else if self.vector(lt).is_some() && self.vector(rt).is_some() {
             // GNU vectors extend the compatible alternatives of C99 §6.5.15p3.
-            let Some(ty) = self.types.composite(lt.unqualified(), rt.unqualified()) else {
-                return self.invalid_expression(e, SemanticErrorKind::InvalidConditionalOperands);
-            };
-            ty
+            // Clang's lax vector conversions also take a vector of another
+            // type of the same size, which then reads as the first's.
+            match self.types.composite(lt.unqualified(), rt.unqualified()) {
+                | Some(ty) => ty,
+                | None if self.context.configuration.compiler_identity().rules()
+                    == crate::configuration::RuleSet::Clang
+                    && self.vector_width(lt) == self.vector_width(rt) =>
+                {
+                    self.convert(
+                        right.expression,
+                        lt.unqualified(),
+                        ConversionKind::Assignment,
+                    );
+                    lt.unqualified()
+                },
+                | None =>
+                    return self
+                        .invalid_expression(e, SemanticErrorKind::InvalidConditionalOperands),
+            }
         } else if (self.nullptr_type(lt) && self.nullptr_type(rt))
             || (matches!(self.types.nodes[lt.index], TypeKind::Scalar(Scalar::Void))
                 && matches!(self.types.nodes[rt.index], TypeKind::Scalar(Scalar::Void)))
@@ -1571,6 +1613,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             promotion_width: None,
             register: false,
             vector_element: false,
+            opaque_vector: false,
             static_address: false,
             unfolded_binary128: false,
             folded: None,
@@ -1584,7 +1627,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// C99: §6.3.2.1p1, p. 46; PDF p. 58. A structure/union containing
     /// const members is not modifiable; arrays and incomplete types are
     /// excluded.
-    pub(super) fn object_category(&mut self, ty: TypeId) -> ValueCategory {
+    pub(in crate::translation_phases::semantic_analysis) fn object_category(
+        &mut self,
+        ty: TypeId,
+    ) -> ValueCategory {
         if self.complete_object(ty)
             && !matches!(self.types.nodes[ty.index], TypeKind::Array(..))
             && !self.contains_const(ty)
@@ -2286,7 +2332,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     TypeKind::Scalar(Scalar::Bool)
                 );
         }
-        if self.vector_assignment(target, from) {
+        if self.vector_value_assignment(target, source, from) {
             return true;
         }
         if self.arithmetic(target) && self.arithmetic(from) {
@@ -2373,13 +2419,37 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             // valid pointer/aggregate returns based on an invented int type.
             // A keyword form's spelling is an identifier only where its
             // keyword is disabled; it stays an opaque reserved name there.
-            let descriptor = crate::builtins::lookup(self.context.string_cache.at(name.name))
+            let known = crate::builtins::lookup(self.context.string_cache.at(name.name));
+            // A builtin only GCC has is unknown to the other identities'
+            // compilers, which reject the call ("use of unknown builtin").
+            if known.is_some_and(|descriptor| {
+                descriptor.availability.feature
+                    == Some(crate::configuration::Feature::GccOnlyBuiltins)
+                    && !descriptor.availability.accepted(self.context.configuration)
+            }) {
+                self.error(
+                    SemanticErrorKind::UndeclaredIdentifier,
+                    name.source_vectors,
+                    Some(name.name),
+                    None,
+                );
+            }
+            let descriptor = known
                 .filter(|descriptor| descriptor.syntax == crate::builtins::SyntaxForm::OrdinaryCall)
                 .filter(|descriptor| descriptor.availability.accepted(self.context.configuration))
                 .filter(|descriptor| self.builtin_prototype_available(descriptor, name));
+            // A builtin a system header's macro spells, as the intrinsic
+            // headers' immediate checks do, is no extension of the user's
+            // code: Clang withholds diagnostics in a system macro's body
+            // (`SourceManager::isInSystemMacro`), and GCC's headers call
+            // the builtins themselves.
             if let Some(descriptor) = descriptor
                 && descriptor.type_rule == crate::builtins::TypeRule::X86Signature
                 && let Some(feature) = descriptor.availability.feature
+                && !(name.source_vectors.length() != 0
+                    && self
+                        .context
+                        .in_system_header(self.context.first_source_vector(name.source_vectors)))
             {
                 self.context
                     .report_extension(feature, "x86 builtin", name.source_vectors);

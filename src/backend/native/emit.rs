@@ -496,6 +496,11 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
         if !self.elf {
             writeln!(self.out, "\t.seh_endprologue")?;
         }
+        // The outgoing arguments start at `%rsp`; an over-aligned copy
+        // among them needs that address aligned as the copy is.
+        if frame.realign > 16 {
+            writeln!(self.out, "\tandq\t$-{}, %rsp", frame.realign)?;
+        }
         Ok(())
     }
 

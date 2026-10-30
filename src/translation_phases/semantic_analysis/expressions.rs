@@ -569,7 +569,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         } = e.kind
         {
             info.vector_element = self
-                .vector(self.expression_info(left_expression).ty)
+                .vector(
+                    self.types
+                        .non_atomic(self.expression_info(left_expression).ty),
+                )
                 .is_some();
         }
         // Size/alignment and generic controlling operands are unevaluated.
@@ -744,6 +747,9 @@ pub(crate) struct ExpressionInfo<'tu> {
     pub(crate) register: bool,
     /// GNU vector extension: a lane remains assignable but has no address.
     pub(crate) vector_element: bool,
+    /// A GCC vector comparison's mask, which GCC types as an opaque vector
+    /// that converts to any vector of its size.
+    pub(crate) opaque_vector: bool,
     /// Whether designation can form an address constant without reading an
     /// object.
     pub(crate) static_address: bool,

@@ -1,102 +1,39 @@
-/*===---- crc32intrin.h - SSE4.2 Accumulate CRC32 intrinsics ---------------===
+/* crc32intrin.h - SSE4.2 CRC32 intrinsics for bcc.
  *
- * Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
- * See https://llvm.org/LICENSE.txt for license information.
- * SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
- *
- *===-----------------------------------------------------------------------===
- */
+ * Written for bcc; part of bcc and under its licence. The CRC32
+ * instruction's CRC-32C (Castagnoli) step in plain C: reflected, with the
+ * polynomial 0x82F63B78, and no initial or final inversion. */
 
 #ifndef __CRC32INTRIN_H
 #define __CRC32INTRIN_H
 
-/// We only declare crc32 as a constexpr if we are compiling C++ code
-#if defined(__cplusplus) && (__cplusplus >= 201103L)
-#define __DEFAULT_FN_ATTRS                                                     \
-  __attribute__((__always_inline__, __nodebug__, __target__("crc32"))) constexpr
-#else
-#define __DEFAULT_FN_ATTRS                                                     \
-  __attribute__((__always_inline__, __nodebug__, __target__("crc32")))
-#endif
-
-/// Adds the unsigned integer operand to the CRC-32C checksum of the
-///    unsigned char operand.
-///
-/// \headerfile <x86intrin.h>
-///
-/// This intrinsic corresponds to the <c> CRC32B </c> instruction.
-///
-/// \param __C
-///    An unsigned integer operand to add to the CRC-32C checksum of operand
-///    \a  __D.
-/// \param __D
-///    An unsigned 8-bit integer operand used to compute the CRC-32C checksum.
-/// \returns The result of adding operand \a __C to the CRC-32C checksum of
-///    operand \a __D.
-static __inline__ unsigned int __DEFAULT_FN_ATTRS
-_mm_crc32_u8(unsigned int __C, unsigned char __D) {
-  return __builtin_ia32_crc32qi(__C, __D);
+static __inline__ __attribute__((__always_inline__, __nodebug__)) unsigned int
+__bcc_crc32c(unsigned int __crc, unsigned long long __data, int __bytes) {
+  int __bit;
+  for (__bit = 0; __bit < 8 * __bytes; ++__bit) {
+    __crc ^= (unsigned int)(__data >> __bit) & 1;
+    __crc = (__crc >> 1) ^ (0x82F63B78u & (0u - (__crc & 1)));
+  }
+  return __crc;
 }
 
-/// Adds the unsigned integer operand to the CRC-32C checksum of the
-///    unsigned short operand.
-///
-/// \headerfile <x86intrin.h>
-///
-/// This intrinsic corresponds to the <c> CRC32W </c> instruction.
-///
-/// \param __C
-///    An unsigned integer operand to add to the CRC-32C checksum of operand
-///    \a __D.
-/// \param __D
-///    An unsigned 16-bit integer operand used to compute the CRC-32C checksum.
-/// \returns The result of adding operand \a __C to the CRC-32C checksum of
-///    operand \a __D.
-static __inline__ unsigned int __DEFAULT_FN_ATTRS
-_mm_crc32_u16(unsigned int __C, unsigned short __D) {
-  return __builtin_ia32_crc32hi(__C, __D);
+static __inline__ __attribute__((__always_inline__, __nodebug__)) unsigned int
+_mm_crc32_u8(unsigned int __c, unsigned char __d) {
+  return __bcc_crc32c(__c, __d, 1);
 }
-
-/// Adds the first unsigned integer operand to the CRC-32C checksum of
-///    the second unsigned integer operand.
-///
-/// \headerfile <x86intrin.h>
-///
-/// This intrinsic corresponds to the <c> CRC32L </c> instruction.
-///
-/// \param __C
-///    An unsigned integer operand to add to the CRC-32C checksum of operand
-///    \a __D.
-/// \param __D
-///    An unsigned 32-bit integer operand used to compute the CRC-32C checksum.
-/// \returns The result of adding operand \a __C to the CRC-32C checksum of
-///    operand \a __D.
-static __inline__ unsigned int __DEFAULT_FN_ATTRS
-_mm_crc32_u32(unsigned int __C, unsigned int __D) {
-  return __builtin_ia32_crc32si(__C, __D);
+static __inline__ __attribute__((__always_inline__, __nodebug__)) unsigned int
+_mm_crc32_u16(unsigned int __c, unsigned short __d) {
+  return __bcc_crc32c(__c, __d, 2);
 }
-
+static __inline__ __attribute__((__always_inline__, __nodebug__)) unsigned int
+_mm_crc32_u32(unsigned int __c, unsigned int __d) {
+  return __bcc_crc32c(__c, __d, 4);
+}
 #ifdef __x86_64__
-/// Adds the unsigned integer operand to the CRC-32C checksum of the
-///    unsigned 64-bit integer operand.
-///
-/// \headerfile <x86intrin.h>
-///
-/// This intrinsic corresponds to the <c> CRC32Q </c> instruction.
-///
-/// \param __C
-///    An unsigned integer operand to add to the CRC-32C checksum of operand
-///    \a __D.
-/// \param __D
-///    An unsigned 64-bit integer operand used to compute the CRC-32C checksum.
-/// \returns The result of adding operand \a __C to the CRC-32C checksum of
-///    operand \a __D.
-static __inline__ unsigned long long __DEFAULT_FN_ATTRS
-_mm_crc32_u64(unsigned long long __C, unsigned long long __D) {
-  return __builtin_ia32_crc32di(__C, __D);
+static __inline__ __attribute__((__always_inline__, __nodebug__)) unsigned long long
+_mm_crc32_u64(unsigned long long __c, unsigned long long __d) {
+  return __bcc_crc32c((unsigned int)__c, __d, 8);
 }
-#endif /* __x86_64__ */
-
-#undef __DEFAULT_FN_ATTRS
+#endif
 
 #endif /* __CRC32INTRIN_H */

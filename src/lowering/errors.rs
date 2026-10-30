@@ -71,7 +71,6 @@ pub(crate) enum LoweringErrorKind {
 pub(crate) enum Construct {
     ComplexAtomic,
     Atomic,
-    Vector,
     VariableLengthArray,
     LabelAddress,
     /// MSVC `__asm` blocks.
@@ -149,7 +148,6 @@ impl Construct {
         match self {
             | Self::ComplexAtomic => "atomic complex values",
             | Self::Atomic => "atomic types",
-            | Self::Vector => "vector types",
             | Self::VariableLengthArray => "variable length arrays",
             | Self::LabelAddress => "label addresses",
             | Self::InlineAssembly => "MSVC inline assembly",

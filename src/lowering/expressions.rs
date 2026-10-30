@@ -335,7 +335,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                         source,
                     ));
                 }
-                if self.schedule_builtin(expression)? {
+                if self.schedule_vector_call(expression)? || self.schedule_builtin(expression)? {
                     return Ok(());
                 }
                 self.tasks.push(Task::Finish(expression));
@@ -536,6 +536,11 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             } => {
                 let right = self.pop();
                 let left = self.pop();
+                if self.vector(left.ty).is_some() {
+                    let lane = self.vector_subscript(left, right, info.ty, source)?;
+                    self.operands.push(lane);
+                    return Ok(());
+                }
                 let (pointer, index) = if self.is_pointer(left.ty) {
                     (left, right)
                 } else {
@@ -621,6 +626,15 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 } else {
                     self.settle(item)
                 };
+                // Semantic analysis records no conversion for a cast to or
+                // from a vector type: it reinterprets the bits.
+                if (self.vector(info.ty).is_some() || self.vector(item.ty).is_some())
+                    && info.operation_type.is_none()
+                {
+                    let cast = self.vector_cast(item, info.ty, source)?;
+                    self.operands.push(cast);
+                    return Ok(());
+                }
                 if let Some(member) = info.operation_type {
                     let layout = types::layout(&self.unit.sema.types, info.ty)
                         .map_err(|kind| at(kind, source))?;
@@ -827,6 +841,10 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                         ty:      conversion.ty,
                     }
                 },
+                // A scalar operand of a vector operator fills every lane.
+                | ConversionKind::Arithmetic
+                    if self.vector(conversion.ty).is_some() && self.vector(item.ty).is_none() =>
+                    self.vector_splat(item, conversion.ty, source)?,
                 | ConversionKind::Arithmetic
                 | ConversionKind::Assignment
                 | ConversionKind::DefaultArgument =>
@@ -914,10 +932,18 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 return Ok(Item { ty: to, ..item }),
             | (Operand::Excess(_), _) if self.half_in_float() =>
                 return self.convert_excess(item, to, target, source),
+            // A half vector's excess converts to a vector of the same lanes
+            // unrounded, as a scalar's does to its own type.
+            | (Operand::VectorExcess(_), _) if self.same_lanes(item.ty, to) =>
+                return Ok(Item { ty: to, ..item }),
             | _ => self.settle(item),
         };
         if self.wide_bit_int(to).is_some() || self.wide_bit_int(item.ty).is_some() {
             return self.wide_convert(item, to, source);
+        }
+        // Vectors of one size convert to each other by their bits.
+        if self.vector(to).is_some() || self.vector(item.ty).is_some() {
+            return self.vector_cast(item, to, source);
         }
         let types = &self.unit.sema.types;
         if matches!(target, Repr::Complex { .. })
@@ -1100,11 +1126,6 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 let ty = self.value_type(item.ty, source)?;
                 Ok(self.extend(truth, false, ty))
             },
-            // A vector lvalue reaches its value use unread: vector values
-            // have no IR representation yet, though their addresses do.
-            // GNU extension: GCC manual, "Vector Extensions".
-            | _ if matches!(self.unit.sema.types.kind(item.ty), TypeKind::Vector { .. }) =>
-                Err(LoweringError::unsupported(Construct::Vector, source)),
             | _ => Err(LoweringError::missing("an operand has no value", source)),
         }
     }
@@ -1549,6 +1570,9 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         source: SourceVectors,
     ) -> Result<Item, LoweringError> {
         use BinaryOperator as B;
+        if self.vector(ty).is_some() || self.vector(left.ty).is_some() {
+            return self.vector_binary(operator, left, right, ty, source);
+        }
         if self.complex_half(left.ty) || self.complex_half(right.ty) {
             return self.complex_half_binary(operator, left, right, ty, source);
         }
@@ -1777,11 +1801,23 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             self.push_item(Operand::Excess(result), info.ty);
             return Ok(());
         }
+        if matches!(operator, U::Plus | U::Minus) && self.excess_vector(info.ty) {
+            let operand = self.pop_excess();
+            let result = self.excess_unary(operator, operand, info.ty, source)?;
+            self.operands.push(result);
+            return Ok(());
+        }
         let operand = if operator == U::LogicalNot {
             self.pop_truth()
         } else {
             self.pop()
         };
+        if matches!(operator, U::Plus | U::Minus | U::BitwiseNot) && self.vector(info.ty).is_some()
+        {
+            let result = self.vector_unary(operator, operand, info.ty, source)?;
+            self.operands.push(result);
+            return Ok(());
+        }
         if matches!(operator, U::Minus | U::BitwiseNot) && self.wide_bit_int(info.ty).is_some() {
             let result = self.wide_unary(operator, operand, info.ty, source)?;
             self.operands.push(result);
@@ -1886,6 +1922,10 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     && matches!(operator, U::PostIncrement | U::PostDecrement)
                 {
                     self.wide_snapshot(operand, source)?
+                } else if self.vector(operand.ty).is_some()
+                    && matches!(operator, U::PostIncrement | U::PostDecrement)
+                {
+                    self.vector_snapshot(operand, source)?
                 } else {
                     operand
                 };
@@ -1918,6 +1958,9 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
     ) -> Result<Item, LoweringError> {
         if self.wide_bit_int(item.ty).is_some() {
             return self.wide_step(item, increment, source);
+        }
+        if self.vector(item.ty).is_some() {
+            return self.vector_step(item, increment, source);
         }
         let value = self.value(item, source)?;
         let operand = match self.repr(item.ty, source)? {
@@ -2602,7 +2645,7 @@ fn unsupported(expression: &Expression<'_>) -> Option<Construct> {
     Some(match expression.kind {
         | ExpressionType::CompoundLiteral { type_name, .. } if literal_storage(type_name, true) =>
             Construct::CompoundLiteralStorage,
-        | ExpressionType::Builtin(b) if !matches!(b.keyword,crate::translation_phases::preprocessing::KeywordTokenType::BuiltinVaArg|crate::translation_phases::preprocessing::KeywordTokenType::BuiltinVaStart|crate::translation_phases::preprocessing::KeywordTokenType::BuiltinVaEnd|crate::translation_phases::preprocessing::KeywordTokenType::BuiltinVaCopy|crate::translation_phases::preprocessing::KeywordTokenType::BuiltinChooseExpr|crate::translation_phases::preprocessing::KeywordTokenType::BuiltinTypesCompatible|crate::translation_phases::preprocessing::KeywordTokenType::BuiltinOffsetof) => Construct::Builtin,
+        | ExpressionType::Builtin(b) if !matches!(b.keyword,crate::translation_phases::preprocessing::KeywordTokenType::BuiltinVaArg|crate::translation_phases::preprocessing::KeywordTokenType::BuiltinVaStart|crate::translation_phases::preprocessing::KeywordTokenType::BuiltinVaEnd|crate::translation_phases::preprocessing::KeywordTokenType::BuiltinVaCopy|crate::translation_phases::preprocessing::KeywordTokenType::BuiltinChooseExpr|crate::translation_phases::preprocessing::KeywordTokenType::BuiltinTypesCompatible|crate::translation_phases::preprocessing::KeywordTokenType::BuiltinOffsetof|crate::translation_phases::preprocessing::KeywordTokenType::BuiltinConvertVector|crate::translation_phases::preprocessing::KeywordTokenType::BuiltinBitCast) => Construct::Builtin,
         | ExpressionType::Countof(_) => Construct::Extension,
         | _ => return None,
     })

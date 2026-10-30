@@ -33,6 +33,7 @@ use super::{
 use crate::{
     diagnostics::format_in,
     ir::{
+        AggregateLayout,
         AggregateParam,
         Align,
         BlockLabel,
@@ -842,6 +843,30 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
         Ok(self.module.intern(signature))
     }
 
+    /// The calling-convention facts of a vector parameter or result
+    /// ([`super::vectors::abi_layout`]) under the claimed compiler's rules.
+    fn vector_abi_layout<'s>(
+        &self,
+        ty: TypeId,
+        result: bool,
+        scratch: &'s Bump,
+    ) -> Result<AggregateLayout<'s>, LoweringErrorKind> {
+        super::vectors::abi_layout(
+            &self.sema.types,
+            ty,
+            crate::abi::Convention::of(self.target),
+            self.rules(),
+            result,
+            scratch,
+        )
+    }
+
+    /// Whose rules the claimed compiler identity follows where GCC's and
+    /// Clang's calling conventions differ.
+    fn rules(&self) -> crate::configuration::RuleSet {
+        self.context.configuration.compiler_identity().rules()
+    }
+
     /// The pre-ABI signature of a call or function whose fixed parameters
     /// have the C types `parameters`. A structure or union parameter is a
     /// `ptr` to a copy the caller makes, described by
@@ -877,9 +902,14 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
                     || types::limb_argument(types, result) =>
             {
                 params.push(Type::Ptr);
+                let layout = if super::vectors::shape(types, result).is_some() {
+                    self.vector_abi_layout(result, true, scratch)?
+                } else {
+                    types::object_layout(types, result, self.rules(), scratch)?
+                };
                 aggregates.push(AggregateParam {
                     index: 0,
-                    abi:   ParamAbi::Result(types::object_layout(types, result, scratch)?),
+                    abi:   ParamAbi::Result(layout),
                 });
                 None
             },
@@ -898,14 +928,20 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
                     // their meaningful component bytes.
                     noundef.push(index);
                     params.push(Type::Ptr);
-                    aggregates.push(AggregateParam {
-                        index,
-                        abi: ParamAbi::Aggregate(types::argument_layout(
+                    let layout = if super::vectors::shape(types, parameter).is_some() {
+                        self.vector_abi_layout(parameter, false, scratch)?
+                    } else {
+                        types::argument_layout(
                             types,
                             self.target,
                             parameter,
+                            self.rules(),
                             scratch,
-                        )?),
+                        )?
+                    };
+                    aggregates.push(AggregateParam {
+                        index,
+                        abi: ParamAbi::Aggregate(layout),
                     });
                 },
                 | representation => {

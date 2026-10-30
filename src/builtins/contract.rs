@@ -138,6 +138,9 @@ pub(crate) enum TypeRule {
     X86Signature,
     /// Two vectors of one type, then constant lane indices.
     VectorShuffle,
+    /// GCC's `__builtin_shuffle`: one or two vectors of one type, then an
+    /// integer mask vector with as many lanes of the same size.
+    GnuShuffle,
     /// One operand-overloaded elementwise or non-temporal operation.
     VectorOverload(VectorOverload),
     ConvertVector,

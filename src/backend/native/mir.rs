@@ -55,6 +55,9 @@ pub(crate) struct MFunction<'a> {
     /// Whether `%rsp` moves after the prologue (`dyn_alloca`,
     /// `stack_restore`), so frame objects are addressed from `%rbp`.
     pub(crate) dynamic:          bool,
+    /// The largest alignment of a `byval` copy the function passes; above
+    /// 16 bytes the prologue realigns `%rsp` to it, with a frame pointer.
+    pub(crate) outgoing_align:   u64,
     /// Whether the frame holds a System V register save area for
     /// `va_start`.
     pub(crate) register_save:    bool,
@@ -90,6 +93,7 @@ impl<'a> MFunction<'a> {
             incoming:         0,
             calls:            false,
             dynamic:          false,
+            outgoing_align:   16,
             register_save:    false,
             slot_align:       1,
             first_push:       None,
