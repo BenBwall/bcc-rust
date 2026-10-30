@@ -119,7 +119,7 @@ block0(v0: ptr, v1: i32):
     v99 = iconst.i16 10
     v100 = ashr.i16 v98, v99
     v101 = sext.i32 v100
-    v102 = shl.i32 nsw v101, v95
+    v102 = shl.i32 v101, v95
     v103 = trunc.i16 v102
     v104 = iconst.i16 63
     v105 = and.i16 v103, v104

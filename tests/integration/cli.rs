@@ -883,6 +883,22 @@ mod tests {
         );
     }
 
+    /// GCC and Clang accept `-w` any number of times, as GCC's testsuite
+    /// passes it in both the harness flags and a test's `dg-options`.
+    #[test]
+    fn repeated_suppress_warnings_flags_are_accepted() {
+        let source = "#warning shown\nint value;\n";
+        let output = run(&["-w", "-w", "--input", source]);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(output.status.success(), "{output:?}");
+        assert!(!stderr.contains("shown"), "{stderr}");
+        let output = run(&["--gcc-mode", "-w", "-w", "-fsyntax-only", "-x", "c", "-"]);
+        assert!(
+            !String::from_utf8_lossy(&output.stderr).contains("cannot be used multiple times"),
+            "{output:?}"
+        );
+    }
+
     fn stderr_of(arguments: &[&str]) -> String {
         let output = run(arguments);
         let stderr = String::from_utf8_lossy(&output.stderr).into_owned();

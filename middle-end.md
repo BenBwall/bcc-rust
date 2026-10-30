@@ -175,9 +175,12 @@ fixed value. Reading an uninitialized local yields `poison`. The interpreter
 implements this exactly and is the specification the optimizer is tested
 against.
 
-C lowering sets `nsw` on signed `+ - *` and on left shifts of signed operands,
-because C99 §6.5p5 makes signed overflow undefined; unsigned arithmetic wraps and
-gets no flags. Pointer arithmetic gets `inbounds` (C99 §6.5.6p8).
+C lowering sets `nsw` on signed `+ - *`, because C99 §6.5p5 makes signed
+overflow undefined; unsigned arithmetic wraps and gets no flags. A signed left
+shift gets no `nsw` either: C99 §6.5.7p4 leaves its overflow undefined, but GCC
+documents that it does not use that latitude and Clang emits a plain `shl`, and
+code such as `addr <<= 8` (GCC's torture test `20121108-1.c`) relies on bits
+shifting into the sign. Pointer arithmetic gets `inbounds` (C99 §6.5.6p8).
 
 ### Instructions
 

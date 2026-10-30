@@ -208,8 +208,9 @@ struct Cli {
     /// form (also accepts Clang -fdiagnostics-format=FORMAT).
     #[arg(long, value_enum, value_name = "FORMAT", default_value = "bcc")]
     diagnostic_format: arguments::Format,
-    /// Suppress all warning diagnostics (GCC -w).
-    #[arg(short = 'w', long)]
+    /// Suppress all warning diagnostics (GCC -w). Repeating it is harmless,
+    /// as in GCC and Clang.
+    #[arg(short = 'w', long, overrides_with = "suppress_warnings")]
     suppress_warnings: bool,
     /// Stop parsing with a diagnostic once this many recursive grammar
     /// productions are active at once. Each nested expression operand,

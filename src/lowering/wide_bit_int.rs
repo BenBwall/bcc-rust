@@ -257,7 +257,7 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
         let (width, signed) = self
             .wide_bit_int(item.ty)
             .ok_or_else(|| LoweringError::missing("a wide operand has no width", source))?;
-        let one = self.wide_limbs_constant(1, item.ty, source)?;
+        let one = self.wide_limbs_constant(1, true, item.ty, source)?;
         let bits = self.iconst(Type::I32, i128::from(width));
         let sign = self.iconst(Type::I32, i128::from(signed));
         let a = wide_address(item, source)?;
@@ -730,15 +730,19 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
 
     /// The wide constant `value`, an integer of at most 128 bits whose
     /// signedness extended it to `i128`, converted to the wide type `ty`:
-    /// the address of a constant object of its limbs.
+    /// the address of a constant object of its limbs. The limbs above are
+    /// copies of the sign only for a `signed` value: an unsigned 128-bit
+    /// value of 2^127 or more has its top bit set without being negative.
+    /// C99: §6.3.1.3 paragraph 1, p. 43; PDF p. 55.
     fn wide_limbs_constant(
         &mut self,
         value: i128,
+        signed: bool,
         ty: TypeId,
         source: SourceVectors,
     ) -> Result<Value, LoweringError> {
         self.constant_object(ty, source, |limbs| {
-            let fill = if value < 0 { u64::MAX } else { 0 };
+            let fill = if signed && value < 0 { u64::MAX } else { 0 };
             let bytes = value.to_le_bytes();
             let (low, high) = bytes.as_chunks::<8>().0.split_at(1);
             let halves = [u64::from_le_bytes(low[0]), u64::from_le_bytes(high[0])];
@@ -840,7 +844,7 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
                 {
                     let ty = self.draft.value_type(value);
                     let constant = self.cast_constant(constant, ty, from.signed(), Type::I128);
-                    let address = self.wide_limbs_constant(constant, to, source)?;
+                    let address = self.wide_limbs_constant(constant, from.signed(), to, source)?;
                     return Ok(Item {
                         operand: Operand::Aggregate(address),
                         ty:      to,
