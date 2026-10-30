@@ -276,6 +276,10 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 240
     steps:
+      # The golden and snapshot fixtures are compared byte for byte with
+      # bcc's LF output, so the checkout keeps LF, as on a developer's host.
+      - name: Keep LF line endings
+        run: git config --global core.autocrlf false
       - uses: actions/checkout@v5
       - name: Restore the LLVM tools
         uses: actions/cache/restore@v4
@@ -295,6 +299,11 @@ jobs:
           fail-on-cache-miss: true
       - uses: ./.github/actions/setup-windows
       - run: cargo test --all-targets --no-fail-fast
+      # Which Visual Studio installation the cl.exe comparisons used, if any;
+      # without one they skip.
+      - name: Report the Microsoft toolchain
+        if: ${{ !cancelled() }}
+        run: cargo test --test integration msvc::toolchain::probe -- --ignored --nocapture
 
   bench:
     name: Benchmarks
