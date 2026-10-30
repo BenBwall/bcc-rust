@@ -51,6 +51,8 @@ mod tests {
     /// `-Wargument-outside-range`, which `-w` silences, while GCC's
     /// `_mm_shuffle_pd` takes any constant; a variable is an error for both.
     /// `__m64` holds two `int`s for GCC and one `long long` for Clang.
+    /// Freestanding, so `<mm_malloc.h>` needs no C library: bcc's default
+    /// target is Linux on every host, a cross target on Windows.
     #[test]
     fn immediates_and_m64_follow_each_identity() {
         let source = temporary("immediates.c");
@@ -94,7 +96,7 @@ mod tests {
                 true,
             ),
         ] {
-            let output = bcc(&[&["-fsyntax-only", source][..], flags].concat());
+            let output = bcc(&[&["-ffreestanding", "-fsyntax-only", source][..], flags].concat());
             assert_eq!(
                 output.status.success(),
                 accepted,
