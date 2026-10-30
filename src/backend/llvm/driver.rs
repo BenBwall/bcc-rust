@@ -570,20 +570,32 @@ fn concat_os(prefix: &str, value: &OsStr) -> std::ffi::OsString {
     argument
 }
 
-/// The MinGW installation: `MINGW_ROOT`, else the parent of a `PATH`
-/// directory holding `gcc.exe` whose installation has `windows.h`. This is
-/// the search `build_support/native.rs` makes for the C helper.
+/// The MinGW installation: `MINGW_ROOT` when it holds one, else the parent
+/// of a `PATH` directory holding `gcc.exe` whose installation does, else
+/// `MINGW_ROOT` as given. An installation has `windows.h` in `include` or
+/// `x86_64-w64-mingw32/include`. A `MINGW_ROOT` naming no installation so
+/// gives way to one on `PATH` instead of failing later on a missing header
+/// or library, and still serves alone where none is needed, as when clang
+/// only assembles an object. Otherwise this is the search
+/// `build_support/native.rs` makes for the C helper.
 pub(crate) fn mingw_root() -> Option<PathBuf> {
-    if let Some(root) = std::env::var_os("MINGW_ROOT") {
-        return Some(PathBuf::from(root));
+    let installation = |root: &Path| {
+        root.join("include/windows.h").is_file()
+            || root.join("x86_64-w64-mingw32/include/windows.h").is_file()
+    };
+    let given = std::env::var_os("MINGW_ROOT").map(PathBuf::from);
+    if let Some(root) = given.as_deref()
+        && installation(root)
+    {
+        return given;
     }
-    let path = std::env::var_os("PATH")?;
-    std::env::split_paths(&path).find_map(|directory| {
-        let root = directory.parent()?;
-        let has_headers = root.join("include/windows.h").is_file()
-            || root.join("x86_64-w64-mingw32/include/windows.h").is_file();
-        (directory.join("gcc.exe").is_file() && has_headers).then(|| root.to_path_buf())
-    })
+    let found = std::env::var_os("PATH").and_then(|path| {
+        std::env::split_paths(&path).find_map(|directory| {
+            let root = directory.parent()?;
+            (directory.join("gcc.exe").is_file() && installation(root)).then(|| root.to_path_buf())
+        })
+    });
+    found.or(given)
 }
 
 /// A clang run that failed, with what it printed.
