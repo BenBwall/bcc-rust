@@ -488,7 +488,9 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             | CommonBuiltin::Alloca => {
                 let size = self.value(items[0], source)?;
                 let size = self.extend(size, false, Type::I64);
-                Operand::Value(self.dynamic_object(size, None))
+                let object = self.dynamic_object(size, None);
+                self.keep_stack();
+                Operand::Value(object)
             },
             // The alignment operand is a constant power of two in bits;
             // GCC requires at least a byte's and gives at least `alloca`'s.

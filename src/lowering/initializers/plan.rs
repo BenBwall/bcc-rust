@@ -30,6 +30,7 @@ use super::{
     },
 };
 use crate::{
+    float_parsing::LongDouble,
     lowering::work::BitFieldBits,
     translation_phases::{
         SourceVectors,
@@ -437,20 +438,30 @@ enum Rest<'tu> {
     Copied(Leaf<'tu>),
 }
 
-/// Whether a leaf writes only zero bytes: an implicit zero, or a scalar
-/// integer constant zero converted to an integer or pointer.
-/// C99: §6.6 paragraph 6, p. 95; PDF p. 107.
-fn zero_leaf<'tu>(sema: &SemanticTranslationUnit<'tu>, leaf: Leaf<'tu>) -> bool {
+/// Whether a leaf writes only zero bytes: an implicit zero, a scalar
+/// integer constant zero converted to an integer, pointer or floating type
+/// (positive zero, all of whose bits are zero), or a positive floating zero.
+/// C99: §6.6 paragraph 6, p. 95; PDF p. 107; §6.3.1.4 paragraph 2, p. 43;
+/// PDF p. 55.
+pub(super) fn zero_leaf<'tu>(sema: &SemanticTranslationUnit<'tu>, leaf: Leaf<'tu>) -> bool {
     match leaf {
         | Leaf::Zero { .. } => true,
         | Leaf::Replicate { zero, .. } => zero,
-        | Leaf::Scalar { expression, ty, .. } =>
-            matches!(
-                repr(&sema.types, ty),
-                Ok(Repr::Int { .. } | Repr::Bool | Repr::Pointer)
-            ) && sema
-                .expression_info(expression)
-                .is_some_and(|info| info.ice && info.integer.is_some_and(Integer::is_zero)),
+        | Leaf::Scalar { expression, ty, .. } => {
+            let Some(info) = sema.expression_info(expression) else {
+                return false;
+            };
+            let integer_zero = info.ice && info.integer.is_some_and(Integer::is_zero);
+            match repr(&sema.types, ty) {
+                | Ok(Repr::Int { .. } | Repr::Bool | Repr::Pointer) => integer_zero,
+                | Ok(Repr::Float { .. } | Repr::Complex { .. }) =>
+                    integer_zero
+                        || info.floating().is_some_and(|value| {
+                            value.real == LongDouble::ZERO && value.imag == LongDouble::ZERO
+                        }),
+                | _ => false,
+            }
+        },
         | Leaf::String { .. } | Leaf::Copy { .. } => false,
     }
 }

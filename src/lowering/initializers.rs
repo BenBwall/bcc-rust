@@ -213,6 +213,26 @@ impl<'tu, 's> FunctionLowerer<'_, '_, 'tu, '_, 's> {
             Storage::Automatic,
             self.scratch,
         )?;
+        // An initializer of zeroes clears the whole object at once, as
+        // Clang's does. A typed store would leave LLVM's SROA an `f80` view
+        // of a union, through which it copies other members' bytes on the
+        // x87 stack, which does not keep every bit pattern.
+        if leaves
+            .iter()
+            .all(|&leaf| plan::zero_leaf(self.unit.sema, leaf))
+        {
+            let size = types::layout(&self.unit.sema.types, ty)
+                .map_err(|kind| at(kind, initializer.source_vectors))?
+                .size;
+            self.tasks.push(Task::InitializeZero {
+                object,
+                ty,
+                offset: 0,
+                size,
+                mask: u8::MAX,
+            });
+            return Ok(());
+        }
         let coverage = CoverageIndex::new(
             &leaves,
             self.unit.sema,

@@ -860,6 +860,15 @@ by element. Copied ranges keep exactly the bytes, relocations and effects
 of element stores; `lowering/tests/ranges.rs` compares both forms and
 counts the replay work of 2^20-element ranges.
 
+An automatic initializer whose every leaf writes only zero bytes (implicit
+zeros, integer constant zeros, and positive floating zeros, including an
+integer zero converted to a floating type) is one `fill` of the whole
+object, as Clang's `memset` is. Otherwise the 48 bits after an x87 `long
+double`'s 80 value bits are padding, which the zero gaps cover like the
+rest. A typed `f80` store of `{0}` into a union would otherwise give
+LLVM's SROA an `f80` view through which it copies a later member's bytes on
+the x87 stack, which does not keep every bit pattern (gcc.dg/torture/pr58416.c).
+
 **M5 is complete.** Effects-only evaluation (an overflow predicate's third operand
 and the statements of a GNU block inside it) interprets retained
 `EffectRecipe`s: nothing, evaluate-and-discard, the node's type-site actions and
@@ -1953,7 +1962,8 @@ source order after parameter initialization and alias installation. Saved bounds
 remain SSA extents. A bound owned by an evaluated typeof operand is scheduled by
 that operand's declaration, preventing premature reservation of its SSA variable.
 Both ordinary expression lowering and effects-only overflow operands consume the
-same normalized type-site actions. Effects-only operands interpret the retained M5
+same normalized type-site actions, which a cast, a compound literal and, as in
+GCC, a `va_arg` run for their type names (gcc.dg/vla-14.c). Effects-only operands interpret the retained M5
 recipes. Allocation, sizeof and pointer/subscript/increment strides consume the
 shared semantic size-formula DAG.
 
@@ -1961,16 +1971,20 @@ shared semantic size-formula DAG.
 `stack_restore` takes such a token from the current invocation and releases later
 dynamic objects. It leaves fixed slots and varargs backing storage live. These
 operations are effectful and cannot be merged or moved across allocations.
-A VLA restore also releases newer `__builtin_alloca` storage. This follows
-Clang's emitted `llvm.stackrestore` placement and the
+Under Clang's rules a VLA restore also releases newer `__builtin_alloca`
+storage. This follows Clang's emitted `llvm.stackrestore` placement and the
 [GCC 4.2.1 Variable Length rule](https://gcc.gnu.org/onlinedocs/gcc-4.2.1/gcc/Variable-Length.html).
 Reading that storage afterward is undefined in this model, and the interpreter
 reports a dangling pointer. A native run returning the stored value does not
 establish lifetime: optimization or unreused physical stack bytes can hide the
 invalid access. Current GCC retains VLA storage when `alloca` occurs in its
-scope ([current manual](https://gcc.gnu.org/onlinedocs/gcc/Variable-Length.html));
-that is a different implementation policy. The regression pins bcc's restore
-semantics before and after optimization and ABI lowering.
+scope ([current manual](https://gcc.gnu.org/onlinedocs/gcc/Variable-Length.html)),
+and under GCC's rules (`alloca_scope_rules`) bcc does too (gcc.dg/vla-24.c):
+after each `alloca`, every VLA stack token is saved again, below the new
+block, so a later restore keeps the block and the arrays before it. Tokens
+are SSA variables, so an exit that no `alloca` reached still restores the
+original position. The regressions pin both policies before and after
+optimization and ABI lowering.
 
 The verifier checks their result and operand types. LLVM emission uses
 `llvm.stacksave.p0` and `llvm.stackrestore.p0`; the interpreter validates activation

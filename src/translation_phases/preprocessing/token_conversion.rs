@@ -50,6 +50,7 @@ use crate::{
         CompilerIdentity,
         DiagnosticGroup,
         Feature,
+        RuleSet,
     },
     float_parsing::{
         FloatRangeError,
@@ -76,6 +77,7 @@ use crate::{
             Bump,
         },
         packed::Packed,
+        raw_bytes,
     },
 };
 
@@ -748,11 +750,21 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
         };
         let mut failed = false;
         let mut escape_character = false;
+        let mut kept_bytes = false;
         while index < end {
             let c = string[index..].chars().next().unwrap();
             index += c.len_utf8();
             if c != '\\' {
-                units.push(LiteralUnit::Character(c));
+                // A byte of malformed UTF-8 stays a byte, as one numeric
+                // escape is, which fits every element type.
+                if context.raw_source_bytes
+                    && let Some(byte) = raw_bytes::raw_byte(c)
+                {
+                    kept_bytes = true;
+                    units.push(LiteralUnit::Numeric(u32::from(byte)));
+                } else {
+                    units.push(LiteralUnit::Character(c));
+                }
                 continue;
             }
             let mut error = None;
@@ -929,7 +941,49 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                 token.source_vectors,
             );
         }
+        if kept_bytes {
+            failed |= Self::report_raw_bytes(context, token, prefix != 0, wide, quote);
+        }
         failed
+    }
+
+    /// Reports the bytes of malformed UTF-8 in a literal as the identity's
+    /// compiler does, and returns whether that was an error. GCC and Clang
+    /// keep them in an unprefixed literal; Clang warns there and rejects
+    /// every prefixed literal, and GCC accepts `u8` ones too but cannot
+    /// convert them to the wide encodings.
+    /// C99: phase 1, §5.1.1.2 paragraph 1, p. 10; PDF p. 22; C11: §6.4.5
+    /// paragraph 6, p. 71; PDF p. 89.
+    fn report_raw_bytes(
+        context: &mut Context<'_>,
+        token: PreprocessorToken,
+        prefixed: bool,
+        wide: bool,
+        quote: Option<u8>,
+    ) -> bool {
+        let error_type = match context.configuration.source_encoding_rules() {
+            | RuleSet::Clang => PreprocessorErrorType::IllegalCharacterEncoding {
+                character: quote == Some(b'\''),
+                prefixed,
+            },
+            | RuleSet::Gcc if wide => PreprocessorErrorType::UnconvertibleSourceCharacter,
+            | RuleSet::Gcc => return false,
+        };
+        let error = prefixed;
+        if error
+            || context
+                .group_severity(DiagnosticGroup::InvalidSourceEncoding, token.source_vectors)
+                .is_some()
+        {
+            Context::raw_preprocessor_error(
+                &mut context.pending_errors,
+                PreprocessorError {
+                    error_type,
+                    source_vectors: token.source_vectors,
+                },
+            );
+        }
+        error
     }
 
     /// A `wb` or `uwb` constant whose magnitude needs more than 64 bits:

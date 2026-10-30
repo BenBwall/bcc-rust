@@ -31,7 +31,10 @@ use crate::{
         SourceVector,
         SourceVectors,
     },
-    util::bump::Bump,
+    util::{
+        bump::Bump,
+        raw_bytes,
+    },
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -75,6 +78,11 @@ impl PreprocessorTokenizerErrorType {
         match self {
             | Self::UnknownToken => {
                 let character = spelling.and_then(|spelling| spelling.chars().next());
+                if let Some(byte) = character.and_then(raw_bytes::raw_byte) {
+                    return new(format_in!(arena, "stray byte <{byte:02X}> in source"))
+                        .label("this byte begins no UTF-8 character")
+                        .note("C99 §6.4: no C token is spelled with this byte");
+                }
                 let quoted = fmt::from_fn(|f| match character {
                     | Some('`') => f.write_str("'`'"),
                     | Some(c) if c.is_control() => write!(f, "U+{:04X}", u32::from(c)),

@@ -260,6 +260,8 @@ diagnostic_groups! {
     /// A `\` before a character that begins no escape sequence; Clang's
     /// extension warning, which `-pedantic-errors` promotes.
     UnknownEscapeSequence => Some("unknown-escape-sequence"), Warning, true;
+    /// Clang: an unprefixed literal that holds bytes of malformed UTF-8.
+    InvalidSourceEncoding => Some("invalid-source-encoding"), Warning, false;
     UnknownWarningOption => Some("unknown-warning-option"), Warning, false;
     /// An attribute name unavailable in its spelling on the selected target.
     UnknownAttributes => Some("unknown-attributes"), Warning, false;

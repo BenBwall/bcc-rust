@@ -32,9 +32,12 @@ use crate::{
         Context,
         TranslationError,
     },
-    util::bump::{
-        ArenaVec,
-        Bump,
+    util::{
+        bump::{
+            ArenaVec,
+            Bump,
+        },
+        raw_bytes,
     },
 };
 
@@ -111,7 +114,7 @@ pub(super) fn print_preprocessed<'tu>(
                     diagnosed += 1;
                 },
             | Step::Flush(end) => {
-                out.write_all(&writer.text.as_bytes()[written..end])?;
+                raw_bytes::write(out, &writer.text[written..end], context.raw_source_bytes)?;
                 written = end;
             },
         }
@@ -120,8 +123,8 @@ pub(super) fn print_preprocessed<'tu>(
         reporter.report(&error, context);
     }
     match macros {
-        | Some(macros) => out.write_all(macros.as_bytes())?,
-        | None => out.write_all(&writer.text.as_bytes()[written..])?,
+        | Some(macros) => raw_bytes::write(out, macros, context.raw_source_bytes)?,
+        | None => raw_bytes::write(out, &writer.text[written..], context.raw_source_bytes)?,
     }
     out.flush()?;
     drop(reporter.finish(context, stderr));

@@ -1,0 +1,308 @@
+//! Wrong code the GCC 15.2 testsuite survey under `--gcc-mode` found, each
+//! checked on every back end: the IR interpreter, LLVM at `-O0` and `-O2`,
+//! and the native back end. Each program aborts on a wrong value, so it
+//! checks itself; the ones that print print what GCC and Clang print.
+//!
+//! - Bytes of malformed UTF-8 in literals stay bytes, as GCC and Clang keep
+//!   them (gcc.c-torture/execute/20000227-1.c); the source files are written at
+//!   run time so the repository holds no malformed UTF-8.
+//! - A union whose first member is an x87 `long double` initialized with `{0}`
+//!   is zeroed whole (gcc.dg/torture/pr58416.c).
+//! - `__alignof__` of a function reads its `aligned` attribute
+//!   (gcc.c-torture/execute/align-3.c).
+//! - `va_arg` evaluates the size expressions of its type name
+//!   (gcc.dg/vla-14.c), and under GCC's rules an `alloca` block outlives the
+//!   VLA scope it was made in (gcc.dg/vla-24.c).
+
+#[cfg(test)]
+#[expect(
+    clippy::disallowed_types,
+    clippy::disallowed_methods,
+    clippy::disallowed_macros,
+    reason = "Tests own process output and temporary files."
+)]
+mod tests {
+    use std::{
+        path::PathBuf,
+        process::{
+            Command,
+            Output,
+        },
+        sync::atomic::{
+            AtomicU32,
+            Ordering,
+        },
+    };
+
+    use crate::native::run_native;
+
+    const IDENTITIES: [&str; 2] = ["--compiler-identity=clang", "--compiler-identity=gcc"];
+
+    #[test]
+    fn malformed_utf8_bytes_stay_bytes_in_narrow_and_utf8_literals() {
+        let source = b"#include <stdio.h>\n\
+            static const unsigned char f[] = \"\\0\\377\";\n\
+            static const unsigned char g[] = \"\\0\xff\";\n\
+            int main(void) {\n\
+            const char *h = \"a\xe2\x82z\";\n\
+            int c = '\xff', m = '\xe2\x82';\n\
+            if (sizeof f != 3 || sizeof g != 3 || f[1] != g[1]) return 1;\n\
+            if (h[1] != '\\342' || h[2] != '\\202' || h[3] != 'z') return 2;\n\
+            if (c != (char)0xff || m != 0xe282) return 3;\n\
+            puts(\"ok\");\n\
+            return 0;\n\
+            }\n";
+        for identity in IDENTITIES {
+            prints_on_every_back_end(identity, source, &["-w"], "ok\n");
+        }
+        let utf8 = b"int main(void) {\n\
+            const char *s = (const char *)u8\"\xff\";\n\
+            return !(sizeof u8\"\xff\" == 2 && (unsigned char)s[0] == 0xff);\n\
+            }\n";
+        prints_on_every_back_end("--compiler-identity=gcc", utf8, &["-std=gnu23"], "");
+    }
+
+    /// Clang warns once per unprefixed literal and rejects prefixed ones;
+    /// GCC is silent but cannot convert them to the wide encodings.
+    #[test]
+    fn malformed_utf8_literals_are_diagnosed_as_each_identity() {
+        let narrow = b"const char *s = \"a\xffb\";\nint c = '\xff';\n";
+        let output = check("--compiler-identity=clang", narrow, &[]);
+        let stderr = text(&output.stderr);
+        assert!(output.status.success(), "{stderr}");
+        assert_eq!(
+            stderr
+                .matches(
+                    "warning: illegal character encoding in string literal \
+                     [-Winvalid-source-encoding]"
+                )
+                .count(),
+            1,
+            "{stderr}"
+        );
+        assert!(
+            stderr.contains(
+                "warning: illegal character encoding in character literal \
+                 [-Winvalid-source-encoding]"
+            ),
+            "{stderr}"
+        );
+        assert!(stderr.contains("\"a<FF>b\""), "{stderr}");
+        let output = check(
+            "--compiler-identity=clang",
+            narrow,
+            &["-Wno-invalid-source-encoding"],
+        );
+        assert_eq!(text(&output.stderr), "", "the group silences it");
+        let output = check("--compiler-identity=gcc", narrow, &[]);
+        assert!(output.status.success());
+        assert_eq!(text(&output.stderr), "");
+        for prefix in ["u8", "u", "U", "L"] {
+            let source = [
+                format!("const void *s = {prefix}\"a").as_bytes(),
+                b"\xff\";\n",
+            ]
+            .concat();
+            let clang = check("--compiler-identity=clang", &source, &["-std=gnu23"]);
+            assert!(!clang.status.success(), "{prefix}");
+            assert!(
+                text(&clang.stderr)
+                    .contains("error: illegal character encoding in string literal\n"),
+                "{prefix}: {}",
+                text(&clang.stderr)
+            );
+            let gcc = check("--compiler-identity=gcc", &source, &["-std=gnu23"]);
+            assert_eq!(gcc.status.success(), prefix == "u8", "{prefix}");
+            if prefix != "u8" {
+                assert!(
+                    text(&gcc.stderr).contains(
+                        "error: converting to execution character set: Invalid or incomplete \
+                         multibyte or wide character"
+                    ),
+                    "{prefix}: {}",
+                    text(&gcc.stderr)
+                );
+            }
+        }
+        let stray = check("--compiler-identity=gcc", b"int x;\n\xff\n", &[]);
+        assert!(
+            text(&stray.stderr).contains("error: stray byte <FF> in source"),
+            "{}",
+            text(&stray.stderr)
+        );
+    }
+
+    /// `-E` spells a string literal that is not UTF-8 with octal escapes,
+    /// which give the same bytes.
+    #[test]
+    fn preprocessing_keeps_malformed_utf8_bytes() {
+        let input = temporary("raw.c");
+        std::fs::write(&input, b"#define S(x) #x\nconst char *t = S(\xffz);\n").unwrap();
+        let output = bcc(&["--gcc-mode", "-E", "-P", input.to_str().unwrap()]);
+        std::fs::remove_file(&input).unwrap();
+        assert!(output.status.success(), "{}", text(&output.stderr));
+        assert_eq!(text(&output.stdout), "const char *t = \"\\377\\172\";\n");
+    }
+
+    #[test]
+    fn long_double_union_zero_initializer_clears_every_byte() {
+        let source = b"struct s { char s[sizeof(long double)]; };\n\
+            union u { long double d; struct s s; };\n\
+            struct t { long double d; int k; };\n\
+            __attribute__((noinline)) static int zero(const void *p, unsigned n) {\n\
+            const unsigned char *b = p;\n\
+            for (unsigned i = 0; i < n; i++) if (b[i]) return 0;\n\
+            return 1;\n\
+            }\n\
+            int main(void) {\n\
+            union u x = {0};\n\
+            if (!zero(&x, sizeof x)) return 1;\n\
+            x.s = (struct s){\"xxxxxxxxxxxxxxxx\"};\n\
+            union u y = x;\n\
+            for (unsigned char *p = (unsigned char *)&y + sizeof y; p-- > (unsigned char *)&y;)\n\
+            if (*p != 'x') return 2;\n\
+            struct t z = {0.0L, 0};\n\
+            if (!zero(&z, sizeof z)) return 3;\n\
+            long double w[3] = {0};\n\
+            if (!zero(w, sizeof w)) return 4;\n\
+            return 0;\n\
+            }\n";
+        for identity in IDENTITIES {
+            prints_on_every_back_end(identity, source, &[], "");
+        }
+    }
+
+    /// GCC gives a function type the alignment 1, Clang 4; an `aligned`
+    /// attribute replaces it in both.
+    #[test]
+    fn function_alignof_reads_the_aligned_attribute() {
+        let source = b"#include <stdio.h>\n\
+            void f(void) __attribute__((aligned(256)));\n\
+            void f(void) {}\n\
+            void h(void) __attribute__((aligned(2)));\n\
+            void g(void);\n\
+            int main(void) {\n\
+            printf(\"%zu %zu %zu %zu\\n\", __alignof__(f), __alignof__(h), __alignof__(g),\n\
+            __alignof__(void(void)));\n\
+            return (unsigned long)&f % 256 != 0;\n\
+            }\n\
+            void h(void) {}\n";
+        prints_on_every_back_end(IDENTITIES[0], source, &[], "256 2 4 4\n");
+        prints_on_every_back_end(IDENTITIES[1], source, &[], "256 2 1 1\n");
+    }
+
+    #[test]
+    fn va_arg_evaluates_its_type_names_bounds() {
+        let source = b"#include <stdarg.h>\n\
+            int a[10];\n\
+            int i = 9;\n\
+            static int f(int n, ...) {\n\
+            va_list ap;\n\
+            va_start(ap, n);\n\
+            void *p = va_arg(ap, __typeof__(int (*)[++i]));\n\
+            va_end(ap);\n\
+            return p == a && i == n;\n\
+            }\n\
+            int main(void) { return !f(10, &a); }\n";
+        for identity in IDENTITIES {
+            prints_on_every_back_end(identity, source, &["-std=gnu99"], "");
+        }
+    }
+
+    /// GCC keeps an `alloca` block, and the VLA scope it was made in, until
+    /// the function returns; Clang releases both with the scope.
+    #[test]
+    fn alloca_outlives_its_vla_scope_under_gcc() {
+        let source = b"__attribute__((noinline)) static int kept(int n) {\n\
+            char *p, *q;\n\
+            if (1) {\n\
+            char vla[n];\n\
+            vla[0] = 0;\n\
+            p = __builtin_alloca(8);\n\
+            p[0] = 1;\n\
+            }\n\
+            q = __builtin_alloca(64);\n\
+            __builtin_memset(q, 0, 64);\n\
+            return p[0];\n\
+            }\n\
+            int main(void) { return !kept(48); }\n";
+        prints_on_every_back_end("--compiler-identity=gcc", source, &["-std=gnu99"], "");
+    }
+
+    /// `source` exits 0 and prints `expected` interpreted (unoptimized and
+    /// with bcc's optimizer) and built by LLVM at `-O0` and `-O2` and by
+    /// the native back end.
+    fn prints_on_every_back_end(identity: &str, source: &[u8], flags: &[&str], expected: &str) {
+        let input = temporary("program.c");
+        std::fs::write(&input, source).unwrap();
+        let path = input.to_str().unwrap();
+        for mode in [
+            &["--interpret", "--opt=none"][..],
+            &["--interpret", "--opt=bcc"],
+        ] {
+            let output = bcc(&[&[identity, path][..], flags, mode].concat());
+            assert_eq!(
+                output.status.code(),
+                Some(0),
+                "{identity} {mode:?}: {}",
+                text(&output.stderr)
+            );
+            assert_eq!(text(&output.stdout), expected, "{identity} {mode:?}");
+        }
+        for mode in [&["-O0"][..], &["-O2"], &["--backend=native"]] {
+            let executable = temporary("program.exe");
+            let built = bcc(&[
+                &[identity, path, "-o", executable.to_str().unwrap()][..],
+                flags,
+                mode,
+            ]
+            .concat());
+            assert!(
+                built.status.success(),
+                "{identity} {mode:?}: {}",
+                text(&built.stderr)
+            );
+            let run = run_native(&mut Command::new(&executable)).unwrap();
+            assert_eq!(run.status.code(), Some(0), "{identity} {mode:?}");
+            assert_eq!(text(&run.stdout), expected, "{identity} {mode:?}");
+            std::fs::remove_file(executable).unwrap();
+        }
+        std::fs::remove_file(input).unwrap();
+    }
+
+    /// Semantic analysis of `source` alone, with its diagnostics.
+    fn check(identity: &str, source: &[u8], flags: &[&str]) -> Output {
+        let input = temporary("check.c");
+        std::fs::write(&input, source).unwrap();
+        let output = bcc(&[&[identity, input.to_str().unwrap()][..], flags].concat());
+        std::fs::remove_file(input).unwrap();
+        output
+    }
+
+    fn bcc(args: &[&str]) -> Output {
+        run_native(
+            Command::new(env!("CARGO_BIN_EXE_bcc-rust"))
+                .args(args)
+                .env("NO_COLOR", "1")
+                .env_remove("CLICOLOR_FORCE")
+                .env_remove("CPATH")
+                .env_remove("C_INCLUDE_PATH"),
+        )
+        .unwrap()
+    }
+
+    /// Output bytes as text, with Windows line ends made plain.
+    fn text(bytes: &[u8]) -> String {
+        String::from_utf8_lossy(bytes).replace("\r\n", "\n")
+    }
+
+    /// A fresh path in the system temporary directory.
+    fn temporary(name: &str) -> PathBuf {
+        static NEXT: AtomicU32 = AtomicU32::new(0);
+        std::env::temp_dir().join(format!(
+            "bcc-survey-{}-{}-{name}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ))
+    }
+}
