@@ -932,6 +932,10 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 return Ok(Item { ty: to, ..item }),
             | (Operand::Excess(_), _) if self.half_in_float() =>
                 return self.convert_excess(item, to, target, source),
+            // A half vector's excess converts to a vector of the same lanes
+            // unrounded, as a scalar's does to its own type.
+            | (Operand::VectorExcess(_), _) if self.same_lanes(item.ty, to) =>
+                return Ok(Item { ty: to, ..item }),
             | _ => self.settle(item),
         };
         if self.wide_bit_int(to).is_some() || self.wide_bit_int(item.ty).is_some() {
@@ -1795,6 +1799,12 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 self.widened.push(result);
             }
             self.push_item(Operand::Excess(result), info.ty);
+            return Ok(());
+        }
+        if matches!(operator, U::Plus | U::Minus) && self.excess_vector(info.ty) {
+            let operand = self.pop_excess();
+            let result = self.excess_unary(operator, operand, info.ty, source)?;
+            self.operands.push(result);
             return Ok(());
         }
         let operand = if operator == U::LogicalNot {

@@ -353,8 +353,9 @@ static void extras(void) {
   }
 
 #ifndef __wasm__
-/* Half-precision lanes compute in float and round each operation;
- * Clang also takes bit-precise lanes of a power-of-two width, and its
+/* Half-precision lanes compute in float; GCC rounds each operation and
+ * Clang keeps the float excess to the end of the expression. Clang also
+ * takes bit-precise lanes of a power-of-two width, and its
  * __builtin_bit_cast reinterprets any object of the same size. Both
  * compilers refuse _Float16 on wasm32. */
 typedef _Float16 v8hf __attribute__((vector_size(16)));
@@ -368,6 +369,21 @@ static void halves(void) {
   SHOW("half_lt", a < a * 2);
   v8bf x = {1.5, 2.25, -3.0, 0.1, 1000.0, 0.333, -0.0, 3e38};
   SHOWF("bf16_ops", x * x - x);
+  /* Where the two rules part: an intermediate beyond the format's
+   * precision or range. */
+  volatile float one = 1;
+  v8bf b1 = {one, 2, 3, 4, 5, 6, 7, 8}, b2 = {256, 512, 1024, 2, 3e38, 1, 1, 1};
+  SHOWF("bf16_excess", b1 + b2 - b2);
+  v8hf h1 = {one, 2, 3, 4, 5, 6, 7, 8}, h2 = {2048, 2048, 4096, 1, 1, 1, 1, 1};
+  SHOWF("half_excess", h1 + h2 - h2);
+  v8hf m = {300, 300, 1000, 1, 2, 3, 4, 5}, d = {10, 10, 100, 1, 1, 1, 1, 1};
+  SHOWF("half_excess_mul_div", m * m / d);
+  SHOWF("half_excess_neg", -(m * m) / d);
+  SHOW("half_excess_compare", m * m / d > 9000);
+  v8hf acc = h1;
+  acc += m * m / d;
+  SHOWF("half_excess_compound", acc);
+  SHOWF("half_excess_comma", (m * m, d) * m);
 #ifdef __clang__
   typedef _BitInt(32) v4bi __attribute__((vector_size(16)));
   typedef unsigned _BitInt(8) v16bu __attribute__((vector_size(16)));

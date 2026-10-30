@@ -141,6 +141,18 @@ impl Shape {
     }
 }
 
+/// The shape of the `f32` lanes holding the excess of a half vector of
+/// shape `shape`.
+fn excess_shape(shape: Shape) -> Shape {
+    Shape {
+        stride: 4,
+        size: shape.size * 2,
+        align: Align::from_bytes(shape.align.bytes().max(4)).unwrap_or(shape.align),
+        lane: Repr::Float { ty: Type::F32 },
+        ..shape
+    }
+}
+
 /// The address of the object holding a vector operand.
 pub(super) fn vector_address(item: Item, source: SourceVectors) -> Result<Value, LoweringError> {
     match item.operand {
@@ -176,6 +188,16 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
         ty: TypeId,
         source: SourceVectors,
     ) -> Result<Item, LoweringError> {
+        // Clang compares the rounded lanes of a half vector's excess and
+        // keeps its arithmetic's excess (`excess_binary`).
+        let (left, right) = if self.excess_vector(left.ty) {
+            if comparison(operator).is_none() {
+                return self.excess_binary(operator, left, right, ty, source);
+            }
+            (self.settle(left), self.settle(right))
+        } else {
+            (left, right)
+        };
         let operand = self.vector_shape(left.ty, source)?;
         // A shift count vector keeps its own lane type.
         let counts = self.vector_shape(right.ty, source)?;
@@ -193,8 +215,8 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
                 let ty = self.draft.value_type(x);
                 self.extend(y, counts.lane.signed(), ty)
             };
-            // A half-precision lane computes in `float` and rounds once,
-            // as GCC and Clang compute each vector operation of them.
+            // GCC computes a half-precision lane in `float` and rounds the
+            // result of each vector operation.
             let half = self.draft.value_type(x).half_format().is_some();
             let lane_type = self.draft.value_type(x);
             let (x, y) = if half {
@@ -226,6 +248,124 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
             operand: Operand::Aggregate(object),
             ty,
         })
+    }
+
+    /// Clang's `+`, `-`, `*` or `/` on vectors of `_Float16` or `__bf16`
+    /// lanes: each lane computes in `float` from the operands' excess or
+    /// their lanes widened exactly, and the result is an excess, rounded
+    /// when a consumer reads it ([`Self::settle`]), as for a scalar
+    /// (`half.rs`). Clang's `ScalarExprEmitter::getPromotionType` promotes
+    /// a vector of them to a vector of `float`.
+    /// C99: §5.2.4.2.2 paragraph 7, p. 24; PDF p. 36 (evaluation formats).
+    fn excess_binary(
+        &mut self,
+        operator: BinaryOperator,
+        left: Item,
+        right: Item,
+        ty: TypeId,
+        source: SourceVectors,
+    ) -> Result<Item, LoweringError> {
+        let shape = self.vector_shape(ty, source)?;
+        let wide = excess_shape(shape);
+        let object = self.vector_object(wide, source)?;
+        for lane in 0..shape.count {
+            let x = self.excess_lane(left, lane, source)?;
+            let y = self.excess_lane(right, lane, source)?;
+            let value = self.lane_binary(operator, wide, x, y, source)?;
+            self.store_lane(value, object, wide, lane);
+        }
+        Ok(Item {
+            operand: Operand::VectorExcess(object),
+            ty,
+        })
+    }
+
+    /// Clang's unary `+` or `-` on a vector of half lanes: an excess, as
+    /// for a scalar; `+` leaves its operand.
+    /// C99: §6.5.3.3 paragraphs 2-3, p. 78; PDF p. 90.
+    pub(super) fn excess_unary(
+        &mut self,
+        operator: UnaryOperator,
+        operand: Item,
+        ty: TypeId,
+        source: SourceVectors,
+    ) -> Result<Item, LoweringError> {
+        if operator != UnaryOperator::Minus {
+            return Ok(Item { ty, ..operand });
+        }
+        let shape = self.vector_shape(ty, source)?;
+        let wide = excess_shape(shape);
+        let object = self.vector_object(wide, source)?;
+        for lane in 0..shape.count {
+            let x = self.excess_lane(operand, lane, source)?;
+            let value = self.convert(Opcode::Fneg, Type::F32, x);
+            self.store_lane(value, object, wide, lane);
+        }
+        Ok(Item {
+            operand: Operand::VectorExcess(object),
+            ty,
+        })
+    }
+
+    /// Lane `lane` of a half vector operand as an `f32`: its excess, or
+    /// its lane widened exactly.
+    fn excess_lane(
+        &mut self,
+        item: Item,
+        lane: u64,
+        source: SourceVectors,
+    ) -> Result<Value, LoweringError> {
+        let shape = self.vector_shape(item.ty, source)?;
+        if let Operand::VectorExcess(excess) = item.operand {
+            return Ok(self.load_lane(excess, excess_shape(shape), lane));
+        }
+        let address = vector_address(item, source)?;
+        let value = self.load_lane(address, shape, lane);
+        Ok(self.widen_half(value))
+    }
+
+    /// A half vector excess at `excess` rounded to its type `ty`, lane by
+    /// lane, into a fresh object.
+    /// C99: §6.3.1.5 paragraph 2, p. 44; PDF p. 56.
+    pub(super) fn settle_vector(&mut self, excess: Value, ty: TypeId) -> Item {
+        let shape = self.vector(ty).expect("a vector excess has a vector type");
+        let half = shape
+            .lane
+            .value_type()
+            .expect("a half vector has float lanes");
+        // The excess object, twice its size, was made, so this one fits.
+        let size = u32::try_from(shape.size).expect("a vector excess fits a stack slot");
+        let slot = self.object_slot(size, shape.align);
+        let object = self.inst(InstData::StackAddr { slot }, Type::Ptr);
+        self.retain_alignment(object, shape.align);
+        for lane in 0..shape.count {
+            let x = self.load_lane(excess, excess_shape(shape), lane);
+            let value = self.round_single(x, half);
+            self.store_lane(value, object, shape, lane);
+        }
+        Item {
+            operand: Operand::Aggregate(object),
+            ty,
+        }
+    }
+
+    /// Whether `ty` is, for Clang, a vector of `_Float16` or `__bf16`
+    /// lanes, whose arithmetic keeps an excess ([`Self::excess_binary`]).
+    /// GCC rounds the result of each vector operation.
+    pub(super) fn excess_vector(&self, ty: TypeId) -> bool {
+        !self.half_in_float()
+            && self
+                .vector(ty)
+                .and_then(|shape| shape.lane.value_type())
+                .is_some_and(|lane| lane.half_format().is_some())
+    }
+
+    /// Whether the vector types `a` and `b` have the same lanes.
+    pub(super) fn same_lanes(&self, a: TypeId, b: TypeId) -> bool {
+        match (self.vector(a), self.vector(b)) {
+            | (Some(a), Some(b)) => a.element == b.element && a.count == b.count,
+            | _ => false,
+        }
     }
 
     /// One lane of an arithmetic, bitwise or shift operator. Integer lanes

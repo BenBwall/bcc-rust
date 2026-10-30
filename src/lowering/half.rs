@@ -79,6 +79,9 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 ..item
             };
         }
+        if let Operand::VectorExcess(excess) = item.operand {
+            return self.settle_vector(excess, item.ty);
+        }
         let Operand::Excess(value) = item.operand else {
             return item;
         };
@@ -435,9 +438,9 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
     }
 
     /// Whether `ty` keeps an excess: `_Float16`, `__bf16` or
-    /// `_Complex _Float16`.
+    /// `_Complex _Float16`, and for Clang a vector of either half type.
     pub(super) fn excess_type(&self, ty: TypeId) -> bool {
-        self.half(ty).is_some() || self.complex_half(ty)
+        self.half(ty).is_some() || self.complex_half(ty) || self.excess_vector(ty)
     }
 
     /// Whether GCC's rule keeps the excess beyond arithmetic operators.
