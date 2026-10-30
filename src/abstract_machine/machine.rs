@@ -34,6 +34,9 @@ pub(super) struct Machine {
     pub next_frame:  usize,
     pub cells:       usize,
     pub metadata:    Vec<ObjectMetadata>,
+    /// The topics this run's notes have explained, one bit per
+    /// [`narration::Topic`].
+    pub explained:   u32,
 }
 
 impl Machine {
@@ -64,7 +67,22 @@ impl Machine {
             },
             | Err(diagnostic) => self.stop(diagnostic),
         }
+        self.explain_once();
         self.refresh(program);
+    }
+
+    /// Keeps the event's note only the first time this run explains its
+    /// topic, so repeated operations stay short.
+    fn explain_once(&mut self) {
+        let event = &mut self.state.event;
+        let Some(topic) = event.topic else {
+            return;
+        };
+        if self.explained & topic.bit() == 0 {
+            self.explained |= topic.bit();
+        } else {
+            event.note.clear();
+        }
     }
 
     fn operation(
@@ -478,7 +496,9 @@ impl Machine {
             next_frame: 2,
             cells: 0,
             metadata: Vec::new(),
+            explained: 0,
         };
+        machine.explain_once();
         machine.refresh(program);
         machine
     }
@@ -568,6 +588,7 @@ impl Machine {
         let event = &self.state.event;
         bytes += event.title.capacity()
             + event.explanation.capacity()
+            + event.note.capacity()
             + event.clauses.capacity() * size_of::<super::Clause>()
             + event.operands.capacity() * size_of::<Operand>()
             + event.objects.capacity() * size_of::<usize>()

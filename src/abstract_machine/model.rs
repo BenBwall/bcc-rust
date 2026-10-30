@@ -1,6 +1,9 @@
 //! Public observations and compact internal operations for the subset engine.
 
-use super::clauses::Clause;
+use super::{
+    clauses::Clause,
+    narration::Topic,
+};
 
 /// A compiled bounded-subset program, independent of native compiler storage.
 #[derive(Debug, Clone)]
@@ -55,6 +58,9 @@ pub struct Event {
     pub title:          String,
     /// A beginner-oriented paragraph naming the values involved.
     pub explanation:    String,
+    /// Why the rule matters, said once per run: empty when this run has
+    /// already explained the same idea.
+    pub note:           String,
     /// The rules applied, most specific first.
     pub clauses:        Vec<Clause>,
     /// Input values, in evaluation order.
@@ -65,6 +71,8 @@ pub struct Event {
     pub objects:        Vec<usize>,
     /// Whether a full expression ended here (C99 §6.8p4).
     pub sequence_point: bool,
+    /// The idea `note` explains, so a run explains each idea once.
+    pub(super) topic:   Option<Topic>,
 }
 
 impl Event {
@@ -74,11 +82,13 @@ impl Event {
             range,
             title,
             explanation: String::new(),
+            note: String::new(),
             clauses: Vec::new(),
             operands: Vec::new(),
             result: None,
             objects: Vec::new(),
             sequence_point: false,
+            topic: None,
         }
     }
 }
