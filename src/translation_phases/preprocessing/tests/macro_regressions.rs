@@ -607,6 +607,22 @@ fn builtin_location_is_the_macro_invocation_not_its_definition() {
         "\"use.c\"",
     );
 }
+
+/// GCC's gcc.dg/pr69391-1.c: an argument spelled in a replacement list is
+/// expanded where that macro is invoked, while one spelled in the source
+/// keeps its own line, as GCC and Clang give.
+#[test]
+fn builtin_location_of_an_argument_is_where_the_argument_was_spelled() {
+    assert_expansion(
+        "#define S_(x) #x\n#define S(x) S_(x)\n#define LINE S(__LINE__) S(__LINE__)\n\nLINE\n",
+        "\"55\"",
+    );
+    assert_expansion(
+        "#define F(x) x\n#define G(x) [x \
+         __LINE__]\nF(\n__LINE__\n)\nG(\n__LINE__\n)\nF(F(\n__LINE__))\n",
+        "4 [ 7 6 ] 10",
+    );
+}
 // C99 6.10.3.5 EXAMPLE 3, N1256 p167, unchanged source and expected output.
 #[test]
 fn c99_reexamination_example_three_matches_normative_output() {

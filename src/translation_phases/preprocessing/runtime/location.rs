@@ -4,6 +4,8 @@
 //! 167; predefined file and line macros, §6.10.8 paragraph 1, p. 160; PDF p.
 //! 172. Locations preserve provenance for other handlers and diagnostics.
 
+use std::mem::take;
+
 use super::{
     super::Expander,
     TokenizerFrameType,
@@ -30,6 +32,37 @@ impl Expander<'_, '_, '_, '_> {
                 | TokenizerFrameType::FunctionLikeMacroInvocation { invocation, .. } =>
                     return invocation.clone(),
                 | TokenizerFrameType::FunctionLikeMacroArgument { .. }
+                | TokenizerFrameType::SourceFile { .. } => break,
+                | TokenizerFrameType::Rescan { .. } | TokenizerFrameType::DeferredQuery => (),
+            }
+        }
+        self.spelling_location(token)
+    }
+
+    /// The current source line for `__LINE__` and `__FILE__`. A token read
+    /// from a replacement list is at its invocation, as for
+    /// [`Self::invocation_location`]. A token read from an argument was
+    /// spelled where the call that owns the argument was: in the source,
+    /// where it keeps its own line, or in an enclosing replacement list
+    /// (`T(__LINE__)` in the body of `L`), where it is at that invocation,
+    /// as GCC and Clang expand it, not on the line of `L`'s definition.
+    /// C99: §6.10.8 paragraph 1, p. 160; PDF p. 172.
+    pub(in crate::translation_phases::preprocessing) fn current_line_location(
+        &self,
+        token: PreprocessorToken,
+    ) -> SourceVector {
+        // An argument frame is read inside the replacement of the macro
+        // that owns it; skip that owner and look where its call was spelled.
+        let mut owner_pending = false;
+        for frame in self.tokenizer_stack.iter().rev() {
+            match &frame.frame_type {
+                | TokenizerFrameType::ObjectLikeMacroInvocation { invocation, .. }
+                | TokenizerFrameType::FunctionLikeMacroInvocation { invocation, .. } => {
+                    if !take(&mut owner_pending) {
+                        return invocation.clone();
+                    }
+                },
+                | TokenizerFrameType::FunctionLikeMacroArgument { .. } => owner_pending = true,
                 | TokenizerFrameType::SourceFile { .. } => break,
                 | TokenizerFrameType::Rescan { .. } | TokenizerFrameType::DeferredQuery => (),
             }
