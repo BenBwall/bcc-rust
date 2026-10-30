@@ -1694,7 +1694,7 @@ Where GCC 15.2 and Clang 23 differ, each identity follows its compiler
 
 | Rule | GCC identity | Clang identity |
 | --- | --- | --- |
-| Scalar operand of a vector operator | `scalar_to_vector`: an integer variable no wider than the lanes (sign changes allowed), an integer constant that fits (a negative one into unsigned lanes and an unsigned one into signed lanes allowed), an integer into floating lanes whose format holds its type's range, never a floating scalar into integer lanes, no `_Bool` or enumeration, nothing into enumeration lanes | `tryGCCVectorConvertAndSplat`: integers by rank (no sign change at equal rank) or a constant's significant bits; a floating scalar into integer lanes of its size; `_Bool` and enumerations as integers; otherwise a scalar as large as the whole vector reinterprets its bits (lax conversion), except as a compound assignment's right operand |
+| Scalar operand of a vector operator | `scalar_to_vector`: an integer variable no wider than the lanes (sign changes allowed), an integer constant that fits (a negative one into unsigned lanes and an unsigned one into signed lanes allowed), an integer into floating lanes whose format holds its type's range, never a floating scalar into integer lanes, no `_Bool` or enumeration, nothing into enumeration lanes, which also shift and count nothing | `tryGCCVectorConvertAndSplat`: integers by rank (no sign change at equal rank) or a constant's significant bits; a floating scalar into integer lanes of its size; `_Bool` and enumerations as integers; otherwise a scalar as large as the whole vector reinterprets its bits (lax conversion), except as a compound assignment's right operand |
 | Vectors of different types | binary operators need as many lanes of one kind and width, signedness aside; assignment, initialization, arguments, `return` and `?:` need compatible lane types | equal sizes suffice everywhere (lax vector conversions), the right operand reading as the left's type |
 | Comparison result | an opaque mask that converts to any vector of its size | the signed mask vector |
 | `++`, `--` | each lane | refused |
@@ -1753,9 +1753,13 @@ loop over lanes; conversions round by the current rounding mode through
 (`_mm_cmpistri` and family) follow the SDM's PCMPxSTRx definition. An
 intrinsic with an immediate operand is a macro that also names the GCC/Clang
 builtin inside `sizeof`, which is not evaluated, so semantic analysis still
-checks the immediate as before: under the Clang identity an out-of-range
-constant is Clang's `-Wargument-outside-range`, an error that `-w` and
-`-Wno-argument-outside-range` silence, and under the GCC identity an error;
+checks the immediate as before, and the builtin, spelled in a system
+header's macro, is no `-pedantic` extension of the caller's code: under the
+Clang identity an out-of-range constant is Clang's
+`-Wargument-outside-range` ("argument value 256 is outside the valid range
+[0, 255]"), an error that `-w`, `-Wno-argument-outside-range` and
+`-Wno-error=argument-outside-range` relax, and under the GCC identity an
+error;
 GCC's `_mm_shuffle_pd` takes any constant and reads its low two bits.
 `__m64` is GCC's two-`int` vector (with `__m64_u` and `__v2sf`) under the
 GCC identity and Clang's one-`long long` vector under the Clang identity. `tests/integration/x86_intrinsics.rs`

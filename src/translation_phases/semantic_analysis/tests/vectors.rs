@@ -427,6 +427,11 @@ fn vector_rules_follow_each_identity() {
             Some(false),
         ),
         ("i = av[1];", true, Some(true)),
+        // A lane of a vector rvalue, or for Clang of an atomic vector, has
+        // no address; GCC's atomic lane is `_Atomic int`, no `int`.
+        ("int *p = &av[1];", false, Some(false)),
+        ("_Atomic int *p = &av[1];", true, Some(false)),
+        ("int *p = &(a + b)[1];", false, Some(false)),
         // Lane types: both take the half-precision types; Clang a
         // power-of-two bit-precise integer and no pointer or array lanes;
         // GCC an enumeration.
@@ -473,6 +478,21 @@ fn vector_rules_follow_each_identity() {
         ),
         (
             "typedef enum E e __attribute__((vector_size(16))); e x; x = x << 1;",
+            false,
+            Some(false),
+        ),
+        (
+            "typedef enum E e __attribute__((vector_size(16))); e x, y; x = x << y; x = x >> y;",
+            false,
+            Some(false),
+        ),
+        (
+            "typedef enum E e __attribute__((vector_size(16))); e x, y; x <<= y;",
+            false,
+            Some(false),
+        ),
+        (
+            "typedef enum E e __attribute__((vector_size(16))); e x; a = a << x;",
             false,
             Some(false),
         ),

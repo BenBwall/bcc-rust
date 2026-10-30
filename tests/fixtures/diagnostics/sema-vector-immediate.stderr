@@ -6,7 +6,7 @@ error: invalid intrinsic immediate operand
   |
   = note: Clang x86 intrinsics: the immediate operand must be an integer constant expression in the builtin's permitted range
 
-error: argument value is outside the valid range [-Wargument-outside-range]
+error: argument value 256 is outside the valid range [0, 255] [-Wargument-outside-range]
  --> sema-vector-immediate.c:2:55
   |
 2 | void f(__m128i v,int i) { v=_mm_shuffle_epi32(v,i); v=_mm_shuffle_epi32(v,256); }

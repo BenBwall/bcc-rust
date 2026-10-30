@@ -79,12 +79,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         && (mask == 0 || (v < 16 && (mask & (1 << v)) != 0))
                 }) {
                     // Clang's `-Wargument-outside-range` is an error by
-                    // default, which `-w` silences.
-                    if value.is_some()
+                    // default, which `-w` silences; a scale outside its
+                    // set stays an error.
+                    if let Some(value) = value.and_then(|value| i32::try_from(value).ok())
+                        && mask == 0
                         && self.context.configuration.compiler_identity().rules() == RuleSet::Clang
                     {
                         self.error(
-                            SemanticErrorKind::ImmediateOutOfRange,
+                            SemanticErrorKind::ImmediateOutOfRange { value, low, high },
                             arg.source_vectors,
                             None,
                             None,

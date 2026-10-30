@@ -182,9 +182,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             // GNU lane-wise extension of C99 §6.5.7p2: a vector shifts by a
             // vector of as many integer lanes, whatever their width; the
             // count keeps its type.
+            // GCC's enumeration lanes shift and count nothing.
             | (Some((_, n, _)), Some((other, m, _))) if shift => {
                 conversions[1] = None;
-                n == m && self.integer_type(other).is_some()
+                n == m
+                    && self.integer_type(other).is_some()
+                    && !self.gcc_enumeration_lanes(element, rules)
+                    && !self.gcc_enumeration_lanes(other, rules)
             },
             // Clang refuses two atomic operands of an arithmetic operator,
             // though not of a comparison.
@@ -1178,10 +1182,6 @@ enum ScalarClass {
     },
 }
 
-/// Clang's `ASTContext::getIntegerTypeOrder(lane, scalar)`: the sign of
-/// the comparison of their ranks, where an unsigned type of a rank at
-/// least the signed one's is the greater.
-/// C99: §6.3.1.1 paragraph 1, p. 42; PDF p. 54 (integer conversion rank).
 /// `scalar` as GCC sees an operand it converts at run time: no constant.
 fn run_time(scalar: ExpressionInfo<'_>) -> ExpressionInfo<'_> {
     ExpressionInfo {
@@ -1192,6 +1192,10 @@ fn run_time(scalar: ExpressionInfo<'_>) -> ExpressionInfo<'_> {
     }
 }
 
+/// Clang's `ASTContext::getIntegerTypeOrder(lane, scalar)`: the sign of
+/// the comparison of their ranks, where an unsigned type of a rank at
+/// least the signed one's is the greater.
+/// C99: §6.3.1.1 paragraph 1, p. 42; PDF p. 54 (integer conversion rank).
 fn clang_integer_order(lane: ScalarClass, scalar: ScalarClass) -> i32 {
     let (
         ScalarClass::Integer {

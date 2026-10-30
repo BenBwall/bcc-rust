@@ -569,7 +569,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         } = e.kind
         {
             info.vector_element = self
-                .vector(self.expression_info(left_expression).ty)
+                .vector(
+                    self.types
+                        .non_atomic(self.expression_info(left_expression).ty),
+                )
                 .is_some();
         }
         // Size/alignment and generic controlling operands are unevaluated.

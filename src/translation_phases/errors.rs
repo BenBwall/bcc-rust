@@ -98,6 +98,8 @@ impl TranslationError<'_> {
                     Some(G::PedanticOverflow),
                 | semantic_analysis::SemanticErrorKind::LiteralConversion(_) =>
                     Some(G::LiteralConversion),
+                | semantic_analysis::SemanticErrorKind::ImmediateOutOfRange { .. } =>
+                    Some(G::ArgumentOutsideRange),
                 | _ => None,
             },
             | _ => None,

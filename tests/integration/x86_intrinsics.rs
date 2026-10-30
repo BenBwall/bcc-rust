@@ -75,6 +75,24 @@ mod tests {
                 true,
             ),
             (&["--compiler-identity=clang", "-w", "-DVARIABLE"], false),
+            (
+                &[
+                    "--compiler-identity=clang",
+                    "-Werror",
+                    "-Wno-error=argument-outside-range",
+                ],
+                true,
+            ),
+            // The headers' immediate checks are no extension of the caller.
+            (&["--compiler-identity=gcc", "-pedantic-errors"], true),
+            (
+                &[
+                    "--compiler-identity=clang",
+                    "-pedantic-errors",
+                    "-Wno-argument-outside-range",
+                ],
+                true,
+            ),
         ] {
             let output = bcc(&[&["-fsyntax-only", source][..], flags].concat());
             assert_eq!(
@@ -83,10 +101,24 @@ mod tests {
                 "{flags:?}: {}",
                 text(&output.stderr)
             );
-            if flags == ["--compiler-identity=clang"] {
+            let expected = match flags {
+                | ["--compiler-identity=clang"] =>
+                    "error: argument value 171 is outside the valid range [0, 3] \
+                     [-Wargument-outside-range]",
+                | [_, "-Werror", _] =>
+                    "warning: argument value 171 is outside the valid range [0, 3] \
+                     [-Wargument-outside-range]",
+                | _ => "",
+            };
+            assert!(
+                text(&output.stderr).contains(expected),
+                "{flags:?}: {}",
+                text(&output.stderr)
+            );
+            if flags.contains(&"-pedantic-errors") {
                 assert!(
-                    text(&output.stderr).contains("-Wargument-outside-range"),
-                    "{}",
+                    !text(&output.stderr).contains("extension"),
+                    "{flags:?}: {}",
                     text(&output.stderr)
                 );
             }
