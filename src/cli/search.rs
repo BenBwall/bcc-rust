@@ -20,7 +20,10 @@ use std::{
 
 use clap::Args;
 
-use crate::target::Target;
+use crate::{
+    configuration::CompilerIdentity,
+    target::Target,
+};
 
 impl CliHeaderSearch {
     /// Groups the directories in search order. GCC searches `CPATH` like
@@ -35,14 +38,22 @@ impl CliHeaderSearch {
         clippy::disallowed_types,
         reason = "Startup owns the directories from argv and the environment as `Vec<PathBuf>`."
     )]
-    pub(super) fn directories(&self, target: Target) -> SearchDirectories {
+    pub(super) fn directories(
+        &self,
+        target: Target,
+        identity: CompilerIdentity,
+    ) -> SearchDirectories {
         let mut angled = self.include.clone();
         angled.extend(include_path_from_env("CPATH"));
         let mut system = self.system_include.clone();
         system.extend(include_path_from_env("C_INCLUDE_PATH"));
         let mut after = Vec::new();
         if !self.nostdinc && !self.nostdlibinc {
-            after.extend(library_directories(target, self.sysroot.as_deref()));
+            after.extend(library_directories(
+                target,
+                self.sysroot.as_deref(),
+                identity,
+            ));
         }
         after.extend(self.after_include.iter().cloned());
         SearchDirectories {
@@ -60,17 +71,26 @@ impl CliHeaderSearch {
 /// directory `usr/include/x86_64-linux-gnu` (or `-musl`) when the target is
 /// Linux and the directory exists, and `usr/include`. Without a sysroot the
 /// root is the host's own, but only when bcc runs on the Linux host it
-/// compiles for; any other target is a cross target, which stays hermetic
-/// until `--sysroot`, `-isystem` or `-idirafter` names its library. The
-/// WASI target's library is bcc's own, in the embedded
-/// [`WASI_DIRECTORY`](crate::headers::WASI_DIRECTORY).
+/// compiles for. On a Windows host the Windows GNU target's library is the
+/// MinGW-w64 installation bcc links with ([`mingw_directories`]), as MinGW
+/// GCC and Clang's MinGW driver search it. TCC for Windows reads the
+/// headers it ships instead (`win32/include`): MinGW-w64's `<vadefs.h>`
+/// refuses a compiler that claims neither GCC nor MSVC, and bcc has none of
+/// TCC's, so the TCC identity stays hermetic there. Any other target is a cross
+/// target, which stays hermetic until `--sysroot`, `-isystem` or
+/// `-idirafter` names its library. The WASI target's library is bcc's own,
+/// in the embedded [`WASI_DIRECTORY`](crate::headers::WASI_DIRECTORY).
 #[expect(
     clippy::disallowed_types,
     clippy::disallowed_methods,
     clippy::disallowed_macros,
     reason = "Startup owns the directories beside clap's arguments as `PathBuf`s."
 )]
-pub(in crate::cli) fn library_directories(target: Target, sysroot: Option<&Path>) -> Vec<PathBuf> {
+pub(in crate::cli) fn library_directories(
+    target: Target,
+    sysroot: Option<&Path>,
+    identity: CompilerIdentity,
+) -> Vec<PathBuf> {
     // WASI's C library is bcc's own, embedded beside the resource headers.
     if target == Target::Wasm32Wasi && sysroot.is_none() {
         return vec![PathBuf::from(crate::headers::WASI_DIRECTORY)];
@@ -78,6 +98,10 @@ pub(in crate::cli) fn library_directories(target: Target, sysroot: Option<&Path>
     let root = match sysroot {
         | Some(sysroot) => sysroot,
         | None if is_host(target) => Path::new("/"),
+        | None if cfg!(windows)
+            && target == Target::WindowsGnu
+            && identity != CompilerIdentity::Tcc =>
+            return mingw_directories(),
         | None => return Vec::new(),
     };
     let include = root.join("usr").join("include");
@@ -92,6 +116,28 @@ pub(in crate::cli) fn library_directories(target: Target, sysroot: Option<&Path>
     directories.extend(multiarch);
     directories.push(include);
     directories
+}
+
+/// The header directories of the MinGW-w64 installation the link uses
+/// ([`mingw_root`](crate::backend::llvm::mingw_root)), in the order of
+/// Clang's MinGW driver: `x86_64-w64-mingw32/include`, then `include`,
+/// each that exists. None without an installation.
+#[expect(
+    clippy::disallowed_types,
+    clippy::disallowed_methods,
+    reason = "Startup owns the directories beside clap's arguments as `PathBuf`s."
+)]
+fn mingw_directories() -> Vec<PathBuf> {
+    let Some(root) = crate::backend::llvm::mingw_root() else {
+        return Vec::new();
+    };
+    [
+        root.join("x86_64-w64-mingw32").join("include"),
+        root.join("include"),
+    ]
+    .into_iter()
+    .filter(|directory| directory.is_dir())
+    .collect()
 }
 
 impl CliHeaderSearch {

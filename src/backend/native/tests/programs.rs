@@ -896,8 +896,9 @@ int main(void) {
         source: r#"int printf(const char *, ...);
 #ifdef _WIN32
 typedef unsigned long long jmp_buf[32];
-int _setjmp(jmp_buf, void *);
-#define setjmp(buffer) _setjmp(buffer, 0)
+/* MinGW-w64's <setjmp.h>: its CRT import libraries have no _setjmp. */
+int __intrinsic_setjmpex(jmp_buf, void *);
+#define setjmp(buffer) __intrinsic_setjmpex(buffer, 0)
 #else
 typedef long jmp_buf[25];
 int _setjmp(jmp_buf);

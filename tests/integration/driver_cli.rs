@@ -424,7 +424,14 @@ mod tests {
         let output = project.bcc(&["-E", "-isystem", "sys", "u.c", "-o", "u.i"]);
         succeeds(&output);
         let text = std::fs::read_to_string(project.path("u.i")).unwrap();
-        assert!(text.contains("# 1 \"sys/s.h\" 3\n"), "{text}");
+        // Clang joins with the host's separator and escapes the name as a
+        // string literal's contents.
+        let line_marker = if cfg!(windows) {
+            r#"# 1 "sys\\s.h" 3"#
+        } else {
+            r#"# 1 "sys/s.h" 3"#
+        };
+        assert!(text.contains(&format!("{line_marker}\n")), "{text}");
         let warnings = |output: &Output| {
             stderr(output)
                 .lines()
@@ -438,9 +445,14 @@ mod tests {
         // Without the flag the same text is user code.
         std::fs::write(project.path("plain.i"), text.replace("\" 3\n", "\"\n")).unwrap();
         let plain = project.bcc(&["-fsyntax-only", "-std=c11", "-pedantic", "plain.i"]);
+        let header = if cfg!(windows) {
+            r"sys\s.h:1"
+        } else {
+            "sys/s.h:1"
+        };
         assert_eq!(
             warnings(&plain),
-            ["sys/s.h:1", "u.c:2", "u.c:3"],
+            [header, "u.c:2", "u.c:3"],
             "{}",
             stderr(&plain)
         );
@@ -483,12 +495,18 @@ mod tests {
             )
             .unwrap();
         }
-        let absolute = project.path("abs.h");
+        // Spelled with `/`, which Windows also reads, since a backslash in
+        // a header name is an extension that `-pedantic` reports.
+        let absolute = project
+            .path("abs.h")
+            .display()
+            .to_string()
+            .replace('\\', "/");
         std::fs::write(
             project.path("paths.c"),
             format!(
-                "# 1 \"h.h\" 1 3\n#include \"i.h\"\n#include \"{}\"\n# 5 \"paths.c\" 2\nint x;\n",
-                absolute.display()
+                "# 1 \"h.h\" 1 3\n#include \"i.h\"\n#include \"{absolute}\"\n# 5 \"paths.c\" \
+                 2\nint x;\n"
             ),
         )
         .unwrap();
@@ -504,10 +522,7 @@ mod tests {
         assert!(warnings(&paths).is_empty(), "{}", stderr(&paths));
         std::fs::write(
             project.path("user.c"),
-            format!(
-                "#include \"i.h\"\n#include \"{}\"\nint x;\n",
-                absolute.display()
-            ),
+            format!("#include \"i.h\"\n#include \"{absolute}\"\nint x;\n"),
         )
         .unwrap();
         let user = project.bcc(&[
@@ -625,7 +640,9 @@ mod tests {
         std::fs::write(project.path("u.c"), "#include <s.h>\n#include \"h.h\"\n").unwrap();
         let all = project.bcc(&["-isystem", "sys", "-M", "u.c"]);
         succeeds(&all);
-        assert_eq!(stdout(&all), "u.o: u.c sys/s.h h.h\n");
+        // Clang joins with the host's separator.
+        let header = if cfg!(windows) { r"sys\s.h" } else { "sys/s.h" };
+        assert_eq!(stdout(&all), format!("u.o: u.c {header} h.h\n"));
         let user = project.bcc(&["-isystem", "sys", "-MM", "-MT", "obj/u.o", "-MP", "u.c"]);
         assert_eq!(stdout(&user), "obj/u.o: u.c h.h\n\nh.h:\n");
         let quoted = project.bcc(&["-MM", "-MQ", "a b$", "main.c"]);
@@ -910,11 +927,36 @@ mod tests {
             );
         };
         // A cross target searches no C library unless told where it is.
-        missing(&project.bcc(&[
-            "--target=x86_64-w64-windows-gnu",
-            "-fsyntax-only",
-            "hello.c",
-        ]));
+        let cross = if cfg!(windows) {
+            "--target=x86_64-unknown-linux-gnu"
+        } else {
+            "--target=x86_64-w64-windows-gnu"
+        };
+        missing(&project.bcc(&[cross, "-fsyntax-only", "hello.c"]));
+        // On Windows the MinGW-w64 installation bcc links with is the host
+        // C library, as for MinGW GCC.
+        if cfg!(windows) {
+            let mingw = std::env::var_os("MINGW_ROOT").is_some()
+                || std::env::var_os("PATH").is_some_and(|path| {
+                    std::env::split_paths(&path)
+                        .any(|directory| directory.join("gcc.exe").is_file())
+                });
+            if !mingw {
+                eprintln!("skipping the host cases: no MinGW-w64 on the host");
+                return;
+            }
+            // bcc's own default target is Linux on every host.
+            succeeds(&project.bcc(&[
+                "--target=x86_64-w64-windows-gnu",
+                "hello.c",
+                "-o",
+                "hello.exe",
+            ]));
+            let run =
+                crate::native::run_native(&mut Command::new(project.path("hello.exe"))).unwrap();
+            assert_eq!(stdout(&run), "hello, world\n");
+            return;
+        }
         if !linkable_host() {
             eprintln!("skipping the host cases: they need a Linux GNU host");
             return;

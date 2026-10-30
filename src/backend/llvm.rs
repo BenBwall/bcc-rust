@@ -42,6 +42,7 @@ pub(crate) use driver::{
     Toolchain,
     compile_module,
     compile_module_checked,
+    mingw_root,
     needs_atomic_runtime,
     operand,
     print_commands,
@@ -181,6 +182,7 @@ fn build_module<'m>(
         module,
         api,
         arena,
+        target,
         functions: &functions,
         globals: &globals,
         labels: &[],
@@ -207,6 +209,7 @@ struct Emitter<'a, 'id, 'm, 'ir> {
     module:                 &'m Module<'ir>,
     api:                    &'a Session<'id>,
     arena:                  &'a Bump,
+    target:                 Target,
     functions:              &'a [Val<'id>],
     globals:                &'a [Val<'id>],
     /// The LLVM block of each label of each function, by `FuncId`.

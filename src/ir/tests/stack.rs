@@ -75,6 +75,46 @@ block0(v0: ptr):
     ] {
         assert!(llvm.contains(expected), "{expected}: {llvm}");
     }
+    assert!(!llvm.contains("read_register"), "{llvm}");
+    // On Windows x64 the frame pointer `llvm.eh.sjlj.longjmp` reloads from
+    // word 0 is `rbp`, which the prologue points into the frame, not the
+    // frame address: word 0 takes `rbp` itself, after the frame address.
+    for target in [
+        crate::target::Target::WindowsGnu,
+        crate::target::Target::WindowsMsvc,
+    ] {
+        let mut llvm = String::new();
+        crate::backend::llvm::emit_module(&module, target, &mut llvm).unwrap();
+        for expected in [
+            "call i64 @llvm.read_register.i64(metadata !0)",
+            "store ptr %v1, ptr %v0, align 8",
+            "call i32 @llvm.eh.sjlj.setjmp(ptr %v0) #",
+            "!0 = !{!\"rbp\"}",
+            "\"frame-pointer\"=\"all\"",
+            "returns_twice",
+        ] {
+            assert!(llvm.contains(expected), "{target:?} {expected}: {llvm}");
+        }
+        for opt in [
+            crate::backend::llvm::OptLevel::O0,
+            crate::backend::llvm::OptLevel::O2,
+        ] {
+            let assembly = crate::backend::llvm::emit_assembly(
+                &module,
+                target,
+                crate::target::CodeOptions::default(),
+                Some(opt),
+            );
+            let setjmp = assembly
+                .split("#EH_SjLj_Setup")
+                .next()
+                .unwrap_or_else(|| panic!("{assembly}"));
+            assert!(
+                setjmp.contains("(%rsp), %rbp\n") && setjmp.contains("movq\t%rbp, "),
+                "{target:?} {opt:?}: {assembly}"
+            );
+        }
+    }
 }
 
 #[test]

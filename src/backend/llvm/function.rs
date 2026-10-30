@@ -43,6 +43,7 @@ use crate::{
         Type,
         Value,
     },
+    target::Target,
     util::bump::{
         ArenaString,
         ArenaVec,
@@ -440,7 +441,7 @@ impl<'id, 'm> BodyBuilder<'_, 'id, 'm, '_> {
                     | Opcode::StackRestore =>
                         self.intrinsic("llvm.stackrestore", &[arg], &[api.ty(Type::Ptr)]),
                     // GCC's builtin non-local jumps, as Clang emits them.
-                    | Opcode::SjljSetjmp => self.intrinsic("llvm.eh.sjlj.setjmp", &[arg], &[]),
+                    | Opcode::SjljSetjmp => self.sjlj_setjmp(arg),
                     | Opcode::SjljLongjmp => self.intrinsic("llvm.eh.sjlj.longjmp", &[arg], &[]),
                     | Opcode::Fneg => api.fneg(arg),
                     | Opcode::Freeze => api.freeze(arg),
@@ -728,6 +729,39 @@ impl<'id, 'm> BodyBuilder<'_, 'id, 'm, '_> {
             };
         }
         result
+    }
+
+    /// `llvm.eh.sjlj.setjmp` on the `buffer` lowering filled as Clang
+    /// fills it. LLVM's `llvm.eh.sjlj.longjmp` reloads the frame pointer
+    /// register from word 0, which the resume code addresses the frame
+    /// through. On Windows x64 that register is not `llvm.frameaddress`:
+    /// the prologue points `rbp` into the frame (`.seh_setframe %rbp, N`)
+    /// while the frame address is the stack pointer after the prologue, so
+    /// a resumed function read its locals and callee-saved registers
+    /// N bytes off and crashed. There word 0 takes `rbp` itself, the
+    /// function keeps a frame pointer, and the call is `returns_twice`,
+    /// which keeps LLVM from inlining it into a caller that may have none.
+    /// GNU extension: GCC manual, "Nonlocal Gotos".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Nonlocal-Gotos.html>
+    fn sjlj_setjmp(&self, buffer: Val<'id>) -> Val<'id> {
+        let api = self.emitter.api;
+        let windows = matches!(
+            self.emitter.target,
+            Target::WindowsGnu | Target::WindowsMsvc
+        );
+        if windows {
+            api.string_attribute(self.function, "frame-pointer", "all");
+            let register = api.metadata_name("rbp");
+            let frame = self.intrinsic("llvm.read_register", &[register], &[api.ty(Type::I64)]);
+            let frame = api.cast(LLVMOpcode::LLVMIntToPtr, frame, api.ty(Type::Ptr));
+            let store = api.store(frame, buffer);
+            api.alignment(store, 8);
+        }
+        let call = self.intrinsic("llvm.eh.sjlj.setjmp", &[buffer], &[]);
+        if windows {
+            returns_twice(api, call, true);
+        }
+        call
     }
 
     fn intrinsic(&self, name: &str, args: &[Val<'id>], overloads: &[Ty<'id>]) -> Val<'id> {

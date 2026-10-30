@@ -341,9 +341,11 @@ int main(void) {
   !i ? 7 : note();
   i ?: note();
   0 ?: note();
-  return calls * 10 + \"\\e\"[0] + '\\E' - 27;
+  return calls * 10 + \"\\e\"[0] + '\\E' - 28;
 }",
-        expected: 67,
+        // Not 67: WSL on the Windows runner reports a Linux exit status of
+        // 67 as its own failure, WSL_E_USER_NOT_FOUND.
+        expected: 66,
     },
     Program {
         // GNU constant compound literals initializing static structures,
