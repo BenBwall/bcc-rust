@@ -8,15 +8,18 @@ use super::{
     super::Expander,
     TokenizerFrameType,
 };
-use crate::translation_phases::{
-    GetPosition,
-    GetSourceFileIndex,
-    SetPosition,
-    SetSourceFileIndex,
-    SourcePosition,
-    SourceVector,
-    SourceVectors,
-    preprocessor_tokenizer::PreprocessorToken,
+use crate::{
+    configuration::CompilerIdentity,
+    translation_phases::{
+        GetPosition,
+        GetSourceFileIndex,
+        SetPosition,
+        SetSourceFileIndex,
+        SourcePosition,
+        SourceVector,
+        SourceVectors,
+        preprocessor_tokenizer::PreprocessorToken,
+    },
 };
 
 impl Expander<'_, '_, '_, '_> {
@@ -43,7 +46,12 @@ impl Expander<'_, '_, '_, '_> {
     /// the innermost macro being replaced whose name was itself spelled in
     /// the source: `T(__LINE__)` in the body of `L` is at `L`'s invocation,
     /// not on the line of `L`'s definition, and so is a macro expanded in
-    /// an argument within that body (`#define C(x) ID(OBJ), x`).
+    /// an argument within that body (`#define C(x) ID(OBJ), x`). For GCC a
+    /// name read from the source counts only when its macro was invoked
+    /// there or in an argument being expanded: a name an argument supplied
+    /// to a body that completes the call (`#define F(m) m()` reached as
+    /// `G(\nE)` through `#define G(x) F(x)`) belongs to the outer `G`, while
+    /// Clang takes that name's own line.
     /// C99: §6.10.8 paragraph 1, p. 160; PDF p. 172.
     pub(in crate::translation_phases::preprocessing) fn current_line_location(
         &self,
@@ -53,11 +61,18 @@ impl Expander<'_, '_, '_, '_> {
         if !self.spelled_in_definition(&spelling) {
             return spelling;
         }
-        for frame in self.tokenizer_stack.iter().rev() {
+        let gcc = !matches!(
+            self.context.configuration.compiler_identity(),
+            CompilerIdentity::Clang | CompilerIdentity::ClangCl
+        );
+        let frames = &self.tokenizer_stack;
+        for (index, frame) in frames.iter().enumerate().rev() {
             match &frame.frame_type {
                 | TokenizerFrameType::ObjectLikeMacroInvocation { spelling, .. }
                 | TokenizerFrameType::FunctionLikeMacroInvocation { spelling, .. } =>
-                    if !self.spelled_in_definition(spelling) {
+                    if !self.spelled_in_definition(spelling)
+                        && (!gcc || Self::invoked_from_source(&frames[..index]))
+                    {
                         return spelling.clone();
                     },
                 | TokenizerFrameType::SourceFile { .. } => break,
@@ -67,6 +82,29 @@ impl Expander<'_, '_, '_, '_> {
             }
         }
         self.invocation_location(token)
+    }
+
+    /// Whether a macro whose frame lies on `below` was invoked while the
+    /// source itself or an argument's own tokens were read, rather than a
+    /// replacement list or an argument substituted into one.
+    fn invoked_from_source(below: &[super::TokenizerFrame<'_>]) -> bool {
+        below
+            .iter()
+            .rev()
+            .find(|frame| {
+                !matches!(
+                    frame.frame_type,
+                    TokenizerFrameType::DeferredQuery
+                        | TokenizerFrameType::Rescan { argument: false }
+                )
+            })
+            .is_none_or(|frame| {
+                matches!(
+                    frame.frame_type,
+                    TokenizerFrameType::SourceFile { .. }
+                        | TokenizerFrameType::FunctionLikeMacroArgument { .. }
+                )
+            })
     }
 
     /// Whether `location` lies in a `#define` directive, its replacement

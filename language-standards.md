@@ -1252,17 +1252,18 @@ the diagnostic is reported, so withheld diagnostics are not counted.
   `__COUNTER__`, `__has_attribute`, and `__has_builtin` may be redefined or
   undefined with a warning; ISO predefined macros and C23 query names stay
   protected.
-- `__LINE__` and `__FILE__` follow GCC. One spelled in the source, in a macro
-  argument too, has its own line. One spelled in a replacement list has the
-  line of the innermost macro being replaced whose name was spelled in the
-  source, which a `#define` line does not hold (`preprocessing/runtime/
-  location.rs`): `T(__LINE__)` in the body of `L`, and `OBJ` expanded in
-  `ID(OBJ)` there, are at `L`'s invocation. Two forms keep a deviation:
-  Clang gives a multi-line invocation's body the line of its closing
-  parenthesis, and GCC gives a macro whose name an argument supplied and
-  whose call a body completes (`#define F(m) m()` called as `G(\nE)` through
-  `#define G(x) F(x)`) the outer `G`'s line, where bcc gives `E`'s, as Clang
-  does.
+- `__LINE__` and `__FILE__` follow the claimed compiler. One spelled in the
+  source, in a macro argument too, has its own line. One spelled in a
+  replacement list has the line of the innermost macro being replaced whose
+  name was spelled in the source, which a `#define` line does not hold
+  (`preprocessing/runtime/location.rs`): `T(__LINE__)` in the body of `L`,
+  and `OBJ` expanded in `ID(OBJ)` there, are at `L`'s invocation. For GCC
+  that name must also have been read from the source or from an argument
+  being expanded, so a macro whose name an argument supplied and whose call
+  a body completes (`#define F(m) m()` called as `G(\nE)` through
+  `#define G(x) F(x)`) is at the outer `G`'s line; Clang gives `E`'s line,
+  as the Clang identities do. Clang gives a multi-line invocation's body the
+  line of its closing parenthesis, which bcc does not reproduce.
 - Because `e sign` may follow `' nondigit` in the pp-number grammar,
   `0x1'e+1` is one invalid pp-number, as GCC lexes it.
 

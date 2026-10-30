@@ -32,6 +32,11 @@ static int __attribute__((noinline)) doubled_is_negative(int value) {
 #define HERE STR(__LINE__)
 #define TWICE STR(__LINE__) STR(__LINE__)
 #define NUMBER __LINE__
+/* A name an argument supplies to a body that completes its call: GCC gives
+   the outer invocation's line, Clang the name's own. */
+#define LINE_OF() __LINE__
+#define CALL(m) m()
+#define PASS(x) CALL(x)
 
 int main(void) {
     static const unsigned char ip[] = {192, 168, 190, 160};
@@ -42,5 +47,8 @@ int main(void) {
     const char *twice = TWICE;
     int number = NUMBER;
     printf("%s %s %d %d\n", here, twice, number, __LINE__);
+    int passed = PASS(
+        LINE_OF);
+    printf("%d\n", passed);
     return 0;
 }
