@@ -553,39 +553,48 @@ fn llvm_arms_match_the_interpreter() {
             runs.push((name, arm, source));
         }
     }
-    thread::scope(|scope| {
-        let handles: Vec<_> = runs
-            .iter()
-            .map(|(name, arm, source)| {
-                let directory = &directory;
-                scope.spawn(move || {
-                    let executable = directory.join(format!("{name}-{}.exe", arm.name));
-                    let options = LlvmOptions {
-                        opt: Some(arm.opt),
-                        disable_llvm_passes: arm.disable_llvm_passes,
-                        target,
-                        kind: OutputKind::Executable,
-                        code: crate::target::CodeOptions::default(),
-                    };
-                    let expected = with_module(
-                        source,
-                        target,
-                        arm.bcc,
-                        Profile::PostAbi,
-                        |module, target| {
-                            compile_module(module, &executable, options)
-                                .unwrap_or_else(|error| panic!("{name} {}: {error}", arm.name));
-                            interpret(module, target)
-                        },
-                    );
-                    (name, arm, expected, run_native(&executable))
+    // A few at a time, as the native back end's `check_all` runs its jobs:
+    // each run reserves address space for its arenas and starts a linker,
+    // and all 140 at once exhausted the memory of a Windows host, which
+    // does not overcommit.
+    let parallelism = thread::available_parallelism()
+        .map_or(4, usize::from)
+        .min(8);
+    for chunk in runs.chunks(parallelism) {
+        thread::scope(|scope| {
+            let handles: Vec<_> = chunk
+                .iter()
+                .map(|(name, arm, source)| {
+                    let directory = &directory;
+                    scope.spawn(move || {
+                        let executable = directory.join(format!("{name}-{}.exe", arm.name));
+                        let options = LlvmOptions {
+                            opt: Some(arm.opt),
+                            disable_llvm_passes: arm.disable_llvm_passes,
+                            target,
+                            kind: OutputKind::Executable,
+                            code: crate::target::CodeOptions::default(),
+                        };
+                        let expected = with_module(
+                            source,
+                            target,
+                            arm.bcc,
+                            Profile::PostAbi,
+                            |module, target| {
+                                compile_module(module, &executable, options)
+                                    .unwrap_or_else(|error| panic!("{name} {}: {error}", arm.name));
+                                interpret(module, target)
+                            },
+                        );
+                        (name, arm, expected, run_native(&executable))
+                    })
                 })
-            })
-            .collect();
-        for handle in handles {
-            let (name, arm, expected, actual) = handle.join().unwrap();
-            assert_eq!(actual, expected, "{name} {}", arm.name);
-            assert_eq!(actual.0, program(name).expected, "{name} {}", arm.name);
-        }
-    });
+                .collect();
+            for handle in handles {
+                let (name, arm, expected, actual) = handle.join().unwrap();
+                assert_eq!(actual, expected, "{name} {}", arm.name);
+                assert_eq!(actual.0, program(name).expected, "{name} {}", arm.name);
+            }
+        });
+    }
 }
