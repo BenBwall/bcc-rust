@@ -49,6 +49,7 @@ pub(crate) use middle_end::{
     DiagnosedModule,
     InlineCopies,
     MiddleEndError,
+    lower_translation_unit_with_lines,
     with_optional_retention,
 };
 pub(crate) use preprocessed_text::{

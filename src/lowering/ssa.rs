@@ -72,17 +72,22 @@ pub(super) struct Var(u32);
 /// One block of a draft.
 pub(super) struct DraftBlock<'s> {
     /// Explicit parameters first, then those SSA construction adds.
-    pub(super) params:     ArenaVec<'s, Value>,
-    pub(super) insts:      ArenaVec<'s, (Op<'s>, Option<Value>)>,
+    pub(super) params:          ArenaVec<'s, Value>,
+    pub(super) insts:           ArenaVec<'s, (Op<'s>, Option<Value>)>,
     /// The source line of each instruction, or 0.
-    pub(super) lines:      ArenaVec<'s, u32>,
-    pub(super) terminator: Option<Terminator<'s>>,
+    pub(super) lines:           ArenaVec<'s, u32>,
+    pub(super) terminator:      Option<Terminator<'s>>,
+    /// The source line of a `return` terminator, the return statement's,
+    /// or 0. Other terminators take the line of the block's last
+    /// instruction, as the WebAssembly source map expects (a function's
+    /// prologue keeps line 0).
+    pub(super) terminator_line: u32,
     /// Each incoming edge: the block it leaves and its index there.
-    pub(super) preds:      ArenaVec<'s, (Block, u32)>,
-    sealed:                bool,
+    pub(super) preds:           ArenaVec<'s, (Block, u32)>,
+    sealed:                     bool,
     /// Parameters added while the block was unsealed, still without their
     /// arguments.
-    incomplete:            ArenaVec<'s, (Var, Value)>,
+    incomplete:                 ArenaVec<'s, (Var, Value)>,
 }
 
 /// A draft value: its type, where it comes from, and, once SSA
@@ -283,13 +288,14 @@ impl<'s> Draft<'s> {
     pub(super) fn create_block(&mut self, params: &[Type]) -> Block {
         let block = Block::new(self.blocks.len());
         self.blocks.push(DraftBlock {
-            params:     ArenaVec::new_in(self.scratch),
-            insts:      ArenaVec::new_in(self.scratch),
-            lines:      ArenaVec::new_in(self.scratch),
-            terminator: None,
-            preds:      ArenaVec::new_in(self.scratch),
-            sealed:     false,
-            incomplete: ArenaVec::new_in(self.scratch),
+            params:          ArenaVec::new_in(self.scratch),
+            insts:           ArenaVec::new_in(self.scratch),
+            lines:           ArenaVec::new_in(self.scratch),
+            terminator:      None,
+            terminator_line: 0,
+            preds:           ArenaVec::new_in(self.scratch),
+            sealed:          false,
+            incomplete:      ArenaVec::new_in(self.scratch),
         });
         for &ty in params {
             _ = self.add_param(block, ty);
@@ -346,7 +352,13 @@ impl<'s> Draft<'s> {
                 u32::try_from(index).expect("a terminator has few edges"),
             ));
         }
+        let line = if matches!(terminator, Terminator::Return(_)) {
+            self.line
+        } else {
+            0
+        };
         self.blocks[block.index()].terminator = Some(terminator);
+        self.blocks[block.index()].terminator_line = line;
     }
 
     pub(super) fn edge(&self, target: Block, args: &[Value]) -> Edge<'s> {

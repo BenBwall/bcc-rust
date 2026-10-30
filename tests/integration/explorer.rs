@@ -22,6 +22,7 @@ mod tests {
 
     use bcc_rust::explorer::{
         ExplorerFile,
+        ExplorerLineMapping,
         ExplorerOptions,
         ExplorerOutput,
         compile,
@@ -263,6 +264,38 @@ mod tests {
                 "{name}"
             );
             assert!(mapping.source.start <= mapping.source.end);
+        }
+        // Each IR line that names a source line lies in a function of the
+        // input and names a line of that function.
+        for (text, lines, range) in [
+            (
+                &output.ir,
+                &output.ir_lines,
+                (|mapping: &ExplorerLineMapping| mapping.ir) as fn(&_) -> _,
+            ),
+            (&output.ir_abi, &output.ir_abi_lines, |mapping| {
+                mapping.ir_abi
+            }),
+        ] {
+            assert_eq!(
+                lines.len(),
+                text.as_ref().unwrap().lines().count(),
+                "{name}"
+            );
+            for (index, &line) in lines.iter().enumerate().filter(|&(_, &line)| line != 0) {
+                let output_line = u32::try_from(index + 1).unwrap();
+                let mapping = output
+                    .line_map
+                    .iter()
+                    .find(|mapping| {
+                        range(mapping).is_some_and(|ir| (ir.start..=ir.end).contains(&output_line))
+                    })
+                    .unwrap_or_else(|| panic!("{name}: IR line {output_line} is in no function"));
+                assert!(
+                    (mapping.source.start..=mapping.source.end).contains(&line),
+                    "{name}: IR line {output_line} names line {line}, outside {mapping:?}"
+                );
+            }
         }
     }
 
@@ -773,6 +806,24 @@ mod tests {
             }
             assert!(from_header > 0, "{text}");
         }
+    }
+
+    #[test]
+    fn ir_lines_name_the_source_line_of_each_instruction() {
+        let source = "int square(int x) {\n    int y = x * x;\n    return y;\n}\n";
+        let output = compile(source, &options(false));
+        let ir = output.ir.as_deref().expect("IR");
+        let line_of = |needle: &str| {
+            let index = ir
+                .lines()
+                .position(|line| line.contains(needle))
+                .unwrap_or_else(|| panic!("{needle} in\n{ir}"));
+            output.ir_lines[index]
+        };
+        assert_eq!(line_of("imul"), 2, "{ir}\n{:?}", output.ir_lines);
+        assert_eq!(line_of("return"), 3, "{ir}\n{:?}", output.ir_lines);
+        assert_eq!(line_of("function @square"), 0);
+        assert!(output.ir_abi_lines.contains(&2));
     }
 
     #[test]

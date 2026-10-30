@@ -222,6 +222,9 @@ pub(super) fn emit<'s>(
         };
         let target_of =
             |edge: &Edge<'_>| blocks[edge.target.index()].expect("successors are reachable");
+        if data.terminator_line != 0 {
+            builder.set_line(data.terminator_line);
+        }
         match data.terminator.as_ref() {
             | Some(Terminator::Jump(edge)) => {
                 let args = edge_args(edge)?;
