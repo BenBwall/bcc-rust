@@ -624,6 +624,7 @@ int main(void){return 0;}
     );
 }
 
+/// GCC and Clang report no call of a reserved builtin, even when pedantic.
 #[test]
 fn gcc_scalar_builtin_policy_uses_the_shared_extension_gate() {
     with_configuration(
@@ -633,7 +634,12 @@ fn gcc_scalar_builtin_policy_uses_the_shared_extension_gate() {
             crate::configuration::ExtensionPolicy::Deny,
         ),
         |context, _| {
-            assert!(context.pending_error_count() > 0);
+            assert_eq!(
+                context.pending_error_count(),
+                0,
+                "{:?}",
+                context.take_pending_errors()
+            );
         },
     );
 }

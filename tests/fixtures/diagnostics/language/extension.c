@@ -1,2 +1,2 @@
-#define QUAL __const__
-QUAL int x;
+#define WIDE __int128
+WIDE x;

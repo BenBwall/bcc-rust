@@ -1,7 +1,7 @@
-error: '__const__' is a GNU extension [-Wpedantic]
+error: '__int128' is a GNU extension [-Wpedantic]
  --> <input>:1:14
   |
-1 | #define QUAL __const__
-  |              ^^^^^^^^^
+1 | #define WIDE __int128
+  |              ^^^^^^^^
 
 1 error generated.

@@ -263,6 +263,8 @@ fn binding_origins_keep_implicit_registered_and_opaque_calls_distinct() {
     );
 }
 
+/// A builtin's reserved name is no extension diagnostic under any policy,
+/// as GCC and Clang report none.
 #[test]
 fn m4_scalar_extension_policy_uses_descriptor_feature() {
     for gnu in [false, true] {
@@ -278,21 +280,7 @@ fn m4_scalar_extension_policy_uses_descriptor_feature() {
                 |context, unit| {
                     let errors = context.take_pending_errors();
                     assert_eq!(unit.errors, 0);
-                    for error in &errors {
-                        assert_eq!(
-                            crate::translation_phases::GetSeverity::severity(error),
-                            if policy == crate::configuration::ExtensionPolicy::Deny {
-                                crate::translation_phases::ErrorSeverity::Error
-                            } else {
-                                crate::translation_phases::ErrorSeverity::Warning
-                            }
-                        );
-                    }
-                    assert_eq!(
-                        errors.len(),
-                        usize::from(policy != crate::configuration::ExtensionPolicy::Allow),
-                        "{gnu:?} {policy:?}: {errors:?}"
-                    );
+                    assert!(errors.is_empty(), "{gnu:?} {policy:?}: {errors:?}");
                 },
             );
         }

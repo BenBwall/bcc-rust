@@ -600,14 +600,14 @@ struct KeywordAlias {
     spelling: &'static str,
     kind:     KeywordTokenType,
     gate:     AliasGate,
-    origin:   FeatureOrigin,
+    origin:   Option<FeatureOrigin>,
 }
 
 const fn alias(
     spelling: &'static str,
     kind: KeywordTokenType,
     gate: AliasGate,
-    origin: FeatureOrigin,
+    origin: Option<FeatureOrigin>,
 ) -> KeywordAlias {
     KeywordAlias {
         spelling,
@@ -625,14 +625,22 @@ const fn c23_alias(spelling: &'static str, kind: KeywordTokenType) -> KeywordAli
         spelling,
         kind,
         AliasGate::Feature(Feature::C23Keywords),
-        FeatureOrigin::Standard(CStandard::C23),
+        Some(FeatureOrigin::Standard(CStandard::C23)),
     )
 }
 
 /// A GNU spelling reserved to the implementation, so a keyword in every
-/// mode. C99: §7.1.3 paragraph 1, p. 166; PDF p. 178.
+/// mode. Neither GCC nor Clang reports one under `-pedantic`, even for a
+/// keyword the revision lacks (`__inline__` in C89, `__thread` before C11),
+/// so it has no diagnostic origin; only the complex-type spellings are
+/// reported before C99, as `_Complex` is.
+/// C99: §7.1.3 paragraph 1, p. 166; PDF p. 178.
 const fn gnu_alias(spelling: &'static str, kind: KeywordTokenType) -> KeywordAlias {
-    alias(spelling, kind, AliasGate::Always, FeatureOrigin::Gnu)
+    let origin = match kind {
+        | KeywordTokenType::Complex => Some(FeatureOrigin::Standard(CStandard::C99)),
+        | _ => None,
+    };
+    alias(spelling, kind, AliasGate::Always, origin)
 }
 
 /// Alternate keyword spellings, in the order their IDs follow
@@ -670,12 +678,17 @@ const KEYWORD_ALIASES: [KeywordAlias; 29] = {
         // <https://gcc.gnu.org/onlinedocs/gcc/Thread-Local.html>
         gnu_alias("__thread", K::ThreadLocal),
         // Not reserved, so an identifier in strict modes.
-        alias("asm", K::Asm, AliasGate::GnuExtensions, FeatureOrigin::Gnu),
+        alias(
+            "asm",
+            K::Asm,
+            AliasGate::GnuExtensions,
+            Some(FeatureOrigin::Gnu),
+        ),
         alias(
             "_asm",
             K::MsAsm,
             AliasGate::Feature(Feature::MsAsm),
-            Feature::MsAsm.origin(),
+            Some(Feature::MsAsm.origin()),
         ),
     ]
 };
@@ -826,12 +839,13 @@ impl KeywordTokenType {
                 return None;
             }
             // The reserved GNU alias overlaps MSVC's statement introducer.
-            // With MS assembly enabled, its grammar owner selects the origin.
+            // With MS assembly enabled, its grammar owner selects the origin;
+            // as a reserved GNU spelling it is reported under neither.
             if kind == Self::MsAsm {
                 let msvc = configuration.accepts(Feature::MsAsm);
                 return Some(KeywordClassification {
                     kind:          if msvc { Self::MsAsm } else { Self::Asm },
-                    origin:        if msvc { None } else { Some(FeatureOrigin::Gnu) },
+                    origin:        None,
                     spelling:      kind.spelling(),
                     ambiguous_asm: true,
                 });
@@ -909,30 +923,23 @@ impl KeywordTokenType {
                     configuration.accepts(Feature::Countof),
                     Some(Feature::Countof.origin()),
                 ),
-                | Self::Attribute => (
-                    configuration.accepts(Feature::GnuAttribute),
-                    Some(Feature::GnuAttribute.origin()),
-                ),
-                | Self::Asm => (
-                    configuration.accepts(Feature::GnuAsm),
-                    Some(Feature::GnuAsm.origin()),
-                ),
+                // `__attribute__`, `__asm__`, `__real__`, `__imag__` and
+                // the type-operand builtins are reserved spellings, which
+                // neither GCC nor Clang reports under `-pedantic`.
+                | Self::Attribute => (configuration.accepts(Feature::GnuAttribute), None),
+                | Self::Asm => (configuration.accepts(Feature::GnuAsm), None),
                 | Self::Extension => (
                     configuration.accepts(Feature::ExtensionMarker),
                     Some(Feature::ExtensionMarker.origin()),
                 ),
-                | Self::BuiltinTypesCompatible => (
-                    configuration.accepts(Feature::BuiltinTypesCompatible),
-                    Some(Feature::BuiltinTypesCompatible.origin()),
-                ),
+                | Self::BuiltinTypesCompatible =>
+                    (configuration.accepts(Feature::BuiltinTypesCompatible), None),
                 | Self::BuiltinConvertVector | Self::BuiltinBitCast => (
                     configuration.accepts(Feature::VectorBuiltins),
                     Some(Feature::VectorBuiltins.origin()),
                 ),
-                | Self::BuiltinChooseExpr => (
-                    configuration.accepts(Feature::BuiltinChooseExpr),
-                    Some(Feature::BuiltinChooseExpr.origin()),
-                ),
+                | Self::BuiltinChooseExpr =>
+                    (configuration.accepts(Feature::BuiltinChooseExpr), None),
                 | Self::LocalLabel => (
                     configuration.accepts(Feature::LocalLabels),
                     Some(Feature::LocalLabels.origin()),
@@ -973,10 +980,7 @@ impl KeywordTokenType {
                     configuration.accepts(Feature::AutoType),
                     Some(Feature::AutoType.origin()),
                 ),
-                | Self::Real | Self::Imag => (
-                    configuration.accepts(Feature::RealImag),
-                    Some(Feature::RealImag.origin()),
-                ),
+                | Self::Real | Self::Imag => (configuration.accepts(Feature::RealImag), None),
 
                 | Self::Declspec => (
                     configuration.accepts(Feature::MsDeclspec),
@@ -1040,7 +1044,7 @@ impl KeywordTokenType {
         };
         enabled.then_some(KeywordClassification {
             kind:          alias.kind,
-            origin:        Some(alias.origin),
+            origin:        alias.origin,
             spelling:      alias.spelling,
             ambiguous_asm: false,
         })

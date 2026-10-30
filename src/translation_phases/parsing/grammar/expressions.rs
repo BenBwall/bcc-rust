@@ -26,10 +26,7 @@ pub(in crate::translation_phases::parsing) use lookahead::{
 };
 
 use crate::{
-    configuration::{
-        Feature,
-        FeatureOrigin,
-    },
+    configuration::Feature,
     translation_phases::{
         GetPosition,
         SourceVectors,
@@ -1865,7 +1862,7 @@ pub(in crate::translation_phases::parsing) fn report_alignof_expression(
     keyword: Token,
 ) {
     let gnu_spelling = KeywordTokenType::classify(keyword.contents, parser.context.configuration)
-        .is_some_and(|x| x.origin == Some(FeatureOrigin::Gnu));
+        .is_some_and(|x| x.spelling.starts_with("__"));
     if gnu_spelling || parser.pedantic_suppression != 0 {
         return;
     }

@@ -71,26 +71,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             },
             // A prototyped call whose immediates `type_call` checks.
             | crate::builtins::TypeRule::X86Signature => return None,
-            | crate::builtins::TypeRule::VectorShuffle => {
-                if let Some(feature) = descriptor.availability.feature {
-                    self.context.report_extension(
-                        feature,
-                        descriptor.spelling,
-                        name.source_vectors,
-                    );
-                }
-                return Some(self.shuffle_vector_builtin(e, arguments));
-            },
-            | crate::builtins::TypeRule::GnuShuffle => {
-                if let Some(feature) = descriptor.availability.feature {
-                    self.context.report_extension(
-                        feature,
-                        descriptor.spelling,
-                        name.source_vectors,
-                    );
-                }
-                return Some(self.gnu_shuffle_builtin(e, arguments));
-            },
+            | crate::builtins::TypeRule::VectorShuffle =>
+                return Some(self.shuffle_vector_builtin(e, arguments)),
+            | crate::builtins::TypeRule::GnuShuffle =>
+                return Some(self.gnu_shuffle_builtin(e, arguments)),
             | crate::builtins::TypeRule::VectorOverload(operation) =>
                 return Some(self.vector_overload(e, name, operation, arguments)),
             | crate::builtins::TypeRule::TypeClassify =>
@@ -114,10 +98,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if builtin == CommonBuiltin::Library {
             return None;
         }
-        if let Some(feature) = descriptor.availability.feature {
-            self.context
-                .report_extension(feature, descriptor.spelling, name.source_vectors);
-        }
+        // A builtin's name is reserved to the implementation (C99 §7.1.3p1),
+        // so neither GCC nor Clang reports a call under `-pedantic`; its
+        // feature only decides whether the name is a builtin at all.
         let args = arguments.as_slice();
         let (min, max) = descriptor.arity;
         if !(min..=max).contains(&args.len()) {

@@ -250,17 +250,19 @@ fn extension_policy_reports_original_alias_spelling_and_native_origin() {
             &pp_arena,
             &mut context,
             PathBuf::from("<keywords>").into_boxed_path(),
-            "_Static_assert __const__\n",
+            "_Static_assert __const__ __complex__ double\n",
             SharedVec::default(),
             SharedVec::default(),
         );
         let tokens = pp.preprocess_all(&mut context);
-        assert_eq!(tokens.len(), 2);
+        assert_eq!(tokens.len(), 4);
         let errors = context.take_pending_errors();
         if let Some(severity) = severity {
+            // `__const__` is reserved, so unreported; `__complex__` names a
+            // C99 type and reports under its own spelling.
             assert_eq!(errors.len(), 2);
             assert_eq!(errors[0].to_string(), "'_Static_assert' is a C11 extension");
-            assert_eq!(errors[1].to_string(), "'__const__' is a GNU extension");
+            assert_eq!(errors[1].to_string(), "'__complex__' is a C99 extension");
             for error in errors {
                 assert_eq!(error.severity(), severity);
             }
@@ -291,42 +293,45 @@ fn every_alias_spelling_has_its_keyword_gate_and_origin() {
         Gnu,
         MsAsm,
     }
-    let c23 = FeatureOrigin::Standard(CStandard::C23);
-    let gnu = FeatureOrigin::Gnu;
+    let c23 = Some(FeatureOrigin::Standard(CStandard::C23));
+    // Reserved spellings, which GCC and Clang never report; the complex
+    // ones are reported before C99, as `_Complex` is.
+    let reserved = None;
+    let c99 = Some(FeatureOrigin::Standard(CStandard::C99));
     let expected = [
         ("bool", K::Bool, Gate::C23, c23),
         ("alignas", K::Alignas, Gate::C23, c23),
         ("alignof", K::Alignof, Gate::C23, c23),
         ("static_assert", K::StaticAssert, Gate::C23, c23),
         ("thread_local", K::ThreadLocal, Gate::C23, c23),
-        ("__inline", K::Inline, Gate::Always, gnu),
-        ("__inline__", K::Inline, Gate::Always, gnu),
-        ("__restrict", K::Restrict, Gate::Always, gnu),
-        ("__restrict__", K::Restrict, Gate::Always, gnu),
-        ("__const", K::Const, Gate::Always, gnu),
-        ("__const__", K::Const, Gate::Always, gnu),
-        ("__volatile", K::Volatile, Gate::Always, gnu),
-        ("__volatile__", K::Volatile, Gate::Always, gnu),
-        ("__signed", K::Signed, Gate::Always, gnu),
-        ("__signed__", K::Signed, Gate::Always, gnu),
-        ("__alignof", K::Alignof, Gate::Always, gnu),
-        ("__alignof__", K::Alignof, Gate::Always, gnu),
-        ("__complex", K::Complex, Gate::Always, gnu),
-        ("__complex__", K::Complex, Gate::Always, gnu),
-        ("__real", K::Real, Gate::Always, gnu),
-        ("__imag", K::Imag, Gate::Always, gnu),
-        ("__typeof", K::Typeof, Gate::Always, gnu),
-        ("__typeof__", K::Typeof, Gate::Always, gnu),
-        ("__typeof_unqual", K::TypeofUnqual, Gate::Always, gnu),
-        ("__typeof_unqual__", K::TypeofUnqual, Gate::Always, gnu),
-        ("__attribute", K::Attribute, Gate::Always, gnu),
-        ("__thread", K::ThreadLocal, Gate::Always, gnu),
-        ("asm", K::Asm, Gate::Gnu, gnu),
+        ("__inline", K::Inline, Gate::Always, reserved),
+        ("__inline__", K::Inline, Gate::Always, reserved),
+        ("__restrict", K::Restrict, Gate::Always, reserved),
+        ("__restrict__", K::Restrict, Gate::Always, reserved),
+        ("__const", K::Const, Gate::Always, reserved),
+        ("__const__", K::Const, Gate::Always, reserved),
+        ("__volatile", K::Volatile, Gate::Always, reserved),
+        ("__volatile__", K::Volatile, Gate::Always, reserved),
+        ("__signed", K::Signed, Gate::Always, reserved),
+        ("__signed__", K::Signed, Gate::Always, reserved),
+        ("__alignof", K::Alignof, Gate::Always, reserved),
+        ("__alignof__", K::Alignof, Gate::Always, reserved),
+        ("__complex", K::Complex, Gate::Always, c99),
+        ("__complex__", K::Complex, Gate::Always, c99),
+        ("__real", K::Real, Gate::Always, reserved),
+        ("__imag", K::Imag, Gate::Always, reserved),
+        ("__typeof", K::Typeof, Gate::Always, reserved),
+        ("__typeof__", K::Typeof, Gate::Always, reserved),
+        ("__typeof_unqual", K::TypeofUnqual, Gate::Always, reserved),
+        ("__typeof_unqual__", K::TypeofUnqual, Gate::Always, reserved),
+        ("__attribute", K::Attribute, Gate::Always, reserved),
+        ("__thread", K::ThreadLocal, Gate::Always, reserved),
+        ("asm", K::Asm, Gate::Gnu, Some(FeatureOrigin::Gnu)),
         (
             "_asm",
             K::MsAsm,
             Gate::MsAsm,
-            FeatureOrigin::Msvc(MsvcFeature::Asm),
+            Some(FeatureOrigin::Msvc(MsvcFeature::Asm)),
         ),
     ];
     assert_eq!(
@@ -357,7 +362,7 @@ fn every_alias_spelling_has_its_keyword_gate_and_origin() {
             assert_eq!(classification.is_some(), enabled, "{spelling} {standard:?}");
             if let Some(classification) = classification {
                 assert_eq!(classification.kind, kind, "{spelling}");
-                assert_eq!(classification.origin, Some(origin), "{spelling}");
+                assert_eq!(classification.origin, origin, "{spelling}");
                 assert_eq!(classification.spelling, spelling);
             }
         }

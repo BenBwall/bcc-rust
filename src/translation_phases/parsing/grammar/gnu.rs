@@ -8,7 +8,6 @@
 //! builtin evaluation and label resolution belong to later analysis.
 
 use crate::{
-    configuration::Feature,
     translation_phases::{
         SourceVectors,
         parsing::{
@@ -65,14 +64,9 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
     ) -> Option<GnuValue<'tu>> {
         let entry = self.enter_production(ProductionKind::Gnu)?;
         let mut source = None;
+        // A reserved `__asm` is reported under neither grammar, as GCC and
+        // Clang report no reserved GNU spelling.
         if let Some(token) = self.cursor.current() {
-            // Reserved `__asm` has a deferred GNU/MSVC origin when
-            // both grammars are enabled; this owner chose GNU syntax.
-            if token.uses_ambiguous_asm(self.context.configuration)
-                && matches!(token.kind, TokenType::Keyword(KeywordTokenType::MsAsm))
-            {
-                self.extension(Feature::GnuAsm, "__asm", token);
-            }
             self.own_gnu_token(&mut source, token);
         }
         let result = match kind {

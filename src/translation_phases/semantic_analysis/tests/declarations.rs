@@ -194,13 +194,14 @@ fn unanalyzed_redeclarations_inherit_the_previous_kind() {
         ),
         []
     );
-    // GNU typeof stays an extension under the pedantic policy.
+    // The reserved `__typeof__` is no extension diagnostic even when
+    // pedantic, as in GCC and Clang.
     assert_eq!(
         extensions(
             "int f(void); extern __typeof__(f) f;",
             pedantic(CStandard::C99, false)
         ),
-        ["'__typeof__' is a GNU extension"]
+        Vec::<String>::new()
     );
 }
 
