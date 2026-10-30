@@ -443,15 +443,10 @@ fn constant_p_has_int_type_and_checks_array_bounds() {
              signedness[(1 ? __builtin_constant_p(0) : 0UL) - 2 < 0 ? -1 : 1];",
             configuration,
             |context, unit| {
+                // The builtin's reserved name is no extension diagnostic
+                // even under Deny, as in GCC and Clang.
                 let errors = context.take_pending_errors();
-                assert_eq!(errors.len(), 5, "{configuration:?}: {errors:?}");
-                assert_eq!(
-                    errors
-                        .iter()
-                        .filter(|error| matches!(error, TranslationError::Extension(_)))
-                        .count(),
-                    4
-                );
+                assert_eq!(errors.len(), 1, "{configuration:?}: {errors:?}");
                 let constraint = errors
                     .iter()
                     .find(|e| matches!(e, TranslationError::Semantic(_)))

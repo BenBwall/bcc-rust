@@ -178,12 +178,14 @@ fn added_gnu_forms_obey_the_existing_extension_policy() {
         CStandard,
         ExtensionPolicy,
     };
-    for source in [
-        "typedef union {int n;} U; void f(void){U u=(U)1;}",
-        "int f(double x){return __builtin_signbit(x);}",
-        "int a[3]={[0 ... 2]=1};",
-        "typedef int i __attribute__((mode(QI)));",
-        "struct __attribute__((packed)) S {char c;int n;};",
+    // Builtins and attributes have reserved spellings, which GCC and Clang
+    // never report under `-pedantic`; the other forms are reported.
+    for (source, reported) in [
+        ("typedef union {int n;} U; void f(void){U u=(U)1;}", true),
+        ("int f(double x){return __builtin_signbit(x);}", false),
+        ("int a[3]={[0 ... 2]=1};", true),
+        ("typedef int i __attribute__((mode(QI)));", false),
+        ("struct __attribute__((packed)) S {char c;int n;};", false),
     ] {
         for gnu in [false, true] {
             with_configuration(
@@ -191,8 +193,9 @@ fn added_gnu_forms_obey_the_existing_extension_policy() {
                 CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Deny)
                     .with_gnu_extensions(gnu),
                 |context, _| {
-                    assert!(
+                    assert_eq!(
                         context.error_count() != 0,
+                        reported,
                         "{source} GNU={gnu}: {:?}",
                         context.take_pending_errors()
                     );

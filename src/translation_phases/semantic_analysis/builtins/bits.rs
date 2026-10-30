@@ -67,10 +67,6 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         operation: GenericBit,
         args: &[&'tu Expression<'tu>],
     ) -> ExpressionInfo<'tu> {
-        if let Some(feature) = descriptor.availability.feature {
-            self.context
-                .report_extension(feature, descriptor.spelling, name.source_vectors);
-        }
         let (min, max) = descriptor.arity;
         if !(min..=max).contains(&args.len()) {
             self.error(

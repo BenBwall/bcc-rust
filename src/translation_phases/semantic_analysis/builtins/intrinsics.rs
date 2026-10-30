@@ -45,17 +45,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         };
         match descriptor.type_rule {
             | R::TypesCompatible | R::ChooseExpr => return self.type_generic_builtin(e, b),
-            | R::BitCast | R::ConvertVector => {
-                if let Some(feature) = descriptor.availability.feature {
-                    self.context
-                        .report_extension(feature, "vector builtin", b.source_vectors);
-                }
+            | R::BitCast | R::ConvertVector =>
                 return if descriptor.type_rule == R::BitCast {
                     self.bit_cast_builtin(e, b)
                 } else {
                     self.convert_vector_builtin(e, b)
-                };
-            },
+                },
             | R::Offsetof => return self.type_offsetof(e, b),
             | _ => {},
         }

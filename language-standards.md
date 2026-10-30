@@ -26,8 +26,9 @@ feature matrix, is implemented through the batch pipeline. These limits remain:
   Preprocessing expressions use a 64-bit intmax/uintmax model.
 - C2y is the subset listed under [Decisions](#decisions), not every current or
   future draft change.
-- The unified extension policy reports reserved GNU and MSVC constructs that
-  GCC or Clang sometimes exempt from pedantic diagnostics. Only `-pedantic`,
+- The unified extension policy reports some reserved MSVC constructs that
+  Clang exempts from pedantic diagnostics; the reserved GNU spellings follow
+  the claimed compiler (below). Only `-pedantic`,
   `-Wpedantic` and `-pedantic-errors` select a policy. Pointer diagnostic group
   controls and global `-Werror` are supported as described below;
   `-Wno-pedantic` and other unrelated warning groups are not implemented.
@@ -866,9 +867,9 @@ Preprocessor arithmetic remains the target's 64-bit intmax/uintmax model
 
 `__thread` is a reserved GNU alternate spelling of `_Thread_local`, a keyword
 in every mode, as in GCC and Clang ([GCC Thread-Local
-Storage](https://gcc.gnu.org/onlinedocs/gcc/Thread-Local.html)). Under the
-unified policy `-pedantic` reports it as a GNU extension, which Clang does
-not; Clang's separate pedantic warning for `__thread` written before `static`
+Storage](https://gcc.gnu.org/onlinedocs/gcc/Thread-Local.html)). No
+pedantic policy reports it, in any revision, as GCC and Clang report none;
+Clang's separate pedantic warning for `__thread` written before `static`
 or `extern` is not reproduced. The three spellings mean the same storage
 class, but `__thread` beside `_Thread_local` or `thread_local` is an error and
 the same one repeated is a repeated-specifier warning, as in Clang. With
@@ -1226,6 +1227,21 @@ the diagnostic is reported, so withheld diagnostics are not counted.
   `_Thread_local`/`thread_local`/GNU `__thread` share kinds. Aliases keep their original
   spelling for policy diagnostics, and token contents preserve it for parser
   consumers.
+- Reserved GNU spellings are no extension diagnostic under any policy, since
+  neither GCC nor Clang reports them under `-pedantic(-errors)`: the alternate
+  keywords (`__inline__`, `__const`, `__signed__`, `__restrict__`,
+  `__volatile__`, `__alignof__`, `__typeof__`, `__thread`, even in a revision
+  without the keyword), `__attribute__`, `__asm__` statements and labels,
+  `__real__`, `__imag__`, `__builtin_types_compatible_p`,
+  `__builtin_choose_expr`, `__builtin_convertvector`, `__builtin_bit_cast`,
+  and calls of `__builtin_*` functions. Only `__complex` and `__complex__`
+  report the C99 origin of complex types before C99, as GCC and Clang do,
+  and under every identity but Clang's `__builtin_complex` does too, as GCC
+  reports it. Where the compilers differ, the identity decides: GCC reports
+  `__int128` and `__label__` and Clang does not; Clang reports `__auto_type`
+  and GCC does not. The GNU constructs spelled without a reserved name (case
+  ranges, `?:` with an omitted operand, statement expressions, zero-length
+  arrays and the like) stay reported.
 - GNU alternate keywords map to existing C99 kinds where they exist. `__asm__`
   and reserved `__asm` accept GNU assembly in every mode, and file-scope
   `__asm` is always GNU. With MS assembly enabled, a statement `__asm` followed

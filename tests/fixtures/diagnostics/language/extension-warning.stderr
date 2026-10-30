@@ -1,7 +1,7 @@
-warning: '__const__' is a GNU extension [-Wpedantic]
+warning: '__auto_type' is a GNU extension [-Wpedantic]
  --> <input>:1:14
   |
-1 | #define QUAL __const__
-  |              ^^^^^^^^^
+1 | #define AUTO __auto_type
+  |              ^^^^^^^^^^^
 
 1 warning generated.

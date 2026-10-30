@@ -1,2 +1,2 @@
-#define QUAL __const__
-QUAL int x;
+#define AUTO __auto_type
+AUTO x = 1;

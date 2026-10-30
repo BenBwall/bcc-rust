@@ -71,26 +71,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             },
             // A prototyped call whose immediates `type_call` checks.
             | crate::builtins::TypeRule::X86Signature => return None,
-            | crate::builtins::TypeRule::VectorShuffle => {
-                if let Some(feature) = descriptor.availability.feature {
-                    self.context.report_extension(
-                        feature,
-                        descriptor.spelling,
-                        name.source_vectors,
-                    );
-                }
-                return Some(self.shuffle_vector_builtin(e, arguments));
-            },
-            | crate::builtins::TypeRule::GnuShuffle => {
-                if let Some(feature) = descriptor.availability.feature {
-                    self.context.report_extension(
-                        feature,
-                        descriptor.spelling,
-                        name.source_vectors,
-                    );
-                }
-                return Some(self.gnu_shuffle_builtin(e, arguments));
-            },
+            | crate::builtins::TypeRule::VectorShuffle =>
+                return Some(self.shuffle_vector_builtin(e, arguments)),
+            | crate::builtins::TypeRule::GnuShuffle =>
+                return Some(self.gnu_shuffle_builtin(e, arguments)),
             | crate::builtins::TypeRule::VectorOverload(operation) =>
                 return Some(self.vector_overload(e, name, operation, arguments)),
             | crate::builtins::TypeRule::TypeClassify =>
@@ -114,10 +98,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if builtin == CommonBuiltin::Library {
             return None;
         }
-        if let Some(feature) = descriptor.availability.feature {
-            self.context
-                .report_extension(feature, descriptor.spelling, name.source_vectors);
-        }
+        // A builtin's name is reserved to the implementation (C99 §7.1.3p1),
+        // so neither GCC nor Clang reports a call under `-pedantic`; its
+        // feature only decides whether the name is a builtin at all.
         let args = arguments.as_slice();
         let (min, max) = descriptor.arity;
         if !(min..=max).contains(&args.len()) {
@@ -171,7 +154,23 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | CommonBuiltin::Float(operation, scalar) => {
                 return Some(self.floating_builtin(e, args, operation, scalar));
             },
-            | CommonBuiltin::Complex => return Some(self.complex_builtin(e, args)),
+            | CommonBuiltin::Complex => {
+                // GCC reports the complex type it forms before C99 ("ISO C90
+                // does not support complex types"); Clang does not.
+                // C99: §6.2.5 paragraph 11, p. 34; PDF p. 46.
+                if !matches!(
+                    self.context.configuration.compiler_identity(),
+                    crate::configuration::CompilerIdentity::Clang
+                        | crate::configuration::CompilerIdentity::ClangCl
+                ) {
+                    self.context.report_extension(
+                        crate::configuration::Feature::Complex,
+                        descriptor.spelling,
+                        name.source_vectors,
+                    );
+                }
+                return Some(self.complex_builtin(e, args));
+            },
             | CommonBuiltin::FloatConstant(scalar, nan) => {
                 if nan {
                     // A dynamic tag lowers as a library call. Retain its

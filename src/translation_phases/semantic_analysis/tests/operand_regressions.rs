@@ -377,8 +377,10 @@ fn local_labels_require_unique_declarations_and_definitions() {
             ExtensionPolicy::Warn,
             ExtensionPolicy::Deny,
         ] {
-            let config =
-                CompilerConfiguration::new(CStandard::C17, policy).with_gnu_extensions(gnu);
+            // GCC reports `__label__`; Clang does not.
+            let config = CompilerConfiguration::new(CStandard::C17, policy)
+                .with_gnu_extensions(gnu)
+                .with_compiler_identity(crate::configuration::CompilerIdentity::Gcc);
             with_configuration("void f(void) { __label__ L; }", config, |context, _| {
                 let errors = context.take_pending_errors();
                 assert!(errors.iter().any(|error| matches!(error, TranslationError::Semantic(e) if e.kind == SemanticErrorKind::UndefinedLocalLabel)));

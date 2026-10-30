@@ -128,19 +128,9 @@ fn alignof_aliases_accept_unary_operands_and_preserve_precedence() {
                             assert!(p.parser.syntax.iter::<Expression<'_>>().any(|x| {
                                 matches!(x.kind, ExpressionType::Binary { left_expression, .. } if std::ptr::eq(left_expression, expression))
                             }), "alignment must leave the addition outside its operand: {source}");
-                            assert_eq!(
-                                p.errors.len(),
-                                usize::from(policy != ExtensionPolicy::Allow),
-                                "{:?}",
-                                p.errors
-                            );
-                            assert!(
-                                p.errors
-                                    .iter()
-                                    .all(|x| x.to_string().contains("GNU extension")),
-                                "{:?}",
-                                p.errors
-                            );
+                            // A reserved spelling, which neither GCC nor
+                            // Clang reports under any policy.
+                            assert!(p.errors.is_empty(), "{:?}", p.errors);
                         },
                     );
                 }
@@ -180,19 +170,8 @@ fn reserved_asm_alias_remains_gnu_with_or_without_msvc_assembly() {
                                     .count(),
                                 0
                             );
-                            let extensions = super::extensions(p);
-                            if policy == ExtensionPolicy::Allow {
-                                assert_eq!(extensions, Vec::<String>::new());
-                            } else {
-                                assert_eq!(
-                                    extensions
-                                        .iter()
-                                        .filter(|x| *x == "'__asm' is a GNU extension")
-                                        .count(),
-                                    5
-                                );
-                                assert!(extensions.iter().all(|x| x.contains("GNU extension")));
-                            }
+                            // Reserved spellings, reported under no policy.
+                            assert_eq!(super::extensions(p), Vec::<String>::new());
                         },
                     );
                 }
@@ -261,7 +240,11 @@ fn reserved_gnu_syntax_keeps_ast_under_every_policy_and_mode() {
             ] {
                 with_parse_configuration(
                     source,
-                    CompilerConfiguration::new(standard, policy).with_gnu_extensions(gnu),
+                    // GCC's choices where the compilers differ: `__int128`
+                    // and `__label__` reported, `__auto_type` not.
+                    CompilerConfiguration::new(standard, policy)
+                        .with_gnu_extensions(gnu)
+                        .with_compiler_identity(crate::configuration::CompilerIdentity::Gcc),
                     |p| {
                         assert_eq!(
                             parser_errors(p).count(),
@@ -275,23 +258,31 @@ fn reserved_gnu_syntax_keeps_ast_under_every_policy_and_mode() {
                             assert_eq!(extensions, Vec::<String>::new());
                         } else {
                             for spelling in [
-                                "__attribute__",
                                 "__int128",
                                 "zero-length array",
-                                "__typeof__",
-                                "__auto_type",
                                 "empty struct",
                                 "__label__",
-                                "__asm__",
                                 "label address",
                                 "computed goto",
                                 "nested function",
-                                "__builtin_choose_expr",
                                 "statement expression",
                                 "omitted conditional",
                             ] {
                                 assert!(
                                     extensions.iter().any(|x| x.contains(spelling)),
+                                    "{spelling}: {extensions:?}"
+                                );
+                            }
+                            // Reserved spellings GCC and Clang never report.
+                            for spelling in [
+                                "__attribute__",
+                                "__typeof__",
+                                "__asm__",
+                                "__builtin_choose_expr",
+                                "__auto_type",
+                            ] {
+                                assert!(
+                                    !extensions.iter().any(|x| x.contains(spelling)),
                                     "{spelling}: {extensions:?}"
                                 );
                             }
@@ -441,7 +432,9 @@ fn extension_marker_suppresses_only_its_operand_or_declaration() {
                   z; z ?: 1; }); return ({2;}); }\n";
     with_parse_configuration(
         source,
-        CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Deny),
+        // GCC reports `__int128`; Clang does not.
+        CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Deny)
+            .with_compiler_identity(crate::configuration::CompilerIdentity::Gcc),
         |p| {
             assert_eq!(parser_errors(p).count(), 0, "{:?}", p.errors);
             let extensions = super::extensions(p);
@@ -675,7 +668,8 @@ fn macro_extension_suppression_preserves_unsuppressed_occurrences() {
     let source = "#define GNU __int128\n__extension__ GNU a;\nGNU b;\n";
     with_parse_configuration(
         source,
-        CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Warn),
+        CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Warn)
+            .with_compiler_identity(crate::configuration::CompilerIdentity::Gcc),
         |p| {
             assert_eq!(p.errors.len(), 1, "{:?}", p.errors);
             assert!(p.errors[0].to_string().contains("__int128"));
@@ -694,8 +688,9 @@ fn alternate_keyword_spellings_reuse_iso_syntax_in_every_revision() {
             CompilerConfiguration::new(standard, ExtensionPolicy::Warn)
                 .with_repeated_specifier_warnings(false),
             |p| {
-                assert_eq!(parser_errors(p).count(), 0, "{:?}", p.errors);
-                assert!(p.errors.iter().any(|x| x.to_string().contains("__inline")));
+                // Reserved spellings, which GCC and Clang do not report
+                // even where the revision lacks the keyword.
+                assert!(p.errors.is_empty(), "{standard:?}: {:?}", p.errors);
             },
         );
     }
@@ -881,7 +876,8 @@ fn many_extension_markers_preserve_occurrence_order_and_later_diagnostics() {
     source.push_str("WIDE unsuppressed;\n__extension__ WIDE another;\nWIDE last;\n");
     with_parse_configuration(
         &source,
-        CompilerConfiguration::new(CStandard::C17, ExtensionPolicy::Warn),
+        CompilerConfiguration::new(CStandard::C17, ExtensionPolicy::Warn)
+            .with_compiler_identity(crate::configuration::CompilerIdentity::Gcc),
         |p| {
             assert_eq!(p.items.len(), 4_099);
             assert_eq!(p.errors.len(), 2, "{:?}", p.errors);

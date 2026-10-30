@@ -94,12 +94,14 @@ fn asm_alias_selects_gnu_parentheses_and_msvc_blocks_or_instructions() {
                     if policy == ExtensionPolicy::Allow {
                         assert_eq!(extensions.len(), 0, "{extensions:?}");
                     } else {
+                        // The reserved `__asm` with GNU syntax is no
+                        // extension diagnostic, as in GCC and Clang.
                         assert_eq!(
                             extensions
                                 .iter()
                                 .filter(|x| x.contains("GNU extension"))
                                 .count(),
-                            1
+                            0
                         );
                         assert_eq!(
                             extensions

@@ -1,92 +1,8 @@
-error: '__attribute__' is a GNU extension [-Wpedantic]
- --> <input>:1:1
-  |
-1 | __attribute__((used)) __int128 wide[0];
-  | ^^^^^^^^^^^^^
-
-error: '__int128' is a GNU extension [-Wpedantic]
- --> <input>:1:23
-  |
-1 | __attribute__((used)) __int128 wide[0];
-  |                       ^^^^^^^^
-
-error: '__typeof__' is a GNU extension [-Wpedantic]
- --> <input>:2:1
-  |
-2 | __typeof__(wide) copy; __auto_type value=1; struct Empty {};
-  | ^^^^^^^^^^
-
 error: '__auto_type' is a GNU extension [-Wpedantic]
  --> <input>:2:24
   |
 2 | __typeof__(wide) copy; __auto_type value=1; struct Empty {};
   |                        ^^^^^^^^^^^
-
-error: '__asm__' is a GNU extension [-Wpedantic]
- --> <input>:3:1
-  |
-3 | __asm__("nop"); int symbol __asm__("name");
-  | ^^^^^^^
-
-error: '__asm__' is a GNU extension [-Wpedantic]
- --> <input>:3:28
-  |
-3 | __asm__("nop"); int symbol __asm__("name");
-  |                            ^^^^^^^
-
-error: '__label__' is a GNU extension [-Wpedantic]
- --> <input>:6:5
-  |
-6 |     __label__ L;
-  |     ^^^^^^^^^
-
-error: '__asm__' is a GNU extension [-Wpedantic]
- --> <input>:8:5
-  |
-8 |     __asm__ __volatile__ __inline__("" : [out] "=r"(value) : "r"(value) : "memory");
-  |     ^^^^^^^
-
-error: '__volatile__' is a GNU extension [-Wpedantic]
- --> <input>:8:13
-  |
-8 |     __asm__ __volatile__ __inline__("" : [out] "=r"(value) : "r"(value) : "memory");
-  |             ^^^^^^^^^^^^
-
-error: '__inline__' is a GNU extension [-Wpedantic]
- --> <input>:8:26
-  |
-8 |     __asm__ __volatile__ __inline__("" : [out] "=r"(value) : "r"(value) : "memory");
-  |                          ^^^^^^^^^^
-
-error: '__asm__' is a GNU extension [-Wpedantic]
-  --> <input>:9:5
-   |
- 9 |     __asm__ goto("" : : : : L);
-   |     ^^^^^^^
-
-error: '__builtin_types_compatible_p' is a GNU extension [-Wpedantic]
-  --> <input>:15:8
-   |
-15 |     b+=__builtin_types_compatible_p(int,long)+__builtin_choose_expr(1,2,3);
-   |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-error: '__builtin_choose_expr' is a GNU extension [-Wpedantic]
-  --> <input>:15:47
-   |
-15 |     b+=__builtin_types_compatible_p(int,long)+__builtin_choose_expr(1,2,3);
-   |                                               ^^^^^^^^^^^^^^^^^^^^^
-
-error: '__real__' is a GNU extension [-Wpedantic]
-  --> <input>:16:17
-   |
-16 |     return ({ b+__real__ u.i+__imag__ u.i; }) ?: 2;
-   |                 ^^^^^^^^
-
-error: '__imag__' is a GNU extension [-Wpedantic]
-  --> <input>:16:30
-   |
-16 |     return ({ b+__real__ u.i+__imag__ u.i; }) ?: 2;
-   |                              ^^^^^^^^
 
 error: 'zero-length array' is a GNU extension [-Wpedantic]
  --> <input>:1:37
@@ -154,4 +70,4 @@ error: 'omitted conditional operand' is a GNU extension [-Wpedantic]
 16 |     return ({ b+__real__ u.i+__imag__ u.i; }) ?: 2;
    |                                                ^
 
-26 errors generated.
+12 errors generated.

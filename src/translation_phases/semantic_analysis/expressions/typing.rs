@@ -2469,22 +2469,6 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 .filter(|descriptor| descriptor.syntax == crate::builtins::SyntaxForm::OrdinaryCall)
                 .filter(|descriptor| descriptor.availability.accepted(self.context.configuration))
                 .filter(|descriptor| self.builtin_prototype_available(descriptor, name));
-            // A builtin a system header's macro spells, as the intrinsic
-            // headers' immediate checks do, is no extension of the user's
-            // code: Clang withholds diagnostics in a system macro's body
-            // (`SourceManager::isInSystemMacro`), and GCC's headers call
-            // the builtins themselves.
-            if let Some(descriptor) = descriptor
-                && descriptor.type_rule == crate::builtins::TypeRule::X86Signature
-                && let Some(feature) = descriptor.availability.feature
-                && !(name.source_vectors.length() != 0
-                    && self
-                        .context
-                        .in_system_header(self.context.first_source_vector(name.source_vectors)))
-            {
-                self.context
-                    .report_extension(feature, "x86 builtin", name.source_vectors);
-            }
             let ty = if let Some(descriptor) = descriptor {
                 self.descriptor_type(descriptor)
             } else {
