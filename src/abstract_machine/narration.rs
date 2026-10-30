@@ -27,7 +27,8 @@ use super::{
 
 /// An idea an event's note explains: why the rule it applied matters. A run
 /// explains each topic once, the first time an operation needs it, so the
-/// many reads, stores and constants of a program stay short.
+/// many reads, stores and constants of a program stay short. A note's text
+/// is its topic's, so the text identifies the topic ([`Topic::of`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Topic {
     AbstractMachine,
@@ -55,6 +56,36 @@ pub(super) enum Topic {
 }
 
 impl Topic {
+    const ALL: [Self; 22] = [
+        Self::AbstractMachine,
+        Self::Scope,
+        Self::Lifetime,
+        Self::Indeterminate,
+        Self::Lvalue,
+        Self::LvalueConversion,
+        Self::ArrayDecay,
+        Self::Promotion,
+        Self::Address,
+        Self::PointerArithmetic,
+        Self::Comparison,
+        Self::IntRange,
+        Self::Division,
+        Self::ElementOrder,
+        Self::SequencePoint,
+        Self::ImplementationDefined,
+        Self::Increment,
+        Self::Condition,
+        Self::ByValue,
+        Self::ExitStatus,
+        Self::Undefined,
+        Self::IndeterminateRead,
+    ];
+
+    /// The topic whose text `note` is.
+    pub(super) fn of(note: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|topic| topic.text() == note)
+    }
+
     pub(super) const fn bit(self) -> u32 {
         1 << self as u32
     }
@@ -1314,7 +1345,6 @@ fn explained(mut event: Event, text: &str, cited: &[Clause]) -> Event {
 /// already explained the topic.
 fn noted(mut event: Event, topic: Topic) -> Event {
     event.note = String::from(topic.text());
-    event.topic = Some(topic);
     event
 }
 

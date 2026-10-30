@@ -335,8 +335,12 @@ fn notes_explain_each_topic_once_per_run() {
         .iter()
         .filter(|state| !state.event.note.is_empty())
         .collect();
-    let mut topics: Vec<_> = noted.iter().map(|state| state.event.topic).collect();
+    let mut topics: Vec<&str> = noted
+        .iter()
+        .map(|state| state.event.note.as_str())
+        .collect();
     let all = topics.len();
+    topics.sort_unstable();
     topics.dedup();
     assert_eq!(topics.len(), all, "a topic is explained once");
     let declarations: Vec<&State> = run

@@ -1,9 +1,6 @@
 //! Public observations and compact internal operations for the subset engine.
 
-use super::{
-    clauses::Clause,
-    narration::Topic,
-};
+use super::clauses::Clause;
 
 /// A compiled bounded-subset program, independent of native compiler storage.
 #[derive(Debug, Clone)]
@@ -71,8 +68,6 @@ pub struct Event {
     pub objects:        Vec<usize>,
     /// Whether a full expression ended here (C99 §6.8p4).
     pub sequence_point: bool,
-    /// The idea `note` explains, so a run explains each idea once.
-    pub(super) topic:   Option<Topic>,
 }
 
 impl Event {
@@ -88,7 +83,6 @@ impl Event {
             result: None,
             objects: Vec::new(),
             sequence_point: false,
-            topic: None,
         }
     }
 }

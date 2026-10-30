@@ -75,7 +75,7 @@ impl Machine {
     /// topic, so repeated operations stay short.
     fn explain_once(&mut self) {
         let event = &mut self.state.event;
-        let Some(topic) = event.topic else {
+        let Some(topic) = narration::Topic::of(&event.note) else {
             return;
         };
         if self.explained & topic.bit() == 0 {
