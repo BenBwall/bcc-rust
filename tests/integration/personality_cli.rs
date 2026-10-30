@@ -124,6 +124,16 @@ mod tests {
         ("x86_64-unknown-linux-gnu", "x86_64-linux-gnu")
     };
 
+    /// What the TCC `-run` programs include for `getchar`, `printf`, `puts`
+    /// and `EOF`: the host's `<stdio.h>`, but on Windows declarations, since
+    /// bcc has none of the headers TCC for Windows ships (`win32/include`).
+    const TCC_STDIO: &str = if cfg!(windows) {
+        "int getchar(void);\nint printf(const char *, ...);\nint puts(const char *);\n#define EOF \
+         (-1)\n"
+    } else {
+        "#include <stdio.h>\n"
+    };
+
     /// Expands `names` in the `cl` personality `mode` with `options`.
     fn cl_expand(mode: &str, options: &[&str], names: &str) -> String {
         let directory = Directory::new();
@@ -2666,8 +2676,10 @@ mod tests {
         let directory = Directory::new();
         directory.write(
             "script.c",
-            "#!/usr/bin/tcc -run\nint printf(const char *, ...);\nint main(int argc, char **argv) \
-             {\n  printf(\"%d %s\\n\", argc, argv[1]);\n  return 3;\n}\n",
+            &format!(
+                "#!/usr/bin/tcc -run\n{TCC_STDIO}int main(int argc, char **argv) {{\n  \
+                 printf(\"%d %s\\n\", argc, argv[1]);\n  return 3;\n}}\n"
+            ),
         );
         let output = directory.bcc("--tcc-mode", &["-run", "script.c", "one"]);
         assert_eq!(output.status.code(), Some(3), "{}", stderr(&output));
@@ -2923,19 +2935,18 @@ mod tests {
     #[test]
     fn tcc_run_reads_options_and_arguments_as_tcc_does() {
         let directory = Directory::new();
-        // The programs declare what they call: bcc has none of the headers
-        // TCC for Windows ships, so TCC finds no `<stdio.h>` there.
         directory.write(
             "args.c",
-            "int getchar(void);\nint printf(const char *, ...);\nint main(int argc, char **argv) \
-             {\n  int c, n = 0;\n  while ((c = getchar()) != -1) n++;\n  printf(\"%d %d %s\\n\", \
-             N, n, argv[argc - 1]);\n  return argc;\n}\n",
+            &format!(
+                "{TCC_STDIO}int main(int argc, char **argv) {{\n  int c, n = 0;\n  while ((c = \
+                 getchar()) != EOF) n++;\n  printf(\"%d %d %s\\n\", N, n, argv[argc - 1]);\n  \
+                 return argc;\n}}\n"
+            ),
         );
         directory.write("input.txt", "abc");
         directory.write(
             "name.c",
-            "int puts(const char *);\nint main(int argc, char **argv) { puts(argv[0]); return 0; \
-             }\n",
+            &format!("{TCC_STDIO}int main(int argc, char **argv) {{ puts(argv[0]); return 0; }}\n"),
         );
         // The program's `argv[0]` is the argument TCC stopped at.
         for (args, name) in [
@@ -3001,8 +3012,16 @@ mod tests {
                 unix.then_some("name proto __asm__(#alias)"),
                 "{target}"
             );
-            assert_eq!(defines(&tcc, "__unix__").is_some(), unix, "{target}");
-            assert_eq!(defines(&tcc, "_WIN32").is_some(), !unix, "{target}");
+            assert_eq!(
+                defines(&tcc, "__unix__").as_deref(),
+                unix.then_some("1"),
+                "{target}"
+            );
+            assert_eq!(
+                defines(&tcc, "_WIN32").as_deref(),
+                (!unix).then_some("1"),
+                "{target}"
+            );
         }
         let tcc = macros("--tcc-mode");
         let windows = cfg!(windows);
@@ -3019,8 +3038,11 @@ mod tests {
         ] {
             assert_eq!(defines(&tcc, name), None, "{name}");
         }
-        assert_eq!(defines(&tcc, "__unix__").is_some(), !windows);
-        assert_eq!(defines(&tcc, "_WIN32").is_some(), windows);
+        assert_eq!(
+            defines(&tcc, "__unix__").as_deref(),
+            (!windows).then_some("1")
+        );
+        assert_eq!(defines(&tcc, "_WIN32").as_deref(), windows.then_some("1"));
         let c11 = macros_with("--tcc-mode", &["-std=c11"]);
         assert_eq!(
             defines(&c11, "__STDC_VERSION__").as_deref(),
