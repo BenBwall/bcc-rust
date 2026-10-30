@@ -2731,7 +2731,14 @@ LLD will not infer: the driver asks for it when it compiles such a source,
 or when an input object's `.note.GNU-stack` is executable, as `ld.bfd` gives
 GCC's executables an executable stack. On `x86_64-pc-windows-msvc`, whose
 `__chkstk` clobbers `%r10` before the chain is read, lowering refuses nested
-functions on every back end.
+functions on every back end. On `x86_64-w64-windows-gnu` it refuses the
+address of a nested function: Windows enforces DEP, and GCC's MinGW port
+calls `__enable_execute_stack` for each trampoline, which bcc does not yet
+do; direct calls need no trampoline and compile. An object archive (`.a`)
+is not inspected for an executable `.note.GNU-stack`, so a trampoline in an
+archive member needs `-Wl,-z,execstack`, which `ld.bfd` would add with a
+warning; and the driver's `-z execstack` follows the user's linker options,
+so it overrides a user's `-Wl,-z,noexecstack`, which GCC lets win.
 
 Not yet supported, and refused: a `goto` out of a nested function to a label
 of a function around it (`__label__`), the address of such a label, a use

@@ -94,6 +94,11 @@ pub(crate) enum Construct {
     /// A nested function on `x86_64-pc-windows-msvc`, whose stack probe
     /// `__chkstk` clobbers the `%r10` its static chain arrives in.
     NestedChainTarget,
+    /// The address of a nested function on `x86_64-w64-windows-gnu`, where
+    /// Windows enforces DEP: its trampoline would run from a stack that is
+    /// not executable, which GCC's MinGW port makes so through
+    /// `__enable_execute_stack` at each trampoline.
+    NestedTrampolineTarget,
     /// A nested function's use of a variably modified object of the
     /// function around it, whose bounds that function keeps.
     NestedVariablyModified,
@@ -169,6 +174,8 @@ impl Construct {
             | Self::NamedJump => "named break and continue",
             | Self::NonLocalGoto => "a jump out of a nested function",
             | Self::NestedChainTarget => "nested functions on x86_64-pc-windows-msvc",
+            | Self::NestedTrampolineTarget =>
+                "the address of a nested function on x86_64-w64-windows-gnu",
             | Self::NestedVariablyModified =>
                 "a nested function's use of a variably modified object of its definer",
             | Self::Builtin => "this builtin",

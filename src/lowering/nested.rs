@@ -535,6 +535,12 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
         let Some(definer) = self.unit.nested.definer(func) else {
             return Ok(self.inst(InstData::FuncAddr { func }, Type::Ptr));
         };
+        if self.unit.target == crate::target::Target::WindowsGnu {
+            return Err(LoweringError::unsupported(
+                Construct::NestedTrampolineTarget,
+                source,
+            ));
+        }
         let own = definer == self.record.scope;
         let index = if own {
             self.unit

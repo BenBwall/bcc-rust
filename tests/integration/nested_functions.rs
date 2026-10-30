@@ -255,6 +255,34 @@ mod tests {
             "{}",
             text(&output.stderr)
         );
+        // Windows enforces DEP, and a trampoline would run from a stack that
+        // GCC's MinGW port makes executable through `__enable_execute_stack`.
+        // A direct call needs no trampoline.
+        let address = "__attribute__((noinline)) int apply(int (*f)(void)) { return f(); }\nint \
+                       main(void) { int n = 3; int get(void) { return n; } return apply(get); }\n";
+        for backend in ["--backend=llvm", "--backend=native"] {
+            let output = check(
+                &[
+                    GCC,
+                    "--target=x86_64-w64-windows-gnu",
+                    backend,
+                    "--emit=asm",
+                ],
+                address,
+            );
+            assert!(!output.status.success(), "{backend}");
+            assert!(
+                text(&output.stderr)
+                    .contains("the address of a nested function on x86_64-w64-windows-gnu"),
+                "{backend}: {}",
+                text(&output.stderr)
+            );
+        }
+        let output = check(
+            &[GCC, "--target=x86_64-w64-windows-gnu", "--emit=asm"],
+            "int main(void) { int n = 3; int get(void) { return n; } return get() - 3; }\n",
+        );
+        assert!(output.status.success(), "{}", text(&output.stderr));
         let output = check(
             &[GCC, "--target=wasm32-wasip1", "--emit=asm"],
             "__attribute__((noinline)) int apply(int (*f)(void)) { return f(); }\nint main(void) \
