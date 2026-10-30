@@ -10,6 +10,7 @@ use crate::{
         FloatCompare,
         FloatOperation,
     },
+    configuration::CompilerIdentity,
     float_parsing::LongDouble,
     translation_phases::{
         parsing::syntax::{
@@ -139,6 +140,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         };
         let mut result = Self::expression_result(expression, result_type);
         result.operation_type = Some(operand);
+        if operation == FloatOperation::Issignaling && first.constant == ConstantClass::Arithmetic {
+            if let Some(signaling) = self.signaling_constant(first, operand) {
+                result.integer = Some(Integer::int(i128::from(signaling)));
+                result.ice = true;
+                result.constant = ConstantClass::Arithmetic;
+            }
+            return result;
+        }
         if classes
             .iter()
             .chain(args)
@@ -166,6 +175,38 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             }
         }
         result
+    }
+
+    /// Whether the constant `info` of the real floating type `operand` is a
+    /// signaling NaN. The value is read as it stands, not rounded to
+    /// `operand` again, which would quiet it: `__builtin_nans` and its
+    /// negation stay signaling. An x87 `long double` follows the claimed
+    /// compiler for the encodings the format leaves unsupported (a pseudo-NaN
+    /// or pseudo-infinity, with the explicit integer bit clear, and an
+    /// unnormal): GCC calls them signaling, as glibc's `issignaling` does,
+    /// and Clang does not.
+    /// C23: §7.12.3.8, pp. 240-241; PDF pp. 253-254 (N3220).
+    fn signaling_constant(&self, info: ExpressionInfo<'tu>, operand: TypeId) -> Option<bool> {
+        if self.binary128_type(operand) {
+            let value = self.binary128_value(info)?.real;
+            return Some(value.is_nan() && value.to_bits() & 1 << 111 == 0);
+        }
+        let TypeKind::Scalar(scalar) = self.types.nodes[self.types.non_atomic(operand).index]
+        else {
+            return None;
+        };
+        let (_, exponent, significand) = self.floating_value(info)?.real.x87_parts()?;
+        let quiet_nan_bits = significand >> 62;
+        let nan_fraction = significand & ((1 << 62) - 1) != 0;
+        let signaling = exponent == 0x7FFF && quiet_nan_bits == 0b10 && nan_fraction;
+        let unsupported = self.floating_precision(scalar) == Some(3)
+            && exponent != 0
+            && significand >> 63 == 0
+            && !matches!(
+                self.context.configuration.compiler_identity(),
+                CompilerIdentity::Clang | CompilerIdentity::ClangCl
+            );
+        Some(signaling || unsupported)
     }
 
     /// `__builtin_isless(x, y)` and its siblings: both operands are real,
@@ -350,10 +391,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             } else {
                 3
             })?,
-            // The quiet bit is the significand's highest fraction bit in
-            // every format, bit 62 of the x87 carrier.
-            | FloatOperation::Issignaling => i128::from(nan && significand & 1 << 62 == 0),
-            | FloatOperation::Copysign | FloatOperation::Compare(_) => return None,
+            // Folded apart, from the value before rounding.
+            | FloatOperation::Issignaling
+            | FloatOperation::Copysign
+            | FloatOperation::Compare(_) => return None,
         })
     }
 }

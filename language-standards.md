@@ -155,11 +155,19 @@ this identity they reach the checked functions. Its `math.h` also defines
 `isgreater`, `isless`, `isunordered` and their siblings (C99 §7.12.14) as
 `__builtin_isgreater` and the like, and `issignaling` and C23's `roundeven`
 as `__builtin_issignaling` and `__builtin_roundeven`; bcc provides those
-builtins under every identity, with GCC's `__builtin_iseqsig` (whose
-"invalid" exception for a NaN operand bcc does not raise). The comparisons
-take two real operands, at least one floating, in their common real type, as
-GCC and Clang check them, and fold constant operands. `msvc` (`cl.exe`)
-removes the GNU and Clang macros and the inline-semantics macro, and defines `_MT` and
+builtins under every identity, and GCC's `__builtin_iseqsig` under the GCC
+identity only (`Feature::GccOnlyBuiltins`; bcc does not raise its "invalid"
+exception for a NaN operand). The comparisons take two real operands, at
+least one floating, in their common real type, as GCC and Clang check them,
+fold constant operands, and raise no "invalid" for a quiet NaN, binary128
+included, as GCC compares it (Clang 23 calls libgcc's signaling
+`__lttf2` there). `__builtin_issignaling` folds a constant from its value
+before any rounding, so `__builtin_nans("")` and its negation are
+signaling. For an x87 `long double`, the encodings the format leaves
+unsupported (pseudo-NaN, pseudo-infinity, unnormal) are signaling except
+under the Clang identities, as GCC and Clang classify them. `msvc`
+(`cl.exe`) removes the GNU and Clang macros and the inline-semantics macro,
+and defines `_MT` and
 `_MSVC_TRADITIONAL` `0` (bcc's preprocessor is conforming, like `cl
 /Zc:preprocessor`); `_MSC_VER` still needs `-fms-extensions` on the MSVC
 target, which the `cl` personality selects. `clang-cl` removes the GNU macros
@@ -2803,7 +2811,8 @@ optional result for zero), and the `__builtin_stdc_*` forms of C23's
 `__builtin_stdc_rotate_right`, exist for every identity under `GnuBuiltins`,
 as GCC 15 and Clang 23 provide them. GCC 14's `__builtin_parityg`,
 `__builtin_ffsg` and `__builtin_clrsbg` exist for the GCC identity only
-(`Feature::GccOnlyBuiltins`, which also gates `__builtin_shuffle`), as Clang 23 lacks them. Each computes at its
+(`Feature::GccOnlyBuiltins`, which also gates `__builtin_shuffle` and
+`__builtin_iseqsig`), as Clang 23 lacks them. Each computes at its
 operand's width, for every unsigned integer type up to `unsigned __int128`
 and every `unsigned _BitInt(N)`. The registry shard is `src/builtins/bits.rs`;
 `semantic_analysis/builtins/bits.rs` types, checks and folds the calls.

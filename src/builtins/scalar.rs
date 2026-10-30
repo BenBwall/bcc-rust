@@ -1795,6 +1795,11 @@ const fn descriptor(
             SyntaxForm::OrdinaryCall,
         ),
     };
+    // Clang 23 has no `__builtin_iseqsig`.
+    let feature = match id {
+        | Id::Iseqsig => Some(crate::configuration::Feature::GccOnlyBuiltins),
+        | _ => feature,
+    };
     BuiltinDescriptor {
         id,
         spelling,

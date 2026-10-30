@@ -256,10 +256,26 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     value
                 }
             });
+            // Negating a NaN only flips its sign (C99 Annex F.3); rounding it
+            // again would quiet a signaling one.
+            let nan = |value: &super::super::Floating| {
+                value
+                    .real
+                    .x87_parts()
+                    .is_some_and(|(_, exponent, significand)| {
+                        exponent == 0x7FFF && significand << 1 != 0
+                    })
+            };
             let value = if half {
                 value.map(|value| self.half_result(value, &mut info))
             } else {
-                value.and_then(|value| self.round_floating(value, ty))
+                value.and_then(|value| {
+                    if nan(&value) {
+                        Some(value)
+                    } else {
+                        self.round_floating(value, ty)
+                    }
+                })
             };
             info.set_floating(value);
         }
