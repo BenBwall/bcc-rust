@@ -91,6 +91,9 @@ pub(crate) enum Construct {
     /// A `goto` from a nested function to a label of a function around
     /// it. GNU extension: GCC manual, "Nested Functions".
     NonLocalGoto,
+    /// A nested function on `x86_64-pc-windows-msvc`, whose stack probe
+    /// `__chkstk` clobbers the `%r10` its static chain arrives in.
+    NestedChainTarget,
     /// A nested function's use of a variably modified object of the
     /// function around it, whose bounds that function keeps.
     NestedVariablyModified,
@@ -165,6 +168,7 @@ impl Construct {
             | Self::StructuredExceptionHandling => "structured exception handling",
             | Self::NamedJump => "named break and continue",
             | Self::NonLocalGoto => "a jump out of a nested function",
+            | Self::NestedChainTarget => "nested functions on x86_64-pc-windows-msvc",
             | Self::NestedVariablyModified =>
                 "a nested function's use of a variably modified object of its definer",
             | Self::Builtin => "this builtin",

@@ -1095,11 +1095,9 @@ impl<'tu> Parser<'_, 'tu, '_> {
                         suppressed |= item.kind == SpecifierExtensionKind::ExtensionMarker;
                         extension = item.next;
                     }
-                    if self.context.configuration.nested_function_rules()
-                        == crate::configuration::RuleSet::Clang
-                    {
+                    if let Some(message) = self.context.configuration.nested_function_refusal() {
                         let token = self.cursor.current();
-                        self.report(ParserErrorType::NestedFunctionDefinition, token);
+                        self.report(ParserErrorType::NestedFunctionDefinition(message), token);
                     } else if !suppressed && let Some(token) = self.cursor.current() {
                         self.extension(
                             Feature::NestedFunctions,

@@ -123,6 +123,16 @@ pub(super) fn link(args: &Cli, inputs: &[Input<'_>]) -> Result<i32, MainError> {
     if status != 0 {
         return Ok(status);
     }
+    // As GCC's driver leaves it to `ld.bfd`, which gives the executable an
+    // executable stack when an input object's note asks for one, though
+    // LLD refuses such an object unless told: trampolines of GNU nested
+    // functions run on the stack.
+    executable_stack |= inputs.iter().any(|input| match input {
+        | Input::Link(option) => needs_executable_stack(Path::new(option)),
+        | _ => false,
+    }) || temporaries
+        .iter()
+        .any(|object| needs_executable_stack(object.path()));
     let mut temporaries = temporaries.iter();
     let ordered = inputs.iter().map(|input| match input {
         | Input::Link(option) => *option,
@@ -252,4 +262,61 @@ pub(super) fn warn_unused_assembler_options(args: &Cli) {
             );
         }
     }
+}
+
+/// Whether `path` is an ELF64 little-endian object whose
+/// `.note.GNU-stack` section is executable (`SHF_EXECINSTR`), as GCC marks
+/// an object whose trampolines run on the stack. Anything unreadable or
+/// otherwise, such as an archive or a linker option, is not.
+/// GNU extension: GCC manual, "Nested Functions".
+fn needs_executable_stack(path: &Path) -> bool {
+    use std::io::{
+        Read,
+        Seek,
+        SeekFrom,
+    };
+    const NAME: &[u8; 16] = b".note.GNU-stack\0";
+    const SHF_EXECINSTR: u64 = 4;
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return false;
+    };
+    let mut read_at = |offset: u64, buffer: &mut [u8]| {
+        file.seek(SeekFrom::Start(offset))
+            .and_then(|_| file.read_exact(buffer))
+            .is_ok()
+    };
+    let mut header = [0_u8; 64];
+    if !read_at(0, &mut header) || header[..6] != *b"\x7fELF\x02\x01" {
+        return false;
+    }
+    let word = |bytes: &[u8], at: usize| {
+        u64::from_le_bytes(bytes[at..at + 8].try_into().expect("eight bytes"))
+    };
+    let half = |bytes: &[u8], at: usize| u64::from(u16::from_le_bytes([bytes[at], bytes[at + 1]]));
+    let (sections, count, names) = (
+        word(&header, 0x28),
+        half(&header, 0x3C),
+        half(&header, 0x3E),
+    );
+    if half(&header, 0x3A) != 64 || names >= count {
+        return false;
+    }
+    let mut section = [0_u8; 64];
+    if !read_at(sections + 64 * names, &mut section) {
+        return false;
+    }
+    let strings = word(&section, 0x18);
+    (0..count).any(|index| {
+        let mut name = [0_u8; 16];
+        read_at(sections + 64 * index, &mut section)
+            && word(&section, 8) & SHF_EXECINSTR != 0
+            && read_at(
+                strings
+                    + u64::from(u32::from_le_bytes(
+                        section[..4].try_into().expect("four bytes"),
+                    )),
+                &mut name,
+            )
+            && name == *NAME
+    })
 }

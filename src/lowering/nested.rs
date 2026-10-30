@@ -4,18 +4,25 @@
 //! Each nested function is an internal IR function whose last fixed
 //! parameter is its static chain ([`crate::ir::Signature::chain`]): the
 //! address of the chain record of the function that defines it. A function
-//! with nested definitions builds its record on entry, one pointer word for
-//! its own static chain (null at file scope) and then the address of each of
-//! its objects a nested function uses, so a use reaches an object any number
-//! of functions out by following the first words. Definitions are lowered
-//! innermost first ([`definition_order`]), so a record's layout is complete
-//! before the function that builds it is lowered, and the objects it points
-//! to live in memory. A direct call passes the record as the chain; taking a
-//! nested function's address makes a trampoline in the frame of the function
-//! that takes it, which calls the nested function with that chain.
+//! with nested definitions builds its record on entry: word 0 holds its own
+//! static chain (null at file scope), word 1 the address of its trampoline
+//! area (or null), and the later words the address of each of its objects a
+//! nested function uses, so a use reaches an object any number of functions
+//! out by following the first words. Definitions are lowered innermost first
+//! ([`definition_order`]), so a record's layout, its trampolines and the
+//! objects it points to, which then live in memory, are known before the
+//! function that builds it is lowered. A direct call passes the record as the
+//! chain.
+//!
+//! Taking a nested function's address gives a trampoline in the frame of the
+//! function that defines it, as GCC builds one, which calls the nested
+//! function with that function's record. The definer makes the trampolines
+//! that functions inside it use on entry, once per activation, in its
+//! trampoline area; one only the definer itself uses is a slot of its own,
+//! made where the definer takes the address.
 //!
 //! For `int f(int n) { int g(void) { return n; } return g(); }`, `g` reads
-//! `n` through word 1 of `f`'s record, and `f`'s call of `g` passes the
+//! `n` through word 2 of `f`'s record, and `f`'s call of `g` passes the
 //! record as `g`'s last argument.
 //!
 //! GNU extension: GCC manual, "Nested Functions".
@@ -53,12 +60,16 @@ use crate::{
             FunctionRecord,
             Linkage,
             ScopeKind,
+            SemanticTranslationUnit,
         },
     },
-    util::bump::{
-        ArenaMap,
-        ArenaVec,
-        Bump,
+    util::{
+        bump::{
+            ArenaMap,
+            ArenaVec,
+            Bump,
+        },
+        string_cache::StringCacheId,
     },
 };
 
@@ -80,25 +91,71 @@ pub(super) fn definition_order<'a, 'tu>(
 pub(super) struct NestedFunctions<'a> {
     /// The IR function of each nested definition, by its binding.
     pub(super) functions: ArenaMap<'a, usize, FuncId>,
+    /// The same, by the scope and name of the definition, which a GNU
+    /// `auto` declaration before it shares.
+    by_name:              ArenaMap<'a, (usize, StringCacheId), FuncId>,
     /// The function scope that defines each nested function.
     definers:             ArenaMap<'a, FuncId, usize>,
-    /// The record word of each object nested functions use, by the
-    /// function scope it belongs to and its binding: word 0 is the chain.
-    words:                ArenaMap<'a, (usize, usize), u32>,
-    /// The objects of each function scope that nested functions use.
-    counts:               ArenaMap<'a, usize, u32>,
     /// The function scopes with nested definitions, which build a record.
     pub(super) parents:   ArenaMap<'a, usize, ()>,
+    /// The record word of each object nested functions use, by the
+    /// function scope it belongs to and its binding.
+    words:                ArenaMap<'a, (usize, usize), u32>,
+    /// Each function scope's captured objects and record trampolines.
+    lists:                ArenaMap<'a, usize, Lists>,
+    /// The captured objects, `(binding, word, next)`, linked per scope.
+    captures:             ArenaVec<'a, (usize, u32, u32)>,
+    /// The record trampolines, `(function, next)`, linked per scope.
+    trampolines:          ArenaVec<'a, (FuncId, u32)>,
+    /// The index of each record trampoline in its scope's area.
+    trampoline_indexes:   ArenaMap<'a, (usize, FuncId), u32>,
+    /// The binding of each function definition at file scope, by its
+    /// function scope.
+    outermost:            ArenaMap<'a, usize, usize>,
+}
+
+/// A function scope's captured objects as `(word, binding)` and its
+/// record trampolines as `(index, function)`.
+type Layout<'s> = (ArenaVec<'s, (u32, usize)>, ArenaVec<'s, (u32, FuncId)>);
+
+/// The heads and lengths of one function scope's lists in
+/// [`NestedFunctions`].
+#[derive(Clone, Copy)]
+struct Lists {
+    captures:         u32,
+    capture_count:    u32,
+    trampolines:      u32,
+    trampoline_count: u32,
+}
+
+impl Lists {
+    const EMPTY: Self = Self {
+        captures:         u32::MAX,
+        capture_count:    0,
+        trampolines:      u32::MAX,
+        trampoline_count: 0,
+    };
 }
 
 impl<'a> NestedFunctions<'a> {
-    pub(super) fn new(arena: &'a Bump) -> Self {
+    pub(super) fn new(arena: &'a Bump, sema: &SemanticTranslationUnit<'_>) -> Self {
+        let mut outermost = ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, arena);
+        for record in sema.functions {
+            if let Some(binding) = record.binding {
+                _ = outermost.insert(record.scope, binding);
+            }
+        }
         Self {
             functions: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, arena),
-            definers:  ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, arena),
-            words:     ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, arena),
-            counts:    ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, arena),
-            parents:   ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, arena),
+            by_name: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, arena),
+            definers: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, arena),
+            parents: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, arena),
+            words: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, arena),
+            lists: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, arena),
+            captures: ArenaVec::new_in(arena),
+            trampolines: ArenaVec::new_in(arena),
+            trampoline_indexes: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, arena),
+            outermost,
         }
     }
 
@@ -108,16 +165,55 @@ impl<'a> NestedFunctions<'a> {
     }
 
     /// The record word that holds the address of `binding`, an object of
-    /// the function scope `owner`, assigned on first use.
+    /// the function scope `owner`, assigned on first use after the chain
+    /// and trampoline-area words.
     fn word(&mut self, owner: usize, binding: usize) -> u32 {
         if let Some(&word) = self.words.get(&(owner, binding)) {
             return word;
         }
-        let count = self.counts.entry(owner).or_insert(0);
-        *count += 1;
-        let word = *count;
+        let lists = self.lists.entry(owner).or_insert(Lists::EMPTY);
+        let word = lists.capture_count + 2;
+        let index = u32::try_from(self.captures.len()).expect("captures fit u32");
+        self.captures.push((binding, word, lists.captures));
+        lists.captures = index;
+        lists.capture_count += 1;
         _ = self.words.insert((owner, binding), word);
         word
+    }
+
+    /// The index in `owner`'s trampoline area of the trampoline of `func`,
+    /// assigned on first use.
+    fn trampoline(&mut self, owner: usize, func: FuncId) -> u32 {
+        if let Some(&index) = self.trampoline_indexes.get(&(owner, func)) {
+            return index;
+        }
+        let lists = self.lists.entry(owner).or_insert(Lists::EMPTY);
+        let index = lists.trampoline_count;
+        let link = u32::try_from(self.trampolines.len()).expect("trampolines fit u32");
+        self.trampolines.push((func, lists.trampolines));
+        lists.trampolines = link;
+        lists.trampoline_count += 1;
+        _ = self.trampoline_indexes.insert((owner, func), index);
+        index
+    }
+
+    /// `owner`'s captured objects as `(word, binding)` and its record
+    /// trampolines as `(index, function)`, in `arena`.
+    fn layout<'s>(&self, owner: usize, arena: &'s Bump) -> Layout<'s> {
+        let lists = self.lists.get(&owner).copied().unwrap_or(Lists::EMPTY);
+        let mut captures = ArenaVec::with_capacity_in(lists.capture_count as usize, arena);
+        let mut next = lists.captures;
+        while let Some(&(binding, word, link)) = self.captures.get(next as usize) {
+            captures.push((word, binding));
+            next = link;
+        }
+        let mut trampolines = ArenaVec::with_capacity_in(lists.trampoline_count as usize, arena);
+        let mut next = lists.trampolines;
+        while let Some(&(func, link)) = self.trampolines.get(next as usize) {
+            trampolines.push((self.trampoline_indexes[&(owner, func)], func));
+            next = link;
+        }
+        (captures, trampolines)
     }
 }
 
@@ -167,6 +263,14 @@ impl<'tu> Unit<'_, 'tu, '_> {
         let definer = self
             .enclosing_function(record.scope)
             .ok_or_else(|| LoweringError::missing("a nested function has no definer", source))?;
+        // MSVC's stack probe `__chkstk` clobbers `%r10`, where the static
+        // chain arrives, before the prologue has saved it.
+        if self.target == crate::target::Target::WindowsMsvc {
+            return Err(LoweringError::unsupported(
+                Construct::NestedChainTarget,
+                source,
+            ));
+        }
         // The bounds of a variably modified type are its definer's, which
         // GCC evaluates where the definition is.
         if self
@@ -193,6 +297,11 @@ impl<'tu> Unit<'_, 'tu, '_> {
             .module
             .declare_function(name, signature, crate::ir::Linkage::Internal);
         _ = self.nested.functions.insert(binding, func);
+        let data = self.sema.bindings[binding];
+        _ = self
+            .nested
+            .by_name
+            .insert((data.scope, data.name.name), func);
         _ = self.nested.definers.insert(func, definer);
         _ = self.nested.parents.insert(definer, ());
         Ok(func)
@@ -246,13 +355,9 @@ impl<'tu> Unit<'_, 'tu, '_> {
             return None;
         }
         self.nested
-            .functions
-            .iter()
-            .find(|&(&definition, _)| {
-                let other = self.sema.bindings[definition];
-                other.name.name == data.name.name && other.scope == data.scope
-            })
-            .map(|(_, &func)| func)
+            .by_name
+            .get(&(data.scope, data.name.name))
+            .copied()
     }
 
     /// Whether `record` is a nested function inside a reachable function
@@ -266,12 +371,11 @@ impl<'tu> Unit<'_, 'tu, '_> {
             scope = outer;
         }
         nested
-            && self.sema.functions.iter().any(|outer| {
-                outer.scope == scope
-                    && outer
-                        .binding
-                        .is_some_and(|binding| self.reachable.contains(&binding))
-            })
+            && self
+                .nested
+                .outermost
+                .get(&scope)
+                .is_some_and(|binding| self.reachable.contains(binding))
     }
 
     /// Whether the function scope `scope` builds a chain record: it
@@ -283,36 +387,51 @@ impl<'tu> Unit<'_, 'tu, '_> {
 
 impl FunctionLowerer<'_, '_, '_, '_, '_> {
     /// Builds the function's chain record on entry, after its parameters:
-    /// its own static chain, then the address of each object its nested
-    /// functions use, all of which live in stack slots.
+    /// its own static chain, its trampoline area, made here once per
+    /// activation, and the address of each object its nested functions use,
+    /// which lives in memory.
     pub(super) fn build_chain_record(&mut self, chain: Option<Value>) -> Result<(), LoweringError> {
         let scope = self.record.scope;
         let source = self.record.syntax.source_vectors;
         if !self.unit.builds_record(scope) {
             return Ok(());
         }
-        let count = self.unit.nested.counts.get(&scope).copied().unwrap_or(0);
-        let mut objects = ArenaVec::new_in(self.scratch);
-        objects.extend(
-            self.unit
-                .nested
-                .words
-                .iter()
-                .filter(|((owner, _), _)| *owner == scope)
-                .map(|(&(_, binding), &word)| (word, binding)),
-        );
-        objects.sort_unstable();
-        let record = self.fresh_object(8 * (u64::from(count) + 1), WORD, source)?;
+        let (objects, trampolines) = self.unit.nested.layout(scope, self.scratch);
+        let words = 2 + objects.len() as u64;
+        let record = self.fresh_object(8 * words, WORD, source)?;
         let chain = chain.unwrap_or_else(|| self.nullary(Opcode::Null));
         self.store_pointer(chain, record);
-        for (word, binding) in objects {
+        let area = if trampolines.is_empty() {
+            self.nullary(Opcode::Null)
+        } else {
+            let area = self.fresh_object(
+                TRAMPOLINE_SIZE * trampolines.len() as u64,
+                Align::TRAMPOLINE,
+                source,
+            )?;
+            for &(index, func) in &trampolines {
+                let storage = self.offset_address(area, TRAMPOLINE_SIZE * u64::from(index));
+                self.make_trampoline(storage, func, record);
+            }
+            area
+        };
+        let at = self.offset_address(record, 8);
+        self.store_pointer(area, at);
+        for &(word, binding) in &objects {
             let source = self.unit.sema.bindings[binding].name.source_vectors;
-            let address = match self.local(binding, source)? {
+            // A parameter is in place already, where it arrived or in a
+            // copy; any other object gets its slot now.
+            let local = match self.locals.get(&binding).copied() {
+                | Some(local) => local,
+                | None => self.local(binding, source)?,
+            };
+            let address = match local {
                 | super::work::Local::Slot(slot) =>
                     self.inst(InstData::StackAddr { slot }, Type::Ptr),
-                | _ =>
-                    return Err(LoweringError::unsupported(
-                        Construct::NestedVariablyModified,
+                | super::work::Local::Address(address) => address,
+                | super::work::Local::Variable(_) =>
+                    return Err(LoweringError::missing(
+                        "a captured object is not in memory",
                         source,
                     )),
             };
@@ -403,9 +522,11 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
         Ok(record)
     }
 
-    /// The address of the nested function `func`: a trampoline in this
-    /// function's frame, made again at each use, that calls it with the
-    /// record of the function that defines it.
+    /// The address of the nested function `func`: a trampoline in the frame
+    /// of the function that defines it, which calls it with that function's
+    /// record. A function inside the definer uses the definer's trampoline
+    /// area, which the definer fills on entry; the definer uses that one
+    /// too if there is one, or else a slot of its own, made at each use.
     pub(super) fn nested_address(
         &mut self,
         func: FuncId,
@@ -414,17 +535,48 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
         let Some(definer) = self.unit.nested.definer(func) else {
             return Ok(self.inst(InstData::FuncAddr { func }, Type::Ptr));
         };
-        let chain = self.record_of(definer, source)?;
-        let slot = match self.trampolines.get(&func) {
-            | Some(&slot) => slot,
-            | None => {
-                let size = u32::try_from(TRAMPOLINE_SIZE).expect("a trampoline is small");
-                let slot = self.object_slot(size, Align::TRAMPOLINE);
-                _ = self.trampolines.insert(func, slot);
-                slot
-            },
+        let own = definer == self.record.scope;
+        let index = if own {
+            self.unit
+                .nested
+                .trampoline_indexes
+                .get(&(definer, func))
+                .copied()
+        } else {
+            Some(self.unit.nested.trampoline(definer, func))
         };
-        let storage = self.inst(InstData::StackAddr { slot }, Type::Ptr);
+        let storage = if let Some(index) = index {
+            let record = self.record_of(definer, source)?;
+            let at = self.offset_address(record, 8);
+            let area = self.load_pointer(at);
+            self.offset_address(area, TRAMPOLINE_SIZE * u64::from(index))
+        } else {
+            let slot = match self.trampolines.get(&func) {
+                | Some(&slot) => slot,
+                | None => {
+                    let size = u32::try_from(TRAMPOLINE_SIZE).expect("a trampoline is small");
+                    let slot = self.object_slot(size, Align::TRAMPOLINE);
+                    _ = self.trampolines.insert(func, slot);
+                    slot
+                },
+            };
+            let storage = self.inst(InstData::StackAddr { slot }, Type::Ptr);
+            let record = self.record_of(definer, source)?;
+            self.make_trampoline(storage, func, record);
+            storage
+        };
+        Ok(self.inst(
+            InstData::Unary {
+                opcode: Opcode::AdjustTrampoline,
+                ty:     Type::Ptr,
+                arg:    storage,
+            },
+            Type::Ptr,
+        ))
+    }
+
+    /// Writes the trampoline at `storage` that calls `func` with `chain`.
+    fn make_trampoline(&mut self, storage: Value, func: FuncId, chain: Value) {
         let target = self.inst(InstData::FuncAddr { func }, Type::Ptr);
         _ = self.draft.push(
             self.memory_op(InstData::MemoryRange {
@@ -435,14 +587,6 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
             }),
             None,
         );
-        Ok(self.inst(
-            InstData::Unary {
-                opcode: Opcode::AdjustTrampoline,
-                ty:     Type::Ptr,
-                arg:    storage,
-            },
-            Type::Ptr,
-        ))
     }
 
     /// The static chain a call of the nested function `func` passes, if it

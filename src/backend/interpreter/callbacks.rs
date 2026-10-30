@@ -302,10 +302,10 @@ impl Machine<'_, '_, '_> {
         b: RuntimeValue,
         host: &mut dyn Host,
     ) -> Result<Compared, Fault> {
-        let func = self.memory.function_at(function)?;
-        let func = self.module.function_definition(func);
+        let (func, chain) = self.callee(function)?;
         let signature = self.module.function_signature(func);
-        if signature.params != [Type::Ptr, Type::Ptr]
+        let own = signature.params.len() - usize::from(chain.is_some());
+        if signature.params[..own] != [Type::Ptr, Type::Ptr]
             || signature.result != Some(Type::I32)
             || self.module.function(func).body.is_none()
         {
@@ -314,7 +314,7 @@ impl Machine<'_, '_, '_> {
         self.arguments.clear();
         self.argument_types.clear();
         self.argument_abis.clear();
-        for value in [a, b] {
+        for value in [a, b].into_iter().chain(chain) {
             self.arguments.push(value);
             self.argument_types.push(Type::Ptr);
             self.argument_abis.push(None);

@@ -2363,7 +2363,7 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             pack_copies: ArenaVec::new_in(tables),
             pack_copy_index: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, tables),
             pack_addresses: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, tables),
-            nested: super::nested::NestedFunctions::new(tables),
+            nested: super::nested::NestedFunctions::new(tables, sema),
         })
     }
 }

@@ -283,6 +283,20 @@ impl<'m, 'ir> Machine<'m, 'ir, '_> {
     /// including host functions and unused parameters. A complex descriptor
     /// represents a scalar value: only its meaningful component bytes are
     /// covered. Ordinary aggregate pointers constrain only the address.
+    /// The defined function a library callback or exit handler `pointer`
+    /// names, with the static chain if a trampoline passes one: a GNU
+    /// nested function's address is its trampoline.
+    pub(super) fn callee(
+        &self,
+        pointer: RuntimeValue,
+    ) -> Result<(FuncId, Option<RuntimeValue>), Fault> {
+        if let Some((func, chain)) = self.memory.trampoline_at(pointer) {
+            return Ok((func, Some(chain)));
+        }
+        let func = self.memory.function_at(pointer)?;
+        Ok((self.module.function_definition(func), None))
+    }
+
     pub(super) fn check_arguments(&self, signature: Signature<'_>) -> Result<(), Fault> {
         for (index, &arg) in self.arguments.iter().enumerate() {
             self.check_argument(signature, index, arg)?;

@@ -67,15 +67,13 @@ pub(crate) const FUNCTIONS: [&str; 7] = [
 
 /// A registered exit handler.
 #[derive(Clone, Copy, Debug)]
-#[expect(
-    variant_size_differences,
-    reason = "A short list of handlers; boxing the argument would allocate."
-)]
 enum Handler {
-    /// `atexit` or `at_quick_exit`: called without arguments.
-    Plain(FuncId),
-    /// `on_exit`: called with the exit status and this argument.
-    WithStatus(FuncId, RuntimeValue),
+    /// `atexit` or `at_quick_exit`: called without arguments, but for the
+    /// static chain of a nested function a trampoline names.
+    Plain(FuncId, Option<RuntimeValue>),
+    /// `on_exit`: called with the exit status and this argument, and the
+    /// static chain if any.
+    WithStatus(FuncId, RuntimeValue, Option<RuntimeValue>),
     /// The module's destructors, which glibc's dynamic linker runs from the
     /// handler it registers first.
     Destructors,
@@ -130,15 +128,14 @@ impl Machine<'_, '_, '_> {
                     if types != [Type::Ptr, Type::Ptr] {
                         return Err(UbKind::SignatureMismatch.into());
                     }
-                    Handler::WithStatus(
-                        self.handler(argument(0), &[Type::I32, Type::Ptr])?,
-                        argument(1),
-                    )
+                    let (func, chain) = self.handler(argument(0), &[Type::I32, Type::Ptr])?;
+                    Handler::WithStatus(func, argument(1), chain)
                 } else {
                     if types != [Type::Ptr] {
                         return Err(UbKind::SignatureMismatch.into());
                     }
-                    Handler::Plain(self.handler(argument(0), &[])?)
+                    let (func, chain) = self.handler(argument(0), &[])?;
+                    Handler::Plain(func, chain)
                 };
                 if name == "at_quick_exit" {
                     self.exit.quick.push(handler);
@@ -161,18 +158,23 @@ impl Machine<'_, '_, '_> {
 
     /// The function `pointer` names, which a registration makes an exit
     /// handler: one the program defines, whose parameters are `parameters`
-    /// and which returns nothing.
-    fn handler(&self, pointer: RuntimeValue, parameters: &[Type]) -> Result<FuncId, Fault> {
-        let func = self.memory.function_at(pointer)?;
-        let func = self.module.function_definition(func);
+    /// and which returns nothing, with the static chain a trampoline passes
+    /// it.
+    fn handler(
+        &self,
+        pointer: RuntimeValue,
+        parameters: &[Type],
+    ) -> Result<(FuncId, Option<RuntimeValue>), Fault> {
+        let (func, chain) = self.callee(pointer)?;
         let signature = self.module.function_signature(func);
         if self.module.function(func).body.is_none() {
             return Err(Fault::Unsupported(Unsupported::HostExitHandler));
         }
-        if signature.params != parameters || signature.result.is_some() {
+        let own = signature.params.len() - usize::from(chain.is_some());
+        if signature.params[..own] != *parameters || signature.result.is_some() {
             return Err(UbKind::SignatureMismatch.into());
         }
-        Ok(func)
+        Ok((func, chain))
     }
 
     /// How the program is ending.
@@ -212,15 +214,12 @@ impl Machine<'_, '_, '_> {
                 // A destructor that exits ends the destructors, and glibc
                 // goes on with the handlers registered since.
                 | Handler::Destructors => self.run_destructors(destructors, host)?,
-                | Handler::Plain(func) => self.call_handler(func, &[], host)?,
-                | Handler::WithStatus(func, argument) => self.call_handler(
-                    func,
-                    &[
-                        RuntimeValue::int(Type::I32, u128::from(status.cast_unsigned())),
-                        argument,
-                    ],
-                    host,
-                )?,
+                | Handler::Plain(func, chain) => self.call_handler(func, chain.as_slice(), host)?,
+                | Handler::WithStatus(func, argument, chain) => {
+                    let status = RuntimeValue::int(Type::I32, u128::from(status.cast_unsigned()));
+                    let args = [status, argument, chain.unwrap_or(RuntimeValue::Poison)];
+                    self.call_handler(func, &args[..2 + usize::from(chain.is_some())], host)?
+                },
             };
             match ended {
                 // glibc resumes the list after the handler, with the new
@@ -275,12 +274,12 @@ impl Machine<'_, '_, '_> {
             .exit
             .handlers
             .iter()
-            .rposition(|handler| matches!(handler, Handler::Plain(_)))
+            .rposition(|handler| matches!(handler, Handler::Plain(..)))
         {
-            let Handler::Plain(func) = self.exit.handlers.remove(index) else {
+            let Handler::Plain(func, chain) = self.exit.handlers.remove(index) else {
                 unreachable!("found a plain handler");
             };
-            if let Some(ended) = self.call_handler(func, &[], host)? {
+            if let Some(ended) = self.call_handler(func, chain.as_slice(), host)? {
                 return Ok(Some(ended));
             }
         }

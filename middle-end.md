@@ -2682,47 +2682,65 @@ use inline assembly, which it does not run.
 ## GNU nested functions (2026-10-30)
 
 Under GCC's identity a function defined in a block is a GNU nested function
-(`lowering/nested.rs`); Clang's identity rejects the definition when it
-parses it, as Clang does. Each nested function is an internal IR function
+(`lowering/nested.rs`), and `auto` declares one ahead of its definition.
+Clang's, TCC's and MSVC's identities reject the definition when they parse
+it, each with its compiler's message ("function definition is not allowed
+here", "cannot use local functions", `cl`'s C2601 "local function
+definitions are illegal"). Each nested function is an internal IR function
 named as GCC names it (`name.0`) whose last fixed parameter is its static
 chain: `Signature::chain` marks it, and the text form writes `chain` after
-that parameter. The chain is the address of the chain record of the
-function that defines it. A function with nested definitions builds its
-record on entry, after its parameters: word 0 holds its own static chain
-(null at file scope), and each later word the address of one of its
-objects a nested function uses, which therefore lives in a stack slot. A
-use reaches an object any number of functions out by following word 0 of
-each record. Definitions are lowered innermost first, so every capture is
-known, and the captured object is marked address-taken, before the function
-that owns it is lowered.
+that parameter. The chain is the address of the chain record of the function
+that defines it. A function with nested definitions builds its record on
+entry, after its parameters:
+
+- word 0 holds its own static chain (null at file scope);
+- word 1 holds the address of its trampoline area (or null);
+- each later word holds the address of one of its objects a nested function
+  uses, a parameter where it arrived or was copied (structures passed in
+  registers or in memory alike), any other object in its slot.
+
+A use reaches an object any number of functions out by following word 0 of
+each record. Definitions are lowered innermost first, so each record's
+captures and trampolines are known, and the captured objects are marked
+address-taken, before the function that owns them is lowered; each defining
+function's captures and trampolines are linked lists of their own, so a unit
+of many such functions builds its records in linear time.
 
 A direct call passes the record as the chain, last among the fixed
 arguments; a call through another type goes indirect with the chained
-signature. Taking a nested function's address makes a trampoline in a
-32-byte, 16-aligned slot of the function that takes it, made again at each
-use: `trampoline storage, func, chain` writes it, and `adjust_trampoline
-storage` is the pointer to call, which reads it. A trampoline therefore
-lives as long as that function's frame, where GCC's lives as long as the
-defining function's.
+signature. Taking a nested function's address gives a trampoline in the
+frame of the function that defines it, as GCC builds one, so it lives as long
+as that frame even when a sibling returns it. A function inside the definer
+uses the definer's trampoline area, which the definer fills on entry, once
+per activation; the definer uses that one too, or, if nothing inside it takes
+the address, a 32-byte, 16-aligned slot of its own made where it takes it.
+`trampoline storage, func, chain` writes a trampoline and `adjust_trampoline
+storage` is the pointer to call, which reads it. A nested function's address
+is no address constant: a static initializer that takes it is the error
+GCC's "initializer element is not constant" is.
 
 | Back end | Chain | Trampoline |
 |---|---|---|
 | LLVM | `nest` parameter and argument (`r10` on x86-64) | `llvm.init.trampoline` and `llvm.adjust.trampoline`; LLVM marks the stack executable |
 | Native | `r10`, taken first on entry and moved last before the `call` | `movabs $func, %r11; movabs $chain, %r10; jmp *%r11`, as GCC's; `.note.GNU-stack,"x"` |
-| Interpreter | an ordinary argument | a table from the storage to the function and chain, which an indirect call through it consults |
+| Interpreter | an ordinary argument | a table from the storage to the function and chain, which indirect calls, `qsort`/`bsearch` comparisons and exit handlers consult |
 | WebAssembly | an ordinary argument | refused: WebAssembly cannot run code from memory |
 
-An executable that uses trampolines links with `-z execstack`, which LLD
-will not infer; GCC's links get an executable stack from the objects' note.
-The native back end refuses a chain on `x86_64-pc-windows-msvc`, whose
-`__chkstk` clobbers `%r10`.
+An executable whose objects use trampolines links with `-z execstack`, which
+LLD will not infer: the driver asks for it when it compiles such a source,
+or when an input object's `.note.GNU-stack` is executable, as `ld.bfd` gives
+GCC's executables an executable stack. On `x86_64-pc-windows-msvc`, whose
+`__chkstk` clobbers `%r10` before the chain is read, lowering refuses nested
+functions on every back end.
 
 Not yet supported, and refused: a `goto` out of a nested function to a label
 of a function around it (`__label__`), the address of such a label, a use
 of a variably modified object of an enclosing function, and a nested
-function whose own type is variably modified (its bounds are its definer's).
+function whose own type is variably modified (its bounds are its definer's,
+which GCC evaluates at the definition), which its definer refuses at the
+definition too.
 
 **Evidence.** Of the 44 GCC 15.2 survey tests that stopped at nested
-functions, 30 now pass on LLVM at `-O0` and `-O2` and on the native back end;
-the rest need non-local gotos (9), label addresses across functions (2) or
-variably modified captures or types (3).
+functions, 29 pass on LLVM at `-O0` and `-O2` and on the native back end;
+the rest need non-local gotos (9), variably modified types or captures (4)
+or label addresses across functions (2).

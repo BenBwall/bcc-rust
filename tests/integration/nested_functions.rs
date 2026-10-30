@@ -31,7 +31,7 @@ mod tests {
 
     const GCC: &str = "--compiler-identity=gcc";
 
-    const EXPECTED: &str = "cleanup 42\n2 33 8\n7 10 8 16 120\n8 42\n";
+    const EXPECTED: &str = "cleanup 42\n2 33 8\n7 10 8 16 120\n8 42\n42 122 27 15001\nexit 42\n";
 
     #[test]
     fn nested_functions_match_gcc_on_every_back_end() {
@@ -83,18 +83,116 @@ mod tests {
         }
     }
 
+    /// Only GCC has nested functions: Clang, TCC and `cl` each reject a
+    /// definition in a block with their own message.
     #[test]
-    fn the_clang_identity_rejects_nested_definitions() {
+    fn other_identities_reject_nested_definitions() {
+        for (identity, message) in [
+            (
+                "--compiler-identity=clang",
+                "function definition is not allowed here",
+            ),
+            (
+                "--compiler-identity=clang-cl",
+                "function definition is not allowed here",
+            ),
+            ("--compiler-identity=tcc", "cannot use local functions"),
+            (
+                "--compiler-identity=msvc",
+                "local function definitions are illegal",
+            ),
+        ] {
+            let output = check(
+                &[identity],
+                "int main(void) { int f(void) { return 0; } return f(); }\n",
+            );
+            assert!(!output.status.success(), "{identity}");
+            let stderr = text(&output.stderr);
+            assert!(stderr.contains(message), "{identity}: {stderr}");
+        }
+    }
+
+    /// A nested function's address is made at run time, so it is not an
+    /// address constant, as GCC reports.
+    #[test]
+    fn a_nested_function_address_is_not_a_constant() {
         let output = check(
-            &["--compiler-identity=clang"],
-            "int main(void) { int f(void) { return 0; } return f(); }\n",
+            &[GCC],
+            "int f(int n) { int get(void) { return n; } static int (*p)(void) = get; return p(); \
+             }\n",
         );
         assert!(!output.status.success());
+        let stderr = text(&output.stderr);
         assert!(
-            text(&output.stderr).contains("error: function definition is not allowed here"),
-            "{}",
-            text(&output.stderr)
+            stderr.contains("static-storage initializer requires a constant expression"),
+            "{stderr}"
         );
+    }
+
+    /// Objects compiled apart link as GCC's driver links them: an object
+    /// whose note asks for an executable stack gets one from LLD too,
+    /// whether bcc or the host GCC built it.
+    #[test]
+    fn separately_compiled_objects_link_with_an_executable_stack() {
+        let main = temporary("main.c");
+        let apply = temporary("apply.c");
+        std::fs::write(
+            &main,
+            "#include <stdio.h>\nint apply(int (*f)(int), int v);\nint main(void) { int n = 40; \
+             int add(int x) { return x + n; } printf(\"%d\\n\", apply(add, 2)); return 0; }\n",
+        )
+        .unwrap();
+        std::fs::write(&apply, "int apply(int (*f)(int), int v) { return f(v); }\n").unwrap();
+        let objects: Vec<PathBuf> = (0..3).map(|_| temporary("part.o")).collect();
+        for (source, object, backend) in [
+            (&main, &objects[0], "--backend=llvm"),
+            (&apply, &objects[1], "--backend=native"),
+        ] {
+            let built = bcc(&[
+                "--gcc-mode",
+                "-Xbcc",
+                backend,
+                "-c",
+                source.to_str().unwrap(),
+                "-o",
+                object.to_str().unwrap(),
+            ]);
+            assert!(built.status.success(), "{}", text(&built.stderr));
+        }
+        let mut sets = vec![[&objects[0], &objects[1]]];
+        let gcc = Command::new("gcc")
+            .args([
+                "-c",
+                main.to_str().unwrap(),
+                "-o",
+                objects[2].to_str().unwrap(),
+            ])
+            .output()
+            .is_ok_and(|output| output.status.success());
+        if gcc {
+            sets.push([&objects[2], &objects[1]]);
+        } else {
+            eprintln!("skipping the GCC-built object: no host GCC");
+        }
+        for set in sets {
+            let executable = temporary("linked.exe");
+            let linked = bcc(&[
+                "--gcc-mode",
+                set[0].to_str().unwrap(),
+                set[1].to_str().unwrap(),
+                "-o",
+                executable.to_str().unwrap(),
+            ]);
+            assert!(linked.status.success(), "{}", text(&linked.stderr));
+            let run = run_native(&mut Command::new(&executable)).unwrap();
+            assert_eq!(text(&run.stdout), "42\n");
+            std::fs::remove_file(executable).unwrap();
+        }
+        for path in objects.iter().filter(|path| path.exists()) {
+            std::fs::remove_file(path).unwrap();
+        }
+        std::fs::remove_file(main).unwrap();
+        std::fs::remove_file(apply).unwrap();
     }
 
     /// A `goto` out of a nested function, and a use of a variably modified
@@ -127,6 +225,17 @@ mod tests {
             assert!(stderr.contains(reason), "{stderr}");
             assert!(!stderr.contains("internal error"), "{stderr}");
         }
+        // MSVC's `__chkstk` clobbers the `%r10` the chain arrives in.
+        let output = check(
+            &[GCC, "--target=x86_64-pc-windows-msvc", "--emit=llvm"],
+            "int main(void) { int n = 3; int get(void) { return n; } return get(); }\n",
+        );
+        assert!(!output.status.success());
+        assert!(
+            text(&output.stderr).contains("nested functions on x86_64-pc-windows-msvc"),
+            "{}",
+            text(&output.stderr)
+        );
         let output = check(
             &[GCC, "--target=wasm32-wasip1", "--emit=asm"],
             "__attribute__((noinline)) int apply(int (*f)(void)) { return f(); }\nint main(void) \
