@@ -2643,7 +2643,9 @@ go to memory (`byval`, aligned as the vector). GCC passes one-lane `float`,
 an integer, the `double` argument in memory with its result in XMM0, and
 the `long double` as x87 data. A vector member of a structure classifies
 as one unit (`f128` for 16 bytes, `f64` for 8, an integer for 1 to 4), as
-Clang's `classify` treats a vector field. Microsoft x64 (`abi/win64.rs`),
+Clang's `classify` treats a vector field; a one-lane `double` member puts
+its record in memory for both compilers, and a one-lane `float` or `long
+double` member for GCC (the layout flag `memory`). Microsoft x64 (`abi/win64.rs`),
 as Clang passes GNU vectors: arguments by reference except a lone `float`
 or `double` lane in its XMM register; results of up to 16 bytes in XMM0
 (`i128`, which the LLVM back end types `<2 x i64>`) and of 32 bytes in XMM0
@@ -2654,7 +2656,10 @@ them into lanes.
 The native back end returns the `f128`/`i128` pair in XMM0 and XMM1, and
 passes a `byval` copy aligned above 16 bytes by realigning `%rsp` in the
 prologue (`andq $-align, %rsp`) with a frame pointer, as a moving stack
-does (`MFunction::outgoing_align`, `Frame::realign`).
+does (`MFunction::outgoing_align`, `Frame::realign`), and again at each
+such call, since a dynamic allocation may have moved `%rsp` since. The LLVM
+back end at `-O0` misplaces such a variadic argument after a variable
+length array, as Clang's own build does.
 
 **Evidence.** `tests/integration/vector_types.rs` runs
 `tests/fixtures/programs/vector_types.c` (every operator, conversion and

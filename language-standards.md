@@ -1702,6 +1702,8 @@ Where GCC 15.2 and Clang 23 differ, each identity follows its compiler
 | Lane count | power of two | any; the object rounds up |
 | `__builtin_shuffle` | provided | absent |
 | Two-operand `__builtin_shufflevector(v, mask)` | refused | run-time shuffle |
+| Atomic vector operands | read first, also with a scalar operand; `++`/`--` only where an `int` variable splats into the lanes | no scalar operand; two atomic operands only in a comparison; no `++`/`--` |
+| Lane types besides integers and real floating types | `_Float16`, `__bf16`, enumerations; through pointer, array and function declarators to their element | `_Float16`, `__bf16`, `_BitInt(N)` of a power-of-two width of at least 8; never a pointer, array or function |
 
 Calls pass vectors as the claimed compiler does (middle-end.md). Known
 differences: GCC's `_Alignof` of a vector or structure aligned above 16
@@ -1715,7 +1717,18 @@ reference. The elementwise and non-temporal builtins
 lowered (refused by name), as are the `__builtin_ia32_*` builtins.
 GCC accepts a braced initializer for an `_Atomic` vector and refuses a
 vector element in a vector initializer (`{a}`) or braces around a lane
-(`{1, {2}}`); bcc follows Clang in all three.
+(`{1, {2}}`); bcc follows Clang in all three. Both compilers only warn
+about an excess element in a vector initializer, which bcc refuses, as it
+does for arrays (C99 §6.7.8p2). Clang folds vector arithmetic, unary
+operators and subscripts of constant vectors in static initializers, which
+both bcc identities refuse, as GCC does. `__builtin_bit_cast` is accepted
+under the GCC identity too, though GCC provides it only for C++. A
+half-precision lane computes in `float` and rounds after each operation,
+as both compilers compute vector operations on them. A GCC-only builtin
+(`__builtin_shuffle`, `__builtin_parityg`, `__builtin_ffsg`,
+`__builtin_clrsbg`) called under another identity is an undeclared
+identifier, as Clang reports it. An `_Atomic` vector of more than 16 bytes
+updates through a byte-wise compare-exchange loop.
 
 
 ### x86 intrinsic headers (2026-10-30)
