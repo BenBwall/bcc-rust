@@ -35,6 +35,10 @@ mod tests {
 
     #[test]
     fn nested_functions_match_gcc_on_every_back_end() {
+        if !linux_host() {
+            eprintln!("skipping: the fixture runs on an x86-64 GNU/Linux host");
+            return;
+        }
         let source = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/programs/nested_functions.c");
         let source = source.to_str().unwrap();
@@ -73,7 +77,15 @@ mod tests {
             "int main(void) { int n = 3; int get(void) { return n; } return get() != 3; }\n";
         for (program, executable) in [(source, true), (plain, false)] {
             for backend in ["--backend=llvm", "--backend=native"] {
-                let assembly = check(&[GCC, backend, "--emit=asm"], program);
+                let assembly = check(
+                    &[
+                        GCC,
+                        "--target=x86_64-unknown-linux-gnu",
+                        backend,
+                        "--emit=asm",
+                    ],
+                    program,
+                );
                 assert!(assembly.status.success(), "{}", text(&assembly.stderr));
                 let marked = text(&assembly.stdout)
                     .lines()
@@ -134,6 +146,10 @@ mod tests {
     /// whether bcc or the host GCC built it.
     #[test]
     fn separately_compiled_objects_link_with_an_executable_stack() {
+        if !linux_host() {
+            eprintln!("skipping: ELF objects link and run on an x86-64 GNU/Linux host");
+            return;
+        }
         let main = temporary("main.c");
         let apply = temporary("apply.c");
         std::fs::write(
@@ -219,7 +235,10 @@ mod tests {
                 "a nested function's use of a variably modified object of its definer",
             ),
         ] {
-            let output = check(&[GCC, "--emit=ir"], source);
+            let output = check(
+                &[GCC, "--target=x86_64-unknown-linux-gnu", "--emit=ir"],
+                source,
+            );
             assert!(!output.status.success(), "{source}");
             let stderr = text(&output.stderr);
             assert!(stderr.contains(reason), "{stderr}");
@@ -247,6 +266,16 @@ mod tests {
             "{}",
             text(&output.stderr)
         );
+    }
+
+    /// Whether the host builds and runs x86-64 GNU/Linux executables, with
+    /// a C library the fixture's headers come from.
+    const fn linux_host() -> bool {
+        cfg!(all(
+            target_arch = "x86_64",
+            target_os = "linux",
+            target_env = "gnu"
+        ))
     }
 
     /// `source` compiled with `flags`, its output on stdout.
