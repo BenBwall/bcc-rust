@@ -622,6 +622,17 @@ fn builtin_location_of_an_argument_is_where_the_argument_was_spelled() {
          __LINE__]\nF(\n__LINE__\n)\nG(\n__LINE__\n)\nF(F(\n__LINE__))\n",
         "4 [ 7 6 ] 10",
     );
+    // A macro expanded in an argument within a replacement list, and a
+    // `__LINE__` in the body of a macro invoked there, are at the outer
+    // invocation, as GCC gives (Clang takes the closing parenthesis's line).
+    assert_expansion(
+        "#define ID(x) x\n#define OBJ __LINE__\n#define C(x) ID(OBJ) , x\n\nC(\n__LINE__)\n",
+        "5 , 6",
+    );
+    assert_expansion(
+        "#define Q(x) x\n#define R(x) x, __LINE__\n#define P(x) Q(R(x))\n\nP(\n__LINE__)\n",
+        "6 , 5",
+    );
 }
 // C99 6.10.3.5 EXAMPLE 3, N1256 p167, unchanged source and expected output.
 #[test]

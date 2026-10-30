@@ -497,6 +497,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 .wide
                 .binary(left, operator, right)
                 .or_else(|| left.sign_bit_shift(operator, right))
+                .or_else(|| left.wrapping_shift(operator, right).map(|(value, _)| value))
                 .map(PredicateConstant::Integer);
         }
         let left = self.predicate_float(left)?;

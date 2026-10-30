@@ -128,7 +128,8 @@ pub(super) fn extended(
         | Operation::Floor => float(0)?.round_integral(Integral::Floor),
         | Operation::Trunc => float(0)?.round_integral(Integral::Truncate),
         | Operation::Round => round(float(0)?),
-        | Operation::Rint | Operation::Nearbyint => float(0)?.round_integral(Integral::HalfEven),
+        | Operation::Rint | Operation::Nearbyint | Operation::Roundeven =>
+            float(0)?.round_integral(Integral::HalfEven),
         | Operation::Fmod => float(0)?.rem(float(1)?),
         | Operation::Remainder => float(0)?.remainder(float(1)?),
         | Operation::Remquo => {

@@ -233,12 +233,14 @@ pub(crate) enum Feature {
     Fp16,
     /// The builtins that exist for the GCC identity only: GCC 14's
     /// `__builtin_parityg`, `__builtin_ffsg` and `__builtin_clrsbg` (Clang
-    /// 23 has the other type-generic bit builtins but not these), and the
-    /// vector shuffle `__builtin_shuffle`, which Clang lacks.
+    /// 23 has the other type-generic bit builtins but not these), the
+    /// vector shuffle `__builtin_shuffle` and `__builtin_iseqsig`, which
+    /// Clang lacks.
     /// GNU extension: GCC manual, "Bit Operation Builtins",
-    /// <https://gcc.gnu.org/onlinedocs/gcc/Bit-Operation-Builtins.html>, and
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Bit-Operation-Builtins.html>,
     /// "Vector Extensions",
-    /// <https://gcc.gnu.org/onlinedocs/gcc/Vector-Extensions.html>.
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Vector-Extensions.html>, and
+    /// "Other Builtins", <https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html>.
     GccOnlyBuiltins,
 }
 

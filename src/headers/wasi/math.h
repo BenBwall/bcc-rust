@@ -50,6 +50,8 @@ double rint(double x);
 float rintf(float x);
 double nearbyint(double x);
 float nearbyintf(float x);
+double roundeven(double x);
+float roundevenf(float x);
 long lrint(double x);
 double copysign(double x, double y);
 float copysignf(float x, float y);

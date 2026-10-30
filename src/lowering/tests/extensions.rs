@@ -440,3 +440,17 @@ block2:
         "{text}"
     );
 }
+
+/// A binary128 comparison builtin tests `uno` first and compares zeros
+/// instead of a NaN, so libgcc's signaling `__lttf2` never sees one and no
+/// "invalid" is raised for a quiet NaN (C99 §7.12.14p1), as GCC compares.
+#[test]
+fn binary128_comparison_builtins_stay_quiet() {
+    let text = lowered("int f(__float128 a, __float128 b) { return __builtin_isless(a, b); }");
+    assert!(
+        text.contains("fcmp.f128 uno") && text.contains("select.f128"),
+        "{text}"
+    );
+    let plain = lowered("int f(double a, double b) { return __builtin_isless(a, b); }");
+    assert!(!plain.contains("uno"), "{plain}");
+}

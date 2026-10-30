@@ -6,7 +6,11 @@
 
 use crate::{
     binary128::Binary128,
-    builtins::FloatOperation,
+    builtins::{
+        FloatCompare,
+        FloatOperation,
+    },
+    configuration::CompilerIdentity,
     float_parsing::LongDouble,
     translation_phases::{
         parsing::syntax::{
@@ -93,6 +97,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         operation: FloatOperation,
         scalar: Option<Scalar>,
     ) -> ExpressionInfo<'tu> {
+        if let FloatOperation::Compare(compare) = operation {
+            return self.floating_compare_builtin(expression, args, compare);
+        }
         let (classes, args) = args.split_at(operation.operand_index());
         let int = self.types.scalar(Scalar::Int);
         for &class in classes {
@@ -133,6 +140,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         };
         let mut result = Self::expression_result(expression, result_type);
         result.operation_type = Some(operand);
+        if operation == FloatOperation::Issignaling && first.constant == ConstantClass::Arithmetic {
+            if let Some(signaling) = self.signaling_constant(first, operand) {
+                result.integer = Some(Integer::int(i128::from(signaling)));
+                result.ice = true;
+                result.constant = ConstantClass::Arithmetic;
+            }
+            return result;
+        }
         if classes
             .iter()
             .chain(args)
@@ -155,6 +170,90 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 self.classify_constant(operation, classes, operand, (sign, exponent, significand))
             {
                 result.integer = Some(Integer::int(value));
+                result.ice = true;
+                result.constant = ConstantClass::Arithmetic;
+            }
+        }
+        result
+    }
+
+    /// Whether the constant `info` of the real floating type `operand` is a
+    /// signaling NaN. The value is read as it stands, not rounded to
+    /// `operand` again, which would quiet it: `__builtin_nans` and its
+    /// negation stay signaling. An x87 `long double` follows the claimed
+    /// compiler for the encodings the format leaves unsupported (a pseudo-NaN
+    /// or pseudo-infinity, with the explicit integer bit clear, and an
+    /// unnormal): GCC calls them signaling, as glibc's `issignaling` does,
+    /// and Clang does not.
+    /// C23: §7.12.3.8, pp. 240-241; PDF pp. 253-254 (N3220).
+    fn signaling_constant(&self, info: ExpressionInfo<'tu>, operand: TypeId) -> Option<bool> {
+        if self.binary128_type(operand) {
+            let value = self.binary128_value(info)?.real;
+            return Some(value.is_nan() && value.to_bits() & 1 << 111 == 0);
+        }
+        let TypeKind::Scalar(scalar) = self.types.nodes[self.types.non_atomic(operand).index]
+        else {
+            return None;
+        };
+        let (_, exponent, significand) = self.floating_value(info)?.real.x87_parts()?;
+        let quiet_nan_bits = significand >> 62;
+        let nan_fraction = significand & ((1 << 62) - 1) != 0;
+        let signaling = exponent == 0x7FFF && quiet_nan_bits == 0b10 && nan_fraction;
+        let unsupported = self.floating_precision(scalar) == Some(3)
+            && exponent != 0
+            && significand >> 63 == 0
+            && !matches!(
+                self.context.configuration.compiler_identity(),
+                CompilerIdentity::Clang | CompilerIdentity::ClangCl
+            );
+        Some(signaling || unsupported)
+    }
+
+    /// `__builtin_isless(x, y)` and its siblings: both operands are real,
+    /// at least one floating, and the usual arithmetic conversions bring
+    /// them to the type they are compared in, as GCC and Clang check them.
+    /// Constant operands fold, a NaN being unordered.
+    /// C99: §7.12.14p1, p. 240; PDF p. 252; §6.3.1.8p1, pp. 44-45;
+    /// PDF pp. 56-57.
+    fn floating_compare_builtin(
+        &mut self,
+        expression: &'tu Expression<'tu>,
+        args: &[&'tu Expression<'tu>],
+        compare: FloatCompare,
+    ) -> ExpressionInfo<'tu> {
+        let (left, right) = (self.expression_info(args[0]), self.expression_info(args[1]));
+        let (lt, rt) = (self.converted(left), self.converted(right));
+        if self.types.unanalyzed(lt) || self.types.unanalyzed(rt) {
+            return Self::expression_result(expression, self.types.unknown());
+        }
+        let floating = |this: &Self, ty: TypeId| {
+            matches!(
+                this.types.nodes[this.types.non_atomic(ty).index],
+                TypeKind::Scalar(s) if s.floating() && !s.complex()
+            )
+        };
+        if !(self.real(lt) && self.real(rt)) || !(floating(self, lt) || floating(self, rt)) {
+            return self.invalid_expression(expression, SemanticErrorKind::InvalidArgumentType);
+        }
+        let operand = self.common_arithmetic(left, right, lt, rt);
+        let mut result = Self::expression_result(expression, self.types.scalar(Scalar::Int));
+        result.operation_type = Some(operand);
+        if left.constant == ConstantClass::Arithmetic && right.constant == ConstantClass::Arithmetic
+        {
+            let ordering = if self.binary128_type(operand) {
+                self.binary128_value(left)
+                    .zip(self.binary128_value(right))
+                    .map(|(left, right)| left.real.compare(right.real))
+            } else {
+                self.converted_floating(left, operand)
+                    .zip(self.converted_floating(right, operand))
+                    .map(|(left, right)| match left.real.compare(right.real) {
+                        | 2 => None,
+                        | order => Some(order.cmp(&0)),
+                    })
+            };
+            if let Some(ordering) = ordering {
+                result.integer = Some(Integer::int(i128::from(compare.holds(ordering))));
                 result.ice = true;
                 result.constant = ConstantClass::Arithmetic;
             }
@@ -292,7 +391,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             } else {
                 3
             })?,
-            | FloatOperation::Copysign => return None,
+            // Folded apart, from the value before rounding.
+            | FloatOperation::Issignaling
+            | FloatOperation::Copysign
+            | FloatOperation::Compare(_) => return None,
         })
     }
 }

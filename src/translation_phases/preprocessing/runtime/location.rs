@@ -4,21 +4,22 @@
 //! 167; predefined file and line macros, §6.10.8 paragraph 1, p. 160; PDF p.
 //! 172. Locations preserve provenance for other handlers and diagnostics.
 
-use std::mem::take;
-
 use super::{
     super::Expander,
     TokenizerFrameType,
 };
-use crate::translation_phases::{
-    GetPosition,
-    GetSourceFileIndex,
-    SetPosition,
-    SetSourceFileIndex,
-    SourcePosition,
-    SourceVector,
-    SourceVectors,
-    preprocessor_tokenizer::PreprocessorToken,
+use crate::{
+    configuration::CompilerIdentity,
+    translation_phases::{
+        GetPosition,
+        GetSourceFileIndex,
+        SetPosition,
+        SetSourceFileIndex,
+        SourcePosition,
+        SourceVector,
+        SourceVectors,
+        preprocessor_tokenizer::PreprocessorToken,
+    },
 };
 
 impl Expander<'_, '_, '_, '_> {
@@ -39,35 +40,104 @@ impl Expander<'_, '_, '_, '_> {
         self.spelling_location(token)
     }
 
-    /// The current source line for `__LINE__` and `__FILE__`. A token read
-    /// from a replacement list is at its invocation, as for
-    /// [`Self::invocation_location`]. A token read from an argument was
-    /// spelled where the call that owns the argument was: in the source,
-    /// where it keeps its own line, or in an enclosing replacement list
-    /// (`T(__LINE__)` in the body of `L`), where it is at that invocation,
-    /// as GCC and Clang expand it, not on the line of `L`'s definition.
+    /// The current source line for `__LINE__` and `__FILE__`, as GCC
+    /// expands them. A token spelled in the source, an argument's included,
+    /// keeps its own line. A token spelled in a replacement list belongs to
+    /// the innermost macro being replaced whose name was itself spelled in
+    /// the source: `T(__LINE__)` in the body of `L` is at `L`'s invocation,
+    /// not on the line of `L`'s definition, and so is a macro expanded in
+    /// an argument within that body (`#define C(x) ID(OBJ), x`). For GCC a
+    /// name read from the source counts only when its macro was invoked
+    /// there or in an argument being expanded: a name an argument supplied
+    /// to a body that completes the call (`#define F(m) m()` reached as
+    /// `G(\nE)` through `#define G(x) F(x)`) belongs to the outer `G`, while
+    /// Clang takes that name's own line.
     /// C99: §6.10.8 paragraph 1, p. 160; PDF p. 172.
     pub(in crate::translation_phases::preprocessing) fn current_line_location(
         &self,
         token: PreprocessorToken,
     ) -> SourceVector {
-        // An argument frame is read inside the replacement of the macro
-        // that owns it; skip that owner and look where its call was spelled.
-        let mut owner_pending = false;
-        for frame in self.tokenizer_stack.iter().rev() {
+        let spelling = self.spelling_location(token);
+        if !self.spelled_in_definition(&spelling) {
+            return spelling;
+        }
+        let gcc = !matches!(
+            self.context.configuration.compiler_identity(),
+            CompilerIdentity::Clang | CompilerIdentity::ClangCl
+        );
+        let frames = &self.tokenizer_stack;
+        for (index, frame) in frames.iter().enumerate().rev() {
             match &frame.frame_type {
-                | TokenizerFrameType::ObjectLikeMacroInvocation { invocation, .. }
-                | TokenizerFrameType::FunctionLikeMacroInvocation { invocation, .. } => {
-                    if !take(&mut owner_pending) {
-                        return invocation.clone();
-                    }
-                },
-                | TokenizerFrameType::FunctionLikeMacroArgument { .. } => owner_pending = true,
+                | TokenizerFrameType::ObjectLikeMacroInvocation { spelling, .. }
+                | TokenizerFrameType::FunctionLikeMacroInvocation { spelling, .. } =>
+                    if !self.spelled_in_definition(spelling)
+                        && (!gcc || Self::invoked_from_source(&frames[..index]))
+                    {
+                        return spelling.clone();
+                    },
                 | TokenizerFrameType::SourceFile { .. } => break,
-                | TokenizerFrameType::Rescan { .. } | TokenizerFrameType::DeferredQuery => (),
+                | TokenizerFrameType::FunctionLikeMacroArgument { .. }
+                | TokenizerFrameType::Rescan { .. }
+                | TokenizerFrameType::DeferredQuery => (),
             }
         }
-        self.spelling_location(token)
+        self.invocation_location(token)
+    }
+
+    /// Whether a macro whose frame lies on `below` was invoked while the
+    /// source itself or an argument's own tokens were read, rather than a
+    /// replacement list or an argument substituted into one.
+    fn invoked_from_source(below: &[super::TokenizerFrame<'_>]) -> bool {
+        below
+            .iter()
+            .rev()
+            .find(|frame| {
+                !matches!(
+                    frame.frame_type,
+                    TokenizerFrameType::DeferredQuery
+                        | TokenizerFrameType::Rescan { argument: false }
+                )
+            })
+            .is_none_or(|frame| {
+                matches!(
+                    frame.frame_type,
+                    TokenizerFrameType::SourceFile { .. }
+                        | TokenizerFrameType::FunctionLikeMacroArgument { .. }
+                )
+            })
+    }
+
+    /// Whether `location` lies in a `#define` directive, its replacement
+    /// list or parameters, including lines its backslash-newlines join
+    /// (C99 §5.1.1.2p1 item 2). Text not retained as a source file, such as
+    /// a command-line definition, counts as a definition.
+    /// C99: §6.10.3 paragraph 1, p. 151; PDF p. 163.
+    fn spelled_in_definition(&self, location: &SourceVector) -> bool {
+        let Some(text) = self.context.source_text(location.source_file_index) else {
+            return true;
+        };
+        let bytes = text.as_bytes();
+        let mut start = (location.index as usize).min(bytes.len());
+        // Back to the start of the logical line.
+        loop {
+            let Some(newline) = bytes[..start].iter().rposition(|&byte| byte == b'\n') else {
+                start = 0;
+                break;
+            };
+            let mut end = newline;
+            if end > 0 && bytes[end - 1] == b'\r' {
+                end -= 1;
+            }
+            if end > 0 && bytes[end - 1] == b'\\' {
+                start = end - 1;
+            } else {
+                start = newline + 1;
+                break;
+            }
+        }
+        let line = text[start..].trim_start_matches([' ', '\t']);
+        line.strip_prefix('#')
+            .is_some_and(|rest| rest.trim_start_matches([' ', '\t']).starts_with("define"))
     }
 
     pub(in crate::translation_phases::preprocessing) fn expansion_end(

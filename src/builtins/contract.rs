@@ -398,6 +398,48 @@ pub(crate) enum FloatOperation {
     /// GNU: five `int` results (NaN, infinite, normal, subnormal, zero),
     /// then the classified operand. C99: §7.12.3.1, p. 216; PDF p. 228.
     Fpclassify,
+    /// C23's `issignaling`: a NaN whose quiet bit is clear, as GCC's and
+    /// Clang's builtin. C23: §7.12.3.8, pp. 240-241; PDF pp. 253-254 (N3220).
+    Issignaling,
+    /// The comparison macros of C99 §7.12.14, pp. 240-242; PDF pp. 252-254:
+    /// two real operands, at least one floating, compared in their common
+    /// real type without raising "invalid" for quiet NaNs.
+    Compare(FloatCompare),
+}
+
+/// One comparison of C99 §7.12.14, pp. 240-242; PDF pp. 252-254, or GCC's
+/// `__builtin_iseqsig` (C23 §7.12.17.7, pp. 281-282; PDF pp. 294-295
+/// (N3220)).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FloatCompare {
+    Greater,
+    GreaterEqual,
+    Less,
+    LessEqual,
+    LessGreater,
+    Unordered,
+    /// Equality; C23 has it raise "invalid" for any NaN operand, which bcc
+    /// does not model (the value is exact).
+    EqualSignaling,
+}
+
+impl FloatCompare {
+    /// Whether the comparison holds for operands that compare as `ordering`,
+    /// or are unordered (`None`, a NaN operand).
+    pub(crate) fn holds(self, ordering: Option<core::cmp::Ordering>) -> bool {
+        let Some(ordering) = ordering else {
+            return self == Self::Unordered;
+        };
+        match self {
+            | Self::Greater => ordering.is_gt(),
+            | Self::GreaterEqual => ordering.is_ge(),
+            | Self::Less => ordering.is_lt(),
+            | Self::LessEqual => ordering.is_le(),
+            | Self::LessGreater => ordering.is_ne(),
+            | Self::Unordered => false,
+            | Self::EqualSignaling => ordering.is_eq(),
+        }
+    }
 }
 
 impl FloatOperation {

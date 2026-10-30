@@ -1636,6 +1636,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                                 .wide
                                 .binary(l, op, r)
                                 .or_else(|| l.sign_bit_shift(op, r))
+                                .or_else(|| l.wrapping_shift(op, r).map(|(value, _)| value))
                                 .and_then(|v| self.bit_int_result(v, ty)),
                         });
                 if left.is_some() && right.is_some() && result.is_none() {

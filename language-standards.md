@@ -151,8 +151,23 @@ representation (`float`, `double`, `double`, `long double`, `__float128`)
 instead, which are not distinct types. glibc's GCC fortify
 wrappers for the `printf` family, `open` and `syslog` forward their arguments
 with `__builtin_va_arg_pack`, which lowering expands at each call, so under
-this identity they reach the checked functions. `msvc` (`cl.exe`) removes the
-GNU and Clang macros and the inline-semantics macro, and defines `_MT` and
+this identity they reach the checked functions. Its `math.h` also defines
+`isgreater`, `isless`, `isunordered` and their siblings (C99 §7.12.14) as
+`__builtin_isgreater` and the like, and `issignaling` and C23's `roundeven`
+as `__builtin_issignaling` and `__builtin_roundeven`; bcc provides those
+builtins under every identity, and GCC's `__builtin_iseqsig` under the GCC
+identity only (`Feature::GccOnlyBuiltins`; bcc does not raise its "invalid"
+exception for a NaN operand). The comparisons take two real operands, at
+least one floating, in their common real type, as GCC and Clang check them,
+fold constant operands, and raise no "invalid" for a quiet NaN, binary128
+included, as GCC compares it (Clang 23 calls libgcc's signaling
+`__lttf2` there). `__builtin_issignaling` folds a constant from its value
+before any rounding, so `__builtin_nans("")` and its negation are
+signaling. For an x87 `long double`, the encodings the format leaves
+unsupported (pseudo-NaN, pseudo-infinity, unnormal) are signaling except
+under the Clang identities, as GCC and Clang classify them. `msvc`
+(`cl.exe`) removes the GNU and Clang macros and the inline-semantics macro,
+and defines `_MT` and
 `_MSVC_TRADITIONAL` `0` (bcc's preprocessor is conforming, like `cl
 /Zc:preprocessor`); `_MSC_VER` still needs `-fms-extensions` on the MSVC
 target, which the `cl` personality selects. `clang-cl` removes the GNU macros
@@ -168,9 +183,15 @@ replaces trigraphs only under `/Zc:trigraphs`. `-fwrapv` makes signed integer
 `+`, `-`, `*`, negation and `++`/`--` wrap in two's complement, so lowering
 marks none of them `nsw`; pointer arithmetic is unaffected, as in GCC. A
 signed `<<` wraps in every mode: GCC documents that it does not treat its
-overflow as undefined, and Clang emits a plain shift. `-fpack-struct=N` (1,
-2, 4, 8 or 16) sets the packing in effect before any `#pragma pack`, which `#pragma pack()` restores, as GCC documents and
-`cl /ZpN` does. `-fpack-struct` without a value instead packs every
+overflow as undefined, and Clang emits a plain shift. Constant expressions
+fold it to the same two's-complement value (`static int s = -1 << 4;` is
+-16, `3 << 31` is `INT_MIN`), reported as a GNU extension only under the
+pedantic policy, as GCC accepts them; Clang's default `-Wshift-negative-value`
+and `-Wshift-overflow` warnings are not reproduced, and such a shift stays an
+integer constant expression, where GCC treats an array bound of it as
+variable. `-fpack-struct=N` (1, 2, 4, 8 or 16) sets the packing in effect
+before any `#pragma pack`, which `#pragma pack()` restores, as GCC documents
+and `cl /ZpN` does. `-fpack-struct` without a value instead packs every
 structure and union as the `packed` attribute does (an `aligned` member keeps
 its alignment) and ignores `#pragma pack` with GCC's warning, as GCC 15.2
 does. `-fno-pack-struct` undoes both. `-fno-builtin` keeps LLVM from
@@ -1231,6 +1252,18 @@ the diagnostic is reported, so withheld diagnostics are not counted.
   `__COUNTER__`, `__has_attribute`, and `__has_builtin` may be redefined or
   undefined with a warning; ISO predefined macros and C23 query names stay
   protected.
+- `__LINE__` and `__FILE__` follow the claimed compiler. One spelled in the
+  source, in a macro argument too, has its own line. One spelled in a
+  replacement list has the line of the innermost macro being replaced whose
+  name was spelled in the source, which a `#define` line does not hold
+  (`preprocessing/runtime/location.rs`): `T(__LINE__)` in the body of `L`,
+  and `OBJ` expanded in `ID(OBJ)` there, are at `L`'s invocation. For GCC
+  that name must also have been read from the source or from an argument
+  being expanded, so a macro whose name an argument supplied and whose call
+  a body completes (`#define F(m) m()` called as `G(\nE)` through
+  `#define G(x) F(x)`) is at the outer `G`'s line; Clang gives `E`'s line,
+  as the Clang identities do. Clang gives a multi-line invocation's body the
+  line of its closing parenthesis, which bcc does not reproduce.
 - Because `e sign` may follow `' nondigit` in the pp-number grammar,
   `0x1'e+1` is one invalid pp-number, as GCC lexes it.
 
@@ -2779,7 +2812,8 @@ optional result for zero), and the `__builtin_stdc_*` forms of C23's
 `__builtin_stdc_rotate_right`, exist for every identity under `GnuBuiltins`,
 as GCC 15 and Clang 23 provide them. GCC 14's `__builtin_parityg`,
 `__builtin_ffsg` and `__builtin_clrsbg` exist for the GCC identity only
-(`Feature::GccOnlyBuiltins`, which also gates `__builtin_shuffle`), as Clang 23 lacks them. Each computes at its
+(`Feature::GccOnlyBuiltins`, which also gates `__builtin_shuffle` and
+`__builtin_iseqsig`), as Clang 23 lacks them. Each computes at its
 operand's width, for every unsigned integer type up to `unsigned __int128`
 and every `unsigned _BitInt(N)`. The registry shard is `src/builtins/bits.rs`;
 `semantic_analysis/builtins/bits.rs` types, checks and folds the calls.

@@ -50,6 +50,8 @@ double rint(double x) { return __builtin_rint(x); }
 float rintf(float x) { return __builtin_rintf(x); }
 double nearbyint(double x) { return __builtin_nearbyint(x); }
 float nearbyintf(float x) { return __builtin_nearbyintf(x); }
+double roundeven(double x) { return __builtin_roundeven(x); }
+float roundevenf(float x) { return __builtin_roundevenf(x); }
 double copysign(double x, double y) { return __builtin_copysign(x, y); }
 float copysignf(float x, float y) { return __builtin_copysignf(x, y); }
 

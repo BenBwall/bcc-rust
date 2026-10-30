@@ -374,8 +374,22 @@ fn shifting_into_the_sign_bit_is_a_gnu_extension() {
         extensions(source, pedantic(CStandard::C99, false)),
         ["'left shift into the sign bit' is a GNU extension"; 3]
     );
+    // A shift of a negative value or past the sign bit wraps as GCC folds it,
+    // reported only when pedantic; a count of the width or more stays
+    // undefined and no constant.
+    let source = "enum { G = 3 << 31, N = -1 << 4 }; static int s = -1 << 4; _Static_assert(G == \
+                  -2147483648 && N == -16, \"wraps\");";
+    assert_eq!(kinds(source, gnu17()), []);
     assert_eq!(
-        kinds("enum { G = 3 << 31, H = 1 << 32 };", gnu17()),
+        extensions(source, pedantic(CStandard::C11, false)),
+        [
+            "'left shift past the sign bit' is a GNU extension",
+            "'left shift of a negative value' is a GNU extension",
+            "'left shift of a negative value' is a GNU extension",
+        ]
+    );
+    assert_eq!(
+        kinds("enum { H = 1 << 32, K = -1 << 32 };", gnu17()),
         [
             SemanticErrorKind::ConstantOverflow,
             SemanticErrorKind::ConstantOverflow,

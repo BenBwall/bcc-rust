@@ -11,7 +11,11 @@ use super::{
     types,
 };
 use crate::{
-    builtins::FloatOperation,
+    builtins::{
+        FloatCompare,
+        FloatOperation,
+    },
+    configuration::CompilerIdentity,
     ir::{
         Align,
         FloatCC,
@@ -40,7 +44,15 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
     ) -> Result<Operand, LoweringError> {
         let value = self.value(items[operation.operand_index()], source)?;
         let ty = self.draft.value_type(value);
-        let result = if matches!(
+        if let FloatOperation::Compare(compare) = operation {
+            let other = self.value(items[1], source)?;
+            return Ok(Operand::Value(
+                self.floating_compare(compare, value, other, source)?,
+            ));
+        }
+        let result = if operation == FloatOperation::Issignaling {
+            self.issignaling(value, operand, source)?
+        } else if matches!(
             operation,
             FloatOperation::Signbit | FloatOperation::Copysign
         ) {
@@ -92,6 +104,166 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
             )?
         };
         Ok(Operand::Value(result))
+    }
+
+    /// Both operands already have their common real type. The ordered
+    /// predicates are false for a NaN operand, `uno` true, so no comparison
+    /// needs a separate NaN test; a 16-bit type compares exactly in `float`.
+    /// The macros raise no "invalid" for a quiet NaN (§7.12.14p1), but a
+    /// binary128 ordered comparison becomes libgcc's `__lttf2` and its
+    /// siblings, which do, so there a NaN operand is first replaced by zero
+    /// and the result masked by the quiet `uno` test, as GCC compares it
+    /// (Clang 23 raises "invalid" there).
+    /// C99: §7.12.14.1-§7.12.14.6, pp. 240-242; PDF pp. 252-254.
+    fn floating_compare(
+        &mut self,
+        compare: FloatCompare,
+        left: Value,
+        right: Value,
+        source: SourceVectors,
+    ) -> Result<Value, LoweringError> {
+        let (mut left, mut right) = if self.draft.value_type(left).half_format().is_some() {
+            (self.widen_half(left), self.widen_half(right))
+        } else {
+            (left, right)
+        };
+        let ty = self.draft.value_type(left);
+        let unordered = (ty == Type::F128 && compare != FloatCompare::Unordered)
+            .then(|| self.fcmp(FloatCC::Uno, left, right));
+        if let Some(unordered) = unordered {
+            let zero = super::super::floats::constant_parts((false, 0, 0), ty)
+                .map(|bits| self.fconst(ty, bits))
+                .ok_or_else(|| LoweringError::missing("binary128 has no zero constant", source))?;
+            left = self.choose(unordered, zero, left);
+            right = self.choose(unordered, zero, right);
+        }
+        let cc = match compare {
+            | FloatCompare::Greater => FloatCC::Ogt,
+            | FloatCompare::GreaterEqual => FloatCC::Oge,
+            | FloatCompare::Less => FloatCC::Olt,
+            | FloatCompare::LessEqual => FloatCC::Ole,
+            | FloatCompare::LessGreater => FloatCC::One,
+            | FloatCompare::Unordered => FloatCC::Uno,
+            | FloatCompare::EqualSignaling => FloatCC::Oeq,
+        };
+        let mut holds = self.fcmp(cc, left, right);
+        if let Some(unordered) = unordered {
+            let one = self.iconst(Type::I1, 1);
+            let ordered = self.plain(Opcode::Xor, unordered, one);
+            holds = self.plain(Opcode::And, holds, ordered);
+        }
+        Ok(self.extend(holds, false, Type::I32))
+    }
+
+    /// A NaN whose quiet bit, the highest fraction bit, is clear. The bit is
+    /// read from the stored representation, which a register copy of a
+    /// signaling NaN keeps; the byte and mask locate it in each format.
+    /// C23: §7.12.3.8, pp. 240-241; PDF pp. 253-254 (N3220).
+    fn issignaling(
+        &mut self,
+        value: Value,
+        operand: TypeId,
+        source: SourceVectors,
+    ) -> Result<Value, LoweringError> {
+        let ty = self.draft.value_type(value);
+        if ty == Type::F80 {
+            return self.x87_signaling(value, operand, source);
+        }
+        let (offset, mask) = match ty {
+            | Type::F16 => (1, 0x02),
+            | Type::BF16 => (0, 0x40),
+            | Type::F32 => (2, 0x40),
+            | Type::F64 => (6, 0x08),
+            | Type::F80 => (7, 0x40),
+            | Type::F128 => (13, 0x80),
+            | _ =>
+                return Err(LoweringError::unsupported(
+                    super::super::Construct::Builtin,
+                    source,
+                )),
+        };
+        let (address, _) = self.floating_sign_byte(value, operand, source)?;
+        let address = self.offset_address(address, offset);
+        let byte = self.inst(
+            InstData::Load {
+                ty:    Type::I8,
+                flags: InstFlags::default(),
+                align: Align::BYTE,
+                tag:   None,
+                addr:  address,
+            },
+            Type::I8,
+        );
+        let mask = self.iconst(Type::I8, mask);
+        let quiet = self.plain(Opcode::And, byte, mask);
+        let zero = self.iconst(Type::I8, 0);
+        let signaling = self.icmp(IntCC::Eq, quiet, zero);
+        let wide = if ty.half_format().is_some() {
+            self.widen_half(value)
+        } else {
+            value
+        };
+        let nan = self.fcmp(FloatCC::Uno, wide, wide);
+        let both = self.plain(Opcode::And, nan, signaling);
+        Ok(self.extend(both, false, Type::I32))
+    }
+
+    /// An x87 value is signaling when it is a NaN with the quiet bit clear
+    /// and the explicit integer bit set. Under every identity but Clang's,
+    /// the encodings the format leaves unsupported, a nonzero exponent with
+    /// the integer bit clear (pseudo-NaN, pseudo-infinity, unnormal), are
+    /// signaling too, as GCC and glibc's `issignaling` classify them; Clang
+    /// calls them not signaling. Only integer tests are used, since an x87
+    /// comparison of an unsupported encoding raises "invalid".
+    /// C23: §7.12.3.8, pp. 240-241; PDF pp. 253-254 (N3220).
+    fn x87_signaling(
+        &mut self,
+        value: Value,
+        operand: TypeId,
+        source: SourceVectors,
+    ) -> Result<Value, LoweringError> {
+        let (address, _) = self.floating_sign_byte(value, operand, source)?;
+        let load = |this: &mut Self, ty: Type, offset: u64| {
+            let addr = this.offset_address(address, offset);
+            this.inst(
+                InstData::Load {
+                    ty,
+                    flags: InstFlags::default(),
+                    align: Align::BYTE,
+                    tag: None,
+                    addr,
+                },
+                ty,
+            )
+        };
+        let significand = load(self, Type::I64, 0);
+        let sign_exponent = load(self, Type::I16, 8);
+        let exponent_mask = self.iconst(Type::I16, 0x7FFF);
+        let exponent = self.plain(Opcode::And, sign_exponent, exponent_mask);
+        let top_shift = self.iconst(Type::I64, 62);
+        let top = self.plain(Opcode::Lshr, significand, top_shift);
+        let integer_only = self.iconst(Type::I64, 0b10);
+        let unquiet = self.icmp(IntCC::Eq, top, integer_only);
+        let fraction_mask = self.iconst(Type::I64, (1 << 62) - 1);
+        let fraction = self.plain(Opcode::And, significand, fraction_mask);
+        let zero = self.iconst(Type::I64, 0);
+        let payload = self.icmp(IntCC::Ne, fraction, zero);
+        let all_ones = self.icmp(IntCC::Eq, exponent, exponent_mask);
+        let nan = self.plain(Opcode::And, all_ones, unquiet);
+        let mut signaling = self.plain(Opcode::And, nan, payload);
+        if !matches!(
+            self.unit.context.configuration.compiler_identity(),
+            CompilerIdentity::Clang | CompilerIdentity::ClangCl
+        ) {
+            let integer_shift = self.iconst(Type::I64, 63);
+            let integer_bit = self.plain(Opcode::Lshr, significand, integer_shift);
+            let no_integer_bit = self.icmp(IntCC::Eq, integer_bit, zero);
+            let zero_exponent = self.iconst(Type::I16, 0);
+            let nonzero_exponent = self.icmp(IntCC::Ne, exponent, zero_exponent);
+            let unsupported = self.plain(Opcode::And, nonzero_exponent, no_integer_bit);
+            signaling = self.plain(Opcode::Or, signaling, unsupported);
+        }
+        Ok(self.extend(signaling, false, Type::I32))
     }
 
     /// Classifies with ordered comparisons against the format's infinities
@@ -189,7 +361,10 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
                 let ordered = self.choose(infinite, infinite_class, finite);
                 self.choose(nan, nan_class, ordered)
             },
-            | FloatOperation::Signbit | FloatOperation::Copysign =>
+            | FloatOperation::Signbit
+            | FloatOperation::Copysign
+            | FloatOperation::Issignaling
+            | FloatOperation::Compare(_) =>
                 return Err(LoweringError::missing("not a classification", source)),
         })
     }

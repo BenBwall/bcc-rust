@@ -256,10 +256,26 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     value
                 }
             });
+            // Negating a NaN only flips its sign (C99 Annex F.3); rounding it
+            // again would quiet a signaling one.
+            let nan = |value: &super::super::Floating| {
+                value
+                    .real
+                    .x87_parts()
+                    .is_some_and(|(_, exponent, significand)| {
+                        exponent == 0x7FFF && significand << 1 != 0
+                    })
+            };
             let value = if half {
                 value.map(|value| self.half_result(value, &mut info))
             } else {
-                value.and_then(|value| self.round_floating(value, ty))
+                value.and_then(|value| {
+                    if nan(&value) {
+                        Some(value)
+                    } else {
+                        self.round_floating(value, ty)
+                    }
+                })
             };
             info.set_floating(value);
         }
@@ -677,6 +693,21 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         self.context.report_extension(
                             crate::configuration::Feature::SignBitShifts,
                             "left shift into the sign bit",
+                            e.operator_source_vectors.unwrap_or(e.source_vectors),
+                        );
+                    }
+                } else if info.integer.is_none()
+                    && let Some((value, negative)) = l.wrapping_shift(op, r)
+                {
+                    info.integer = Some(value);
+                    if !self.tainted {
+                        self.context.report_extension(
+                            crate::configuration::Feature::SignBitShifts,
+                            if negative {
+                                "left shift of a negative value"
+                            } else {
+                                "left shift past the sign bit"
+                            },
                             e.operator_source_vectors.unwrap_or(e.source_vectors),
                         );
                     }
@@ -2025,7 +2056,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     /// C99: §6.3.1.8p1, pp. 44-45; PDF pp. 56-57. Preserve ranks even
     /// when long and long long have the same LP64 width.
-    fn common_arithmetic(
+    pub(in crate::translation_phases::semantic_analysis) fn common_arithmetic(
         &mut self,
         left: ExpressionInfo<'tu>,
         right: ExpressionInfo<'tu>,
