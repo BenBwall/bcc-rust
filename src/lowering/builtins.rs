@@ -32,6 +32,7 @@ use crate::{
         ArgumentEvaluation,
         BitOperation,
         BuiltinOperation as CommonBuiltin,
+        ComplexPart,
         OverflowOperation,
         VaOperation,
     },
@@ -49,6 +50,7 @@ use crate::{
         semantic_analysis::{
             BuiltinCallFacts,
             BuiltinOperand,
+            Integer,
             TypeId,
         },
     },
@@ -200,6 +202,32 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             | Operand::Place(super::Place::Memory(value)) | Operand::Value(value) => Ok(value),
             | _ => Err(LoweringError::missing("va_list has no storage", source)),
         }
+    }
+
+    /// The refusal of a call of a reserved `__builtin_` name semantic
+    /// analysis has no contract for, whose result type it could not
+    /// analyze: by name where GCC has the builtin.
+    pub(super) fn opaque_builtin(&self, e: &'tu Expression<'tu>) -> Option<LoweringError> {
+        let crate::translation_phases::semantic_analysis::Callee::Builtin {
+            binding: Some(binding),
+            instance: None,
+            ..
+        } = self.unit.sema.call_facts(e)?.callee
+        else {
+            return None;
+        };
+        let data = self.unit.sema.bindings[binding];
+        (data.origin
+            == crate::translation_phases::semantic_analysis::BindingOrigin::OpaqueIntrinsic)
+            .then(|| {
+                let name = self.unit.context.string_cache.at(data.name.name);
+                super::module_items::at(
+                    super::LoweringErrorKind::UnsupportedBuiltin(crate::builtins::unimplemented(
+                        name,
+                    )),
+                    e.source_vectors,
+                )
+            })
     }
 
     /// Dispatch only the semantic instance. Semantic-only and unsupported
@@ -375,7 +403,8 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             },
             | CommonBuiltin::Expect(_)
             | CommonBuiltin::Aligned
-            | CommonBuiltin::ExtractReturnAddress => items[0].operand,
+            | CommonBuiltin::ExtractReturnAddress
+            | CommonBuiltin::AssocBarrier => items[0].operand,
             // Only the current frame has a defined address everywhere; GCC
             // calls outer levels unpredictable. GNU extension: GCC "Return
             // Address". <https://gcc.gnu.org/onlinedocs/gcc/Return-Address.html>
@@ -397,7 +426,10 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 }))
             },
             // Debug-information annotations do not execute.
-            | CommonBuiltin::Prefetch | CommonBuiltin::Annotation => Operand::Void,
+            // x86 keeps instruction fetch coherent with stores, so
+            // `__builtin___clear_cache` needs nothing either.
+            | CommonBuiltin::Prefetch | CommonBuiltin::Annotation | CommonBuiltin::ClearCache =>
+                Operand::Void,
             // x86 `__rdtsc` reads the time-stamp counter, as Clang's
             // `llvm.x86.rdtsc`.
             | CommonBuiltin::ReadTimestamp => Operand::Value(self.inst(
@@ -457,6 +489,57 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 let size = self.extend(size, false, Type::I64);
                 Operand::Value(self.dynamic_object(size, None))
             },
+            // The alignment operand is a constant power of two in bits;
+            // GCC requires at least a byte's and gives at least `alloca`'s.
+            | CommonBuiltin::AllocaAligned => {
+                let bits = match instance.operands[1].expression {
+                    | Some(bits) => self.info(bits)?.integer.and_then(Integer::to_u64),
+                    | None => None,
+                }
+                .ok_or_else(|| {
+                    LoweringError::missing("alloca alignment is not constant", source)
+                })?;
+                let align = Align::from_bytes((bits / 8).max(16))
+                    .ok_or_else(|| LoweringError::unsupported(super::Construct::Builtin, source))?;
+                let size = self.value(items[0], source)?;
+                let size = self.extend(size, false, Type::I64);
+                Operand::Value(self.dynamic_object(size, Some(align)))
+            },
+            | CommonBuiltin::ComplexPart(part) => {
+                let [real, imaginary] = self.complex_parts(items[0], source)?;
+                match part {
+                    | ComplexPart::Real => Operand::Value(real),
+                    | ComplexPart::Imaginary => Operand::Value(imaginary),
+                    | ComplexPart::Conjugate => {
+                        let ty = self.draft.value_type(imaginary);
+                        let negated = self.convert(Opcode::Fneg, ty, imaginary);
+                        self.complex_pair([real, negated])
+                    },
+                }
+            },
+            // GCC's and Clang's expansion: the carry out of either addition
+            // (or the borrow of either subtraction), so an incoming carry
+            // other than 0 or 1 counts once.
+            | CommonBuiltin::Carry(subtract, _) => {
+                let a = self.value(items[0], source)?;
+                let b = self.value(items[1], source)?;
+                let carry = self.value(items[2], source)?;
+                let (opcode, compare) = if subtract {
+                    (Opcode::Isub, IntCC::Ugt)
+                } else {
+                    (Opcode::Iadd, IntCC::Ult)
+                };
+                let first = self.plain(opcode, a, b);
+                let first_carry = self.icmp(compare, first, a);
+                let result = self.plain(opcode, first, carry);
+                let second_carry = self.icmp(compare, result, first);
+                let carried = self.plain(Opcode::Or, first_carry, second_carry);
+                let ty = self.draft.value_type(result);
+                let carried = self.extend(carried, false, ty);
+                let address = self.value(items[3], source)?;
+                self.store(carried, address, instance.result_type, source)?;
+                Operand::Value(result)
+            },
             | CommonBuiltin::FloatConstant(_, nan) => {
                 if nan {
                     return Err(LoweringError::missing(
@@ -490,7 +573,22 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             | CommonBuiltin::Bswap(_) => {
                 let arg = self.value(items[0], source)?;
                 let ty = self.draft.value_type(arg);
-                Operand::Value(self.convert(Opcode::Bswap, ty, arg))
+                if ty == Type::I128 {
+                    // The swapped halves, exchanged: every back end swaps
+                    // 64 bits.
+                    let shift = self.iconst(Type::I128, 64);
+                    let low = self.convert(Opcode::Trunc, Type::I64, arg);
+                    let high = self.plain(Opcode::Lshr, arg, shift);
+                    let high = self.convert(Opcode::Trunc, Type::I64, high);
+                    let low = self.convert(Opcode::Bswap, Type::I64, low);
+                    let high = self.convert(Opcode::Bswap, Type::I64, high);
+                    let low = self.extend(low, false, Type::I128);
+                    let high = self.extend(high, false, Type::I128);
+                    let low = self.plain(Opcode::Shl, low, shift);
+                    Operand::Value(self.plain(Opcode::Or, low, high))
+                } else {
+                    Operand::Value(self.convert(Opcode::Bswap, ty, arg))
+                }
             },
             | CommonBuiltin::Bit(op, _) => {
                 let arg = self.value(items[0], source)?;

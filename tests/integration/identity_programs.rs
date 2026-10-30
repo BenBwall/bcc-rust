@@ -60,6 +60,16 @@ mod tests {
         matches_the_claimed_compiler("float_comparisons.c");
     }
 
+    /// GCC's and Clang's library aliases (`__builtin_strcat`,
+    /// `__builtin_mempcpy`, `__builtin_bcopy`, ...), carry, aligned
+    /// `alloca`, complex-part and `_Float16`/`__float128` sign builtins,
+    /// and the NaN and infinity constructors, with GCC's `q`, `bswap128`,
+    /// `<ctype.h>` and `assoc_barrier` builtins under its identity.
+    #[test]
+    fn gnu_builtins_match_the_claimed_compiler() {
+        matches_the_claimed_compiler("gnu_builtins.c");
+    }
+
     /// Signed left shifts that wrap, and `__LINE__` as a macro argument in
     /// a replacement list.
     #[test]

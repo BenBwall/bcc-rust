@@ -217,6 +217,14 @@ pub(super) const BUILTINS: &[BuiltinDescriptor] = &[
         S::Float,
         false,
     ),
+    half_constant_descriptor(
+        Id::HugeValf16,
+        "__builtin_huge_valf16",
+        None,
+        Float16Nullary,
+        S::Float16,
+        false,
+    ),
     interchange_constant_descriptor(
         Id::HugeValf32,
         "__builtin_huge_valf32",
@@ -297,6 +305,14 @@ pub(super) const BUILTINS: &[BuiltinDescriptor] = &[
         None,
         FloatNullary,
         S::Float,
+        false,
+    ),
+    half_constant_descriptor(
+        Id::Inff16,
+        "__builtin_inff16",
+        None,
+        Float16Nullary,
+        S::Float16,
         false,
     ),
     interchange_constant_descriptor(
@@ -509,6 +525,14 @@ pub(super) const BUILTINS: &[BuiltinDescriptor] = &[
         Some("nanf"),
         FloatNan,
         S::Float,
+        true,
+    ),
+    half_constant_descriptor(
+        Id::LibraryNanf16,
+        "__builtin_nanf16",
+        Some("nanf16"),
+        Float16Nan,
+        S::Float16,
         true,
     ),
     interchange_constant_descriptor(
@@ -852,6 +876,28 @@ const fn interchange_constant_descriptor(
     }
 }
 
+/// A constant builtin of `_Float16`, which exists where the type's keyword
+/// does: for the GCC and Clang identities in every mode.
+/// GNU extension: GCC manual, "Other Builtins"; Clang Language Extensions,
+/// "Half-Precision Floating Point".
+/// <https://clang.llvm.org/docs/LanguageExtensions.html#half-precision-floating-point>
+const fn half_constant_descriptor(
+    id: Id,
+    spelling: &'static str,
+    library: Option<&'static str>,
+    contract: Contract,
+    scalar: S,
+    nan: bool,
+) -> BuiltinDescriptor {
+    BuiltinDescriptor {
+        availability: Availability {
+            feature: Some(Feature::Float16),
+            naming:  NamingPolicy::Reserved,
+        },
+        ..constant_descriptor(id, spelling, library, contract, scalar, nan)
+    }
+}
+
 #[derive(Clone, Copy)]
 struct Contract {
     signature: Signature,
@@ -902,6 +948,8 @@ contract!(FloatLongLongResult, T::Scalar(S::LongLong); T::Scalar(S::Float));
 contract!(FloatNan, T::Scalar(S::Float); T::Pointer(S::Char, true));
 contract!(FloatNexttoward, T::Scalar(S::Float); T::Scalar(S::Float), T::Scalar(S::LongDouble));
 contract!(LongDoubleNullary, T::Scalar(S::LongDouble); );
+contract!(Float16Nullary, T::Scalar(S::Float16); );
+contract!(Float16Nan, T::Scalar(S::Float16); T::Pointer(S::Char, true));
 contract!(Float32Nullary, T::Scalar(S::Float32); );
 contract!(Float32Nan, T::Scalar(S::Float32); T::Pointer(S::Char, true));
 contract!(Float32xNullary, T::Scalar(S::Float32x); );

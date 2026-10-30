@@ -304,6 +304,32 @@ pub(crate) enum BuiltinOperation {
     /// GNU: the return address as an address; the identity on x86-64.
     ExtractReturnAddress,
     Overflow(OverflowOperation, Option<Scalar>, bool),
+    /// GNU and Clang `__builtin_addc` (`false`) and `__builtin_subc`
+    /// (`true`) at the unsigned type: the sum or difference of the first
+    /// two operands and the incoming carry, with the outgoing carry stored
+    /// through the fourth. GNU extension: GCC manual, "Integer Overflow
+    /// Builtins".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Integer-Overflow-Builtins.html>
+    Carry(bool, Scalar),
+    /// GNU `__builtin_alloca_with_align` and
+    /// `__builtin_alloca_with_align_and_max`: `alloca` storage with the
+    /// alignment the second operand gives in bits; a maximum size is only
+    /// a hint. GNU extension: GCC manual, "Stack Allocation".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Stack-Allocation.html>
+    AllocaAligned,
+    /// GNU `__builtin___clear_cache`: makes the instruction cache coherent
+    /// with written code in a range, which x86 needs nothing for.
+    /// GNU extension: GCC manual, "Other Builtins".
+    ClearCache,
+    /// GCC `__builtin_assoc_barrier`: its operand's value, across which
+    /// the optimizer may not reassociate floating arithmetic. GNU
+    /// extension: GCC manual, "Other Builtins".
+    AssocBarrier,
+    /// GNU and Clang `__builtin_creal`, `__builtin_cimag` and
+    /// `__builtin_conj` with their `f` and `l` forms: a part of the operand
+    /// converted to the complex type, or its conjugate.
+    /// C99: §7.3.9.2-§7.3.9.4, pp. 189-190; PDF pp. 201-202.
+    ComplexPart(ComplexPart),
     /// GNU: the complex value of a real and an imaginary part of one real
     /// floating type. <https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html>
     Complex,
@@ -388,6 +414,9 @@ pub(crate) enum FloatOperation {
     Signbit,
     Isinf,
     Copysign,
+    /// The magnitude: the operand with its sign bit clear, which keeps a
+    /// NaN's payload. C99: §7.12.7.2, p. 228; PDF p. 240.
+    Fabs,
     /// The type-generic classification macros of C99 §7.12.3, pp. 216-217;
     /// PDF pp. 228-229, as GCC and Clang builtins.
     Isnan,
@@ -547,6 +576,15 @@ pub(crate) enum GenericBitResult {
     Bool,
     /// The operand's own type.
     Operand,
+}
+
+/// The part of a complex value `__builtin_creal`, `__builtin_cimag` and
+/// `__builtin_conj` compute.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ComplexPart {
+    Real,
+    Imaginary,
+    Conjugate,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -2880,3 +2880,70 @@ rather than `popcnt`, `lzcnt` or `tzcnt`. `tests/integration/stdbit.rs` runs
 `tests/fixtures/programs/stdbit{,_gcc,_clang}.c` on every back end against
 Clang 23 and GCC 15 (and wasi-sdk's Clang for wasm32), and the
 `sema-stdbit-{gcc,clang}` goldens pin the misuse diagnostics.
+
+## GCC library and scalar builtins (2026-10-30)
+
+A survey of GCC 15.2's run tests under `--gcc-mode` refused 67 files with
+"a type built from an extension semantic analysis does not model". None was
+an extension type: each called a `__builtin_` name the registry had no
+contract for, which semantic analysis binds as an opaque intrinsic of
+unknown result. About 35 are the `<math.h>` comparison builtins and
+`__builtin_roundeven`, which #190 registered since. The rest, by file: GCC's library aliases
+(8), `_FloatN` math aliases folded in static initializers (6, below),
+`__builtin_apply` and its siblings (5), `__auto_type` (3),
+`__builtin_bswap128` (3), the `q` and `f16` constructors (2),
+`__builtin_conjf` (2), `__builtin_assoc_barrier` (2), and one each for
+`__builtin_addc`, `__builtin_alloca_with_align`, `__builtin___clear_cache`,
+`__builtin_clear_padding`, `__builtin_powi`, `__builtin_call_with_static_chain`
+and two `__builtin_ia32_*` names no header declares.
+
+Now registered, with the availability `__has_builtin` reports under each
+identity (GCC 15 and Clang 23 checked):
+
+- Library aliases, lowered as calls of the C library function: `strcat`,
+  `strncat`, `strstr`, `strspn`, `strcspn`, `strpbrk`, `strdup`, `strndup`,
+  `stpcpy`, `stpncpy`, `mempcpy`, `bcopy`, `bzero`, `bcmp`, `index`,
+  `rindex`, `strcasecmp`, `strncasecmp`, `realloc`, `labs` and `llabs` for
+  both identities; `strnlen`, `aligned_alloc` and the `<ctype.h>`
+  classifiers and `toupper`/`tolower` for GCC only (Clang knows those names
+  as library functions but not their `__builtin_` aliases). Their ordinary
+  names take the library type when called undeclared in a hosted mode, as
+  the other aliases' do; the POSIX and BSD ones only in GNU modes, as GCC's
+  `DEF_EXT_LIB_BUILTIN` makes them.
+- `__builtin_addc`, `__builtin_subc` and their `l` and `ll` forms (GCC 14
+  and Clang): the carry or borrow of either step, stored through the
+  fourth operand.
+- `__builtin_alloca_with_align` (both) and
+  `__builtin_alloca_with_align_and_max` (GCC): `alloca` storage aligned to
+  the constant power-of-two bit count, at least 16 bytes.
+- `__builtin___clear_cache` (both), which needs nothing on x86.
+- `__builtin_creal`, `__builtin_cimag` and `__builtin_conj` with their `f`
+  and `l` forms (both), on the operand converted to the complex type.
+- `__builtin_bswap128` and `__builtin_assoc_barrier` (GCC). A byte swap of
+  a constant now folds, so `__builtin_bswap64 (1)` initializes a static
+  object, as both compilers allow.
+- `__builtin_fabsf16`, `__builtin_copysignf16`, `__builtin_nanf16`,
+  `__builtin_nansf16`, `__builtin_inff16` and `__builtin_huge_valf16`
+  (both), `__builtin_nansf16b` (GCC; GCC 15 has no other `f16b` builtin),
+  and GCC's `q` spellings `__builtin_nanq`, `__builtin_nansq`,
+  `__builtin_infq`, `__builtin_huge_valq`, `__builtin_fabsq` and
+  `__builtin_copysignq`. `__builtin_fabsf128` and `__builtin_copysignf128`
+  moved from the binary128 primitives, which only folded, to sign
+  operations, so a call with a run-time operand lowers too.
+
+Deviations: bcc folds `__builtin_fabsq` and `__builtin_copysignq` in a
+static initializer, where GCC 15 reports "initializer element is not
+constant" (it folds the `f128` spellings), and folds the `f16` sign
+builtins under the Clang identity, which Clang 23 does not.
+
+Still refused, now by name ("not yet supported by lowering:
+`__builtin_apply_args`"): `__builtin_apply`, `__builtin_apply_args`,
+`__builtin_return`, `__builtin_call_with_static_chain`,
+`__builtin_clear_padding`, `__builtin_powi{,f,l}`,
+`__builtin_speculation_safe_value` and `__builtin_stack_{save,restore}`;
+any other unregistered `__builtin_` name is "a builtin this compiler does
+not know". `__auto_type` reports the existing "inferred declaration types"
+refusal, as C23 `auto` inference does. GCC's `_FloatN` aliases of the math
+functions (`__builtin_acoshf32`, …) stay unregistered: `floatN-builtin.c`
+needs them folded in static initializers with MPFR's correctly rounded
+results, which bcc has no evaluator for.

@@ -100,23 +100,56 @@ pub(super) const BUILTINS: &[BuiltinDescriptor] = &[
         true,
         false,
     ),
-    math128(
-        Id::Fabsf128,
-        "__builtin_fabsf128",
-        S::Float128,
-        1,
-        false,
-        true,
+    // GCC's `q` spellings of the `__float128` constructors, which Clang
+    // lacks, and the signaling NaNs of `_Float16`, which both have, and of
+    // `__bf16`, which only GCC has.
+    gcc_math128(Id::HugeValq, "__builtin_huge_valq", S::Float128, 0, false),
+    gcc_math128(Id::Infq, "__builtin_infq", S::Float128, 0, false),
+    gcc_math128(Id::Nanq, "__builtin_nanq", S::Float128, 1, true),
+    gcc_math128(Id::Nansq, "__builtin_nansq", S::Float128, 1, true),
+    half_math128(
+        Id::Nansf16,
+        "__builtin_nansf16",
+        S::Float16,
+        Feature::Float16,
     ),
-    math128(
-        Id::Copysignf128,
-        "__builtin_copysignf128",
-        S::Float128,
-        2,
-        false,
-        true,
+    half_math128(
+        Id::Nansf16b,
+        "__builtin_nansf16b",
+        S::BFloat16,
+        Feature::GccOnlyBuiltins,
     ),
 ];
+
+/// A `__float128` constructor only GCC spells: Clang 23 rejects the `q`
+/// forms as unknown builtins.
+/// GNU extension: GCC manual, "Additional Floating Types".
+/// <https://gcc.gnu.org/onlinedocs/gcc/Floating-Types.html>
+const fn gcc_math128(
+    id: Id,
+    spelling: &'static str,
+    result: S,
+    arguments: usize,
+    tag: bool,
+) -> BuiltinDescriptor {
+    let mut descriptor = math128(id, spelling, result, arguments, tag, false);
+    descriptor.availability.feature = Some(Feature::GccOnlyBuiltins);
+    descriptor
+}
+
+/// A signaling NaN of a 16-bit type, which exists where `feature` is
+/// accepted. GNU extension: GCC manual, "Other Builtins".
+/// <https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html>
+const fn half_math128(
+    id: Id,
+    spelling: &'static str,
+    result: S,
+    feature: Feature,
+) -> BuiltinDescriptor {
+    let mut descriptor = math128(id, spelling, result, 1, true, false);
+    descriptor.availability.feature = Some(feature);
+    descriptor
+}
 
 /// GCC's `__builtin_nansfN`: a signaling NaN of an interchange or extended
 /// type, which exists where the type's keyword does.
@@ -146,7 +179,7 @@ const fn math128(
             arguments,
             tag,
             arithmetic,
-            quiet: matches!(id, Id::Nanf128),
+            quiet: matches!(id, Id::Nanf128 | Id::Nanq),
         }),
         O::Math128,
         arguments,

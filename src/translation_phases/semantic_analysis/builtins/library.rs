@@ -28,7 +28,12 @@ impl Analyzer<'_, '_, '_> {
         if !self.context.configuration.hosted() {
             return None;
         }
-        let descriptor = crate::builtins::ordinary(self.context.string_cache.at(name.name))?;
+        let spelling = self.context.string_cache.at(name.name);
+        if crate::builtins::extension_name(spelling) && !self.context.configuration.gnu_extensions()
+        {
+            return None;
+        }
+        let descriptor = crate::builtins::ordinary(spelling)?;
         let signature = descriptor.signature;
         let variadic = signature.variadic;
         let ty = self.descriptor_type(descriptor);

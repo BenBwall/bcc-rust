@@ -50,6 +50,10 @@ pub(crate) use index::{
     BuiltinId,
     lookup,
 };
-pub(crate) use library::ordinary;
+pub(crate) use library::{
+    extension_name,
+    ordinary,
+};
+pub(crate) use scalar::unimplemented;
 #[cfg(test)]
 pub(crate) use x86::MERGED as test_merged_x86;

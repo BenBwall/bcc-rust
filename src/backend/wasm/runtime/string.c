@@ -106,6 +106,37 @@ char *strncpy(char *restrict d, const char *restrict s, size_t n) {
     return d;
 }
 
+/* The POSIX, GNU and BSD copies the compiler's __builtin_ aliases call. */
+char *stpcpy(char *restrict d, const char *restrict s) {
+    while ((*d = *s++))
+        d++;
+    return d;
+}
+
+char *stpncpy(char *restrict d, const char *restrict s, size_t n) {
+    size_t i = 0;
+    for (; i < n && s[i]; i++)
+        d[i] = s[i];
+    char *end = d + i;
+    for (; i < n; i++)
+        d[i] = 0;
+    return end;
+}
+
+void *mempcpy(void *restrict d, const void *restrict s, size_t n) {
+    return (unsigned char *)memcpy(d, s, n) + n;
+}
+
+void bcopy(const void *s, void *d, size_t n) { memmove(d, s, n); }
+
+void bzero(void *d, size_t n) { memset(d, 0, n); }
+
+int bcmp(const void *a, const void *b, size_t n) { return memcmp(a, b, n); }
+
+char *index(const char *s, int c) { return strchr(s, c); }
+
+char *rindex(const char *s, int c) { return strrchr(s, c); }
+
 char *strcat(char *restrict d, const char *restrict s) {
     strcpy(d + strlen(d), s);
     return d;

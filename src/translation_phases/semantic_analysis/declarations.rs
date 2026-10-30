@@ -287,7 +287,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     | super::ExtendedType::Decimal32 => Some(UnmodeledType::Decimal32),
                     | super::ExtendedType::Decimal64 => Some(UnmodeledType::Decimal64),
                     | super::ExtendedType::Decimal128 => Some(UnmodeledType::Decimal128),
-                    | super::ExtendedType::Inferred => Some(UnmodeledType::Inferred),
+                    | super::ExtendedType::Inferred | super::ExtendedType::AutoType =>
+                        Some(UnmodeledType::Inferred),
                     | _ => None,
                 };
                 let ty = match reason {

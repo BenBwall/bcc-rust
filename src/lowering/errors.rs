@@ -37,10 +37,6 @@ pub(crate) struct LoweringError {
 
 /// What went wrong.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-#[expect(
-    variant_size_differences,
-    reason = "A missing fact names itself with a static string; the other kinds are a byte or two."
-)]
 pub(crate) enum LoweringErrorKind {
     /// An earlier phase reported an error, so no code is generated.
     /// C99: §5.1.1.3 paragraph 1, p. 11; PDF p. 23.
@@ -53,6 +49,10 @@ pub(crate) enum LoweringErrorKind {
     #[cfg(test)]
     CallDiagnostic(crate::util::string_cache::StringCacheId),
     UnmodeledType(UnmodeledType),
+    /// A call of a builtin semantic analysis has no contract for: GCC's
+    /// spelling where [`crate::builtins::unimplemented`] names it, else
+    /// `None` for one this compiler does not know.
+    UnsupportedBuiltin(Option<&'static str>),
     /// File-scope assembly in a form GCC's grammar and Clang reject.
     InvalidFileScopeAsm(FileScopeAsmFault),
     /// A fact lowering relies on is missing from the semantic results: a
@@ -231,7 +231,8 @@ impl LoweringErrorKind {
             #[cfg(test)]
             | Self::CallDiagnostic(_) => "function attribute diagnostic",
             | Self::UnitHasErrors => "code is not generated for a translation unit with errors",
-            | Self::Unsupported(_) | Self::UnmodeledType(_) => "not yet supported by lowering",
+            | Self::Unsupported(_) | Self::UnmodeledType(_) | Self::UnsupportedBuiltin(_) =>
+                "not yet supported by lowering",
             | Self::UnanalyzedType =>
                 "not yet supported by lowering: a type built from an extension semantic analysis \
                  does not model",
@@ -266,6 +267,13 @@ impl ToDiagnostic for LoweringError {
                 format_in!(arena, "{}: {}", self.kind.message(), reason.description()),
             | LoweringErrorKind::MissingFact(fact) =>
                 format_in!(arena, "{}: {fact}", self.kind.message()),
+            | LoweringErrorKind::UnsupportedBuiltin(Some(name)) =>
+                format_in!(arena, "{}: `{name}`", self.kind.message()),
+            | LoweringErrorKind::UnsupportedBuiltin(None) => format_in!(
+                arena,
+                "{}: a builtin this compiler does not know",
+                self.kind.message()
+            ),
             | kind => kind.message(),
         };
         let explanation = Explanation::new(arena, message);
@@ -275,6 +283,8 @@ impl ToDiagnostic for LoweringError {
                 .note("the program is valid C; this compiler cannot translate it yet"),
             | LoweringErrorKind::UnanalyzedType =>
                 explanation.label("the type could not be analyzed"),
+            | LoweringErrorKind::UnsupportedBuiltin(_) =>
+                explanation.label("this builtin is called here"),
             | LoweringErrorKind::UnmodeledType(_) => explanation
                 .label("this expression or object uses the unsupported construct")
                 .note("semantic analysis does not yet model this construct"),
@@ -301,6 +311,9 @@ impl fmt::Display for LoweringError {
                 write!(f, ": {}", construct.description()),
             | LoweringErrorKind::UnmodeledType(reason) => write!(f, ": {}", reason.description()),
             | LoweringErrorKind::MissingFact(fact) => write!(f, ": {fact}"),
+            | LoweringErrorKind::UnsupportedBuiltin(Some(name)) => write!(f, ": `{name}`"),
+            | LoweringErrorKind::UnsupportedBuiltin(None) =>
+                f.write_str(": a builtin this compiler does not know"),
             | _ => Ok(()),
         }
     }
