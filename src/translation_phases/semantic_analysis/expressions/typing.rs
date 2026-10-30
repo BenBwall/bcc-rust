@@ -680,6 +680,21 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                             e.operator_source_vectors.unwrap_or(e.source_vectors),
                         );
                     }
+                } else if info.integer.is_none()
+                    && let Some((value, negative)) = l.wrapping_shift(op, r)
+                {
+                    info.integer = Some(value);
+                    if !self.tainted {
+                        self.context.report_extension(
+                            crate::configuration::Feature::SignBitShifts,
+                            if negative {
+                                "left shift of a negative value"
+                            } else {
+                                "left shift past the sign bit"
+                            },
+                            e.operator_source_vectors.unwrap_or(e.source_vectors),
+                        );
+                    }
                 }
             }
             if matches!(op, B::LogicalAnd | B::LogicalOr) {

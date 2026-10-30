@@ -1041,6 +1041,29 @@ impl Integer {
         (raw <= (l.mask() >> shift)).then(|| l.cast_value((raw << shift) as i128))
     }
 
+    /// GNU extension: folds a signed left shift of a negative value, or one
+    /// past the sign bit, to its two's-complement result, which GCC
+    /// documents and computes in constant expressions too (Clang folds it
+    /// with a warning). The second result is whether the value was
+    /// negative. Counts outside the width stay no constant.
+    /// GNU extension: GCC manual, "Integers".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Integers-implementation.html>
+    /// C99: §6.5.7 paragraph 4, p. 85; PDF p. 97.
+    pub(crate) fn wrapping_shift(self, op: BinaryOperator, right: Self) -> Option<(Self, bool)> {
+        if self.wide() || right.wide() {
+            return None;
+        }
+        let (l, r) = (self.promote(), right.promote());
+        if op != BinaryOperator::LeftShift || !l.signed {
+            return None;
+        }
+        let shift = u32::try_from(r.to_i128()?).ok().filter(|&n| n < l.bits)?;
+        Some((
+            l.cast_value(((l.value as u128) << shift) as i128),
+            l.value < 0,
+        ))
+    }
+
     pub(crate) const fn int(value: i128) -> Self {
         Self {
             value,

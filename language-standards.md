@@ -175,9 +175,15 @@ replaces trigraphs only under `/Zc:trigraphs`. `-fwrapv` makes signed integer
 `+`, `-`, `*`, negation and `++`/`--` wrap in two's complement, so lowering
 marks none of them `nsw`; pointer arithmetic is unaffected, as in GCC. A
 signed `<<` wraps in every mode: GCC documents that it does not treat its
-overflow as undefined, and Clang emits a plain shift. `-fpack-struct=N` (1,
-2, 4, 8 or 16) sets the packing in effect before any `#pragma pack`, which `#pragma pack()` restores, as GCC documents and
-`cl /ZpN` does. `-fpack-struct` without a value instead packs every
+overflow as undefined, and Clang emits a plain shift. Constant expressions
+fold it to the same two's-complement value (`static int s = -1 << 4;` is
+-16, `3 << 31` is `INT_MIN`), reported as a GNU extension only under the
+pedantic policy, as GCC accepts them; Clang's default `-Wshift-negative-value`
+and `-Wshift-overflow` warnings are not reproduced, and such a shift stays an
+integer constant expression, where GCC treats an array bound of it as
+variable. `-fpack-struct=N` (1, 2, 4, 8 or 16) sets the packing in effect
+before any `#pragma pack`, which `#pragma pack()` restores, as GCC documents
+and `cl /ZpN` does. `-fpack-struct` without a value instead packs every
 structure and union as the `packed` attribute does (an `aligned` member keeps
 its alignment) and ignores `#pragma pack` with GCC's warning, as GCC 15.2
 does. `-fno-pack-struct` undoes both. `-fno-builtin` keeps LLVM from
