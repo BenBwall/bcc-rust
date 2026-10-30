@@ -1703,11 +1703,17 @@ Vectors support function parameters/results, arrays/records, brace
 initialization, lvalue subscripting, casts between equal-bit-width vectors, unary arithmetic and
 integer complement, element-wise arithmetic/bitwise/shifts/comparisons, and
 compound assignments. Comparison masks contain signed integers of each lane's
-width and natural alignment. Clang's default lax vector conversions are used: vectors with equal bit widths can
-convert implicitly, including mixed element types. Padded object size alone
-does not make three-lane and four-lane vectors convertible. Scalar operands splat only
-when Clang's precision/truncation rules allow them. Vector element addresses,
-logical operators, increments and vector conditions are rejected in C.
+width and natural alignment. The conversions between vectors, the scalar
+operands that splat, increments, vector element addresses and `?:` follow the
+claimed identity's compiler (2026-10-29; language-standards.md, "GNU vector
+values"): the Clang identities use Clang's default lax vector conversions,
+under which vectors with equal bit widths convert implicitly, including mixed
+element types, and a scalar as large as the vector reinterprets its bits; the
+GCC identity accepts only compatible lane types, except for a comparison's
+opaque mask (`ExpressionInfo::opaque_vector`). Padded object size alone does
+not make three-lane and four-lane vectors convertible. Logical operators and
+vector conditions are rejected in C. The operators record their operands'
+lvalue conversions, so lowering reads them as any other operand.
 
 Vector operands may be discarded with a void cast, selected by a scalar
 conditional with compatible vector alternatives, and copied by a single braced
@@ -1748,14 +1754,17 @@ signatures so replacing intrin0.h preserves the native C17 stdatomic.h path.
 The prefetch builtin checks its pointer and optional constant operands.
 
 Known boundaries: AVX-512, AMX, newer x86 instruction families, _Float16/bfloat
-vector typedefs and ext_vector_type are not shipped. `vector_size` arguments have
-an iterative integer-literal/enum/arithmetic reducer rather than general C ICE
-syntax (`sizeof` and casts in `vector_size` operands are not implemented).
+vector typedefs and ext_vector_type are not shipped. `vector_size` arguments
+are parsed and analyzed as integer constant expressions, as `aligned` ones are
+(2026-10-29); the iterative integer-literal/enum/arithmetic reducer remains for
+an argument analysis did not keep.
 GNU alignment operands use semantic constant evaluation; declaration alignment
 on pointers and arrays does not change their pointee or element type.
-sizeof/alignof vectors and constant scalar lane initializers evaluate normally;
-vector arithmetic/shuffles/casts do not retain lane constants, so their results
-are not folded in static initializers or subsequent subscripting. This is a
+sizeof/alignof vectors and constant scalar lane initializers evaluate normally,
+and a vector compound literal initializes a static vector as a record literal
+initializes a record; vector arithmetic/shuffles/casts do not retain lane
+constants, so their results are not folded in static initializers or
+subsequent subscripting. This is a
 constant-evaluation gap, not an opaque type-checking fallback.
 
 The final libc survey in `target/libc-survey/vector/results.json` compares 448

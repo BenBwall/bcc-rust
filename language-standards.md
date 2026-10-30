@@ -597,7 +597,7 @@ mode gate and policy diagnostics (`Imaginary` reports an unsupported type); a
 | BuiltinVaArg | - | - | - | - | - | - | - | reserved intrinsic in all modes | parser/sema |
 | BuiltinOffsetof | - | - | - | - | - | - | - | reserved intrinsic in all modes | parser/sema |
 | BuiltinTypesCompatible | - | - | - | - | - | - | - | extension (GNU native) | parser/sema |
-| VectorBuiltins | - | - | - | - | - | - | - | extension (GNU native) | shuffle/convert/bitcast and x86 signatures |
+| VectorBuiltins | - | - | - | - | - | - | - | extension (GNU native) | shuffle/convert/bitcast and x86 signatures; the shuffles, `__builtin_convertvector` and `__builtin_bit_cast` lower |
 | BuiltinChooseExpr | - | - | - | - | - | - | - | extension (GNU native) | parser/sema |
 | LabelsAsValues | - | - | - | - | - | - | - | extension (GNU native) | parser, sema, lowering |
 | LocalLabels | - | - | - | - | - | - | - | extension (GNU native) | parser, sema, lowering |
@@ -1673,6 +1673,50 @@ constant for every type (also on `main`); GCC and Clang accept it.
 
 GNU vector semantics and x86 resource coverage follow [GCC Vector Extensions](https://gcc.gnu.org/onlinedocs/gcc/Vector-Extensions.html) and [Clang Language Extensions](https://clang.llvm.org/docs/LanguageExtensions.html); see semantic-analysis.md for the supported instruction families and constant-evaluation boundaries.
 
+### GNU vector values (2026-10-29)
+
+`vector_size` vectors compile and run on every back end (LLVM, native
+x86-64, interpreter, wasm32): declarations, initializers and compound
+literals (also in static initializers), assignment and loads and stores
+through vector pointers (aligned or `aligned(1)`), the arithmetic, bitwise,
+shift and comparison operators with vector or scalar operands, unary `+`,
+`-` and `~`, subscripts (read and write, constant or variable index), casts
+between vectors of one size and to and from scalars of that size,
+`__builtin_shufflevector`, `__builtin_convertvector`, `__builtin_bit_cast`,
+GCC's `__builtin_shuffle`, `sizeof`, `_Alignof`, vectors in structures and
+arrays, `_Atomic` vectors and `va_arg` of a vector. Lowering keeps a vector
+in memory and scalarizes every operator lane by lane (middle-end.md, "GNU
+vector values"). `vector_size` arguments are integer constant expressions
+(`vector_size(4 * sizeof(int))`).
+
+Where GCC 15.2 and Clang 23 differ, each identity follows its compiler
+(probed with both; `semantic_analysis/tests/vectors.rs` pins the cases):
+
+| Rule | GCC identity | Clang identity |
+| --- | --- | --- |
+| Scalar operand of a vector operator | `scalar_to_vector`: an integer variable no wider than the lanes (sign changes allowed), an integer constant that fits (a negative one into unsigned lanes and an unsigned one into signed lanes allowed), an integer into floating lanes whose format holds its type's range, never a floating scalar into integer lanes, no `_Bool` or enumeration | `tryGCCVectorConvertAndSplat`: integers by rank (no sign change at equal rank) or a constant's significant bits; a floating scalar into integer lanes of its size; `_Bool` and enumerations as integers; otherwise a scalar as large as the whole vector reinterprets its bits (lax conversion), except as a compound assignment's right operand |
+| Vectors of different types | binary operators need as many lanes of one kind and width, signedness aside; assignment, initialization, arguments, `return` and `?:` need compatible lane types | equal sizes suffice everywhere (lax vector conversions), the right operand reading as the left's type |
+| Comparison result | an opaque mask that converts to any vector of its size | the signed mask vector |
+| `++`, `--` | each lane | refused |
+| `&v[i]` | allowed | refused |
+| Lane count | power of two | any; the object rounds up |
+| `__builtin_shuffle` | provided | absent |
+| Two-operand `__builtin_shufflevector(v, mask)` | refused | run-time shuffle |
+
+Calls pass vectors as the claimed compiler does (middle-end.md). Known
+differences: GCC's `_Alignof` of a vector or structure aligned above 16
+bytes reports 16 without `-mavx` (`__alignof__` reports the alignment, and
+bcc reports it for both spellings); Clang returns a 64-byte vector in
+XMM0-XMM3, bcc through memory as GCC does; on Win64 Clang passes a 32- or
+64-byte vector argument as one pointer per 16 bytes, bcc as one pointer;
+on wasm32 Clang splits a vector argument into its lanes, bcc passes it by
+reference. The elementwise and non-temporal builtins
+(`__builtin_elementwise_*`, `__builtin_nontemporal_*`) are checked but not
+lowered (refused by name), as are the `__builtin_ia32_*` builtins.
+GCC accepts a braced initializer for an `_Atomic` vector and refuses a
+vector element in a vector initializer (`{a}`) or braces around a lane
+(`{1, {2}}`); bcc follows Clang in all three.
+
 
 ### Common GCC scalar intrinsics (2026-10-12)
 
@@ -2671,7 +2715,7 @@ optional result for zero), and the `__builtin_stdc_*` forms of C23's
 `__builtin_stdc_rotate_right`, exist for every identity under `GnuBuiltins`,
 as GCC 15 and Clang 23 provide them. GCC 14's `__builtin_parityg`,
 `__builtin_ffsg` and `__builtin_clrsbg` exist for the GCC identity only
-(`Feature::GccBitBuiltins`), as Clang 23 lacks them. Each computes at its
+(`Feature::GccOnlyBuiltins`, which also gates `__builtin_shuffle`), as Clang 23 lacks them. Each computes at its
 operand's width, for every unsigned integer type up to `unsigned __int128`
 and every `unsigned _BitInt(N)`. The registry shard is `src/builtins/bits.rs`;
 `semantic_analysis/builtins/bits.rs` types, checks and folds the calls.

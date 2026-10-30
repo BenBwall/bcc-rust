@@ -2604,3 +2604,68 @@ at `-O0` every IR instruction's entry has a line. The explorer returns the
 binary, the text and the same table (`ExplorerOutput::wasm`). `scripts/wasm/run.mjs` runs a
 WASI module under Node; `scripts/wasm/survey_torture.py` surveys GCC's
 c-torture execute tests.
+
+## GNU vector values (2026-10-29)
+
+A `vector_size` vector has no IR type. Lowering (`lowering/vectors.rs`)
+gives it `Repr::Aggregate`: it lives in memory, its lanes `stride` bytes
+apart, and its value is the address of an object holding it, so objects,
+members, arrays, assignment, calls, results, `?:` and atomics treat it as a
+structure. Every operator is scalarized: it loads each lane of its operands
+with the alignment the lane's offset leaves, computes the lane with the
+scalar instruction of the lane type, and stores it into a fresh stack object,
+the result. Integer lanes wrap (no `nsw`): GCC and Clang leave vector
+overflow undefined and both unoptimized builds wrap. A comparison
+sign-extends each `i1` into its mask lane; a scalar operand converted by
+semantic analysis with an arithmetic conversion is converted once and
+stored into every lane (a splat), and one converted by assignment is
+reinterpreted (Clang's lax conversion of a scalar as large as the vector).
+Casts reinterpret bytes. A subscript of a vector lvalue is a place inside
+its object; of an rvalue, the lane's value. `__builtin_shufflevector` with
+constant indices copies lanes; the run-time shuffles (GCC's
+`__builtin_shuffle`, Clang's two-operand `__builtin_shufflevector`) copy
+the inputs side by side and index that table by each mask lane modulo the
+lane count; `__builtin_convertvector` converts each lane as a C conversion;
+`__builtin_bit_cast` stores and reloads. The back ends see only scalar
+code, so no back end needs vector types; LLVM's SLP vectorizer may put the
+lanes back together at `-O2`.
+
+**Calls.** `vectors::abi_layout` describes a vector parameter or result as
+an `AggregateLayout` flagged `vector`, whose scalars are not its lanes but
+the registers the claimed compiler uses, chosen at lowering because the
+rules depend on the identity; no scalars means memory. System V
+(`abi/sysv.rs`): 16 bytes in one SSE register (`f128` carries the bits), 8
+in an SSE eightbyte (`f64`), 1, 2 or 4 in a general register; a 32-byte
+result comes back in XMM0 and XMM1 for Clang (`f128, f128` at offsets 0
+and 16) and through memory for GCC; larger ones and every larger argument
+go to memory (`byval`, aligned as the vector). GCC passes one-lane `float`,
+`double` and `long double` vectors in memory; Clang passes the `float` as
+an integer, the `double` argument in memory with its result in XMM0, and
+the `long double` as x87 data. A vector member of a structure classifies
+as one unit (`f128` for 16 bytes, `f64` for 8, an integer for 1 to 4), as
+Clang's `classify` treats a vector field. Microsoft x64 (`abi/win64.rs`),
+as Clang passes GNU vectors: arguments by reference except a lone `float`
+or `double` lane in its XMM register; results of up to 16 bytes in XMM0
+(`i128`, which the LLVM back end types `<2 x i64>`) and of 32 bytes in XMM0
+and XMM1. WebAssembly passes one-lane `float` and `double` vectors as
+values and others by reference and `sret`, where wasi-sdk's Clang splits
+them into lanes.
+
+The native back end returns the `f128`/`i128` pair in XMM0 and XMM1, and
+passes a `byval` copy aligned above 16 bytes by realigning `%rsp` in the
+prologue (`andq $-align, %rsp`) with a frame pointer, as a moving stack
+does (`MFunction::outgoing_align`, `Frame::realign`).
+
+**Evidence.** `tests/integration/vector_types.rs` runs
+`tests/fixtures/programs/vector_types.c` (every operator, conversion and
+builtin) under both identities against the host GCC's and the bundled
+Clang's builds, interpreted with and without the optimizer and built
+through LLVM (`-O0`, `-O2`) and the native back end, and on wasm32 against
+wasi-sdk's build; `vector_types_abi.c` links halves built by bcc's four
+compiled arms and the claimed compiler in all 25 pairings per identity.
+The GCC testsuite programs that use `vector_size` (c-torture execute,
+`gcc.dg` and `gcc.dg/torture` run tests; 134 of 140 build and pass with
+GCC 15.2 at `-O0`) pass 132 of those 134 with bcc's LLVM `-O0` and `-O2`
+and native arms; the other two call `__builtin_assoc_barrier` and an
+`__builtin_ia32_*` builtin. The interpreter passes 104: most of the rest
+use inline assembly, which it does not run.
