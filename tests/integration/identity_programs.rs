@@ -53,6 +53,13 @@ mod tests {
         matches_the_claimed_compiler("imaginary_interchange_constants.c");
     }
 
+    /// The C99 §7.12.14 comparison builtins glibc's `<math.h>` uses, with
+    /// `__builtin_issignaling` and `__builtin_roundeven`.
+    #[test]
+    fn float_comparisons_match_the_claimed_compiler() {
+        matches_the_claimed_compiler("float_comparisons.c");
+    }
+
     /// Signed left shifts that wrap, and `__LINE__` as a macro argument in
     /// a replacement list.
     #[test]
@@ -143,6 +150,7 @@ mod tests {
         let built = Command::new(compiler)
             .args([source, "-std=gnu17", "-O0", "-w", "-o"])
             .arg(&executable)
+            .arg("-lm")
             .output()
             .unwrap();
         assert!(
