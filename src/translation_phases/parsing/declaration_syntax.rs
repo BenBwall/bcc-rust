@@ -897,6 +897,41 @@ impl<'tu> TypeSpecifiers<'tu> {
         }
     }
 
+    /// Whether these specifiers name an integer type `_Complex` may make
+    /// complex: any but `_Bool`, `__int128` and the extended integers.
+    /// GNU extension: GCC manual, "Complex Numbers".
+    pub(super) fn is_complex_integer_base(self) -> bool {
+        matches!(
+            self,
+            TypeSpecifiers::Char
+                | TypeSpecifiers::SignedChar
+                | TypeSpecifiers::UnsignedChar
+                | TypeSpecifiers::Short
+                | TypeSpecifiers::SignedShort
+                | TypeSpecifiers::UnsignedShort
+                | TypeSpecifiers::ShortInt
+                | TypeSpecifiers::SignedShortInt
+                | TypeSpecifiers::UnsignedShortInt
+                | TypeSpecifiers::Int
+                | TypeSpecifiers::SignedInt
+                | TypeSpecifiers::UnsignedInt
+                | TypeSpecifiers::Signed
+                | TypeSpecifiers::Unsigned
+                | TypeSpecifiers::Long
+                | TypeSpecifiers::SignedLong
+                | TypeSpecifiers::UnsignedLong
+                | TypeSpecifiers::LongInt
+                | TypeSpecifiers::SignedLongInt
+                | TypeSpecifiers::UnsignedLongInt
+                | TypeSpecifiers::LongLong
+                | TypeSpecifiers::SignedLongLong
+                | TypeSpecifiers::UnsignedLongLong
+                | TypeSpecifiers::LongLongInt
+                | TypeSpecifiers::SignedLongLongInt
+                | TypeSpecifiers::UnsignedLongLongInt
+        )
+    }
+
     pub(super) fn is_long_double(self) -> bool {
         match self {
             | TypeSpecifiers::LongDouble | TypeSpecifiers::ComplexLongDouble => true,
@@ -1156,6 +1191,8 @@ impl Display for TypeSpecifiers<'_> {
                         if *complex { " _Complex" } else { "" }
                     );
                 },
+                | super::modern::ExtendedType::ComplexInteger(real) =>
+                    return write!(f, "_Complex {real}"),
             }),
             | TypeSpecifiers::Empty => write!(f, "<no type specifier>"),
             | TypeSpecifiers::Char => write!(f, "char"),

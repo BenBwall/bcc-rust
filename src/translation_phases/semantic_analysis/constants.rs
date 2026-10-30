@@ -214,6 +214,29 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let TypeKind::Scalar(scalar) = self.types.nodes[ty.index] else {
             return None;
         };
+        // A complex integer type keeps each part's integer value, wrapped
+        // to the part's width as an integer conversion wraps (C99
+        // §6.3.1.3p2), after truncation of a floating part (§6.3.1.4p1).
+        // GNU extension: GCC manual, "Complex Numbers".
+        if scalar.complex_integer() {
+            let (bits, signed) = self.types.target.integer(scalar.real_type())?;
+            let part = |value: LongDouble| {
+                let truncated =
+                    crate::float_parsing::bits::to_integer(&value, 128, true)?.cast_signed();
+                self.integer_value(
+                    Integer::int(truncated).cast(bits, signed),
+                    crate::ir::Type::F80,
+                )
+            };
+            return Some(Floating {
+                real: part(value.real)?,
+                imag: if scalar.complex() {
+                    part(value.imag)?
+                } else {
+                    LongDouble::ZERO
+                },
+            });
+        }
         if let Some(format) = scalar.real_type().half_format() {
             return Some(Floating {
                 real: round_half(value.real, format),

@@ -24,6 +24,7 @@ mod bit_int;
 mod call_diagnostics;
 mod cli;
 mod code_generation_cli;
+mod complex_integers;
 mod diagnostic_parity;
 mod diagnostics_golden;
 mod driver_cli;

@@ -2678,3 +2678,33 @@ GCC 15.2 at `-O0`) pass 132 of those 134 with bcc's LLVM `-O0` and `-O2`
 and native arms; the other two call `__builtin_assoc_barrier` and an
 `__builtin_ia32_*` builtin. The interpreter passes 104: most of the rest
 use inline assembly, which it does not run.
+
+## GNU complex integer types (2026-10-30)
+
+A complex integer value is a `Repr::Complex` pair whose component is the IR
+integer type of its real type (`i8` to `i64`). `lowering/complex.rs`
+converts part by part through `part_from` (an integer part extends or
+wraps, a floating part truncates with `fptosi`/`fptoui`), and
+`complex_integer_binary` lowers `+`, `-` and `*` to wrapping `iadd`,
+`isub` and `imul` of the parts, `==` and `!=` to two `icmp`s, and `/`
+to `sdiv` or `udiv` by the identity's formula: Clang's
+`(ac + bd) / (cc + dd)`, or GCC's (`gcc_integer_quotient`), which selects
+between its two ratios with `select` and divides an unused ratio by 1, so
+only a zero divisor traps. Unary `-` and `~` (the conjugate) negate parts
+with `isub` from zero; a condition is `or` of two `icmp ne`. Folded
+constants and static initializers write the exact parts from the floating
+carrier, wrapped to the part's width.
+
+ABI: a complex integer's layout is `AggregateFlags::COMPLEX` with two
+integer leaves (the verifier accepts integer leaves as well as floating
+ones), which the System V classification passes as GCC and Clang pass a
+structure of the two parts: `_Complex char`, `short` and `int` in one
+register, `_Complex long` in two or on the stack whole. The Microsoft x64
+and WebAssembly conventions classify the same layout; only calls within
+one wasm32 module were run.
+
+**Evidence.** `complex_integers.c` prints what GCC 15 and Clang 23 print
+under each identity on all six arms (`identity_programs.rs`), and what
+wasi-sdk's Clang prints on wasm32 (`complex_integers.rs`);
+`complex_integers_abi.c` passes in all 16 caller/callee pairings of GCC,
+Clang and bcc's LLVM and native back ends, and interpreted.

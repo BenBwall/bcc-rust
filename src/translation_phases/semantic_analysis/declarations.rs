@@ -147,6 +147,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | S::ComplexLongDouble => Some(Scalar::ComplexLongDouble),
             | S::Extended(super::ExtendedType::MsInteger { width, signedness }) =>
                 Some(ms_integer(*width, *signedness)),
+            // GNU extension: GCC manual, "Complex Numbers".
+            | S::Extended(super::ExtendedType::ComplexInteger(real)) =>
+                standard_integer(*real).map(Scalar::complex_type),
             | _ => None,
         };
         self.work.push(Work::Qualify(q, source));
@@ -2082,4 +2085,25 @@ pub(super) fn compatible_enum_type(
     } else {
         target.intmax_t
     }
+}
+
+/// The standard integer type that integer type specifiers name.
+/// C99: §6.7.2 paragraph 2, pp. 99-100; PDF pp. 111-112.
+fn standard_integer(spec: TypeSpecifiers<'_>) -> Option<Scalar> {
+    use TypeSpecifiers as S;
+    Some(match spec {
+        | S::Char => Scalar::Char,
+        | S::SignedChar => Scalar::SignedChar,
+        | S::UnsignedChar => Scalar::UnsignedChar,
+        | S::Short | S::SignedShort | S::ShortInt | S::SignedShortInt => Scalar::Short,
+        | S::UnsignedShort | S::UnsignedShortInt => Scalar::UnsignedShort,
+        | S::Int | S::Signed | S::SignedInt => Scalar::Int,
+        | S::Unsigned | S::UnsignedInt => Scalar::UnsignedInt,
+        | S::Long | S::SignedLong | S::LongInt | S::SignedLongInt => Scalar::Long,
+        | S::UnsignedLong | S::UnsignedLongInt => Scalar::UnsignedLong,
+        | S::LongLong | S::SignedLongLong | S::LongLongInt | S::SignedLongLongInt =>
+            Scalar::LongLong,
+        | S::UnsignedLongLong | S::UnsignedLongLongInt => Scalar::UnsignedLongLong,
+        | _ => return None,
+    })
 }

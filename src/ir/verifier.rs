@@ -414,7 +414,7 @@ fn verify_signature(
         } else if let Some(layout) = param.abi.layout()
             && layout.flags.contains(super::AggregateFlags::COMPLEX)
             && (layout.flags != super::AggregateFlags::COMPLEX
-                || !matches!(layout.scalars, [a, b] if a.offset == 0 && a.ty == b.ty && a.ty.is_float() && u64::from(b.offset) * 2 == layout.size && u64::from(b.offset) == if a.ty == Type::F80 { 16 } else { u64::from(a.ty.bytes()) }))
+                || !matches!(layout.scalars, [a, b] if a.offset == 0 && a.ty == b.ty && (a.ty.is_float() || a.ty.is_int()) && u64::from(b.offset) * 2 == layout.size && u64::from(b.offset) == if a.ty == Type::F80 { 16 } else { u64::from(a.ty.bytes()) }))
         {
             Some(ParamAbiProblem::ComplexLayout)
         } else if let ParamAbi::Registers(registers) = param.abi

@@ -54,7 +54,15 @@ impl TargetLayout {
         ))
     }
 
+    /// A complex integer type is laid out as an array of two of its real
+    /// type. GNU extension: GCC manual, "Complex Numbers".
     pub(crate) fn scalar(self, scalar: Scalar) -> Option<Layout> {
+        if scalar.complex_integer() {
+            return self.scalar(scalar.real_type()).map(|real| Layout {
+                size:  2 * real.size,
+                align: real.align,
+            });
+        }
         self.scalars[scalar.representation() as usize]
     }
 
@@ -277,6 +285,24 @@ pub(crate) enum Scalar {
     ComplexFloat64,
     ComplexFloat32x,
     ComplexFloat64x,
+    /// GCC's and Clang's complex integer types, `_Complex` with an integer
+    /// type specifier: two values of the corresponding real integer type,
+    /// laid out as an array of two. GCC also accepts `_Complex __int128`,
+    /// which Clang rejects and bcc does not model; neither accepts
+    /// `_Complex _Bool`.
+    /// GNU extension: GCC manual, "Complex Numbers".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Complex.html>
+    ComplexChar,
+    ComplexSignedChar,
+    ComplexUnsignedChar,
+    ComplexShort,
+    ComplexUnsignedShort,
+    ComplexInt,
+    ComplexUnsignedInt,
+    ComplexLong,
+    ComplexUnsignedLong,
+    ComplexLongLong,
+    ComplexUnsignedLongLong,
 }
 
 impl Scalar {
@@ -317,6 +343,17 @@ impl Scalar {
             | Self::ComplexFloat64 => "_Float64 _Complex",
             | Self::ComplexFloat32x => "_Float32x _Complex",
             | Self::ComplexFloat64x => "_Float64x _Complex",
+            | Self::ComplexChar => "_Complex char",
+            | Self::ComplexSignedChar => "_Complex signed char",
+            | Self::ComplexUnsignedChar => "_Complex unsigned char",
+            | Self::ComplexShort => "_Complex short",
+            | Self::ComplexUnsignedShort => "_Complex unsigned short",
+            | Self::ComplexInt => "_Complex int",
+            | Self::ComplexUnsignedInt => "_Complex unsigned int",
+            | Self::ComplexLong => "_Complex long",
+            | Self::ComplexUnsignedLong => "_Complex unsigned long",
+            | Self::ComplexLongLong => "_Complex long long",
+            | Self::ComplexUnsignedLongLong => "_Complex unsigned long long",
         }
     }
 
@@ -341,9 +378,35 @@ impl Scalar {
         }
     }
 
-    /// Whether this is a complex floating type.
+    /// Whether this is a complex type: a complex floating type, or GCC's and
+    /// Clang's complex integer types.
     /// C99: §6.2.5 paragraph 11, p. 34; PDF p. 46.
     pub(crate) const fn complex(self) -> bool {
+        self.complex_floating() || self.complex_integer()
+    }
+
+    /// Whether this is one of the complex integer types.
+    /// GNU extension: GCC manual, "Complex Numbers".
+    pub(crate) const fn complex_integer(self) -> bool {
+        matches!(
+            self,
+            Self::ComplexChar
+                | Self::ComplexSignedChar
+                | Self::ComplexUnsignedChar
+                | Self::ComplexShort
+                | Self::ComplexUnsignedShort
+                | Self::ComplexInt
+                | Self::ComplexUnsignedInt
+                | Self::ComplexLong
+                | Self::ComplexUnsignedLong
+                | Self::ComplexLongLong
+                | Self::ComplexUnsignedLongLong
+        )
+    }
+
+    /// Whether this is a complex floating type.
+    /// C99: §6.2.5 paragraph 11, p. 34; PDF p. 46.
+    pub(crate) const fn complex_floating(self) -> bool {
         matches!(
             self,
             Self::ComplexFloat
@@ -372,12 +435,24 @@ impl Scalar {
             | Self::ComplexFloat64 => Self::Float64,
             | Self::ComplexFloat32x => Self::Float32x,
             | Self::ComplexFloat64x => Self::Float64x,
+            | Self::ComplexChar => Self::Char,
+            | Self::ComplexSignedChar => Self::SignedChar,
+            | Self::ComplexUnsignedChar => Self::UnsignedChar,
+            | Self::ComplexShort => Self::Short,
+            | Self::ComplexUnsignedShort => Self::UnsignedShort,
+            | Self::ComplexInt => Self::Int,
+            | Self::ComplexUnsignedInt => Self::UnsignedInt,
+            | Self::ComplexLong => Self::Long,
+            | Self::ComplexUnsignedLong => Self::UnsignedLong,
+            | Self::ComplexLongLong => Self::LongLong,
+            | Self::ComplexUnsignedLongLong => Self::UnsignedLongLong,
             | _ => self,
         }
     }
 
     /// The complex type whose corresponding real type is this real floating
-    /// type; any other type is its own.
+    /// or integer type (`_Bool` and `__int128` have none); any other type is
+    /// its own.
     /// C99: §6.2.5 paragraph 11, p. 34; PDF p. 46.
     pub(crate) const fn complex_type(self) -> Self {
         match self {
@@ -390,6 +465,17 @@ impl Scalar {
             | Self::Float64 => Self::ComplexFloat64,
             | Self::Float32x => Self::ComplexFloat32x,
             | Self::Float64x => Self::ComplexFloat64x,
+            | Self::Char => Self::ComplexChar,
+            | Self::SignedChar => Self::ComplexSignedChar,
+            | Self::UnsignedChar => Self::ComplexUnsignedChar,
+            | Self::Short => Self::ComplexShort,
+            | Self::UnsignedShort => Self::ComplexUnsignedShort,
+            | Self::Int => Self::ComplexInt,
+            | Self::UnsignedInt => Self::ComplexUnsignedInt,
+            | Self::Long => Self::ComplexLong,
+            | Self::UnsignedLong => Self::ComplexUnsignedLong,
+            | Self::LongLong => Self::ComplexLongLong,
+            | Self::UnsignedLongLong => Self::ComplexUnsignedLongLong,
             | _ => self,
         }
     }

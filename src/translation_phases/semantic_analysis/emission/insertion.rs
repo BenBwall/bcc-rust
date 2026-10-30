@@ -481,7 +481,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let ty = self.types.non_atomic(self.expression_info(operand).ty);
         matches!(
             self.types.nodes[ty.index],
-            TypeKind::Scalar(s) if s.complex()
+            TypeKind::Scalar(s) if s.complex_floating()
         )
     }
 

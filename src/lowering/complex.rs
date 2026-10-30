@@ -25,6 +25,7 @@ use crate::{
         FloatCC,
         InstData,
         InstFlags,
+        IntCC,
         Linkage,
         Opcode,
         ParamAbi,
@@ -39,6 +40,7 @@ use crate::{
         semantic_analysis::{
             Scalar,
             TypeId,
+            TypeKind,
         },
     },
 };
@@ -199,6 +201,7 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
     }
 
     /// Componentwise conversions retain unsigned integer source semantics.
+    /// A GNU complex integer type's parts convert as its real type does.
     /// C99: §6.3.1.2p1, p. 43; PDF p. 55; §6.3.1.6-§6.3.1.7, p. 44; PDF p. 56.
     pub(super) fn convert_complex(
         &mut self,
@@ -209,24 +212,21 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
         let from = self.repr(item.ty, source)?;
         let target = self.repr(to, source)?;
         let operand = match target {
-            | Repr::Complex { component } => {
+            | Repr::Complex { .. } => {
+                let part = self.part_repr(to, source)?;
                 let pair = if let Repr::Complex { .. } = from {
                     // The parts' own type: `f32` for a `_Complex _Float16`
                     // excess.
                     let pair = self.complex_parts(item, source)?;
-                    let old = Repr::Float {
-                        ty: self.draft.value_type(pair[0]),
-                    };
+                    let old = self.parts_repr(item.ty, pair[0], source)?;
                     [
-                        self.float_from(pair[0], old, component, source)?,
-                        self.float_from(pair[1], old, component, source)?,
+                        self.part_from(pair[0], old, part, source)?,
+                        self.part_from(pair[1], old, part, source)?,
                     ]
                 } else {
                     let value = self.value(item, source)?;
-                    [
-                        self.float_from(value, from, component, source)?,
-                        self.fconst(component, 0),
-                    ]
+                    let zero = self.part_zero(part);
+                    [self.part_from(value, from, part, source)?, zero]
                 };
                 self.complex_pair(pair)
             },
@@ -235,37 +235,99 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
                 let truth = self.truth(item, source)?;
                 Operand::Value(self.extend(truth, false, Type::I8))
             },
-            | Repr::Float { ty } => {
+            | representation @ (Repr::Float { .. } | Repr::Int { .. }) => {
                 let real = self.complex_parts(item, source)?[0];
-                Operand::Value(self.float_from(
-                    real,
-                    Repr::Float {
-                        ty: self.draft.value_type(real),
-                    },
-                    ty,
-                    source,
-                )?)
-            },
-            | representation @ Repr::Int { ty, signed, .. } => {
-                let mut real = self.complex_parts(item, source)?[0];
-                // A 16-bit part widens exactly first.
-                if self.draft.value_type(real).half_format().is_some() {
-                    real = self.widen_half(real);
-                }
-                let value = self.convert(
-                    if signed {
-                        Opcode::Fptosi
-                    } else {
-                        Opcode::Fptoui
-                    },
-                    ty,
-                    real,
-                );
-                Operand::Value(self.normalize(value, representation))
+                let old = self.parts_repr(item.ty, real, source)?;
+                let value = self.part_from(real, old, representation, source)?;
+                Operand::Value(if let Repr::Int { .. } = representation {
+                    self.normalize(value, representation)
+                } else {
+                    value
+                })
             },
             | _ => return Err(LoweringError::missing("invalid complex conversion", source)),
         };
         Ok(Item { operand, ty: to })
+    }
+
+    /// The representation of one part of the complex type `ty`.
+    pub(super) fn part_repr(
+        &self,
+        ty: TypeId,
+        source: SourceVectors,
+    ) -> Result<Repr, LoweringError> {
+        let ty = self.unit.sema.types.non_atomic(ty);
+        let TypeKind::Scalar(scalar) = self.unit.sema.types.kind(ty) else {
+            return Err(LoweringError::missing(
+                "a complex type has no scalar",
+                source,
+            ));
+        };
+        types::scalar_repr(&self.unit.sema.types, scalar.real_type())
+            .map_err(|kind| at(kind, source))
+    }
+
+    /// The representation of the parts a complex value of type `ty` holds:
+    /// its real type's, or a floating one in the parts' own IR type (`f32`
+    /// for a `_Complex _Float16` excess).
+    fn parts_repr(
+        &self,
+        ty: TypeId,
+        part: Value,
+        source: SourceVectors,
+    ) -> Result<Repr, LoweringError> {
+        let representation = self.part_repr(ty, source)?;
+        Ok(match representation {
+            | Repr::Float { .. } => Repr::Float {
+                ty: self.draft.value_type(part),
+            },
+            | representation => representation,
+        })
+    }
+
+    /// Zero in a part of representation `part`.
+    fn part_zero(&mut self, part: Repr) -> Value {
+        match part {
+            | Repr::Float { ty } => self.fconst(ty, 0),
+            | Repr::Int { ty, .. } => self.iconst(ty, 0),
+            | _ => self.iconst(Type::I8, 0),
+        }
+    }
+
+    /// `value`, of representation `from`, converted to a part of
+    /// representation `to`: a floating part as `float_from` converts, an
+    /// integer one truncated toward zero from a floating value (§6.3.1.4p1)
+    /// or extended or wrapped from an integer (§6.3.1.3).
+    fn part_from(
+        &mut self,
+        value: Value,
+        from: Repr,
+        to: Repr,
+        source: SourceVectors,
+    ) -> Result<Value, LoweringError> {
+        match to {
+            | Repr::Float { ty } => self.float_from(value, from, ty, source),
+            | Repr::Int { ty, signed, .. } => Ok(match from {
+                | Repr::Float { .. } => {
+                    let mut value = value;
+                    // A 16-bit part widens exactly first.
+                    if self.draft.value_type(value).half_format().is_some() {
+                        value = self.widen_half(value);
+                    }
+                    let opcode = if signed {
+                        Opcode::Fptosi
+                    } else {
+                        Opcode::Fptoui
+                    };
+                    self.convert(opcode, ty, value)
+                },
+                | from => self.extend(value, from.signed(), ty),
+            }),
+            | _ => Err(LoweringError::missing(
+                "invalid complex part conversion",
+                source,
+            )),
+        }
     }
 
     /// Evaluate in the operands' common real precision, preserving domains.
@@ -288,6 +350,9 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
         } else {
             self.draft.value_type(self.complex_parts(right, source)?[0])
         };
+        if !component.is_float() {
+            return self.complex_integer_binary(operator, left, right, ty, domains, source);
+        }
         let a = if domains & 1 != 0 {
             self.complex_parts(left, source)?
         } else {
@@ -378,6 +443,167 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
             | _ => return Err(LoweringError::missing("invalid complex operator", source)),
         };
         Ok(Item { operand, ty })
+    }
+
+    /// GNU complex integer arithmetic in the parts' type, wrapping as
+    /// unsigned arithmetic does: the sum, difference and product of each
+    /// part (`(ac - bd) + (ad + bc)i`), equality of both parts, and a
+    /// quotient by the identity's formula
+    /// ([`CompilerConfiguration::complex_integer_rules`](crate::configuration::CompilerConfiguration::complex_integer_rules)).
+    /// A real divisor divides each part, as both compilers do.
+    /// GNU extension: GCC manual, "Complex Numbers".
+    fn complex_integer_binary(
+        &mut self,
+        operator: BinaryOperator,
+        left: Item,
+        right: Item,
+        ty: TypeId,
+        domains: u8,
+        source: SourceVectors,
+    ) -> Result<Item, LoweringError> {
+        use BinaryOperator as B;
+        let flags = InstFlags::empty();
+        let parts = |lowerer: &mut Self, item: Item, complex: bool| -> Result<[Value; 2], _> {
+            if complex {
+                lowerer.complex_parts(item, source)
+            } else {
+                let value = lowerer.value(item, source)?;
+                let zero = lowerer.iconst(lowerer.draft.value_type(value), 0);
+                Ok([value, zero])
+            }
+        };
+        let a = parts(self, left, domains & 1 != 0)?;
+        let b = parts(self, right, domains & 2 != 0)?;
+        let operand = match operator {
+            | B::Equal | B::NotEqual => {
+                let cc = if operator == B::Equal {
+                    IntCC::Eq
+                } else {
+                    IntCC::Ne
+                };
+                let re = self.icmp(cc, a[0], b[0]);
+                let im = self.icmp(cc, a[1], b[1]);
+                let opcode = if operator == B::Equal {
+                    Opcode::And
+                } else {
+                    Opcode::Or
+                };
+                Operand::Truth(self.binary_inst(opcode, flags, re, im))
+            },
+            | B::Addition | B::Subtraction => {
+                let opcode = if operator == B::Addition {
+                    Opcode::Iadd
+                } else {
+                    Opcode::Isub
+                };
+                let pair = [
+                    self.binary_inst(opcode, flags, a[0], b[0]),
+                    self.binary_inst(opcode, flags, a[1], b[1]),
+                ];
+                self.complex_pair(pair)
+            },
+            | B::Multiplication => {
+                let ac = self.binary_inst(Opcode::Imul, flags, a[0], b[0]);
+                let bd = self.binary_inst(Opcode::Imul, flags, a[1], b[1]);
+                let ad = self.binary_inst(Opcode::Imul, flags, a[0], b[1]);
+                let bc = self.binary_inst(Opcode::Imul, flags, a[1], b[0]);
+                let pair = [
+                    self.binary_inst(Opcode::Isub, flags, ac, bd),
+                    self.binary_inst(Opcode::Iadd, flags, ad, bc),
+                ];
+                self.complex_pair(pair)
+            },
+            | B::Division => {
+                let signed = self.part_repr(ty, source)?.signed();
+                let divide = if signed { Opcode::Sdiv } else { Opcode::Udiv };
+                let pair = if domains & 2 == 0 {
+                    [
+                        self.binary_inst(divide, flags, a[0], b[0]),
+                        self.binary_inst(divide, flags, a[1], b[0]),
+                    ]
+                } else if self.unit.context.configuration.complex_integer_rules()
+                    == crate::configuration::RuleSet::Gcc
+                {
+                    self.gcc_integer_quotient(a, b, signed)
+                } else {
+                    // Clang: `(ac + bd) / (cc + dd)` and `(bc - ad) / (cc +
+                    // dd)`.
+                    let cc = self.binary_inst(Opcode::Imul, flags, b[0], b[0]);
+                    let dd = self.binary_inst(Opcode::Imul, flags, b[1], b[1]);
+                    let ac = self.binary_inst(Opcode::Imul, flags, a[0], b[0]);
+                    let bd = self.binary_inst(Opcode::Imul, flags, a[1], b[1]);
+                    let bc = self.binary_inst(Opcode::Imul, flags, a[1], b[0]);
+                    let ad = self.binary_inst(Opcode::Imul, flags, a[0], b[1]);
+                    let denominator = self.binary_inst(Opcode::Iadd, flags, cc, dd);
+                    let real = self.binary_inst(Opcode::Iadd, flags, ac, bd);
+                    let imaginary = self.binary_inst(Opcode::Isub, flags, bc, ad);
+                    [
+                        self.binary_inst(divide, flags, real, denominator),
+                        self.binary_inst(divide, flags, imaginary, denominator),
+                    ]
+                };
+                self.complex_pair(pair)
+            },
+            | _ => return Err(LoweringError::missing("invalid complex operator", source)),
+        };
+        Ok(Item { operand, ty })
+    }
+
+    /// GCC's quotient of complex integers `a / b` (`expand_complex_div_wide`
+    /// in its `tree-complex.cc`): dividing by the part of the divisor with
+    /// the larger magnitude first, in the parts' type. Where `|c| < |d|`,
+    /// with `r = c / d` and `t = c r + d`, it is `((a r + b) / t) + ((b r -
+    /// a) / t)i`; otherwise, with `r = d / c` and `t = d r + c`, `((b r + a)
+    /// / t) + ((b - a r) / t)i`. The unused ratio divides by 1, so only a
+    /// zero divisor traps, as GCC's does.
+    fn gcc_integer_quotient(&mut self, a: [Value; 2], b: [Value; 2], signed: bool) -> [Value; 2] {
+        let flags = InstFlags::empty();
+        let ty = self.draft.value_type(a[0]);
+        let divide = if signed { Opcode::Sdiv } else { Opcode::Udiv };
+        let zero = self.iconst(ty, 0);
+        let one = self.iconst(ty, 1);
+        let magnitude = |lowerer: &mut Self, value: Value| {
+            if signed {
+                let negative = lowerer.icmp(IntCC::Slt, value, zero);
+                let negated = lowerer.binary_inst(Opcode::Isub, flags, zero, value);
+                lowerer.choose(negative, negated, value)
+            } else {
+                value
+            }
+        };
+        let (c, d) = (b[0], b[1]);
+        let c_magnitude = magnitude(self, c);
+        let d_magnitude = magnitude(self, d);
+        let smaller = self.icmp(
+            if signed { IntCC::Slt } else { IntCC::Ult },
+            c_magnitude,
+            d_magnitude,
+        );
+        // |c| < |d|: r = c / d, t = c r + d.
+        let d_divisor = self.choose(smaller, d, one);
+        let small_ratio = self.binary_inst(divide, flags, c, d_divisor);
+        let small_scaled = self.binary_inst(Opcode::Imul, flags, c, small_ratio);
+        let small_total = self.binary_inst(Opcode::Iadd, flags, small_scaled, d);
+        let ar = self.binary_inst(Opcode::Imul, flags, a[0], small_ratio);
+        let small_real = self.binary_inst(Opcode::Iadd, flags, ar, a[1]);
+        let br = self.binary_inst(Opcode::Imul, flags, a[1], small_ratio);
+        let small_imaginary = self.binary_inst(Opcode::Isub, flags, br, a[0]);
+        // Otherwise: r = d / c, t = d r + c.
+        let c_divisor = self.choose(smaller, one, c);
+        let large_ratio = self.binary_inst(divide, flags, d, c_divisor);
+        let large_scaled = self.binary_inst(Opcode::Imul, flags, d, large_ratio);
+        let large_total = self.binary_inst(Opcode::Iadd, flags, large_scaled, c);
+        let br = self.binary_inst(Opcode::Imul, flags, a[1], large_ratio);
+        let large_real = self.binary_inst(Opcode::Iadd, flags, br, a[0]);
+        let ar = self.binary_inst(Opcode::Imul, flags, a[0], large_ratio);
+        let large_imaginary = self.binary_inst(Opcode::Isub, flags, a[1], ar);
+        let total = self.choose(smaller, small_total, large_total);
+        let real = self.choose(smaller, small_real, large_real);
+        let imaginary = self.choose(smaller, small_imaginary, large_imaginary);
+        [
+            self.binary_inst(divide, flags, real, total),
+            self.binary_inst(divide, flags, imaginary, total),
+        ]
     }
 
     /// The product or quotient of two complex values from libgcc's

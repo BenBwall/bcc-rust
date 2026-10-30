@@ -2874,3 +2874,43 @@ rather than `popcnt`, `lzcnt` or `tzcnt`. `tests/integration/stdbit.rs` runs
 `tests/fixtures/programs/stdbit{,_gcc,_clang}.c` on every back end against
 Clang 23 and GCC 15 (and wasi-sdk's Clang for wasm32), and the
 `sema-stdbit-{gcc,clang}` goldens pin the misuse diagnostics.
+
+## GNU complex integer types (2026-10-30)
+
+`_Complex` combines with the integer type specifiers in any order
+(`_Complex int`, `unsigned short _Complex`, `long _Complex`, `_Complex long
+long`), as GCC and Clang accept it: the parser wraps the integer specifiers
+in `ExtendedType::ComplexInteger`, and semantic analysis gives
+`Scalar::ComplexChar` through `Scalar::ComplexUnsignedLongLong`, laid out as
+an array of two of the real type. `-pedantic` reports "complex integer
+type", under the GNU complex-number feature `ImaginaryConstants`. Integer
+imaginary constants (`2i`, `2li`) have the complex type of their real
+constant's type, as in both compilers. `_Complex _Bool` is refused, as both
+refuse it; `_Complex __int128`, which GCC accepts and Clang refuses, is
+refused under both identities ("cannot combine"), and plain `_Complex`
+(GCC's `_Complex double`) stays an error.
+
+Typing follows both compilers: a complex integer operand takes part in the
+usual arithmetic conversions through its real type unpromoted
+(`_Complex char + _Complex char` is `_Complex char`), a real integer
+operand promotes (`_Complex char + char` is `_Complex int`), and a floating
+operand makes the result complex floating. `~` on any complex value is its
+conjugate (also for complex floating types, a GNU extension Clang shares),
+`!` and conditions test both parts, `==` and `!=` compare both, and
+`__real__` and `__imag__` are lvalues. Conversions go part by part:
+an integer part wraps, a floating part truncates.
+
+Division differs between the compilers and follows the identity
+(`CompilerConfiguration::complex_integer_rules`): GCC divides by the
+divisor part of larger magnitude first (`expand_complex_div_wide`:
+with `|c| < |d|`, `r = c / d`, `t = c r + d`, the quotient is
+`((a r + b) / t) + ((b r - a) / t)i`, and symmetrically), Clang computes
+`(ac + bd) / (cc + dd)` and `(bc - ad) / (cc + dd)`; both in the parts'
+type, wrapping, and both divide each part by a real divisor. Constant
+expressions fold with the same rules, the parts held exactly in the floating
+carrier, so a complex integer constant initializes a static object.
+
+Not modeled: `++` and `--` on complex values, `_Atomic` complex integers
+(refused by lowering), and the `-pedantic` diagnostic for `~` as conjugate
+under the Clang identity (reported as "`~` for complex conjugation" under
+the `RealImag` feature for both).

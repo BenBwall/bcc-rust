@@ -60,6 +60,14 @@ mod tests {
         matches_the_claimed_compiler("float_comparisons.c");
     }
 
+    /// GNU complex integer types: arithmetic, the conjugate, conversions,
+    /// component lvalues, static initializers and calls; GCC and Clang
+    /// divide them differently.
+    #[test]
+    fn complex_integers_match_the_claimed_compiler() {
+        matches_the_claimed_compiler("complex_integers.c");
+    }
+
     /// Signed left shifts that wrap, and `__LINE__` as a macro argument in
     /// a replacement list.
     #[test]
