@@ -4,7 +4,8 @@
 //! over the messages in `protocol`; `editor` mounts Monaco for the source and
 //! the compiler outputs, with `highlight` colouring the prerendered fallback;
 //! `panels` render engine snapshots (whose shape `snapshot` describes) and the
-//! compiler pipeline (`pipeline`); `palette` keeps each variable's colour the
+//! compiler pipeline (`pipeline`); `glossary` defines the standard's terms the
+//! explanations use; `palette` keeps each variable's colour the
 //! same in every view; `demos` embeds the lesson programs. `machine` runs the
 //! bcc abstract machine inside its Worker, and `explorer` runs bcc's real
 //! compiler inside another.
@@ -25,6 +26,7 @@ mod editor;
 mod engine;
 #[cfg(feature = "compiler")]
 pub mod explorer;
+mod glossary;
 mod highlight;
 #[cfg(feature = "worker")]
 pub mod machine;

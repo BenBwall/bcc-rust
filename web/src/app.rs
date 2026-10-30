@@ -39,6 +39,7 @@ use crate::{
         self,
         Engine,
     },
+    glossary::Glossary,
     palette,
     panels::{
         LiveCompile,
@@ -100,7 +101,7 @@ pub fn App() -> impl IntoView {
         <a class="skip-link" href="#workbench">"Skip to the workbench"</a>
         <Header state />
         <main>
-            <Hero />
+            <Hero state />
             <Lessons state />
             <EngineNotice state />
             <section class="workbench" id="workbench" aria-label="Workbench">
@@ -149,6 +150,7 @@ pub fn App() -> impl IntoView {
                 </div>
             </section>
             <About />
+            <Glossary />
             <p class="sr-only" role="status" aria-live="polite" aria-atomic="true">{state.announcement}</p>
         </main>
         <footer class="site-footer">
@@ -591,6 +593,16 @@ impl State {
             "program.c".into()
         };
         self.action(move || self.load_program(text, name));
+    }
+
+    /// Open `mode` (and pipeline `stage`) from a link elsewhere on the page,
+    /// which itself scrolls to the workbench.
+    fn open_view(self, mode: Mode, stage: Option<Stage>) {
+        if let Some(stage) = stage {
+            self.stage.set(stage);
+        }
+        self.mode.set(mode);
+        self.compile_now();
     }
 
     fn set_mode(self, mode: Mode) {
@@ -1439,23 +1451,86 @@ fn Header(state: State) -> impl IntoView {
 }
 
 #[component]
-fn Hero() -> impl IntoView {
+fn Hero(state: State) -> impl IntoView {
     view! {
         <section class="hero" id="top">
-            <p class="eyebrow">"An interactive introduction to compilers and the C abstract machine"</p>
-            <h1>"What really happens when C runs?"</h1>
-            <p class="lede">
-                "The C standard doesn’t describe your CPU. It describes an "<em>"abstract machine"</em>
-                ": objects with lifetimes, values that are read and stored, and rules for exactly when each \
-                 effect happens. Step through real programs one evaluation at a time, then watch bcc, a C \
-                 compiler written in Rust, translate the same code into IR, assembly and machine code."
-            </p>
-            <ol class="hero-steps" aria-label="How to use this page">
-                <li><span class="hero-step-number">"1"</span>"Pick a lesson"</li>
-                <li><span class="hero-step-number">"2"</span>"Step through it with "<kbd>"→"</kbd></li>
-                <li><span class="hero-step-number">"3"</span>"Open the compiler pipeline"</li>
-            </ol>
+            <div class="hero-text">
+                <p class="eyebrow">"An interactive introduction to compilers and the C abstract machine"</p>
+                <h1>"What really happens when C runs?"</h1>
+                <p class="lede">
+                    "The C standard doesn’t describe your CPU. It describes an "<em>"abstract machine"</em>
+                    ": objects with lifetimes, values that are read and stored, and rules for exactly when each \
+                     effect happens. Step through real programs one evaluation at a time, then watch bcc, a C \
+                     compiler written in Rust, translate the same code into IR, assembly and machine code."
+                </p>
+                <ol class="hero-steps" aria-label="How to use this page">
+                    <li><span class="hero-step-number">"1"</span>"Pick a lesson"</li>
+                    <li><span class="hero-step-number">"2"</span>"Step through it with "<kbd>"→"</kbd></li>
+                    <li><span class="hero-step-number">"3"</span>"Open the compiler pipeline"</li>
+                </ol>
+            </div>
+            <ReadingMap state />
         </section>
+    }
+}
+
+/// How to read the page: one C program, two ways of giving it meaning. The
+/// abstract machine runs it as the standard defines it; the compiler
+/// translates it, stage by stage, into code a processor runs. Each part
+/// opens the view that shows it.
+#[component]
+fn ReadingMap(state: State) -> impl IntoView {
+    let stage = move |stage: Stage, name: &'static str, gloss: &'static str| {
+        view! {
+            <li>
+                <a class="map-stage" href="#workbench" on:click=move |_| state.open_view(Mode::Pipeline, Some(stage))>
+                    <span class="map-stage-name">{name}</span>
+                    <span class="map-stage-gloss">{gloss}</span>
+                </a>
+            </li>
+        }
+    };
+    view! {
+        <aside class="reading-map" aria-labelledby="map-title">
+            <h2 id="map-title">"How to read this page"</h2>
+            <div class="map-source">
+                <span class="map-file">"lesson.c"</span>
+                <code>"total = total + next;"</code>
+            </div>
+            <div class="map-lanes">
+                <section class="map-lane is-machine" aria-labelledby="map-machine">
+                    <p class="map-kicker">"What it means"</p>
+                    <h3 id="map-machine"><span aria-hidden="true">"◈ "</span>"Abstract machine"</h3>
+                    <ul class="map-ideas">
+                        <li><strong>"Objects"</strong>" are places in memory: "<code>"total"</code>", "<code>"next"</code></li>
+                        <li><strong>"Each step"</strong>" reads, computes or stores one value"</li>
+                        <li><strong>"Rules"</strong>" of C99 say why, and when effects finish"</li>
+                    </ul>
+                    <a class="map-open" href="#workbench" on:click=move |_| state.open_view(Mode::Machine, None)>
+                        "Step through it"<span aria-hidden="true">" →"</span>
+                    </a>
+                </section>
+                <section class="map-lane is-pipeline" aria-labelledby="map-pipeline">
+                    <p class="map-kicker">"How it is translated"</p>
+                    <h3 id="map-pipeline"><span aria-hidden="true">"⇢ "</span>"Compiler pipeline"</h3>
+                    <ol class="map-stages">
+                        {stage(Stage::Tokens, "Tokens", "words and symbols")}
+                        {stage(Stage::SyntaxTree, "Syntax tree", "the grammar’s structure")}
+                        {stage(Stage::Ir, "IR", "simple operations on values")}
+                        {stage(Stage::Asm, "Assembly", "x86-64 instructions")}
+                        {stage(Stage::MachineCode, "Machine code", "the bytes a CPU runs")}
+                    </ol>
+                </section>
+            </div>
+            <p class="map-wasm">
+                <a href="#workbench" on:click=move |_| state.open_view(Mode::Wasm, None)>
+                    <span aria-hidden="true">"▤ "</span>"WebAssembly"
+                </a>
+                " runs bcc’s output for real, one instruction at a time. Terms like "
+                <a href="#term-lvalue">"lvalue"</a>" and "<a href="#term-sequence-point">"sequence point"</a>
+                " are in the "<a href="#glossary">"glossary"</a>"."
+            </p>
+        </aside>
     }
 }
 

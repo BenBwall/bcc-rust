@@ -6,6 +6,8 @@
 //! short text the page shows (`5`, `&values[1]`), and the current full
 //! expression's tree is resolved from the program.
 
+mod flow;
+
 use std::collections::HashMap;
 
 use bcc_rust::abstract_machine::{
@@ -118,6 +120,9 @@ fn rejected(diagnostic: &abstract_machine::Diagnostic, source: &str) -> Snapshot
                  still show what bcc itself makes of it.",
                 diagnostic.message
             ),
+            note:           String::new(),
+            flow:           Vec::new(),
+            access:         Vec::new(),
             clauses:        clause(diagnostic.clause).into_iter().collect(),
             range:          location,
             objects:        Vec::new(),
@@ -145,6 +150,14 @@ fn snapshot(state: &State, program: &Program, source: &str) -> Snapshot {
         .collect();
     let fault = state.diagnostics.first();
     let event = &state.event;
+    // The operator of the expression node the step evaluated, for the flow.
+    let operator = state.evaluation.as_ref().and_then(|evaluation| {
+        let nodes = program.expression(evaluation.function, evaluation.root);
+        let first = nodes.first()?.first;
+        nodes
+            .get(evaluation.last?.checked_sub(first)?)
+            .map(|node| node.label.as_str())
+    });
     Snapshot {
         step:         state.step,
         status:       state.status.to_owned(),
@@ -157,6 +170,9 @@ fn snapshot(state: &State, program: &Program, source: &str) -> Snapshot {
             category:       event.kind.category().to_owned(),
             title:          event.title.clone(),
             explanation:    event.explanation.clone(),
+            note:           event.note.clone(),
+            flow:           flow::flow(event, operator, state.status == "finished", &objects),
+            access:         flow::access(event),
             clauses:        event
                 .clauses
                 .iter()
@@ -412,6 +428,72 @@ mod tests {
 
     fn returned(states: &[Snapshot]) -> Option<&str> {
         integer(states.last()?.return_value.as_ref())
+    }
+
+    #[test]
+    fn steps_show_their_value_flow_and_the_objects_they_touch() {
+        let mut machine = Machine::default();
+        let states = execute(&mut machine, demos::find("promotion").unwrap().source);
+        let event = |kind: &str| {
+            states
+                .iter()
+                .map(|state| &state.event)
+                .find(|event| event.kind == kind)
+                .unwrap_or_else(|| panic!("a {kind} step"))
+        };
+        let shape = |event: &StepEvent| {
+            event
+                .flow
+                .iter()
+                .map(|part| format!("{}:{}", part.role, part.text))
+                .collect::<Vec<_>>()
+        };
+        let read = event("lvalue_conversion");
+        assert_eq!(shape(read), ["object:small", "arrow:read", "value:100"]);
+        assert_eq!(read.access.len(), 1);
+        assert_eq!(
+            (read.access[0].cell, read.access[0].kind.as_str()),
+            (Some(0), "read")
+        );
+        assert_eq!(
+            shape(event("integer_promotion")),
+            ["value:100", "arrow:promote", "value:100"]
+        );
+        assert_eq!(
+            shape(event("arithmetic")),
+            [
+                "value:100",
+                "operator:+",
+                "value:100",
+                "arrow:=",
+                "value:200"
+            ]
+        );
+        // 200 does not fit in a char: the store shows the conversion.
+        let narrow = states
+            .iter()
+            .map(|state| &state.event)
+            .find(|event| event.title.starts_with("Initialize `narrow`"))
+            .expect("narrow is initialized");
+        assert_eq!(
+            shape(narrow),
+            [
+                "value:200",
+                "arrow:convert",
+                "value:-56",
+                "arrow:store",
+                "object:narrow"
+            ]
+        );
+        assert_eq!(narrow.flow[2].ty.as_deref(), Some("char"));
+        assert_eq!(narrow.access[0].kind, "write");
+        assert_eq!(event("declare").access[0].cell, None);
+        // The first step of a run explains why the abstract machine matters.
+        assert!(
+            states[0].event.note.contains("abstract machine"),
+            "{}",
+            states[0].event.note
+        );
     }
 
     #[test]

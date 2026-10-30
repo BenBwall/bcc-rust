@@ -45,12 +45,44 @@ pub struct StepEvent {
     pub category:       String,
     pub title:          String,
     pub explanation:    String,
+    /// Why the rule matters, given the first time a run needs it; empty
+    /// otherwise.
+    pub note:           String,
+    /// What went in and what came out, as chips the page lines up with an
+    /// arrow: `values[1]` → `4`.
+    pub flow:           Vec<FlowPart>,
+    /// How the operation used each object, for the memory diagram.
+    pub access:         Vec<Access>,
     pub clauses:        Vec<Clause>,
     /// The exact source the operation evaluated.
     pub range:          Option<Range>,
     /// Objects the operation created, read, wrote or ended.
     pub objects:        Vec<usize>,
     pub sequence_point: bool,
+}
+
+/// One chip of a step's value flow.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
+pub struct FlowPart {
+    /// `object` (a designated object), `value`, `operator`, or `arrow` (with
+    /// the verb that connects its neighbours as `text`).
+    pub role:   String,
+    pub text:   String,
+    /// The C type, where the step makes it matter (`char` → `int`).
+    pub ty:     Option<String>,
+    /// The variable whose colour the chip takes.
+    pub object: Option<String>,
+}
+
+/// How an operation used one object, or one element of an array.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+pub struct Access {
+    pub object: usize,
+    /// The element of an array, or 0 for another object; `None` when the
+    /// operation used the whole object.
+    pub cell:   Option<usize>,
+    /// `read`, `write`, `create`, `end` or `designate`.
+    pub kind:   String,
 }
 
 /// A cited paragraph of the C standard.
@@ -164,6 +196,26 @@ pub struct Diagnostic {
     pub note:    String,
 }
 
+impl Clause {
+    /// The paragraph's page in N1256, the C99 draft with its corrigenda
+    /// that every citation was checked against, as a link that opens the
+    /// PDF there. The citation names it as `PDF p. 58` or `PDF pp. 54-55`.
+    pub fn link(&self) -> Option<String> {
+        let (_, pages) = self.citation.split_once("PDF p")?;
+        let page: String = pages
+            .trim_start_matches('p')
+            .trim_start_matches(['.', ' '])
+            .chars()
+            .take_while(char::is_ascii_digit)
+            .collect();
+        (!page.is_empty()).then(|| format!("{N1256_URL}#page={page}"))
+    }
+}
+
+/// The C99 standard with its three technical corrigenda, as published by
+/// the committee.
+pub const N1256_URL: &str = "https://www.open-std.org/jtc1/sc22/wg14/www/docs/n1256.pdf";
+
 impl Diagnostic {
     pub fn kind_label(&self) -> &'static str {
         match self.kind.as_deref() {
@@ -186,5 +238,28 @@ pub fn status_label(status: &str) -> &str {
         | "error" => "Stopped",
         | "limit" => "Resource limit",
         | other => other,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Clause;
+
+    #[test]
+    fn clauses_link_to_their_page_of_the_standard() {
+        let clause = |citation: &str| Clause {
+            citation: citation.to_owned(),
+            ..Clause::default()
+        };
+        assert_eq!(
+            clause("C99 §6.3.2.1p2, p. 46; PDF p. 58").link().as_deref(),
+            Some("https://www.open-std.org/jtc1/sc22/wg14/www/docs/n1256.pdf#page=58")
+        );
+        assert!(
+            clause("C99 §6.3.1.1p2, pp. 42-43; PDF pp. 54-55")
+                .link()
+                .is_some_and(|link| link.ends_with("#page=54"))
+        );
+        assert_eq!(clause("no pages").link(), None);
     }
 }
