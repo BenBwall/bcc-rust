@@ -36,6 +36,18 @@ struct s3 { v2si v; int i; };
 struct s4 { v4qi a; float b; };
 struct big { v4si a; v4si b; };
 struct s8 { v8sf v; };
+/* One-lane vector members: GCC puts all three records in memory (the
+ * long double one as a result; as an argument it is x87 data, memory for
+ * both), Clang the double one. */
+struct lf { v1sf v; };
+struct ld { v1df v; };
+struct ll { v1xf v; };
+void af(struct lf s, double x);
+void ad(struct ld s, double x);
+void al(struct ll s, double x);
+struct lf rf(void);
+struct ld rd(void);
+struct ll rl(void);
 v4sf f4sf(v4sf a, v4sf b);
 v4si f4si(v4si a, int s, v4si b);
 v2df f2df(v2df a, double d);
@@ -109,6 +121,12 @@ v4si varsum(int n, ...) {
 v1sf f1sf(v1sf a, v1sf b) { return a + b; }
 v1df f1df(v1df a, v1df b) { return a * b; }
 v1xf f1xf(v1xf a, v1xf b) { return a - b; }
+void af(struct lf s, double x) { printf("af %g %g\n", s.v[0], x); }
+void ad(struct ld s, double x) { printf("ad %g %g\n", s.v[0], x); }
+void al(struct ll s, double x) { printf("al %Lg %g\n", s.v[0], x); }
+struct lf rf(void) { return (struct lf){{1.5f}}; }
+struct ld rd(void) { return (struct ld){{2.5}}; }
+struct ll rl(void) { return (struct ll){{3.5L}}; }
 #endif
 
 #ifndef CALLEE_ONLY
@@ -151,6 +169,10 @@ int main(void) {
   P("f1sf", f1sf((v1sf){1.5f}, (v1sf){2}));
   P("f1df", f1df((v1df){1.5}, (v1df){4}));
   P("f1xf", f1xf((v1xf){1.5L}, (v1xf){0.25L}));
+  af((struct lf){{4.5f}}, 7);
+  ad((struct ld){{5.5}}, 8);
+  al((struct ll){{6.5L}}, 9);
+  printf("rf %g rd %g rl %Lg\n", rf().v[0], rd().v[0], rl().v[0]);
   return 0;
 }
 #endif

@@ -859,17 +859,21 @@ bitflags! {
         /// compiler's convention ([`AggregateLayout::scalars`]); none
         /// means memory.
         const VECTOR = 1 << 4;
+        /// A member, a one-lane GNU vector, puts the aggregate in memory
+        /// under the claimed compiler's System V classification.
+        const MEMORY = 1 << 5;
     }
 }
 
 impl AggregateFlags {
     /// Each flag with its textual name, in printing order.
-    pub(crate) const NAMES: [(Self, &'static str); 5] = [
+    pub(crate) const NAMES: [(Self, &'static str); 6] = [
         (Self::UNALIGNED, "unaligned"),
         (Self::FLEXIBLE, "flexible"),
         (Self::COMPLEX, "complex"),
         (Self::SINGLE_ELEMENT, "single_element"),
         (Self::VECTOR, "vector"),
+        (Self::MEMORY, "memory"),
     ];
 }
 

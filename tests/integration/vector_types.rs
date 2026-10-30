@@ -225,6 +225,58 @@ mod tests {
         }
     }
 
+    /// A 64-byte-aligned vector passed through `...` after a variable
+    /// length array moved the stack: bcc's native caller realigns its
+    /// outgoing arguments at the call, so a GCC-built callee finds them. The
+    /// LLVM back end misplaces it at `-O0`, as Clang's own build does.
+    #[test]
+    fn over_aligned_variadic_vectors_follow_a_moved_stack() {
+        if !linux_x86_64() || !host_gcc() {
+            return;
+        }
+        let source = fixture("vector_types_vla_call.c");
+        let expected = reference("gcc", &source, &[]);
+        let definitions = temporary("vla_callee.o");
+        let built = Command::new("gcc")
+            .args([&source, "-DCALLEE_ONLY", "-w", "-Wno-psabi", "-c", "-o"])
+            .arg(&definitions)
+            .output()
+            .unwrap();
+        assert!(built.status.success(), "{}", text(&built.stderr));
+        for flags in [
+            &["--backend=native"][..],
+            &["--backend=native", "--opt=bcc"],
+        ] {
+            let checks = temporary("vla_caller.o");
+            let built = bcc(&[
+                &[
+                    "--compiler-identity=gcc",
+                    &source,
+                    "-DCALLER_ONLY",
+                    "-c",
+                    "-o",
+                    checks.to_str().unwrap(),
+                ][..],
+                flags,
+            ]
+            .concat());
+            assert!(built.status.success(), "{flags:?}: {}", text(&built.stderr));
+            let executable = temporary("vla.exe");
+            let linked = Command::new(CLANG)
+                .args([&definitions, &checks])
+                .arg("-o")
+                .arg(&executable)
+                .output()
+                .unwrap();
+            assert!(linked.status.success(), "{}", text(&linked.stderr));
+            let run = run_native(&mut Command::new(&executable)).unwrap();
+            assert_eq!(text(&run.stdout), expected, "{flags:?}");
+            std::fs::remove_file(executable).unwrap();
+            std::fs::remove_file(checks).unwrap();
+        }
+        std::fs::remove_file(definitions).unwrap();
+    }
+
     /// Compares output with expectations line by line, reporting the first
     /// differences.
     fn assert_lines(output: &str, expected: &str, context: &str) {

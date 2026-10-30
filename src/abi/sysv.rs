@@ -294,7 +294,8 @@ pub(crate) enum Classification {
 ///
 /// An aggregate larger than two eightbytes is MEMORY, since without vector
 /// types no larger one is passed in registers; so is one with a misaligned
-/// member or a flexible array member, as Clang decides. Otherwise each
+/// member or a flexible array member, as Clang decides, or with a one-lane
+/// vector member that the claimed compiler classifies as MEMORY. Otherwise each
 /// scalar's classes merge into the eightbytes it covers, and the clean-up
 /// runs.
 /// psABI §3.2.3, "Classification", rules 1-5.
@@ -302,9 +303,9 @@ pub(crate) fn classify(layout: AggregateLayout<'_>) -> Classification {
     // A transparent union's first member is classified in its place.
     let size = layout.first.map_or(layout.size, |first| first.size);
     if size > AggregateLayout::MAX_SCALAR_BYTES
-        || layout
-            .flags
-            .intersects(AggregateFlags::UNALIGNED | AggregateFlags::FLEXIBLE)
+        || layout.flags.intersects(
+            AggregateFlags::UNALIGNED | AggregateFlags::FLEXIBLE | AggregateFlags::MEMORY,
+        )
     {
         return Classification::Memory;
     }

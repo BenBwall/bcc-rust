@@ -193,6 +193,15 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
                 let ty = self.draft.value_type(x);
                 self.extend(y, counts.lane.signed(), ty)
             };
+            // A half-precision lane computes in `float` and rounds once,
+            // as GCC and Clang compute each vector operation of them.
+            let half = self.draft.value_type(x).half_format().is_some();
+            let lane_type = self.draft.value_type(x);
+            let (x, y) = if half {
+                (self.widen_half(x), self.widen_half(y))
+            } else {
+                (x, y)
+            };
             let value = if let Some(cc) = comparison(operator) {
                 let truth = if matches!(operand.lane, Repr::Float { .. }) {
                     self.fcmp(float_comparison(cc), x, y)
@@ -201,6 +210,13 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
                 };
                 let mask = result.lane_type(source)?;
                 self.extend(truth, true, mask)
+            } else if half {
+                let shape = Shape {
+                    lane: Repr::Float { ty: Type::F32 },
+                    ..operand
+                };
+                let value = self.lane_binary(operator, shape, x, y, source)?;
+                self.round_single(value, lane_type)
             } else {
                 self.lane_binary(operator, operand, x, y, source)?
             };
@@ -274,6 +290,14 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
         for lane in 0..shape.count {
             let x = self.load_lane(from, shape, lane);
             let ty = self.draft.value_type(x);
+            // A half-precision lane negates exactly in `float`.
+            if ty.half_format().is_some() && operator == UnaryOperator::Minus {
+                let wide = self.widen_half(x);
+                let negated = self.convert(Opcode::Fneg, Type::F32, wide);
+                let value = self.round_single(negated, ty);
+                self.store_lane(value, object, shape, lane);
+                continue;
+            }
             let value = match operator {
                 | UnaryOperator::Minus if ty.is_float() => self.convert(Opcode::Fneg, ty, x),
                 | UnaryOperator::Minus => {
@@ -311,6 +335,8 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
         let from = vector_address(item, source)?;
         let object = self.vector_object(shape, source)?;
         let ty = shape.lane_type(source)?;
+        let half = ty.half_format().is_some();
+        let ty = if half { Type::F32 } else { ty };
         let (one, opcode) = if ty.is_float() {
             let bits = floats::from_integer(1, ty)
                 .ok_or_else(|| LoweringError::missing("a floating type has no one", source))?;
@@ -330,7 +356,14 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
         };
         for lane in 0..shape.count {
             let x = self.load_lane(from, shape, lane);
+            let lane_type = self.draft.value_type(x);
+            let x = if half { self.widen_half(x) } else { x };
             let value = self.binary_inst(opcode, InstFlags::empty(), x, one);
+            let value = if half {
+                self.round_single(value, lane_type)
+            } else {
+                value
+            };
             self.store_lane(value, object, shape, lane);
         }
         Ok(Item {
@@ -377,6 +410,8 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
     ) -> Result<Item, LoweringError> {
         let shape = self.vector_shape(to, source)?;
         let lane = self.convert_value(item, shape.element, source)?;
+        // A half-precision scalar's excess rounds to the lane type.
+        let lane = self.settle(lane);
         let value = self.value(lane, source)?;
         let object = self.vector_object(shape, source)?;
         for index in 0..shape.count {
@@ -573,20 +608,32 @@ const fn unsigned(cc: IntCC) -> IntCC {
 /// The ABI leaf of a vector member of a structure or union, which Clang's
 /// `X86_64ABIInfo::classify` gives the vector as a whole: one SSE register
 /// (`f128`) for 16 bytes, an SSE eightbyte (`f64`) for 8, an INTEGER one of
-/// its size for 1 to 4, and the x87 class for a lone `long double`. A
-/// larger vector makes its record larger than two eightbytes, which no
-/// convention passes in registers, so its leaf is never classified.
+/// its size for 1 to 4, and the x87 class for a lone `long double`; or
+/// `None` when the member puts its record in memory, as a lone `double`
+/// does for both compilers and a lone `float` or `long double` does for
+/// GCC. A larger vector makes its record larger than two eightbytes,
+/// which no convention passes in registers, so its leaf is never
+/// classified.
 /// System V AMD64 psABI §3.2.3, "Classification", rule 1 (`__m64`,
 /// `__m128` and `__m256`).
-pub(super) fn member_leaf(types: &Types<'_>, ty: TypeId) -> Result<Type, LoweringErrorKind> {
+pub(super) fn member_leaf(
+    types: &Types<'_>,
+    ty: TypeId,
+    rules: RuleSet,
+) -> Result<Option<Type>, LoweringErrorKind> {
     let shape = shape(types, ty).ok_or(LoweringErrorKind::MissingFact(
         "a vector member has no vector type",
     ))?;
+    let lone = |want: Type| shape.count == 1 && shape.lane == Repr::Float { ty: want };
+    let gcc = rules == RuleSet::Gcc;
     Ok(match shape.size {
-        | 16 if shape.lane == (Repr::Float { ty: Type::F80 }) => Type::F80,
-        | 16.. => Type::F128,
-        | 8 => Type::F64,
-        | size => int_type(8 * u32::try_from(size).unwrap_or(32)),
+        | 4 if lone(Type::F32) && gcc => None,
+        | 8 if lone(Type::F64) => None,
+        | 16 if lone(Type::F80) && gcc => None,
+        | 16 if lone(Type::F80) => Some(Type::F80),
+        | 16.. => Some(Type::F128),
+        | 8 => Some(Type::F64),
+        | size => Some(int_type(8 * u32::try_from(size).unwrap_or(32))),
     })
 }
 

@@ -27,6 +27,7 @@ typedef char v4qi __attribute__((vector_size(4)));
 typedef int v8si __attribute__((vector_size(32)));
 typedef double v4df __attribute__((vector_size(32)));
 typedef float v16sf __attribute__((vector_size(64)));
+typedef int v16si __attribute__((vector_size(64)));
 typedef float v4sf_u __attribute__((vector_size(16), aligned(1)));
 
 #define SHOW(name, ...) do { __typeof__(__VA_ARGS__) v = (__VA_ARGS__); printf("%s:", name); for (unsigned i_ = 0; i_ < sizeof(v) / sizeof((v)[0]); i_++) printf(" %lld", (long long)(v)[i_]); printf("\n"); } while (0)
@@ -277,6 +278,9 @@ static void conditional(void) {
 }
 
 _Atomic v4si av;
+_Atomic v8si av8;
+_Atomic v16sf av64;
+_Atomic v16si av64q;
 volatile int z = 0;
 struct pair { v2si a; v4df b; };
 
@@ -290,6 +294,30 @@ static void extras(void) {
   v4si r = av;
   SHOW("atomic", r);
   printf("atomic_lane: %d\n", av[2]);
+  /* Atomic objects no register holds update through byte-wise
+   * compare-exchange. */
+  av8 = (v8si){1, 2, 3, 4, 5, 6, 7, 8};
+  av8 += (v8si){1, 1, 1, 1, 1, 1, 1, 1};
+  av8 = av8 * (v8si){2, 2, 2, 2, 2, 2, 2, 2};
+  v8si r8 = av8;
+  SHOW("atomic32", r8);
+  av64 = (v16sf){1, 2, 3};
+  av64 -= (v16sf){0.5f};
+  v16sf r64 = av64;
+  SHOWF("atomic64", r64);
+  v16si init = {1, 2, 3};
+  init[15] = 64;
+  av64q = init;
+#ifndef __clang__
+  v8si old8 = av8++;
+  r8 = av8;
+  SHOW("atomic32_inc", r8);
+  SHOW("atomic32_old", old8);
+  v16si q = av64q--;
+  SHOW("atomic64_old", q);
+  q = av64q;
+  SHOW("atomic64_dec", q);
+#endif
 #endif
 #ifndef __clang__
   v4si b = a;
@@ -324,8 +352,49 @@ static void extras(void) {
   SHOW("select", sel);
   }
 
+#ifndef __wasm__
+/* Half-precision lanes compute in float and round each operation;
+ * Clang also takes bit-precise lanes of a power-of-two width, and its
+ * __builtin_bit_cast reinterprets any object of the same size. Both
+ * compilers refuse _Float16 on wasm32. */
+typedef _Float16 v8hf __attribute__((vector_size(16)));
+typedef __bf16 v8bf __attribute__((vector_size(16)));
+struct pairf { float x, y; };
+
+static void halves(void) {
+  v8hf a = {1.5f16, 2.25f16, -3.0f16, 0.1f16, 1000.0f16, 0.333f16, -0.0f16, 65504.0f16};
+  SHOWF("half_ops", a * a + a);
+  SHOWF("half_neg_div", -a / 3);
+  SHOW("half_lt", a < a * 2);
+  v8bf x = {1.5, 2.25, -3.0, 0.1, 1000.0, 0.333, -0.0, 3e38};
+  SHOWF("bf16_ops", x * x - x);
+#ifdef __clang__
+  typedef _BitInt(32) v4bi __attribute__((vector_size(16)));
+  typedef unsigned _BitInt(8) v16bu __attribute__((vector_size(16)));
+  v4bi p = {1, -2, 3, 2147483647};
+  p = p * 3 + p;
+  SHOW("bitint_lanes", p);
+  v16bu q = {200, 3};
+  SHOW("bitint_u8_lanes", q * 3);
+  float f = 1.0f + z;
+  printf("bit_cast_scalar: %x\n", __builtin_bit_cast(int, f));
+  v2sf v = {1.5f, -2.0f};
+  v2si bits = __builtin_bit_cast(v2si, v);
+  SHOW("bit_cast_vector", bits);
+  long long whole = __builtin_bit_cast(long long, v);
+  printf("bit_cast_to_scalar: %llx\n", whole);
+  struct pairf pf = __builtin_bit_cast(struct pairf, v);
+  printf("bit_cast_struct: %a %a\n", pf.x, pf.y);
+  SHOWF("bit_cast_from_struct", __builtin_bit_cast(v2sf, ((struct pairf){3.0f, 4.0f})));
+#endif
+}
+#endif
+
 int main(void) {
   extras();
+#ifndef __wasm__
+  halves();
+#endif
   arithmetic();
   floating();
   compare();

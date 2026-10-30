@@ -363,7 +363,7 @@ fn vector_rules_follow_each_identity() {
          E { E0 }; extern v4si a, b; extern v4su u; extern v4sf f; extern v16qi q; extern v2di l; \
          extern v2si s2; extern int i; extern unsigned ui; extern long long ll; extern float fl; \
          extern double db; extern long double ld; extern _Bool bo; extern enum E en; extern short \
-         sh;\n";
+         sh; extern _Atomic v4si av; extern _Atomic v4sf af;\n";
     // (statement, accepted by GCC, accepted by Clang)
     for (body, gcc, clang) in [
         ("f = f * 2;", true, Some(true)),
@@ -405,10 +405,50 @@ fn vector_rules_follow_each_identity() {
             true,
             Some(true),
         ),
-        // Clang has no `__builtin_shuffle`; bcc's Clang identity, like its
-        // other unknown `__builtin_` names, does not check it.
-        ("a = __builtin_shuffle(a, b);", true, None),
-        ("a = __builtin_shuffle(a, f);", false, None),
+        // Clang has no `__builtin_shuffle`.
+        ("a = __builtin_shuffle(a, b);", true, Some(false)),
+        ("a = __builtin_shuffle(a, f);", false, Some(false)),
+        // Atomic operands: GCC reads them first; Clang splats no scalar into
+        // one and refuses two in arithmetic, not in a comparison.
+        ("av *= 3; av ^= 5;", true, Some(false)),
+        ("av <<= 1; av += a;", true, Some(true)),
+        ("a = av + av;", true, Some(false)),
+        ("a = av < av;", true, Some(true)),
+        ("av++;", true, Some(false)),
+        ("af++;", false, Some(false)),
+        // Lane types: both take the half-precision types; Clang a
+        // power-of-two bit-precise integer and no pointer or array lanes;
+        // GCC an enumeration.
+        (
+            "typedef _Float16 h __attribute__((vector_size(16))); h x; x = x * x;",
+            true,
+            Some(true),
+        ),
+        (
+            "typedef __bf16 h __attribute__((vector_size(16))); h x;",
+            true,
+            Some(true),
+        ),
+        (
+            "typedef _BitInt(32) b __attribute__((vector_size(16))); b x; x = x + x;",
+            false,
+            Some(true),
+        ),
+        (
+            "typedef _BitInt(24) b __attribute__((vector_size(12)));",
+            false,
+            Some(false),
+        ),
+        (
+            "typedef enum E e __attribute__((vector_size(16))); e x;",
+            true,
+            Some(false),
+        ),
+        (
+            "typedef int *p __attribute__((vector_size(16)));",
+            true,
+            Some(false),
+        ),
         ("a = __builtin_shufflevector(a, b);", false, Some(true)),
     ] {
         for (identity, accepted) in [

@@ -152,6 +152,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             ) && self.context.configuration.compiler_identity().rules()
                 == crate::configuration::RuleSet::Gcc
                 && operand.category == ValueCategory::ModifiableLvalue
+                && (!matches!(self.types.nodes[operand.ty.index], TypeKind::Atomic(_))
+                    || self.gcc_steps_atomic_vector(element, operand))
             {
                 self.note_parameter_write(operand.binding);
                 return Self::expression_result(e, ty);
@@ -2409,7 +2411,22 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             // valid pointer/aggregate returns based on an invented int type.
             // A keyword form's spelling is an identifier only where its
             // keyword is disabled; it stays an opaque reserved name there.
-            let descriptor = crate::builtins::lookup(self.context.string_cache.at(name.name))
+            let known = crate::builtins::lookup(self.context.string_cache.at(name.name));
+            // A builtin only GCC has is unknown to the other identities'
+            // compilers, which reject the call ("use of unknown builtin").
+            if known.is_some_and(|descriptor| {
+                descriptor.availability.feature
+                    == Some(crate::configuration::Feature::GccOnlyBuiltins)
+                    && !descriptor.availability.accepted(self.context.configuration)
+            }) {
+                self.error(
+                    SemanticErrorKind::UndeclaredIdentifier,
+                    name.source_vectors,
+                    Some(name.name),
+                    None,
+                );
+            }
+            let descriptor = known
                 .filter(|descriptor| descriptor.syntax == crate::builtins::SyntaxForm::OrdinaryCall)
                 .filter(|descriptor| descriptor.availability.accepted(self.context.configuration))
                 .filter(|descriptor| self.builtin_prototype_available(descriptor, name));

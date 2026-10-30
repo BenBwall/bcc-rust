@@ -31,12 +31,14 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
                 source,
             ));
         };
-        if self.wide_bit_int(place.ty).is_some() {
+        let layout = types::layout(&self.unit.sema.types, place.ty)
+            .map_err(|kind| crate::lowering::module_items::at(kind, source))?;
+        // No register holds a wide bit-precise integer or a GNU vector of
+        // more than 16 bytes (or of a size no integer has).
+        if self.wide_bit_int(place.ty).is_some() || !matches!(layout.size, 1 | 2 | 4 | 8 | 16) {
             return self.atomic_update_bytes(address, place.ty, source, update);
         }
         let ty = self.unit.sema.types.non_atomic(place.ty).unqualified();
-        let layout = types::layout(&self.unit.sema.types, place.ty)
-            .map_err(|kind| crate::lowering::module_items::at(kind, source))?;
         let bits_ty = types::int_type(u32::try_from(layout.size * 8).expect("scalar atomic width"));
         let initial = self.atomic_item_bits(initial, bits_ty, source)?;
         let retry = self.draft.create_block(&[bits_ty]);
@@ -76,10 +78,10 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
         Ok((old, desired))
     }
 
-    /// [`Self::atomic_update`] of an object of more than 16 bytes, a wide
-    /// bit-precise integer, which no register holds: its bytes are loaded
-    /// into an object, the update computes from that object, and a
-    /// compare-exchange of the bytes stores the result or refreshes the
+    /// [`Self::atomic_update`] of an object no register holds, a wide
+    /// bit-precise integer or a GNU vector of more than 16 bytes: its bytes
+    /// are loaded into an object, the update computes from that object, and
+    /// a compare-exchange of the bytes stores the result or refreshes the
     /// object with the value it found for another try.
     /// C11: §6.5.16.2p3, pp. 103-104; PDF pp. 121-122.
     fn atomic_update_bytes(

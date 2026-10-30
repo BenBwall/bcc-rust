@@ -171,11 +171,21 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 conversions[1] = None;
                 n == m && self.integer_type(other).is_some()
             },
-            | (Some(_), Some(_)) => self.vector_operands(lt, rt, rules),
+            // Clang refuses two atomic operands of an arithmetic operator,
+            // though not of a comparison.
+            | (Some(_), Some(_)) =>
+                self.vector_operands(lt, rt, rules)
+                    && !(rules == RuleSet::Clang
+                        && !compares(op)
+                        && matches!(self.types.nodes[left.ty.index], TypeKind::Atomic(_))
+                        && matches!(self.types.nodes[right.ty.index], TypeKind::Atomic(_))),
             // A vector shifts by any integer count, which each lane takes.
             | (Some(_), None) if shift => self.integer_type(rt).is_some(),
+            // Clang's scalar splat wants an ordinary vector; GCC reads an
+            // atomic one first.
             | (Some(_), None) =>
-                !matches!(self.types.nodes[left.ty.index], TypeKind::Atomic(_))
+                (rules == RuleSet::Gcc
+                    || !matches!(self.types.nodes[left.ty.index], TypeKind::Atomic(_)))
                     && match self.scalar_to_vector(
                         element,
                         lt,
@@ -198,7 +208,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         || self.splat_operand(element, ExpressionInfo { ty: lt, ..left }, rules)),
             | (None, Some(_)) =>
                 !assignment
-                    && !matches!(self.types.nodes[right.ty.index], TypeKind::Atomic(_))
+                    && (rules == RuleSet::Gcc
+                        || !matches!(self.types.nodes[right.ty.index], TypeKind::Atomic(_)))
                     && match self.scalar_to_vector(
                         element,
                         rt,
@@ -251,15 +262,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if !valid || !allowed {
             return Some(self.vector_error(e));
         }
-        let comparison = matches!(
-            op,
-            B::Equal
-                | B::NotEqual
-                | B::LessThan
-                | B::LessThanOrEqual
-                | B::GreaterThan
-                | B::GreaterThanOrEqual
-        );
+        let comparison = compares(op);
         let ty = if comparison {
             let size = self.types.layout(element)?.size;
             let mask = self.types.scalar(match size {
@@ -354,6 +357,25 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             && self.scalar_class(scalar.ty).is_some()
             && self.types.layout(scalar.ty).map(|l| l.size) == self.vector_width(vector))
         .then_some(ConversionKind::Assignment)
+    }
+
+    /// Whether GCC steps an atomic vector of lane type `element` with `++`
+    /// or `--`: it adds the `int` one as a run-time scalar, which only
+    /// lanes that hold every `int` take ("conversion of scalar 'int' to
+    /// vector ... involves truncation" otherwise).
+    pub(super) fn gcc_steps_atomic_vector(
+        &mut self,
+        element: TypeId,
+        operand: ExpressionInfo<'tu>,
+    ) -> bool {
+        let one = ExpressionInfo {
+            ty: self.types.scalar(Scalar::Int),
+            ice: false,
+            integer: None,
+            constant: super::ConstantClass::None,
+            ..operand
+        };
+        self.splat_operand(element, one, RuleSet::Gcc)
     }
 
     /// Whether a vector of type `from` converts implicitly to `to`, as in
@@ -464,35 +486,53 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             }
         }
         let mut vector = self.vector(ty);
+        let gcc = self.context.configuration.compiler_identity().rules() == RuleSet::Gcc;
         if let Some(size) = bytes {
-            // GNU vector elements extend the real/integer types of C99 §6.2.5.
-            let valid_element = matches!(
-                self.types.nodes[ty.index],
-                TypeKind::Scalar(
-                    Scalar::Char
-                        | Scalar::SignedChar
-                        | Scalar::UnsignedChar
-                        | Scalar::Short
-                        | Scalar::UnsignedShort
-                        | Scalar::Int
-                        | Scalar::UnsignedInt
-                        | Scalar::Long
-                        | Scalar::UnsignedLong
-                        | Scalar::LongLong
-                        | Scalar::UnsignedLongLong
-                        | Scalar::Int128
-                        | Scalar::UnsignedInt128
-                        | Scalar::Float
-                        | Scalar::Double
-                        | Scalar::LongDouble
-                        | Scalar::Float128
-                )
-            );
+            // GNU vector elements extend the real/integer types of C99 §6.2.5:
+            // both compilers take the half-precision types; Clang also a
+            // bit-precise integer of a power-of-two width of at least 8 bits,
+            // GCC an enumeration. Clang applies the attribute to the declared
+            // type itself, so a pointer, array or function element is
+            // invalid; GCC applies it to their innermost element.
+            let valid_element = (gcc || derived.is_empty())
+                && (matches!(
+                    self.types.nodes[ty.index],
+                    TypeKind::Scalar(Scalar::Float16 | Scalar::BFloat16)
+                ) || matches!(
+                    self.types.nodes[ty.index],
+                    TypeKind::BitInt { width, .. }
+                        if !gcc && (8..=128).contains(&width) && width.is_power_of_two()
+                ) || matches!(
+                    self.types.nodes[ty.index],
+                    TypeKind::Tag(id)
+                        if gcc && self.types.tags[id].kind == super::TagKind::Enum
+                            && self.types.tags[id].complete.get()
+                ) || matches!(
+                    self.types.nodes[ty.index],
+                    TypeKind::Scalar(
+                        Scalar::Char
+                            | Scalar::SignedChar
+                            | Scalar::UnsignedChar
+                            | Scalar::Short
+                            | Scalar::UnsignedShort
+                            | Scalar::Int
+                            | Scalar::UnsignedInt
+                            | Scalar::Long
+                            | Scalar::UnsignedLong
+                            | Scalar::LongLong
+                            | Scalar::UnsignedLongLong
+                            | Scalar::Int128
+                            | Scalar::UnsignedInt128
+                            | Scalar::Float
+                            | Scalar::Double
+                            | Scalar::LongDouble
+                            | Scalar::Float128
+                    )
+                ));
             let layout = self.types.layout(ty);
             // GCC also wants a power-of-two lane count ("number of vector
             // components ... not a power of two"); Clang rounds the object
             // up instead.
-            let gcc = self.context.configuration.compiler_identity().rules() == RuleSet::Gcc;
             if !valid_element
                 || size.is_none()
                 || !size.is_some_and(|n| {
@@ -792,6 +832,21 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let ty = self.types.non_atomic(ty);
         let (scalar, plain) = match self.types.nodes[ty.index] {
             | TypeKind::Scalar(scalar) => (scalar.representation(), true),
+            // Clang ranks a bit-precise integer below the standard integer
+            // of its width (`getIntegerRank`).
+            | TypeKind::BitInt { width, signed } =>
+                return Some(ScalarClass::Integer {
+                    bits: width,
+                    signed,
+                    rank: match width {
+                        | 0..=8 => 1,
+                        | 9..=16 => 2,
+                        | 17..=32 => 3,
+                        | 33..=64 => 5,
+                        | _ => 6,
+                    },
+                    plain: true,
+                }),
             | TypeKind::Tag(id) => {
                 let tag = self.types.tags[id];
                 if tag.kind != super::TagKind::Enum {
@@ -868,6 +923,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         ] = operands
         {
             let from = self.expression_info(input);
+            // C99 §6.3.2.1p2: the operand is read.
+            let from = ExpressionInfo {
+                ty: self.converted(from),
+                ..from
+            };
             let to = self
                 .resolved_type_names
                 .get(&super::type_name_identity(name))
@@ -1026,6 +1086,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         ] = b.operands.as_slice()
         {
             let from = self.expression_info(input);
+            // C99 §6.3.2.1p2: the operand is read; an array or function
+            // decays as Clang's `__builtin_bit_cast` operand does.
+            let from = ExpressionInfo {
+                ty: self.converted(from),
+                ..from
+            };
             let to = self
                 .resolved_type_names
                 .get(&super::type_name_identity(name))
@@ -1172,4 +1238,17 @@ fn signed_kind(kind: TypeKind<'_>) -> Option<Scalar> {
         | Scalar::UnsignedInt128 => Scalar::Int128,
         | other => other,
     })
+}
+
+/// Whether `op` compares, giving a mask.
+const fn compares(op: BinaryOperator) -> bool {
+    matches!(
+        op,
+        BinaryOperator::Equal
+            | BinaryOperator::NotEqual
+            | BinaryOperator::LessThan
+            | BinaryOperator::LessThanOrEqual
+            | BinaryOperator::GreaterThan
+            | BinaryOperator::GreaterThanOrEqual
+    )
 }

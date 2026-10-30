@@ -855,10 +855,16 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
             &self.sema.types,
             ty,
             crate::abi::Convention::of(self.target),
-            self.context.configuration.compiler_identity().rules(),
+            self.rules(),
             result,
             scratch,
         )
+    }
+
+    /// Whose rules the claimed compiler identity follows where GCC's and
+    /// Clang's calling conventions differ.
+    fn rules(&self) -> crate::configuration::RuleSet {
+        self.context.configuration.compiler_identity().rules()
     }
 
     /// The pre-ABI signature of a call or function whose fixed parameters
@@ -899,7 +905,7 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
                 let layout = if super::vectors::shape(types, result).is_some() {
                     self.vector_abi_layout(result, true, scratch)?
                 } else {
-                    types::object_layout(types, result, scratch)?
+                    types::object_layout(types, result, self.rules(), scratch)?
                 };
                 aggregates.push(AggregateParam {
                     index: 0,
@@ -925,7 +931,13 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
                     let layout = if super::vectors::shape(types, parameter).is_some() {
                         self.vector_abi_layout(parameter, false, scratch)?
                     } else {
-                        types::argument_layout(types, self.target, parameter, scratch)?
+                        types::argument_layout(
+                            types,
+                            self.target,
+                            parameter,
+                            self.rules(),
+                            scratch,
+                        )?
                     };
                     aggregates.push(AggregateParam {
                         index,
