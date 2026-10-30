@@ -929,8 +929,12 @@ fn emission_model_queries_stay_linear() {
             (table, None, 15),
             (reverse(size), None, 15),
             // Keep the original budgets; this larger independent row rejects
-            // the quadratic painter after parsing cost is paid as well.
-            (reverse(600_000), None, 40),
+            // the quadratic painter after parsing cost is paid as well. Its
+            // linear cost is about 19 s in a local debug build and up to 42 s
+            // on CI runners, while a quadratic painter costs
+            // (600,000 / 20,000)^2 = 900 times what it does on the
+            // 20,000-entry row, so 120 s still separates the two.
+            (reverse(600_000), None, 120),
             (repeated_strlen.clone(), None, 15),
             (
                 repeated_strlen.replace("char s[]", "char *const s"),
