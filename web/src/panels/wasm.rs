@@ -52,8 +52,10 @@ pub fn WasmView(
                 "Compiling with bcc and loading the module into the stepper…"
             </div>
             <Show when=shown>
-                <Provenance wasm on_choose />
+                // The narration first: it explains the instruction the
+                // listing beside (or, on narrow screens, above) it marks.
                 <Narration wasm on_jump />
+                <Provenance wasm on_choose />
                 <div class="wasm-row">
                     <state::OperandStack wasm />
                     <state::Locals wasm />
@@ -392,6 +394,7 @@ pub fn WasmListing(
                     on_hover_line=Callback::new(move |line| wasm.hover_wat.set(line))
                     on_gutter_click=on_breakpoint
                     reveal
+                    follow_on_page=Signal::derive(move || hover_source.get() == 0)
                 />
             </div>
             <footer class="source-legend wat-legend">
@@ -399,7 +402,7 @@ pub fn WasmListing(
                 <span><i class="swatch swatch-current"></i>"just executed"</span>
                 <span><i class="swatch swatch-next-instruction"></i>"next"</span>
                 <span><i class="swatch swatch-breakpoint"></i>"click a line number to break there"</span>
-                <span hidden=move || !has_lines()><i class="swatch swatch-link"></i>"hover to link C and WebAssembly"</span>
+                <span class="legend-hover" hidden=move || !has_lines()><i class="swatch swatch-link"></i>"hover to link C and WebAssembly"</span>
             </footer>
         </div>
     }

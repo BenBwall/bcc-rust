@@ -128,7 +128,7 @@ pub fn App() -> impl IntoView {
                                             headers=state.headers
                                             filename=state.filename.read_only()
                                             source=state.editor_text.into()
-                                            on_reveal=Callback::new(move |line| state.reveal.set(Some(line)))
+                                            on_reveal=Callback::new(move |line| state.show_source_line(line))
                                         />
                                     }
                                 >
@@ -379,6 +379,7 @@ impl State {
                 | Err(error) => self.show_unavailable(&error),
             }
             self.busy.set(false);
+            crate::editor::prefetch();
         });
     }
 
@@ -593,6 +594,7 @@ impl State {
     }
 
     fn set_mode(self, mode: Mode) {
+        hold_source_pane();
         self.mode.set(mode);
         // Loading the program compiles it, so the squiggles' compilation
         // waits for it rather than compiling the same text twice.
@@ -753,7 +755,7 @@ impl State {
             .and_then(|target| target.dyn_into::<web_sys::Element>().ok())
             .is_some_and(|element| {
                 element
-                    .closest("input, textarea, select, .monaco-editor, [contenteditable]")
+                    .closest("input, textarea, select, .code-editor, [contenteditable]")
                     .ok()
                     .flatten()
                     .is_some()
@@ -817,6 +819,20 @@ impl State {
         self.error.set(None);
         self.reveal_current();
         self.announce_state();
+    }
+
+    /// Show `line` of the source, as a link from the pipeline asks. On
+    /// narrow screens the source sits above the pipeline, so bring it on
+    /// screen first, below the sticky toolbar; the editor then scrolls the
+    /// line itself clear of it.
+    fn show_source_line(self, line: usize) {
+        if let Ok(Some(editor)) = document().query_selector(".source-pane > .code-editor") {
+            let options = web_sys::ScrollIntoViewOptions::new();
+            options.set_block(web_sys::ScrollLogicalPosition::Nearest);
+            options.set_behavior(web_sys::ScrollBehavior::Instant);
+            editor.scroll_into_view_with_scroll_into_view_options(&options);
+        }
+        self.reveal.set(Some(line));
     }
 
     fn reveal_current(self) {
@@ -1544,6 +1560,8 @@ fn SiteError(state: State) -> impl IntoView {
 
 #[component]
 fn Toolbar(state: State) -> impl IntoView {
+    let toolbar = NodeRef::<leptos::html::Div>::new();
+    publish_height(toolbar);
     let run_label = move || match (state.running.get(), state.pause_requested.get()) {
         | (true, true) => "Pausing…",
         | (true, false) => "Pause",
@@ -1567,7 +1585,7 @@ fn Toolbar(state: State) -> impl IntoView {
                 .map_or_else(|| "idle".to_owned(), |snapshot| snapshot.status.clone())
         })
     };
-    let tab = move |mode: Mode, label: &'static str, icon: &'static str| {
+    let tab = move |mode: Mode, label: &'static str, short: &'static str, icon: &'static str| {
         view! {
             <button
                 type="button"
@@ -1578,16 +1596,17 @@ fn Toolbar(state: State) -> impl IntoView {
                 on:click=move |_| state.set_mode(mode)
             >
                 <span class="mode-icon" aria-hidden="true">{icon}</span>
-                {label}
+                <span class="mode-label-long">{label}</span>
+                <span class="mode-label-short" aria-hidden="true">{short}</span>
             </button>
         }
     };
     view! {
-        <div class="toolbar">
+        <div class="toolbar" node_ref=toolbar>
             <div class="mode-tabs" role="tablist" aria-label="View">
-                {tab(Mode::Machine, "Abstract machine", "◈")}
-                {tab(Mode::Pipeline, "Compiler pipeline", "⇢")}
-                {tab(Mode::Wasm, "WebAssembly", "▤")}
+                {tab(Mode::Machine, "Abstract machine", "Machine", "◈")}
+                {tab(Mode::Pipeline, "Compiler pipeline", "Pipeline", "⇢")}
+                {tab(Mode::Wasm, "WebAssembly", "WebAssembly", "▤")}
             </div>
             <div class="transport" role="group" aria-label="Execution controls" hidden=move || state.mode.get() != Mode::Machine>
                 <button
@@ -1598,7 +1617,7 @@ fn Toolbar(state: State) -> impl IntoView {
                     on:click=move |_| state.reset()
                 >
                     <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><path d="M4 10a6 6 0 1 0 1.8-4.3M4 3.5v3.2h3.2" /></svg>
-                    "Reset"
+                    <span class="button-label">"Reset"</span>
                 </button>
                 <button
                     type="button"
@@ -1608,7 +1627,7 @@ fn Toolbar(state: State) -> impl IntoView {
                     on:click=move |_| state.back()
                 >
                     <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><path d="M12 5l-5 5 5 5" /></svg>
-                    "Back"
+                    <span class="button-label">"Back"</span>
                 </button>
                 <button
                     type="button"
@@ -1635,7 +1654,7 @@ fn Toolbar(state: State) -> impl IntoView {
                     } else {
                         view! { <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><path class="fill" d="M6 4.5v11l9-5.5z" /></svg> }.into_any()
                     }}
-                    {run_label}
+                    <span class="button-label">{run_label}</span>
                 </button>
                 <button
                     type="button"
@@ -1652,12 +1671,114 @@ fn Toolbar(state: State) -> impl IntoView {
                 <span class="step-counter">"Step "<strong>{move || state.current.with(|s| s.as_ref().map_or_else(|| "–".into(), |s| s.step.to_string()))}</strong></span>
             </div>
             <wasm::WasmTransport state hidden=Signal::derive(move || state.mode.get() != Mode::Wasm) />
+            <wasm::StartAtMain state hidden=Signal::derive(move || state.mode.get() != Mode::Wasm) />
             <div class="run-status" hidden=move || state.mode.get() != Mode::Wasm>
                 <span class="status-pill" data-status=move || wasm::status(state.wasm).1>{move || wasm::status(state.wasm).0}</span>
                 <span class="step-counter">"Instruction "<strong>{move || state.wasm.current.with(|s| s.as_ref().map_or_else(|| "–".into(), |s| s.step.to_string()))}</strong></span>
             </div>
         </div>
     }
+}
+
+/// Undo the browser's scroll anchoring while a change of view resizes the
+/// toolbar and the source pane above the narration (at once, and again when
+/// the WebAssembly listing arrives): anchoring keeps the narration in place,
+/// which scrolls the top of the source under the toolbar. A scroll by exactly
+/// the change in what lies above the narration is anchoring and is undone;
+/// any other scroll (the reader's, the focus being scrolled into view, a
+/// revealed line) ends the hold, as does `HOLD_MS` passing.
+fn hold_source_pane() {
+    use std::cell::{
+        Cell,
+        RefCell,
+    };
+
+    use gloo_timers::callback::Interval;
+
+    let document = document();
+    let (Some(window), Some(workbench), Some(insight)) = (
+        web_sys::window(),
+        document.get_element_by_id("workbench"),
+        document.get_element_by_id("insight"),
+    ) else {
+        return;
+    };
+    // What lies above the narration (the toolbar, and on narrow screens the
+    // source pane), and the page's scroll.
+    let measure = {
+        let window = window.clone();
+        move || {
+            (
+                insight.get_bounding_client_rect().top()
+                    - workbench.get_bounding_client_rect().top(),
+                window.scroll_y().unwrap_or_default(),
+            )
+        }
+    };
+    let last = Cell::new(measure());
+    let held = Cell::new(true);
+    let interval = Rc::new(RefCell::new(None));
+    *interval.borrow_mut() = Some(Interval::new(HOLD_CHECK_MS, move || {
+        if !held.get() {
+            return;
+        }
+        let ((height, scroll), (last_height, last_scroll)) = (measure(), last.get());
+        let (grown, scrolled) = (height - last_height, scroll - last_scroll);
+        if grown.abs() >= 1.0 && (scrolled - grown).abs() < 2.0 {
+            let options = web_sys::ScrollToOptions::new();
+            options.set_top(-scrolled);
+            options.set_behavior(web_sys::ScrollBehavior::Instant);
+            window.scroll_by_with_scroll_to_options(&options);
+            last.set((height, scroll - scrolled));
+        } else {
+            held.set(scrolled.abs() < 1.0);
+            last.set((height, scroll));
+        }
+    }));
+    Timeout::new(HOLD_MS, move || {
+        interval.borrow_mut().take();
+    })
+    .forget();
+}
+
+/// How long a change of view watches for scroll anchoring, at most.
+const HOLD_MS: u32 = 8000;
+/// How often the hold compares the narration's offset and the page's scroll.
+const HOLD_CHECK_MS: u32 = 50;
+
+/// Publish the toolbar's height as `--toolbar-height` on the root element
+/// whenever its controls wrap, so the sticky source pane, the WebAssembly
+/// listing's height and the scroll padding all sit below it.
+fn publish_height(toolbar: NodeRef<leptos::html::Div>) {
+    Effect::new(move |observing: Option<bool>| {
+        if observing == Some(true) {
+            return true;
+        }
+        let Some(element) = toolbar.get() else {
+            return false;
+        };
+        let publish = move || {
+            if let Some(root) = document()
+                .document_element()
+                .and_then(|root| root.dyn_into::<web_sys::HtmlElement>().ok())
+            {
+                _ = root.style().set_property(
+                    "--toolbar-height",
+                    &format!("{}px", element.offset_height()),
+                );
+            }
+        };
+        publish();
+        let closure = wasm_bindgen::closure::Closure::<dyn FnMut()>::new(publish);
+        if let Ok(observer) = web_sys::ResizeObserver::new(closure.as_ref().unchecked_ref())
+            && let Some(element) = toolbar.get_untracked()
+        {
+            observer.observe(&element);
+        }
+        // The toolbar lives as long as the page.
+        closure.forget();
+        true
+    });
 }
 
 #[component]
@@ -1675,7 +1796,7 @@ fn SourcePane(state: State) -> impl IntoView {
         <section
             class="pane source-pane"
             class:is-wasm=move || state.mode.get() == Mode::Wasm
-            style:--source-lines=move || state.editor_text.with(|text| text.lines().count().max(4).to_string())
+            style:--source-lines=move || state.editor_text.with(|text| text.split('\n').count().max(4).to_string())
             aria-labelledby="source-title"
         >
             <header class="pane-header">
@@ -1723,6 +1844,7 @@ fn SourcePane(state: State) -> impl IntoView {
                 on_hover_line=on_hover
                 on_gutter_click=on_gutter
                 reveal=state.reveal.into()
+                follow_on_page=Signal::stored(true)
             />
             <footer class="source-legend" hidden=move || state.mode.get() != Mode::Machine>
                 <span><i class="swatch swatch-current"></i>"just evaluated"</span>
@@ -1731,7 +1853,7 @@ fn SourcePane(state: State) -> impl IntoView {
                 <span><i class="swatch swatch-squiggle"></i>"bcc error"</span>
             </footer>
             <footer class="source-legend" hidden=move || state.mode.get() != Mode::Pipeline>
-                <span><i class="swatch swatch-link"></i>"hover a line to find what it became"</span>
+                <span class="legend-hover"><i class="swatch swatch-link"></i>"hover a line to find what it became"</span>
                 <span><i class="swatch swatch-squiggle"></i>"bcc error"</span>
             </footer>
             <Show when=move || state.mode.get() == Mode::Wasm>

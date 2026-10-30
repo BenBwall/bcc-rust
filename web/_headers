@@ -1,0 +1,26 @@
+# Cache hints for static hosts that read a _headers file (Cloudflare Pages,
+# Netlify); others ignore it, and GitHub Pages sets its own. Trunk copies it
+# into dist/ (see index.html). Every file but two is named after its
+# contents or its package version, so it can be cached for good
+# (web/README.md, "Deploy"): the page itself, and wasm-bindgen's snippet,
+# whose directory is named after the crate rather than the file's bytes, are
+# revalidated on every visit. The rules do not overlap, because hosts merge
+# every rule that matches. They assume the site sits at the origin's root.
+/
+  Cache-Control: no-cache
+/index.html
+  Cache-Control: no-cache
+/bcc-web-*
+  Cache-Control: public, max-age=31536000, immutable
+/style-*
+  Cache-Control: public, max-age=31536000, immutable
+/snippets/*
+  Cache-Control: no-cache
+/engine-*
+  Cache-Control: public, max-age=31536000, immutable
+/compiler-*
+  Cache-Control: public, max-age=31536000, immutable
+/editor-*
+  Cache-Control: public, max-age=31536000, immutable
+/fonts/*
+  Cache-Control: public, max-age=31536000, immutable

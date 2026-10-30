@@ -50,6 +50,56 @@ addEventListener('pointerdown', () => { usingKeyboard = false; }, true);
 const TAB_KEY_TOGGLE = monaco.KeyMod.Alt | monaco.KeyCode.KeyM;
 const TAB_KEY_TOGGLE_LABEL = /Mac|iPhone|iPad/.test(navigator.platform) ? '⌥M' : 'Alt+M';
 
+/** The part of the window that nothing sticky covers. */
+function visibleBand() {
+  const clear = parseFloat(getComputedStyle(document.documentElement).scrollPaddingTop) || 0;
+  return { clear, bottom: innerHeight - 8 };
+}
+
+/** Whether `node` sits in a sticky box that is stuck to the window's top. */
+function isStuck(node) {
+  for (let box = node.parentElement; box; box = box.parentElement) {
+    const style = getComputedStyle(box);
+    if (style.position === 'sticky') {
+      return Math.abs(box.getBoundingClientRect().top - (parseFloat(style.top) || 0)) < 1;
+    }
+  }
+  return false;
+}
+
+// The editors that follow execution on the page, each showing its current
+// line. A step can move one line (the WebAssembly instruction) or two (and
+// the C line); the page scrolls once per frame, as little as shows every
+// current line clear of the toolbar when they fit together, and otherwise
+// the line just revealed.
+const following = new Set();
+let latest = null;
+let frame = 0;
+
+function followOnPage(editor) {
+  following.add(editor);
+  latest = editor;
+  frame ||= requestAnimationFrame(() => {
+    frame = 0;
+    const { clear, bottom: limit } = visibleBand();
+    const spans = [...following].map((each) => [each, each.followedSpan(clear, limit)]).filter(([, span]) => span);
+    for (const each of following) {
+      each.revealed = null;
+    }
+    const own = spans.find(([each]) => each === latest)?.[1];
+    if (!own) {
+      return;
+    }
+    const all = { top: Math.min(...spans.map(([, span]) => span.top)), bottom: Math.max(...spans.map(([, span]) => span.bottom)) };
+    const span = all.bottom - all.top <= limit - clear ? all : own;
+    if (span.top < clear) {
+      scrollBy({ top: span.top - clear });
+    } else if (span.bottom > limit) {
+      scrollBy({ top: span.bottom - limit });
+    }
+  });
+}
+
 /** Switch every editor between the site's `light` and `dark` themes. */
 export function setTheme(theme) {
   monaco.editor.setTheme(theme === 'light' ? 'bcc-light' : 'bcc-dark');
@@ -102,7 +152,11 @@ class Editor {
       guides: { indentation: true },
       bracketPairColorization: { enabled: false },
       tabSize: 4,
-      wordWrap: 'off',
+      // The source wraps rather than hiding the ends of long lines (its
+      // comments, mostly) in the narrow columns of small screens; the
+      // listings keep one instruction per line.
+      wordWrap: options.readOnly ? 'off' : 'on',
+      wrappingIndent: 'indent',
       stickyScroll: { enabled: false },
       accessibilitySupport: 'auto',
       quickSuggestions: false,
@@ -268,11 +322,55 @@ class Editor {
     })));
   }
 
-  /** Scroll so `line` is visible, centring it only when it is off screen. */
-  revealLine(line) {
-    if (line > 0) {
-      this.editor.revealLineInCenterIfOutsideViewport(line, monaco.editor.ScrollType.Smooth);
+  /**
+   * Scroll so `line` is visible, centring it only when it is off screen.
+   * With `onPage`, also scroll the page as little as needed to bring the
+   * line clear of the sticky header and toolbar (the root's scroll
+   * padding) and above the window's bottom (see `followOnPage`), provided
+   * part of the editor is already on screen, so that a reader who scrolled
+   * away to the memory diagram stays there, and the editor is not in a
+   * sticky pane that is already stuck, which scrolling cannot move.
+   */
+  revealLine(line, onPage) {
+    if (line <= 0) {
+      return;
     }
+    const editor = this.editor;
+    const lineHeight = editor.getOption(monaco.editor.EditorOption.lineHeight);
+    const height = editor.getLayoutInfo().height;
+    const scrollTop = editor.getScrollTop();
+    const top = editor.getTopForLineNumber(line);
+    const inside = top >= scrollTop && top + lineHeight <= scrollTop + height;
+    editor.revealLineInCenterIfOutsideViewport(line, monaco.editor.ScrollType.Smooth);
+    if (!onPage) {
+      return;
+    }
+    // Where the line ends up in the editor: where it is, or where the
+    // (smooth) reveal is taking it, centred as far as the text allows.
+    const centred = Math.min(Math.max(0, top - (height - lineHeight) / 2), Math.max(0, editor.getContentHeight() - height));
+    this.followed = line;
+    this.revealed = top - (inside ? scrollTop : centred);
+    followOnPage(this);
+  }
+
+  /**
+   * Where this editor's current line sits in the window, or null when the
+   * page should not follow it: the editor is off screen (the reader
+   * scrolled away), or in a sticky pane that is stuck, which scrolling
+   * cannot move.
+   */
+  followedSpan(clear, limit) {
+    const node = this.editor.getContainerDomNode();
+    if (!this.followed || !node.isConnected || isStuck(node)) {
+      return null;
+    }
+    const host = node.getBoundingClientRect();
+    if (host.bottom <= clear || host.top >= limit) {
+      return null;
+    }
+    const offset = this.revealed ?? this.editor.getTopForLineNumber(this.followed) - this.editor.getScrollTop();
+    const top = host.top + offset;
+    return { top, bottom: top + this.editor.getOption(monaco.editor.EditorOption.lineHeight) };
   }
 
   focus() {
@@ -289,6 +387,7 @@ class Editor {
    * observer. The page calls this when the view holding the editor unmounts.
    */
   dispose() {
+    following.delete(this);
     for (const listener of this.listeners.splice(0)) {
       listener.dispose();
     }

@@ -100,6 +100,11 @@ pub fn CodeEditor(
     /// A line to scroll into view.
     #[prop(optional)]
     reveal: Option<Signal<Option<usize>>>,
+    /// Also scroll the page to a revealed line, when part of the editor is
+    /// on screen, so it never sits under the sticky toolbar or below the
+    /// window: for the views that follow execution, not for hover links.
+    #[prop(optional)]
+    follow_on_page: Option<Signal<bool>>,
     /// The gutter's label for each line, in place of its number; empty
     /// numbers the lines as usual.
     #[prop(optional)]
@@ -122,10 +127,12 @@ pub fn CodeEditor(
         on_hover_line,
         on_gutter_click,
         reveal,
+        follow_on_page,
         line_numbers,
     });
     #[cfg(not(feature = "hydrate"))]
     let _ = (
+        follow_on_page,
         theme,
         read_only,
         decorations,
@@ -137,13 +144,41 @@ pub fn CodeEditor(
         line_numbers,
     );
     view! {
-        <div class="code-editor" class:is-ready=move || ready.get() data-language=move || language.get()>
-            <pre class="code-fallback" aria-label=label tabindex="0">
+        // A press on the fallback asks for the editor at once.
+        <div
+            class="code-editor"
+            class:is-ready=move || ready.get()
+            data-language=move || language.get()
+            on:pointerdown=move |_| {
+                #[cfg(feature = "hydrate")]
+                monaco::request();
+            }
+        >
+            // Until Monaco replaces it, Space would scroll the page under a
+            // reader who expects to type.
+            <pre
+                class="code-fallback"
+                aria-label=label
+                tabindex="0"
+                on:keydown=move |event| {
+                    if event.key() == " " {
+                        event.prevent_default();
+                    }
+                }
+            >
                 {move || text.with(|text| highlight::fallback(text, language.get()))}
             </pre>
             <div class="monaco-host" node_ref=host></div>
         </div>
     }
+}
+
+/// Load the editor bundle once the browser is idle. The page calls this
+/// when the engine is ready, so the bundle neither delays it nor waits for a
+/// reader to reach an editor.
+pub fn prefetch() {
+    #[cfg(feature = "hydrate")]
+    monaco::prefetch();
 }
 
 #[cfg(feature = "hydrate")]
@@ -201,7 +236,7 @@ mod monaco {
         #[wasm_bindgen(method, js_name = setMarkers)]
         fn set_markers(this: &Editor, items: &JsValue);
         #[wasm_bindgen(method, js_name = revealLine)]
-        fn reveal_line(this: &Editor, line: usize);
+        fn reveal_line(this: &Editor, line: usize, on_page: bool);
         #[wasm_bindgen(method, js_name = setLineNumbers)]
         fn set_line_numbers(this: &Editor, labels: &JsValue);
         #[wasm_bindgen(method, js_name = onChange)]
@@ -211,25 +246,93 @@ mod monaco {
         #[wasm_bindgen(method, js_name = onGutterClick)]
         fn on_gutter_click(this: &Editor, callback: &js_sys::Function);
         #[wasm_bindgen(method)]
+        fn focus(this: &Editor);
+        #[wasm_bindgen(method)]
         fn dispose(this: &Editor);
     }
 
     thread_local! {
         static MODULE: RefCell<Option<Promise>> = const { RefCell::new(None) };
+        /// The editors waiting for the bundle to be requested.
+        static WAITING: RefCell<Vec<futures_channel::oneshot::Sender<()>>> =
+            const { RefCell::new(Vec::new()) };
     }
 
-    /// The editor bundle, loaded once per page.
+    /// The editor bundle, loaded once per page. A failed import (a stale
+    /// `editor-<hash>` after a redeploy) is forgotten, so the next editor
+    /// tries again.
     async fn module() -> Result<EditorModule, String> {
+        let result = JsFuture::from(bundle()).await;
+        if result.is_err() {
+            MODULE.with(|module| module.borrow_mut().take());
+        }
+        result
+            .map(JsCast::unchecked_into)
+            .map_err(|error| format!("{error:?}"))
+    }
+
+    /// Request the bundle (see `bundle`).
+    pub fn request() {
+        _ = bundle();
+    }
+
+    /// The bundle's import, started once, waking the editors waiting for it.
+    fn bundle() -> Promise {
         let promise = MODULE.with(|module| {
             module
                 .borrow_mut()
                 .get_or_insert_with(|| load_module(&bundle_url()))
                 .clone()
         });
-        JsFuture::from(promise)
-            .await
-            .map(JsCast::unchecked_into)
-            .map_err(|error| format!("{error:?}"))
+        for waiting in WAITING.with(RefCell::take) {
+            _ = waiting.send(());
+        }
+        promise
+    }
+
+    /// Request the bundle once the browser is idle (or after
+    /// `PREFETCH_TIMEOUT_MS` at the latest; Safari has no idle callback).
+    pub fn prefetch() {
+        let Some(window) = web_sys::window() else {
+            return;
+        };
+        let options = web_sys::IdleRequestOptions::new();
+        options.set_timeout(PREFETCH_TIMEOUT_MS);
+        let idle = Closure::once_into_js(|| {
+            request();
+        });
+        if window
+            .request_idle_callback_with_options(idle.unchecked_ref(), &options)
+            .is_err()
+        {
+            gloo_timers::callback::Timeout::new(PREFETCH_TIMEOUT_MS, || {
+                request();
+            })
+            .forget();
+        }
+    }
+
+    /// The longest a prefetch waits for the browser to be idle.
+    const PREFETCH_TIMEOUT_MS: u32 = 2000;
+
+    /// Wait until the page wants the editor bundle. Monaco is by far the
+    /// largest download, so it must not compete with the page's Wasm and
+    /// the engine: the page prefetches it once the engine is ready
+    /// (`super::prefetch`), and before that a key press (the shortcuts step
+    /// the program from anywhere, and Tab reaches the editors) or a press
+    /// on an editor requests it. Until then the editors show their
+    /// highlighted fallback.
+    async fn wanted() {
+        if MODULE.with(|module| module.borrow().is_some()) {
+            return;
+        }
+        let (sender, receiver) = futures_channel::oneshot::channel::<()>();
+        WAITING.with(|waiting| waiting.borrow_mut().push(sender));
+        let key = window_event_listener(leptos::ev::keydown, |_| {
+            request();
+        });
+        _ = receiver.await;
+        key.remove();
     }
 
     fn bundle_url() -> String {
@@ -265,6 +368,7 @@ mod monaco {
         pub on_hover_line:   Option<Callback<usize>>,
         pub on_gutter_click: Option<Callback<usize>>,
         pub reveal:          Option<Signal<Option<usize>>>,
+        pub follow_on_page:  Option<Signal<bool>>,
         pub line_numbers:    Option<Signal<Vec<String>>>,
     }
 
@@ -314,6 +418,7 @@ mod monaco {
             };
             let owner = owner.clone();
             spawn_local(async move {
+                wanted().await;
                 let module = module().await;
                 // The view may have unmounted while the bundle loaded; its
                 // owner's cleanup disposed the slot, so create nothing.
@@ -343,7 +448,17 @@ mod monaco {
         let Ok(options) = serde_wasm_bindgen::to_value(&options) else {
             return;
         };
+        // Whoever had the keyboard focus on the fallback keeps it in the
+        // editor that replaces it.
+        let focused = document().active_element().is_some_and(|active| {
+            element
+                .parent_element()
+                .is_some_and(|editor| editor.contains(Some(&active)))
+        });
         let instance = module.create_editor(element, &options);
+        if focused {
+            instance.focus();
+        }
         let mut listeners = Vec::new();
         if let Some(callback) = mount.on_change {
             listeners.push(listen(
@@ -389,6 +504,7 @@ mod monaco {
             decorations,
             markers,
             reveal,
+            follow_on_page,
             line_numbers,
             ..
         } = mount;
@@ -448,10 +564,11 @@ mod monaco {
         if let Some(reveal) = reveal {
             Effect::new(move || {
                 let line = reveal.get();
+                let on_page = follow_on_page.is_some_and(|follow| follow.get());
                 if ready.get()
                     && let Some(line) = line
                 {
-                    with(&|editor| editor.reveal_line(line));
+                    with(&|editor| editor.reveal_line(line, on_page));
                 }
             });
         }

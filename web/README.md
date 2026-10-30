@@ -40,8 +40,14 @@ them. Visitors pick a lesson (a small C program) and see it three ways:
   narration explains each instruction for programmers new to WebAssembly.
 
 Every variable keeps one colour across the source, the expression tree and the
-memory diagram. The page has light and dark themes and works down to tablet
-width.
+memory diagram. The page has light and dark themes and works down to phone
+width. At almost every size the line that runs and the narration of what it
+did are on screen together: down to 821 px the source stays beside the
+narration (a sticky column, sized to fit under the toolbar); narrower, the page
+is one column with the source sized so the narration follows it on the same
+screen, and only the toolbar stays at the top. Windows 600 px tall or less (a
+phone held sideways, a zoomed laptop) let the header scroll away and drop the
+source's legends.
 
 The site is written in Rust with [Leptos](https://leptos.dev) and built by
 [Trunk](https://trunkrs.dev) into a static site in `web/dist/`. The page's
@@ -105,8 +111,12 @@ for the editor: `js/bridge.js`, a one-line dynamic `import()` that wasm-bindgen
 binds (Rust cannot express one), and the Monaco glue in `editor/src/` (editor
 creation, decorations and events behind a small plain-data API, the Monarch
 grammars and the themes). `src/editor.rs` holds the wasm-bindgen bindings and
-decides everything the editor shows. Monaco loads after hydration; until then,
-and without JavaScript, the code views show Rust-highlighted text.
+decides everything the editor shows. Monaco is the page's largest download
+(about 820 KB compressed), so it waits until the abstract machine's engine is
+ready and then loads while the browser is idle, or earlier when a key is
+pressed or an editor is pressed. Until then, and without JavaScript, the code
+views show Rust-highlighted text, which takes the focus and passes it on to
+Monaco.
 
 ## Deploy
 
@@ -118,11 +128,21 @@ or under any path prefix, provided the page is requested at a URL ending in
 `/` (or as `index.html`). All files must share an origin, because browsers
 only start Workers from the page's origin.
 
-Every file except `index.html` has a content hash or version in its URL, so a
-new build never reuses a URL for different bytes. Suggested caching:
-`index.html` with `Cache-Control: no-cache`; everything else with
-`public, max-age=31536000, immutable`. Upload the hashed files before
-`index.html`.
+Every file except `index.html` and wasm-bindgen's snippet (`snippets/`) has a
+content hash or version in its URL, so a new build never reuses a URL for
+different bytes. Suggested caching: those two with `Cache-Control: no-cache`;
+everything else with `public, max-age=31536000, immutable`. `_headers`
+(copied into `dist/`) states exactly that for hosts that read one, such as
+Cloudflare Pages and Netlify; GitHub Pages ignores it. Serve the text files and
+the Wasm modules compressed: gzip shrinks the first load from 2.1 MB to about
+840 KB. Upload the hashed files before `index.html`.
+
+What a first visit fetches: the page, its stylesheet, the two web fonts, the
+page's Wasm (the largest part, 540 KB gzip) and the abstract machine's Worker
+(180 KB gzip). The Monaco bundle follows once the engine is ready, the
+compiler's Worker (1.4 MB gzip) when a program is first compiled (an edit,
+or the pipeline or WebAssembly view), and Monaco's icon font (150 KB) with the
+first read-only listing, whose folding arrows use it.
 
 ## Interface
 

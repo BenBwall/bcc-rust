@@ -967,6 +967,11 @@ impl WasmState {
 pub(super) fn WasmTransport(state: State, hidden: Signal<bool>) -> impl IntoView {
     let wasm = state.wasm;
     let ready = move || !wasm.locked_tracked() && wasm.can_step();
+    let run_label = move || match (wasm.running.get(), wasm.pausing.get()) {
+        | (true, true) => "Pausing…",
+        | (true, false) => "Pause",
+        | (false, _) => "Run",
+    };
     let button = move |label: &'static str,
                        title: &'static str,
                        class: &'static str,
@@ -983,7 +988,7 @@ pub(super) fn WasmTransport(state: State, hidden: Signal<bool>) -> impl IntoView
                 {(!icon.is_empty()).then(|| view! {
                     <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><path d=icon /></svg>
                 })}
-                {label}
+                <span class="button-label">{label}</span>
             </button>
         }
     };
@@ -1001,7 +1006,7 @@ pub(super) fn WasmTransport(state: State, hidden: Signal<bool>) -> impl IntoView
                 on:click=move |_| wasm.reset(state)
             >
                 <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><path d="M4 10a6 6 0 1 0 1.8-4.3M4 3.5v3.2h3.2" /></svg>
-                "Reset"
+                <span class="button-label">"Reset"</span>
             </button>
             <button
                 type="button"
@@ -1011,12 +1016,14 @@ pub(super) fn WasmTransport(state: State, hidden: Signal<bool>) -> impl IntoView
                 on:click=move |_| wasm.back(state)
             >
                 <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><path d="M12 5l-5 5 5 5" /></svg>
-                "Back"
+                <span class="button-label">"Back"</span>
             </button>
             {button("Step", "Execute one instruction (→)", "primary", WasmRun::Step, "")}
-            {button("Over", "Step over: run a call to its return (O)", "", WasmRun::StepOver, "M4 13a6 6 0 0 1 11-3M15 6v4h-4")}
-            {button("Out", "Step out: run until this function returns (U)", "", WasmRun::StepOut, "M10 15V5M6 9l4-4 4 4")}
-            {button("Next line", "Run to the next C source line (N)", "", WasmRun::NextLine, "M4 6h12M4 10h8M4 14h12")}
+            // These three keep their words on phones: their icons alone
+            // would not say which is which.
+            {button("Over", "Step over: run a call to its return (O)", "labelled", WasmRun::StepOver, "M4 13a6 6 0 0 1 11-3M15 6v4h-4")}
+            {button("Out", "Step out: run until this function returns (U)", "labelled", WasmRun::StepOut, "M10 15V5M6 9l4-4 4 4")}
+            {button("Next line", "Run to the next C source line (N)", "labelled", WasmRun::NextLine, "M4 6h12M4 10h8M4 14h12")}
             <button
                 type="button"
                 class="button"
@@ -1030,11 +1037,7 @@ pub(super) fn WasmTransport(state: State, hidden: Signal<bool>) -> impl IntoView
                 } else {
                     view! { <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><path class="fill" d="M6 4.5v11l9-5.5z" /></svg> }.into_any()
                 }}
-                {move || match (wasm.running.get(), wasm.pausing.get()) {
-                    | (true, true) => "Pausing…",
-                    | (true, false) => "Pause",
-                    | (false, _) => "Run",
-                }}
+                <span class="button-label">{run_label}</span>
             </button>
             <button
                 type="button"
@@ -1049,21 +1052,32 @@ pub(super) fn WasmTransport(state: State, hidden: Signal<bool>) -> impl IntoView
             >
                 {move || format!("Run to line {}", state.target_line.get().unwrap_or_default())}
             </button>
-            <button
-                type="button"
-                class="toggle-chip"
-                aria-pressed=move || wasm.choice.with(|choice| !choice.from_entry).to_string()
-                title="Begin at the first instruction of main, after the code that runs before it: the C library's startup and any constructors (Back still steps through it), or at the entry point's first instruction"
-                disabled=move || wasm.locked_tracked()
-                on:click=move |_| {
-                    let on = wasm.choice.with_untracked(|choice| choice.from_entry);
-                    wasm.set_start_at_main(state, on);
-                }
-            >
-                <span class="toggle-chip-dot" aria-hidden="true"></span>
-                "Start at main"
-            </button>
         </div>
+    }
+}
+
+/// Whether Reset starts at `main` or at the module's entry point. A setting
+/// rather than a command, it sits outside the controls, beside the status on
+/// narrow screens.
+#[component]
+pub(super) fn StartAtMain(state: State, hidden: Signal<bool>) -> impl IntoView {
+    let wasm = state.wasm;
+    view! {
+        <button
+            type="button"
+            class="toggle-chip start-at-main"
+            hidden=move || hidden.get()
+            aria-pressed=move || wasm.choice.with(|choice| !choice.from_entry).to_string()
+            title="Begin at the first instruction of main, after the code that runs before it: the C library's startup and any constructors (Back still steps through it), or at the entry point's first instruction"
+            disabled=move || wasm.locked_tracked()
+            on:click=move |_| {
+                let on = wasm.choice.with_untracked(|choice| choice.from_entry);
+                wasm.set_start_at_main(state, on);
+            }
+        >
+            <span class="toggle-chip-dot" aria-hidden="true"></span>
+            "Start at main"
+        </button>
     }
 }
 
