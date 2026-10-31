@@ -105,11 +105,20 @@ impl Expander<'_, '_, '_, '_> {
                                 TokenizerFrameType::FunctionLikeMacroInvocation { .. }
                                 | TokenizerFrameType::ObjectLikeMacroInvocation { .. },
                             ..
-                        } =>
-                            if token.kind == PreprocessorTokenType::Newline {
+                        } => match token.kind {
+                            | PreprocessorTokenType::Newline => {
                                 self.pop_tokenizer_frame();
                                 continue 'base;
                             },
+                            // White space before the directive's new-line
+                            // is not part of the list either (§6.10.3p7).
+                            | PreprocessorTokenType::Whitespace
+                                if self.tokenizer.spellings().next().is_none_or(|(kind, _)| {
+                                    kind == PreprocessorTokenType::Newline
+                                }) =>
+                                continue 'base,
+                            | _ => {},
+                        },
                         | TokenizerFrame {
                             frame_type:
                                 TokenizerFrameType::FunctionLikeMacroArgument {

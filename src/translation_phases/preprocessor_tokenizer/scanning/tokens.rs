@@ -15,7 +15,11 @@ use super::{
     Lexed,
 };
 use crate::{
-    configuration::Feature,
+    configuration::{
+        CStandard,
+        Feature,
+        RuleSet,
+    },
     translation_phases::{
         SourcePosition,
         SourceVector,
@@ -268,6 +272,31 @@ impl Lexer<'_, '_, '_, '_> {
         token
     }
 
+    /// Whether a `+` or `-` after the `pp-number` spelled from `start` to
+    /// `end` continues it. After `e` or `E` it always does. After `p` or `P`
+    /// it does from C99, which added the form for hexadecimal floating
+    /// constants; before C99, GCC lets it in only in its GNU modes (its
+    /// "extended numbers"), so strict C90 reads `0x1p+f` as `0x1p` `+` `f`,
+    /// and Clang only where the number looks like a hexadecimal constant
+    /// (`0x` and no `_`).
+    /// C99: §6.4.8p1, p. 65; PDF p. 77; C90 §6.1.8 has only `e+`, `e-`,
+    /// `E+` and `E-`.
+    fn sign_continues(&self, start: usize, end: usize) -> bool {
+        let configuration = self.context.configuration;
+        match self.bytes[end - 1] {
+            | b'e' | b'E' => true,
+            | b'p' | b'P' if configuration.standard() >= CStandard::C99 => true,
+            | b'p' | b'P' => match configuration.compiler_identity().rules() {
+                | RuleSet::Gcc => configuration.gnu_extensions(),
+                | RuleSet::Clang => {
+                    let number = &self.bytes[start..end];
+                    matches!(number, [b'0', b'x' | b'X', ..]) && !number.contains(&b'_')
+                },
+            },
+            | _ => false,
+        }
+    }
+
     /// Extends a `pp-number`, including exponent sign and identifier suffix.
     /// C99: §6.4.8p1-4, p. 65; PDF p. 77; maximal munch §6.4p4, p. 50;
     /// PDF p. 62.
@@ -277,8 +306,8 @@ impl Lexer<'_, '_, '_, '_> {
             let run = byte_scan::number_run(&self.bytes[end..]);
             end += run;
             if run != 0
-                && matches!(self.bytes[end - 1], b'e' | b'E' | b'p' | b'P')
                 && matches!(self.peek(end), Some(b'+' | b'-'))
+                && self.sign_continues(start, end)
             {
                 end += 1;
                 continue;
@@ -289,8 +318,8 @@ impl Lexer<'_, '_, '_, '_> {
                         && let Some(after) = self.number_separator_end(end) =>
                 {
                     end = after;
-                    if matches!(self.bytes[end - 1], b'e' | b'E' | b'p' | b'P')
-                        && matches!(self.peek(end), Some(b'+' | b'-'))
+                    if matches!(self.peek(end), Some(b'+' | b'-'))
+                        && self.sign_continues(start, end)
                     {
                         end += 1;
                     }
