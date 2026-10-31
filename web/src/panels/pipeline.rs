@@ -205,15 +205,28 @@ pub fn PipelineView(
                         })}
                     </p>
                     <div class="stage-missing-actions" hidden=move || stage.get() != Stage::Llvm || lesson.get()>
-                        <button type="button" class="button small" on:click=move |_| stage.set(Stage::Ir)>
+                        <button type="button" class="button small" on:click=move |_| show_ir(stage)>
                             "Show bcc IR, compiled live"
                         </button>
-                        <code class="stage-command">{move || format!("$ bcc-rust{} --emit=llvm {}", if optimize.get() { " -O2" } else { "" }, filename.get())}</code>
+                        <code class="stage-command">{move || Stage::Llvm.command(&filename.get(), optimize.get()).map(|command| format!("$ {command}"))}</code>
                     </div>
                 </div>
             </article>
             <Diagnostics compilation live on_reveal />
         </section>
+    }
+}
+
+/// Switches to the bcc IR stage and moves the focus to its tab, since the
+/// button that asked for it disappears with the empty state.
+fn show_ir(stage: RwSignal<Stage>) {
+    stage.set(Stage::Ir);
+    #[cfg(feature = "hydrate")]
+    if let Some(tab) = document()
+        .get_element_by_id(&format!("stage-tab-{}", Stage::Ir.key()))
+        .and_then(|tab| wasm_bindgen::JsCast::dyn_into::<web_sys::HtmlElement>(tab).ok())
+    {
+        _ = tab.focus();
     }
 }
 
@@ -258,6 +271,7 @@ fn StageStrip(stage: RwSignal<Stage>, compilation: Memo<Option<Compilation>>) ->
                     data-phase=entry.phase()
                     aria-selected=move || (stage.get() == entry).to_string()
                     aria-controls="stage-output"
+                    id=format!("stage-tab-{}", entry.key())
                     on:click=move |_| stage.set(entry)
                 >
                     <span class="stage-index">{move || if stopped(entry) { "✕".to_owned() } else { (index + 1).to_string() }}</span>
