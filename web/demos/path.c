@@ -1,4 +1,4 @@
-// One small program, followed from its text to a running program.
+// One small program, from its text to machine code.
 int square(int n) {
     return n * n;
 }
