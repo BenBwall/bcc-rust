@@ -155,7 +155,8 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             && !matches!(
                 info.category,
                 ValueCategory::Lvalue | ValueCategory::ModifiableLvalue
-            );
+            )
+            && !self.operates_on_signaling_nan(expression);
         // A folded binary128 constant has exact bits too.
         if let Some(folded) = info.binary128().filter(|_| folded_value) {
             match repr(&self.unit.sema.types, info.ty) {
@@ -489,6 +490,54 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         }
         self.prepare_expression_actions(expression)?;
         Ok(())
+    }
+
+    /// Under `-fsignaling-nans`, whether evaluating `expression`, which
+    /// semantic analysis may have folded, performs arithmetic or a
+    /// conversion on a signaling NaN, directly or in a folded operand. GCC
+    /// keeps such an operation, which raises the invalid exception and
+    /// gives a quiet NaN at run time, instead of folding it, so lowering
+    /// evaluates it. C99: §F.2.1 paragraph 1, p. 445; PDF p. 457 (signaling
+    /// NaNs are the implementation's choice); GNU extension: GCC manual,
+    /// "Optimize Options".
+    fn operates_on_signaling_nan(&self, expression: &'tu Expression<'tu>) -> bool {
+        use ExpressionType as E;
+        if !self.unit.context.configuration.signaling_nans() {
+            return false;
+        }
+        let operands = match expression.kind {
+            | E::Parenthesized { expression: inner } => [Some(inner), None],
+            | E::Binary {
+                operator:
+                    BinaryOperator::Addition
+                    | BinaryOperator::Subtraction
+                    | BinaryOperator::Multiplication
+                    | BinaryOperator::Division,
+                left_expression,
+                right_expression,
+            } => [Some(left_expression), Some(right_expression)],
+            | E::Cast {
+                operand_expression, ..
+            } => [Some(operand_expression), None],
+            | _ => return false,
+        };
+        operands.into_iter().flatten().any(|operand| {
+            self.info(operand).is_ok_and(|info| {
+                let standard = info.floating().is_some_and(|value| {
+                    [value.real, value.imag].into_iter().any(|part| {
+                        part.x87_parts().is_some_and(|(_, exponent, significand)| {
+                            exponent == 0x7FFF
+                                && significand >> 62 == 0b10
+                                && significand & ((1 << 62) - 1) != 0
+                        })
+                    })
+                });
+                let binary128 = info
+                    .binary128()
+                    .is_some_and(|value| value.real.is_signaling() || value.imag.is_signaling());
+                standard || binary128
+            }) || self.operates_on_signaling_nan(operand)
+        })
     }
 
     /// Completes an operator whose operands are on the stack.

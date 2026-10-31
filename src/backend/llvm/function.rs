@@ -179,6 +179,9 @@ impl<'a, 'id, 'm> Emitter<'a, 'id, 'm, '_> {
                 }
             }
         }
+        if self.module.signaling_nans() {
+            api.strict_calls(self.functions[id.index()]);
+        }
         let mut labels = ArenaVec::with_capacity_in(body.label_count(), self.arena);
         for (_, block) in body.labels() {
             labels.push(blocks[block.index()].ok_or(std::fmt::Error)?);
@@ -412,6 +415,18 @@ impl<'id, 'm> BodyBuilder<'_, 'id, 'm, '_> {
                     | Opcode::Subobject => a,
                     | Opcode::VaCopy =>
                         self.intrinsic("llvm.va_copy", &[a, b], &[api.ty(Type::Ptr)]),
+                    | Opcode::Fadd | Opcode::Fsub | Opcode::Fmul | Opcode::Fdiv | Opcode::Frem
+                        if self.emitter.module.signaling_nans() =>
+                    {
+                        let name = match opcode {
+                            | Opcode::Fadd => "llvm.experimental.constrained.fadd",
+                            | Opcode::Fsub => "llvm.experimental.constrained.fsub",
+                            | Opcode::Fmul => "llvm.experimental.constrained.fmul",
+                            | Opcode::Fdiv => "llvm.experimental.constrained.fdiv",
+                            | _ => "llvm.experimental.constrained.frem",
+                        };
+                        self.constrained(name, &[a, b], true, &[api.ty(ty)])
+                    },
                     | _ => {
                         let value = api.binary(binary_opcode(opcode), a, b);
                         api.flags(value, flags);
@@ -522,12 +537,45 @@ impl<'id, 'm> BodyBuilder<'_, 'id, 'm, '_> {
                         };
                         api.runtime_call(name, Type::BF16, &[from], &[arg])
                     },
+                    | Opcode::Fpext
+                    | Opcode::Fptrunc
+                    | Opcode::Sitofp
+                    | Opcode::Uitofp
+                    | Opcode::Fptosi
+                    | Opcode::Fptoui
+                        if self.emitter.module.signaling_nans() =>
+                    {
+                        let (name, rounds) = match opcode {
+                            | Opcode::Fpext => ("llvm.experimental.constrained.fpext", false),
+                            | Opcode::Fptrunc => ("llvm.experimental.constrained.fptrunc", true),
+                            | Opcode::Sitofp => ("llvm.experimental.constrained.sitofp", true),
+                            | Opcode::Uitofp => ("llvm.experimental.constrained.uitofp", true),
+                            | Opcode::Fptosi => ("llvm.experimental.constrained.fptosi", false),
+                            | _ => ("llvm.experimental.constrained.fptoui", false),
+                        };
+                        self.constrained(name, &[arg], rounds, &[api.ty(ty), api.ty(from)])
+                    },
                     | _ => api.cast(cast_opcode(opcode), arg, api.ty(ty)),
                 }
             },
             | InstData::IntCompare {
                 cond, args: [a, b], ..
             } => api.icmp(int_condition(cond), self.value(a)?, self.value(b)?),
+            // A quiet comparison, as without the option: it raises the
+            // invalid exception for a signaling NaN only.
+            | InstData::FloatCompare {
+                cond, args: [a, b], ..
+            } if self.emitter.module.signaling_nans() => {
+                let operand = api.ty(self.body.value_type(a));
+                let (a, b) = (self.value(a)?, self.value(b)?);
+                let predicate = api.metadata_string(float_condition_name(cond));
+                let behavior = api.metadata_string("fpexcept.strict");
+                self.intrinsic(
+                    "llvm.experimental.constrained.fcmp",
+                    &[a, b, predicate, behavior],
+                    &[operand],
+                )
+            },
             | InstData::FloatCompare {
                 cond, args: [a, b], ..
             } => api.fcmp(float_condition(cond), self.value(a)?, self.value(b)?),
@@ -831,6 +879,26 @@ impl<'id, 'm> BodyBuilder<'_, 'id, 'm, '_> {
         call
     }
 
+    /// A constrained floating operation, which keeps its exceptions under
+    /// `-fsignaling-nans`: the operands, then the rounding mode if the
+    /// operation `rounds`, and the strict exception behavior.
+    fn constrained(
+        &self,
+        name: &str,
+        operands: &[Val<'id>],
+        rounds: bool,
+        overloads: &[Ty<'id>],
+    ) -> Val<'id> {
+        let api = self.emitter.api;
+        let mut args = ArenaVec::with_capacity_in(operands.len() + 2, self.emitter.arena);
+        args.extend_from_slice(operands);
+        if rounds {
+            args.push(api.metadata_string("round.tonearest"));
+        }
+        args.push(api.metadata_string("fpexcept.strict"));
+        self.intrinsic(name, &args, overloads)
+    }
+
     fn intrinsic(&self, name: &str, args: &[Val<'id>], overloads: &[Ty<'id>]) -> Val<'id> {
         let api = self.emitter.api;
         let (function, ty) = api.intrinsic(name, overloads);
@@ -1125,6 +1193,26 @@ fn int_condition(value: IntCC) -> LLVMIntPredicate {
         | IntCC::Ule => LLVMIntPredicate::LLVMIntULE,
         | IntCC::Ugt => LLVMIntPredicate::LLVMIntUGT,
         | IntCC::Uge => LLVMIntPredicate::LLVMIntUGE,
+    }
+}
+
+/// The predicate's name as a constrained comparison spells it.
+fn float_condition_name(value: FloatCC) -> &'static str {
+    match value {
+        | FloatCC::Oeq => "oeq",
+        | FloatCC::One => "one",
+        | FloatCC::Olt => "olt",
+        | FloatCC::Ole => "ole",
+        | FloatCC::Ogt => "ogt",
+        | FloatCC::Oge => "oge",
+        | FloatCC::Ord => "ord",
+        | FloatCC::Ueq => "ueq",
+        | FloatCC::Une => "une",
+        | FloatCC::Ult => "ult",
+        | FloatCC::Ule => "ule",
+        | FloatCC::Ugt => "ugt",
+        | FloatCC::Uge => "uge",
+        | FloatCC::Uno => "uno",
     }
 }
 

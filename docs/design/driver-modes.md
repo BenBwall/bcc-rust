@@ -232,12 +232,20 @@ GCC's warning), the options that give up part of IEC 60559 semantics
 `-fno-unsafe-math-optimizations`, which restore them): bcc's code keeps
 IEC 60559 semantics, which they permit, and the GCC identity's macros
 report them as GCC's do (`__GCC_IEC_559` 0, `__NO_SIGNED_ZEROS__`, ...),
-`-fsignaling-nans` (bcc's code tells signaling NaNs from quiet ones under
-any option: an operation on one gives a quiet NaN, and copies, negation,
-`fabs`, `copysign` and `__builtin_issignaling` keep the encoding; the GCC
-identity defines `__SUPPORT_SNAN__`, as GCC does; like GCC at `-O2`, bcc may
-fold an operation on a constant signaling NaN without raising
-`FE_INVALID`), `-mno-mmx` (bcc's code uses no MMX register, and its MMX
+`-fsignaling-nans` (an arithmetic operation or conversion on a signaling
+NaN, a constant one included, is kept and raises `FE_INVALID` at run
+time, as in GCC: lowering does not use the value semantic analysis folded
+for it, the LLVM back end emits floating operations as constrained
+intrinsics with strict exception behavior in `strictfp` functions, so
+LLVM neither folds them nor applies identities such as `x * 1.0 == x`,
+and the native back end and bcc's optimizer never fold floating
+arithmetic; copies, negation, `fabs`, `copysign` and
+`__builtin_issignaling` keep the encoding; the GCC identity defines
+`__SUPPORT_SNAN__` and keeps trapping math, as GCC does. GCC folds a
+widening and narrowing round trip such as `(double)(long double)x` to
+`x`, keeping a signaling NaN; bcc converts twice, quieting it and raising
+`FE_INVALID`, as IEC 60559 conversions do. Without the option, LLVM may
+fold such operations as GCC does), `-mno-mmx` (bcc's code uses no MMX register, and its MMX
 intrinsics work in SSE registers, as GCC's and Clang's do on x86-64, so the
 option changes only the macros: the GCC and Clang personalities pass
 `-U__MMX__` ahead of the command line's `-D` and `-U`, unless a later

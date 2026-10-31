@@ -1354,6 +1354,46 @@ mod tests {
         }
     }
 
+    /// Under `-fsignaling-nans` an operation on a signaling NaN, a constant
+    /// one included, is kept and raises the invalid exception at run time,
+    /// as in GCC; LLVM's identities such as `x * 1.0` no longer drop it.
+    #[test]
+    fn signaling_nans_keep_their_operations() {
+        let directory = Directory::new();
+        directory.write("f.c", "double f(double x) { return x * 1.0; }\n");
+        let llvm = directory.bcc("", &["--emit=llvm", "-O2", "-fsignaling-nans", "f.c"]);
+        succeeds(&llvm);
+        assert!(
+            stdout(&llvm).contains("llvm.experimental.constrained.fmul"),
+            "{}",
+            stdout(&llvm)
+        );
+        if !cfg!(all(target_os = "linux", target_env = "gnu")) {
+            return;
+        }
+        directory.write(
+            "s.c",
+            "#include <fenv.h>\n__attribute__((noinline)) double one(double x) { return x * 1.0; \
+             }\n__attribute__((noinline)) double folded(void) { return __builtin_nans(\"\") * \
+             2.0; }\nstatic int raised(double r) {\n  int invalid = fetestexcept(FE_INVALID) != \
+             0;\n  feclearexcept(FE_ALL_EXCEPT);\n  return invalid && r != r && \
+             !__builtin_issignaling(r);\n}\nint main(void) {\n  volatile double s = \
+             __builtin_nans(\"\");\n  feclearexcept(FE_ALL_EXCEPT);\n  if (!raised(one(s)))\n    \
+             return 1;\n  if (!raised(folded()))\n    return 2;\n  return 0;\n}\n",
+        );
+        for options in [
+            &["-O0"][..],
+            &["-O2"],
+            &["-O2", "-Xbcc", "--backend=native"],
+        ] {
+            let mut args = vec!["-fsignaling-nans", "s.c", "-lm", "-o", "s"];
+            args.extend(options);
+            succeeds(&directory.bcc("--gcc-mode", &args));
+            let run = Command::new(directory.path("s")).output().unwrap();
+            assert_eq!(run.status.code(), Some(0), "{options:?}");
+        }
+    }
+
     /// `-ftrapv` traps on signed `+`, `-` and `*` overflow and on `abs` of
     /// the most negative value instead of marking them `nsw`; with
     /// `-fwrapv` the last option given decides under the GCC identity, as

@@ -505,12 +505,12 @@ impl CompilerConfiguration {
         self.given_floating_point & option.bit() != 0
     }
 
-    /// Asks that signaling NaNs be told from quiet ones, as GCC's
-    /// `-fsignaling-nans` does. bcc's code always does: an operation on a
-    /// signaling NaN gives a quiet NaN, and the operations that only copy
-    /// or change the sign (assignment, `-`, `fabs`, `copysign`) and
-    /// `__builtin_issignaling` keep the encoding, under any option. Only
-    /// the GCC identity's `__SUPPORT_SNAN__` reads it.
+    /// Asks that operations on signaling NaNs be kept, as GCC's
+    /// `-fsignaling-nans` does: lowering evaluates an operation on a folded
+    /// signaling NaN, and the LLVM back end emits floating operations with
+    /// strict exception behavior (`Module::signaling_nans`), so each raises
+    /// the invalid exception and gives a quiet NaN at run time. The GCC
+    /// identity also defines `__SUPPORT_SNAN__` and keeps trapping math.
     /// C99: Annex F, §F.2.1 paragraph 1, p. 445; PDF p. 457 (signaling NaNs
     /// need not be supported); GNU extension: GCC manual, "Optimize
     /// Options".
