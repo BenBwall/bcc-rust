@@ -124,6 +124,11 @@ const REFUSED: &[(&str, &str)] = &[
         "bcc's -ftrapv traps on overflow directly, without a handler",
     ),
     (
+        "-fnon-call-exceptions",
+        "bcc's code does not let a trapping instruction throw, and its optimizer may remove one \
+         that would trap",
+    ),
+    (
         "-fsplit-stack",
         "bcc's functions run on one contiguous stack, which a program that relies on split stacks \
          would overflow",
@@ -579,6 +584,7 @@ const IGNORED: &[&str] = &[
     "-fno-sanitize*",
     "-fsanitize-*",
     "-fno-exceptions",
+    "-fno-non-call-exceptions",
     "-fno-async-exceptions",
     "-fno-stack-protector",
     "-fcf-protection=none",
