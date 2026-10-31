@@ -17,6 +17,9 @@ struct flags { int small : 3; unsigned wide : 20; };
 static int twice(int x) { return 2 * x; }
 static int calls;
 static int next(void) { return ++calls; }
+static struct point make(int v) { struct point p = {v, v + 1}; return p; }
+static int cleaned;
+static void clean(int *p) { cleaned += *p; }
 
 __auto_type file_scale = 2.5;
 static __auto_type file_count = 10u;
@@ -90,6 +93,34 @@ int main(void) {
     printf("vla %d %d %d %d %d\n", (int)sizeof *whole, (*whole)[3], element[4],
            (int)sizeof *row, rows[2][4]);
     free(rows);
+
+    /* A cast's variably modified type is evaluated where the cast is. */
+    volatile int columns = 4;
+    int *buffer = calloc(64, sizeof(int));
+    __auto_type grid = (int (*)[columns])buffer;
+    grid[1][2] = 7;
+    columns = 9;
+    printf("cast %d %d\n", (int)sizeof *grid, buffer[6]);
+    free(buffer);
+
+    /* Conditional, call and statement-expression operands. */
+    __auto_type mixed = n ? 1 : 2.0;
+    __auto_type made = make(4);
+    __auto_type built = ({ struct point q = {8, 9}; q; });
+    __auto_type maker = &make;
+    printf("operands %s %d %d %d %d\n", KIND(mixed), made.y, built.x, built.y, maker(1).x);
+
+    /* Attributes on the declaration, and jumps past one. */
+    {
+        __attribute__((cleanup(clean))) __auto_type tracked = 5;
+        tracked += 1;
+    }
+    __attribute__((aligned(32))) __auto_type aligned = 1;
+    goto over;
+    __auto_type skipped = next();
+    (void)skipped;
+over:
+    printf("attributes %d %d %d\n", cleaned, (int)((unsigned long)&aligned % 32), calls);
 
     /* Complex, vector and half-precision values. */
     __auto_type z = 1.0 + 2.0i;
