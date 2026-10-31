@@ -224,6 +224,28 @@ mod tests {
         );
     }
 
+    /// Clang macro-replaces `#pragma pack` operands and GCC does not, which
+    /// ignores `pack(N)` as an unknown action; `-E` writes them as spelled
+    /// for both, so GCC's rule compiles its own text the same.
+    #[test]
+    fn pack_operands_are_replaced_as_each_compiler_replaces_them() {
+        let directory = Directory::new();
+        let source = |size: u32| {
+            format!(
+                "#define N 2\n#pragma pack(N)\nstruct s {{ char c; int i; \
+                 }};\n_Static_assert(sizeof(struct s) == {size}, \"size\");\n"
+            )
+        };
+        directory.write("gcc.c", &source(8));
+        directory.write("clang.c", &source(6));
+        for (mode, file) in [("--gcc-mode", "gcc.c"), ("--clang-mode", "clang.c")] {
+            succeeds(&directory.bcc(mode, &["-fsyntax-only", "-w", file]));
+        }
+        let output = directory.bcc("--gcc-mode", &["-E", "gcc.c", "-o", "gcc.i"]);
+        succeeds(&output);
+        succeeds(&directory.bcc("--gcc-mode", &["-fsyntax-only", "-w", "gcc.i"]));
+    }
+
     /// C23 leaves the white space at the ends of a `__VA_OPT__` replacement
     /// to `#`, which GCC drops and Clang keeps.
     #[test]

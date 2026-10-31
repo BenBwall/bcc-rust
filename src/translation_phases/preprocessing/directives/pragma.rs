@@ -386,8 +386,12 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
         Some(text.into_str())
     }
 
-    /// GCC/Clang pack operands are macro-replaced, unlike ordinary pragmas.
-    /// Pass their tokens and output boundary to phase 7 for interpretation.
+    /// Pass a pack pragma's tokens and output boundary to phase 7 for
+    /// interpretation. Clang macro-replaces the operands, unlike ordinary
+    /// pragmas, and so does `cl` as clang-cl models it; GCC does not, so
+    /// with `#define N 2`, `#pragma pack(N)` is an unknown action it
+    /// ignores. Either way `-E` writes the operands as spelled, so only
+    /// GCC's rule compiles its own `-E` text the same.
     /// C99: §6.10.6p1 and footnote 152, p. 159; PDF p. 171 permit this choice.
     /// Clang: <https://clang.llvm.org/doxygen/ParsePragma_8cpp_source.html>.
     fn retain_pack_pragma(&mut self, source: SourceVectors) {
@@ -397,12 +401,25 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
         };
         let arena = self.context.tu_arena();
         let mut operands = crate::util::bump::ArenaVec::new_in(arena);
-        self.expand_pragma_line(source, |_, token| {
-            operands.push(PackToken {
-                spelling:   token.contents,
-                identifier: token.kind.is_identifier(),
-            });
-        });
+        let operand = |token: PreprocessorToken| PackToken {
+            spelling:   token.contents,
+            identifier: token.kind.is_identifier(),
+        };
+        if self
+            .context
+            .configuration
+            .compiler_identity()
+            .ms_compatible_rules()
+            == RuleSet::Gcc
+        {
+            while let Some(token) = Self::next_ignore_whitespace(&mut self.tokenizer, self.context)
+                && token.kind != PreprocessorTokenType::Newline
+            {
+                operands.push(operand(token));
+            }
+        } else {
+            self.expand_pragma_line(source, |_, token| operands.push(operand(token)));
+        }
         let source = self.context.retain_token_source(source);
         self.context.pack_pragmas.push(PackPragma {
             position: self.context.preprocessed_tokens,
