@@ -24,7 +24,10 @@ use super::{
         Type,
         Value,
     },
-    narration,
+    narration::{
+        self,
+        Designation,
+    },
 };
 
 #[derive(Debug, Clone)]
@@ -122,7 +125,8 @@ impl Machine {
                     offset: 0,
                 };
                 self.push(operand.clone())?;
-                self.designate(range, id, operand)
+                let role = self.designation(program, instruction);
+                self.designate(range, id, operand, role)
             },
             | Op::Element(name, index) => {
                 let id = self.named(name)?;
@@ -265,6 +269,45 @@ impl Machine {
                     ));
                 },
         })
+    }
+
+    /// What the operator around the name `instruction` evaluates will do
+    /// with its object: the next operation reads it, or its parent node in
+    /// the expression tree stores into it, initializes it, takes its address
+    /// or updates it.
+    fn designation(&self, program: &Program, instruction: &Instruction) -> Designation {
+        let activation = &self.activations[self.activations.len() - 1];
+        let function = &program.functions[activation.function];
+        // The program counter is already past `instruction`.
+        let reads = function
+            .code
+            .get(activation.pc)
+            .is_some_and(|next| matches!(next.op, Op::Load) && next.node == instruction.node);
+        let parent = instruction.node.and_then(|node| {
+            function
+                .nodes
+                .iter()
+                .position(|candidate| candidate.children.contains(&node))
+        });
+        let initializes = parent.is_some_and(|parent| {
+            function.code.iter().any(|operation| {
+                operation.node == Some(parent)
+                    && matches!(
+                        operation.op,
+                        Op::Store {
+                            initializer: true,
+                            ..
+                        }
+                    )
+            })
+        });
+        match parent.map(|parent| function.nodes[parent].label.as_str()) {
+            | _ if reads => Designation::Read,
+            | _ if initializes => Designation::Initialized,
+            | Some("&") => Designation::Address,
+            | Some("++" | "--") => Designation::Updated,
+            | _ => Designation::Assigned,
+        }
     }
 
     fn call(

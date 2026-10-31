@@ -90,6 +90,10 @@ clauses! {
     /// C99: §6.4.4.1 paragraph 5, pp. 55-56; PDF pp. 67-68.
     INTEGER_CONSTANT = "6.4.4.1p5", "pp. 55-56; PDF pp. 67-68", "Integer constants",
         "A decimal constant without a suffix has type int when its value fits in an int.";
+    /// C99: §6.5 paragraph 3, p. 67; PDF p. 79.
+    EVALUATION_ORDER = "6.5p3", "p. 67; PDF p. 79", "Expressions",
+        "C leaves the order in which an operator's operands are evaluated unspecified (except for \
+         &&, ||, ?: and the comma operator); a program must not depend on it.";
     /// C99: §6.5 paragraph 5, p. 67; PDF p. 79.
     EXCEPTIONAL_CONDITION = "6.5p5", "p. 67; PDF p. 79", "Expressions",
         "If a result is not mathematically defined or does not fit its type (such as signed int \
@@ -106,7 +110,8 @@ clauses! {
          C passes arguments by value.";
     /// C99: §6.5.2.2 paragraph 10, p. 72; PDF p. 84.
     CALL_SEQUENCE_POINT = "6.5.2.2p10", "p. 72; PDF p. 84", "Function calls",
-        "There is a sequence point just before the call: every argument is fully evaluated first.";
+        "The arguments are evaluated in an unspecified order, and there is a sequence point just \
+         before the call: every argument is fully evaluated first.";
     /// C99: §6.5.2.4 paragraph 2, p. 75; PDF p. 87.
     POSTFIX_INCREMENT = "6.5.2.4p2", "p. 75; PDF p. 87", "Postfix increment and decrement operators",
         "x++ yields x's old value; the stored value grows by one before the next sequence point.";
@@ -151,6 +156,9 @@ clauses! {
     /// C99: §6.5.16.1 paragraph 2, p. 92; PDF p. 104.
     SIMPLE_ASSIGNMENT = "6.5.16.1p2", "p. 92; PDF p. 104", "Simple assignment",
         "x = v converts v to x's type and replaces the value stored in x.";
+    /// C99: §6.5.16 paragraph 4, p. 91; PDF p. 103.
+    ASSIGNMENT_ORDER = "6.5.16p4", "p. 91; PDF p. 103", "Assignment operators",
+        "Which operand of an assignment is evaluated first is unspecified.";
     /// C99: §6.7.8 paragraph 10, p. 126; PDF p. 138.
     INDETERMINATE = "6.7.8p10", "p. 126; PDF p. 138", "Initialization",
         "A local variable that is not initialized holds an indeterminate value, not zero.";

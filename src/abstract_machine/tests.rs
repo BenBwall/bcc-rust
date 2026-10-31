@@ -705,8 +705,122 @@ fn pointer_events_describe_decay_one_past_and_indirection() {
     let fault = run("int main(void) { int a[2] = {1, 2}; return a[2]; }");
     let event = &fault.state().event;
     assert_eq!(event.kind, EventKind::Fault);
-    assert_eq!(event.title, "Undefined behavior");
+    assert_eq!(event.title, "Undefined behavior: access one past the end");
     assert_eq!(event.clauses[0].id, "6.5.6p8");
+}
+
+#[test]
+fn every_step_leads_with_one_sentence() {
+    let sources = [
+        DEMO_SOURCE,
+        "int main(void) { char c = 100; char d = c + c; d++; int a[2] = {5}; int *p = a; int *q = \
+         &a[1]; if (p == q) { return 1; } else { p = 0; } while (!p) { p = q; } return -d / 2 + \
+         *p % 3; }",
+        "int main(void) { int big = 2147483647; big = big + 1; return big; }",
+        "int main(void) { int x; return x; }",
+        "int main(void) { int zero = 0; return 1 / zero; }",
+        "int main(void) { int *p = 0; return *p; }",
+    ];
+    for source in sources {
+        for state in states(source) {
+            let event = &state.event;
+            let summary = &event.summary;
+            assert!(
+                summary.ends_with('.') && summary.len() <= 170,
+                "{:?} {}: {summary:?}",
+                event.kind,
+                event.title
+            );
+            assert!(
+                summary
+                    .chars()
+                    .next()
+                    .is_some_and(|first| !first.is_lowercase()),
+                "{summary:?}"
+            );
+            assert_ne!(summary, &event.explanation, "{summary}");
+        }
+    }
+}
+
+#[test]
+fn names_are_narrated_by_what_their_operator_does() {
+    let states = states("int main(void) { int x = 1; int *p = &x; x = x + 1; x++; return x; }");
+    let titles = states
+        .iter()
+        .filter(|state| state.event.kind == EventKind::Designate)
+        .map(|state| state.event.title.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        titles,
+        [
+            "`x` receives its initial value",
+            "`p` receives its initial value",
+            "`x` is the operand of &",
+            "`x` is where the result goes",
+            "`x` names an object to read",
+            "`x` is the object to update",
+            "`x` names an object to read",
+        ]
+    );
+    let initializer = states
+        .iter()
+        .find(|state| state.event.kind == EventKind::Designate)
+        .map(|state| &state.event)
+        .expect("a designation");
+    // A declarator is not an expression: no primary-expression citation.
+    assert_eq!(initializer.clauses[0].id, "6.7.8p11");
+    assert!(initializer.note.is_empty());
+    let assigned = states
+        .iter()
+        .find(|state| state.event.title == "`x` is where the result goes")
+        .map(|state| &state.event)
+        .expect("an assignment target");
+    assert!(
+        assigned
+            .clauses
+            .iter()
+            .any(|clause| clause.id == "6.5.16p4")
+    );
+}
+
+#[test]
+fn undefined_behavior_is_titled_by_its_cause() {
+    let title = |source: &str| run(source).state().event.title.clone();
+    assert_eq!(
+        title("int main(void) { int big = 2147483647; return big + 1; }"),
+        "Undefined behavior: signed overflow"
+    );
+    assert_eq!(
+        title("int main(void) { int zero = 0; return 1 % zero; }"),
+        "Undefined behavior: division by zero"
+    );
+    assert_eq!(
+        title("int main(void) { int *p = 0; return *p; }"),
+        "Undefined behavior: null pointer dereference"
+    );
+    assert_eq!(
+        title("int main(void) { int a[2] = {1, 2}; int *p = a + 3; return *p; }"),
+        "Undefined behavior: pointer outside its array"
+    );
+}
+
+#[test]
+fn binary_operators_say_their_operand_order_is_the_machines_choice() {
+    let states = states("int main(void) { int a = 1; int b = 2; return a + b < 4; }");
+    for kind in [EventKind::Arithmetic, EventKind::Comparison] {
+        let event = &states
+            .iter()
+            .find(|state| state.event.kind == kind)
+            .expect("the operator's step")
+            .event;
+        assert!(
+            event.explanation.contains("unspecified"),
+            "{}",
+            event.explanation
+        );
+        assert!(event.clauses.iter().any(|clause| clause.id == "6.5p3"));
+    }
 }
 
 #[test]
@@ -990,7 +1104,10 @@ fn overflow_names_the_arithmetic_that_did_not_fit() {
         "{}",
         diagnostic.message
     );
-    assert_eq!(session.state().event.title, "Undefined behavior");
+    assert_eq!(
+        session.state().event.title,
+        "Undefined behavior: signed overflow"
+    );
     let negated = run("int main(void) { int x = -2147483647 - 1; return -x; }");
     assert!(
         negated.state().diagnostics[0]

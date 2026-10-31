@@ -53,6 +53,9 @@ pub struct Event {
     pub range:          SourceRange,
     /// A short headline, such as "Read `total`".
     pub title:          String,
+    /// One plain sentence: what happened and why C says so. The
+    /// explanation gives the details.
+    pub summary:        String,
     /// A beginner-oriented paragraph naming the values involved.
     pub explanation:    String,
     /// Why the rule matters, or empty. Every event of a topic carries the
@@ -76,6 +79,7 @@ impl Event {
             kind,
             range,
             title,
+            summary: String::new(),
             explanation: String::new(),
             note: String::new(),
             clauses: Vec::new(),

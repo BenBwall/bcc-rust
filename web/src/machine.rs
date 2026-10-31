@@ -115,6 +115,9 @@ fn rejected(diagnostic: &abstract_machine::Diagnostic, source: &str) -> Snapshot
             kind:           "fault".to_owned(),
             category:       "fault".to_owned(),
             title:          "This program is outside the supported subset".to_owned(),
+            summary:        "The abstract machine runs only a small subset of C, and this \
+                             program uses something outside it."
+                .to_owned(),
             explanation:    format!(
                 "The abstract machine could not compile it: {}. The compiler pipeline view may \
                  still show what bcc itself makes of it.",
@@ -169,6 +172,7 @@ fn snapshot(state: &State, program: &Program, source: &str) -> Snapshot {
             kind:           event.kind.name().to_owned(),
             category:       event.kind.category().to_owned(),
             title:          event.title.clone(),
+            summary:        event.summary.clone(),
             explanation:    event.explanation.clone(),
             note:           event.note.clone(),
             flow:           flow::flow(event, operator, state.status == "finished", &objects),

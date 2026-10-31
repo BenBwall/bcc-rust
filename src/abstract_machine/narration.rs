@@ -25,6 +25,11 @@ use super::{
     },
 };
 
+/// The sentence that ends a binary operator's details: the machine's
+/// left-to-right order is its own choice.
+const UNORDERED: &str = " C leaves the order of evaluating the two operands unspecified; this \
+                         machine evaluated the left one first.";
+
 /// An idea an event's note explains: why the rule it applied matters. Every
 /// event of a topic carries its note; the site shows a note the first time
 /// the learner sees it, so the many reads, stores and constants of a
@@ -81,24 +86,24 @@ impl Topic {
                  it when the declaration is reached.",
             | Self::Lvalue =>
                 "An lvalue names a place, not a value. The operator around it decides what happens \
-                 next: most operators read the value stored there, while the left side of =, the \
-                 operand of & and the operand of ++ use the object itself (++ reads it, then \
+                 next: most operators read the value stored there, while the left side of `=`, the \
+                 operand of `&` and the operand of `++` use the object itself (`++` reads it, then \
                  stores into it).",
             | Self::LvalueConversion =>
                 "Reading an object (unless it is volatile) is not a side effect: the object keeps \
-                 its value. Only stores (=, compound assignments such as +=, ++, --, and calls \
-                 that do them) change memory.",
+                 its value. Only stores (`=`, compound assignments such as `+=`, `++`, `--`, and \
+                 calls that do them) change memory.",
             | Self::ArrayDecay =>
                 "Array-to-pointer decay is why passing an array to a function passes only the \
                  address of its first element, and why the function cannot know the array's \
-                 length. The exceptions are sizeof and &, which see the whole array.",
+                 length. The exceptions are `sizeof` and `&`, which see the whole array.",
             | Self::Promotion =>
                 "C never does arithmetic in a type narrower than int. That is why two chars \
                  holding 100 add up to 200, more than a signed char (plain char on x86-64) can \
                  hold: the sum is computed in int.",
             | Self::Address =>
-                "& does not read the object, so it is fine to take the address of a variable that \
-                 has no value yet. The pointer is only a way to reach the object later.",
+                "`&` does not read the object, so it is fine to take the address of a variable \
+                 that has no value yet. The pointer is only a way to reach the object later.",
             | Self::PointerArithmetic =>
                 "An int is 4 bytes on x86-64, so the address grows by 4 per step, but C counts in \
                  elements. Pointer arithmetic is defined only within one array and one past its \
@@ -112,26 +117,26 @@ impl Topic {
                  range is not wrapped around: it is undefined behavior, and this machine stops on \
                  it.",
             | Self::Division =>
-                "Integer division truncates toward zero, so -7 / 2 is -3 and -7 % 2 is -1. \
+                "Integer division truncates toward zero, so `-7 / 2` is -3 and `-7 % 2` is -1. \
                  Dividing by zero is undefined behavior.",
             | Self::ElementOrder =>
                 "Without designators the list fills the elements from [0] upward, so the third \
-                 value always goes to [2]. A designator names an element out of order instead: int \
-                 a[5] = {[3] = 7}; starts at [3].",
+                 value always goes to `[2]`. A designator names an element out of order instead: \
+                 `int a[5] = {[3] = 7};` starts at `[3]`.",
             | Self::SequencePoint =>
                 "Between two sequence points C leaves the order of evaluations and side effects \
                  open. Modifying an object twice, or modifying it and also reading it for another \
-                 purpose, with no sequence point between is undefined: i = i++ + 1, i + i++ and \
-                 a[i] = i++ all are. Sequence points come at the end of each full expression, \
-                 after the first operand of &&, || and ?:, at each comma operator, and just before \
-                 a function is called.",
+                 purpose, with no sequence point between is undefined: `i = i++ + 1`, `i + i++` \
+                 and `a[i] = i++` all are. Sequence points come at the end of each full \
+                 expression, after the first operand of `&&`, `||` and `?:`, at each comma \
+                 operator, and just before a function is called.",
             | Self::ImplementationDefined =>
                 "Implementation-defined means each compiler must pick a result and document it. \
                  This one is not portable: where plain char is unsigned (on ARM Linux, for \
                  example), the object would hold 200.",
             | Self::Increment =>
-                "As a statement on its own, i++ and ++i do the same thing. They differ only in the \
-                 value the expression yields: i++ yields the old value, ++i the new one.",
+                "As a statement on its own, `i++` and `++i` do the same thing. They differ only in \
+                 the value the expression yields: `i++` yields the old value, `++i` the new one.",
             | Self::Condition =>
                 "Any scalar can be a condition: 0 and a null pointer mean false, everything else \
                  means true. There is no separate boolean test.",
@@ -141,10 +146,10 @@ impl Topic {
                  address, which still lets the callee reach the caller's objects.",
             | Self::ExitStatus =>
                 "The exit status is how a program reports to whoever ran it: 0 means success. A \
-                 shell shows it as $?, and on Linux only its low 8 bits get there.",
+                 shell shows it as `$?`, and on Linux only its low 8 bits get there.",
             | Self::Undefined =>
                 "Compilers assume undefined behavior never happens and optimize on that \
-                 assumption: they may delete a check like x + 1 > x, or keep a loop running \
+                 assumption: they may delete a check like `x + 1 > x`, or keep a loop running \
                  forever. The same program can then behave differently at -O0 and -O2.",
             | Self::IndeterminateRead =>
                 "In practice the read returns whatever was left in that register or stack slot, so \
@@ -153,11 +158,29 @@ impl Topic {
     }
 }
 
+/// What the operator around a name will do with the object it designates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Designation {
+    /// Read its value (lvalue conversion comes next).
+    Read,
+    /// Store into it: the left operand of `=`.
+    Assigned,
+    /// Give it its first value: the declarator of an initialized
+    /// declaration, which is not an expression.
+    Initialized,
+    /// Take its address: the operand of `&`.
+    Address,
+    /// Read and store it: the operand of `++` or `--`.
+    Updated,
+}
+
 /// The initial state's event: nothing has run yet.
 pub(super) fn start(range: SourceRange) -> Event {
     noted(
         explained(
             Event::new(EventKind::Start, range, String::from("Ready to run main")),
+            "Nothing has run yet: each Step performs one evaluation and says which rule of C it \
+             followed.",
             "Nothing has run yet. Each Step performs one evaluation of the abstract machine and \
              explains the rule of C behind it, starting with main's body.",
             &[clauses::ABSTRACT_MACHINE],
@@ -166,21 +189,30 @@ pub(super) fn start(range: SourceRange) -> Event {
     )
 }
 
-/// The event for a diagnostic that stops execution.
+/// The event for a diagnostic that stops execution. Undefined behavior is
+/// titled by what went wrong, from the paragraph that makes it undefined.
 pub(super) fn fault(diagnostic: &Diagnostic) -> Event {
     let dangling = diagnostic.clause == Some(&clauses::LIFETIME);
-    let (title, explanation, topic) = match diagnostic.kind {
-        | "undefined_behavior" => (
-            "Undefined behavior",
-            String::from(
-                "The C standard places no requirements on a program once this happens: the real \
-                 program could crash, print garbage, or appear to work. The abstract machine \
-                 stops here instead of guessing.",
-            ),
-            Some(Topic::Undefined),
-        ),
+    let (title, summary, explanation, topic) = match diagnostic.kind {
+        | "undefined_behavior" => {
+            let (title, summary) = undefined(diagnostic);
+            (
+                title,
+                String::from(summary),
+                String::from(
+                    "The C standard places no requirements on a program once this happens: the \
+                     real program could crash, print garbage, or appear to work. The abstract \
+                     machine stops here instead of guessing.",
+                ),
+                Some(Topic::Undefined),
+            )
+        },
         | "indeterminate" if dangling => (
             "Use of a dangling pointer",
+            String::from(
+                "The object this pointer pointed to no longer exists, so the pointer's value is \
+                 indeterminate and cannot be used.",
+            ),
             String::from(
                 "When an object's lifetime ends, every pointer to it becomes indeterminate. Using \
                  such a pointer is the dangling-pointer bug: the memory may already belong to \
@@ -191,6 +223,10 @@ pub(super) fn fault(diagnostic: &Diagnostic) -> Event {
         | "indeterminate" => (
             "Read of an indeterminate value",
             String::from(
+                "Nothing was ever stored in this object, so there is no value to read: C calls \
+                 its value indeterminate.",
+            ),
+            String::from(
                 "An indeterminate value is either an unspecified value or a trap representation, \
                  a bit pattern that is no value at all, and reading a trap representation is \
                  undefined. C11 went further: reading a local that was never initialized and \
@@ -199,10 +235,23 @@ pub(super) fn fault(diagnostic: &Diagnostic) -> Event {
             ),
             Some(Topic::IndeterminateRead),
         ),
-        | "limit" => ("Engine limit reached", sentence(&diagnostic.message), None),
+        | "limit" => (
+            "Engine limit reached",
+            sentence(&diagnostic.message),
+            String::from(
+                "The browser's engine bounds every run so that a long loop cannot freeze the \
+                 page. The program itself may be fine.",
+            ),
+            None,
+        ),
         | _ => (
             "Outside the supported subset",
             sentence(&diagnostic.message),
+            String::from(
+                "The abstract machine runs a small subset of C: int and char locals, int \
+                 pointers, fixed int arrays, functions, if, while and for. The compiler pipeline \
+                 and WebAssembly views compile the whole language.",
+            ),
             None,
         ),
     };
@@ -211,6 +260,7 @@ pub(super) fn fault(diagnostic: &Diagnostic) -> Event {
         diagnostic.source_range,
         String::from(title),
     );
+    event.summary = summary;
     event.explanation = explanation;
     event.clauses.extend(diagnostic.clause.copied());
     if diagnostic.kind == "indeterminate" && !dangling {
@@ -219,6 +269,58 @@ pub(super) fn fault(diagnostic: &Diagnostic) -> Event {
     match topic {
         | Some(topic) => noted(event, topic),
         | None => event,
+    }
+}
+
+/// The title and the one-sentence reason for undefined behavior, from the
+/// paragraph the diagnostic cites.
+fn undefined(diagnostic: &Diagnostic) -> (&'static str, &'static str) {
+    let clause = diagnostic.clause.map(|clause| clause.id);
+    let message = diagnostic.message.as_str();
+    if clause == Some(clauses::EXCEPTIONAL_CONDITION.id) {
+        (
+            "Undefined behavior: signed overflow",
+            "The exact result does not fit in an int, and C defines no behavior for signed \
+             overflow.",
+        )
+    } else if clause == Some(clauses::DIVISION.id) {
+        (
+            "Undefined behavior: division by zero",
+            "C defines no quotient or remainder for an integer division by zero.",
+        )
+    } else if clause == Some(clauses::INDIRECTION.id) {
+        (
+            "Undefined behavior: null pointer dereference",
+            "A null pointer points to no object, so there is nothing for * to designate.",
+        )
+    } else if clause == Some(clauses::LIFETIME.id) {
+        (
+            "Undefined behavior: use after lifetime",
+            "The object no longer exists: its lifetime has ended, and C gives no meaning to using \
+             it.",
+        )
+    } else if clause == Some(clauses::POINTER_ARITHMETIC.id) && message.contains("one past") {
+        (
+            "Undefined behavior: access one past the end",
+            "A pointer may point just past the last element, but no object is there to read or \
+             write.",
+        )
+    } else if clause == Some(clauses::POINTER_ARITHMETIC.id) && message.contains("leaves") {
+        (
+            "Undefined behavior: pointer outside its array",
+            "Pointer arithmetic may move only within an array and to one past its end; this \
+             result would leave both.",
+        )
+    } else if clause == Some(clauses::POINTER_ARITHMETIC.id) {
+        (
+            "Undefined behavior: access outside the array",
+            "This access is outside the object, where C says nothing about what happens.",
+        )
+    } else {
+        (
+            "Undefined behavior",
+            "C places no requirements on what the program does from here.",
+        )
     }
 }
 
@@ -249,11 +351,17 @@ impl Machine {
         let mut event = if ended.is_empty() {
             explained(
                 Event::new(EventKind::LeaveBlock, range, String::from("Leave a block")),
+                "The block ends; it declared no objects, so nothing ceases to exist.",
                 "The block finishes. It created no objects, so no lifetimes end here.",
                 &[clauses::BLOCK_SCOPE],
             )
         } else {
             let title = format!("End the lifetime of {names}");
+            let summary = if ended.len() == 1 {
+                format!("The block ends, so {names}, declared inside it, ceases to exist.")
+            } else {
+                format!("The block ends, so {names}, declared inside it, cease to exist.")
+            };
             let text = if ended.len() == 1 {
                 format!(
                     "The block finishes, so {names} reaches the end of its lifetime. Its storage \
@@ -270,6 +378,7 @@ impl Machine {
             noted(
                 explained(
                     Event::new(EventKind::LeaveBlock, range, title),
+                    &summary,
                     &text,
                     &[clauses::AUTOMATIC_LIFETIME, clauses::BLOCK_SCOPE],
                 ),
@@ -293,6 +402,17 @@ impl Machine {
             | Type::Char => String::from("a char object (1 byte). Its value is"),
             | Type::Int => String::from("an int object (4 bytes on x86-64). Its value is"),
         };
+        let kind = match ty {
+            | Type::Array(count) => format!("an array of {count} ints"),
+            | Type::Pointer => String::from("a pointer to int"),
+            | Type::Char => String::from("a char object"),
+            | Type::Int => String::from("an int object"),
+        };
+        let summary = format!(
+            "The declaration creates `{name}`, {kind} in {function}'s frame, with no value until \
+             one is stored.",
+            name = object.name,
+        );
         let text = format!(
             "The declaration of `{name}` is reached, so the machine creates {what} indeterminate \
              until something is stored. The object lives in {function}'s frame: it has automatic \
@@ -306,6 +426,7 @@ impl Machine {
                     range,
                     format!("Create `{}` ({})", object.name, object.r#type),
                 ),
+                &summary,
                 &text,
                 &[clauses::AUTOMATIC_LIFETIME, clauses::INDETERMINATE],
             ),
@@ -315,24 +436,91 @@ impl Machine {
         event
     }
 
-    pub(super) fn designate(&self, range: SourceRange, id: usize, operand: Operand) -> Event {
+    /// The event for a name evaluated to the object it designates, told by
+    /// what the operator around it will do with the object.
+    pub(super) fn designate(
+        &self,
+        range: SourceRange,
+        id: usize,
+        operand: Operand,
+        role: Designation,
+    ) -> Event {
         let name = &self.state.objects[id - 1].name;
-        let text = format!(
-            "The name `{name}` is an lvalue: it designates the object `{name}`, a place in \
-             memory. Nothing is read yet."
+        let lvalue = format!(
+            "The name `{name}` is an lvalue: it designates the object `{name}`, a place in memory."
         );
-        let mut event = noted(
-            explained(
-                Event::new(
-                    EventKind::Designate,
-                    range,
-                    format!("`{name}` designates an object"),
+        let (title, summary, text, cited): (String, String, String, &[Clause]) = match role {
+            | Designation::Read => (
+                format!("`{name}` names an object to read"),
+                format!(
+                    "The name `{name}` designates its object, a place in memory; the next step \
+                     reads the value stored there."
                 ),
-                &text,
+                format!(
+                    "{lvalue} The expression needs a value, so the next step reads the object, \
+                     but a name on its own only says where the object is."
+                ),
                 &[clauses::IDENTIFIER, clauses::LVALUE],
             ),
-            Topic::Lvalue,
+            | Designation::Assigned => (
+                format!("`{name}` is where the result goes"),
+                format!(
+                    "The left side of = says which object receives the result, so `{name}` is \
+                     located, not read."
+                ),
+                format!(
+                    "{lvalue} The left operand of an assignment must be such a place: the \
+                     assignment stores into it and never reads its old value. C leaves the order \
+                     of evaluating the two operands of = unspecified; this machine does the left \
+                     one first."
+                ),
+                &[
+                    clauses::IDENTIFIER,
+                    clauses::LVALUE,
+                    clauses::ASSIGNMENT_ORDER,
+                ],
+            ),
+            | Designation::Initialized => (
+                format!("`{name}` receives its initial value"),
+                format!(
+                    "The value after = becomes the first value of `{name}`, the object this \
+                     declaration just created."
+                ),
+                format!(
+                    "In a declaration, `{name}` is not an expression that is evaluated: the \
+                     initializer gives the new object its first value, converted to its type as \
+                     if by assignment. The machine next evaluates the initializer."
+                ),
+                &[clauses::SCALAR_INITIALIZER],
+            ),
+            | Designation::Address => (
+                format!("`{name}` is the operand of &"),
+                format!(
+                    "& needs the object itself, not its value, so `{name}` is located but not \
+                     read."
+                ),
+                format!("{lvalue} & turns that place into a pointer; nothing is read."),
+                &[clauses::IDENTIFIER, clauses::LVALUE],
+            ),
+            | Designation::Updated => (
+                format!("`{name}` is the object to update"),
+                format!(
+                    "++ and -- work on the object itself: they read `{name}` and store the new \
+                     value back."
+                ),
+                format!("{lvalue} The next step reads it and stores the updated value back."),
+                &[clauses::IDENTIFIER, clauses::LVALUE],
+            ),
+        };
+        let mut event = explained(
+            Event::new(EventKind::Designate, range, title),
+            &summary,
+            &text,
+            cited,
         );
+        if role != Designation::Initialized {
+            event = noted(event, Topic::Lvalue);
+        }
         event.objects.push(id);
         result(event, operand)
     }
@@ -355,6 +543,10 @@ impl Machine {
                     EventKind::Designate,
                     range,
                     format!("Select {location} to initialize"),
+                ),
+                &format!(
+                    "An initializer list fills an array from [0] upward, so the next value goes \
+                     to {location}."
                 ),
                 &text,
                 &[clauses::INITIALIZER_ORDER],
@@ -381,6 +573,11 @@ impl Machine {
                     range,
                     format!("`{}` decays to a pointer", object.name),
                 ),
+                &format!(
+                    "An array is never copied in an expression: `{name}` becomes a pointer to its \
+                     first element, {name}[0].",
+                    name = object.name,
+                ),
                 &text,
                 &[clauses::ARRAY_DECAY],
             ),
@@ -399,9 +596,12 @@ impl Machine {
     ) -> Event {
         let location = self.location(target, offset);
         let shown = self.value_text(&value);
+        let summary = format!(
+            "The expression needs the value of {location}, so the machine reads it: {shown}."
+        );
         let text = format!(
-            "Lvalue conversion: {location} is used for its value, so the machine reads the value \
-             stored in that object: {shown}."
+            "{location} is used for its value, not as a place, so the machine reads the value \
+             stored in that object: {shown}. C calls this lvalue conversion."
         );
         let mut event = noted(
             explained(
@@ -410,6 +610,7 @@ impl Machine {
                     range,
                     format!("Read {location} → {}", self.short_value(&value)),
                 ),
+                &summary,
                 &text,
                 &[clauses::LVALUE_CONVERSION],
             ),
@@ -433,6 +634,10 @@ impl Machine {
                     EventKind::IntegerPromotion,
                     range,
                     format!("Promote char {shown} to int"),
+                ),
+                &format!(
+                    "C does no arithmetic in char, so the char {shown} becomes the int {shown} \
+                     first: same value, wider type."
                 ),
                 &text,
                 &[clauses::INTEGER_PROMOTIONS, clauses::CHAR_SIGNEDNESS],
@@ -462,6 +667,9 @@ impl Machine {
                     range,
                     format!("Take the address of {location}"),
                 ),
+                &format!(
+                    "& makes a pointer to {location}, a way to reach it later, without reading it."
+                ),
                 &text,
                 &[clauses::ADDRESS_OPERATOR],
             ),
@@ -481,9 +689,11 @@ impl Machine {
     ) -> Event {
         let location = self.location(target, offset);
         let operand = snippet(source, range).trim_start_matches('*');
+        let summary =
+            format!("`*{operand}` follows the pointer to the object it points to, {location}.");
         let text = format!(
-            "Indirection: `{operand}` holds {}, so `*{operand}` is an lvalue designating \
-             {location}. Nothing is read or written yet.",
+            "`{operand}` holds {}, so `*{operand}` (indirection) is an lvalue designating \
+             {location}. Nothing is read or written yet: the operator around it decides which.",
             self.value_text(&pointer),
         );
         let mut event = explained(
@@ -492,6 +702,7 @@ impl Machine {
                 range,
                 format!("`*{operand}` designates {location}"),
             ),
+            &summary,
             &text,
             &[clauses::INDIRECTION],
         );
@@ -520,6 +731,10 @@ impl Machine {
         );
         let mut event = explained(
             Event::new(EventKind::Subscript, range, format!("Select {location}")),
+            &format!(
+                "Subscripting counts elements from the pointer: it moves {steps} and designates \
+                 {location}."
+            ),
             &text,
             &[clauses::SUBSCRIPT, clauses::POINTER_ARITHMETIC],
         );
@@ -539,9 +754,10 @@ impl Machine {
     ) -> Event {
         let input = self.short_value(&value);
         let shown = self.short_value(&output);
-        let (title, text, clause) = match operator {
+        let (title, summary, text, clause) = match operator {
             | "!" => (
                 format!("Logical not: !{input} → {shown}"),
+                format!("! turns 0 into 1 and anything else into 0, so !{input} is {shown}."),
                 format!(
                     "! yields 1 if its operand compares equal to 0 and 0 otherwise. The operand \
                      is {input}, so the result is the int {shown}."
@@ -550,16 +766,23 @@ impl Machine {
             ),
             | "-" => (
                 format!("Negate {input} → {shown}"),
+                format!("Unary minus negates the value: -({input}) is {shown}."),
                 format!("Unary minus negates its int operand: -({input}) is {shown}."),
                 clauses::UNARY_MINUS,
             ),
             | _ => (
                 format!("Unary plus: {shown}"),
+                format!("Unary plus leaves the value as it is: {shown}."),
                 format!("Unary plus yields its (promoted) operand unchanged: {shown}."),
                 clauses::UNARY_PLUS,
             ),
         };
-        let mut event = explained(Event::new(EventKind::Unary, range, title), &text, &[clause]);
+        let mut event = explained(
+            Event::new(EventKind::Unary, range, title),
+            &summary,
+            &text,
+            &[clause],
+        );
         event.operands.push(Operand::Value(value));
         result(event, Operand::Value(output))
     }
@@ -593,12 +816,17 @@ impl Machine {
                         format!("Compare pointers: {} → {shown}", snippet(source, range)),
                     ),
                     &format!(
+                        "Pointers are equal only when they point to the same place, so \
+                         `{operator}` yields the int {shown}."
+                    ),
+                    &format!(
                         "Two pointers compare equal exactly when they point to the same place. \
-                         The left is {}, the right is {}, so `{operator}` yields the int {shown}.",
+                         The left is {}, the right is {}, so `{operator}` yields the int \
+                         {shown}.{UNORDERED}",
                         self.value_text(&left),
                         self.value_text(&right),
                     ),
-                    &[clauses::EQUALITY],
+                    &[clauses::EQUALITY, clauses::EVALUATION_ORDER],
                 ),
                 Topic::Comparison,
             ),
@@ -656,9 +884,28 @@ impl Machine {
                 } else {
                     format!("Pointer arithmetic: {written}")
                 };
+                let summary = if element {
+                    format!(
+                        "`{written}` computes an address from the pointer and the index; the \
+                         element is never read."
+                    )
+                } else if self.one_past(&output) {
+                    format!(
+                        "Pointer arithmetic counts elements: {sign} {} gives {}, which may be \
+                         formed and compared but not read through.",
+                        self.short_value(count),
+                        self.value_text(&output),
+                    )
+                } else {
+                    format!(
+                        "Pointer arithmetic counts elements, not bytes: {sign} {} moves {moved}.",
+                        self.short_value(count),
+                    )
+                };
                 noted(
                     explained(
                         Event::new(EventKind::PointerArithmetic, range, title),
+                        &summary,
                         &text,
                         cited,
                     ),
@@ -671,6 +918,7 @@ impl Machine {
                     range,
                     format!("Compare with a null pointer → {shown}"),
                 ),
+                &format!("`{operator}` tests whether the pointer is null: the result is {shown}."),
                 &format!(
                     "The constant 0 here is a null pointer constant, so `{operator}` tests \
                      whether the pointer is null. The result is the int {shown}."
@@ -696,10 +944,14 @@ impl Machine {
                             format!("Compare {a} {operator} {b} → {shown}"),
                         ),
                         &format!(
-                            "A comparison yields an int: 1 when the relation holds and 0 when it \
-                             does not. {a} {operator} {b} {truth}, so the result is {shown}."
+                            "{a} {operator} {b} {truth}, so the comparison yields the int {shown}."
                         ),
-                        &[clause],
+                        &format!(
+                            "A comparison yields an int: 1 when the relation holds and 0 when it \
+                             does not. {a} {operator} {b} {truth}, so the result is \
+                             {shown}.{UNORDERED}"
+                        ),
+                        &[clause, clauses::EVALUATION_ORDER],
                     ),
                     Topic::Comparison,
                 )
@@ -728,11 +980,15 @@ impl Machine {
                             format!("Compute {a} {operator} {b} = {shown}"),
                         ),
                         &format!(
+                            "{a} {operator} {b} = {shown}, computed in int; the result fits in an \
+                             int, so it is well defined."
+                        ),
+                        &format!(
                             "Both operands are int, so the usual arithmetic conversions leave \
                              them unchanged and the machine {verb} in int: {a} {operator} {b} = \
-                             {shown}. The result fits in an int, so it is well defined."
+                             {shown}. The result fits in an int, so it is well defined.{UNORDERED}"
                         ),
-                        &[clause, clauses::USUAL_ARITHMETIC],
+                        &[clause, clauses::USUAL_ARITHMETIC, clauses::EVALUATION_ORDER],
                     ),
                     topic,
                 )
@@ -795,9 +1051,9 @@ impl Machine {
                 self.value_text(&value)
             )
         } else {
-            let before = previous.map_or_else(
+            let before = previous.as_ref().map_or_else(
                 || String::from("its old value"),
-                |previous| self.value_text(&previous),
+                |previous| self.value_text(previous),
             );
             format!(
                 "Simple assignment: {} replaces the value stored in {location} (previously \
@@ -805,6 +1061,30 @@ impl Machine {
                 self.value_text(&value)
             )
         };
+        let mut summary = if char_conversion {
+            format!(
+                "{} does not fit in a char, so {location} gets {shown}; C leaves that result to \
+                 the implementation.",
+                self.short_value(&value)
+            )
+        } else if converted {
+            format!("Storing the constant 0 into a pointer makes {location} a null pointer.")
+        } else if initializer {
+            format!("The initializer gives {location} its first value, {shown}.")
+        } else {
+            let before = previous.as_ref().map_or_else(
+                || String::from("its old value"),
+                |previous| self.short_value(previous),
+            );
+            format!("The assignment stores {shown} into {location}, replacing {before}.")
+        };
+        if !converted && self.object_type(target) == Some(Type::Char) {
+            let _ = write!(
+                text,
+                " The int {shown} is converted to {location}'s type, char; it fits in -128 to \
+                 127, so the value is unchanged."
+            );
+        }
         let mut cited = vec![clause];
         let mut topic = None;
         if converted && self.object_type(target) == Some(Type::Pointer) {
@@ -824,7 +1104,11 @@ impl Machine {
             cited.push(clauses::FULL_EXPRESSION);
             topic = topic.or(Some(Topic::SequencePoint));
         }
-        let mut event = explained(Event::new(kind, range, title), &text, &cited);
+        if full_expression {
+            summary.pop();
+            summary.push_str(", ending the full expression: a sequence point.");
+        }
+        let mut event = explained(Event::new(kind, range, title), &summary, &text, &cited);
         if let Some(topic) = topic {
             event = noted(event, topic);
         }
@@ -876,6 +1160,7 @@ impl Machine {
             );
         }
         text.push_str(" The full expression ends here, a sequence point.");
+        let summary = format!("`{form}` {verb} {location}, so it changes from {old} to {new}.");
         let increment = if prefix {
             clauses::PREFIX_INCREMENT
         } else {
@@ -888,6 +1173,7 @@ impl Machine {
                     range,
                     format!("Update {location}: {old} → {new}"),
                 ),
+                &summary,
                 &text,
                 &[increment, clauses::FULL_EXPRESSION],
             ),
@@ -914,6 +1200,10 @@ impl Machine {
                 range,
                 String::from("Discard the result"),
             ),
+            &format!(
+                "The statement's value, {}, is not used: the statement ran only for its effects.",
+                self.short_value(&value),
+            ),
             &text,
             &[clauses::EXPRESSION_STATEMENT, clauses::FULL_EXPRESSION],
         );
@@ -932,24 +1222,34 @@ impl Machine {
     ) -> Event {
         let shown = self.short_value(&value);
         let condition = snippet(source, range);
-        let (title, outcome, clause) = match (statement, truth) {
+        let (title, outcome, short, clause) = match (statement, truth) {
             | ("if", true) => (
                 "true: take the if branch",
                 "the first branch runs",
+                "the if branch runs",
                 clauses::IF_STATEMENT,
             ),
             | ("if", false) => (
                 "false: skip the if branch",
                 "the first branch is skipped (and an else branch, if any, runs)",
+                "the if branch is skipped",
                 clauses::IF_STATEMENT,
             ),
             | (_, true) => (
                 "true: run the loop body",
                 "the loop body runs",
+                "the loop body runs again",
                 clauses::ITERATION,
             ),
-            | (_, false) => ("false: leave the loop", "the loop ends", clauses::ITERATION),
+            | (_, false) => (
+                "false: leave the loop",
+                "the loop ends",
+                "the loop ends",
+                clauses::ITERATION,
+            ),
         };
+        let counts = if truth { "true" } else { "false" };
+        let summary = format!("`{condition}` is {shown}, which counts as {counts}, so {short}.");
         let meaning = match value {
             | Value::Pointer { target: None, .. } => "a null pointer counts as false",
             | Value::Pointer { .. } => "a non-null pointer counts as true",
@@ -964,6 +1264,7 @@ impl Machine {
         let mut event = noted(
             explained(
                 Event::new(EventKind::Branch, range, format!("Condition is {title}")),
+                &summary,
                 &text,
                 &[clause, clauses::FULL_EXPRESSION],
             ),
@@ -1003,9 +1304,9 @@ impl Machine {
             )
         } else {
             format!(
-                "All arguments are evaluated before the call; that is a sequence point. The \
-                 machine creates a new activation of {name} (frame #{frame}) on top of the call \
-                 stack."
+                "All arguments are evaluated before the call, in an order C leaves unspecified \
+                 (this machine goes left to right); a sequence point follows. The machine creates \
+                 a new activation of {name} (frame #{frame}) on top of the call stack."
             )
         };
         if parameters.is_empty() {
@@ -1030,12 +1331,27 @@ impl Machine {
             );
             cited.push(clauses::AUTOMATIC_LIFETIME);
         }
+        let summary = match parameters.as_slice() {
+            | [] =>
+                format!("The call runs {name} in a new frame of its own; it takes no arguments."),
+            | [only] => format!(
+                "The call runs {name} in a new frame of its own, and its parameter {} gets a copy \
+                 of the argument.",
+                self.names(&[*only])
+            ),
+            | all => format!(
+                "The call runs {name} in a new frame of its own, and its parameters {} get copies \
+                 of the arguments.",
+                self.names(all)
+            ),
+        };
         let mut event = explained(
             Event::new(
                 EventKind::Call,
                 range,
                 format!("Call {name} (frame #{frame})"),
             ),
+            &summary,
             &text,
             &cited,
         );
@@ -1101,12 +1417,25 @@ impl Machine {
         } else {
             [clauses::MAIN_RETURN, clauses::AUTOMATIC_LIFETIME]
         };
+        let summary = if fallthrough {
+            String::from(
+                "Reaching main's closing brace returns 0, so the program ends with exit status 0.",
+            )
+        } else if call.is_some() {
+            format!(
+                "The return hands {shown} back to the caller of {function}, and the objects of \
+                 its frame cease to exist."
+            )
+        } else {
+            format!("Returning {shown} from main ends the program with exit status {shown}.")
+        };
         let mut event = explained(
             Event::new(
                 EventKind::Return,
                 range,
                 format!("Return {shown} from {function}"),
             ),
+            &summary,
             &text,
             &cited,
         );
@@ -1238,6 +1567,7 @@ pub(super) fn enter_block(range: SourceRange) -> Event {
     noted(
         explained(
             Event::new(EventKind::EnterBlock, range, String::from("Enter a block")),
+            "Execution enters a { … } block, a new scope: names declared inside belong to it.",
             "Execution enters a { … } block. Names declared inside it can be used only until its \
              closing brace.",
             &[clauses::COMPOUND_STATEMENT, clauses::BLOCK_SCOPE],
@@ -1258,6 +1588,7 @@ pub(super) fn constant(range: SourceRange, integer: i32, value: Operand) -> Even
                 range,
                 format!("Evaluate the constant {integer}"),
             ),
+            &format!("The constant {integer} is simply the int value {integer}."),
             &text,
             &[clauses::INTEGER_CONSTANT],
         ),
@@ -1273,6 +1604,7 @@ pub(super) fn implicit_zero(range: SourceRange, value: Operand) -> Event {
                 range,
                 String::from("Supply an implicit 0"),
             ),
+            "The list has no value left for this element, so C initializes it to zero.",
             "The initializer list ran out before the array did. Elements without an initializer \
              of their own are initialized to zero.",
             &[clauses::PARTIAL_INITIALIZER],
@@ -1289,6 +1621,7 @@ pub(super) fn jump(range: SourceRange, backward: bool) -> Event {
                 range,
                 String::from("Jump back to the loop condition"),
             ),
+            "One pass through the loop is done, so control goes back to test the condition again.",
             "The loop body (and a for loop's update expression) has finished, so control returns \
              to the controlling expression, which decides whether to run the body again.",
             &[clauses::ITERATION],
@@ -1296,13 +1629,17 @@ pub(super) fn jump(range: SourceRange, backward: bool) -> Event {
     } else {
         explained(
             Event::new(EventKind::Jump, range, String::from("Skip the else branch")),
+            "The if branch is done, so the else branch is skipped.",
             "The if branch has finished, so control jumps over the else branch.",
             &[clauses::IF_STATEMENT],
         )
     }
 }
 
-fn explained(mut event: Event, text: &str, cited: &[Clause]) -> Event {
+/// `event` with its one-sentence `summary`, the details `text`, and the
+/// rules it applied.
+fn explained(mut event: Event, summary: &str, text: &str, cited: &[Clause]) -> Event {
+    event.summary = String::from(summary);
     event.explanation = String::from(text);
     event.clauses.extend_from_slice(cited);
     event
