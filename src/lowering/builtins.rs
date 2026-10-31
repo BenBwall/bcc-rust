@@ -33,6 +33,7 @@ use crate::{
         BitOperation,
         BuiltinOperation as CommonBuiltin,
         ComplexPart,
+        MemoryBuiltin,
         OverflowOperation,
         VaOperation,
     },
@@ -515,6 +516,38 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                         let negated = self.convert(Opcode::Fneg, ty, imaginary);
                         self.complex_pair([real, negated])
                     },
+                }
+            },
+            // As Clang lowers them: a move with the pointers swapped, a fill
+            // with zero, and a copy returning the end of the destination.
+            | CommonBuiltin::Memory(operation) => {
+                let first = self.value(items[0], source)?;
+                let second = self.value(items[1], source)?;
+                let count = self.value(items[count - 1], source)?;
+                let count = self.extend(count, false, Type::I64);
+                let (opcode, flags, args) = match operation {
+                    | MemoryBuiltin::Bcopy =>
+                        (Opcode::Copy, InstFlags::MAY_OVERLAP, [second, first, count]),
+                    | MemoryBuiltin::Bzero => {
+                        let zero = self.iconst(Type::I8, 0);
+                        (Opcode::Fill, InstFlags::empty(), [first, zero, count])
+                    },
+                    | MemoryBuiltin::Mempcpy =>
+                        (Opcode::Copy, InstFlags::empty(), [first, second, count]),
+                };
+                _ = self.draft.push(
+                    self.memory_op(InstData::MemoryRange {
+                        opcode,
+                        flags,
+                        align: Align::BYTE,
+                        args,
+                    }),
+                    None,
+                );
+                if operation == MemoryBuiltin::Mempcpy {
+                    Operand::Value(self.ptr_add(first, count))
+                } else {
+                    Operand::Void
                 }
             },
             // GCC's and Clang's expansion: the carry out of either addition

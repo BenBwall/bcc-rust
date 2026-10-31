@@ -2761,7 +2761,13 @@ implements `mempcpy`, `stpncpy`, `bcopy`, `bzero`, `bcmp`, `index`,
 `rindex`, `strcasecmp`, `strncasecmp`, `labs`, `llabs` and `aligned_alloc`
 (a heap object at the requested power-of-two alignment); the WASI runtime's
 `string.c` adds `stpcpy`, `stpncpy`, `mempcpy`, `bcopy`, `bzero`, `bcmp`,
-`index` and `rindex`.
+`index` and `rindex`, weak (with `strcasecmp` and `strncasecmp`), since a
+program may define those identifiers itself (`int index;`). The aliases
+`__builtin_bcopy`, `__builtin_bzero` and `__builtin_mempcpy` do not call
+them: they lower to the IR's `copy` (overlapping for `bcopy`) and `fill`,
+LLVM's `llvm.memmove`, `llvm.memset` and `llvm.memcpy`, as Clang lowers them
+on every target, so the Microsoft C runtime, which lacks the three, needs
+no such symbol (`BuiltinOperation::Memory`).
 
 The scalar builtins lower in `lowering/builtins.rs` to existing IR:
 `__builtin_addc`/`__builtin_subc` add or subtract twice and `or` the two

@@ -311,6 +311,11 @@ pub(crate) enum BuiltinOperation {
     /// Builtins".
     /// <https://gcc.gnu.org/onlinedocs/gcc/Integer-Overflow-Builtins.html>
     Carry(bool, Scalar),
+    /// The BSD and GNU memory aliases `__builtin_bcopy`, `__builtin_bzero`
+    /// and `__builtin_mempcpy`, which execute as a memory move, fill or
+    /// copy, as Clang lowers them on every target, so no library needs the
+    /// symbols. GNU extension: GCC manual, "Library Builtins".
+    Memory(MemoryBuiltin),
     /// GNU `__builtin_alloca_with_align` and
     /// `__builtin_alloca_with_align_and_max`: `alloca` storage with the
     /// alignment the second operand gives in bits; a maximum size is only
@@ -576,6 +581,19 @@ pub(crate) enum GenericBitResult {
     Bool,
     /// The operand's own type.
     Operand,
+}
+
+/// What a [`BuiltinOperation::Memory`] alias does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum MemoryBuiltin {
+    /// `bcopy (source, destination, n)`: `memmove` with the pointers
+    /// swapped.
+    Bcopy,
+    /// `bzero (destination, n)`: `memset (destination, 0, n)`.
+    Bzero,
+    /// `mempcpy (destination, source, n)`: `memcpy`, returning the end of
+    /// the copy.
+    Mempcpy,
 }
 
 /// The part of a complex value `__builtin_creal`, `__builtin_cimag` and

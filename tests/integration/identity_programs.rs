@@ -77,6 +77,42 @@ mod tests {
         matches_the_claimed_compiler("torture_semantics.c");
     }
 
+    /// `__builtin_bcopy`, `__builtin_bzero` and `__builtin_mempcpy` lower to
+    /// LLVM's memory intrinsics on every target, as Clang lowers them, so
+    /// the Microsoft C runtime, which has none of the three, needs no such
+    /// symbol.
+    #[test]
+    fn memory_aliases_lower_to_memory_intrinsics() {
+        let source = temporary("memory.c");
+        std::fs::write(
+            &source,
+            "char *f(char *d, const char *s, unsigned long n) {\n__builtin_bcopy(s, d, \
+             n);\n__builtin_bzero(d, n);\nreturn __builtin_mempcpy(d, s, n);\n}\n",
+        )
+        .unwrap();
+        for target in [
+            "x86_64-unknown-linux-gnu",
+            "x86_64-pc-windows-msvc",
+            "x86_64-w64-windows-gnu",
+        ] {
+            let target = format!("--target={target}");
+            let output = bcc(&[&target, "--emit=llvm", source.to_str().unwrap()]);
+            let ir = text(&output.stdout);
+            assert!(
+                output.status.success(),
+                "{target}: {}",
+                text(&output.stderr)
+            );
+            for intrinsic in ["@llvm.memmove", "@llvm.memset", "@llvm.memcpy"] {
+                assert!(ir.contains(intrinsic), "{target} {intrinsic}: {ir}");
+            }
+            for symbol in ["@bcopy", "@bzero", "@mempcpy"] {
+                assert!(!ir.contains(symbol), "{target} {symbol}: {ir}");
+            }
+        }
+        std::fs::remove_file(source).unwrap();
+    }
+
     /// A wasm32 program's own `index`, `bcmp` and `stpcpy` replace the WASI
     /// runtime's weak definitions instead of clashing with them, under
     /// both identities and optimizers; without `node` this is skipped.

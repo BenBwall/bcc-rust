@@ -11,6 +11,7 @@ use super::{
     BuiltinOperation,
     ConversionRule as C,
     DesignatorPolicy,
+    MemoryBuiltin,
     NamingPolicy,
     Signature,
     SignatureType as T,
@@ -82,8 +83,9 @@ pub(super) const BUILTINS: &[BuiltinDescriptor] = &[
             A::value(C::Parameter(T::Size)),
         ],
     ),
-    descriptor(
+    memory_descriptor(
         Id::LibraryBcopy,
+        MemoryBuiltin::Bcopy,
         "__builtin_bcopy",
         "bcopy",
         Signature {
@@ -102,8 +104,9 @@ pub(super) const BUILTINS: &[BuiltinDescriptor] = &[
             A::value(C::Parameter(T::Size)),
         ],
     ),
-    descriptor(
+    memory_descriptor(
         Id::LibraryBzero,
+        MemoryBuiltin::Bzero,
         "__builtin_bzero",
         "bzero",
         Signature {
@@ -475,8 +478,9 @@ pub(super) const BUILTINS: &[BuiltinDescriptor] = &[
             A::value(C::Parameter(T::Size)),
         ],
     ),
-    descriptor(
+    memory_descriptor(
         Id::LibraryMempcpy,
+        MemoryBuiltin::Mempcpy,
         "__builtin_mempcpy",
         "mempcpy",
         Signature {
@@ -986,6 +990,22 @@ pub(crate) fn extension_name(name: &str) -> bool {
             | "strndup"
             | "strnlen"
     )
+}
+
+/// A memory alias that executes as a copy or fill
+/// ([`super::BuiltinOperation::Memory`]); its ordinary name stays a library
+/// function.
+const fn memory_descriptor(
+    id: Id,
+    operation: MemoryBuiltin,
+    spelling: &'static str,
+    library: &'static str,
+    signature: Signature,
+    arguments: &'static [A],
+) -> BuiltinDescriptor {
+    let mut descriptor = descriptor(id, spelling, library, signature, arguments);
+    descriptor.operation = BuiltinOperation::Memory(operation);
+    descriptor
 }
 
 /// A library alias only GCC has: Clang 23 rejects `__builtin_aligned_alloc`,

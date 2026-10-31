@@ -404,6 +404,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | CommonBuiltin::Bit(..)
             | CommonBuiltin::GenericBit(_)
             | CommonBuiltin::Carry(..)
+            | CommonBuiltin::Memory(_)
             | CommonBuiltin::AllocaAligned
             | CommonBuiltin::ClearCache
             | CommonBuiltin::ComplexPart(_)
