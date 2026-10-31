@@ -81,7 +81,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
         let value = match tag {
             | Some(tag) => LongDouble::quiet_nan(
-                nan_payload(tag.as_bytes()),
+                half_payload(scalar, nan_payload(tag.as_bytes())),
                 self.floating_precision(scalar).unwrap_or(3),
             ),
             | None => LongDouble::from_double(f64::INFINITY),
@@ -133,7 +133,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             }
             ty
         };
-        let result_type = if operation == FloatOperation::Copysign {
+        let result_type = if matches!(operation, FloatOperation::Copysign | FloatOperation::Fabs) {
             operand
         } else {
             self.types.scalar(Scalar::Int)
@@ -148,15 +148,42 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             }
             return result;
         }
-        if classes
+        let constant = classes
             .iter()
             .chain(args)
-            .all(|arg| self.expression_info(arg).constant == ConstantClass::Arithmetic)
+            .all(|arg| self.expression_info(arg).constant == ConstantClass::Arithmetic);
+        if constant
+            && self.binary128_type(operand)
+            && matches!(operation, FloatOperation::Copysign | FloatOperation::Fabs)
+        {
+            // GCC folds the binary128 sign operations too, as for
+            // `__builtin_fabsf128` in a static initializer.
+            let real = |index: usize| {
+                args.get(index)
+                    .and_then(|&argument| self.binary128_value(self.expression_info(argument)))
+                    .map(|value| value.real)
+            };
+            let folded = if operation == FloatOperation::Fabs {
+                real(0).map(|value| value.with_sign(false))
+            } else {
+                real(0)
+                    .zip(real(1))
+                    .map(|(value, sign)| value.with_sign(sign.is_negative()))
+            };
+            if folded.is_some() {
+                result.constant = ConstantClass::Arithmetic;
+                result.set_binary128(folded.map(Binary128Value::real));
+                self.mark_unfolded_binary128(&mut result);
+            }
+        } else if constant
             && !self.binary128_type(operand)
             && let Some(value) = self.converted_floating(first, operand)
             && let Some((sign, exponent, significand)) = value.real.x87_parts()
         {
-            if operation == FloatOperation::Copysign {
+            if operation == FloatOperation::Fabs {
+                result.set_floating(Some(Floating::real(value.real.with_sign(false))));
+                result.constant = ConstantClass::Arithmetic;
+            } else if operation == FloatOperation::Copysign {
                 let second = self.expression_info(args[1]);
                 if let Some(sign) = self
                     .converted_floating(second, operand)
@@ -394,6 +421,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             // Folded apart, from the value before rounding.
             | FloatOperation::Issignaling
             | FloatOperation::Copysign
+            | FloatOperation::Fabs
             | FloatOperation::Compare(_) => return None,
         })
     }
@@ -455,4 +483,22 @@ fn payload_digits(tag: &[u8]) -> Option<(u32, impl Iterator<Item = u32>)> {
                     .filter_map(move |&byte| char::from(byte).to_digit(radix)),
             )
         })
+}
+
+/// A NaN payload for the carrier at `float` precision, where a 16-bit
+/// result's own fraction bits narrow from: GCC and Clang give `_Float16`
+/// and `__bf16` NaNs the tag's low payload bits in their own fraction
+/// (`__builtin_nanf16 ("5")` is `0x7e05`), which sit 13 and 16 bits higher
+/// in `float`'s. Any other type's payload is unchanged.
+/// C99: §7.12.11.2 paragraph 2, p. 237; PDF p. 249 (implementation-defined
+/// payload).
+pub(in crate::translation_phases::semantic_analysis) fn half_payload(
+    scalar: Scalar,
+    payload: u64,
+) -> u64 {
+    match scalar.real_type().half_format() {
+        | Some(crate::half_precision::HalfFormat::Binary16) => (payload & 0x1FF) << 13,
+        | Some(crate::half_precision::HalfFormat::BFloat16) => (payload & 0x3F) << 16,
+        | None => payload,
+    }
 }

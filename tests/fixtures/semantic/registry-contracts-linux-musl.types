@@ -244,15 +244,15 @@ expression 21 type="void *" category=rvalue
 expression 22 type=void category=rvalue
 expression 23 type="unsigned short (unsigned short)" category=function-designator binding=__builtin_bswap16
 expression 24 type=int category=rvalue value=1 ice constant=arithmetic
-expression 25 type="unsigned short" category=rvalue
+expression 25 type="unsigned short" category=rvalue value=256 ice constant=arithmetic
 expression 26 type=void category=rvalue
 expression 27 type="unsigned int (unsigned int)" category=function-designator binding=__builtin_bswap32
 expression 28 type=int category=rvalue value=1 ice constant=arithmetic
-expression 29 type="unsigned int" category=rvalue
+expression 29 type="unsigned int" category=rvalue value=16777216 ice constant=arithmetic
 expression 30 type=void category=rvalue
 expression 31 type="unsigned long (unsigned long)" category=function-designator binding=__builtin_bswap64
 expression 32 type=int category=rvalue value=1 ice constant=arithmetic
-expression 33 type="unsigned long" category=rvalue
+expression 33 type="unsigned long" category=rvalue value=72057594037927936 ice constant=arithmetic
 expression 34 type=void category=rvalue
 expression 35 type="int (int)" category=function-designator binding=__builtin_clrsb
 expression 36 type=int category=rvalue value=1 ice constant=arithmetic

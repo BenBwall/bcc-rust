@@ -106,6 +106,41 @@ char *strncpy(char *restrict d, const char *restrict s, size_t n) {
     return d;
 }
 
+/* The POSIX, GNU and BSD functions the compiler's __builtin_ aliases call.
+   They are weak, as a C library's names outside ISO C must yield to a
+   program's own definitions of those identifiers (`int index;`). */
+#define WEAK __attribute__((weak))
+
+WEAK char *stpcpy(char *restrict d, const char *restrict s) {
+    while ((*d = *s++))
+        d++;
+    return d;
+}
+
+WEAK char *stpncpy(char *restrict d, const char *restrict s, size_t n) {
+    size_t i = 0;
+    for (; i < n && s[i]; i++)
+        d[i] = s[i];
+    char *end = d + i;
+    for (; i < n; i++)
+        d[i] = 0;
+    return end;
+}
+
+WEAK void *mempcpy(void *restrict d, const void *restrict s, size_t n) {
+    return (unsigned char *)memcpy(d, s, n) + n;
+}
+
+WEAK void bcopy(const void *s, void *d, size_t n) { memmove(d, s, n); }
+
+WEAK void bzero(void *d, size_t n) { memset(d, 0, n); }
+
+WEAK int bcmp(const void *a, const void *b, size_t n) { return memcmp(a, b, n); }
+
+WEAK char *index(const char *s, int c) { return strchr(s, c); }
+
+WEAK char *rindex(const char *s, int c) { return strrchr(s, c); }
+
 char *strcat(char *restrict d, const char *restrict s) {
     strcpy(d + strlen(d), s);
     return d;
@@ -220,7 +255,7 @@ char *strerror(int error) {
     }
 }
 
-int strcasecmp(const char *a, const char *b) {
+WEAK int strcasecmp(const char *a, const char *b) {
     while (*a && tolower((unsigned char)*a) == tolower((unsigned char)*b)) {
         a++;
         b++;
@@ -228,7 +263,7 @@ int strcasecmp(const char *a, const char *b) {
     return tolower((unsigned char)*a) - tolower((unsigned char)*b);
 }
 
-int strncasecmp(const char *a, const char *b, size_t n) {
+WEAK int strncasecmp(const char *a, const char *b, size_t n) {
     for (; n; n--, a++, b++) {
         int x = tolower((unsigned char)*a), y = tolower((unsigned char)*b);
         if (x != y)

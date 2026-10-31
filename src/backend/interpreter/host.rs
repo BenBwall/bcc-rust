@@ -591,6 +591,33 @@ impl DefaultHost<'_> {
                     RuntimeValue::Int(value.unsigned_abs())
                 }
             },
+            // C99 §7.20.6.1: `labs` and `llabs` of the most negative value
+            // are undefined.
+            | "labs" | "llabs" => {
+                let ty = call.result.unwrap_or(Type::I64);
+                let value = super::arithmetic::sext(ty, integer(arg(0))?);
+                if value == -(1_i128 << (ty.bits() - 1)) {
+                    RuntimeValue::Poison
+                } else {
+                    RuntimeValue::Int(value.unsigned_abs())
+                }
+            },
+            // C11 `aligned_alloc`: glibc gives at least `malloc`'s
+            // alignment, and a stricter power of two when asked.
+            | "aligned_alloc" => {
+                let alignment = u64::try_from(integer(arg(0))?)
+                    .ok()
+                    .and_then(|alignment| Align::from_bytes(alignment.max(16)));
+                let pointer = match alignment {
+                    | Some(alignment) =>
+                        allocate_aligned(memory, integer(arg(1))?, false, alignment)?,
+                    | None => RuntimeValue::NULL,
+                };
+                if pointer == RuntimeValue::NULL {
+                    self.set_errno(memory, errno::ENOMEM)?;
+                }
+                pointer
+            },
             | "isprint" => {
                 let value = super::arithmetic::sext(Type::I32, integer(arg(0))?);
                 RuntimeValue::Int(u128::from((32..=126).contains(&value)))
@@ -896,10 +923,23 @@ fn integer(value: RuntimeValue) -> Result<u128, Fault> {
 ///
 /// C99: §7.20.3.1 and §7.20.3.3, pp. 313-314; PDF pp. 325-326.
 fn allocate(memory: &mut Memory<'_>, size: u128, zeroed: bool) -> Result<RuntimeValue, Fault> {
+    allocate_aligned(
+        memory,
+        size,
+        zeroed,
+        Align::from_bytes(16).expect("16 is a power of two"),
+    )
+}
+
+fn allocate_aligned(
+    memory: &mut Memory<'_>,
+    size: u128,
+    zeroed: bool,
+    align: Align,
+) -> Result<RuntimeValue, Fault> {
     let Ok(size) = u64::try_from(size) else {
         return Ok(RuntimeValue::NULL);
     };
-    let align = Align::from_bytes(16).expect("16 is a power of two");
     let pointer: Pointer = match memory.allocate(ObjectKind::Heap, size, align) {
         | Ok(pointer) => pointer,
         | Err(Fault::Unsupported(_)) => return Ok(RuntimeValue::NULL),

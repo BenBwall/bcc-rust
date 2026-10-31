@@ -151,6 +151,25 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             }
         }
         match builtin {
+            // GCC types `__builtin_assoc_barrier` as its converted operand,
+            // arithmetic or a GNU vector.
+            | CommonBuiltin::AssocBarrier => {
+                let operand = self.expression_info(args[0]);
+                let ty = self.converted(operand);
+                if !self.types.unanalyzed(ty)
+                    && !self.arithmetic(ty)
+                    && !matches!(self.types.nodes[ty.index], TypeKind::Vector { .. })
+                {
+                    self.error(
+                        SemanticErrorKind::InvalidArgumentType,
+                        args[0].source_vectors,
+                        None,
+                        None,
+                    );
+                    return Some(Self::expression_result(e, self.types.unknown()));
+                }
+                return Some(Self::expression_result(e, ty));
+            },
             | CommonBuiltin::Float(operation, scalar) => {
                 return Some(self.floating_builtin(e, args, operation, scalar));
             },
@@ -203,6 +222,25 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         )
                         .cast(width, false),
                     );
+                    info.ice = true;
+                    info.constant = ConstantClass::Arithmetic;
+                }
+            },
+            // GCC and Clang fold a constant operand, so the call may
+            // initialize a static object.
+            | CommonBuiltin::Bswap(bits) => {
+                let value = self.expression_info(args[0]);
+                if value.ice
+                    && let Some(value) = value.integer
+                {
+                    #[expect(
+                        clippy::cast_sign_loss,
+                        clippy::cast_possible_wrap,
+                        reason = "The operand's bits are reinterpreted, then swapped."
+                    )]
+                    let swapped = ((value.cast(bits, false).value as u128).swap_bytes()
+                        >> (128 - bits)) as i128;
+                    info.integer = Some(Integer::int(swapped).cast(bits, false));
                     info.ice = true;
                     info.constant = ConstantClass::Arithmetic;
                 }
@@ -365,7 +403,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | CommonBuiltin::Atomic(_)
             | CommonBuiltin::Bit(..)
             | CommonBuiltin::GenericBit(_)
-            | CommonBuiltin::Bswap(_)
+            | CommonBuiltin::Carry(..)
+            | CommonBuiltin::Memory(_)
+            | CommonBuiltin::AllocaAligned
+            | CommonBuiltin::ClearCache
+            | CommonBuiltin::ComplexPart(_)
             | CommonBuiltin::Expect(_)
             | CommonBuiltin::Aligned
             | CommonBuiltin::Prefetch

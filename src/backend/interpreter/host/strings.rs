@@ -51,6 +51,15 @@ pub(super) const FUNCTIONS: &[&str] = &[
     "strdup",
     "strndup",
     "stpcpy",
+    "stpncpy",
+    "mempcpy",
+    "bcopy",
+    "bzero",
+    "bcmp",
+    "index",
+    "rindex",
+    "strcasecmp",
+    "strncasecmp",
     "strtok",
     "memrchr",
     "atoi",
@@ -199,6 +208,76 @@ impl DefaultHost<'_> {
                 } else {
                     destination
                 }
+            },
+            // POSIX `stpncpy`: `strncpy` returning the end of the copy,
+            // the first null it wrote or the end of the destination.
+            | "stpncpy" => {
+                let copied = super::strncpy(memory, arg(0), arg(1), integer(arg(2))?)?;
+                at(memory, arg(0), copied)
+            },
+            // GNU `mempcpy`: `memcpy` returning the end of the copy.
+            | "mempcpy" => {
+                let length = count(integer(arg(2))?)?;
+                memory.copy(
+                    arg(0),
+                    arg(1),
+                    RuntimeValue::Int(u128::from(length)),
+                    Align::BYTE,
+                    false,
+                )?;
+                at(memory, arg(0), length)
+            },
+            // BSD `bcopy (source, destination, n)`: `memmove` with the
+            // pointers swapped; `bzero (s, n)`: `memset (s, 0, n)`.
+            | "bcopy" => {
+                memory.copy(arg(1), arg(0), arg(2), Align::BYTE, true)?;
+                return Ok(HostReturn::Value(None));
+            },
+            | "bzero" => {
+                memory.fill(arg(0), RuntimeValue::Int(0), arg(1), Align::BYTE)?;
+                return Ok(HostReturn::Value(None));
+            },
+            // BSD `bcmp`: zero for equal bytes and nonzero otherwise, which
+            // `memcmp`'s difference is.
+            | "bcmp" => super::compare_bytes(memory, arg(0), arg(1), integer(arg(2))?, false)?,
+            // BSD `index` and `rindex`: `strchr` and `strrchr`.
+            | "index" | "rindex" => {
+                let character = u8::try_from(integer(arg(1))? & 0xFF).expect("masked to a byte");
+                let mut found = RuntimeValue::NULL;
+                let mut offset = 0;
+                loop {
+                    let current = byte(memory, arg(0), offset)?;
+                    if current == character {
+                        found = at(memory, arg(0), offset);
+                        if call.name == "index" {
+                            break;
+                        }
+                    }
+                    if current == 0 {
+                        break;
+                    }
+                    offset += 1;
+                }
+                found
+            },
+            // POSIX `strcasecmp` and `strncasecmp`: bytes compared after
+            // `tolower` in the C locale.
+            | "strcasecmp" | "strncasecmp" => {
+                let limit = if call.name == "strncasecmp" {
+                    count(integer(arg(2))?)?
+                } else {
+                    u64::MAX
+                };
+                let mut difference = 0;
+                for offset in 0..limit {
+                    let a = byte(memory, arg(0), offset)?.to_ascii_lowercase();
+                    let b = byte(memory, arg(1), offset)?.to_ascii_lowercase();
+                    if a != b || a == 0 {
+                        difference = i32::from(a) - i32::from(b);
+                        break;
+                    }
+                }
+                RuntimeValue::int(Type::I32, u128::from(difference.cast_unsigned()))
             },
             | "strstr" => {
                 let (haystack, needle) = (arg(0), arg(1));
