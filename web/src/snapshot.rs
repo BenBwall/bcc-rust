@@ -81,7 +81,8 @@ pub struct Access {
     /// The element of an array, or 0 for another object; `None` when the
     /// operation used the whole object.
     pub cell:   Option<usize>,
-    /// `read`, `write`, `create`, `end` or `designate`.
+    /// `read`, `write`, `create`, `end`, `designate`, or `address` (`&` or
+    /// an array's decay took its address).
     pub kind:   String,
 }
 

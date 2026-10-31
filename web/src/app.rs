@@ -142,7 +142,7 @@ pub fn App() -> impl IntoView {
                                 </Show>
                             }
                         >
-                            <Narration snapshot=state.current recent=state.recent on_jump=Callback::new(move |index| state.jump(index)) placeholder=state.placeholder />
+                            <Narration snapshot=state.current recent=state.recent on_jump=Callback::new(move |index| state.jump(index)) placeholder=state.placeholder running=state.running.into() />
                             <TreeView snapshot=state.current />
                             <Memory snapshot=state.current />
                         </Show>

@@ -543,7 +543,7 @@
   .cell[data-access] { --access: var(--cat-evaluate); z-index: 1; }
   .cell[data-access="read"] { --access: var(--cat-convert); box-shadow: 0 0 0 2px var(--access); }
   .cell[data-access="written"] { --access: var(--cat-memory); box-shadow: 0 0 0 2px var(--access); background: color-mix(in srgb, var(--cat-memory) 20%, var(--surface)) !important; animation: settle .45s var(--ease); }
-  .cell[data-access="designated"] { outline: 2px dashed var(--access); outline-offset: 2px; }
+  .cell[data-access="designated"], .cell[data-access="address taken"] { outline: 2px dashed var(--access); outline-offset: 2px; }
   /* What the step did to the object, beside its name. */
   .object-access { padding: 0 7px; border-radius: 999px; font: 650 11px var(--font-sans); white-space: nowrap; color: var(--cat); background: color-mix(in srgb, var(--cat) 15%, transparent); }
   .object.is-touched .object-name { text-decoration: underline 2px; text-underline-offset: 4px; }
@@ -1122,6 +1122,8 @@
   /* A drawn arrow, as long as its verb. */
   .flow-arrow::after { content: ""; display: block; width: 100%; height: 9px; margin-top: 1px; background: currentColor; clip-path: polygon(0 41%, calc(100% - 7px) 41%, calc(100% - 7px) 0, 100% 50%, calc(100% - 7px) 100%, calc(100% - 7px) 59%, 0 59%); }
   .flow-operator { font: 600 17px var(--font-mono); color: var(--text-2); padding: 0 2px; }
+  /* An arrow or operator wraps with the chip it leads to. */
+  .flow-group { display: inline-flex; align-items: center; gap: 6px; }
   .flow-separator { color: var(--faint); margin-right: 10px; }
 
   .nowrap { white-space: nowrap; }
@@ -1227,6 +1229,9 @@
     .hero { grid-template-columns: minmax(0, 1fr); max-width: 920px; }
   }
   @media (max-width: 600px) {
+    /* A clause's id goes above its text, which keeps the full width. */
+    .clause { grid-template-columns: minmax(0, 1fr); }
+    .clause-id { grid-row: auto; justify-self: start; }
     .map-lanes { grid-template-columns: minmax(0, 1fr); margin-top: 14px; }
     .map-lanes::before, .map-lanes::after { display: none; }
     .glossary-list { grid-template-columns: minmax(0, 1fr); }

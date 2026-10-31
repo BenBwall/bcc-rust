@@ -194,6 +194,7 @@ impl Layout {
                 | "write" => "written",
                 | "create" => "created",
                 | "end" => "lifetime ends",
+                | "address" => "address taken",
                 | _ => "designated",
             })
     }

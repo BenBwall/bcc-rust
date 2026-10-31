@@ -135,11 +135,9 @@ pub(super) fn access(event: &Event) -> Vec<Access> {
             at(event.operands.first(), "write"),
         | EventKind::Declare | EventKind::Call => whole("create"),
         | EventKind::LeaveBlock | EventKind::Return => whole("end"),
-        | EventKind::Designate
-        | EventKind::Subscript
-        | EventKind::Dereference
-        | EventKind::AddressOf
-        | EventKind::ArrayDecay => at(event.result.as_ref(), "designate"),
+        | EventKind::Designate | EventKind::Subscript | EventKind::Dereference =>
+            at(event.result.as_ref(), "designate"),
+        | EventKind::AddressOf | EventKind::ArrayDecay => at(event.result.as_ref(), "address"),
         | _ => Vec::new(),
     }
 }

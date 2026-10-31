@@ -3,6 +3,8 @@
 //! of chips; the first use of each term of the standard is marked, with its
 //! definition on hover or focus; each cited paragraph links to the standard.
 
+use std::collections::HashMap;
+
 use leptos::prelude::*;
 
 use super::category_label;
@@ -28,6 +30,9 @@ pub fn Narration(
     on_jump: Callback<usize>,
     /// The lesson's summary, shown before the engine has loaded.
     placeholder: Memo<&'static str>,
+    /// Whether Run is stepping: the steps it passes through flash by, so
+    /// they do not count as seen.
+    running: Signal<bool>,
 ) -> impl IntoView {
     let event =
         Memo::new(move |_| snapshot.with(|state| state.as_ref().map(|state| state.event.clone())));
@@ -56,14 +61,25 @@ pub fn Narration(
         tip.set(None);
     });
     let card = NodeRef::<leptos::html::Article>::new();
-    let note = move || {
-        event.with(|event| {
-            event
-                .as_ref()
-                .map(|event| event.note.clone())
-                .unwrap_or_default()
+    // Each note shows on the first step the learner sees it at (by step
+    // number, so Back to that step shows it again); steps Run passes through
+    // do not use it up. The run starts over at step 0.
+    let first_seen = StoredValue::new(HashMap::<String, usize>::new());
+    let note = Memo::new(move |_| {
+        snapshot.with(|state| {
+            let state = state.as_ref()?;
+            let note = &state.event.note;
+            if state.step == 0 {
+                first_seen.update_value(HashMap::clear);
+            }
+            if note.is_empty() || running.get() {
+                return None;
+            }
+            let first = first_seen
+                .try_update_value(|seen| *seen.entry(note.clone()).or_insert(state.step))?;
+            (first == state.step).then(|| note.clone())
         })
-    };
+    });
     view! {
         <article class="card narration" data-category=category aria-labelledby="narration-title" node_ref=card>
             <div class="narration-meta">
@@ -82,7 +98,7 @@ pub fn Narration(
                 })}
             </h2>
             <p class="flow" aria-hidden="true" hidden=move || event.with(|event| event.as_ref().is_none_or(|event| event.flow.is_empty()))>
-                {move || event.with(|event| event.as_ref().map(|event| event.flow.iter().map(chip).collect_view()))}
+                {move || event.with(|event| event.as_ref().map(|event| flow_groups(&event.flow)))}
             </p>
             <p class="narration-body">
                 {move || event.with(|event| match event {
@@ -90,15 +106,15 @@ pub fn Narration(
                     | None => placeholder.get().into_any(),
                 })}
             </p>
-            <aside class="narration-note" aria-label="Why it matters" hidden=move || note().is_empty()>
+            <aside class="narration-note" aria-label="Why it matters" hidden=move || note.with(Option::is_none)>
                 <h3>"Why it matters"</h3>
                 <p>
-                    {move || event.with(|event| event.as_ref().map(|event| {
+                    {move || note.get().and_then(|note| event.with(|event| event.as_ref().map(|event| {
                         // Terms the explanation marked stay plain here.
                         let mut seen = Vec::new();
                         let _ = explained_pieces(&event.explanation, &mut seen);
-                        explained(&event.note, &mut seen, tip, card)
-                    }))}
+                        explained(&note, &mut seen, tip, card)
+                    })))}
                 </p>
             </aside>
             <p class="return-callout" hidden=move || returned.with(Option::is_none)>
@@ -402,6 +418,27 @@ fn related_has_class(event: &leptos::ev::MouseEvent, class: &str) -> bool {
 #[cfg(not(feature = "hydrate"))]
 fn related_has_class(_event: &leptos::ev::MouseEvent, _class: &str) -> bool {
     false
+}
+
+/// The value flow's chips, each arrow or operator grouped with the chip
+/// after it so a line never ends on an arrow.
+fn flow_groups(flow: &[FlowPart]) -> AnyView {
+    let mut groups: Vec<Vec<&FlowPart>> = Vec::new();
+    let mut pending = Vec::new();
+    for part in flow {
+        pending.push(part);
+        if !matches!(part.role.as_str(), "arrow" | "operator") {
+            groups.push(std::mem::take(&mut pending));
+        }
+    }
+    if !pending.is_empty() {
+        groups.push(pending);
+    }
+    groups
+        .into_iter()
+        .map(|group| view! { <span class="flow-group">{group.into_iter().map(chip).collect_view()}</span> })
+        .collect_view()
+        .into_any()
 }
 
 /// One chip of the value flow.

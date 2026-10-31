@@ -84,8 +84,10 @@ pub static TERMS: [Term; 22] = [
         name:       "Sequence point",
         phrases:    &["sequence point"],
         definition: "A point in execution where every earlier side effect is complete and no \
-                     later one has begun: the end of a full expression, or just before a function \
-                     is called.",
+                     later one has begun: the end of a full expression, after the first operand \
+                     of &&, || and ?:, at a comma operator, and just before a function is called. \
+                     Modifying an object twice between two of them, or modifying it and reading \
+                     it for something else (i + i++), is undefined.",
         clause:     "5.1.2.3p2",
         page:       25,
     },
@@ -102,9 +104,9 @@ pub static TERMS: [Term; 22] = [
         id:         "storage-duration",
         name:       "Automatic storage duration",
         phrases:    &["automatic storage duration", "storage duration"],
-        definition: "How long an object's storage lasts. Local variables have automatic storage \
-                     duration: they exist from entry into their block until the block ends, and \
-                     each entry gets fresh ones.",
+        definition: "How long an object's storage lasts. Local variables not declared static have \
+                     automatic storage duration: they exist from entry into their block until the \
+                     block ends, and each entry gets fresh ones.",
         clause:     "6.2.4p5",
         page:       44,
     },
@@ -151,8 +153,8 @@ pub static TERMS: [Term; 22] = [
         name:       "Indeterminate value",
         phrases:    &["indeterminate"],
         definition: "A value you cannot rely on: either an unspecified value or a trap \
-                     representation. Local variables are indeterminate until something is stored \
-                     in them.",
+                     representation. Automatic local variables are indeterminate until something \
+                     is stored in them; static ones start at zero.",
         clause:     "3.17.2",
         page:       18,
     },
@@ -161,7 +163,7 @@ pub static TERMS: [Term; 22] = [
         name:       "Trap representation",
         phrases:    &["trap representation"],
         definition: "A bit pattern that is not a value of its type at all. Reading one as that \
-                     type is undefined.",
+                     type is undefined; a character type such as unsigned char may read any byte.",
         clause:     "6.2.6.1p5",
         page:       49,
     },
