@@ -7,7 +7,8 @@
 //!   them (gcc.c-torture/execute/20000227-1.c); the source files are written at
 //!   run time so the repository holds no malformed UTF-8.
 //! - A union whose first member is an x87 `long double` initialized with `{0}`
-//!   is zeroed whole (gcc.dg/torture/pr58416.c).
+//!   is zeroed whole, and one initialized with another constant is copied from
+//!   a constant image (gcc.dg/torture/pr58416.c).
 //! - `__alignof__` of a function reads its `aligned` attribute
 //!   (gcc.c-torture/execute/align-3.c).
 //! - `va_arg` evaluates the size expressions of its type name
@@ -180,6 +181,41 @@ mod tests {
             if (!zero(&z, sizeof z)) return 3;\n\
             long double w[3] = {0};\n\
             if (!zero(w, sizeof w)) return 4;\n\
+            return 0;\n\
+            }\n";
+        for identity in IDENTITIES {
+            prints_on_every_back_end(identity, source, &[], "");
+        }
+    }
+
+    /// A constant initializer that stores a non-zero `long double` is copied
+    /// from a constant image, so a later copy of the union keeps the bytes
+    /// another member wrote over it. Reading the `long double` member of the
+    /// same union first breaks Clang's copy too, so other objects check the
+    /// values.
+    #[test]
+    fn long_double_union_constant_initializer_keeps_later_bytes() {
+        let source = b"union u { long double d; char s[sizeof(long double)]; };\n\
+            union c { _Complex long double d; char s[sizeof(_Complex long double)]; };\n\
+            struct t { int k; long double d; };\n\
+            int main(void) {\n\
+            union u v = {1.0L}, x = {1.0L};\n\
+            if (v.d != 1.0L) return 1;\n\
+            for (unsigned i = 0; i < sizeof x.s; i++) x.s[i] = 'x';\n\
+            union u y = x;\n\
+            for (unsigned i = 0; i < sizeof y.s; i++) if (y.s[i] != 'x') return 2;\n\
+            union u o = {-0.0L}, n = {-0.0L};\n\
+            if (o.d != 0.0L || !__builtin_signbit(o.d)) return 3;\n\
+            for (unsigned i = 0; i < sizeof n.s; i++) n.s[i] = 'x';\n\
+            union u m = n;\n\
+            for (unsigned i = 0; i < sizeof m.s; i++) if (m.s[i] != 'x') return 4;\n\
+            union c a = {1.0L}, z = {1.0L};\n\
+            if (__real__ a.d != 1.0L || __imag__ a.d != 0.0L) return 5;\n\
+            for (unsigned i = 0; i < sizeof z.s; i++) z.s[i] = 'x';\n\
+            union c w = z;\n\
+            for (unsigned i = 0; i < sizeof w.s; i++) if (w.s[i] != 'x') return 6;\n\
+            struct t r = {7, 2.5L};\n\
+            if (r.k != 7 || r.d != 2.5L) return 7;\n\
             return 0;\n\
             }\n";
         for identity in IDENTITIES {
