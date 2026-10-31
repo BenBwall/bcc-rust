@@ -102,8 +102,11 @@ pub(super) fn compile(
             .as_deref()
             .or(options.emit_path.as_deref()),
     };
+    // `-` names stdin as an input and stdout as an output, never a file, so
+    // `./-` is a file that no `-o -` writes.
     if let (Source::File(input) | Source::Preprocessed(input), Some(output)) = (source, output)
         && input != Path::new("-")
+        && output != Path::new("-")
     {
         let same_file = output_file::is_input(input, output).map_err(|source| {
             MainError::InspectOutputFileError {

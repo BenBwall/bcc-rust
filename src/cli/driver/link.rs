@@ -89,8 +89,17 @@ pub(super) fn link(args: &Cli, inputs: &[Input<'_>]) -> Result<i32, MainError> {
                 })?,
         };
         match *input {
-            | Input::Assembly(assembly) =>
-                status = combine(status, assemble(args, assembly, object.path())),
+            | Input::Assembly(assembly) => {
+                let rules = dependencies::request_at(
+                    args,
+                    Some(assembly.path),
+                    false,
+                    DependencyNames::default(),
+                )?
+                .map(|rules| rules.clang_arguments(args, false))
+                .unwrap_or_default();
+                status = combine(status, assemble(args, assembly, object.path(), &rules));
+            },
             | _ => {
                 let source = input.c_source().expect("a C input");
                 let mut job = generation.clone();
@@ -172,8 +181,14 @@ pub(super) fn link(args: &Cli, inputs: &[Input<'_>]) -> Result<i32, MainError> {
     clippy::disallowed_types,
     reason = "The clang options are startup strings beside clap's arguments."
 )]
-pub(super) fn assemble(args: &Cli, assembly: Assembly<'_>, object: &Path) -> i32 {
-    let options = assembler_arguments(args, assembly);
+pub(super) fn assemble(
+    args: &Cli,
+    assembly: Assembly<'_>,
+    object: &Path,
+    rules: &[OsString],
+) -> i32 {
+    let mut options = assembler_arguments(args, assembly);
+    options.extend_from_slice(rules);
     let assembled = Toolchain::bundled(args.target).and_then(|toolchain| {
         toolchain
             .with_sysroot(args.search.sysroot())
@@ -210,8 +225,10 @@ pub(super) fn preprocess_assembly(
     args: &Cli,
     assembly: Assembly<'_>,
     output: Option<&Path>,
+    rules: &[OsString],
 ) -> i32 {
     let mut options = assembler_arguments(args, assembly);
+    options.extend_from_slice(rules);
     if args.driver.no_line_markers {
         options.push("-P".into());
     }
