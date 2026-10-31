@@ -1345,8 +1345,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             info.constant = ConstantClass::Arithmetic;
             info.ice = false;
         }
+        // GCC folds `__builtin_assoc_barrier` of a constant first.
         if (self.pointer_target(target).is_some() || self.nullptr_type(target))
-            && (self.address_value(operand) || (operand.ice && operand.integer.is_some()))
+            && (self.address_value(operand)
+                || ((operand.ice || operand.assoc_barrier) && operand.integer.is_some()))
         {
             info.constant = ConstantClass::Address;
             info.integer = operand.integer.map(|v| v.cast(64, false));
