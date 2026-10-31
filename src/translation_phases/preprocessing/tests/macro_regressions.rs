@@ -56,6 +56,7 @@ fn a_pasted_name_of_the_macro_being_replaced_stays_unreplaced() {
     );
 }
 
+#[test]
 fn stringified_replacements_keep_only_the_invocations_spacing() {
     // C99 6.10.3p7: the white space before a replacement list is not part
     // of it, so `#` spaces a replacement as its invocation was spaced, as
