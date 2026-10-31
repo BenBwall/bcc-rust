@@ -113,21 +113,22 @@ pub(super) fn map<'tu>(
 pub(super) fn ir_lines(module: &Module<'_>, text: &str) -> Vec<u32> {
     let lines: Vec<&str> = text.lines().collect();
     let mut sources = vec![0; lines.len()];
-    let mut from = 0;
-    for (func, function) in module.functions() {
+    // The printer writes the functions in module order, each from its
+    // `function` line; one with a body follows it with one line per stack
+    // slot and per block label, then each block's label line and one line
+    // per instruction (instruction text escapes control characters).
+    let mut headers = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, line)| line.starts_with("function "))
+        .map(|(index, _)| index);
+    for (_, function) in module.functions() {
+        let Some(start) = headers.next() else {
+            break;
+        };
         let Some(body) = &function.body else {
             continue;
         };
-        let printed = module.display_function(func).to_string();
-        let Some(header) = printed.lines().next() else {
-            continue;
-        };
-        let Some(start) = (from..lines.len()).find(|&index| lines[index] == header) else {
-            continue;
-        };
-        from = start + 1;
-        // The header, then one line per stack slot and per block label,
-        // then each block's label line and its instructions.
         let mut at = start + 1 + body.stack_slots().count() + body.labels().count();
         for block in body.blocks() {
             at += 1;
@@ -135,17 +136,14 @@ pub(super) fn ir_lines(module: &Module<'_>, text: &str) -> Vec<u32> {
                 if let Some(source) = sources.get_mut(at) {
                     *source = body.inst_line(inst);
                 }
-                at += 1 + module
-                    .display_inst(body, inst)
-                    .to_string()
-                    .matches('\n')
-                    .count();
+                at += 1;
             }
         }
         debug_assert_eq!(
             lines.get(at).copied(),
             Some("}"),
-            "the IR layout of {header}"
+            "the IR layout of {}",
+            lines[start]
         );
     }
     sources
