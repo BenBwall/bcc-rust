@@ -100,6 +100,30 @@ function followOnPage(editor) {
   });
 }
 
+/**
+ * Scroll the page as little as shows the cursor's line of `editor`, after
+ * the arrow keys moved it: Monaco keeps the line inside the editor, not
+ * the editor's line on the page. An editor in a stuck sticky pane is
+ * already where scrolling cannot move it.
+ */
+function showCursorOnPage(editor) {
+  requestAnimationFrame(() => {
+    const node = editor.getContainerDomNode();
+    const position = editor.getPosition();
+    if (!position || !node.isConnected || isStuck(node)) {
+      return;
+    }
+    const { clear, bottom } = visibleBand();
+    const height = editor.getOption(monaco.editor.EditorOption.lineHeight);
+    const top = node.getBoundingClientRect().top + editor.getTopForLineNumber(position.lineNumber) - editor.getScrollTop();
+    if (top < clear) {
+      scrollBy({ top: top - clear });
+    } else if (top + height > bottom) {
+      scrollBy({ top: top + height - bottom });
+    }
+  });
+}
+
 /** Switch every editor between the site's `light` and `dark` themes. */
 export function setTheme(theme) {
   monaco.editor.setTheme(theme === 'light' ? 'bcc-light' : 'bcc-dark');
@@ -171,6 +195,9 @@ class Editor {
       tabFocusMode: true,
     });
     this.tabHint = new TabHint(this.editor);
+    this.listeners.push(this.editor.onDidChangeCursorPosition((event) => {
+      if (event.source === 'keyboard') showCursorOnPage(this.editor);
+    }));
   }
 
   getValue() {
