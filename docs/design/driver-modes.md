@@ -198,9 +198,9 @@ instead: `-fwrapv` (lowering marks signed arithmetic without `nsw`),
 wider check for overflow, and so does `abs`, `labs` or `llabs` of the most
 negative value while the library builtins are on, and run the `trap`
 instruction, on every back end, where GCC's libgcc routines call `abort`,
-so the program ends with `SIGILL` rather than `SIGABRT`; a narrow
-`_BitInt` and GNU `_Complex int` arithmetic are not checked, where GCC
-checks the latter; with `-fwrapv` also given, the last of the two decides
+so the program ends with `SIGILL` rather than `SIGABRT`; GNU complex
+integers' sums and products are checked in their signed `int` or wider
+parts, as in GCC, and a narrow `_BitInt` is not checked; with `-fwrapv` also given, the last of the two decides
 in the GCC personality, and `-fno-wrapv` only turns `-fwrapv` off, as in
 GCC, while `-ftrapv` always wins in the Clang personality, which refuses
 `-fno-trapv` as Clang does; Clang's `-ftrapv-handler=` is refused),

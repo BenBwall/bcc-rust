@@ -1472,6 +1472,28 @@ mod tests {
                     );
                 }
             }
+            // GNU complex integers' sums and products are checked in their
+            // parts, as GCC checks them; a `_Complex short` is not.
+            directory.write(
+                "c.c",
+                "__attribute__((noinline)) _Complex int mul(_Complex int a, _Complex int b) { \
+                 return a * b; }\n__attribute__((noinline)) _Complex short smul(_Complex short a, \
+                 _Complex short b) { return a * b; }\nint main(int argc, char **argv) {\n  \
+                 (void)argv;\n  _Complex int z = mul(3 + 4i, 3 + 4i);\n  if (__real__ z != -7 || \
+                 __imag__ z != 24)\n    return 2;\n  _Complex short s = smul(30000, 30000);\n  \
+                 (void)s;\n  if (argc > 1)\n    z = mul(2147483647, 2147483647);\n  return \
+                 __real__ z == 5;\n}\n",
+            );
+            succeeds(&directory.bcc("--gcc-mode", &["-O2", "-ftrapv", "c.c", "-o", "c"]));
+            let run = |arguments: &[&str]| {
+                Command::new(directory.path("c"))
+                    .args(arguments)
+                    .output()
+                    .unwrap()
+                    .status
+            };
+            assert_eq!(run(&[]).code(), Some(0));
+            assert!(run(&["a"]).code().is_none());
         }
     }
 
