@@ -266,6 +266,27 @@ impl Expander<'_, '_, '_, '_> {
 }
 
 impl Expander<'_, '_, '_, '_> {
+    /// A `##` operand with the paint it has where it was read: a name of a
+    /// macro being replaced there is marked unavailable. A paste with a
+    /// placemarker yields the other operand itself, which keeps that paint;
+    /// any other paste makes a new token, which only the replacement list
+    /// holding the `##` can paint ([`Self::pasted_macro_is_disabled`]).
+    ///
+    /// C99: §6.10.3.3 paragraphs 2-3, p. 154; PDF p. 166; §6.10.3.4
+    /// paragraph 2, p. 155; PDF p. 167.
+    fn paint_operand(&self, mut token: PreprocessorToken) -> PreprocessorToken {
+        let kind = match token.kind {
+            | PreprocessorTokenType::Identifier => PreprocessorTokenType::UnavailableIdentifier,
+            | PreprocessorTokenType::UniversalIdentifier =>
+                PreprocessorTokenType::UnavailableUniversalIdentifier,
+            | _ => return token,
+        };
+        if self.macro_is_disabled(token.identifier_id(self.context)) {
+            token.kind = kind;
+        }
+        token
+    }
+
     /// Returns the next completely macro-replaced preprocessing token.
     ///
     /// Placemarkers left by `##` are dropped here (C99: §6.10.3.4 paragraph
@@ -311,7 +332,8 @@ impl Expander<'_, '_, '_, '_> {
                         | Some(HashHash::Lhs(lhs)) => {
                             let lhs = *lhs;
                             _ = self.hash_hash_stack.pop();
-                            self.merge_tokens(lhs, token)
+                            let rhs = self.paint_operand(token);
+                            self.merge_tokens(lhs, rhs)
                         },
                         | Some(HashHash::Rhs(rhs)) => {
                             // Paste the last token of the left argument.
@@ -320,13 +342,19 @@ impl Expander<'_, '_, '_, '_> {
                             }
                             let rhs = *rhs;
                             _ = self.hash_hash_stack.pop();
-                            self.merge_tokens(token, rhs)
+                            let lhs = self.paint_operand(token);
+                            self.merge_tokens(lhs, rhs)
                         },
                     };
                     if (next_is_end || token.kind == PreprocessorTokenType::Placeholder)
-                        && let Some(x @ HashHash::Empty) = self.hash_hash_stack.last_mut()
+                        && matches!(self.hash_hash_stack.last(), Some(HashHash::Empty))
                     {
-                        *x = HashHash::Lhs(if let Some(new) = new { new } else { token });
+                        let operand = match new {
+                            | Some(new) => new,
+                            | None => self.paint_operand(token),
+                        };
+                        *self.hash_hash_stack.last_mut().expect("checked above") =
+                            HashHash::Lhs(operand);
                         continue 'base;
                     }
                     if let Some(new) = new {

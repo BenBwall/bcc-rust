@@ -57,6 +57,34 @@ fn a_pasted_name_of_the_macro_being_replaced_stays_unreplaced() {
 }
 
 #[test]
+fn a_paste_with_a_placemarker_keeps_the_other_operands_paint() {
+    // C99 6.10.3.3p2-3: `##` with an empty operand yields the other operand
+    // itself, so an `F` read while F was being replaced stays painted
+    // (6.10.3.4p2) and the `(2)` after it calls nothing, as in GCC and
+    // Clang. The paste is still checked against the list holding the `##`.
+    let glue = "#define glue(a, b) a ## b\n";
+    let variadic = "#define vg(a, ...) a ## __VA_ARGS__\n#define vh(a, ...) __VA_ARGS__ ## a\n";
+    for (source, expected) in [
+        ("#define F(n) glue(F,\nF(1) )(2) )\n", "F ( 2 ) )"),
+        ("#define F(n) glue(, F\nF(1) )(2) )\n", "F ( 2 ) )"),
+        ("#define F(n) glue(F, n\nF() )(2) )\n", "F ( 2 ) )"),
+        ("#define F(n) vg(, F\nF(1) )(2) )\n", "F ( 2 ) )"),
+        ("#define F(n) vh(, F\nF(1) )(2) )\n", "F ( 2 ) )"),
+        (
+            "#define id(x) x\n#define F(n) id(glue(, F)\nF(1) ))(2) )\n",
+            "F ) ( 2 ) )",
+        ),
+        ("#define G glue(, G\nG )(1) )\n", "G ( 1 ) )"),
+        (
+            "#define g3(a,b,c) a ## b ## c\n#define F(n) g3(, , F\nF(1) )(2) )\n",
+            "F ( 2 ) )",
+        ),
+    ] {
+        assert_expansion(&format!("{glue}{variadic}{source}"), expected);
+    }
+}
+
+#[test]
 fn stringified_replacements_keep_only_the_invocations_spacing() {
     // C99 6.10.3p7: the white space before a replacement list is not part
     // of it, so `#` spaces a replacement as its invocation was spaced, as
