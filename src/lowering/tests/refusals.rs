@@ -195,20 +195,36 @@ fn unsupported_type_diagnostics_retain_the_actual_construct() {
 /// own type, which lowering has no type for; Clang rejects the operand.
 #[test]
 fn objects_inferred_from_bit_fields_are_refused_under_gcc() {
-    let errors = lower_with(
-        "struct s { unsigned u : 2; } s; int f(void) { auto y = s.u; return y; }",
-        crate::configuration::CompilerConfiguration::new(
-            crate::configuration::CStandard::C23,
-            crate::configuration::ExtensionPolicy::Allow,
+    // GCC keeps the field's type through parentheses, a comma, an
+    // assignment, an update and a statement expression's result.
+    for operand in [
+        "s.u",
+        "(s.u)",
+        "(0, s.u)",
+        "(s.u = 1)",
+        "++s.u",
+        "s.u++",
+        "s.u--",
+        "({ s.u; })",
+    ] {
+        let errors = lower_with(
+            &format!(
+                "struct s {{ unsigned u : 2; }} s; int f(void) {{ auto y = {operand}; return y; }}"
+            ),
+            crate::configuration::CompilerConfiguration::new(
+                crate::configuration::CStandard::C23,
+                crate::configuration::ExtensionPolicy::Allow,
+            )
+            .with_gnu_extensions(true)
+            .with_compiler_identity(crate::configuration::CompilerIdentity::Gcc),
         )
-        .with_gnu_extensions(true)
-        .with_compiler_identity(crate::configuration::CompilerIdentity::Gcc),
-    )
-    .expect_err("a bit-field's type is unsupported");
-    assert_eq!(
-        errors,
-        ["not yet supported by lowering: types inferred from bit-fields"]
-    );
+        .expect_err("a bit-field's type is unsupported");
+        assert_eq!(
+            errors,
+            ["not yet supported by lowering: types inferred from bit-fields"],
+            "{operand}"
+        );
+    }
 }
 
 /// File-scope basic assembly reaches the module in source order, with

@@ -186,7 +186,25 @@ fn faults_follow_each_compiler() {
             &[F::SelfReference],
             &[F::SelfReference],
         ),
-        // Bit-fields: GCC rejects only a member access for `__auto_type`.
+        // Bit-fields: GCC rejects only a member access for `__auto_type`;
+        // Clang rejects a member access, parenthesized or not, and deduces
+        // `int` from any other operand.
+        (
+            "struct s { int b : 3; } s; void f(void) { auto x = (s.b); }",
+            &[],
+            &[F::BitField],
+        ),
+        (
+            "struct s { int b : 3; } s, *ps; void f(void) { auto x = ps->b; }",
+            &[],
+            &[F::BitField],
+        ),
+        (
+            "struct s { int b : 3; } s; void f(void) { auto x = (0, s.b); auto y = (s.b = 3); \
+             auto z = ++s.b; auto w = (s.b += 1); _Static_assert(_Generic(&x, int *: 1), \"\"); }",
+            &[],
+            &[],
+        ),
         (
             "struct s { int b : 3; } s; void f(void) { __auto_type x = s.b; }",
             &[F::BitField],
@@ -251,6 +269,28 @@ fn faults_follow_each_compiler() {
             "typedef __auto_type T;",
             &[F::NotAllowedHere],
             &[F::NotAllowedHere],
+        ),
+        (
+            "void f(void) { auto __auto_type x = 1; }",
+            &[],
+            &[F::AutoWithAutoType],
+        ),
+        (
+            "void f(void) { auto (*p)[] = (int (*)[3])0; }",
+            &[F::NotPlainIdentifier],
+            &[F::DeductionMismatch],
+        ),
+        (
+            "void f(void) { auto (*p)[] = (int (*)[])0; }",
+            &[F::NotPlainIdentifier],
+            &[],
+        ),
+        // Attributes may follow the declarator.
+        (
+            "auto g __attribute__((unused)) = 1; void f(void) { auto x __attribute__((unused)) = \
+             1; auto y [[maybe_unused]] = 2; }",
+            &[],
+            &[],
         ),
         (
             "void f(void) { static auto int x = 1; }",

@@ -39,13 +39,17 @@ use super::{
     },
     scopes::Namespace,
     types::{
+        ArrayBound,
         TypeId,
         TypeKind,
         UnmodeledType,
     },
 };
 use crate::{
-    configuration::RuleSet,
+    configuration::{
+        CStandard,
+        RuleSet,
+    },
     translation_phases::{
         SourceVectors,
         parsing::{
@@ -58,8 +62,11 @@ use crate::{
                 TypeSpecifiers,
             },
             syntax::{
+                Expression,
+                ExpressionType,
                 Identifier,
                 StorageClass,
+                UnaryOperator,
             },
         },
     },
@@ -163,6 +170,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if spec.storage_class == Some(StorageClass::Typedef) || self.old_parameter_mode {
             return Some((InferenceFault::NotAllowedHere, None));
         }
+        // Clang reads a C23 `auto` before `__auto_type` as inference too and
+        // rejects the pair; GCC takes the `auto` as a storage class.
+        if rules == RuleSet::Clang
+            && keyword == InferenceKeyword::AutoType
+            && (spec.storage_class == Some(StorageClass::Auto) || spec.auto_with_storage_class)
+            && self.context.configuration.standard() >= CStandard::C23
+        {
+            return (index == 0).then_some((InferenceFault::AutoWithAutoType, None));
+        }
         // GCC stops reading the declaration at its first fault, or at the
         // comma after its first declarator (`c_parser_declaration_or_fndef`),
         // so it reports the second declarator only after a valid first one.
@@ -182,7 +198,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         match (rules, derivations.last()) {
             | (_, None) | (RuleSet::Clang, Some(Derivation::Pointer)) => {},
             | (RuleSet::Gcc, Some(_)) => return Some((InferenceFault::NotPlainIdentifier, None)),
-            | (RuleSet::Clang, Some(Derivation::Array)) =>
+            | (RuleSet::Clang, Some(Derivation::Array { .. })) =>
                 return Some((InferenceFault::ArrayDeclarator, None)),
             | (RuleSet::Clang, Some(Derivation::Function)) =>
                 return Some((InferenceFault::FunctionDeclarator, None)),
@@ -222,26 +238,24 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             unreachable!("checked by declaration_fault");
         };
         let info = self.expression_info(e);
-        let bit_field = info.bit_field.is_some() || info.promotion_width.is_some();
         let mut fault = None;
         let ty = if let Some(reason) = self.unmodeled_extension_reason(spec.extensions) {
             // `constexpr auto` stays as unmodeled as any `constexpr` object.
             self.types.unmodeled(reason)
         } else if self.types.unanalyzed(info.ty) {
             self.types.unknown()
-        } else if bit_field {
-            // Clang rejects every operand that refers to a bit-field
-            // (`Expr::refersToBitField`), GCC only a member access for
-            // `__auto_type`. Otherwise GCC gives the object the operand's
-            // bit-field type, which no declaration can name.
-            if rules == RuleSet::Clang
-                || (keyword == InferenceKeyword::AutoType && info.bit_field.is_some())
-            {
+        } else if self.bit_field_member(e) {
+            // GCC and Clang reject a bit-field member access itself, and GCC
+            // rejects it only for `__auto_type`; otherwise GCC gives the
+            // object the bit-field's own type, which no declaration can name.
+            if rules == RuleSet::Clang || keyword == InferenceKeyword::AutoType {
                 fault = Some(InferenceFault::BitField);
                 self.types.unknown()
             } else {
                 self.types.unmodeled(UnmodeledType::InferredBitField)
             }
+        } else if rules == RuleSet::Gcc && self.gcc_bit_field_type(e) {
+            self.types.unmodeled(UnmodeledType::InferredBitField)
         } else {
             let (mut ty, _) = self.value_conversion(info);
             // Clang's deduction removes qualifiers but keeps `_Atomic`,
@@ -328,6 +342,47 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
+    /// Whether `e` is a bit-field member access, parenthesized or not, as
+    /// GCC's `__auto_type` check (`DECL_C_BIT_FIELD` of a `COMPONENT_REF`)
+    /// and Clang's (`getSourceBitField` of the operand without parentheses)
+    /// recognize it.
+    fn bit_field_member(&self, mut e: &'tu Expression<'tu>) -> bool {
+        while let ExpressionType::Parenthesized { expression } = e.kind {
+            e = expression;
+        }
+        matches!(
+            e.kind,
+            ExpressionType::DirectMember { .. } | ExpressionType::IndirectMember { .. }
+        ) && self.expression_info(e).bit_field.is_some()
+    }
+
+    /// Whether GCC types `e` with a bit-field's own type: an operand whose
+    /// integer promotion keeps the field's width (a comma, assignment or
+    /// prefix update of one), a postfix update of one, or a statement
+    /// expression ending in one.
+    fn gcc_bit_field_type(&self, mut e: &'tu Expression<'tu>) -> bool {
+        loop {
+            let info = self.expression_info(e);
+            if info.bit_field.is_some() || info.promotion_width.is_some() {
+                return true;
+            }
+            e = match e.kind {
+                | ExpressionType::Parenthesized { expression } => expression,
+                | ExpressionType::Unary {
+                    operator: UnaryOperator::PostIncrement | UnaryOperator::PostDecrement,
+                    operand_expression,
+                } => operand_expression,
+                | ExpressionType::StatementExpression(block) => {
+                    let Some((_, tail)) = self.statement_expression_tail(block) else {
+                        return false;
+                    };
+                    tail
+                },
+                | _ => return false,
+            };
+        }
+    }
+
     /// The type an inferred declarator gives its innermost type: the
     /// operand's type for a plain identifier, or under Clang's deduction
     /// what remains after matching each pointer, array or function
@@ -337,10 +392,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let mut derivations = ArenaVec::new_in(self.scratch);
         derivations_of(declarator, &mut derivations);
         let mut ty = ty;
-        for derivation in derivations.iter().rev() {
+        for &derivation in derivations.iter().rev() {
             ty = match (derivation, self.types.nodes[ty.index]) {
                 | (Derivation::Pointer, TypeKind::Pointer(target)) => target,
-                | (Derivation::Array, TypeKind::Array(element, _)) => element,
+                // An unsized derivation deduces only from an unsized array.
+                | (Derivation::Array { sized }, TypeKind::Array(element, bound))
+                    if sized || bound == ArrayBound::Incomplete =>
+                    element,
                 | (Derivation::Function, TypeKind::Function { result, .. }) => result,
                 | _ => return None,
             };
@@ -467,7 +525,13 @@ fn derivations_of(declarator: Declarator<'_>, out: &mut ArenaVec<'_, Derivation>
         }
         for direct in declarator.kind.iter().rev() {
             match *direct {
-                | DirectDeclarator::Array { .. } => out.push(Derivation::Array),
+                | DirectDeclarator::Array {
+                    assignment_expression,
+                    is_pointer,
+                    ..
+                } => out.push(Derivation::Array {
+                    sized: assignment_expression.is_some() || is_pointer,
+                }),
                 | DirectDeclarator::Function { .. }
                 | DirectDeclarator::KAndRStyleFunction { .. } => out.push(Derivation::Function),
                 | DirectDeclarator::Parenthesized(inner) => current = Some(inner.declarator),
@@ -484,7 +548,10 @@ fn derivations_of(declarator: Declarator<'_>, out: &mut ArenaVec<'_, Derivation>
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Derivation {
     Pointer,
-    Array,
+    /// An array derivation, and whether its size is written.
+    Array {
+        sized: bool,
+    },
     Function,
 }
 
@@ -552,6 +619,8 @@ pub(crate) enum InferenceFault {
     TagInInitializer,
     /// C23 `auto` beside another storage class with a type specifier.
     StorageWithoutInference,
+    /// Clang: C23 `auto` with `__auto_type`.
+    AutoWithAutoType,
 }
 
 impl InferenceFault {
@@ -572,6 +641,7 @@ impl InferenceFault {
             | Self::Redeclared => "already declared in this scope",
             | Self::TagInInitializer => "tag declared here",
             | Self::StorageWithoutInference => "auto with a type specifier",
+            | Self::AutoWithAutoType => "auto with __auto_type",
         }
     }
 
@@ -618,8 +688,8 @@ impl InferenceFault {
             ),
             | Self::BitField => (
                 "an inferred type cannot come from a bit-field",
-                "GCC rejects __auto_type of a bit-field member and Clang any inferred type that \
-                 refers to a bit-field: no declaration can name a bit-field's type",
+                "GCC rejects __auto_type of a bit-field member access and Clang any inferred type \
+                 of one, parenthesized or not: no declaration can name a bit-field's type",
             ),
             | Self::DeductionMismatch => (
                 "the initializer's type does not match the inferred declarator",
@@ -640,6 +710,11 @@ impl InferenceFault {
                 "a tag is declared in an underspecified object initializer",
                 "C23 §6.7.1p12: declaring a tag inside an underspecified declaration is \
                  implementation-defined; GCC rejects it",
+            ),
+            | Self::AutoWithAutoType => (
+                "auto cannot be combined with __auto_type",
+                "C23 §6.7.2p4: Clang reads a C23 auto without a type specifier as type inference, \
+                 which __auto_type then repeats",
             ),
             | Self::StorageWithoutInference => (
                 "auto beside another storage-class specifier requires an inferred type",

@@ -3066,10 +3066,12 @@ compiler, as GCC 13.3, GCC 15's `c-parser.cc` and Clang 23 behave:
 | --- | --- | --- |
 | no initializer, or a braced one | error | error |
 | more than one declarator | error at the second | each deduced; error if they differ |
-| `*p`, `(*f)(int)`, `(*a)[3]` declarators | error ("plain identifier") | deduced through the derivations; error if the initializer does not match |
+| `*p`, `(*f)(int)`, `(*a)[3]` declarators | error ("plain identifier") | deduced through the derivations; error if the initializer does not match, an unsized `[]` matching only an unsized array |
+| `auto __auto_type x = 1;` in C23 | `auto` is a storage class | error |
 | array or function declarator | error | error |
 | the name in its own initializer | C23 `auto`: error; `__auto_type`: the outer declaration | error for both |
-| a bit-field operand | `__auto_type` of a member: error; otherwise the bit-field's own type (refused by lowering) | error for both (`refersToBitField`) |
+| a bit-field member access, parenthesized or not | `__auto_type`: error; C23 `auto`: the bit-field's own type (refused by lowering) | error for both |
+| another operand of a bit-field's type: `(0, s.b)`, `(s.b = 1)`, `++s.b`, `s.b++`, `({ s.b; })` | the bit-field's own type (refused by lowering) | its promoted type, usually `int` |
 | an `_Atomic` operand | atomic dropped | `_Atomic` kept |
 | a tag declared in a C23 `auto` initializer | error | accepted |
 | C23 `auto` redeclaring a name of the same scope | error | error |
@@ -3101,3 +3103,13 @@ Deviations and limits:
   bcc's parser follows GCC and publishes the name after the initializer
   under both identities.
 - GCC 13 has no `_BitInt`; GCC 14 and later infer it as Clang does.
+- Clang 23 reads C23 `auto` followed by a typedef name as an inferred
+  declaration of that name (`typedef int T; auto T x = 1;` is an error, and
+  `auto T = 1.0;` declares `T`), and rejects `auto _Atomic x = 1;` while it
+  accepts `_Atomic auto x = 1;`; bcc's parser takes the typedef name as the
+  type under both identities, as GCC does, and accepts both `_Atomic`
+  orders.
+- An attribute after the declarator (`auto x __attribute__((unused)) = 1;`,
+  `auto x [[maybe_unused]] = 1;`) used to be misread as an unknown type name
+  followed by a declarator; after a storage-class specifier the identifier
+  is now the declarator, as in GCC and Clang.
