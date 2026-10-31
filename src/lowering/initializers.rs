@@ -233,6 +233,23 @@ impl<'tu, 's> FunctionLowerer<'_, '_, 'tu, '_, 's> {
             });
             return Ok(());
         }
+        // For the same reason, a constant initializer that stores an `f80`
+        // is copied from a constant image of the object, as Clang's is.
+        let sema = self.unit.sema;
+        if !types::is_volatile(ty)
+            && leaves.iter().any(|&leaf| plan::x87_leaf(sema, leaf))
+            && leaves.iter().all(|&leaf| plan::constant_leaf(sema, leaf))
+            && let Some(global) = self.unit.constant_image(ty, initializer)?
+        {
+            let size = types::layout(&sema.types, ty)
+                .map_err(|kind| at(kind, initializer.source_vectors))?
+                .size;
+            let destination = self.object_address(object)?;
+            let source = self.inst(InstData::GlobalAddr { global }, Type::Ptr);
+            let length = self.iconst(Type::I64, i128::from(size));
+            self.memory_range(Opcode::Copy, [destination, source, length]);
+            return Ok(());
+        }
         let coverage = CoverageIndex::new(
             &leaves,
             self.unit.sema,

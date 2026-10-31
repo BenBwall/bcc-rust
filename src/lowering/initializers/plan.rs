@@ -31,6 +31,7 @@ use super::{
 };
 use crate::{
     float_parsing::LongDouble,
+    ir::Type,
     lowering::work::BitFieldBits,
     translation_phases::{
         SourceVectors,
@@ -464,6 +465,41 @@ pub(super) fn zero_leaf<'tu>(sema: &SemanticTranslationUnit<'tu>, leaf: Leaf<'tu
         },
         | Leaf::String { .. } | Leaf::Copy { .. } => false,
     }
+}
+
+/// Whether a leaf's bytes are known without running code: an implicit
+/// zero, a copy of earlier such leaves, a string literal, or an arithmetic
+/// constant converted to a non-volatile arithmetic type.
+/// C99: §6.6 paragraphs 6 and 8, p. 95; PDF p. 107.
+pub(super) fn constant_leaf<'tu>(sema: &SemanticTranslationUnit<'tu>, leaf: Leaf<'tu>) -> bool {
+    match leaf {
+        | Leaf::Zero { .. } | Leaf::Replicate { .. } | Leaf::String { .. } => true,
+        | Leaf::Scalar { expression, ty, .. } => {
+            let Some(info) = sema.expression_info(expression) else {
+                return false;
+            };
+            let integer = info.ice && info.integer.is_some();
+            !volatile(sema, ty)
+                && match repr(&sema.types, ty) {
+                    | Ok(Repr::Int { .. } | Repr::Bool) => integer,
+                    | Ok(Repr::Float { .. } | Repr::Complex { .. }) =>
+                        integer || info.floating().is_some(),
+                    | _ => false,
+                }
+        },
+        | Leaf::Copy { .. } => false,
+    }
+}
+
+/// Whether a leaf stores an x87 `f80` value, real or complex.
+pub(super) fn x87_leaf<'tu>(sema: &SemanticTranslationUnit<'tu>, leaf: Leaf<'tu>) -> bool {
+    matches!(
+        leaf,
+        Leaf::Scalar { ty, .. } if matches!(
+            repr(&sema.types, ty),
+            Ok(Repr::Float { ty: Type::F80 } | Repr::Complex { component: Type::F80 })
+        )
+    )
 }
 
 /// Whether `ty` or its array elements are volatile.
