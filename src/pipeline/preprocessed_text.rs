@@ -1,11 +1,12 @@
 //! The preprocessed translation unit as C source text, as `-E` writes it:
-//! each phase-6 token with its spelling, on the line where the reader was in
+//! each phase-4 token with its spelling, on the line where the reader was in
 //! its source file, with GCC's line markers unless `-P` drops them. The
 //! command line streams it (`cli/preprocessed.rs`); the explorer keeps it.
 //!
 //! A token that does not touch the previous one in its source gets a space
-//! before it, so no two tokens paste together. Strings are written as phase
-//! 6 joined them. A token goes on the line where the reader was in its
+//! before it, so no two tokens paste together. Adjacent string literals are
+//! written apart, as phase 4 leaves them; both callers keep phase 6 from
+//! joining them. A token goes on the line where the reader was in its
 //! source file, so the text a macro expands to stays on its invocation's
 //! line. Line markers (`# LINE "FILE" FLAGS`) name the physical file; flag 3
 //! marks a system header.

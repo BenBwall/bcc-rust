@@ -1007,6 +1007,13 @@ character outside identifiers, as GCC, Clang and TCC do, and
 `-fdollars-in-identifiers` restores the default. C89 long-long suffixes and hexadecimal floating constants
 report C99 policy diagnostics while keeping their values.
 
+A sign after `e` or `E` always continues a pp-number; after `p` or `P` it does
+from C99, which added that form for hexadecimal floating constants. Before C99
+the identity decides: GCC's rules (`--gcc-mode`, TCC and MSVC identities) take
+it only in a GNU mode (GCC's "extended numbers"), so strict C90 reads
+`0x1p+f` as `0x1p` `+` `f` as GCC's `gcc.dg/c90-hexfloat-2.c` expects, and
+Clang's take it only in a number that starts with `0x` or `0X` and has no `_`.
+
 A C23 `'` continues a pp-number only before a digit or an ASCII nondigit, even
 when conversion must reject the resulting constant; a universal character name,
 another character or `$` after it starts a character constant instead. C23

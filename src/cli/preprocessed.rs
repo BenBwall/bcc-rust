@@ -5,8 +5,9 @@
 //! output and reports diagnostics in order.
 //!
 //! C99: translation phases 4-6, §5.1.1.2 paragraph 1 items 4-6, p. 10;
-//! PDF p. 22; adjacent string literals, §6.4.5 paragraph 4, p. 62; PDF p. 74.
-//! The text form is the GCC and Clang `-E` convention.
+//! PDF p. 22. The text is phase 4's: adjacent string literals, which phase 6
+//! concatenates (§6.4.5 paragraph 4, p. 62; PDF p. 74), are printed apart,
+//! as in the GCC and Clang `-E` convention.
 
 use std::{
     io::{
@@ -69,6 +70,9 @@ pub(super) fn print_preprocessed<'tu>(
         input_string,
         search,
         |mut preprocessor, context, _pp| {
+            // The text is phase 4's, as GCC and Clang print it: adjacent
+            // string literals stay apart, each where it was written.
+            preprocessor.keep_strings_apart();
             let main_file = context.intern_source_file(source_filename);
             let mut writer = TextWriter::new(&text_arena, options, main_file);
             let mut pragmas = Pragmas::default();
