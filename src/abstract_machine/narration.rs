@@ -25,10 +25,10 @@ use super::{
     },
 };
 
-/// An idea an event's note explains: why the rule it applied matters. A run
-/// explains each topic once, the first time an operation needs it, so the
-/// many reads, stores and constants of a program stay short. A note's text
-/// is its topic's, so the text identifies the topic ([`Topic::of`]).
+/// An idea an event's note explains: why the rule it applied matters. Every
+/// event of a topic carries its note; the site shows a note the first time
+/// the learner sees it, so the many reads, stores and constants of a
+/// program stay short.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Topic {
     AbstractMachine,
@@ -56,40 +56,6 @@ pub(super) enum Topic {
 }
 
 impl Topic {
-    const ALL: [Self; 22] = [
-        Self::AbstractMachine,
-        Self::Scope,
-        Self::Lifetime,
-        Self::Indeterminate,
-        Self::Lvalue,
-        Self::LvalueConversion,
-        Self::ArrayDecay,
-        Self::Promotion,
-        Self::Address,
-        Self::PointerArithmetic,
-        Self::Comparison,
-        Self::IntRange,
-        Self::Division,
-        Self::ElementOrder,
-        Self::SequencePoint,
-        Self::ImplementationDefined,
-        Self::Increment,
-        Self::Condition,
-        Self::ByValue,
-        Self::ExitStatus,
-        Self::Undefined,
-        Self::IndeterminateRead,
-    ];
-
-    /// The topic whose text `note` is.
-    pub(super) fn of(note: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|topic| topic.text() == note)
-    }
-
-    pub(super) const fn bit(self) -> u32 {
-        1 << self as u32
-    }
-
     /// Why the idea matters, in plain words.
     const fn text(self) -> &'static str {
         match self {
@@ -101,31 +67,35 @@ impl Topic {
                  different from these steps.",
             | Self::Scope =>
                 "A block is a scope: names declared inside it exist only up to its closing brace. \
-                 Its local variables are created for this run of the block and destroyed when \
-                 execution leaves it, so a loop body gets fresh locals on every iteration.",
+                 Its automatic variables (locals not declared static) are created for this run of \
+                 the block and destroyed when execution leaves it, so a loop body gets fresh \
+                 locals on every iteration.",
             | Self::Lifetime =>
                 "After an object's lifetime ends, a pointer that still holds its address is \
                  dangling. Using it is undefined behavior, the classic dangling-pointer bug: the \
                  memory may already hold something else.",
             | Self::Indeterminate =>
-                "C does not set local variables to zero. Until something is stored, the object's \
-                 value is indeterminate, and reading it is a bug (see the Uninitialized reads \
-                 lesson). Strictly, C creates the object on entry to its block; this machine draws \
+                "C does not set automatic local variables to zero (static ones start at zero). \
+                 Until something is stored, the object's value is indeterminate, and reading it is \
+                 a bug. Strictly, C creates the object on entry to its block; this machine draws \
                  it when the declaration is reached.",
             | Self::Lvalue =>
                 "An lvalue names a place, not a value. The operator around it decides what happens \
                  next: most operators read the value stored there, while the left side of =, the \
-                 operand of ++ and the operand of & use the object itself.",
+                 operand of & and the operand of ++ use the object itself (++ reads it, then \
+                 stores into it).",
             | Self::LvalueConversion =>
                 "Reading an object (unless it is volatile) is not a side effect: the object keeps \
-                 its value. Only stores (=, ++, --, and calls that do them) change memory.",
+                 its value. Only stores (=, compound assignments such as +=, ++, --, and calls \
+                 that do them) change memory.",
             | Self::ArrayDecay =>
                 "Array-to-pointer decay is why passing an array to a function passes only the \
                  address of its first element, and why the function cannot know the array's \
                  length. The exceptions are sizeof and &, which see the whole array.",
             | Self::Promotion =>
                 "C never does arithmetic in a type narrower than int. That is why two chars \
-                 holding 100 add up to 200, a value no char could hold: the sum is computed in int.",
+                 holding 100 add up to 200, more than a signed char (plain char on x86-64) can \
+                 hold: the sum is computed in int.",
             | Self::Address =>
                 "& does not read the object, so it is fine to take the address of a variable that \
                  has no value yet. The pointer is only a way to reach the object later.",
@@ -139,19 +109,22 @@ impl Topic {
                  true.",
             | Self::IntRange =>
                 "An int on x86-64 holds -2147483648 to 2147483647. A signed result outside that \
-                 range is not wrapped around: it is undefined behavior, which the Signed overflow \
-                 lesson stops on.",
+                 range is not wrapped around: it is undefined behavior, and this machine stops on \
+                 it.",
             | Self::Division =>
                 "Integer division truncates toward zero, so -7 / 2 is -3 and -7 % 2 is -1. \
                  Dividing by zero is undefined behavior.",
             | Self::ElementOrder =>
-                "Elements the list does not mention are set to zero, so int a[100] = {0}; zeroes \
-                 the whole array.",
+                "Without designators the list fills the elements from [0] upward, so the third \
+                 value always goes to [2]. A designator names an element out of order instead: int \
+                 a[5] = {[3] = 7}; starts at [3].",
             | Self::SequencePoint =>
-                "Inside one full expression, C does not say in which order side effects happen. \
-                 Writing the same object twice without a sequence point between, as in i = i++ + \
-                 1, is undefined. The end of a statement is a sequence point: every effect before \
-                 it is complete.",
+                "Between two sequence points C leaves the order of evaluations and side effects \
+                 open. Modifying an object twice, or modifying it and also reading it for another \
+                 purpose, with no sequence point between is undefined: i = i++ + 1, i + i++ and \
+                 a[i] = i++ all are. Sequence points come at the end of each full expression, \
+                 after the first operand of &&, || and ?:, at each comma operator, and just before \
+                 a function is called.",
             | Self::ImplementationDefined =>
                 "Implementation-defined means each compiler must pick a result and document it. \
                  This one is not portable: where plain char is unsigned (on ARM Linux, for \
@@ -847,10 +820,7 @@ impl Machine {
             topic = Some(Topic::ImplementationDefined);
         }
         if full_expression {
-            text.push_str(
-                " The full expression ends here, which is a sequence point: this store is \
-                 complete before the next statement begins.",
-            );
+            text.push_str(" The full expression ends here, a sequence point.");
             cited.push(clauses::FULL_EXPRESSION);
             topic = topic.or(Some(Topic::SequencePoint));
         }
@@ -905,10 +875,7 @@ impl Machine {
                  is converted back to char when it is stored.",
             );
         }
-        text.push_str(
-            " The statement uses only this side effect, and it is complete at the end of the full \
-             expression.",
-        );
+        text.push_str(" The full expression ends here, a sequence point.");
         let increment = if prefix {
             clauses::PREFIX_INCREMENT
         } else {
@@ -991,8 +958,8 @@ impl Machine {
         };
         let text = format!(
             "The controlling expression `{condition}` of this {statement} statement evaluated to \
-             {shown}. In C, {meaning}, so {outcome}. A condition is a full expression: its \
-             evaluation, including any side effects, is complete before the next step."
+             {shown}. In C, {meaning}, so {outcome}. The condition is a full expression, so this \
+             is a sequence point."
         );
         let mut event = noted(
             explained(
@@ -1341,8 +1308,7 @@ fn explained(mut event: Event, text: &str, cited: &[Clause]) -> Event {
     event
 }
 
-/// `event` with the note on `topic`; the machine drops it when this run has
-/// already explained the topic.
+/// `event` with the note on `topic`.
 fn noted(mut event: Event, topic: Topic) -> Event {
     event.note = String::from(topic.text());
     event

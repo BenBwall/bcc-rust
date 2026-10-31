@@ -59,7 +59,8 @@ clauses! {
     /// C99: §6.2.6.1 paragraph 5, pp. 37-38; PDF pp. 49-50.
     TRAP_REPRESENTATION = "6.2.6.1p5", "pp. 37-38; PDF pp. 49-50", "Representations of types",
         "Some bit patterns are not values of their type (trap representations); reading one as \
-         that type is undefined.";
+         that type is undefined, though a character type such as unsigned char may read any \
+         byte.";
     /// C99: §6.3.1.1 paragraph 2, pp. 42-43; PDF pp. 54-55.
     INTEGER_PROMOTIONS = "6.3.1.1p2", "pp. 42-43; PDF pp. 54-55", "Boolean, characters, and integers",
         "Before arithmetic, values of types narrower than int (like char) are converted to int.";

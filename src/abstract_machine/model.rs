@@ -55,8 +55,8 @@ pub struct Event {
     pub title:          String,
     /// A beginner-oriented paragraph naming the values involved.
     pub explanation:    String,
-    /// Why the rule matters, said once per run: empty when this run has
-    /// already explained the same idea.
+    /// Why the rule matters, or empty. Every event of a topic carries the
+    /// same note; the site shows it the first time the learner sees it.
     pub note:           String,
     /// The rules applied, most specific first.
     pub clauses:        Vec<Clause>,

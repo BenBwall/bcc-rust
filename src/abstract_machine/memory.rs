@@ -124,8 +124,11 @@ impl Machine {
             // asserting that every indeterminate read is undefined.
             return Err(Diagnostic::indeterminate(
                 self.state.source_range,
-                "nothing has been stored in this object yet, so its value is indeterminate; the \
-                 machine stops instead of making up a value",
+                &format!(
+                    "nothing has been stored in {} yet, so its value is indeterminate; the \
+                     machine stops instead of making up a value",
+                    self.location(target, offset)
+                ),
                 &clauses::INDETERMINATE,
             ));
         }
@@ -217,7 +220,16 @@ impl Machine {
                      [{offset}], outside the array",
                     length - 1
                 ),
-                | _ => format!("this access is {offset} objects away from `{name}`, outside it"),
+                // C99 §6.5.6p7: a single object acts as an array of one.
+                | _ if offset == 1 => format!(
+                    "`{name}` is a single object, which pointer arithmetic treats as an array of \
+                     one element, and this access is at [1], one past the end: a pointer may \
+                     point there, but no object is there to read or write"
+                ),
+                | _ => format!(
+                    "`{name}` is a single object, which pointer arithmetic treats as an array of \
+                     one element, and this access is at [{offset}], outside it"
+                ),
             };
             Diagnostic::ub(
                 self.state.source_range,

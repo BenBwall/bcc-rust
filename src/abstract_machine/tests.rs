@@ -326,45 +326,41 @@ fn out_of_bounds_access_names_the_array_and_index() {
         message.starts_with("`a` has 3 elements, [0] to [2], and this access is at [3], one past"),
         "{message}"
     );
+    // C99 §6.5.6p7: &x + 1 is the one-past position of an array of one.
+    let session = run("int main(void) { int x = 1; int *p = &x + 1; return *p; }");
+    let message = &session.state().diagnostics[0].message;
+    assert!(message.contains("at [1], one past the end"), "{message}");
+    let session = run("int main(void) { int x; return x; }");
+    let message = &session.state().diagnostics[0].message;
+    assert!(
+        message.starts_with("nothing has been stored in `x` yet"),
+        "{message}"
+    );
 }
 
 #[test]
-fn notes_explain_each_topic_once_per_run() {
+fn every_step_of_a_topic_carries_its_note() {
     let run = states("int main(void) { int a = 1; int b = 2; b = a + b; b = b + a; return b; }");
-    let noted: Vec<&State> = run
-        .iter()
-        .filter(|state| !state.event.note.is_empty())
-        .collect();
-    let mut topics: Vec<&str> = noted
-        .iter()
-        .map(|state| state.event.note.as_str())
-        .collect();
-    let all = topics.len();
-    topics.sort_unstable();
-    topics.dedup();
-    assert_eq!(topics.len(), all, "a topic is explained once");
-    let declarations: Vec<&State> = run
-        .iter()
-        .filter(|state| state.event.kind == EventKind::Declare)
-        .collect();
+    let notes = |kind: EventKind| -> Vec<&str> {
+        run.iter()
+            .filter(|state| state.event.kind == kind)
+            .map(|state| state.event.note.as_str())
+            .collect()
+    };
+    // The site shows a note once; the engine attaches it to every step of
+    // its topic, so skipping steps (Run, Run to line) loses none.
+    let declarations = notes(EventKind::Declare);
     assert!(
-        !declarations[0].event.note.is_empty(),
-        "the first declaration explains"
-    );
-    assert!(
-        declarations[1].event.note.is_empty(),
-        "the second stays short"
-    );
-    let sums: Vec<&State> = run
-        .iter()
-        .filter(|state| state.event.kind == EventKind::Arithmetic)
-        .collect();
-    assert!(
-        sums[0].event.note.contains("2147483647"),
+        declarations[0].contains("automatic local variables"),
         "{}",
-        sums[0].event.note
+        declarations[0]
     );
-    assert!(sums[1].event.note.is_empty());
+    assert_eq!(declarations[0], declarations[1]);
+    let sums = notes(EventKind::Arithmetic);
+    assert!(sums[0].contains("2147483647"), "{}", sums[0]);
+    assert_eq!(sums[0], sums[1]);
+    let stores = notes(EventKind::Assign);
+    assert!(stores[0].contains("a[i] = i++"), "{}", stores[0]);
     // Back and a replayed step see the same notes.
     let program = compile("int main(void) { int a = 1; int b = a; return b; }").expect("compiles");
     let mut session = program.session();
