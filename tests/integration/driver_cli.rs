@@ -890,21 +890,27 @@ mod tests {
         args.extend(options);
         let rules = project.bcc(&args);
         succeeds(&rules);
-        assert_eq!(stdout(&rules), "f.o: f.S forced.h inc/inc.h\n");
+        // Rules name a header as it was found, with the host's separator.
+        let inc = if cfg!(windows) {
+            r"inc\inc.h"
+        } else {
+            "inc/inc.h"
+        };
+        assert_eq!(stdout(&rules), format!("f.o: f.S forced.h {inc}\n"));
         let mut args = vec!["-MM", "-MT", "tgt", "-MP", "f.S"];
         args.extend(options);
         let phony = project.bcc(&args);
         succeeds(&phony);
         assert_eq!(
             stdout(&phony),
-            "tgt: f.S forced.h inc/inc.h\nforced.h:\ninc/inc.h:\n"
+            format!("tgt: f.S forced.h {inc}\nforced.h:\n{inc}:\n")
         );
         let mut args = vec!["-c", "-MMD", "f.S", "-o", "deps.o"];
         args.extend(options);
         succeeds(&project.bcc(&args));
         assert_eq!(
             std::fs::read_to_string(project.path("deps.d")).unwrap(),
-            "deps.o: f.S forced.h inc/inc.h\n"
+            format!("deps.o: f.S forced.h {inc}\n")
         );
         // Clang's warnings reach stderr, and `-w` and `-Werror` apply.
         std::fs::write(
