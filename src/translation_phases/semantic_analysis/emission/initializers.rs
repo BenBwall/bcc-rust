@@ -103,11 +103,9 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         };
         for (value, &live) in plan.values.iter().zip(live) {
             if !live && !self.expression_contains_label(value.expression) {
-                _ = self
-                    .functions
-                    .emission
-                    .overridden_values
-                    .insert(std::ptr::from_ref(value.expression).addr(), ());
+                let key = std::ptr::from_ref(value.expression).addr();
+                _ = self.functions.emission.overridden_values.insert(key, ());
+                _ = self.initializers.overridden.insert(key, ());
             }
         }
     }
