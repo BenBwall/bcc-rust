@@ -79,6 +79,21 @@ use crate::{
     },
 };
 
+/// A pragma a text of phase 4 writes back where it was.
+/// C99: §6.10.6 paragraph 1, p. 159; PDF p. 171.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct TextPragma<'tu> {
+    /// Its output-token ordinal ([`Context::preprocessed_tokens`] before
+    /// the next token).
+    pub(crate) position: usize,
+    /// The source file being read and the line the reader was on.
+    pub(crate) file:     u32,
+    pub(crate) line:     u32,
+    /// `#pragma` and its tokens as spelled, each run of white space as one
+    /// space.
+    pub(crate) text:     &'tu str,
+}
+
 #[expect(
     clippy::struct_excessive_bools,
     reason = "Each flag is an independent fact about the translation unit's input."
@@ -135,6 +150,9 @@ pub(crate) struct Context<'tu> {
     /// out of the values Clang's evaluator folds, each with its output-token
     /// ordinal ([`Self::preprocessed_tokens`] before the next token).
     pub(crate) weak_pragmas: ArenaVec<'tu, (usize, StringCacheId)>,
+    /// The pragmas a text of phase 4 ([`Self::phase_four_text`]) writes back
+    /// where they were.
+    pub(crate) text_pragmas: ArenaVec<'tu, TextPragma<'tu>>,
     pub(crate) source_vectors: SourceVectorStack,
     parser_token_vectors: RegionVec<SourceVector>,
     retained_vectors: RegionVec<SourceVector>,

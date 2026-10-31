@@ -19,9 +19,11 @@ use crate::{
 };
 
 /// What phase 4 leaves of `source` for a text under `identity`: each token
-/// as spelled, with a space between; and each diagnostic, with its severity.
+/// as spelled, with a space between; each pragma the text writes back, after
+/// how many tokens; and each diagnostic, with its severity.
 struct Text {
     tokens:      String,
+    pragmas:     Vec<(usize, String)>,
     diagnostics: Vec<(ErrorSeverity, String)>,
 }
 
@@ -51,12 +53,18 @@ fn text_in(source: &str, configuration: CompilerConfiguration) -> Text {
         let spelling = context.string_cache.at(token.contents);
         tokens.push(spelling.trim_end_matches('\0').to_owned());
     });
+    let pragmas = context
+        .text_pragmas
+        .iter()
+        .map(|pragma| (pragma.position, pragma.text.to_owned()))
+        .collect();
     let mut diagnostics = Vec::new();
     while let Some(error) = context.pop_pending_error() {
         diagnostics.push((error.severity(), diagnostic_name(&error)));
     }
     Text {
         tokens: tokens.join(" "),
+        pragmas,
         diagnostics,
     }
 }
@@ -172,6 +180,73 @@ fn a_directive_rejects_an_unclosed_literal_it_reads() {
                 "MissingTerminatingQuote(34)".to_owned()
             ),
             (ErrorSeverity::Error, "NewlineInString".to_owned()),
+        ]
+    );
+}
+
+#[test]
+fn pragmas_are_written_back_as_spelled() {
+    // GCC and Clang print a pragma that later phases or no phase carry out
+    // with its tokens as written, `pack` included, and a `_Pragma`
+    // operator's as a `#pragma` line.
+    let source = "#define N 4\na\n#pragma pack(1)\n#  pragma   pack ( N ) // c\n#pragma omp \
+                  parallel  for N\n#pragma GCC diagnostic push\n#pragma STDC FP_CONTRACT \
+                  ON\n#pragma weak w\n#pragma message(\"m\")\n#pragma foo @ 08\nb _Pragma(\"omp  \
+                  x\") c\n";
+    let expected = [
+        (1, "#pragma pack(1)"),
+        (1, "#pragma pack ( N )"),
+        (1, "#pragma omp parallel for N"),
+        (1, "#pragma GCC diagnostic push"),
+        (1, "#pragma STDC FP_CONTRACT ON"),
+        (1, "#pragma weak w"),
+        (1, "#pragma message(\"m\")"),
+        (1, "#pragma foo @ 08"),
+        (2, "#pragma omp x"),
+    ];
+    for identity in [CompilerIdentity::Gcc, CompilerIdentity::Clang] {
+        let text = text_of(source, identity);
+        assert_eq!(text.tokens, "a b c", "{identity:?}");
+        let pragmas: Vec<_> = text
+            .pragmas
+            .iter()
+            .map(|(position, line)| (*position, line.as_str()))
+            .collect();
+        assert_eq!(pragmas, expected, "{identity:?}");
+    }
+}
+
+#[test]
+fn pragmas_the_preprocessor_carries_out_are_not_written_back() {
+    // Each compiler's `-E` leaves out the pragmas its preprocessor consumes:
+    // GCC its `GCC warning`, Clang its own `clang` pragmas and MSVC's
+    // `region`; both `once`, `push_macro` and `GCC poison`. GCC writes a
+    // space after an empty `#pragma`.
+    let source = "#define X 1\n#pragma once\n#pragma push_macro(\"X\")\n#pragma \
+                  pop_macro(\"X\")\n#pragma GCC poison p\n#pragma GCC warning \"w\"\n#pragma \
+                  clang deprecated(X)\n#pragma clang diagnostic push\n#pragma region r\n#pragma\n";
+    let lines = |identity| {
+        text_of(source, identity)
+            .pragmas
+            .into_iter()
+            .map(|(_, line)| line)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        lines(CompilerIdentity::Gcc),
+        [
+            "#pragma clang deprecated(X)",
+            "#pragma clang diagnostic push",
+            "#pragma region r",
+            "#pragma ",
+        ]
+    );
+    assert_eq!(
+        lines(CompilerIdentity::Clang),
+        [
+            "#pragma GCC warning \"w\"",
+            "#pragma clang diagnostic push",
+            "#pragma",
         ]
     );
 }

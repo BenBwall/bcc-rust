@@ -436,6 +436,37 @@ mod tests {
     }
 
     #[test]
+    fn preprocessing_writes_pragmas_back_as_spelled() {
+        let project = Project::new();
+        let source = "#define N 4\na\n#  pragma   pack ( N ) // c\n#pragma omp parallel  for \
+                      N\n#pragma GCC diagnostic push\nb _Pragma(\"message(\\\"m\\\")\") \
+                      c\n#pragma push_macro(\"N\")\nd\n";
+        std::fs::write(project.path("pragmas.c"), source).unwrap();
+        // GCC and Clang print each pragma later phases may read on its own
+        // line, with its tokens as written, and leave out those that
+        // preprocessing alone carries out.
+        // The token after a `_Pragma` operator starts a line of its own,
+        // indented to its column; the indentation is not compared.
+        let output = project.bcc(&["-E", "-P", "pragmas.c"]);
+        succeeds(&output);
+        let text = stdout(&output);
+        assert_eq!(
+            text.lines().map(str::trim_start).collect::<Vec<_>>(),
+            [
+                "a",
+                "#pragma pack ( N )",
+                "#pragma omp parallel for N",
+                "#pragma GCC diagnostic push",
+                "b",
+                "#pragma message(\"m\")",
+                "c",
+                "d",
+            ],
+            "{text}"
+        );
+    }
+
+    #[test]
     fn preprocessing_writes_source_text_with_line_markers() {
         let project = Project::new();
         let output = project.bcc(&["-E", "main.c"]);

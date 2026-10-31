@@ -223,7 +223,8 @@ impl Expander<'_, '_, '_, '_> {
                     .context
                     .first_source_vector(directive.source_vectors)
                     .index;
-                if !self.parse_pragma_directive(from) {
+                let at = self.reading_position();
+                if !self.parse_pragma_directive(from, at) {
                     self.skip_until_newline();
                 }
                 self.resume_at_line_start();

@@ -33,15 +33,15 @@ use crate::{
     },
 };
 
-/// The pragmas bcc keeps for later phases, which the text writes back where
-/// they were: `#pragma pack` with its replaced operands and `#pragma weak`
-/// with its name. Other pragmas affect only preprocessing, or nothing in
-/// bcc, and are not written.
-/// C99: §6.10.6 paragraph 1, p. 159; PDF p. 171.
+/// The pragmas a text of phase 4 writes back where they were, as GCC and
+/// Clang write them: each `#pragma` line, and each `_Pragma` operator's, on a
+/// line of its own, spelled as written, unless the preprocessor alone
+/// carries it out.
+/// C99: §6.10.6 paragraph 1, p. 159; PDF p. 171; §6.10.9 paragraph 1,
+/// p. 161; PDF p. 173.
 #[derive(Default)]
 pub(crate) struct Pragmas {
-    pack: usize,
-    weak: usize,
+    next: usize,
 }
 
 impl Pragmas {
@@ -52,42 +52,11 @@ impl Pragmas {
         ordinal: usize,
         writer: &mut TextWriter<'_>,
     ) {
-        loop {
-            let pack = context
-                .pack_pragmas
-                .get(self.pack)
-                .filter(|p| p.position <= ordinal);
-            let weak = context
-                .weak_pragmas
-                .get(self.weak)
-                .filter(|w| w.0 <= ordinal);
-            match (pack, weak) {
-                | (Some(pack), weak) if weak.is_none_or(|weak| pack.position <= weak.0) => {
-                    writer.start_directive();
-                    writer.text.push_str("#pragma pack");
-                    for operand in pack.operands {
-                        writer.text.push(' ');
-                        writer.text.push_str(
-                            context
-                                .string_cache
-                                .at(operand.spelling)
-                                .trim_end_matches('\0'),
-                        );
-                    }
-                    writer.text.push('\n');
-                    self.pack += 1;
-                },
-                | (_, Some(&(_, name))) => {
-                    writer.start_directive();
-                    writer.text.push_str("#pragma weak ");
-                    writer
-                        .text
-                        .push_str(context.string_cache.at(name).trim_end_matches('\0'));
-                    writer.text.push('\n');
-                    self.weak += 1;
-                },
-                | _ => return,
-            }
+        while let Some(pragma) = context.text_pragmas.get(self.next)
+            && pragma.position <= ordinal
+        {
+            writer.pragma(context, pragma.file, pragma.line, pragma.text);
+            self.next += 1;
         }
     }
 }
@@ -123,9 +92,9 @@ pub(crate) struct TextWriter<'a> {
     last:            (Option<u8>, Option<u8>),
     /// The main source file, whose line marker starts the text.
     main_file:       u32,
-    /// A directive ended the line: the next token starts one with a line
-    /// marker.
-    resync:          bool,
+    /// The current line holds a pragma: a token for it or an earlier line
+    /// starts one of its own, with a line marker.
+    after_pragma:    bool,
 }
 
 /// What separated two tokens in the source.
@@ -191,7 +160,7 @@ impl<'a> TextWriter<'a> {
             end_line: 0,
             last: (None, None),
             main_file,
-            resync: false,
+            after_pragma: false,
         }
     }
 
@@ -270,50 +239,31 @@ impl<'a> TextWriter<'a> {
                 .is_some_and(u8::is_ascii_whitespace)
         });
         let next = first_byte(context, token);
-        if self.resync {
-            self.resync = false;
+        let later = matches!(self.line, Some((current_file, current_line))
+            if current_file == file && line > current_line);
+        if std::mem::take(&mut self.after_pragma)
+            && !later
+            && self.line.is_some_and(|(f, _)| f == file)
+        {
+            self.text.push('\n');
             if !self.options.no_line_markers {
                 self.marker(context, file, line);
             }
             self.line = Some((file, line));
             self.indent(column);
-        } else {
-            match self.line {
-                | Some((current_file, current_line)) if current_file == file =>
-                    if line > current_line {
-                        if self.options.no_line_markers || line - current_line > MAX_BLANK_LINES {
-                            self.text.push('\n');
-                            if !self.options.no_line_markers {
-                                self.marker(context, file, line);
-                            }
-                        } else {
-                            for _ in current_line..line {
-                                self.text.push('\n');
-                            }
-                        }
-                        self.line = Some((file, line));
-                        self.indent(column);
-                    } else if gap == Gap::Space
-                        || (gap == Gap::Unknown && (white_before || would_paste(self.last, next)))
-                    {
-                        self.text.push(' ');
-                    },
-                | previous => {
-                    if !self.options.no_line_markers {
-                        match previous {
-                            | Some(_) => self.text.push('\n'),
-                            | None => self.marker(context, self.main_file, 1),
-                        }
-                        if file != self.main_file || line > 1 {
-                            self.marker(context, file, line);
-                        }
-                    } else if previous.is_some() {
-                        self.text.push('\n');
-                    }
-                    self.line = Some((file, line));
-                    self.indent(column);
-                },
+        } else if self
+            .line
+            .is_some_and(|(current_file, _)| current_file == file)
+            && !later
+        {
+            if gap == Gap::Space
+                || (gap == Gap::Unknown && (white_before || would_paste(self.last, next)))
+            {
+                self.text.push(' ');
             }
+        } else {
+            self.advance(context, file, line);
+            self.indent(column);
         }
         self.scratch.reset();
         let spelling = if self.options.as_written {
@@ -334,6 +284,62 @@ impl<'a> TextWriter<'a> {
         offset.map(|offset| (file, offset))
     }
 
+    /// Writes a pragma's line, `text`, for line `line` of `file`: on that
+    /// line when the output has not reached it, otherwise after a new line
+    /// and a line marker, as for a `_Pragma` operator between two tokens of
+    /// a line. The next token starts a line of its own.
+    pub(crate) fn pragma(&mut self, context: &Context<'_>, file: u32, line: u32, text: &str) {
+        match self.line {
+            | Some((current_file, current_line)) if current_file == file && line <= current_line =>
+            {
+                self.text.push('\n');
+                if !self.options.no_line_markers {
+                    self.marker(context, file, line);
+                }
+                self.line = Some((file, line));
+            },
+            | _ => self.advance(context, file, line),
+        }
+        self.text.push_str(text);
+        self.after_pragma = true;
+        self.last = (None, None);
+        self.end = None;
+    }
+
+    /// Starts output line `line` of `file`, which is later in the same file
+    /// than the current line, or in another: with new lines up to it, or a
+    /// line marker after too many or for another file, or with the text's
+    /// first line marker.
+    fn advance(&mut self, context: &Context<'_>, file: u32, line: u32) {
+        match self.line {
+            | Some((current_file, current_line)) if current_file == file => {
+                if self.options.no_line_markers || line - current_line > MAX_BLANK_LINES {
+                    self.text.push('\n');
+                    if !self.options.no_line_markers {
+                        self.marker(context, file, line);
+                    }
+                } else {
+                    for _ in current_line..line {
+                        self.text.push('\n');
+                    }
+                }
+            },
+            | previous =>
+                if !self.options.no_line_markers {
+                    match previous {
+                        | Some(_) => self.text.push('\n'),
+                        | None => self.marker(context, self.main_file, 1),
+                    }
+                    if file != self.main_file || line > 1 {
+                        self.marker(context, file, line);
+                    }
+                } else if previous.is_some() {
+                    self.text.push('\n');
+                },
+        }
+        self.line = Some((file, line));
+    }
+
     /// Writes `# LINE "FILE"` and a new line, with flag 3 for a system
     /// header.
     fn marker(&mut self, context: &Context<'_>, file: u32, line: u32) {
@@ -350,16 +356,6 @@ impl<'a> TextWriter<'a> {
     fn indent(&mut self, column: u32) {
         for _ in 1..column {
             self.text.push(' ');
-        }
-    }
-
-    /// Ends the current line for a directive; the next token starts a line
-    /// with a line marker.
-    fn start_directive(&mut self) {
-        if let Some((file, _)) = self.line {
-            self.text.push('\n');
-            self.line = Some((file, u32::MAX));
-            self.resync = true;
         }
     }
 

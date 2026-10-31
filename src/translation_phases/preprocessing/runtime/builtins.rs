@@ -181,6 +181,7 @@ impl Expander<'_, '_, '_, '_> {
 
         let input = Self::prepare_pragma_operator_string(self.context, string_token.contents);
 
+        let at = self.reading_position();
         let tokenizer = take(&mut self.tokenizer);
         // Each operator gets its own identity:
         // diagnostics rendered later must quote this
@@ -190,7 +191,7 @@ impl Expander<'_, '_, '_, '_> {
             .add_synthetic_source_file(Path::new("<pragma string>"), input);
         self.tokenizer = TokenSource::new(self.context, self.scratch, pragma_string, input);
         self.pushed_frames += 1;
-        _ = self.parse_pragma_directive(from);
+        _ = self.parse_pragma_directive(from, at);
         if self.tokenizer.next_item(self.context).is_some() {
             let source_vectors = self.current_location();
             self.context.preprocessor_error(PreprocessorError {

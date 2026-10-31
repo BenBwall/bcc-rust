@@ -201,7 +201,9 @@ impl Expander<'_, '_, '_, '_> {
     /// The innermost source file being read, and the reader's position in
     /// it: the live cursor when no macro frame is above the file, otherwise
     /// the cursor the file's frame saved when the macro was pushed.
-    fn reading_position(&self) -> Option<(u32, SourcePosition)> {
+    pub(in crate::translation_phases::preprocessing) fn reading_position(
+        &self,
+    ) -> Option<(u32, SourcePosition)> {
         let last = self.tokenizer_stack.len().checked_sub(1)?;
         self.tokenizer_stack
             .iter()

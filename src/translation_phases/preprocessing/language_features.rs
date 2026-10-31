@@ -154,6 +154,7 @@ impl<'pp: 'x, 'x> Expander<'_, '_, 'pp, 'x> {
                         contents:       self.context.string_cache.intern("\n"),
                         source_vectors: token.source_vectors,
                     };
+                    let at = self.reading_position();
                     let old = std::mem::replace(
                         &mut self.tokenizer,
                         TokenSource::replay(
@@ -163,7 +164,7 @@ impl<'pp: 'x, 'x> Expander<'_, '_, 'pp, 'x> {
                             SourceVector::default(),
                         ),
                     );
-                    _ = self.parse_pragma_directive(from);
+                    _ = self.parse_pragma_directive(from, at);
                     self.tokenizer = old;
                     return None;
                 }

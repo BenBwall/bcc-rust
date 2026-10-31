@@ -197,6 +197,33 @@ mod tests {
         assert_eq!(cl_expand("--msvc-mode", &["/DX#5", "/DY=6"], "X Y"), "5 6");
     }
 
+    /// Each compiler's `-E` leaves out the pragmas its own preprocessor
+    /// carries out: GCC its `#pragma GCC warning`, Clang its `clang`
+    /// pragmas and MSVC's `region`; GCC writes a space after an empty
+    /// `#pragma`.
+    #[test]
+    fn preprocessing_leaves_out_the_pragmas_each_compiler_consumes() {
+        let directory = Directory::new();
+        directory.write(
+            "pragmas.c",
+            "#define X 1\na\n#pragma GCC warning \"w\"\n#pragma clang deprecated(X)\n#pragma \
+             region r\n#pragma\n#pragma once\nb\n",
+        );
+        let pragmas = |mode: &str| {
+            let output = directory.bcc(mode, &["-E", "-P", "-w", "pragmas.c"]);
+            succeeds(&output);
+            stdout(&output)
+        };
+        assert_eq!(
+            pragmas("--gcc-mode"),
+            "a\n#pragma clang deprecated(X)\n#pragma region r\n#pragma \nb\n"
+        );
+        assert_eq!(
+            pragmas("--clang-mode"),
+            "a\n#pragma GCC warning \"w\"\n#pragma\nb\n"
+        );
+    }
+
     /// A sign after `p` continues a preprocessing number from C99. Before
     /// C99, GCC reads it so only in its GNU modes and Clang only after a
     /// hexadecimal prefix, so strict C90 splits `0x1p+f` (GCC's
