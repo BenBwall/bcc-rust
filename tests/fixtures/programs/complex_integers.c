@@ -22,6 +22,11 @@ struct pair { char tag; ci z; cs w; };
 static cus statics[3] = { 100 + 200i, 300 - 2i, 65535 + 65536i };
 static struct pair initialized = { 'p', 7 - 8i, 3 + 300000i };
 static const cc folded = (cc)(100 + 50i) * (cc)(3 + 1i);
+/* A part of a complex integer constant is an integer constant. */
+static int imaginary_part = __imag__ 3i + 1;
+static int real_part = __real__ (2 + 3i) * 5;
+static int bounded[__imag__ (2 + 3i)];
+enum { IMAGINARY = __imag__ (4 - 2i), WRAPPED = __real__ (cuc)(300 + 1i) };
 
 static ci add_many(ci a, ci b, cs c, cc d, cl e, ci f, ci g, cl h)
 {
@@ -132,6 +137,8 @@ int main(void)
     struct pair swapped = swap(initialized);
     SHOW(ci, swapped.z);
     SHOW(cs, swapped.w);
+    printf("%d %d %zu %d %d\n", imaginary_part, real_part, sizeof bounded / sizeof bounded[0],
+           IMAGINARY, WRAPPED);
     ci array[4] = { 1, 2i, 3 + 3i };
     ci *pointer = &array[1];
     pointer[2] = pointer[0] * pointer[1];

@@ -297,7 +297,26 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             result.static_address = operand.static_address;
             result.vector_element = operand.vector_element;
         }
-        if scalar.integer() {
+        if scalar.complex_integer() {
+            // A GNU complex integer constant's part is an integer constant,
+            // which both compilers accept in an integer constant
+            // expression (an array bound, an enumerator), held exactly in
+            // the floating carrier. GNU extension: GCC manual, "Complex
+            // Numbers".
+            let part = operand.floating().and_then(|value| {
+                let part = if op == UnaryOperator::Real {
+                    value.real
+                } else {
+                    value.imag
+                };
+                let (bits, signed) = self.types.target.integer(component)?;
+                let exact = crate::float_parsing::bits::to_integer(&part, 128, true)?.cast_signed();
+                Some(Integer::int(exact).cast(bits, signed))
+            });
+            result.integer = part;
+            result.ice = part.is_some() && operand.constant == ConstantClass::Arithmetic;
+            result.constant = operand.constant;
+        } else if scalar.integer() {
             result.integer = if op == UnaryOperator::Imag {
                 operand.integer.map(|_| Integer::int(0))
             } else {
