@@ -92,31 +92,34 @@ pub fn Narration(
         })
     });
     view! {
-        <article class="card narration" data-category=category aria-labelledby="narration-title" node_ref=card>
-            <div class="narration-meta">
+        <article class="note narration" data-category=category aria-labelledby="narration-title" node_ref=card>
+            <h2 id="narration-title" class="note-title" tabindex="-1">
+                <span class="note-number">
+                    {move || snapshot.with(|state| state.as_ref().map_or_else(|| "Note".to_owned(), |state| format!("Note {}", state.step)))}
+                </span>
+                <span class="note-rule" aria-hidden="true">" · "</span>
+                <span class="narration-title">
+                    {move || event.with(|event| match event {
+                        | Some(event) => super::rich_text(&event.title),
+                        | None => "Loading the abstract machine…".into_any(),
+                    })}
+                </span>
+            </h2>
+            <p class="narration-meta">
                 // No step has run before the engine loads, so no kind of step.
                 <span class="category-badge" title=move || category_hint(&category()) hidden=move || event.with(Option::is_none)>{move || category_label(&category())}</span>
-                <span class="narration-step">
-                    {move || snapshot.with(|state| state.as_ref().map_or_else(String::new, |state| format!("Step {}", state.step)))}
-                </span>
                 <span class="sequence-chip" hidden=move || !event.with(|event| event.as_ref().is_some_and(|event| event.sequence_point))>
-                    <span class="sequence-dot" aria-hidden="true"></span>"Sequence point"
+                    "Sequence point"
                 </span>
-            </div>
-            <h2 id="narration-title" class="narration-title" tabindex="-1">
-                {move || event.with(|event| match event {
-                    | Some(event) => super::rich_text(&event.title),
-                    | None => "Loading the abstract machine…".into_any(),
-                })}
-            </h2>
-            <p class="flow" aria-hidden="true" hidden=move || event.with(|event| event.as_ref().is_none_or(|event| event.flow.is_empty()))>
-                {move || event.with(|event| event.as_ref().map(|event| flow_groups(&event.flow)))}
             </p>
             <p class="narration-lead">
                 {move || event.with(|event| match event {
                     | Some(event) => names.with(|names| explained(lead(event), &mut Vec::new(), names, tip, card)),
                     | None => placeholder.get().into_any(),
                 })}
+            </p>
+            <p class="flow" aria-hidden="true" hidden=move || event.with(|event| event.as_ref().is_none_or(|event| event.flow.is_empty()))>
+                {move || event.with(|event| event.as_ref().map(|event| flow_groups(&event.flow)))}
             </p>
             <aside class="narration-note" aria-label="Why it matters" hidden=move || note.with(Option::is_none)>
                 <h3>"Why it matters"</h3>

@@ -303,7 +303,7 @@ pub fn Glossary() -> impl IntoView {
     view! {
         <section class="glossary" id="glossary" aria-labelledby="glossary-title">
             <div class="section-heading">
-                <h2 id="glossary-title">"Glossary"</h2>
+                <h2 id="glossary-title"><span class="section-number">"Table 2"</span>"Glossary"</h2>
                 <p>"The words of the C standard the explanations use. Each links to the paragraph that defines it."</p>
             </div>
             <dl class="glossary-list">

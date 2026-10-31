@@ -1,38 +1,28 @@
-// Editor themes matching the site's palette (web/style.css). Each token kind
-// has one colour in every language: types are blue, values and variables
-// light blue, labels pink, instructions and keywords violet, numbers amber.
+// Editor themes matching the site (web/style.css). Every editor is one of
+// the device's black screens, in daylight and under low light alike, so both
+// themes are dark; the low-light screen is a shade deeper. Each token kind
+// has one colour in every language, few and muted, as on a hardware
+// sequencer's screen: keywords warm, types and variables blue, numbers ochre,
+// strings green, the rest off-white and grey.
 
-const dark = {
-  background: '#0f141d',
-  foreground: '#dfe6f0',
-  muted: '#9fa7b6',
-  keyword: '#c4a7ff',
-  type: '#7cc7f7',
-  number: '#f5b86a',
-  string: '#8fdca3',
-  function: '#5fd8c4',
-  variable: '#a5c8ff',
-  slot: '#e3b8ff',
-  label: '#f59fc8',
+const screen = {
+  background: '#0b0b0b',
+  foreground: '#ecebe4',
+  muted: '#9a9991',
+  keyword: '#ff9466',
+  type: '#7fb0ff',
+  number: '#e8b45c',
+  string: '#9fd49a',
+  function: '#f2f2ec',
+  variable: '#a8c7ff',
+  slot: '#c9b3ff',
+  label: '#ffb3c8',
   register: '#ff9ea9',
-  operator: '#b6c2d4',
+  operator: '#b5b4ac',
 };
 
-const light = {
-  background: '#ffffff',
-  foreground: '#1b2230',
-  muted: '#58606d',
-  keyword: '#7036d6',
-  type: '#0b62a3',
-  number: '#964a09',
-  string: '#156d35',
-  function: '#0a6b60',
-  variable: '#1f4fbf',
-  slot: '#8a2fb8',
-  label: '#b0185f',
-  register: '#b4233a',
-  operator: '#475266',
-};
+const dark = { ...screen, background: '#050505' };
+const light = screen;
 
 function rules(palette) {
   const strip = (color) => color.slice(1);
@@ -62,41 +52,40 @@ function rules(palette) {
   ];
 }
 
-function colors(palette, isDark) {
+function colors(palette) {
   return {
     'editor.background': palette.background,
     'editor.foreground': palette.foreground,
     'editorGutter.background': palette.background,
-    'editorLineNumber.foreground': isDark ? '#768296' : '#6b7484',
+    'editorLineNumber.foreground': '#7a7a73',
     // The number of the empty line after a final new-line, which Monaco
-    // otherwise dims to 1.7:1.
-    'editorLineNumber.dimmedForeground': isDark ? '#768296' : '#6b7484',
-    'editorLineNumber.activeForeground': isDark ? '#c3cddb' : '#2b3445',
-    'editor.lineHighlightBackground': isDark ? '#ffffff08' : '#0b62a308',
+    // otherwise dims below 4.5:1.
+    'editorLineNumber.dimmedForeground': '#7a7a73',
+    'editorLineNumber.activeForeground': '#f2f2ec',
+    'editor.lineHighlightBackground': '#ffffff08',
     'editor.lineHighlightBorder': '#00000000',
-    // Other places of the word under the cursor. Monaco's light default
-    // drops tokens below 4.5:1 where it meets the cursor's line; a light
-    // fill with an outline keeps every token readable.
-    'editor.wordHighlightBackground': isDark ? '#ffffff12' : '#0b62a30d',
-    'editor.wordHighlightBorder': isDark ? '#ffffff30' : '#0b62a340',
-    'editor.wordHighlightStrongBackground': isDark ? '#ffffff12' : '#0b62a30d',
-    'editor.wordHighlightStrongBorder': isDark ? '#ffffff30' : '#0b62a340',
-    'editor.wordHighlightTextBackground': isDark ? '#ffffff12' : '#0b62a30d',
-    'editor.wordHighlightTextBorder': isDark ? '#ffffff30' : '#0b62a340',
-    'editor.selectionBackground': isDark ? '#3b82f640' : '#3b82f62e',
-    'editor.inactiveSelectionBackground': isDark ? '#3b82f626' : '#3b82f61c',
-    'editorCursor.foreground': isDark ? '#5eead4' : '#0b7a6d',
-    'editorIndentGuide.background1': isDark ? '#ffffff0c' : '#0000000c',
-    'editorIndentGuide.activeBackground1': isDark ? '#ffffff22' : '#00000022',
-    'editorBracketMatch.background': isDark ? '#5eead422' : '#0b7a6d18',
-    'editorBracketMatch.border': isDark ? '#5eead466' : '#0b7a6d55',
-    'editorWidget.background': isDark ? '#171e2b' : '#ffffff',
-    'editorWidget.border': isDark ? '#2a3446' : '#dfe4ec',
-    'editorHoverWidget.background': isDark ? '#171e2b' : '#ffffff',
-    'editorHoverWidget.border': isDark ? '#2a3446' : '#dfe4ec',
-    'scrollbarSlider.background': isDark ? '#ffffff14' : '#0000001a',
-    'scrollbarSlider.hoverBackground': isDark ? '#ffffff26' : '#0000002b',
-    'focusBorder': isDark ? '#5eead4' : '#0b7a6d',
+    // Other places of the word under the cursor: a faint fill with an
+    // outline keeps every token readable.
+    'editor.wordHighlightBackground': '#ffffff12',
+    'editor.wordHighlightBorder': '#ffffff30',
+    'editor.wordHighlightStrongBackground': '#ffffff12',
+    'editor.wordHighlightStrongBorder': '#ffffff30',
+    'editor.wordHighlightTextBackground': '#ffffff12',
+    'editor.wordHighlightTextBorder': '#ffffff30',
+    'editor.selectionBackground': '#ff5a1f55',
+    'editor.inactiveSelectionBackground': '#ff5a1f30',
+    'editorCursor.foreground': '#ff5a1f',
+    'editorIndentGuide.background1': '#ffffff0c',
+    'editorIndentGuide.activeBackground1': '#ffffff22',
+    'editorBracketMatch.background': '#ff5a1f22',
+    'editorBracketMatch.border': '#ff5a1f88',
+    'editorWidget.background': '#141413',
+    'editorWidget.border': '#3a3a36',
+    'editorHoverWidget.background': '#141413',
+    'editorHoverWidget.border': '#3a3a36',
+    'scrollbarSlider.background': '#ffffff14',
+    'scrollbarSlider.hoverBackground': '#ffffff26',
+    'focusBorder': '#ff5a1f',
     // Monaco still tags brackets with its pair-colouring classes when that
     // feature is off; give every level the delimiter colour so brackets
     // match the rest of the palette instead of Monaco's rainbow.
@@ -112,12 +101,12 @@ export function defineThemes(monaco) {
     base: 'vs-dark',
     inherit: false,
     rules: rules(dark),
-    colors: colors(dark, true),
+    colors: colors(dark),
   });
   monaco.editor.defineTheme('bcc-light', {
-    base: 'vs',
+    base: 'vs-dark',
     inherit: false,
     rules: rules(light),
-    colors: colors(light, false),
+    colors: colors(light),
   });
 }
