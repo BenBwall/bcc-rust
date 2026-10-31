@@ -69,11 +69,21 @@ impl Renderer {
                 | _ => write!(out, "{file}:{}:{}: ", vector.line, vector.column),
             };
         }
+        // TCC names no warning options, so a message drops the `[-W…]`
+        // suffix GCC and Clang add.
+        let message = match format {
+            | DiagnosticFormat::Tcc => diagnostic
+                .message
+                .rfind(" [-W")
+                .filter(|_| diagnostic.message.ends_with(']'))
+                .map_or(diagnostic.message, |at| &diagnostic.message[..at]),
+            | _ => diagnostic.message,
+        };
         let _ = writeln!(
             out,
             "{} {}",
             self.paint(severity, severity_style),
-            self.paint(diagnostic.message, Style::new().bold()),
+            self.paint(message, Style::new().bold()),
         );
         // TCC writes the message line alone.
         if format == DiagnosticFormat::Tcc {

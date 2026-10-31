@@ -467,6 +467,27 @@ mod tests {
         }
     }
 
+    /// TCC names no warning options, so its diagnostics carry no `[-W…]`
+    /// suffix, as GCC's and Clang's do.
+    #[test]
+    fn tcc_diagnostics_name_no_warning_options() {
+        let directory = Directory::new();
+        directory.write(
+            "warn.c",
+            "int main(void) { long b = 1; char *p = b; return 0; }\n",
+        );
+        let tcc = directory.bcc("--tcc-mode", &["-c", "warn.c"]);
+        succeeds(&tcc);
+        assert!(
+            stderr(&tcc).starts_with("warn.c:1: warning: "),
+            "{}",
+            stderr(&tcc)
+        );
+        assert!(!stderr(&tcc).contains("[-W"), "{}", stderr(&tcc));
+        let gcc = directory.bcc("--gcc-mode", &["-c", "warn.c"]);
+        assert!(stderr(&gcc).contains("[-W"), "{}", stderr(&gcc));
+    }
+
     /// A sign after `p` continues a preprocessing number from C99. Before
     /// C99, GCC reads it so only in its GNU modes and Clang only after a
     /// hexadecimal prefix, so strict C90 splits `0x1p+f` (GCC's
@@ -3693,15 +3714,14 @@ mod tests {
         succeeds(&output);
         assert_eq!(
             stderr(&output),
-            "ptr.c:1: warning: incompatible integer and pointer conversion \
-             [-Wint-conversion]\nptr.c:1: warning: incompatible pointer types in conversion \
-             [-Wincompatible-pointer-types]\n"
+            "ptr.c:1: warning: incompatible integer and pointer conversion\nptr.c:1: warning: \
+             incompatible pointer types in conversion\n"
         );
         let output = directory.bcc("--tcc-mode", &["-Werror", "-c", "ptr.c"]);
         assert_eq!(output.status.code(), Some(1));
         assert_eq!(
             stderr(&output),
-            "ptr.c:1: error: incompatible integer and pointer conversion [-Wint-conversion]\n"
+            "ptr.c:1: error: incompatible integer and pointer conversion\n"
         );
         // `$` follows `-f[no-]dollars-in-identifiers`, in every personality.
         directory.write("dollar.c", "int a$b = 3;\n");
