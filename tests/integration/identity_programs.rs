@@ -77,6 +77,59 @@ mod tests {
         matches_the_claimed_compiler("torture_semantics.c");
     }
 
+    /// A wasm32 program's own `index`, `bcmp` and `stpcpy` replace the WASI
+    /// runtime's weak definitions instead of clashing with them, under
+    /// both identities and optimizers; without `node` this is skipped.
+    #[test]
+    fn wasm32_programs_define_posix_string_names() {
+        if !Command::new("node")
+            .arg("--version")
+            .output()
+            .is_ok_and(|output| output.status.success())
+        {
+            eprintln!("skipping wasm32: node is not on the path");
+            return;
+        }
+        let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/programs/posix_string_names.c")
+            .to_str()
+            .unwrap()
+            .to_owned();
+        let runner = Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts/wasm/run.mjs");
+        for identity in ["--compiler-identity=clang", "--compiler-identity=gcc"] {
+            for optimization in ["-O0", "-O2"] {
+                let module = temporary("names.wasm");
+                let built = bcc(&[
+                    identity,
+                    optimization,
+                    "-w",
+                    "--target=wasm32-wasip1",
+                    &source,
+                    "-o",
+                    module.to_str().unwrap(),
+                ]);
+                assert!(
+                    built.status.success(),
+                    "{identity} {optimization}: {}",
+                    text(&built.stderr)
+                );
+                let run = run_native(
+                    Command::new("node")
+                        .arg("--no-warnings")
+                        .arg(&runner)
+                        .arg(&module),
+                )
+                .unwrap();
+                assert_eq!(
+                    text(&run.stdout),
+                    "abcd 3 7\nxy\n",
+                    "{identity} {optimization}"
+                );
+                std::fs::remove_file(module).unwrap();
+            }
+        }
+    }
+
     /// Each identity's value of `fixture` matches its compiler's build,
     /// interpreted before and after optimization and built through LLVM
     /// and the native back end.
