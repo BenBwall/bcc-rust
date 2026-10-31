@@ -44,6 +44,9 @@ pub struct StepEvent {
     /// `fault`; it selects the colour.
     pub category:       String,
     pub title:          String,
+    /// One plain sentence: what happened and why. The card leads with it;
+    /// the explanation is the detail behind it.
+    pub summary:        String,
     pub explanation:    String,
     /// Why the rule matters, given the first time a run needs it; empty
     /// otherwise.
