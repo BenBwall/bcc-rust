@@ -93,7 +93,7 @@ pub(crate) fn compile_module_checked(
         return Ok(false);
     };
     if let Some(buffer) = &buffer {
-        std::fs::write(object_path, buffer.bytes())?;
+        crate::backend::write_object(object_path, buffer.bytes())?;
     }
     let Some(object) = temporary else {
         return Ok(true);
@@ -487,6 +487,11 @@ impl Toolchain {
         }
         let output = run(&mut command)?;
         if output.status.success() {
+            // Clang wrote an object for `-o -` to its stdout, which `run`
+            // captured.
+            if kind == OutputKind::Object && out_path == Path::new("-") {
+                return crate::backend::write_object(out_path, &output.stdout);
+            }
             Ok(())
         } else {
             Err(io::Error::other(ClangError(output)))
