@@ -93,6 +93,10 @@ impl<'pp> Expander<'_, '_, 'pp, '_> {
     ///
     /// C99: §6.4 paragraphs 2-3, p. 49; PDF p. 61.
     pub(super) fn map_preprocessor_token(&mut self, token: PreprocessorToken) -> Option<Token> {
+        // A directive's operands are read as tokens even for a text.
+        if self.state.as_text && !self.state.in_directive && spelled_only_in_text(token.kind) {
+            return Some(Self::build_token(token, TokenType::Identifier));
+        }
         Some(match token.kind {
             | PreprocessorTokenType::Other => {
                 let character = self
@@ -2011,4 +2015,26 @@ pub(crate) fn bit_precise_magnitude(spelling: &str, limbs: &mut [u64]) {
 /// The low 64 bits of a double-limb intermediate.
 fn low_limb(value: u128) -> u64 {
     u64::try_from(value & u128::from(u64::MAX)).unwrap_or(0)
+}
+
+/// Whether a text of phase 4
+/// ([`Preprocessor::read_as_text`](super::Preprocessor::read_as_text))
+/// writes a token of `kind` by its spelling alone, unconverted and
+/// unchecked, which is all the text uses of it. An operator keeps its kind,
+/// a directive is still carried out, and a new-line still ends a line.
+const fn spelled_only_in_text(kind: PreprocessorTokenType) -> bool {
+    matches!(
+        kind,
+        PreprocessorTokenType::Other
+            | PreprocessorTokenType::Number
+            | PreprocessorTokenType::String
+            | PreprocessorTokenType::Character
+            | PreprocessorTokenType::GeneratedString
+            | PreprocessorTokenType::WideGeneratedString
+            | PreprocessorTokenType::Identifier
+            | PreprocessorTokenType::UniversalIdentifier
+            | PreprocessorTokenType::UnavailableIdentifier
+            | PreprocessorTokenType::UnavailableUniversalIdentifier
+            | PreprocessorTokenType::Defined
+    )
 }

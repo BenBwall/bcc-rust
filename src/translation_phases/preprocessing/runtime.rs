@@ -117,9 +117,9 @@ pub(super) struct PreprocessorState<'pp> {
     /// Directives end at their first new-line (C99 §6.10p2).
     pub(super) in_directive:        bool,
     pub(super) retain_placeholders: bool,
-    /// Leave adjacent string literals apart, for a text of phase 4 alone;
-    /// phase 6 concatenates them.
-    pub(super) strings_apart:       bool,
+    /// Produce phase 4's tokens for a text of them, unconverted
+    /// ([`Preprocessor::read_as_text`]).
+    pub(super) as_text:             bool,
     pub(super) arena:               &'pp Bump,
     pub(super) once_set:            ArenaSet<'pp, u32>,
     pub(super) macro_definitions:   ArenaMap<'pp, StringCacheId, MacroDefinition<'pp>>,
