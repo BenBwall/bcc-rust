@@ -41,6 +41,22 @@ fn stringification_discards_trailing_argument_whitespace() {
 }
 
 #[test]
+fn a_pasted_name_of_the_macro_being_replaced_stays_unreplaced() {
+    // C99 6.10.3.4p2: `##` makes `glue` inside glue's own replacement, so
+    // it is painted for good and the `(12)` after the invocation does not
+    // call it (GCC's gcc.dg/cpp/paste2.c).
+    let glue = "#define glue(a, b) a ## b\n";
+    assert_expansion(&format!("{glue}glue(gl, ue)(12)\n"), "glue ( 12 )");
+    assert_expansion(&format!("{glue}glue(, glue)(1, 2)\n"), "glue ( 1 , 2 )");
+    assert_expansion(&format!("{glue}glue(glue, )(1, 2)\n"), "glue ( 1 , 2 )");
+    // A name pasted in another macro's list is still replaced.
+    assert_expansion(
+        &format!("{glue}#define call(a, b) a ## b\ncall(gl, ue)(x, y)\n"),
+        "xy",
+    );
+}
+
+#[test]
 fn stringified_replacements_keep_only_the_invocations_spacing() {
     // C99 6.10.3p7: the white space before a replacement list is not part
     // of it, so `#` spaces a replacement as its invocation was spaced, as

@@ -384,7 +384,13 @@ impl Expander<'_, '_, '_, '_> {
 
             // C99 §6.10.3.4p2: a name met while its macro is being replaced
             // stays unreplaced, even when it is rescanned later.
-            if self.macro_is_disabled(token.identifier_id(self.context)) {
+            let name = token.identifier_id(self.context);
+            let disabled = if is_pasted {
+                self.pasted_macro_is_disabled(name)
+            } else {
+                self.macro_is_disabled(name)
+            };
+            if disabled {
                 token.kind = if token.kind == PreprocessorTokenType::UniversalIdentifier {
                     PreprocessorTokenType::UnavailableUniversalIdentifier
                 } else {
