@@ -70,12 +70,30 @@ impl<'a, 'id, 'm> Emitter<'a, 'id, 'm, '_> {
         for (_, block) in body.labels() {
             labeled[block.index()] = true;
         }
+        // Blocks that only trap (`-ftrapv`'s overflow checks) share one
+        // LLVM block: LLVM's branch folding merges identical blocks in
+        // quadratic time, and thousands of them made a long function's
+        // compilation take tens of seconds.
+        let mut trap = None;
+        let mut duplicate = ArenaVec::new_in(self.arena);
+        duplicate.resize(body.block_count(), false);
         for block in body.blocks() {
             if edges.reachable[block.index()] || labeled[block.index()] {
-                blocks[block.index()] = Some(api.block(
+                if !labeled[block.index()] && only_traps(body, block) {
+                    if let Some(shared) = trap {
+                        blocks[block.index()] = Some(shared);
+                        duplicate[block.index()] = true;
+                        continue;
+                    }
+                }
+                let llvm = api.block(
                     self.functions[id.index()],
                     api.name(&named(block, self.arena)),
-                ));
+                );
+                if trap.is_none() && !labeled[block.index()] && only_traps(body, block) {
+                    trap = Some(llvm);
+                }
+                blocks[block.index()] = Some(llvm);
             }
         }
         for block in body.blocks() {
@@ -132,6 +150,9 @@ impl<'a, 'id, 'm> Emitter<'a, 'id, 'm, '_> {
             values,
         };
         for &block in dom.reverse_post_order() {
+            if duplicate[block.index()] {
+                continue;
+            }
             api.position(blocks[block.index()].ok_or(std::fmt::Error)?);
             for &inst in body.block_insts(block) {
                 let value = builder.inst(inst)?;
@@ -164,6 +185,15 @@ impl<'a, 'id, 'm> Emitter<'a, 'id, 'm, '_> {
         }
         Ok(self.arena.alloc_slice_copy(&labels))
     }
+}
+
+/// Whether `block` takes no parameters and holds only `trap` and
+/// `unreachable`.
+fn only_traps(body: &Body<'_>, block: Block) -> bool {
+    body.block_params(block).is_empty()
+        && matches!(body.block_insts(block), &[trap, end]
+            if matches!(*body.inst(trap), InstData::Nullary { opcode: Opcode::Trap, .. })
+                && matches!(*body.inst(end), InstData::Unreachable))
 }
 
 pub(super) fn signature_type<'id>(
