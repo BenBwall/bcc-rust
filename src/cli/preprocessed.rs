@@ -70,9 +70,9 @@ pub(super) fn print_preprocessed<'tu>(
         input_string,
         search,
         |mut preprocessor, context, _pp| {
-            // The text is phase 4's, as GCC and Clang print it: adjacent
-            // string literals stay apart, each where it was written.
-            preprocessor.keep_strings_apart();
+            // The text is phase 4's, as GCC and Clang print it: each token
+            // as it was spelled, adjacent string literals apart.
+            preprocessor.read_as_text();
             let main_file = context.intern_source_file(source_filename);
             let mut writer = TextWriter::new(&text_arena, options, main_file);
             let mut pragmas = Pragmas::default();

@@ -256,8 +256,8 @@ mod tests {
         }
     }
 
-    /// `-E` spells a string literal that is not UTF-8 with octal escapes,
-    /// which give the same bytes.
+    /// `-E` copies the bytes of a string literal that is not UTF-8, as GCC
+    /// does.
     #[test]
     fn preprocessing_keeps_malformed_utf8_bytes() {
         let input = temporary("raw.c");
@@ -265,7 +265,7 @@ mod tests {
         let output = bcc(&["--gcc-mode", "-E", "-P", input.to_str().unwrap()]);
         std::fs::remove_file(&input).unwrap();
         assert!(output.status.success(), "{}", text(&output.stderr));
-        assert_eq!(text(&output.stdout), "const char *t = \"\\377\\172\";\n");
+        assert_eq!(output.stdout, b"const char *t = \"\xffz\";\n");
     }
 
     #[test]
