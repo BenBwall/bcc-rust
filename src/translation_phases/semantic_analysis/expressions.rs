@@ -61,7 +61,6 @@ use super::{
         Floating,
     },
     integer::Integer,
-    scopes::Namespace,
     types::{
         ArrayBound,
         Scalar,
@@ -90,10 +89,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let mut info = Self::expression_result(e, self.types.unknown());
         match e.kind {
             | E::Identifier(name) => {
-                let found = self
-                    .lookup(Namespace::Ordinary, name.name)
-                    .map(|entry| entry.binding)
-                    .or_else(|| self.predefined_identifier(name));
+                let (found, self_reference) = self.identifier_lookup(name);
                 if let Some(index) = found {
                     let binding = self.bindings[index];
                     info.ty = binding.ty;
@@ -145,7 +141,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         info.integer = binding.value;
                         info.constant = ConstantClass::Arithmetic;
                     }
-                } else if !e.recovered && !self.builtin_name(name) {
+                } else if !self_reference && !e.recovered && !self.builtin_name(name) {
                     self.error(
                         SemanticErrorKind::UndeclaredIdentifier,
                         name.source_vectors,

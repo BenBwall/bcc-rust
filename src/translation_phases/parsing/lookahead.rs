@@ -292,7 +292,7 @@ impl Parser<'_, '_, '_> {
     /// read by lookahead. The token after a `[` is known only when the `[` is
     /// the current token or the one following it; at any later position the
     /// `[` is not taken as an attribute start.
-    fn attribute_starter_in_lookahead(&self, token: Token) -> bool {
+    pub(super) fn attribute_starter_in_lookahead(&self, token: Token) -> bool {
         if !matches!(
             token.kind,
             TokenType::Operator(OperatorTokenType::OpeningSquareBracket)

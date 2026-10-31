@@ -604,6 +604,11 @@ pub(crate) enum SemanticErrorKind {
     /// GNU extension: GCC manual, "Extended Asm"; C99 §J.5.10, p. 514;
     /// PDF p. 526.
     InvalidAsm(super::assembly::AsmFault),
+    /// C23 `auto` and GNU `__auto_type` inference constraints, with each
+    /// compiler's choices for the implementation-defined forms.
+    /// C23 (N3220): §6.7.10 paragraphs 1-2, pp. 134-135; PDF pp. 147-148;
+    /// §6.7.1 paragraph 12, p. 98; PDF p. 111.
+    InvalidInference(super::inference::InferenceFault),
     /// Clang `-Wunknown-attributes`: an attribute name no rule knows.
     /// C23: §6.7.13.2p2, p. 143; PDF p. 156 (unrecognized attributes are
     /// ignored). GNU extension: GCC manual, "Attribute Syntax".
@@ -788,6 +793,7 @@ impl SemanticErrorKind {
             | Self::InvalidImmediate => "expected an integer constant expression in range",
             | Self::ImmediateOutOfRange { .. } => "outside the builtin's valid range",
             | Self::InvalidAsm(fault) => fault.label(),
+            | Self::InvalidInference(fault) => fault.label(),
             | Self::CallAttribute | Self::CallAttributeWarning => "function attribute diagnostic",
             | Self::NoViableOverload => "no viable overload",
             | Self::AmbiguousOverload => "ambiguous overload",
@@ -1362,6 +1368,7 @@ impl SemanticErrorKind {
                  indices; convertvector requires equal lane counts",
             ),
             | Self::InvalidAsm(fault) => fault.explanation(),
+            | Self::InvalidInference(fault) => fault.explanation(),
             | Self::ImmediateOutOfRange { .. } => (
                 "argument value is outside the valid range",
                 "Clang x86 intrinsics: the immediate operand must lie in the builtin's \

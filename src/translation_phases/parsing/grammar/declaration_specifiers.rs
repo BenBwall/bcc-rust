@@ -704,7 +704,10 @@ impl<'tu> SpecifierList<'tu> {
         // with either. Diagnose it once as an unknown type name and let the
         // rest of the declaration follow, instead of misreading it as an
         // implicit-`int` name and then rejecting what comes after it.
-        // C99 has no implicit `int` (§6.7.2p2).
+        // C99 has no implicit `int` (§6.7.2p2). After a storage-class
+        // specifier the identifier may be the declarator of a C23 `auto`
+        // inference or a GNU implicit `int`, which attributes can follow
+        // (`auto x __attribute__((unused)) = 1;`).
         if matches!(token.kind, TokenType::Identifier)
             && self.mode != SpecifierMode::TypeName
             && self.specifiers.type_specifiers == TypeSpecifiers::Empty
@@ -716,7 +719,9 @@ impl<'tu> SpecifierList<'tu> {
                         following.kind,
                         TokenType::Operator(OperatorTokenType::Asterisk)
                     )
-                    || parser.declaration_starter(following)
+                    || (parser.declaration_starter(following)
+                        && !(self.specifiers.storage_class.is_some()
+                            && parser.attribute_starter_in_lookahead(following)))
             })
         {
             parser.report(ParserErrorType::UnknownTypeName, Some(token));
