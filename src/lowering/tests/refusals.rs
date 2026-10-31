@@ -200,8 +200,8 @@ fn records_with_variably_modified_members_are_refused_under_gcc() {
         "int f(int n) { struct s { int a; int b[n]; int c; } s; s.c = 3; return s.c; }",
         "void *vp, *vq; long f(int n) { struct s { int b[n]; } *p = vp, *q = vq; return p - q; }",
         "void *vp; int f(int n) { struct s { int b[n]; } *p = vp; p++; return p != 0; }",
-        "void *vp; int f(int n) { struct s { int b[n]; } *p = vp; void *v = p + 1; return v != \
-         0; }",
+        "void *vp; int f(int n) { struct s { int b[n]; } *p = vp; void *v = p + 1; return v != 0; \
+         }",
         "void *vp; int f(int n) { struct s { int b[n]; } *p = vp; return p[1].b[0]; }",
         "void *vp; int f(int n) { struct s { int b[n]; } *p = vp; return (int)sizeof *p; }",
         "char *p; void f(int n) { __asm__ volatile(\"\" : \"=m\"(*(struct { char x[n]; } *)p)); }",
