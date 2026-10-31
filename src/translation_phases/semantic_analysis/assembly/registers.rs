@@ -29,6 +29,10 @@ pub(in crate::translation_phases::semantic_analysis) enum RegisterName {
     NotGeneral,
 }
 
+/// The registers GCC's x86-64 table numbers, which a register variable may
+/// name by number.
+const GCC_REGISTERS: usize = 92;
+
 /// The register `name` (with or without `%`) names for a local register
 /// variable under `rules`, as `gcc -m64` and the bundled Clang 23 accept
 /// them: GCC takes the extended general registers by their 64-bit names
@@ -39,6 +43,22 @@ pub(in crate::translation_phases::semantic_analysis) fn register_variable(
 ) -> RegisterName {
     let name = name.strip_prefix('%').unwrap_or(name);
     let clang = rules == RuleSet::Clang;
+    // Both compilers take a register's number in GCC's x86 table: `ax`,
+    // `dx`, `cx`, `bx`, `si`, `di`, `bp`, `sp`, then the x87, flags, SSE
+    // and other registers.
+    if !name.is_empty() && name.bytes().all(|byte| byte.is_ascii_digit()) {
+        const GENERAL: [u8; 8] = [0, 2, 1, 3, 6, 7, 5, 4];
+        return match name.parse::<usize>() {
+            | Ok(number) if number < GENERAL.len() => RegisterName::General(GENERAL[number]),
+            | Ok(number) if number < GCC_REGISTERS => RegisterName::Other,
+            | _ => RegisterName::Invalid,
+        };
+    }
+    // Clang places a value in the high byte of `ah`-`dh`, which lowering
+    // does not model; GCC places it in the low byte.
+    if clang && matches!(name, "ah" | "bh" | "ch" | "dh") {
+        return RegisterName::Other;
+    }
     if let Some(register) = general(name) {
         let extended = register >= 8;
         let byte_legacy = matches!(name, "sil" | "dil" | "spl" | "bpl");
