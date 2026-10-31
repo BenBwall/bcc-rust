@@ -1,8 +1,8 @@
 // Monaco glue for the bcc site. The Leptos page (web/src/editor.rs) imports
 // this module at run time through wasm-bindgen and drives it with a small,
 // plain-data API: create an editor in a host element, set its text,
-// language and decorations, and listen for edits and line hovers. Everything
-// else (state, semantics, what to highlight) lives in Rust.
+// language and decorations, and listen for edits, line hovers and cursor
+// moves. Everything else (state, semantics, what to highlight) lives in Rust.
 //
 // Only the editor core and the features the site uses are bundled; language
 // support is the Monarch grammars in ./languages.js.
@@ -100,6 +100,30 @@ function followOnPage(editor) {
   });
 }
 
+/**
+ * Scroll the page as little as shows the cursor's line of `editor`, after
+ * the arrow keys moved it: Monaco keeps the line inside the editor, not
+ * the editor's line on the page. An editor in a stuck sticky pane is
+ * already where scrolling cannot move it.
+ */
+function showCursorOnPage(editor) {
+  requestAnimationFrame(() => {
+    const node = editor.getContainerDomNode();
+    const position = editor.getPosition();
+    if (!position || !node.isConnected || isStuck(node)) {
+      return;
+    }
+    const { clear, bottom } = visibleBand();
+    const height = editor.getOption(monaco.editor.EditorOption.lineHeight);
+    const top = node.getBoundingClientRect().top + editor.getTopForLineNumber(position.lineNumber) - editor.getScrollTop();
+    if (top < clear) {
+      scrollBy({ top: top - clear });
+    } else if (top + height > bottom) {
+      scrollBy({ top: top + height - bottom });
+    }
+  });
+}
+
 /** Switch every editor between the site's `light` and `dark` themes. */
 export function setTheme(theme) {
   monaco.editor.setTheme(theme === 'light' ? 'bcc-light' : 'bcc-dark');
@@ -133,7 +157,11 @@ class Editor {
       fontLigatures: false,
       minimap: { enabled: false },
       scrollBeyondLastLine: false,
-      renderLineHighlight: options.readOnly ? 'none' : 'line',
+      // A read-only view marks the cursor's line only while it has the
+      // focus, for the reader moving through it with the arrow keys.
+      // The gutter too, where the focused editor's bar marks the line.
+      renderLineHighlight: 'all',
+      renderLineHighlightOnlyWhenFocus: !!options.readOnly,
       // Clicking a read-only view's line number selects the line; keep the
       // spaces of the selection blank.
       renderWhitespace: options.readOnly ? 'none' : 'selection',
@@ -168,6 +196,24 @@ class Editor {
       tabFocusMode: true,
     });
     this.tabHint = new TabHint(this.editor);
+    this.listeners.push(this.editor.onDidChangeCursorPosition((event) => {
+      if (event.source === 'keyboard') showCursorOnPage(this.editor);
+    }));
+    // A read-only view the reader scrolled keeps its cursor where it was,
+    // often far off screen; Tab into it starts at the first line in view
+    // instead, so its links and announcement are about what is shown.
+    if (options.readOnly) {
+      this.listeners.push(this.editor.onDidFocusEditorText(() => {
+        const line = this.editor.getPosition()?.lineNumber ?? 1;
+        const visible = this.editor.getVisibleRanges();
+        if (visible.length && !visible.some((range) => line >= range.startLineNumber && line <= range.endLineNumber)) {
+          // Past the padding line Monaco half-shows at the top.
+          const top = visible[0].startLineNumber;
+          const first = this.editor.getTopForLineNumber(top) < this.editor.getScrollTop() ? top + 1 : top;
+          this.editor.setPosition({ lineNumber: Math.min(first, visible[0].endLineNumber), column: 1 });
+        }
+      }));
+    }
   }
 
   getValue() {
@@ -247,15 +293,29 @@ class Editor {
     }));
   }
 
-  /** Call `callback(line)` when the cursor moves to another line. */
+  /**
+   * Call `callback(line)` with the cursor's line while the editor has the
+   * keyboard focus: as the focus arrives and whenever the cursor moves to
+   * another line. Call `callback(0)` when the focus leaves.
+   */
   onCursorLine(callback) {
     let current = 0;
-    this.listeners.push(this.editor.onDidChangeCursorPosition((event) => {
-      if (event.position.lineNumber !== current) {
-        current = event.position.lineNumber;
-        callback(current);
+    const report = (line) => {
+      if (line !== current) {
+        current = line;
+        callback(line);
       }
+    };
+    this.listeners.push(this.editor.onDidChangeCursorPosition((event) => {
+      if (this.editor.hasTextFocus()) report(event.position.lineNumber);
     }));
+    this.listeners.push(this.editor.onDidFocusEditorText(() => {
+      report(this.editor.getPosition()?.lineNumber ?? 0);
+    }));
+    this.listeners.push(this.editor.onDidBlurEditorText(() => report(0)));
+    // The page may have moved the focus in before listening (from the
+    // highlighted fallback Monaco replaced).
+    if (this.editor.hasTextFocus()) report(this.editor.getPosition()?.lineNumber ?? 0);
   }
 
   /**

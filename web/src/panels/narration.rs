@@ -83,7 +83,8 @@ pub fn Narration(
     view! {
         <article class="card narration" data-category=category aria-labelledby="narration-title" node_ref=card>
             <div class="narration-meta">
-                <span class="category-badge">{move || category_label(&category())}</span>
+                // No step has run before the engine loads, so no kind of step.
+                <span class="category-badge" hidden=move || event.with(Option::is_none)>{move || category_label(&category())}</span>
                 <span class="narration-step">
                     {move || snapshot.with(|state| state.as_ref().map_or_else(String::new, |state| format!("Step {}", state.step)))}
                 </span>

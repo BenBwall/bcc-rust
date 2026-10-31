@@ -33,6 +33,12 @@ pub fn TreeView(snapshot: Memo<Option<Snapshot>>) -> impl IntoView {
                         </div>
                     </div>
                 }.into_any(),
+                // Before the engine loads there is no step yet.
+                | _ if snapshot.with(Option::is_none) => view! {
+                    <p class="empty-state">
+                        "The expression being evaluated appears here as a tree, and fills in from the leaves up as the machine evaluates it."
+                    </p>
+                }.into_any(),
                 | _ => view! {
                     <p class="empty-state">
                         "This step is not part of an expression. When the machine evaluates one, its tree appears here and fills in from the leaves up."
