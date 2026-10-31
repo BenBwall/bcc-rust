@@ -56,6 +56,7 @@ pub(crate) use entities::{
     BodyEmission,
     EntityFacts,
     FunctionEnd,
+    RegisterVariable,
     SymbolRequest,
 };
 #[cfg_attr(

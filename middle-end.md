@@ -975,7 +975,14 @@ rather than producing wrong code.
 
 GNU assembler labels select the IR symbol name of functions and static-duration
 objects, and propagate across linked declarations. Labels must be nonempty,
-NUL-free UTF-8; automatic register labels are unsupported. Semantic completion
+NUL-free UTF-8. On an automatic object the label names a register: a GNU
+local register variable (`register long x asm("rdi")`, GCC manual, "Local
+Register Variables") is an ordinary object (`EntityFacts::register_variables`)
+except as a general-register `asm` operand, whose constraint lowering narrows
+to that register when the object is declared `register`, as GCC and Clang
+place it (without `register` both ignore the label); GCC's names are accepted (`rax`
+to `rdi` in every width, `ah` to `dh`, `r8` to `r15`), with or without `%`.
+A register outside the operand's class leaves the class alone. Semantic completion
 retains decoded requests and their inheritance; lowering checks IR symbol
 collisions and reports retained capability refusals. Semantic analysis resolves
 calling-convention modifiers on every declaration and type name, including

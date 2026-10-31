@@ -32,6 +32,10 @@ use constraints::{
     ConstraintFault,
     Tie,
 };
+pub(super) use registers::{
+    RegisterName,
+    register_variable,
+};
 use template::{
     Names,
     TemplateFault,
@@ -611,6 +615,27 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         clobbers: AsmClobbers,
     ) -> bool {
         for (operand, facts) in asm.operands.iter().zip(operands) {
+            // A local register variable's operand takes its register, as GCC
+            // and Clang reject when the statement also clobbers it.
+            let mut expression = facts.expression;
+            while let crate::translation_phases::parsing::syntax::ExpressionType::Parenthesized {
+                expression: inner,
+            } = expression.kind
+            {
+                expression = inner;
+            }
+            if let AsmOperandKind::Register(AsmRegisterClass::General(_)) = facts.kind
+                && let Some(binding) = self.expression_info(expression).binding
+                && let Some(&register) = self.register_variables.get(&binding)
+                && clobbers.general & (1 << register) != 0
+            {
+                self.assembly_error(
+                    AsmFault::RegisterVariableClobbered,
+                    operand.expression.source_vectors,
+                    None,
+                );
+                return false;
+            }
             if let AsmOperandKind::Register(AsmRegisterClass::General(mask)) = facts.kind
                 && mask.is_power_of_two()
                 && clobbers.general & mask != 0
@@ -736,6 +761,8 @@ pub(crate) enum AsmFault {
     TiedType,
     UnknownRegister,
     ClobberConflict,
+    /// A local register variable's register is clobbered too.
+    RegisterVariableClobbered,
     Escape,
     OperandNumber,
     OperandName,
@@ -762,6 +789,7 @@ impl AsmFault {
             | Self::OperandType | Self::TiedType => "operand type does not fit the constraint",
             | Self::UnknownRegister => "unknown register",
             | Self::ClobberConflict => "register is clobbered",
+            | Self::RegisterVariableClobbered => "the variable's register is clobbered",
             | Self::Escape | Self::OperandNumber | Self::OperandName | Self::Modifier =>
                 "invalid template",
             | Self::SizeModifier => "operand has no size suffix",
@@ -844,6 +872,11 @@ impl AsmFault {
                 "unknown register name in asm",
                 "GNU Clobbers and Scratch Registers: a clobber names an x86-64 register, 'cc' or \
                  'memory'",
+            ),
+            | Self::RegisterVariableClobbered => (
+                "asm-specifier for variable conflicts with asm clobber list",
+                "GNU Local Register Variables: the operand lives in its variable's register, \
+                 which the statement clobbers",
             ),
             | Self::ClobberConflict => (
                 "asm operand has impossible constraints",
