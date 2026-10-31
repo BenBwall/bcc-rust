@@ -74,6 +74,60 @@ fn diagnostic_name(error: &TranslationError<'_>) -> String {
 }
 
 #[test]
+fn a_hash_inside_a_line_is_a_punctuator_of_the_text() {
+    // C99 §6.10p2: only a `#` that is the first token of a line begins a
+    // directive; GCC and Clang print the others, `%:` and `##` as written.
+    let text = text_of(
+        "a # b\nc %: d ## e %:%: f\nx #if 1\ny\n",
+        CompilerIdentity::Gcc,
+    );
+    assert_eq!(text.tokens, "a # b c %: d ## e %:%: f x # if 1 y");
+    assert_eq!(text.diagnostics, []);
+}
+
+#[test]
+fn a_hash_a_replacement_produces_begins_no_directive() {
+    // C99 §6.10.3.4p3: a replacement that looks like a directive is not
+    // processed as one, and an empty one before `#` is still the line's
+    // first token.
+    let text = text_of(
+        "#define H #\n#define E\nH define X 1\nX\nE # define Y 2\nY\n  # define Z 3\nZ\n",
+        CompilerIdentity::Gcc,
+    );
+    assert_eq!(text.tokens, "# define X 1 X # define Y 2 Y 3");
+    assert_eq!(text.diagnostics, []);
+}
+
+#[test]
+fn a_stray_hash_in_a_translation_unit_is_an_error() {
+    // Outside a text the punctuator has no use, as GCC's "stray '#' in
+    // program" error says, and the rest of the line is not a directive.
+    let tu = crate::util::bump::Bump::new();
+    let mut context = Context::with_configuration(&tu, CompilerConfiguration::default());
+    let preprocess_arena = crate::util::bump::Bump::new();
+    let mut preprocessor = Preprocessor::new(
+        &preprocess_arena,
+        &mut context,
+        PathBuf::from("<test>").into_boxed_path(),
+        "int value; #define X 1\nX\n",
+        SharedVec::default(),
+        SharedVec::default(),
+    );
+    let mut tokens = Vec::new();
+    preprocessor.for_each_item(&mut context, |context, token| {
+        let spelling = context.string_cache.at(token.contents);
+        tokens.push(spelling.trim_end_matches('\0').to_owned());
+    });
+    assert_eq!(tokens.join(" "), "int value ; define X 1 X");
+    let error = context
+        .pop_pending_error()
+        .expect("the stray `#` is reported");
+    assert_eq!(error.severity(), ErrorSeverity::Error);
+    assert_eq!(diagnostic_name(&error), "HashMustBeFirstCharacterOnLine");
+    assert!(context.pop_pending_error().is_none());
+}
+
+#[test]
 fn an_unclosed_quote_keeps_the_rest_of_its_line_with_a_warning() {
     // GCC and Clang warn "missing terminating ' character" and print the
     // line as written, without the quote bcc appended for recovery.

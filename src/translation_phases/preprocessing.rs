@@ -403,6 +403,10 @@ impl Expander<'_, '_, '_, '_> {
             if let Some(token) = self.replace_macro_name(token) {
                 break 'base Some(token);
             }
+            // Even an empty replacement is a token before any `#` that
+            // follows on the line, which therefore begins no directive
+            // (C99 §6.10 paragraph 2, p. 146; PDF p. 158).
+            self.last_was_newline = false;
         };
         self.generate_placeholders = false;
         self.current_is_newline = ret.is_none_or(|t| t.kind == PreprocessorTokenType::Newline);

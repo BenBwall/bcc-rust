@@ -128,6 +128,18 @@ impl<'pp> Expander<'_, '_, 'pp, '_> {
                 ) {
                     unreachable!("Handled in next_preprocessor_token");
                 }
+                if !self.begins_directive() {
+                    // A text keeps the punctuator; a translation unit has
+                    // no use for it.
+                    if self.state.as_text {
+                        return Some(Self::build_token(token, TokenType::Identifier));
+                    }
+                    self.context.preprocessor_error(PreprocessorError {
+                        error_type:     PreprocessorErrorType::HashMustBeFirstCharacterOnLine,
+                        source_vectors: token.source_vectors,
+                    });
+                    return None;
+                }
                 // C99 §6.10p2: expanded directive operands still end at
                 // the first new-line, including within query operators.
                 let in_directive = std::mem::replace(&mut self.state.in_directive, true);
@@ -309,6 +321,24 @@ impl<'pp> Expander<'_, '_, 'pp, '_> {
                 return None;
             },
         })
+    }
+
+    /// Whether the `#` just read begins a directive: it is the first token
+    /// of a line of a source file. A `#` elsewhere on a line, or one that a
+    /// macro's replacement produced even at the start of a line, is an
+    /// ordinary punctuator.
+    ///
+    /// C99: §6.10 paragraph 2, p. 146; PDF p. 158; §6.10.3.4 paragraph 3,
+    /// p. 155; PDF p. 167.
+    fn begins_directive(&self) -> bool {
+        self.last_was_newline
+            && matches!(
+                self.tokenizer_stack.last(),
+                Some(TokenizerFrame {
+                    frame_type: TokenizerFrameType::SourceFile { .. },
+                    ..
+                })
+            )
     }
 
     /// Joins `first` with the string literals that follow it. The result is
@@ -2055,11 +2085,13 @@ fn low_limb(value: u128) -> u64 {
 /// ([`Context::phase_four_text`](crate::translation_phases::Context::phase_four_text))
 /// writes a token of `kind` by its spelling alone, unconverted and
 /// unchecked, which is all the text uses of it. An operator keeps its kind,
-/// a directive is still carried out, and a new-line still ends a line.
+/// a directive is still carried out, and a new-line still ends a line; a
+/// `##` outside a replacement list is only punctuation (C99 §6.4.6p3).
 const fn spelled_only_in_text(kind: PreprocessorTokenType) -> bool {
     matches!(
         kind,
         PreprocessorTokenType::Other
+            | PreprocessorTokenType::HashHash
             | PreprocessorTokenType::Number
             | PreprocessorTokenType::String
             | PreprocessorTokenType::Character

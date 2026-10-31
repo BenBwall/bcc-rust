@@ -405,6 +405,37 @@ mod tests {
     }
 
     #[test]
+    fn preprocessing_keeps_text_that_begins_no_directive_or_token() {
+        let project = Project::new();
+        let source = "a # b %: c ## d\n#define H #\nH define X 1\nX\ndon't stop\nsay \"hi\n";
+        std::fs::write(project.path("text.c"), source).unwrap();
+        // C99 6.10p2: a `#` that does not start a line, or that a macro
+        // produced, begins no directive; an unclosed quote keeps the rest of
+        // its line with a warning. GCC and Clang print the text as written.
+        let output = project.bcc(&["-E", "-P", "text.c"]);
+        succeeds(&output);
+        assert_eq!(
+            stdout(&output),
+            "a # b %: c ## d\n# define X 1\nX\ndon't stop\nsay \"hi\n"
+        );
+        let diagnostics = stderr(&output);
+        for quote in ["'", "\""] {
+            let warning = format!("warning: missing terminating `{quote}` character");
+            assert!(diagnostics.contains(&warning), "{diagnostics}");
+        }
+        // Compiled, the stray `#` is an error and the line is no directive,
+        // and the unclosed literal is still an error.
+        std::fs::write(project.path("stray.c"), "int value; # define X 1\n").unwrap();
+        let output = project.bcc(&["-fsyntax-only", "stray.c"]);
+        assert!(!output.status.success());
+        assert!(stderr(&output).contains("error: stray `#` in program"));
+        std::fs::write(project.path("quote.c"), "char c = 'a;\n").unwrap();
+        let output = project.bcc(&["-fsyntax-only", "quote.c"]);
+        assert!(!output.status.success());
+        assert!(stderr(&output).contains("error: unterminated character constant"));
+    }
+
+    #[test]
     fn preprocessing_writes_source_text_with_line_markers() {
         let project = Project::new();
         let output = project.bcc(&["-E", "main.c"]);
