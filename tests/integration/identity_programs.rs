@@ -78,6 +78,22 @@ mod tests {
         matches_the_claimed_compiler("gnu_builtins.c");
     }
 
+    /// GNU `__auto_type` objects of every kind of type, in the macros that
+    /// use it, with Clang keeping an atomic operand's `_Atomic` and GCC's
+    /// initializer seeing an outer declaration of the name; on wasm32 too.
+    #[test]
+    fn auto_type_matches_the_claimed_compiler() {
+        matches_the_claimed_compiler_in("auto_type.c", "-std=gnu17", true);
+    }
+
+    /// C23 `auto` objects at file and block scope, with storage classes and
+    /// qualifiers, and Clang's deduction through pointer and function
+    /// declarators; on wasm32 too.
+    #[test]
+    fn inferred_auto_matches_the_claimed_compiler() {
+        matches_the_claimed_compiler_in("inferred_auto.c", "-std=gnu2x", true);
+    }
+
     /// Signed left shifts that wrap, and `__LINE__` as a macro argument in
     /// a replacement list.
     #[test]
@@ -341,6 +357,14 @@ mod tests {
     /// interpreted before and after optimization and built through LLVM
     /// and the native back end.
     fn matches_the_claimed_compiler(fixture: &str) {
+        matches_the_claimed_compiler_in(fixture, "-std=gnu17", false);
+    }
+
+    /// [`matches_the_claimed_compiler`] in the language mode `standard`;
+    /// with `wasm32`, also built for `wasm32-wasip1` and run by `node`
+    /// where it is on the path, printing the reference's lines except
+    /// those starting `x86:`, which use types wasm32 lacks.
+    fn matches_the_claimed_compiler_in(fixture: &str, standard: &str, wasm32: bool) {
         if !cfg!(all(
             target_arch = "x86_64",
             target_os = "linux",
@@ -361,12 +385,12 @@ mod tests {
             eprintln!("skipping the GCC identity: no host GCC");
         }
         for (identity, compiler) in references {
-            let expected = reference(compiler, &source);
+            let expected = reference(compiler, &source, standard);
             for flags in [
                 &["--interpret", "--opt=none"][..],
                 &["--interpret", "--opt=bcc"],
             ] {
-                let output = bcc(&[&[identity, "-std=gnu17", &source][..], flags].concat());
+                let output = bcc(&[&[identity, standard, &source][..], flags].concat());
                 assert_eq!(
                     output.status.code(),
                     Some(0),
@@ -389,7 +413,7 @@ mod tests {
                 let built = bcc(&[
                     &[
                         identity,
-                        "-std=gnu17",
+                        standard,
                         &source,
                         "-o",
                         executable.to_str().unwrap(),
@@ -411,14 +435,79 @@ mod tests {
                 );
                 std::fs::remove_file(executable).unwrap();
             }
+            if wasm32 {
+                let expected: String = expected
+                    .lines()
+                    .filter(|line| !line.starts_with("x86:"))
+                    .flat_map(|line| [line, "\n"])
+                    .collect();
+                matches_on_wasm32(fixture, &source, identity, standard, &expected);
+            }
         }
     }
 
-    /// The output of `source` built by `compiler`.
-    fn reference(compiler: &str, source: &str) -> String {
+    /// `source` built for `wasm32-wasip1` under `identity`, unoptimized and
+    /// optimized, prints `expected`; without `node` this is skipped.
+    fn matches_on_wasm32(
+        fixture: &str,
+        source: &str,
+        identity: &str,
+        standard: &str,
+        expected: &str,
+    ) {
+        if !Command::new("node")
+            .arg("--version")
+            .output()
+            .is_ok_and(|output| output.status.success())
+        {
+            eprintln!("skipping wasm32: node is not on the path");
+            return;
+        }
+        let runner = Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts/wasm/run.mjs");
+        for optimization in ["-O0", "-O2"] {
+            let module = temporary("program.wasm");
+            let built = bcc(&[
+                identity,
+                standard,
+                optimization,
+                "-w",
+                "--target=wasm32-wasip1",
+                source,
+                "-o",
+                module.to_str().unwrap(),
+            ]);
+            assert!(
+                built.status.success(),
+                "{fixture} {identity} wasm32 {optimization}: {}",
+                text(&built.stderr)
+            );
+            let run = run_native(
+                Command::new("node")
+                    .arg("--no-warnings")
+                    .arg(&runner)
+                    .arg(&module),
+            )
+            .unwrap();
+            assert_eq!(
+                run.status.code(),
+                Some(0),
+                "{fixture} {identity} wasm32 {optimization}"
+            );
+            assert_eq!(
+                text(&run.stdout),
+                expected,
+                "{fixture} {identity} wasm32 {optimization}"
+            );
+            std::fs::remove_file(module).unwrap();
+        }
+    }
+
+    /// The output of `source` built by `compiler` in the language mode
+    /// `standard`.
+    fn reference(compiler: &str, source: &str, standard: &str) -> String {
         let executable = temporary("reference.exe");
         let built = Command::new(compiler)
-            .args([source, "-std=gnu17", "-O0", "-w", "-o"])
+            .args([source, standard, "-O0", "-w", "-o"])
             .arg(&executable)
             .arg("-lm")
             .output()

@@ -423,7 +423,7 @@ Stage-1 boundaries, with their current disposition:
 
 - Stage 2 types sizeof/alignof expression operands and evaluates their modeled
   constant sizes. VLA sizes remain runtime expressions.
-- Extension-derived and inferred types, fixed-underlying enums, decimal
+- Extension-derived types, fixed-underlying enums, decimal
   types and layout-changing extensions are unanalyzed. MSVC `__int8`,
   `__int16`, `__int32` and `__int64` are not: as in Clang, they are `char`,
   `short`, `int` and `long long`, and `signed` or `unsigned` selects that
@@ -2781,3 +2781,26 @@ fold at any width (`generic_bit_value`, through
 bits), as does the emission evaluator's condition folding. The rules, the
 probed compiler behaviour and the deviations are in
 [language-standards.md](language-standards.md#type-generic-bit-builtins-and-stdbith-2026-10-29).
+
+## Inferred declarations (2026-10-31)
+
+A C23 `auto` or GNU `__auto_type` declarator (`inference.rs`) reverses the
+usual order: `Work::InferDeclarator` checks the declaration's form and
+analyzes the initializer first, under the same elision, dead-code and
+initializer-value state `Work::InitializeDeclaration` sets, but with no
+reference owner, since no binding exists yet. `Work::InferType` reads the
+analyzed expression's type after lvalue conversion and decay (Clang keeps
+`_Atomic`) and matches Clang's pointer and function derivations;
+`Work::Qualify` adds the written qualifiers, and the ordinary
+`Work::DeclarationDeclarator` and `Work::Bind` steps type and bind the
+declarator. `Work::InferInitialization` then records the initializer and
+queues `Work::InitializeDone` without analyzing it again. References made
+while a static or thread-local object's initializer was analyzed are given
+to the bound object (`Analyzer::claim_references`), so entity emission
+keeps what they name, and `Analyzer::initializing_static` answers from the
+pending declaration's specifiers until it is bound. A use of the name in its
+own initializer is checked against the stack of pending inferences
+(`Analyzer::inferred_self_reference`): a binding made inside the initializer
+may shadow it; an outer one, or none, is the self-reference C23 forbids,
+which only GCC's `__auto_type` allows. `language-standards.md` ("Type
+inference") lists each identity's constraints.

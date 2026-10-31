@@ -327,10 +327,19 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// unanalyzed; a tag named here keeps its own completion and layout.
     /// C99: §6.7.2p2-5, pp. 99-100; PDF pp. 111-112.
     pub(super) fn spec(&mut self, spec: DeclarationSpecifiers<'tu>, force_tag: bool) {
-        if let Some(reason) = self.unmodeled_extension_reason(spec.extensions).or(spec
-            .auto_with_storage_class
-            .then_some(UnmodeledType::Inferred))
-        {
+        // C23 (N3220) §6.7.2p4: `auto` joins another storage class only to
+        // infer the type, as GCC and Clang require.
+        if spec.auto_with_storage_class && !super::inference::inferred(spec) {
+            self.error(
+                SemanticErrorKind::InvalidInference(
+                    super::inference::InferenceFault::StorageWithoutInference,
+                ),
+                spec.source_vectors,
+                None,
+                None,
+            );
+        }
+        if let Some(reason) = self.unmodeled_extension_reason(spec.extensions) {
             self.taint(true);
             self.work.push(Work::UnknownType(reason));
         }
@@ -1752,8 +1761,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 );
                 return (self.rejected_tag(kind, name), true);
             }
+            if body {
+                self.underspecified_tag(name, source);
+            }
             return (entry.binding, body);
         }
+        self.underspecified_tag(name, source);
         if kind == TagKind::Enum && !body && !allow_incomplete {
             self.context.report_extension(
                 crate::configuration::Feature::ForwardEnumReference,

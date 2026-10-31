@@ -505,6 +505,9 @@ pub(crate) enum UnmodeledType {
     /// GNU: a structure or union with a variably modified member, whose
     /// layout is computed at run time.
     VariableMembers,
+    /// GCC types an object inferred from a bit-field with the bit-field's
+    /// own type, which no declaration can name.
+    InferredBitField,
     FixedEnum,
     PointerModifier,
     ExtendedVector,
@@ -520,6 +523,7 @@ impl UnmodeledType {
             | Self::Decimal128 => "_Decimal128 types",
             | Self::Inferred => "inferred declaration types",
             | Self::VariableMembers => "structures with variably modified members",
+            | Self::InferredBitField => "types inferred from bit-fields",
             | Self::FixedEnum => "fixed-underlying enum types",
             | Self::PointerModifier => "MSVC pointer modifiers",
             | Self::ExtendedVector => "ext_vector_type types",

@@ -113,6 +113,8 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
             attributes: super::attributes::AttributeState::new(scratch),
             defining: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             enum_ranges: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            inferences: ArenaVec::new_in(scratch),
+            inferred_leaves: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
         };
         analyzer.scopes.push(Scope {
             parent: None,
