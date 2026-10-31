@@ -367,7 +367,13 @@
     transition: opacity .25s;
   }
   .fallback-line { display: block; padding-right: 16px; }
-  .fallback-number { display: inline-block; width: 4.2ch; padding-right: 1.8ch; text-align: right; color: var(--faint); user-select: none; }
+  /* The numbers and the code sit where Monaco will put them, so nothing
+     moves when it replaces the fallback: the source has a glyph margin, the
+     read-only views a folding margin, and the WebAssembly text a wider
+     number column. */
+  .fallback-number { display: inline-block; width: 57px; padding-right: 10px; text-align: right; color: var(--faint); user-select: none; }
+  .code-editor:not([data-language="c"]) .fallback-number { width: 51px; padding-right: 26px; }
+  .code-editor[data-language="wat"] .fallback-number { width: 59px; }
   .monaco-host { position: absolute; inset: 0; opacity: 0; transition: opacity .3s var(--ease); }
   /* Until Monaco arrives, a press lands on the fallback (and asks for it). */
   .code-editor:not(.is-ready) .monaco-host { pointer-events: none; }
