@@ -33,6 +33,15 @@ impl Analyzer<'_, '_, '_> {
         {
             return None;
         }
+        // `-fno-builtin` and `-fno-builtin-NAME` make the name an ordinary
+        // identifier, as in GCC and Clang: an undeclared call is an implicit
+        // declaration again.
+        match self.context.library_builtins {
+            | crate::configuration::LibraryBuiltins::None => return None,
+            | crate::configuration::LibraryBuiltins::Except(names) if names.contains(&spelling) =>
+                return None,
+            | _ => {},
+        }
         let descriptor = crate::builtins::ordinary(spelling)?;
         let signature = descriptor.signature;
         let variadic = signature.variadic;

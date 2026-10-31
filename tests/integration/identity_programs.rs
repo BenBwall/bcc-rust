@@ -77,6 +77,46 @@ mod tests {
         matches_the_claimed_compiler("torture_semantics.c");
     }
 
+    /// `-fno-builtin` and `-fno-builtin-index` make `index` an ordinary
+    /// name, so a GNU89 call before the program's own `int index(int)` is
+    /// an implicit declaration, as in GCC and Clang; with library builtins
+    /// on, the call gets the library's `char *index(const char *, int)`,
+    /// whose two arguments both compilers then require.
+    #[test]
+    fn no_builtin_leaves_library_names_ordinary() {
+        let source = temporary("index.c");
+        std::fs::write(
+            &source,
+            "int main(void) { return index(3) - 4; }\nint index(int x) { return x + 1; }\n",
+        )
+        .unwrap();
+        let source = source.to_str().unwrap();
+        for identity in ["--compiler-identity=clang", "--compiler-identity=gcc"] {
+            for (flag, accepted) in [
+                ("-fno-builtin", true),
+                ("-fno-builtin-index", true),
+                ("-fbuiltin", false),
+            ] {
+                let output = bcc(&[identity, "-std=gnu89", "-w", flag, "--interpret", source]);
+                if accepted {
+                    assert_eq!(
+                        output.status.code(),
+                        Some(0),
+                        "{identity} {flag}: {}",
+                        text(&output.stderr)
+                    );
+                } else {
+                    assert!(
+                        text(&output.stderr).contains("wrong number of arguments"),
+                        "{identity} {flag}: {}",
+                        text(&output.stderr)
+                    );
+                }
+            }
+        }
+        std::fs::remove_file(source).unwrap();
+    }
+
     /// `__builtin_bcopy`, `__builtin_bzero` and `__builtin_mempcpy` lower to
     /// LLVM's memory intrinsics on every target, as Clang lowers them, so
     /// the Microsoft C runtime, which has none of the three, needs no such
