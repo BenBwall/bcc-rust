@@ -197,6 +197,40 @@ mod tests {
         assert_eq!(cl_expand("--msvc-mode", &["/DX#5", "/DY=6"], "X Y"), "5 6");
     }
 
+    /// A sign after `p` continues a preprocessing number from C99. Before
+    /// C99, GCC reads it so only in its GNU modes and Clang only after a
+    /// hexadecimal prefix, so strict C90 splits `0x1p+f` (GCC's
+    /// gcc.dg/c90-hexfloat-2.c).
+    #[test]
+    fn hexadecimal_float_signs_split_numbers_as_each_compiler_does() {
+        let directory = Directory::new();
+        directory.write(
+            "numbers.c",
+            "#define f (\n#define l )\n0x1p+f 0x1p+l 1p+f 1p+l 1e+f\n",
+        );
+        // Where the sign ends the number, `f` and `l` are replaced; the
+        // spacing between the tokens is not compared. The numbers are not
+        // valid constants, which bcc's `-E` still reports where GCC's does
+        // not, so only the text is compared.
+        let expand = |mode: &str, standard: &str| {
+            let output = directory.bcc(mode, &[standard, "-E", "-P", "numbers.c"]);
+            stdout(&output).split_whitespace().collect::<String>()
+        };
+        let joined = "0x1p+f0x1p+l1p+f1p+l1e+f";
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            assert_eq!(expand(mode, "-std=c99"), joined, "{mode}");
+        }
+        assert_eq!(expand("--gcc-mode", "-std=gnu89"), joined);
+        assert_eq!(expand("--gcc-mode", "-std=c90"), "0x1p+(0x1p+)1p+(1p+)1e+f");
+        for standard in ["-std=c90", "-std=gnu89"] {
+            assert_eq!(
+                expand("--clang-mode", standard),
+                "0x1p+f0x1p+l1p+(1p+)1e+f",
+                "{standard}"
+            );
+        }
+    }
+
     /// `-funsigned-char` and its relatives in GCC, Clang and TCC, and `/J`
     /// in `cl` and clang-cl, make plain `char` unsigned, with the macros
     /// each compiler defines for `<limits.h>`; the last option wins.
