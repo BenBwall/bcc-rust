@@ -169,8 +169,8 @@ pub fn PipelineView(
                         {move || if shown_links.with(Links::is_exact) {
                             "Hover a source line to find what it became here, or hover here to find its source."
                         } else {
-                            "Hover a source line to find its function here, or hover here to find the source. This \
-                             stage keeps no source locations, so it links per function, not per line."
+                            "Hover a source line to find its function here, or hover here to find the source. These \
+                             lines keep no source locations, so they link per function, not per line."
                         }}
                     </p>
                     <button

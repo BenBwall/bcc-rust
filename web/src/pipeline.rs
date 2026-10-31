@@ -754,10 +754,14 @@ impl Links {
     /// function's header), else the first linked at all.
     pub fn first_output_for(&self, line: usize) -> Option<usize> {
         let outputs = self.outputs_for(line);
-        outputs
-            .iter()
-            .copied()
-            .find(|&output| self.sources_for(output) == [line])
+        self.exact
+            .as_ref()
+            .and_then(|exact| {
+                outputs
+                    .iter()
+                    .copied()
+                    .find(|&output| exact[output] == Some((line, line)))
+            })
             .or_else(|| outputs.first().copied())
     }
 
@@ -932,14 +936,17 @@ pub fn links(stage: Stage, compilation: &Compilation, source: &str, headers: boo
 /// each function's header and closing brace to the whole function. A
 /// function whose instructions all lost their lines (the optimizer rebuilt
 /// it) links every line to the whole function, as the other back-end stages
-/// do. `None` without recorded lines.
+/// do. `None` when no line kept its source line, so the stage links per
+/// function and says so.
 fn ir_links(stage: Stage, compilation: &Compilation) -> Option<LineLinks> {
     let sources = if stage == Stage::Ir {
         &compilation.ir_lines
     } else {
         &compilation.ir_abi_lines
     };
-    if sources.is_empty() {
+    // At -O2 the optimizer may have rebuilt every body, and a program of
+    // declarations has none: no line to link one by one.
+    if sources.iter().all(|&line| line == 0) {
         return None;
     }
     let mut links: LineLinks = std::iter::once(None)

@@ -196,9 +196,11 @@ fn links_ir_instructions_to_their_lines() {
         ir_lines: vec![0; 7],
         ..compilation
     };
-    assert_eq!(
-        links(Stage::Ir, &rebuilt, source, false).sources_for(5),
-        [1, 2, 3, 4]
+    let rebuilt = links(Stage::Ir, &rebuilt, source, false);
+    assert_eq!(rebuilt.sources_for(5), [1, 2, 3, 4]);
+    assert!(
+        !rebuilt.is_exact(),
+        "the note says the stage links per function"
     );
 }
 
