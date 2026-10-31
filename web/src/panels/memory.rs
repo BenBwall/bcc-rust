@@ -13,6 +13,7 @@ use leptos::{
 use crate::{
     palette,
     snapshot::{
+        Access,
         Object,
         Snapshot,
         Value,
@@ -37,7 +38,11 @@ pub fn Memory(snapshot: Memo<Option<Snapshot>>) -> impl IntoView {
     });
     let layout = Memo::new(move |_| snapshot.with(|state| state.as_ref().map(layout)));
     view! {
-        <section class="card memory-card" aria-labelledby="memory-title">
+        <section
+            class="card memory-card"
+            aria-labelledby="memory-title"
+            data-category=move || snapshot.with(|state| state.as_ref().map(|state| state.event.category.clone()))
+        >
             <header class="card-header">
                 <h2 id="memory-title">"Memory"</h2>
                 <span class="card-subtitle">"Call stack, innermost call on top"</span>
@@ -113,6 +118,8 @@ struct Layout {
     ended:    Vec<Object>,
     /// Objects touched by the last step.
     touched:  HashSet<usize>,
+    /// How the last step used them.
+    access:   Vec<Access>,
     /// Array objects some pointer targets one past the end.
     one_past: HashSet<usize>,
 }
@@ -170,19 +177,65 @@ fn layout(snapshot: &Snapshot) -> Layout {
             .cloned()
             .collect(),
         touched: snapshot.event.objects.iter().copied().collect(),
+        access: snapshot.event.access.clone(),
         one_past,
+    }
+}
+
+impl Layout {
+    /// How the last step used `object` as a whole (`cell` `None`) or one of
+    /// its elements.
+    fn access(&self, object: usize, cell: Option<usize>) -> Option<&'static str> {
+        self.access
+            .iter()
+            .find(|access| access.object == object && access.cell == cell)
+            .map(|access| match access.kind.as_str() {
+                | "read" => "read",
+                | "write" => "written",
+                | "create" => "created",
+                | "end" => "lifetime ends",
+                | "address" => "address taken",
+                | _ => "designated",
+            })
     }
 }
 
 fn object_view(object: &Object, layout: &Layout) -> AnyView {
     let colour = palette::class(&object.name);
-    let touched = layout.touched.contains(&object.id);
+    // What the last step did to the object, or to which element, in its
+    // heading: "read", "[1] written".
+    let element = match &object.value {
+        | Value::Array { elements } => (0..elements.len()).find_map(|index| {
+            layout
+                .access(object.id, Some(index))
+                .map(|access| format!("[{index}] {access}"))
+        }),
+        | _ => layout.access(object.id, Some(0)).map(str::to_owned),
+    };
+    let whole = layout
+        .access(object.id, None)
+        .filter(|&access| object.alive || access != "lifetime ends")
+        .map(str::to_owned)
+        .or(element);
+    let touched = layout.touched.contains(&object.id)
+        || layout
+            .access
+            .iter()
+            .any(|access| access.object == object.id);
     let cells = match &object.value {
         | Value::Array { elements } => {
             let mut cells: Vec<AnyView> = elements
                 .iter()
                 .enumerate()
-                .map(|(index, value)| cell(object, index, value, true))
+                .map(|(index, value)| {
+                    cell(
+                        object,
+                        index,
+                        value,
+                        true,
+                        layout.access(object.id, Some(index)),
+                    )
+                })
                 .collect();
             if layout.one_past.contains(&object.id) {
                 cells.push(
@@ -197,7 +250,13 @@ fn object_view(object: &Object, layout: &Layout) -> AnyView {
             }
             cells
         },
-        | value => vec![cell(object, 0, value, false)],
+        | value => vec![cell(
+            object,
+            0,
+            value,
+            false,
+            layout.access(object.id, Some(0)),
+        )],
     };
     let lifetime = if object.alive { "" } else { "lifetime ended" };
     view! {
@@ -213,6 +272,7 @@ fn object_view(object: &Object, layout: &Layout) -> AnyView {
                 <span class="object-type">{object.ty.clone()}</span>
                 {object.parameter.then(|| view! { <span class="object-tag">"parameter"</span> })}
                 <span class="object-lifetime">{lifetime}</span>
+                {whole.map(|label| view! { <span class="object-access">{label}</span> })}
             </div>
             <div class="cells">{cells}</div>
         </div>
@@ -220,22 +280,28 @@ fn object_view(object: &Object, layout: &Layout) -> AnyView {
     .into_any()
 }
 
-fn cell(object: &Object, index: usize, value: &Value, indexed: bool) -> AnyView {
+fn cell(
+    object: &Object,
+    index: usize,
+    value: &Value,
+    indexed: bool,
+    access: Option<&'static str>,
+) -> AnyView {
     let id = format!("{}-{index}", object.id);
     let label = indexed.then(|| view! { <span class="cell-index">{format!("[{index}]")}</span> });
     match value {
         | Value::Indeterminate => view! {
-            <div class="cell is-indeterminate" data-cell=id title="Indeterminate: no value has been stored">
+            <div class="cell is-indeterminate" data-cell=id data-access=access title="Indeterminate: no value has been stored">
                 {label}<span class="cell-value">"?"</span>
             </div>
         }
         .into_any(),
         | Value::Integer { text } => view! {
-            <div class="cell" data-cell=id>{label}<span class="cell-value">{text.clone()}</span></div>
+            <div class="cell" data-cell=id data-access=access>{label}<span class="cell-value">{text.clone()}</span></div>
         }
         .into_any(),
         | Value::Pointer { target: None, .. } => view! {
-            <div class="cell is-pointer is-null" data-cell=id>{label}<span class="cell-value">"NULL"</span></div>
+            <div class="cell is-pointer is-null" data-cell=id data-access=access>{label}<span class="cell-value">"NULL"</span></div>
         }
         .into_any(),
         | &Value::Pointer {
@@ -248,6 +314,7 @@ fn cell(object: &Object, index: usize, value: &Value, indexed: bool) -> AnyView 
                 class="cell is-pointer"
                 class:is-dangling=ended
                 data-cell=id
+                data-access=access
                 data-points=format!("{target}-{offset}")
                 data-colour=palette::class(&object.name)
             >

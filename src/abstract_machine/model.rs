@@ -55,6 +55,9 @@ pub struct Event {
     pub title:          String,
     /// A beginner-oriented paragraph naming the values involved.
     pub explanation:    String,
+    /// Why the rule matters, or empty. Every event of a topic carries the
+    /// same note; the site shows it the first time the learner sees it.
+    pub note:           String,
     /// The rules applied, most specific first.
     pub clauses:        Vec<Clause>,
     /// Input values, in evaluation order.
@@ -74,6 +77,7 @@ impl Event {
             range,
             title,
             explanation: String::new(),
+            note: String::new(),
             clauses: Vec::new(),
             operands: Vec::new(),
             result: None,

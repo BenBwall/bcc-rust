@@ -389,14 +389,17 @@
   .empty-state { color: var(--muted); font-size: 14px; line-height: 1.6; }
 
   /* Narration */
+  /* The category bar is an inset shadow, which follows the rounded corners
+     without clipping the card, so a term's definition can overlap the
+     cards below. */
   .narration {
     --cat: var(--cat-control);
-    position: relative; overflow: hidden; padding: 20px 22px 18px;
+    position: relative; padding: 20px 22px 18px;
     background: linear-gradient(180deg, color-mix(in srgb, var(--cat) 9%, transparent), transparent 140px), var(--surface);
     border-color: color-mix(in srgb, var(--cat) 30%, var(--border));
+    box-shadow: inset 3px 0 0 var(--cat);
     transition: border-color .3s var(--ease), background .3s var(--ease);
   }
-  .narration::before { content: ""; position: absolute; inset: 0 auto 0 0; width: 3px; background: var(--cat); }
   [data-category="evaluate"] { --cat: var(--cat-evaluate); }
   [data-category="convert"] { --cat: var(--cat-convert); }
   [data-category="memory"] { --cat: var(--cat-memory); }
@@ -536,6 +539,13 @@
   .cell.is-one-past { border-style: dashed; border-left-width: 1.5px !important; background: transparent; color: var(--faint); margin-left: 6px; border-radius: 8px !important; }
   .cell.is-one-past .cell-value { font-size: 11px; font-weight: 500; }
   .object.is-touched .cell { background: color-mix(in srgb, var(--obj) 14%, var(--surface)); border-color: var(--obj); }
+  /* The element the step read or wrote, named under the cell. */
+  .cell[data-access] { --access: var(--cat-evaluate); z-index: 1; }
+  .cell[data-access="read"] { --access: var(--cat-convert); box-shadow: 0 0 0 2px var(--access); }
+  .cell[data-access="written"] { --access: var(--cat-memory); box-shadow: 0 0 0 2px var(--access); background: color-mix(in srgb, var(--cat-memory) 20%, var(--surface)) !important; animation: settle .45s var(--ease); }
+  .cell[data-access="designated"], .cell[data-access="address taken"] { outline: 2px dashed var(--access); outline-offset: 2px; }
+  /* What the step did to the object, beside its name. */
+  .object-access { padding: 0 7px; border-radius: 999px; font: 650 11px var(--font-sans); white-space: nowrap; color: var(--cat); background: color-mix(in srgb, var(--cat) 15%, transparent); }
   .object.is-touched .object-name { text-decoration: underline 2px; text-underline-offset: 4px; }
   .ended-calls { margin-top: 14px; padding-top: 12px; border-top: 1px dashed var(--border); }
   .ended-calls h3 { margin-bottom: 4px; font-size: 11.5px; }
@@ -1090,6 +1100,142 @@
 
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+  }
+}
+
+/* What each step means: its value flow, the standard's terms with their
+   definitions, the note on why a rule matters, the map of the page in the
+   hero, and the glossary. */
+@layer components {
+  .flow { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 6px; margin-top: 14px; }
+  .flow[hidden] { display: none; }
+  .flow-chip {
+    display: inline-flex; align-items: baseline; gap: 7px; min-height: 32px; padding: 5px 11px;
+    border: 1.5px solid var(--border-strong); border-radius: 9px; background: var(--surface-2);
+    font: 600 14px/1.3 var(--font-mono); color: var(--text); font-variant-ligatures: none;
+  }
+  .flow-chip.is-object { color: var(--obj, var(--text-2)); border-color: color-mix(in srgb, var(--obj, var(--text-2)) 65%, var(--border)); background: color-mix(in srgb, var(--obj, var(--text-2)) 9%, var(--surface)); }
+  .flow-chip.is-label { font-family: var(--font-sans); color: var(--cat); border-color: color-mix(in srgb, var(--cat) 45%, var(--border)); }
+  .flow-type { font: 500 11.5px var(--font-mono); color: var(--muted); }
+  .flow-arrow { display: inline-flex; flex-direction: column; align-items: center; min-width: 44px; padding: 0 2px; color: var(--cat); }
+  .flow-verb { font-size: 11.5px; font-weight: 650; letter-spacing: .02em; line-height: 1.2; white-space: nowrap; }
+  /* A drawn arrow, as long as its verb. */
+  .flow-arrow::after { content: ""; display: block; width: 100%; height: 9px; margin-top: 1px; background: currentColor; clip-path: polygon(0 41%, calc(100% - 7px) 41%, calc(100% - 7px) 0, 100% 50%, calc(100% - 7px) 100%, calc(100% - 7px) 59%, 0 59%); }
+  .flow-operator { font: 600 17px var(--font-mono); color: var(--text-2); padding: 0 2px; }
+  /* An arrow or operator wraps with the chip it leads to. */
+  .flow-group { display: inline-flex; align-items: center; gap: 6px; }
+  .flow-separator { color: var(--faint); margin-right: 10px; }
+
+  .nowrap { white-space: nowrap; }
+  .term {
+    padding: 0 1px; margin: 0; border: 0; border-radius: 3px; background: none; color: inherit; font: inherit; cursor: help;
+    text-decoration: underline dotted 1.5px color-mix(in srgb, var(--cat) 85%, transparent); text-underline-offset: 4px;
+  }
+  .term:hover, .term[aria-expanded="true"] { color: var(--text); text-decoration-style: solid; background: color-mix(in srgb, var(--cat) 12%, transparent); }
+  .term-tip {
+    position: absolute; z-index: 30; display: grid; gap: 4px; padding: 11px 13px;
+    border: 1px solid var(--border-strong); border-radius: var(--radius-s); background: var(--surface-3); box-shadow: var(--shadow);
+    color: var(--text-2); font-size: 13.5px; line-height: 1.55; text-align: left;
+  }
+  .term-tip[hidden] { display: none; }
+  /* Bridges the gap to the term, so the pointer can move onto the tip. */
+  .term-tip::before { content: ""; position: absolute; left: 0; right: 0; top: -9px; height: 9px; }
+  .term-tip.is-above::before { top: auto; bottom: -9px; }
+  .term-tip-word { color: var(--text); font-weight: 680; }
+  .term-tip-clause { font: 600 11.5px var(--font-mono); color: var(--cat); }
+
+  .narration-note {
+    position: relative; margin-top: 14px; padding: 11px 14px 12px 42px; border-radius: var(--radius-s);
+    border: 1px solid color-mix(in srgb, var(--cat-lifetime) 30%, var(--border));
+    background: color-mix(in srgb, var(--cat-lifetime) 7%, var(--surface));
+  }
+  .narration-note::before {
+    content: "?"; position: absolute; left: 13px; top: 12px; width: 18px; height: 18px; border-radius: 50%;
+    display: grid; place-items: center; background: var(--cat-lifetime); color: var(--surface); font: 750 12px/1 var(--font-sans);
+  }
+  .card .narration-note h3 { margin-bottom: 3px; font-size: 12px; font-weight: 700; letter-spacing: .05em; color: var(--cat-lifetime); }
+  .narration-note p { color: var(--text-2); font-size: 14.5px; line-height: 1.65; max-width: 72ch; text-wrap: pretty; }
+  .narration-note .term { --cat: var(--cat-lifetime); }
+
+  a.clause-id { text-decoration: none; cursor: pointer; }
+  a.clause-id::after { content: " ↗"; font-weight: 500; }
+  a.clause-id:hover { text-decoration: underline; text-underline-offset: 3px; }
+
+  /* The hero: the introduction beside a map of the page. */
+  .hero { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(360px, .85fr); gap: 28px 48px; align-items: center; max-width: none; }
+  .reading-map {
+    padding: 18px 18px 16px; border: 1px solid var(--border); border-radius: var(--radius-l);
+    background: color-mix(in srgb, var(--surface) 88%, transparent); box-shadow: var(--shadow);
+  }
+  .reading-map h2 { margin-bottom: 12px; font-size: 12px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: var(--muted); }
+  .map-source { display: flex; align-items: center; gap: 10px; width: fit-content; margin: 0 auto; padding: 8px 12px; border: 1px solid var(--border-strong); border-radius: var(--radius-s); background: var(--code-bg); }
+  .map-file { padding: 2px 7px; border-radius: 5px; background: var(--surface-3); color: var(--muted); font: 600 11.5px var(--font-mono); }
+  .map-source code { color: var(--text); font: 500 14px var(--font-mono); }
+  /* One program, two roads: a fork from the source to each lane. */
+  .map-lanes { position: relative; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 26px; }
+  .map-lanes::before { content: ""; position: absolute; top: -14px; left: 25%; right: 25%; height: 14px; border: 1.5px solid var(--line); border-bottom: 0; border-radius: 10px 10px 0 0; }
+  .map-lanes::after { content: ""; position: absolute; top: -26px; left: 50%; height: 12px; border-left: 1.5px solid var(--line); }
+  .map-lane {
+    --lane: var(--cat-memory);
+    display: flex; flex-direction: column; gap: 8px; padding: 13px 14px 14px;
+    border: 1px solid var(--border); border-top: 3px solid var(--lane); border-radius: var(--radius-m); background: var(--surface-2);
+  }
+  .map-lane.is-pipeline { --lane: var(--cat-convert); }
+  .map-kicker { color: var(--lane); font-size: 11.5px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; }
+  .map-lane h3 { margin-top: -4px; color: var(--text); font-size: 16px; font-weight: 680; letter-spacing: -.01em; }
+  .map-ideas { display: grid; gap: 7px; color: var(--text-2); font-size: 13.5px; line-height: 1.5; }
+  .map-ideas li { position: relative; padding-left: 14px; }
+  .map-ideas li::before { content: ""; position: absolute; left: 0; top: .6em; width: 6px; height: 6px; border-radius: 2px; background: var(--lane); }
+  .map-ideas strong { color: var(--text); font-weight: 650; }
+  .map-ideas code { color: var(--text); font-size: 12.5px; }
+  .map-open {
+    align-self: flex-start; margin-top: auto; padding: 6px 11px; border-radius: 8px;
+    background: color-mix(in srgb, var(--lane) 13%, transparent); color: var(--lane); font-size: 13.5px; font-weight: 650; text-decoration: none;
+  }
+  .map-open:hover { background: color-mix(in srgb, var(--lane) 22%, transparent); }
+  .map-stages { display: grid; }
+  .map-stages li { position: relative; }
+  /* The stages as a rail: one dot each, joined by a line. */
+  .map-stages li:not(:last-child)::after { content: ""; position: absolute; left: 7px; top: 19px; bottom: -7px; border-left: 1.5px solid color-mix(in srgb, var(--lane) 45%, var(--border)); }
+  .map-stage { position: relative; display: flex; flex-direction: column; padding: 3px 8px 3px 22px; border-radius: 7px; color: var(--text); text-decoration: none; }
+  .map-stage::before { content: ""; position: absolute; left: 4px; top: 9px; width: 7px; height: 7px; border-radius: 50%; border: 1.5px solid var(--lane); background: var(--surface-2); }
+  .map-stage:hover { background: color-mix(in srgb, var(--lane) 11%, transparent); }
+  .map-stage-name { font-size: 13.5px; font-weight: 650; line-height: 1.35; }
+  .map-stage-gloss { color: var(--muted); font-size: 12.5px; line-height: 1.35; }
+  .map-wasm { margin-top: 12px; color: var(--muted); font-size: 13px; line-height: 1.6; }
+  .map-wasm a { color: var(--accent); font-weight: 600; text-underline-offset: 3px; }
+
+  /* Glossary */
+  .glossary { margin-top: 56px; }
+  .glossary-list { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+  .glossary-entry {
+    padding: 14px 16px; border: 1px solid var(--border); border-radius: var(--radius-m); background: var(--surface);
+    scroll-margin-top: calc(var(--sticky-top) + 16px);
+  }
+  .glossary-entry:target { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  .glossary-entry dt { margin-bottom: 4px; color: var(--text); font-size: 15px; font-weight: 680; letter-spacing: -.01em; }
+  .glossary-entry dd { margin: 0; color: var(--text-2); font-size: 14px; line-height: 1.6; }
+  .glossary-clause { white-space: nowrap; color: var(--accent); font: 600 12px var(--font-mono); text-decoration: none; }
+  .glossary-clause::after { content: " ↗"; font-family: var(--font-sans); }
+  .glossary-clause:hover { text-decoration: underline; text-underline-offset: 3px; }
+}
+
+@layer responsive {
+  @media (max-width: 1180px) {
+    .hero { grid-template-columns: minmax(0, 1fr) minmax(340px, .8fr); column-gap: 32px; }
+    .glossary-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  }
+  @media (max-width: 1060px) {
+    .hero { grid-template-columns: minmax(0, 1fr); max-width: 920px; }
+  }
+  @media (max-width: 600px) {
+    /* A clause's id goes above its text, which keeps the full width. */
+    .clause { grid-template-columns: minmax(0, 1fr); }
+    .clause-id { grid-row: auto; justify-self: start; }
+    .map-lanes { grid-template-columns: minmax(0, 1fr); margin-top: 14px; }
+    .map-lanes::before, .map-lanes::after { display: none; }
+    .glossary-list { grid-template-columns: minmax(0, 1fr); }
+    .flow-chip { font-size: 13px; padding: 4px 9px; min-height: 28px; }
   }
 }
 

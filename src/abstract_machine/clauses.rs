@@ -56,6 +56,11 @@ clauses! {
     CHAR_SIGNEDNESS = "6.2.5p15", "p. 35; PDF p. 47", "Types",
         "Whether plain char is signed or unsigned is up to the implementation; on x86-64 Linux \
          it is signed, holding -128 to 127.";
+    /// C99: §6.2.6.1 paragraph 5, pp. 37-38; PDF pp. 49-50.
+    TRAP_REPRESENTATION = "6.2.6.1p5", "pp. 37-38; PDF pp. 49-50", "Representations of types",
+        "Some bit patterns are not values of their type (trap representations); reading one as \
+         that type is undefined, though a character type such as unsigned char may read any \
+         byte.";
     /// C99: §6.3.1.1 paragraph 2, pp. 42-43; PDF pp. 54-55.
     INTEGER_PROMOTIONS = "6.3.1.1p2", "pp. 42-43; PDF pp. 54-55", "Boolean, characters, and integers",
         "Before arithmetic, values of types narrower than int (like char) are converted to int.";
@@ -152,6 +157,10 @@ clauses! {
     /// C99: §6.7.8 paragraph 11, p. 126; PDF p. 138.
     SCALAR_INITIALIZER = "6.7.8p11", "p. 126; PDF p. 138", "Initialization",
         "A scalar's initial value is its initializer's value, converted as if by assignment.";
+    /// C99: §6.7.8 paragraph 17, pp. 126-127; PDF pp. 138-139.
+    INITIALIZER_ORDER = "6.7.8p17", "pp. 126-127; PDF pp. 138-139", "Initialization",
+        "Without designators, an initializer list fills an array's elements in increasing index \
+         order.";
     /// C99: §6.7.8 paragraph 21, p. 127; PDF p. 139.
     PARTIAL_INITIALIZER = "6.7.8p21", "p. 127; PDF p. 139", "Initialization",
         "Array elements without an initializer of their own are initialized to zero.";

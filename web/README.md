@@ -7,10 +7,17 @@ them. Visitors pick a lesson (a small C program) and see it three ways:
   Each step is explained in plain language from what the engine actually did
   (which subexpression it evaluated, which values it read, converted or
   stored, which objects began or ended their lifetime) and cites the C99
-  paragraph that requires it. The exact source range is highlighted, the
-  current full expression is drawn as a tree whose values fill in as it is
-  evaluated, and memory is drawn as call frames holding objects, with
-  pointers as arrows.
+  paragraph that requires it, linked to its page of the standard (N1256).
+  The first time a run needs an idea (a sequence point, the integer
+  promotions, pass by value), a "Why it matters" note says what it means
+  for real programs; the standard's terms in the text show their definition
+  on hover or focus and are collected in a glossary. A row of chips draws
+  each step's value flow (`values[1]` read → `4`; the int `200` converted
+  to the char `-56`, stored into `narrow`). The exact source range is
+  highlighted, the current full expression is drawn as a tree whose values
+  fill in as it is evaluated, and memory is drawn as call frames holding
+  objects, with pointers as arrows and the element just read or written
+  marked.
 - **Compiler pipeline.** What bcc itself produces for the same program, from
   the first translation phases to machine code: the logical lines after
   line splicing (phases 1-2), the preprocessing tokens (phase 3), the
@@ -39,8 +46,12 @@ them. Visitors pick a lesson (a small C program) and see it three ways:
   data, the bytes just read or written) show the machine's state, and a
   narration explains each instruction for programmers new to WebAssembly.
 
-Every variable keeps one colour across the source, the expression tree and the
-memory diagram. The page has light and dark themes and works down to phone
+The page opens with a map of how to read it: one C program, given meaning
+by the abstract machine and translated by the compiler stage by stage, each
+part a link to the view that shows it.
+
+Every variable keeps one colour across the source, the expression tree, the
+value flow and the memory diagram. The page has light and dark themes and works down to phone
 width. At almost every size the line that runs and the narration of what it
 did are on screen together: down to 821 px the source stays beside the
 narration (a sticky column, sized to fit under the toolbar); narrower, the page
