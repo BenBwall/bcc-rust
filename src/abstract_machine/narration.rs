@@ -291,7 +291,7 @@ fn undefined(diagnostic: &Diagnostic) -> (&'static str, &'static str) {
     } else if clause == Some(clauses::INDIRECTION.id) {
         (
             "Undefined behavior: null pointer dereference",
-            "A null pointer points to no object, so there is nothing for * to designate.",
+            "A null pointer points to no object, so there is nothing for `*` to designate.",
         )
     } else if clause == Some(clauses::LIFETIME.id) {
         (
@@ -465,7 +465,7 @@ impl Machine {
             | Designation::Assigned => (
                 format!("`{name}` is where the result goes"),
                 format!(
-                    "The left side of = says which object receives the result, so `{name}` is \
+                    "The left side of `=` says which object receives the result, so `{name}` is \
                      located, not read."
                 ),
                 format!(
@@ -494,19 +494,19 @@ impl Machine {
                 &[clauses::SCALAR_INITIALIZER],
             ),
             | Designation::Address => (
-                format!("`{name}` is the operand of &"),
+                format!("`{name}` is the operand of `&`"),
                 format!(
-                    "& needs the object itself, not its value, so `{name}` is located but not \
+                    "`&` needs the object itself, not its value, so `{name}` is located but not \
                      read."
                 ),
-                format!("{lvalue} & turns that place into a pointer; nothing is read."),
+                format!("{lvalue} `&` turns that place into a pointer; nothing is read."),
                 &[clauses::IDENTIFIER, clauses::LVALUE],
             ),
             | Designation::Updated => (
                 format!("`{name}` is the object to update"),
                 format!(
-                    "++ and -- work on the object itself: they read `{name}` and store the new \
-                     value back."
+                    "`++` and `--` work on the object itself: they read `{name}` and store the \
+                     new value back."
                 ),
                 format!("{lvalue} The next step reads it and stores the updated value back."),
                 &[clauses::IDENTIFIER, clauses::LVALUE],
@@ -668,7 +668,8 @@ impl Machine {
                     format!("Take the address of {location}"),
                 ),
                 &format!(
-                    "& makes a pointer to {location}, a way to reach it later, without reading it."
+                    "`&` makes a pointer to {location}, a way to reach it later, without reading \
+                     it."
                 ),
                 &text,
                 &[clauses::ADDRESS_OPERATOR],
@@ -757,7 +758,7 @@ impl Machine {
         let (title, summary, text, clause) = match operator {
             | "!" => (
                 format!("Logical not: !{input} → {shown}"),
-                format!("! turns 0 into 1 and anything else into 0, so !{input} is {shown}."),
+                format!("`!` turns 0 into 1 and anything else into 0, so `!{input}` is {shown}."),
                 format!(
                     "! yields 1 if its operand compares equal to 0 and 0 otherwise. The operand \
                      is {input}, so the result is the int {shown}."
@@ -766,7 +767,7 @@ impl Machine {
             ),
             | "-" => (
                 format!("Negate {input} → {shown}"),
-                format!("Unary minus negates the value: -({input}) is {shown}."),
+                format!("Unary minus negates the value: `-({input})` is {shown}."),
                 format!("Unary minus negates its int operand: -({input}) is {shown}."),
                 clauses::UNARY_MINUS,
             ),
@@ -1011,7 +1012,7 @@ impl Machine {
         full_expression: bool,
         target: usize,
         offset: i32,
-        previous: Option<Value>,
+        previous: Option<&Value>,
         value: Value,
         stored: Value,
     ) -> Event {
@@ -1051,7 +1052,7 @@ impl Machine {
                 self.value_text(&value)
             )
         } else {
-            let before = previous.as_ref().map_or_else(
+            let before = previous.map_or_else(
                 || String::from("its old value"),
                 |previous| self.value_text(previous),
             );
@@ -1072,7 +1073,7 @@ impl Machine {
         } else if initializer {
             format!("The initializer gives {location} its first value, {shown}.")
         } else {
-            let before = previous.as_ref().map_or_else(
+            let before = previous.map_or_else(
                 || String::from("its old value"),
                 |previous| self.short_value(previous),
             );
@@ -1221,6 +1222,7 @@ impl Machine {
         statement: &str,
         value: Value,
         truth: bool,
+        has_else: bool,
     ) -> Event {
         let shown = self.short_value(&value);
         let condition = snippet(source, range);
@@ -1231,9 +1233,15 @@ impl Machine {
                 "the if branch runs",
                 clauses::IF_STATEMENT,
             ),
+            | ("if", false) if has_else => (
+                "false: take the else branch",
+                "the first branch is skipped and the else branch runs",
+                "the else branch runs",
+                clauses::IF_STATEMENT,
+            ),
             | ("if", false) => (
                 "false: skip the if branch",
-                "the first branch is skipped (and an else branch, if any, runs)",
+                "the first branch is skipped; with no else, the if statement is done",
                 "the if branch is skipped",
                 clauses::IF_STATEMENT,
             ),

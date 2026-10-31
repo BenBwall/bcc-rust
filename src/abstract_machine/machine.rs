@@ -223,7 +223,7 @@ impl Machine {
                     full_expression,
                     target,
                     offset,
-                    previous,
+                    previous.as_ref(),
                     value,
                     stored,
                 )
@@ -252,7 +252,15 @@ impl Machine {
                 if !truth {
                     self.activations[top].pc = target;
                 }
-                self.branch(range, source, statement, value, truth)
+                // An if with an else ends its first branch with a forward
+                // jump over the else branch; a loop's jump goes back.
+                let code = &program.functions[self.activations[top].function].code;
+                let has_else = statement == "if"
+                    && target
+                        .checked_sub(1)
+                        .and_then(|last| code.get(last))
+                        .is_some_and(|last| matches!(last.op, Op::Jump(over) if over >= target));
+                self.branch(range, source, statement, value, truth, has_else)
             },
             | Op::Call(name, count) => self.call(program, instruction, name, *count)?,
             | Op::Return => {

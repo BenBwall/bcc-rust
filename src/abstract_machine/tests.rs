@@ -756,7 +756,7 @@ fn names_are_narrated_by_what_their_operator_does() {
         [
             "`x` receives its initial value",
             "`p` receives its initial value",
-            "`x` is the operand of &",
+            "`x` is the operand of `&`",
             "`x` is where the result goes",
             "`x` names an object to read",
             "`x` is the object to update",
@@ -770,7 +770,7 @@ fn names_are_narrated_by_what_their_operator_does() {
         .expect("a designation");
     // A declarator is not an expression: no primary-expression citation.
     assert_eq!(initializer.clauses[0].id, "6.7.8p11");
-    assert!(initializer.note.is_empty());
+    assert_eq!(initializer.note, "");
     let assigned = states
         .iter()
         .find(|state| state.event.title == "`x` is where the result goes")
@@ -781,6 +781,26 @@ fn names_are_narrated_by_what_their_operator_does() {
             .clauses
             .iter()
             .any(|clause| clause.id == "6.5.16p4")
+    );
+}
+
+#[test]
+fn a_false_condition_says_whether_an_else_branch_runs() {
+    let titles = |source: &str| {
+        states(source)
+            .into_iter()
+            .filter(|state| state.event.kind == EventKind::Branch)
+            .map(|state| state.event.title)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        titles("int main(void) { int x = 0; if (x) { x = 1; } else { x = 2; } return x; }"),
+        ["Condition is false: take the else branch"]
+    );
+    assert_eq!(
+        // The loop's backward jump ends the first branch; it is no else.
+        titles("int main(void) { int x = 0; if (x) while (x) x = 0; return x; }"),
+        ["Condition is false: skip the if branch"]
     );
 }
 
