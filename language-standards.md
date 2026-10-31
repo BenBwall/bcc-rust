@@ -1033,9 +1033,13 @@ translation unit that read malformed UTF-8. As each compiler does:
 
 | Literal | GCC identity | Clang identity |
 |---|---|---|
-| unprefixed string or character | bytes kept, silent | bytes kept, one "illegal character encoding in string literal [-Winvalid-source-encoding]" (or "character literal") per literal |
+| unprefixed string or character | bytes kept, silent | bytes kept, one "illegal character encoding in string literal [-Winvalid-source-encoding]" (or "character literal") per literal, an error under `-pedantic-errors` |
 | `u8` | bytes kept, silent; a `u8` character constant of more than one byte is an error | error "illegal character encoding in string literal" |
 | `u`, `U`, `L` | error "converting to execution character set: Invalid or incomplete multibyte or wide character" | error "illegal character encoding in string literal" |
+
+An unprefixed literal joined to a prefixed one takes its prefix (C11
+§6.4.5p5), and so its row: Clang's warning becomes the prefixed literal's
+error, and GCC rejects bytes in a `u`, `U` or `L` result.
 
 A stray byte outside a literal is the error "stray byte <FF> in source", and
 source excerpts show each byte as `<FF>`, as Clang does. `-E` spells a

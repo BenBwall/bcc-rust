@@ -110,6 +110,24 @@ mod tests {
             &["-Wno-invalid-source-encoding"],
         );
         assert_eq!(text(&output.stderr), "", "the group silences it");
+        let output = check("--compiler-identity=clang", narrow, &["-pedantic-errors"]);
+        let stderr = text(&output.stderr);
+        assert!(!output.status.success(), "{stderr}");
+        assert_eq!(
+            stderr
+                .matches("error: illegal character encoding in ")
+                .count(),
+            2,
+            "-pedantic-errors promotes it: {stderr}"
+        );
+        let output = check(
+            "--compiler-identity=clang",
+            narrow,
+            &["-pedantic-errors", "-Wno-invalid-source-encoding"],
+        );
+        assert!(output.status.success(), "{}", text(&output.stderr));
+        let output = check("--compiler-identity=gcc", narrow, &["-pedantic-errors"]);
+        assert!(output.status.success(), "{}", text(&output.stderr));
         let output = check("--compiler-identity=gcc", narrow, &[]);
         assert!(output.status.success());
         assert_eq!(text(&output.stderr), "");
