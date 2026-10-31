@@ -52,6 +52,7 @@ fn main() {
     println!("cargo:rerun-if-changed=build_support/native.rs");
     println!("cargo:rerun-if-changed=build_support/llvm.rs");
     println!("cargo:rerun-if-changed=build_support/llvm_target_options.cpp");
+    println!("cargo:rerun-if-changed=build_support/llvm_attributes.cpp");
     println!("cargo:rerun-if-changed=build_support/llvm/cache.rs");
     println!("cargo:rerun-if-changed=build_support/llvm/tools.rs");
     native::compile(&OUT_DIR);

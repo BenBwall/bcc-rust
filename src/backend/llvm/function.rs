@@ -15,6 +15,7 @@ use super::{
     Emitter,
     api::{
         self,
+        IndexedAttribute,
         Session,
         Ty,
         Val,
@@ -272,15 +273,17 @@ fn passed(signature: Signature<'_>, index: usize) -> bool {
     !matches!(signature.param_abi(index), Some(ParamAbi::Registers(_)))
 }
 
-pub(super) fn attributes<'id>(
+/// The ABI attributes of `signature`'s result and parameters, for
+/// [`Session::add_attributes`] to apply at once.
+pub(super) fn attributes<'a, 'id>(
     api: &Session<'id>,
-    value: Val<'id>,
     signature: Signature<'_>,
-    call: bool,
-) {
-    extension(api, value, 0, signature.result_extension, call);
+    arena: &'a Bump,
+) -> ArenaVec<'a, IndexedAttribute<'id>> {
+    let mut attributes = ArenaVec::with_capacity_in(signature.params.len() + 1, arena);
+    extension(api, &mut attributes, 0, signature.result_extension);
     if signature.result_noundef {
-        api.attribute(value, 0, "noundef", 0, None, call);
+        attributes.push(api.indexed_attribute(0, "noundef", 0, None));
     }
     let mut llvm_index = 1;
     for index in 0..signature.params.len() {
@@ -294,35 +297,38 @@ pub(super) fn attributes<'id>(
                 } else {
                     "sret"
                 };
-                api.attribute(
-                    value,
+                attributes.push(api.indexed_attribute(
                     llvm_index,
                     name,
                     0,
                     Some(api.array(api.ty(Type::I8), layout.size)),
-                    call,
-                );
-                api.attribute(value, llvm_index, "align", layout.align.bytes(), None, call);
+                ));
+                attributes.push(api.indexed_attribute(
+                    llvm_index,
+                    "align",
+                    layout.align.bytes(),
+                    None,
+                ));
             },
             | _ => {},
         }
         extension(
             api,
-            value,
+            &mut attributes,
             llvm_index,
             signature.param_extension(index),
-            call,
         );
         if signature.param_noundef(index) {
-            api.attribute(value, llvm_index, "noundef", 0, None, call);
+            attributes.push(api.indexed_attribute(llvm_index, "noundef", 0, None));
         }
         // LLVM passes a `nest` parameter where trampolines put the static
         // chain (`r10` on x86-64, `ecx` on i386), as GCC does.
         if signature.chain_param() == Some(index) {
-            api.attribute(value, llvm_index, "nest", 0, None, call);
+            attributes.push(api.indexed_attribute(llvm_index, "nest", 0, None));
         }
         llvm_index += 1;
     }
+    attributes
 }
 
 /// Marks a function or call `returns_twice`, which keeps LLVM from
@@ -338,17 +344,16 @@ pub(super) fn returns_twice<'id>(api: &Session<'id>, value: Val<'id>, call: bool
 /// the extension convention and poison semantics are additional IR contracts.
 fn extension<'id>(
     api: &Session<'id>,
-    value: Val<'id>,
+    attributes: &mut ArenaVec<'_, IndexedAttribute<'id>>,
     index: u32,
     extension: Option<Extension>,
-    call: bool,
 ) {
     let name = match extension {
         | Some(Extension::Sign) => "signext",
         | Some(Extension::Zero) => "zeroext",
         | _ => return,
     };
-    api.attribute(value, index, name, 0, None, call);
+    attributes.push(api.indexed_attribute(index, name, 0, None));
 }
 
 struct BodyBuilder<'a, 'id, 'm, 'ir> {
@@ -949,7 +954,7 @@ impl<'id, 'm> BodyBuilder<'_, 'id, 'm, '_> {
             function,
             &arguments,
         );
-        attributes(api, call, signature, true);
+        let mut call_attributes = attributes(api, signature, self.emitter.arena);
         if signature.variadic_noundef {
             let fixed = signature
                 .params
@@ -958,16 +963,15 @@ impl<'id, 'm> BodyBuilder<'_, 'id, 'm, '_> {
                 .filter(|&(index, _)| passed(signature, index))
                 .count();
             for index in 0..args.len().saturating_sub(signature.params.len()) {
-                api.attribute(
-                    call,
+                call_attributes.push(api.indexed_attribute(
                     u32::try_from(fixed + index + 1).map_err(|_| std::fmt::Error)?,
                     "noundef",
                     0,
                     None,
-                    true,
-                );
+                ));
             }
         }
+        api.add_attributes(call, &call_attributes, true);
         if let Some(ParamAbi::Registers(registers)) = signature.result_param() {
             api.set_name(call, &return_name(inst, self.emitter.arena));
             if let Some(&area) = args.first() {
