@@ -145,6 +145,9 @@ impl<'pp> Expander<'_, '_, 'pp, '_> {
                 let in_directive = std::mem::replace(&mut self.state.in_directive, true);
                 self.parse_directive(token);
                 self.state.in_directive = in_directive;
+                // The directive took its whole line, so the next token, a
+                // `#` included, starts one, whichever directive it was.
+                self.resume_at_line_start();
                 return None;
             },
             | PreprocessorTokenType::GeneratedString
