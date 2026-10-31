@@ -254,7 +254,12 @@ pub(super) fn preprocess_assembly(
 )]
 fn assembler_arguments(args: &Cli, assembly: Assembly<'_>) -> Vec<OsString> {
     let mut options: Vec<OsString> = Vec::new();
-    if let Some(preprocessed) = assembly.language {
+    // Clang knows `.S` but not `.sx`, which it would take for a linker
+    // input, so a preprocessed input always names its language.
+    if let Some(preprocessed) = assembly
+        .language
+        .or(assembly.preprocessed().then_some(true))
+    {
         options.push("-x".into());
         options.push(
             if preprocessed {

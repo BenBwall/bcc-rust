@@ -591,9 +591,12 @@ impl Toolchain {
     }
 
     /// Runs a foreign job, with its diagnostics as the error when it fails.
+    /// The warnings of one that succeeds go to stderr, as GCC and Clang
+    /// show an assembly input's `#warning`.
     fn run_foreign(command: &mut Command) -> io::Result<Output> {
         let output = run(command)?;
         if output.status.success() {
+            io::stderr().write_all(&output.stderr)?;
             Ok(output)
         } else {
             Err(io::Error::other(ClangError(output)))

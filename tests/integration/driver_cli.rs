@@ -860,6 +860,20 @@ mod tests {
         );
         // Its errors fail the run.
         assert_eq!(project.bcc(&["-E", "f.S"]).status.code(), Some(1));
+        // `.sx` is preprocessed too, though clang would take it for a
+        // linker input.
+        std::fs::write(project.path("g.sx"), assembly).unwrap();
+        let mut args = vec!["-E", "-P", "g.sx"];
+        args.extend(options);
+        let sx = project.bcc(&args);
+        succeeds(&sx);
+        assert!(stdout(&sx).contains("movl $7"), "{}", stdout(&sx));
+        // A dependency job writes rules, not the assembly's text.
+        let mut args = vec!["-MM", "f.S"];
+        args.extend(options);
+        let rules = project.bcc(&args);
+        succeeds(&rules);
+        assert!(!stdout(&rules).contains("movl"), "{}", stdout(&rules));
         // Assembler options reach assembly but not C sources, which bcc
         // assembles itself; `--noexecstack` is already true of them.
         let warned = project.bcc(&["-c", "-Wa,--noexecstack,-L", "a.c"]);

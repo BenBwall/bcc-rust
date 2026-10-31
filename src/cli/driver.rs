@@ -177,8 +177,10 @@ pub(super) fn run(args: &Cli, matches: &ArgMatches) -> Result<i32, MainError> {
         },
         | Stage::Preprocess =>
             for input in &inputs {
+                // A dependency job reads assembly no more than before.
                 if let Input::Assembly(assembly) = *input
                     && assembly.preprocessed()
+                    && args.driver.dependencies.is_none()
                 {
                     status = combine(status, preprocess_assembly(args, assembly, output));
                     continue;
