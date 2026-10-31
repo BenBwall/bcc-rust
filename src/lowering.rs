@@ -141,6 +141,7 @@ use crate::{
     target::Target,
     translation_phases::{
         Context,
+        SourceVector,
         SourceVectors,
         parsing::{
             ParsedTranslationUnit,
@@ -682,14 +683,27 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         if source.length() == 0 {
             return;
         }
-        let context = self.unit.context;
-        let vector = context.file_vector(source);
-        let line = context
-            .physical_position(vector.source_file_index, vector.index as usize)
-            .map_or(0, |(line, _)| line);
-        if line != 0 {
+        let vector = self.unit.context.file_vector(source);
+        if let Some(line) = self.home_line(vector) {
             self.draft.line = line;
         }
+    }
+
+    /// The physical line of `vector` in the file that defines this
+    /// function, or 0 when `vector` is in another file (a header that a
+    /// `#include` inside the body brings in), whose lines are not the
+    /// function's. `None` when the file's text was not recorded.
+    pub(super) fn home_line(&self, vector: &SourceVector) -> Option<u32> {
+        let context = self.unit.context;
+        let home = context.file_vector(self.record.syntax.source_vectors);
+        if context.physical_source_file(vector.source_file_index)
+            != context.physical_source_file(home.source_file_index)
+        {
+            return Some(0);
+        }
+        context
+            .physical_line(vector.source_file_index, vector.index as usize)
+            .filter(|&line| line != 0)
     }
 }
 
