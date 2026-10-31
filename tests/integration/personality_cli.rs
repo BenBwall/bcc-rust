@@ -486,6 +486,35 @@ mod tests {
         assert!(!stderr(&tcc).contains("[-W"), "{}", stderr(&tcc));
         let gcc = directory.bcc("--gcc-mode", &["-c", "warn.c"]);
         assert!(stderr(&gcc).contains("[-W"), "{}", stderr(&gcc));
+        // The diagnostics TCC's users meet most read in TCC's words (TCC mob
+        // e23dabe), each stopping the compilation at the first error.
+        for (source, expected) in [
+            (
+                "int main(void){ return x; }",
+                "e.c:1: error: 'x' undeclared\n",
+            ),
+            (
+                "int main(void){ int *p; char *q = p; return 0; }",
+                "e.c:1: warning: assignment from incompatible pointer type\n",
+            ),
+            (
+                "int main(void){ int a; int a; return 0; }",
+                "e.c:1: error: redeclaration of 'a'\n",
+            ),
+            ("int main(void){ break; }", "e.c:1: error: cannot break\n"),
+            (
+                "int main(void){ goto L; }",
+                "e.c:1: error: label 'L' used but not defined\n",
+            ),
+            (
+                "int main(void){ int a[2]; a = 0; return 0; }",
+                "e.c:1: error: lvalue expected\n",
+            ),
+        ] {
+            directory.write("e.c", &format!("{source}\n"));
+            let output = directory.bcc("--tcc-mode", &["-c", "e.c"]);
+            assert_eq!(stderr(&output), expected, "{source}");
+        }
     }
 
     /// A sign after `p` continues a preprocessing number from C99. Before
@@ -3515,10 +3544,7 @@ mod tests {
         // A failing input stops the others, and says so once.
         let output = directory.bcc("--tcc-mode", &["-c", "bad.c", "b.c", "-MD"]);
         assert_eq!(output.status.code(), Some(1));
-        assert_eq!(
-            stderr(&output),
-            "bad.c:1: error: identifier has no visible declaration: `y`\n"
-        );
+        assert_eq!(stderr(&output), "bad.c:1: error: 'y' undeclared\n");
         let output = directory.bcc("--tcc-mode", &["-c", "a.c", "-lm"]);
         assert_eq!(output.status.code(), Some(1));
         assert_eq!(
@@ -3715,7 +3741,7 @@ mod tests {
         assert_eq!(
             stderr(&output),
             "ptr.c:1: warning: incompatible integer and pointer conversion\nptr.c:1: warning: \
-             incompatible pointer types in conversion\n"
+             assignment from incompatible pointer type\n"
         );
         let output = directory.bcc("--tcc-mode", &["-Werror", "-c", "ptr.c"]);
         assert_eq!(output.status.code(), Some(1));

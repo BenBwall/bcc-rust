@@ -2231,6 +2231,37 @@ impl SemanticErrorKind {
     }
 }
 
+impl SemanticError {
+    /// TCC's own words for the diagnostics its users meet most, in TCC's
+    /// diagnostic format (TCC mob, `tccgen.c` and `tccpp.c`); other
+    /// diagnostics keep bcc's.
+    fn tcc_message<'d>(&self, context: &Context<'_>, arena: &'d Bump) -> Option<&'d str> {
+        if context.configuration.diagnostic_format() != crate::configuration::DiagnosticFormat::Tcc
+        {
+            return None;
+        }
+        let name = self.name.map(|name| context.string_cache.at(name));
+        Some(match (self.kind, name) {
+            | (SemanticErrorKind::UndeclaredIdentifier, Some(name)) =>
+                format_in!(arena, "'{name}' undeclared"),
+            | (SemanticErrorKind::DuplicateDeclaration, Some(name)) =>
+                format_in!(arena, "redeclaration of '{name}'"),
+            | (SemanticErrorKind::UndefinedLabel, Some(name)) =>
+                format_in!(arena, "label '{name}' used but not defined"),
+            | (SemanticErrorKind::BreakOutsideLoopOrSwitch, _) => "cannot break",
+            | (SemanticErrorKind::ContinueOutsideLoop, _) => "cannot continue",
+            | (SemanticErrorKind::ExpectedModifiableLvalue, _) => "lvalue expected",
+            | (
+                SemanticErrorKind::PointerConstraint(
+                    crate::configuration::DiagnosticGroup::IncompatiblePointerTypes,
+                ),
+                _,
+            ) => "assignment from incompatible pointer type",
+            | _ => return None,
+        })
+    }
+}
+
 impl ToDiagnostic for SemanticError {
     fn diagnostic_in<'d>(
         &self,
@@ -2308,6 +2339,7 @@ impl ToDiagnostic for SemanticError {
             } else {
                 message
             };
+        let message = self.tcc_message(context, arena).unwrap_or(message);
         let mut diagnostic = Explanation::new(arena, message)
             .label(self.kind.label())
             .note(note)
