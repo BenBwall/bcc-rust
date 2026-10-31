@@ -208,7 +208,19 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
     /// The refusal of a call of a reserved `__builtin_` name semantic
     /// analysis has no contract for, whose result type it could not
     /// analyze: by name where GCC has the builtin.
-    pub(super) fn opaque_builtin(&self, e: &'tu Expression<'tu>) -> Option<LoweringError> {
+    pub(super) fn opaque_builtin(&self, mut e: &'tu Expression<'tu>) -> Option<LoweringError> {
+        // The call may sit under parentheses and casts, as in
+        // `(void) __builtin_apply_args ()`, whose cast has no type either.
+        use crate::translation_phases::parsing::syntax::ExpressionType as E;
+        loop {
+            match e.kind {
+                | E::Parenthesized { expression } => e = expression,
+                | E::Cast {
+                    operand_expression, ..
+                } => e = operand_expression,
+                | _ => break,
+            }
+        }
         let crate::translation_phases::semantic_analysis::Callee::Builtin {
             binding: Some(binding),
             instance: None,

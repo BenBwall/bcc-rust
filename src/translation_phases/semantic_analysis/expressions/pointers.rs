@@ -137,7 +137,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             // keeps the cast from being an integer constant expression.
             let ice = operand.ice && self.valid_ice_operands(operand.expression);
             if gcc {
-                let constant = ice || self.casts_address_constant(operand.expression);
+                // GCC folds `__builtin_assoc_barrier` of a constant before it
+                // judges the cast.
+                let constant = ice
+                    || (operand.assoc_barrier && operand.integer.is_some())
+                    || self.casts_address_constant(operand.expression);
                 (bits != pointer_bits && !enumeration && !constant)
                     .then_some(DiagnosticGroup::IntToPointerCast)
             } else if bits < pointer_bits && !enumeration && !ice {

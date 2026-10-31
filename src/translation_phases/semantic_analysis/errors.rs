@@ -216,6 +216,10 @@ pub(crate) enum SemanticErrorKind {
     /// `__builtin_longjmp` must be the constant 1.
     /// <https://gcc.gnu.org/onlinedocs/gcc/Nonlocal-Gotos.html>
     InvalidLongjmpValue,
+    /// GNU extension: the bound of `__builtin_alloca_with_align_and_max`
+    /// must be a constant, as GCC 13 requires it ("third argument to
+    /// function ... must be a constant integer").
+    InvalidAllocaMaximum,
     /// Clang's `-Wconstant-conversion`: an implicit conversion changes an
     /// integer constant's value; the payload is the interned message.
     /// C99: §6.3.1.3p3, p. 43; PDF p. 55.
@@ -839,6 +843,7 @@ impl SemanticErrorKind {
             | Self::InvalidBuiltinProbability => "expected a constant probability from 0 to 1",
             | Self::InvalidFrameLevel => "expected an integer constant frame level",
             | Self::InvalidLongjmpValue => "expected the constant 1",
+            | Self::InvalidAllocaMaximum => "expected a constant",
             | Self::ConstantConversion(_) => "the converted value differs",
             | Self::FloatOverflow(_) | Self::LiteralConversion(_) | Self::PedanticOverflow =>
                 "the value is not the integer's",
@@ -1154,6 +1159,11 @@ impl SemanticErrorKind {
                 "implicit conversion changes the value of an integer constant",
                 "C99 §6.3.1.3p3: the conversion to a signed type that cannot represent the value \
                  is implementation-defined; bcc, GCC and Clang reduce it modulo 2^N",
+            ),
+            | Self::InvalidAllocaMaximum => (
+                "the third argument must be a constant integer",
+                "GNU extension: GCC requires the maximum size of \
+                 __builtin_alloca_with_align_and_max to be a constant",
             ),
             | Self::InvalidLongjmpValue => (
                 "the value argument must be the integer constant 1",

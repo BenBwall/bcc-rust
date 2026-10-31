@@ -50,6 +50,7 @@ mod switches;
 mod labels;
 
 pub(super) use branches::Position;
+pub(super) use folding::floating_integer;
 pub(super) use labels::expression_children;
 use rustc_hash::FxBuildHasher;
 
