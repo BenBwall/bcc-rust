@@ -310,12 +310,18 @@ fn term_button(
             class="term"
             data-term=term.id
             aria-describedby=move || open().then_some("term-tip")
-            aria-expanded=move || open().to_string()
-            on:mouseenter=move |event| show(event.target())
+            // A tap on a touch screen also sends pointer and mouse events,
+            // so hovering opens the tip only for a mouse, and a click (or
+            // tap) only ever opens it; blur, Escape and leaving close it.
+            on:pointerenter=move |event| {
+                if event.pointer_type() == "mouse" {
+                    show(event.target());
+                }
+            }
             on:focus=move |event| show(event.target())
-            on:click=move |event| if open() { tip.set(None) } else { show(event.target()) }
-            on:mouseleave=move |event| {
-                if !leaves_for_tip(&event) {
+            on:click=move |event| show(event.target())
+            on:pointerleave=move |event| {
+                if event.pointer_type() == "mouse" && !leaves_for_tip(&event) {
                     tip.set(None);
                 }
             }
