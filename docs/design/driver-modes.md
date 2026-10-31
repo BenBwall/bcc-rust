@@ -196,11 +196,13 @@ Where bcc can do what the option asks cheaply, the personality maps it
 instead: `-fwrapv` (lowering marks signed arithmetic without `nsw`),
 `-ftrapv` (signed `+`, `-`, `*`, negation and `++`/`--` of `int` and
 wider check for overflow, and so does `abs`, `labs` or `llabs` of the most
-negative value while the library builtins are on, and run the `trap`
+negative value while the library builtins are on (`__builtin_abs` and
+its relatives always), and run the `trap`
 instruction, on every back end, where GCC's libgcc routines call `abort`,
 so the program ends with `SIGILL` rather than `SIGABRT`; GNU complex
-integers' sums and products are checked in their signed `int` or wider
-parts, as in GCC, and a narrow `_BitInt` is not checked; with `-fwrapv` also given, the last of the two decides
+integers' sums, products, negation and conjugate are checked in their
+signed `int` or wider parts, as in GCC, and a narrow `_BitInt` is not
+checked; with `-fwrapv` also given, the last of the two decides
 in the GCC personality, and `-fno-wrapv` only turns `-fwrapv` off, as in
 GCC, while `-ftrapv` always wins in the Clang personality, which refuses
 `-fno-trapv` as Clang does; Clang's `-ftrapv-handler=` is refused),
@@ -244,7 +246,11 @@ arithmetic; copies, negation, `fabs`, `copysign` and
 `__SUPPORT_SNAN__` and keeps trapping math, as GCC does. GCC folds a
 widening and narrowing round trip such as `(double)(long double)x` to
 `x`, keeping a signaling NaN; bcc converts twice, quieting it and raising
-`FE_INVALID`, as IEC 60559 conversions do. Without the option, LLVM may
+`FE_INVALID`, as IEC 60559 conversions do. A unit with a `__bf16` value
+keeps LLVM's ordinary floating semantics: LLVM 23 lowers `bf16`
+conversions in `strictfp` code to `__truncsfbf2` and `__extendbfsf2`
+calls with the wrong register convention, a bug Clang's
+`-ffp-exception-behavior=strict` shares. Without the option, LLVM may
 fold such operations as GCC does), `-mno-mmx` (bcc's code uses no MMX register, and its MMX
 intrinsics work in SSE registers, as GCC's and Clang's do on x86-64, so the
 option changes only the macros: the GCC and Clang personalities pass
