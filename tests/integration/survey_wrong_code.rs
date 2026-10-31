@@ -306,6 +306,7 @@ mod tests {
         let source = b"union u { long double d; char s[sizeof(long double)]; };\n\
             union c { _Complex long double d; char s[sizeof(_Complex long double)]; };\n\
             struct t { int k; long double d; };\n\
+            struct w { int k; union u u[2]; };\n\
             int main(void) {\n\
             union u v = {1.0L}, x = {1.0L};\n\
             if (v.d != 1.0L) return 1;\n\
@@ -324,11 +325,50 @@ mod tests {
             for (unsigned i = 0; i < sizeof w.s; i++) if (w.s[i] != 'x') return 6;\n\
             struct t r = {7, 2.5L};\n\
             if (r.k != 7 || r.d != 2.5L) return 7;\n\
+            struct w e = {1, {{2.0L}, {.d = 3.0L}}}, b = {1, {{2.0L}, {.d = 3.0L}}};\n\
+            if (e.k != 1 || e.u[0].d != 2.0L || e.u[1].d != 3.0L) return 8;\n\
+            for (unsigned i = 0; i < sizeof b.u[1].s; i++) b.u[1].s[i] = 'x';\n\
+            struct w g = b;\n\
+            for (unsigned i = 0; i < sizeof g.u[1].s; i++) if (g.u[1].s[i] != 'x') return 9;\n\
             return 0;\n\
             }\n";
         for identity in IDENTITIES {
             prints_on_every_back_end(identity, source, &[], "");
         }
+    }
+
+    /// As in Clang, only an object of at most 32 bytes, or one needing more
+    /// than six stores besides its zeroes, is copied from a constant image;
+    /// a large, mostly zero one is filled with zeroes and stores its `long
+    /// double` as integers, with no image of its size.
+    #[test]
+    fn long_double_initializers_copy_an_image_only_when_small() {
+        let large = check(
+            "--emit=ir",
+            b"long double use(long double *);\n\
+              long double f(void) { long double a[1 << 22] = {1.0L}; return use(a); }\n",
+            &[],
+        );
+        let ir = text(&large.stdout);
+        assert!(large.status.success(), "{}", text(&large.stderr));
+        assert!(!ir.contains("global "), "{ir}");
+        assert!(ir.contains("fill "), "{ir}");
+        assert!(ir.contains("store.i16 "), "{ir}");
+        assert!(!ir.contains("store.f80 "), "{ir}");
+        assert!(ir.len() < 4096, "{} bytes of IR", ir.len());
+        let small = check(
+            "--emit=ir",
+            b"union u { long double d; char s[16]; };\n\
+              void use(union u *);\n\
+              void f(void) { union u x = {1.0L}; use(&x); }\n",
+            &[],
+        );
+        let ir = text(&small.stdout);
+        assert!(small.status.success(), "{}", text(&small.stderr));
+        assert!(
+            ir.contains("global @.initializer internal constant size 16"),
+            "{ir}"
+        );
     }
 
     /// GCC gives a function type the alignment 1, Clang 4; an `aligned`
