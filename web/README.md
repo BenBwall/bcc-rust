@@ -34,7 +34,8 @@ them. Visitors pick a lesson (a small C program) and see it three ways:
   instruction of the IR that kept its source line, which at -O2 is often
   none once the optimizer rebuilds a function; per function for the rest,
   LLVM IR and the machine stages, whose output keeps no source locations),
-  and the reverse.
+  and the reverse. Moving the cursor to a line (with the arrow keys, or a
+  tap on a touch screen) does the same.
 
 - **WebAssembly.** The program compiled to WebAssembly by bcc, in the
   browser, executed one
@@ -180,7 +181,13 @@ first read-only listing, whose folding arrows use it.
   underline what runs next; undefined behavior is marked in red. The compiler
   pipeline view drops these marks and shows the compiler's instead: the
   selected stage's marks in the source and the lines linked to the output
-  under the pointer.
+  line under the pointer or the cursor.
+- The links between the source and the pipeline's output or the
+  WebAssembly text follow the pointer and the cursor of the editor with the
+  keyboard focus, whichever moved last; a focused editor marks its cursor's
+  line with a bar at its left edge. When the cursor rests on a line, a
+  polite live region says what it links to ("Source line 13 became lines
+  14, 40 and 52 of the bcc IR."), once.
 - Back replays retained snapshots (up to 2,000); the engine stays at the newest
   state, and stepping forward replays history before asking it for more.
 - An announcement region narrates each step for screen readers.

@@ -1,8 +1,8 @@
 // Monaco glue for the bcc site. The Leptos page (web/src/editor.rs) imports
 // this module at run time through wasm-bindgen and drives it with a small,
 // plain-data API: create an editor in a host element, set its text,
-// language and decorations, and listen for edits and line hovers. Everything
-// else (state, semantics, what to highlight) lives in Rust.
+// language and decorations, and listen for edits, line hovers and cursor
+// moves. Everything else (state, semantics, what to highlight) lives in Rust.
 //
 // Only the editor core and the features the site uses are bundled; language
 // support is the Monarch grammars in ./languages.js.
@@ -133,7 +133,10 @@ class Editor {
       fontLigatures: false,
       minimap: { enabled: false },
       scrollBeyondLastLine: false,
-      renderLineHighlight: options.readOnly ? 'none' : 'line',
+      // A read-only view marks the cursor's line only while it has the
+      // focus, for the reader moving through it with the arrow keys.
+      renderLineHighlight: 'line',
+      renderLineHighlightOnlyWhenFocus: !!options.readOnly,
       // Clicking a read-only view's line number selects the line; keep the
       // spaces of the selection blank.
       renderWhitespace: options.readOnly ? 'none' : 'selection',
@@ -247,15 +250,26 @@ class Editor {
     }));
   }
 
-  /** Call `callback(line)` when the cursor moves to another line. */
+  /**
+   * Call `callback(line)` with the cursor's line while the editor has the
+   * keyboard focus: as the focus arrives and whenever the cursor moves to
+   * another line. Call `callback(0)` when the focus leaves.
+   */
   onCursorLine(callback) {
     let current = 0;
-    this.listeners.push(this.editor.onDidChangeCursorPosition((event) => {
-      if (event.position.lineNumber !== current) {
-        current = event.position.lineNumber;
-        callback(current);
+    const report = (line) => {
+      if (line !== current) {
+        current = line;
+        callback(line);
       }
+    };
+    this.listeners.push(this.editor.onDidChangeCursorPosition((event) => {
+      if (this.editor.hasTextFocus()) report(event.position.lineNumber);
     }));
+    this.listeners.push(this.editor.onDidFocusEditorText(() => {
+      report(this.editor.getPosition()?.lineNumber ?? 0);
+    }));
+    this.listeners.push(this.editor.onDidBlurEditorText(() => report(0)));
   }
 
   /**

@@ -907,6 +907,9 @@
   .monaco-editor .target-line { background: color-mix(in srgb, var(--cat-lifetime) 9%, transparent); }
   .monaco-editor .target-glyph::before { content: ""; display: block; width: 9px; height: 9px; margin: 6px auto 0; border-radius: 50%; background: var(--cat-lifetime); box-shadow: 0 0 0 3px color-mix(in srgb, var(--cat-lifetime) 25%, transparent); }
   .monaco-editor .link-line { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+  /* The cursor's line in the editor with the focus: where the links come
+     from when the keyboard moves through the code. */
+  .monaco-editor.focused .view-overlays .current-line { box-shadow: inset 3px 0 0 var(--accent); }
   .monaco-editor .link-range { outline: 1.5px solid color-mix(in srgb, var(--accent) 85%, transparent); background: color-mix(in srgb, var(--accent) 12%, transparent); border-radius: 3px; }
   /* What the front-end stages mark in the source and in their output. */
   .monaco-editor .src-splice { color: var(--accent) !important; font-weight: 700; background: color-mix(in srgb, var(--accent) 18%, transparent); border-radius: 3px; }
@@ -1096,9 +1099,11 @@
     .transport { gap: 2px; }
     .transport .button { min-width: 28px; padding: 0 3px; font-size: 12px; }
   }
-  /* Hover links mean nothing without a pointer that hovers. */
+  /* Without a pointer that hovers, a tap moves the cursor, which links. */
+  .source-legend .legend-tap { display: none; }
   @media (hover: none) {
     .source-legend .legend-hover { display: none; }
+    .source-legend .legend-tap { display: inline-flex; }
   }
 
   @media (prefers-reduced-motion: reduce) {

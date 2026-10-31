@@ -13,9 +13,15 @@ use leptos::prelude::*;
 
 use super::rich_text;
 use crate::{
-    app::wasm::{
-        Compiler,
-        WasmState,
+    app::{
+        links::{
+            Pointing,
+            Side,
+        },
+        wasm::{
+            Compiler,
+            WasmState,
+        },
     },
     editor::CodeEditor,
 };
@@ -308,7 +314,7 @@ fn Narration(wasm: WasmState, on_jump: Callback<u64>) -> impl IntoView {
 pub fn WasmListing(
     wasm: WasmState,
     theme: Signal<&'static str>,
-    hover_source: ReadSignal<usize>,
+    pointing: Pointing,
     on_breakpoint: Callback<usize>,
 ) -> impl IntoView {
     let text = Signal::derive(move || {
@@ -319,9 +325,10 @@ pub fn WasmListing(
                 .unwrap_or_default()
         })
     });
-    let layers = Signal::derive(move || wasm.listing_marks(hover_source.get()));
+    let linked_source = move || pointing.line(Side::Source);
+    let layers = Signal::derive(move || wasm.listing_marks(linked_source()));
     let reveal = Signal::derive(move || {
-        let hovered = hover_source.get();
+        let hovered = linked_source();
         let linked = (hovered > 0)
             .then(|| {
                 wasm.program.with(|program| {
@@ -391,10 +398,11 @@ pub fn WasmListing(
                     label="WebAssembly text format (read only). Click a line number to set a breakpoint."
                     read_only=true
                     decorations=layers
-                    on_hover_line=Callback::new(move |line| wasm.hover_wat.set(line))
+                    on_hover_line=Callback::new(move |line| pointing.hover(Side::Output, line))
+                    on_cursor_line=Callback::new(move |line| pointing.cursor(Side::Output, line))
                     on_gutter_click=on_breakpoint
                     reveal
-                    follow_on_page=Signal::derive(move || hover_source.get() == 0)
+                    follow_on_page=Signal::derive(move || linked_source() == 0)
                 />
             </div>
             <footer class="source-legend wat-legend">
@@ -402,7 +410,8 @@ pub fn WasmListing(
                 <span><i class="swatch swatch-current"></i>"just executed"</span>
                 <span><i class="swatch swatch-next-instruction"></i>"next"</span>
                 <span><i class="swatch swatch-breakpoint"></i>"click a line number to break there"</span>
-                <span class="legend-hover" hidden=move || !has_lines()><i class="swatch swatch-link"></i>"hover to link C and WebAssembly"</span>
+                <span class="legend-hover" hidden=move || !has_lines()><i class="swatch swatch-link"></i>"hover or move the cursor to link C and WebAssembly"</span>
+                <span class="legend-tap" hidden=move || !has_lines()><i class="swatch swatch-link"></i>"tap a line to link C and WebAssembly"</span>
             </footer>
         </div>
     }

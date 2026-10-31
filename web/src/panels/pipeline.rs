@@ -3,8 +3,8 @@
 //! stage with the C99 rules it applies, and bcc's real output for it in a
 //! read-only editor, compiled live in the browser at `-O0` or `-O2`. The
 //! front-end stages add what they did to this program (`front_end.rs`).
-//! Hovering a source line highlights the output lines that came from it (and
-//! the reverse). When an error stops bcc, the view says which stage stopped
+//! Hovering a source line, or moving the cursor to it, highlights the output
+//! lines that came from it (and the reverse; see `app/links.rs`). When an error stops bcc, the view says which stage stopped
 //! and why, and the diagnostics list every message.
 
 use leptos::prelude::*;
@@ -14,6 +14,10 @@ use super::front_end::{
     StageClauses,
 };
 use crate::{
+    app::links::{
+        Pointing,
+        Side,
+    },
     demos,
     editor::{
         CodeEditor,
@@ -54,8 +58,8 @@ pub fn PipelineView(
     /// The in-browser compiler's progress on `source` at the selected level.
     live: Signal<LiveCompile>,
     theme: Signal<&'static str>,
-    hover_source: ReadSignal<usize>,
-    hover_output: RwSignal<usize>,
+    /// The lines linked between the source and the output.
+    pointing: Pointing,
     /// Whether the preprocessed text shows the headers' text, not a folded
     /// line for each.
     headers: RwSignal<bool>,
@@ -102,7 +106,7 @@ pub fn PipelineView(
     // the next output compiles.
     let shown_links = links_of(shown);
     let layers = Signal::derive(move || -> Vec<Layer> {
-        let hovered = hover_source.get();
+        let hovered = pointing.line(Side::Source);
         let linked = if hovered > 0 {
             links.with(|links| links.outputs_for(hovered))
         } else {
@@ -120,12 +124,13 @@ pub fn PipelineView(
         ]
     });
     let reveal = Signal::derive(move || {
-        let hovered = hover_source.get();
+        let hovered = pointing.line(Side::Source);
         (hovered > 0)
             .then(|| links.with(|links| links.first_output_for(hovered)))
             .flatten()
     });
-    let on_hover = Callback::new(move |line| hover_output.set(line));
+    let on_hover = Callback::new(move |line| pointing.hover(Side::Output, line));
+    let on_cursor = Callback::new(move |line| pointing.cursor(Side::Output, line));
     view! {
         <section class="pipeline" aria-labelledby="pipeline-title">
             <h2 id="pipeline-title" class="sr-only">"Compiler pipeline"</h2>
@@ -167,10 +172,12 @@ pub fn PipelineView(
                 <div class="stage-toolbar">
                     <p class="stage-note is-link" hidden=move || shown_links.with(Links::is_empty)>
                         {move || if shown_links.with(Links::is_exact) {
-                            "Hover a source line to find what it became here, or hover here to find its source."
+                            "Hover a source line, or move the cursor to it, to find what it became here; do the \
+                             same here to find its source."
                         } else {
-                            "Hover a source line to find its function here, or hover here to find the source. These \
-                             lines keep no source locations, so they link per function, not per line."
+                            "Hover a source line, or move the cursor to it, to find its function here; do the same \
+                             here to find the source. These lines keep no source locations, so they link per \
+                             function, not per line."
                         }}
                     </p>
                     <button
@@ -194,6 +201,7 @@ pub fn PipelineView(
                         read_only=true
                         decorations=layers
                         on_hover_line=on_hover
+                        on_cursor_line=on_cursor
                         reveal
                         line_numbers
                     />
@@ -687,7 +695,10 @@ mod tests {
     ) -> String {
         use leptos::prelude::*;
 
-        use super::PipelineView;
+        use super::{
+            PipelineView,
+            Pointing,
+        };
 
         Owner::new().with(|| {
             let compilation = Memo::new(move |_| current.clone());
@@ -702,8 +713,7 @@ mod tests {
                     other
                     live=Signal::stored(LiveCompile::Compiling)
                     theme=Signal::stored("dark")
-                    hover_source=RwSignal::new(0).read_only()
-                    hover_output=RwSignal::new(0)
+                    pointing=Pointing::new()
                     headers=RwSignal::new(false)
                     filename=RwSignal::new("program.c".to_owned()).read_only()
                     source=Signal::stored("int main(void) { return 0; }\n".to_owned())

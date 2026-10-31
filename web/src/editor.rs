@@ -96,6 +96,11 @@ pub fn CodeEditor(
     #[prop(optional)] markers: Option<Signal<Vec<Marker>>>,
     #[prop(optional)] on_change: Option<Callback<String>>,
     #[prop(optional)] on_hover_line: Option<Callback<usize>>,
+    /// Called with the cursor's line while the editor has the keyboard
+    /// focus, as the focus arrives and the cursor moves, and with 0 when the
+    /// focus leaves.
+    #[prop(optional)]
+    on_cursor_line: Option<Callback<usize>>,
     #[prop(optional)] on_gutter_click: Option<Callback<usize>>,
     /// A line to scroll into view.
     #[prop(optional)]
@@ -125,6 +130,7 @@ pub fn CodeEditor(
         markers,
         on_change,
         on_hover_line,
+        on_cursor_line,
         on_gutter_click,
         reveal,
         follow_on_page,
@@ -139,6 +145,7 @@ pub fn CodeEditor(
         markers,
         on_change,
         on_hover_line,
+        on_cursor_line,
         on_gutter_click,
         reveal,
         line_numbers,
@@ -243,6 +250,8 @@ mod monaco {
         fn on_change(this: &Editor, callback: &js_sys::Function);
         #[wasm_bindgen(method, js_name = onHoverLine)]
         fn on_hover_line(this: &Editor, callback: &js_sys::Function);
+        #[wasm_bindgen(method, js_name = onCursorLine)]
+        fn on_cursor_line(this: &Editor, callback: &js_sys::Function);
         #[wasm_bindgen(method, js_name = onGutterClick)]
         fn on_gutter_click(this: &Editor, callback: &js_sys::Function);
         #[wasm_bindgen(method)]
@@ -366,6 +375,7 @@ mod monaco {
         pub markers:         Option<Signal<Vec<Marker>>>,
         pub on_change:       Option<Callback<String>>,
         pub on_hover_line:   Option<Callback<usize>>,
+        pub on_cursor_line:  Option<Callback<usize>>,
         pub on_gutter_click: Option<Callback<usize>>,
         pub reveal:          Option<Signal<Option<usize>>>,
         pub follow_on_page:  Option<Signal<bool>>,
@@ -473,6 +483,15 @@ mod monaco {
             listeners.push(listen(
                 &instance,
                 Editor::on_hover_line,
+                move |line: JsValue| {
+                    callback.run(line_number(&line));
+                },
+            ));
+        }
+        if let Some(callback) = mount.on_cursor_line {
+            listeners.push(listen(
+                &instance,
+                Editor::on_cursor_line,
                 move |line: JsValue| {
                     callback.run(line_number(&line));
                 },

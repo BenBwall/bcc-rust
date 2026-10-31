@@ -23,6 +23,7 @@ use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::JsFuture;
 use web_sys::HtmlInputElement;
 
+use self::links::Side;
 use crate::{
     demos::{
         self,
@@ -93,6 +94,12 @@ pub fn App() -> impl IntoView {
             state.wasm.ensure_loaded(state);
         }
     });
+    // A view switch unmounts the output's editor, which reports no leaving.
+    Effect::new(move || {
+        state.mode.track();
+        state.pointing.clear_output();
+    });
+    links::announce(state);
     Effect::new(move || {
         // The page lives as long as the listener.
         let _handle = window_event_listener(ev::keydown, move |event| state.shortcut(&event));
@@ -124,8 +131,7 @@ pub fn App() -> impl IntoView {
                                             other=state.other_level
                                             live=state.live_status.into()
                                             theme=state.theme_name
-                                            hover_source=state.hover_source.read_only()
-                                            hover_output=state.hover_output
+                                            pointing=state.pointing
                                             headers=state.headers
                                             filename=state.filename.read_only()
                                             source=state.editor_text.into()
@@ -152,6 +158,7 @@ pub fn App() -> impl IntoView {
             <About />
             <Glossary />
             <p class="sr-only" role="status" aria-live="polite" aria-atomic="true">{state.announcement}</p>
+            <p class="sr-only" role="status" aria-live="polite" aria-atomic="true">{state.pointing.announcement}</p>
         </main>
         <footer class="site-footer">
             <span><strong>"bcc"</strong>" · a C99 compiler written in Rust"</span>
@@ -233,8 +240,8 @@ pub(crate) struct State {
     debounce:        StoredValue<Option<Timeout>, LocalStorage>,
     pending:         RwSignal<bool>,
     live_status:     Memo<LiveCompile>,
-    hover_source:    RwSignal<usize>,
-    hover_output:    RwSignal<usize>,
+    /// The lines linked between the source and the view beside it.
+    pointing:        links::Pointing,
     reveal:          RwSignal<Option<usize>>,
     current:         Memo<Option<Snapshot>>,
     recent:          Memo<Vec<(usize, String, String)>>,
@@ -337,8 +344,7 @@ impl State {
             debounce: StoredValue::new_local(None),
             pending,
             live_status: live.status,
-            hover_source: RwSignal::new(0),
-            hover_output: RwSignal::new(0),
+            pointing: links::Pointing::new(),
             reveal: RwSignal::new(None),
             current,
             recent,
@@ -987,7 +993,7 @@ impl State {
             let (execution, links) = if self.wasm.stale(&self.editor_text.get()) {
                 (Vec::new(), Vec::new())
             } else {
-                self.wasm.source_marks()
+                self.wasm.source_marks(self.pointing.line(Side::Output))
             };
             // Each layer is listed, so a mark another view drew (such as the
             // pipeline stage's) is cleared.
@@ -1090,7 +1096,7 @@ impl State {
     /// The source lines (and the exact range, for a preprocessing token)
     /// that the pipeline output line under the pointer came from.
     fn hover_links(self) -> Vec<Decoration> {
-        let hovered = self.hover_output.get();
+        let hovered = self.pointing.line(Side::Output);
         if hovered == 0 {
             return Vec::new();
         }
@@ -1865,7 +1871,8 @@ fn SourcePane(state: State) -> impl IntoView {
             state.compile_after_typing();
         }
     });
-    let on_hover = Callback::new(move |line| state.hover_source.set(line));
+    let on_hover = Callback::new(move |line| state.pointing.hover(Side::Source, line));
+    let on_cursor = Callback::new(move |line| state.pointing.cursor(Side::Source, line));
     let on_gutter = Callback::new(move |line| state.set_target(line));
     view! {
         <section
@@ -1917,6 +1924,7 @@ fn SourcePane(state: State) -> impl IntoView {
                 markers=state.markers.into()
                 on_change
                 on_hover_line=on_hover
+                on_cursor_line=on_cursor
                 on_gutter_click=on_gutter
                 reveal=state.reveal.into()
                 follow_on_page=Signal::stored(true)
@@ -1928,14 +1936,15 @@ fn SourcePane(state: State) -> impl IntoView {
                 <span><i class="swatch swatch-squiggle"></i>"bcc error"</span>
             </footer>
             <footer class="source-legend" hidden=move || state.mode.get() != Mode::Pipeline>
-                <span class="legend-hover"><i class="swatch swatch-link"></i>"hover a line to find what it became"</span>
+                <span class="legend-hover"><i class="swatch swatch-link"></i>"hover or move the cursor to a line to find what it became"</span>
+                <span class="legend-tap"><i class="swatch swatch-link"></i>"tap a line to find what it became"</span>
                 <span><i class="swatch swatch-squiggle"></i>"bcc error"</span>
             </footer>
             <Show when=move || state.mode.get() == Mode::Wasm>
                 <WasmListing
                     wasm=state.wasm
                     theme=state.theme_name
-                    hover_source=state.hover_source.read_only()
+                    pointing=state.pointing
                     on_breakpoint=Callback::new(move |line| state.wasm.toggle_breakpoint(state, line))
                 />
             </Show>
@@ -2008,6 +2017,7 @@ fn About() -> impl IntoView {
     }
 }
 
+pub mod links;
 #[cfg(test)]
 mod tests;
 pub mod wasm;

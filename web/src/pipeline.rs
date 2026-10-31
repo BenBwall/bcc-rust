@@ -339,6 +339,23 @@ impl Stage {
         }
     }
 
+    /// The stage's output as named in a sentence ("line 3 of the …").
+    pub fn view_name(self) -> &'static str {
+        match self {
+            | Self::Lines => "logical lines",
+            | Self::PpTokens => "preprocessing tokens",
+            | Self::Preprocessor => "preprocessed text",
+            | Self::Tokens => "tokens",
+            | Self::SyntaxTree => "syntax tree",
+            | Self::SemanticTypes => "semantic types",
+            | Self::Ir => "bcc IR",
+            | Self::IrAbi => "ABI-lowered IR",
+            | Self::Llvm => "LLVM IR",
+            | Self::Asm => "x86-64 assembly",
+            | Self::MachineCode => "machine code",
+        }
+    }
+
     /// Which part of the compiler produces this stage.
     pub fn phase(self) -> &'static str {
         match self {

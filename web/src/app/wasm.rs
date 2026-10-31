@@ -354,8 +354,6 @@ pub struct WasmState {
     pub pausing:      RwSignal<bool>,
     /// Module offsets with breakpoints.
     pub breakpoints:  RwSignal<Vec<u32>>,
-    /// The listing line under the pointer.
-    pub hover_wat:    RwSignal<usize>,
     pub reveal_wat:   RwSignal<Option<usize>>,
     pub memory_tab:   RwSignal<&'static str>,
     pub memory_words: RwSignal<bool>,
@@ -376,7 +374,6 @@ impl WasmState {
             running:      RwSignal::new(false),
             pausing:      RwSignal::new(false),
             breakpoints:  RwSignal::new(Vec::new()),
-            hover_wat:    RwSignal::new(0),
             reveal_wat:   RwSignal::new(None),
             memory_tab:   RwSignal::new("stack"),
             memory_words: RwSignal::new(false),
@@ -859,9 +856,9 @@ impl WasmState {
     }
 
     /// The source editor's marks in this mode: the C line of the next
-    /// instruction and of the last one, and the lines linked to the hovered
-    /// listing line.
-    pub fn source_marks(self) -> (Vec<Decoration>, Vec<Decoration>) {
+    /// instruction and of the last one, and the line linked to `linked`, the
+    /// listing line under the pointer or the cursor (0 for none).
+    pub fn source_marks(self, linked: usize) -> (Vec<Decoration>, Vec<Decoration>) {
         let mut execution = Vec::new();
         self.current.with(|current| {
             let Some(current) = current else {
@@ -884,12 +881,11 @@ impl WasmState {
                 execution.push(Decoration::line(line, "exec-line-fault"));
             }
         });
-        let hovered = self.hover_wat.get();
-        let links = if hovered > 0 {
+        let links = if linked > 0 {
             self.program.with(|program| {
                 program
                     .as_ref()
-                    .and_then(|program| program.source_for(hovered))
+                    .and_then(|program| program.source_for(linked))
                     .map(|line| vec![Decoration::line(line, "link-line")])
                     .unwrap_or_default()
             })
@@ -900,8 +896,9 @@ impl WasmState {
     }
 
     /// The listing's marks: the instruction just executed, the next one,
-    /// breakpoints, and the lines linked to the hovered C line.
-    pub fn listing_marks(self, hover_source: usize) -> Vec<(&'static str, Vec<Decoration>)> {
+    /// breakpoints, and the lines linked to `linked`, the C line under the
+    /// pointer or the cursor (0 for none).
+    pub fn listing_marks(self, linked: usize) -> Vec<(&'static str, Vec<Decoration>)> {
         let mut execution = Vec::new();
         self.current.with(|current| {
             let Some(current) = current else {
@@ -938,13 +935,13 @@ impl WasmState {
                     .collect()
             })
         });
-        let links = if hover_source > 0 {
+        let links = if linked > 0 {
             self.program.with(|program| {
                 program
                     .as_ref()
                     .map(|program| {
                         program
-                            .wat_lines_for(hover_source)
+                            .wat_lines_for(linked)
                             .into_iter()
                             .map(|line| Decoration::line(line, "link-line"))
                             .collect()
