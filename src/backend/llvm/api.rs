@@ -12,6 +12,7 @@ use std::{
     ffi::{
         CStr,
         c_char,
+        c_int,
         c_void,
     },
     fmt,
@@ -165,6 +166,7 @@ use llvm_sys::{
     ir_reader::LLVMParseIRInContext2,
     linker::LLVMLinkModules2,
     prelude::{
+        LLVMAttributeRef,
         LLVMBasicBlockRef,
         LLVMBuilderRef,
         LLVMContextRef,
@@ -189,6 +191,7 @@ use llvm_sys::{
         LLVMDisposeTargetMachine,
         LLVMGetTargetFromTriple,
         LLVMRelocMode,
+        LLVMTargetMachineEmitToFile,
         LLVMTargetMachineEmitToMemoryBuffer,
         LLVMTargetMachineRef,
     },
@@ -271,6 +274,17 @@ pub(super) struct Val<'id>(LLVMValueRef, PhantomData<fn(&'id ()) -> &'id ()>);
 // ABI-identical to the LLVMBasicBlockRef it wraps, including in slices.
 #[repr(transparent)]
 pub(super) struct Block<'id>(LLVMBasicBlockRef, PhantomData<fn(&'id ()) -> &'id ()>);
+/// An attribute and the LLVM-C index it applies at: 0 for the result, `~0`
+/// for the function, `1 + n` for parameter `n`.
+#[derive(Clone, Copy)]
+// Layout-identical to `BccIndexedAttribute` in
+// `build_support/llvm_attributes.cpp`, including in slices.
+#[repr(C)]
+pub(super) struct IndexedAttribute<'id> {
+    index:     u32,
+    attribute: LLVMAttributeRef,
+    _brand:    PhantomData<fn(&'id ()) -> &'id ()>,
+}
 
 impl Session<'_> {
     /// A session for `target` with the default code options.
@@ -1460,17 +1474,7 @@ impl<'id> Session<'id> {
         ty: Option<Ty<'id>>,
         call: bool,
     ) {
-        // SAFETY: The counted attribute name is valid during lookup.
-        let kind = unsafe { LLVMGetEnumAttributeKindForName(name.as_ptr().cast(), name.len()) };
-        let attribute = if let Some(ty) = ty {
-            // SAFETY: The attribute kind is byval/sret and the type belongs to
-            // this context by the type system.
-            unsafe { LLVMCreateTypeAttribute(self.context, kind, ty.0) }
-        } else {
-            // SAFETY: Known enum attribute with its appropriate integer
-            // payload.
-            unsafe { LLVMCreateEnumAttribute(self.context, kind, number) }
-        };
+        let attribute = self.indexed_attribute(index, name, number, ty).attribute;
         if call {
             // SAFETY: A call instruction in this live session by the type
             // system, with a valid ABI argument/result index.
@@ -1483,6 +1487,57 @@ impl<'id> Session<'id> {
             unsafe {
                 LLVMAddAttributeAtIndex(value.0, index, attribute);
             }
+        }
+    }
+
+    /// The enum attribute `name` (with `number`, or the type `ty` for
+    /// `byval`/`sret`/`elementtype`) at the LLVM-C attribute `index`, for
+    /// [`Self::add_attributes`].
+    pub(super) fn indexed_attribute(
+        &self,
+        index: u32,
+        name: &str,
+        number: u64,
+        ty: Option<Ty<'id>>,
+    ) -> IndexedAttribute<'id> {
+        // SAFETY: The counted attribute name is valid during lookup.
+        let kind = unsafe { LLVMGetEnumAttributeKindForName(name.as_ptr().cast(), name.len()) };
+        let attribute = if let Some(ty) = ty {
+            // SAFETY: The attribute kind is byval/sret and the type belongs to
+            // this context by the type system.
+            unsafe { LLVMCreateTypeAttribute(self.context, kind, ty.0) }
+        } else {
+            // SAFETY: Known enum attribute with its appropriate integer
+            // payload.
+            unsafe { LLVMCreateEnumAttribute(self.context, kind, number) }
+        };
+        IndexedAttribute {
+            index,
+            attribute,
+            _brand: PhantomData,
+        }
+    }
+
+    /// Adds every attribute in `attributes` to the function or call `value`
+    /// at once. Adding them one at a time would make LLVM build and keep a
+    /// new attribute list per attribute, each as long as the highest index
+    /// so far: quadratic in a signature's parameter count.
+    pub(super) fn add_attributes(
+        &self,
+        value: Val<'id>,
+        attributes: &[IndexedAttribute<'id>],
+        call: bool,
+    ) {
+        // SAFETY: The type system ties the function or call and every
+        // attribute to this live session; the bridge only reads the counted
+        // array, whose element layout matches its `BccIndexedAttribute`.
+        unsafe {
+            bcc_llvm_add_attributes(
+                value.0,
+                c_int::from(call),
+                attributes.as_ptr(),
+                attributes.len(),
+            );
         }
     }
 
@@ -1741,10 +1796,33 @@ impl<'id> Session<'id> {
         assembly: bool,
         check: impl FnOnce(&Self) -> bool,
     ) -> Result<Option<Buffer>, Message> {
-        let machine = self.prepare_emission(target, opt, skip_passes)?;
-        if !check(self) {
+        let Some(machine) = self.prepare_checked(target, opt, skip_passes, check)? else {
             return Ok(None);
-        }
+        };
+        self.emit_to_memory(&machine, assembly).map(Some)
+    }
+
+    /// Runs the IR pipeline and makes the target machine for emission, or
+    /// `None` when `check`, which sees the optimized module, refuses it.
+    pub(super) fn prepare_checked(
+        &self,
+        target: Target,
+        opt: Option<OptLevel>,
+        skip_passes: bool,
+        check: impl FnOnce(&Self) -> bool,
+    ) -> Result<Option<Machine>, Message> {
+        let machine = self.prepare_emission(target, opt, skip_passes)?;
+        Ok(check(self).then_some(machine))
+    }
+
+    /// The object or assembly for the prepared module, in memory. LLVM
+    /// builds it in a growing buffer and then copies it, so it costs about
+    /// twice its size at its peak.
+    pub(super) fn emit_to_memory(
+        &self,
+        machine: &Machine,
+        assembly: bool,
+    ) -> Result<Buffer, Message> {
         let mut error = ptr::null_mut();
         let mut buffer = ptr::null_mut();
         let kind = if assembly {
@@ -1771,7 +1849,33 @@ impl<'id> Session<'id> {
         if failed != 0 {
             return Err(message);
         }
-        Ok(buffer)
+        Ok(buffer.expect("successful emission produces a buffer"))
+    }
+
+    /// Writes the object for the prepared module into the regular file
+    /// named `path`, which LLVM creates or truncates and writes as it goes:
+    /// an object padded to a large section alignment costs no memory for
+    /// its padding. After an error the file may hold a corrupt object,
+    /// which the caller removes.
+    pub(super) fn emit_object_file(&self, machine: &Machine, path: &CStr) -> Result<(), Message> {
+        let mut error = ptr::null_mut();
+        // SAFETY: Verified live module and machine; the path is
+        // NUL-terminated and the error message is separately owned.
+        let failed = unsafe {
+            LLVMTargetMachineEmitToFile(
+                machine.0,
+                self.module,
+                path.as_ptr(),
+                LLVMCodeGenFileType::LLVMObjectFile,
+                &raw mut error,
+            )
+        };
+        let message = Message(error);
+        self.diagnostics.check()?;
+        if failed != 0 {
+            return Err(message);
+        }
+        Ok(())
     }
 }
 
@@ -1923,11 +2027,19 @@ impl Drop for Buffer {
     }
 }
 #[derive(Debug)]
-struct Machine(LLVMTargetMachineRef);
+pub(super) struct Machine(LLVMTargetMachineRef);
 
 unsafe extern "C" {
     /// Selects ELF initialization arrays on a live, unused target machine.
     fn bcc_llvm_use_init_array(machine: LLVMTargetMachineRef);
+    /// Merges the counted `attributes` into the attribute list of a live
+    /// function (`call` 0) or call instruction (`call` 1) in one step.
+    fn bcc_llvm_add_attributes(
+        value: LLVMValueRef,
+        call: c_int,
+        attributes: *const IndexedAttribute<'_>,
+        count: usize,
+    );
 }
 impl Drop for Machine {
     fn drop(&mut self) {

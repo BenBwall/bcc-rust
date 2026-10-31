@@ -77,6 +77,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
             match md {
                 | MacroDefinition::ObjectLike { tokenizer } => {
                     self.warn_deprecated_macro(token);
+                    let tokenizer = self.without_leading_whitespace(tokenizer);
                     let frame = TokenizerFrame {
                         frame_type: TokenizerFrameType::ObjectLikeMacroInvocation {
                             invocation_end: self.expansion_end().unwrap_or_else(|| {
@@ -115,6 +116,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                         return Some(token);
                     };
                     self.warn_deprecated_macro(token);
+                    let tokenizer = self.without_leading_whitespace(tokenizer);
                     let (tokenizer, arguments) = if is_variadic {
                         self.prepare_variadic_body(token, tokenizer, arguments)
                     } else {
@@ -151,6 +153,28 @@ impl<'x> Expander<'_, '_, '_, 'x> {
             }
         }
         Some(token)
+    }
+
+    /// A replacement list read from its first token: the white space
+    /// before it, after the macro's name or parameters, is not part of the
+    /// list. A token the replacement begins with is then separated from the
+    /// one before the invocation only as the invocation was, which `#`
+    /// spells: with `#define X 1`, `-X` stringizes as `"-1"`.
+    ///
+    /// C99: §6.10.3 paragraph 7, p. 151; PDF p. 163; §6.10.3.2 paragraph 2,
+    /// p. 153; PDF p. 165.
+    fn without_leading_whitespace<'t>(
+        &mut self,
+        mut tokenizer: TokenSource<'t>,
+    ) -> TokenSource<'t> {
+        let blanks = tokenizer
+            .spellings()
+            .take_while(|&(kind, _)| kind == PreprocessorTokenType::Whitespace)
+            .count();
+        for _ in 0..blanks {
+            _ = tokenizer.next_item(self.context);
+        }
+        tokenizer
     }
 
     /// Capture an invocation whose opening, arguments, or closing delimiter
