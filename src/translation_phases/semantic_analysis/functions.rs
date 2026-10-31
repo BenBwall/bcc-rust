@@ -521,9 +521,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 }) {
                     // Decide after typing whether Clang emits the operand.
                     // Every reference, definition and join shares this context.
-                    let static_data = self.functions.initializer.is_some_and(|binding| {
-                        self.bindings[binding].duration.is_static_or_thread()
-                    });
+                    let static_data = self.initializing_static();
                     self.enter_reference_context_kind(ReferenceContextKind::ConstantQuery {
                         emitted: false,
                     });
@@ -701,9 +699,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 // differs from function code's for some queries.
                 let info = self.expression_info(condition);
                 let constant_context = arm.is_none()
-                    || self.functions.initializer.is_some_and(|binding| {
-                        self.bindings[binding].duration.is_static_or_thread()
-                    });
+                    || self.initializing_static();
                 let value = if info.runtime_query && constant_context {
                     Self::constant_truth(info)
                 } else {
@@ -1917,10 +1913,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         // Clang emits a block-scope static object's declaration wherever it
         // visits the declaration, even after a jump (`EmitSimpleStmt`), so
         // its initializer is skipped only where the code is not visited.
-        let static_local = self.functions.initializer.is_some_and(|binding| {
-            let data = self.bindings[binding];
-            data.linkage == Linkage::None && data.duration.is_static_or_thread()
-        });
+        let static_local = match self.functions.initializer {
+            | Some(binding) => {
+                let data = self.bindings[binding];
+                data.linkage == Linkage::None && data.duration.is_static_or_thread()
+            },
+            | None => self
+                .inferences
+                .last()
+                .is_some_and(|inference| inference.static_local()),
+        };
         self.functions.uses.push(Use {
             reference_context: self.functions.reference_context,
             owner: self.reference_owner(),
@@ -1936,6 +1938,43 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             dead: self.functions.elided
                 || (self.functions.dead && (self.functions.unvisited || !static_local)),
         });
+    }
+
+    /// Whether the initializer being analyzed is a static or thread-local
+    /// object's: the bound object's, or before an inferred object is bound,
+    /// the one its specifiers declare.
+    pub(super) fn initializing_static(&self) -> bool {
+        match self.functions.initializer {
+            | Some(binding) => self.bindings[binding].duration.is_static_or_thread(),
+            | None => self
+                .inferences
+                .last()
+                .is_some_and(|inference| inference.duration().is_static_or_thread()),
+        }
+    }
+
+    /// Where the references of an initializer analyzed before its object is
+    /// bound begin, and the owner they are recorded with.
+    pub(super) fn reference_mark(&self) -> ReferenceMark {
+        ReferenceMark {
+            start: self.functions.uses.len(),
+            owner: self.reference_owner(),
+        }
+    }
+
+    /// Gives the references recorded since `mark` to `binding`, a static or
+    /// thread-local object bound after its initializer was analyzed, as if
+    /// it had owned them throughout. References a nested static declaration
+    /// owns stay its own.
+    pub(super) fn claim_references(&mut self, mark: ReferenceMark, binding: usize) {
+        if !self.bindings[binding].duration.is_static_or_thread() {
+            return;
+        }
+        for usage in &mut self.functions.uses[mark.start..] {
+            if usage.owner == mark.owner {
+                usage.owner = Some(ReferenceOwner::Object(binding));
+            }
+        }
     }
 
     fn reference_owner(&self) -> Option<ReferenceOwner> {
@@ -2742,6 +2781,14 @@ struct DefinitionContext {
     reference_context: Option<usize>,
 }
 
+/// The first reference of an inferred object's initializer and the owner
+/// it was analyzed under ([`Analyzer::reference_mark`]).
+#[derive(Clone, Copy, Debug)]
+pub(super) struct ReferenceMark {
+    start: usize,
+    owner: Option<ReferenceOwner>,
+}
+
 /// Owner and first reference before a foldable condition is analyzed.
 #[derive(Clone, Copy)]
 pub(super) struct ConditionMark {
@@ -2821,7 +2868,7 @@ enum ReferenceContextKind<'tu> {
 /// Parameter type sites execute as part of the definition, before its binding
 /// is installed. Resolve their syntactic owner to that binding at completion.
 /// C99: §6.9.1p10, p. 142; PDF p. 154.
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum ReferenceOwner {
     Function(usize),
     Object(usize),

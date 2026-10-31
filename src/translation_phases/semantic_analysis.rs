@@ -21,9 +21,10 @@
 //!   stack balance; `collection.rs` builds scratch lists; `scopes.rs` installs,
 //!   finds and restores names; `results.rs` defines the retained output.
 //! - Syntax and constraints: `traversal.rs` schedules child syntax;
-//!   `declarations.rs` constructs types and bindings; `expressions.rs` and
-//!   `expressions/` type expressions and conversions; `initializers.rs` walks
-//!   subobjects; `statements.rs` checks jumps and returns; `functions.rs`
+//!   `declarations.rs` constructs types and bindings; `inference.rs` types
+//!   C23 `auto` and GNU `__auto_type` objects from their initializers;
+//!   `expressions.rs` and `expressions/` type expressions and conversions;
+//!   `initializers.rs` walks subobjects; `statements.rs` checks jumps and returns; `functions.rs`
 //!   checks definitions and completes the translation unit; `emission.rs`
 //!   models which code Clang's code generation skips in folded switches and
 //!   after calls that do not return.
@@ -70,6 +71,7 @@ mod emission;
 mod expressions;
 mod facts;
 mod functions;
+mod inference;
 mod initializers;
 mod predefined;
 mod statements;
@@ -421,12 +423,17 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 if d.init_declarators.is_empty() {
                     self.misplaced_transparent_union(d.declaration_specifiers);
                 }
-                for init in d.init_declarators.iter().rev() {
+                let inferred = inference::inferred(d.declaration_specifiers);
+                for (index, init) in d.init_declarators.iter().enumerate().rev() {
                     if attributes::written_on(d.declaration_specifiers.extensions, init.declarator)
                     {
                         self.work.push(Work::DeclarationEnd(
                             init.declarator.kind.as_slice().as_ptr().addr(),
                         ));
+                    }
+                    if inferred {
+                        self.work.push(Work::InferDeclarator(d, index));
+                        continue;
                     }
                     if let Some(initializer) = init.initializer {
                         self.work
@@ -529,6 +536,11 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 self.taint(f.recovered);
                 self.prepare_function(f);
                 self.work.push(Work::FunctionBase(f));
+                _ = self.misplaced_inference(
+                    f.declaration_specifiers.type_specifiers,
+                    inference::InferenceFault::FunctionDeclarator,
+                    f.declaration_specifiers.source_vectors,
+                );
                 self.spec(f.declaration_specifiers, false);
             },
             | Work::FunctionBase(f) => {
@@ -616,6 +628,14 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     self.functions.initializer = Some(entry.binding);
                 }
                 self.work.push(Work::Initializer(initializer));
+            },
+            | Work::InferDeclarator(d, index) => self.infer_declarator(d, index),
+            | Work::InferType(d, index) => self.infer_type(d, index),
+            | Work::InferQualified(d, index) => self.infer_binding(d, index),
+            | Work::InferInitialization(d, index, omitted, references) =>
+                self.infer_initialization(d, index, omitted, references),
+            | Work::EndInference => {
+                _ = self.inferences.pop();
             },
             | Work::InitializeDone(binding, initializer) => {
                 self.record_constant_initializer(binding, initializer);
@@ -794,6 +814,11 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     return;
                 }
                 self.work.push(Work::TypeNameBase(name, fold_bounds));
+                _ = self.misplaced_inference(
+                    name.declaration_specifiers.type_specifiers,
+                    inference::InferenceFault::NotAllowedHere,
+                    name.declaration_specifiers.source_vectors,
+                );
                 self.spec(name.declaration_specifiers, false);
             },
             | Work::TypeNameBase(name, fold_bounds) => {
@@ -1011,6 +1036,15 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                         params,
                         std::ptr::from_ref(&list.as_slice()[index]).addr(),
                     ));
+                    // A C23 `auto` parameter already reports its storage
+                    // class.
+                    if p.declaration_specifiers.storage_class.is_none() {
+                        _ = self.misplaced_inference(
+                            p.declaration_specifiers.type_specifiers,
+                            inference::InferenceFault::NotAllowedHere,
+                            p.declaration_specifiers.source_vectors,
+                        );
+                    }
                     self.spec(p.declaration_specifiers, false);
                 } else {
                     let scope = self.scope;
@@ -1212,6 +1246,11 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     self.work.push(Work::RecordMemberBase(tag, member, members));
                     self.work
                         .push(Work::VectorAttributes(member.extensions, false));
+                    _ = self.misplaced_inference(
+                        member.type_specifiers,
+                        inference::InferenceFault::NotAllowedHere,
+                        member.source_vectors,
+                    );
                     self.work.push(Work::Spec(
                         member.type_specifiers,
                         member.type_qualifiers,
@@ -1812,6 +1851,24 @@ enum Work<'tu, 's> {
     ValueExpression(&'tu Expression<'tu>),
     CompoundInitializer(&'tu Expression<'tu>, &'tu Initializer<'tu>),
     InitializeDeclaration(Declarator<'tu>, &'tu Initializer<'tu>),
+    /// One init-declarator of a C23 `auto` or GNU `__auto_type`
+    /// declaration, by index: its form is checked and its initializer
+    /// analyzed before it is typed and bound.
+    InferDeclarator(&'tu Declaration<'tu>, usize),
+    /// The inferred declarator's initializer is analyzed; type it.
+    InferType(&'tu Declaration<'tu>, usize),
+    /// The inferred type is qualified; bind the declarator.
+    InferQualified(&'tu Declaration<'tu>, usize),
+    /// The inferred declarator is bound; initialize it, recording whether
+    /// unreachable code omits the initialization.
+    InferInitialization(
+        &'tu Declaration<'tu>,
+        usize,
+        bool,
+        functions::ReferenceMark,
+    ),
+    /// An inferred declarator's initializer has been analyzed.
+    EndInference,
     InitializeDone(usize, &'tu Initializer<'tu>),
     Condition(ExpressionSlot<'tu>, bool),
     RequireConstant(
@@ -2040,6 +2097,12 @@ struct Analyzer<'a, 'tu, 's> {
     defining:                ArenaMap<'s, usize, ()>,
     /// Least and greatest enumerator values of an open enumeration.
     enum_ranges:             ArenaMap<'s, usize, (i128, i128)>,
+    /// Inferred declarations whose initializers are being analyzed,
+    /// innermost last.
+    inferences:              ArenaVec<'s, inference::Inference>,
+    /// The type a declaration's first inferred declarator deduced, by the
+    /// declaration's identity, for Clang's check of the others.
+    inferred_leaves:         ArenaMap<'s, usize, TypeId>,
 }
 
 // Tests
