@@ -530,6 +530,18 @@ fn scalar_code(scalar: Scalar) -> &'static str {
         | Scalar::ComplexFloat64 => "CDF64_",
         | Scalar::ComplexFloat32x => "CDF32x",
         | Scalar::ComplexFloat64x => "CDF64x",
+        // `C <type>`, as Clang mangles the complex integer types.
+        | Scalar::ComplexChar => "Cc",
+        | Scalar::ComplexSignedChar => "Ca",
+        | Scalar::ComplexUnsignedChar => "Ch",
+        | Scalar::ComplexShort => "Cs",
+        | Scalar::ComplexUnsignedShort => "Ct",
+        | Scalar::ComplexInt => "Ci",
+        | Scalar::ComplexUnsignedInt => "Cj",
+        | Scalar::ComplexLong => "Cl",
+        | Scalar::ComplexUnsignedLong => "Cm",
+        | Scalar::ComplexLongLong => "Cx",
+        | Scalar::ComplexUnsignedLongLong => "Cy",
     }
 }
 fn binary_code(operator: BinaryOperator) -> Option<&'static str> {

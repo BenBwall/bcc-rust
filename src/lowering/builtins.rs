@@ -868,7 +868,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         self.binary_inst(opcode, InstFlags::empty(), a, b)
     }
 
-    fn choose(&mut self, condition: Value, yes: Value, no: Value) -> Value {
+    pub(super) fn choose(&mut self, condition: Value, yes: Value, no: Value) -> Value {
         let ty = self.draft.value_type(yes);
         self.inst(
             InstData::Select {

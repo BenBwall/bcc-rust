@@ -156,18 +156,15 @@ fn repeated_double_is_a_duplicate_not_a_conflict() {
 }
 
 /// C99 §6.7.2p2 lists `_Complex` only together with `float`, `double`, or
-/// `long double`; plain `_Complex` and `long _Complex` are not valid
-/// multisets in any specifier context.
+/// `long double`; plain `_Complex` is not a valid multiset in any specifier
+/// context. (`long _Complex` is GNU's complex `long int`.)
 #[test]
 fn incomplete_complex_type_specifiers_are_diagnosed() {
     for source in [
         "_Complex c;\n",
-        "long _Complex d;\n",
-        "_Complex long d;\n",
         "struct s { _Complex m; };\n",
         "void f(_Complex p);\n",
         "int x = sizeof(_Complex);\n",
-        "int y = (_Complex long)0;\n",
         "const _Complex;\n",
         "_Complex",
     ] {
@@ -188,6 +185,40 @@ fn incomplete_complex_type_specifiers_are_diagnosed() {
             );
         },
     );
+}
+
+/// GNU complex integer types: `_Complex` with integer type specifiers in
+/// any order, `long _Complex` alone included, as GCC and Clang accept them;
+/// `_Bool` and a repeated `_Complex` are not.
+/// GNU extension: GCC manual, "Complex Numbers".
+#[test]
+fn complex_integer_type_specifiers_parse() {
+    for source in [
+        "long _Complex d;\n",
+        "_Complex long d;\n",
+        "int y = (_Complex long)0;\n",
+        "_Complex int a; int _Complex b; unsigned _Complex short c;\n",
+        "_Complex unsigned char e; long long _Complex f; _Complex long unsigned g;\n",
+        "struct s { _Complex char m; };\n",
+    ] {
+        with_parse(source, |parsed| {
+            assert!(
+                parser_errors(parsed).next().is_none(),
+                "{source:?}: {:#?}",
+                parsed.errors
+            );
+        });
+    }
+    for source in ["_Complex _Bool b;\n", "_Complex int _Complex c;\n"] {
+        with_parse(source, |parsed| {
+            assert_eq!(
+                parser_errors(parsed).count(),
+                1,
+                "{source:?}: {:#?}",
+                parsed.errors
+            );
+        });
+    }
 }
 
 /// C99 §6.9.1p1: an identifier-list head followed by a declaration-list is a
@@ -554,10 +585,11 @@ fn recovered_old_style_head_does_not_swallow_unrelated_declarations() {
     });
 }
 
+/// GNU complex integer types parse alike in either order, with no
+/// diagnostic. (Before they were modeled, `_Complex int` drew both the
+/// conflict and the incomplete-complex error.)
 #[test]
-fn complex_integer_type_is_diagnosed_once_in_any_order() {
-    // Round-2 review: `_Complex int` drew the conflict and the
-    // incomplete-complex error; `int _Complex` drew one.
+fn complex_integer_type_parses_in_any_order() {
     for source in [
         "_Complex char g;\n",
         "_Complex int i;\n",
@@ -566,7 +598,7 @@ fn complex_integer_type_is_diagnosed_once_in_any_order() {
         with_parse(source, |parsed| {
             assert_eq!(
                 parser_errors(parsed).count(),
-                1,
+                0,
                 "{source}: {:#?}",
                 parsed.errors
             );

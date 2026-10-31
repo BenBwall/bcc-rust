@@ -208,9 +208,23 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             }
             return result;
         }
+        // GNU: `~` of a complex value is its conjugate (GCC manual,
+        // "Complex Numbers"); Clang accepts it too.
+        let conjugate = op == U::BitwiseNot
+            && matches!(
+                self.types.nodes[self.types.non_atomic(ty).index],
+                TypeKind::Scalar(s) if s.complex()
+            );
+        if conjugate {
+            self.context.report_extension(
+                crate::configuration::Feature::RealImag,
+                "`~` for complex conjugation",
+                e.source_vectors,
+            );
+        }
         if !match op {
             | U::Plus | U::Minus => self.arithmetic(ty),
-            | U::BitwiseNot => self.integer_type(ty).is_some(),
+            | U::BitwiseNot => self.integer_type(ty).is_some() || conjugate,
             | U::LogicalNot => self.scalar_type(ty),
             | _ => true,
         } {
@@ -252,6 +266,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             let value = value.map(|value| {
                 if op == U::Minus {
                     Self::floating_negate(value)
+                } else if conjugate {
+                    super::super::Floating {
+                        real: value.real,
+                        imag: value.imag.negate(),
+                    }
                 } else {
                     value
                 }
@@ -652,7 +671,30 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     self.converted_floating(info, operand_type)
                 }
             };
-            if floating && let Some((left_value, right_value)) = operand(left).zip(operand(right)) {
+            let complex_integer = matches!(
+                self.types.nodes[self.types.non_atomic(operand_type).index],
+                TypeKind::Scalar(s) if s.complex_integer()
+            );
+            if floating
+                && complex_integer
+                && let Some((left_value, right_value)) = operand(left).zip(operand(right))
+            {
+                let real_divisor = !matches!(
+                    self.types.nodes[self.types.non_atomic(rt).index],
+                    TypeKind::Scalar(s) if s.complex()
+                );
+                let value = self.complex_integer_binary(
+                    op,
+                    left_value,
+                    right_value,
+                    operand_type,
+                    real_divisor,
+                );
+                info.set_floating(value.and_then(|value| self.round_floating(value, info.ty)));
+                info.integer = Self::floating_comparison(op, left_value, right_value);
+            } else if floating
+                && let Some((left_value, right_value)) = operand(left).zip(operand(right))
+            {
                 let TypeKind::Scalar(scalar) = self.types.nodes[operand_type.index] else {
                     unreachable!("floating scalar operation")
                 };
@@ -2054,6 +2096,83 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
+    /// Folds `+`, `-`, `*` and `/` of two GNU complex integer constants of
+    /// type `ty`, whose exact parts the floating carrier holds, wrapping
+    /// each step to the parts' width as the run-time operation does; a
+    /// quotient uses the identity's formula (GCC dividing each part by a
+    /// real divisor, Clang taking it as `c + 0i`), and a zero divisor does
+    /// not fold.
+    /// GNU extension: GCC manual, "Complex Numbers".
+    fn complex_integer_binary(
+        &self,
+        op: BinaryOperator,
+        left: super::super::Floating,
+        right: super::super::Floating,
+        ty: TypeId,
+        real_divisor: bool,
+    ) -> Option<super::super::Floating> {
+        use BinaryOperator as B;
+        let TypeKind::Scalar(scalar) = self.types.nodes[self.types.non_atomic(ty).index] else {
+            return None;
+        };
+        let (bits, signed) = self.types.target.integer(scalar.real_type())?;
+        let wrap = |value: i128| Integer::int(value).cast(bits, signed).value;
+        let part = |value: crate::float_parsing::LongDouble| {
+            crate::float_parsing::bits::to_integer(&value, 128, true).map(u128::cast_signed)
+        };
+        let [a, b, c, d] = [
+            part(left.real)?,
+            part(left.imag)?,
+            part(right.real)?,
+            part(right.imag)?,
+        ];
+        let mul = |x: i128, y: i128| wrap(x.wrapping_mul(y));
+        let add = |x: i128, y: i128| wrap(x.wrapping_add(y));
+        let sub = |x: i128, y: i128| wrap(x.wrapping_sub(y));
+        let div = |x: i128, y: i128| (y != 0).then(|| wrap(x.wrapping_div(y)));
+        let gcc = self.context.configuration.complex_integer_rules()
+            == crate::configuration::RuleSet::Gcc;
+        let [real, imaginary] = match op {
+            | B::Addition => [add(a, c), add(b, d)],
+            | B::Subtraction => [sub(a, c), sub(b, d)],
+            | B::Multiplication => [sub(mul(a, c), mul(b, d)), add(mul(a, d), mul(b, c))],
+            // GCC divides each part by a real divisor; Clang's formula
+            // takes it as `c + 0i` below.
+            | B::Division if real_divisor && gcc => [div(a, c)?, div(b, c)?],
+            | B::Division if gcc => {
+                // GCC's `expand_complex_div_wide`; see lowering's
+                // `gcc_integer_quotient`.
+                if wrap(c.abs()) < wrap(d.abs()) {
+                    let ratio = div(c, d)?;
+                    let total = add(mul(c, ratio), d);
+                    [
+                        div(add(mul(a, ratio), b), total)?,
+                        div(sub(mul(b, ratio), a), total)?,
+                    ]
+                } else {
+                    let ratio = div(d, c)?;
+                    let total = add(mul(d, ratio), c);
+                    [
+                        div(add(mul(b, ratio), a), total)?,
+                        div(sub(b, mul(a, ratio)), total)?,
+                    ]
+                }
+            },
+            | B::Division => {
+                let total = add(mul(c, c), mul(d, d));
+                [
+                    div(add(mul(a, c), mul(b, d)), total)?,
+                    div(sub(mul(b, c), mul(a, d)), total)?,
+                ]
+            },
+            | _ => return None,
+        };
+        Some(super::super::Floating {
+            real: self.integer_value(Integer::int(real), crate::ir::Type::F80)?,
+            imag: self.integer_value(Integer::int(imaginary), crate::ir::Type::F80)?,
+        })
+    }
+
     /// C99: §6.3.1.8p1, pp. 44-45; PDF pp. 56-57. Preserve ranks even
     /// when long and long long have the same LP64 width.
     pub(in crate::translation_phases::semantic_analysis) fn common_arithmetic(
@@ -2095,27 +2214,45 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             .real_type();
             if complex { real.complex_type() } else { real }
         } else {
+            // A complex integer operand takes part through its real type,
+            // which is not promoted: `_Complex char + _Complex char` has
+            // type `_Complex char`, as in GCC and Clang (GNU extension: GCC
+            // manual, "Complex Numbers").
+            let (ls, rs) = (ls.real_type(), rs.real_type());
             let rank = |s| match s {
+                | Scalar::Char | Scalar::SignedChar | Scalar::UnsignedChar => -1,
+                | Scalar::Short | Scalar::UnsignedShort => 0,
                 | Scalar::Long | Scalar::UnsignedLong => 2,
                 | Scalar::LongLong | Scalar::UnsignedLongLong => 3,
                 | Scalar::Int128 | Scalar::UnsignedInt128 => 4,
                 | _ => 1,
             };
             let unsigned = |s| {
-                matches!(
-                    s,
-                    Scalar::UnsignedInt
-                        | Scalar::UnsignedLong
-                        | Scalar::UnsignedLongLong
-                        | Scalar::UnsignedInt128
-                )
+                self.types
+                    .target
+                    .integer(s)
+                    .is_some_and(|(_, signed)| !signed)
             };
-            let (high, low) = if rank(ls) >= rank(rs) {
+            // Of two operands of equal rank, the unsigned one's type is
+            // the common type (§6.3.1.8p1): plain `char` where it is
+            // unsigned. Two complex integer parts of equal rank and
+            // signedness (`_Complex signed char` and `_Complex char`) give
+            // Clang the left operand's, and GCC the left's only if it is
+            // unsigned (its `c_common_type`), else the right's.
+            let right_first = rank(ls) == rank(rs)
+                && if self.context.configuration.complex_integer_rules()
+                    == crate::configuration::RuleSet::Gcc
+                {
+                    !unsigned(ls)
+                } else {
+                    unsigned(rs) && !unsigned(ls)
+                };
+            let (high, low) = if rank(ls) >= rank(rs) && !right_first {
                 (ls, rs)
             } else {
                 (rs, ls)
             };
-            if unsigned(high) == unsigned(low)
+            let real = if unsigned(high) == unsigned(low)
                 || unsigned(high)
                 || self.types.target.integer(high).map(|m| m.0)
                     > self.types.target.integer(low).map(|m| m.0)
@@ -2123,12 +2260,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 high
             } else {
                 match high {
+                    | Scalar::Char | Scalar::SignedChar => Scalar::UnsignedChar,
+                    | Scalar::Short => Scalar::UnsignedShort,
                     | Scalar::Long => Scalar::UnsignedLong,
                     | Scalar::LongLong => Scalar::UnsignedLongLong,
                     | Scalar::Int128 => Scalar::UnsignedInt128,
                     | _ => Scalar::UnsignedInt,
                 }
-            }
+            };
+            if complex { real.complex_type() } else { real }
         };
         // GNU aligned typedef identity survives when no common-type
         // reconstruction is needed. Different precision/rank selects the
