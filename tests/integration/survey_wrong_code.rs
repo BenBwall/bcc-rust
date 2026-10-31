@@ -290,6 +290,34 @@ mod tests {
         }
     }
 
+    /// GCC computes with a bit-field wider than `int` in the field's own
+    /// width (gcc.c-torture bitfld-3, bitfld-5, pr34971, pr32244-1); Clang
+    /// promotes it to the declared type.
+    #[test]
+    fn wide_bit_fields_compute_in_their_width_as_each_compiler_does() {
+        let source = b"#include <stdio.h>\n\
+            struct s { unsigned long long u40:40; long long s40:40; \
+            unsigned long long u20:20; } x = { 0xFFFFFFFFFFull, -1, 0xFFFFF };\n\
+            int main(void) {\n\
+            printf(\"%llx %llx %llx %lld %x %llx\\n\", (unsigned long long)(x.u40 + 1), \
+            (unsigned long long)(x.u40 + 1ull), (unsigned long long)(x.u40 << 8), \
+            (long long)(x.s40 + 1), (unsigned)(x.u20 + 1), (unsigned long long)(~x.u40));\n\
+            return 0;\n\
+            }\n";
+        prints_on_every_back_end(
+            "--compiler-identity=gcc",
+            source,
+            &["-w"],
+            "0 10000000000 ffffffff00 0 100000 0\n",
+        );
+        prints_on_every_back_end(
+            "--compiler-identity=clang",
+            source,
+            &["-w"],
+            "10000000000 10000000000 ffffffffff00 0 100000 ffffff0000000000\n",
+        );
+    }
+
     #[test]
     fn long_double_union_zero_initializer_clears_every_byte() {
         let source = b"struct s { char s[sizeof(long double)]; };\n\

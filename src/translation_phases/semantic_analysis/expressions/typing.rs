@@ -2125,6 +2125,22 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             };
             return self.types.scalar(promoted);
         }
+        // GCC gives a bit-field wider than int but narrower than its declared
+        // type a type of its own width, which converts as `_BitInt(N)` does:
+        // `u40 + 1` wraps at 40 bits, and `u40 + 1ull` is 64-bit. Clang
+        // promotes it to the declared type.
+        // C99: §6.7.2.1p4, p. 101; PDF p. 113 (implementation-defined
+        // bit-field types). C23: §6.3.1.8p1 (bit-precise conversions).
+        if let Some(width) = info.promotion_width.map(|width| u32::from(width.get()))
+            && width > 32
+            && self.context.configuration.compiler_identity().rules()
+                == crate::configuration::RuleSet::Gcc
+            && let Some((bits, signed)) = self.integer_type(ty)
+            && width < bits
+            && !matches!(self.types.nodes[ty.index], TypeKind::BitInt { .. })
+        {
+            return self.types.intern(TypeKind::BitInt { width, signed });
+        }
         // Clang's implementation-defined extended bit-field promotions.
         // C99: §6.3.1.1p2, p. 42; PDF p. 54; §6.7.2.1p4, p. 101; PDF p. 113.
         if let Some(width) = info.promotion_width.map(NonZeroU8::get)

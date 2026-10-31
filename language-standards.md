@@ -2915,6 +2915,16 @@ operand's width, for every unsigned integer type up to `unsigned __int128`
 and every `unsigned _BitInt(N)`. The registry shard is `src/builtins/bits.rs`;
 `semantic_analysis/builtins/bits.rs` types, checks and folds the calls.
 
+Arithmetic on a bit-field wider than `int` follows the identity too.
+GCC gives a field of width N, between `int`'s width and its declared type's,
+a type of that width, which converts as `_BitInt(N)` does: with
+`unsigned long long u40 : 40`, `u40 + 1`, `u40 + 1u`, `u40 << 8`, `-u40` and
+`~u40` are computed in 40 bits, `u40 + 1ull` in 64, and a variadic argument
+passes the value at the declared type's width. Clang promotes the field to
+its declared type. A field at most as wide as `int` promotes to `int` under
+both. bcc does not model GCC's distinct type in `_Generic`, which matches an
+unpromoted wide field against its declared type.
+
 The identity's rules (`bit_builtin_rules`) decide what each accepts, both
 compilers having been probed:
 
