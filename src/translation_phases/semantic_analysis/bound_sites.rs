@@ -13,9 +13,12 @@ use super::{
     TypeSpecifiers,
 };
 use crate::{
-    translation_phases::parsing::syntax::{
-        Expression,
-        ExpressionType,
+    translation_phases::{
+        parsing::syntax::{
+            Expression,
+            ExpressionType,
+        },
+        preprocessing::KeywordTokenType,
     },
     util::bump::ArenaVec,
 };
@@ -31,17 +34,29 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
-    /// A cast or compound literal evaluates the size expressions and typeof
-    /// operands of its type name when the expression is evaluated.
-    /// C99: §6.7.5.2p5, p. 117; PDF p. 129; §6.5.2.5p6, p. 76; PDF p. 88.
+    /// A cast, compound literal or `va_arg` evaluates the size expressions
+    /// and typeof operands of its type name when the expression is
+    /// evaluated, as GCC does for `va_arg`.
+    /// C99: §6.7.5.2p5, p. 117; PDF p. 129; §6.5.2.5p6, p. 76; PDF p. 88;
+    /// §7.15.1.1, p. 250; PDF p. 262.
     pub(super) fn retain_expression_actions(&mut self, expression: &'tu Expression<'tu>) {
         // Normalize the written type site once. Both effect classification and
         // value/effects lowering consume this same generic prelude record.
-        if let ExpressionType::Cast {
-            target_type: type_name,
-            ..
-        }
-        | ExpressionType::CompoundLiteral { type_name, .. } = expression.kind
+        let type_name = match expression.kind {
+            | ExpressionType::Cast {
+                target_type: type_name,
+                ..
+            }
+            | ExpressionType::CompoundLiteral { type_name, .. } => Some(type_name),
+            | ExpressionType::Builtin(builtin)
+                if builtin.keyword == KeywordTokenType::BuiltinVaArg =>
+                builtin.operands.iter().find_map(|operand| match *operand {
+                    | SyntaxOperand::Type(name) => Some(name),
+                    | SyntaxOperand::Expression(_) => None,
+                }),
+            | _ => None,
+        };
+        if let Some(type_name) = type_name
             && let Some(&site) = self
                 .type_name_sites
                 .get(&super::type_name_identity(type_name))

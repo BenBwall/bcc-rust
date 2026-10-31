@@ -497,6 +497,50 @@ fn vla_restore_releases_newer_alloca_storage() {
     }
 }
 
+/// GCC keeps an `alloca` block, and the VLA scope it was made in, until the
+/// function returns (gcc.dg/vla-24.c); an exit that no `alloca` reached
+/// still releases the arrays.
+#[test]
+fn vla_restore_keeps_alloca_storage_under_gcc() {
+    let sources = [
+        "int main(void){int n=3,*p; {int a[n]; a[0]=11; p=__builtin_alloca(sizeof(int)); *p=37;} \
+         return *p!=37;}",
+        "int main(void){int n=128,i=0,*p=0; while(i<1000){int a[n]; a[0]=++i; if(i==1000) \
+         {p=__builtin_alloca(sizeof(int)); *p=37;}} return *p!=37;}",
+    ];
+    for source in sources {
+        for target in [Target::LinuxGnu, Target::WindowsGnu] {
+            for (optimize, profile) in STAGES {
+                with_configured_module(
+                    source,
+                    target,
+                    optimize,
+                    profile,
+                    CompilerConfiguration::default()
+                        .with_target(target)
+                        .with_gnu_extensions(true)
+                        .with_compiler_identity(crate::configuration::CompilerIdentity::Gcc),
+                    |module, target| {
+                        let arena = Bump::new();
+                        let mut host = DefaultHost::for_target(&arena, target);
+                        let outcome = interpreter::run(module, "main", &[], &mut host).unwrap();
+                        assert_eq!(
+                            outcome.termination,
+                            Termination::Returned(Some(RuntimeValue::Int(0))),
+                            "{source}"
+                        );
+                        assert!(
+                            outcome.memory_cells < 100_000,
+                            "{} cells: {source}",
+                            outcome.memory_cells
+                        );
+                    },
+                );
+            }
+        }
+    }
+}
+
 const SWITCH_VLAS: &[&str] = &[
     "int main(void){int n=8192; for(int i=0;i<1000;i++){int a[n]; a[0]=i; a[n-1]=37; \
      switch(i%3){case 0: break; case 1: a[0]+=1; break; default: a[0]+=2;} if(a[n-1]!=37 || \

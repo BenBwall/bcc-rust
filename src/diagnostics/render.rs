@@ -25,10 +25,13 @@ use crate::{
         Context,
         ErrorSeverity,
     },
-    util::bump::{
-        ArenaString,
-        ArenaVec,
-        Bump,
+    util::{
+        bump::{
+            ArenaString,
+            ArenaVec,
+            Bump,
+        },
+        raw_bytes,
     },
 };
 
@@ -483,6 +486,9 @@ fn visible_source<'scratch>(text: &str, scratch: &'scratch Bump) -> ArenaString<
             for _ in 0..TAB_WIDTH {
                 visible.push(' ');
             }
+        } else if let Some(byte) = raw_bytes::raw_byte(c) {
+            // A byte of malformed UTF-8 shows as Clang shows it.
+            let _ = write!(visible, "<{byte:02X}>");
         } else {
             visible.push(match u32::from(c) {
                 | code @ 0..0x20 => char::from_u32(0x2400 + code).unwrap_or(c),
@@ -496,12 +502,23 @@ fn visible_source<'scratch>(text: &str, scratch: &'scratch Bump) -> ArenaString<
 
 fn display_width(text: &str) -> usize {
     text.chars()
-        .map(|c| if c == '\t' { TAB_WIDTH } else { 1 })
+        .map(|c| {
+            if c == '\t' {
+                TAB_WIDTH
+            } else if raw_bytes::raw_byte(c).is_some() {
+                RAW_BYTE_WIDTH
+            } else {
+                1
+            }
+        })
         .sum()
 }
 
 /// Width a tab occupies when a source line is echoed.
 const TAB_WIDTH: usize = 4;
+
+/// Width of a malformed-UTF-8 byte echoed as `<FF>`.
+const RAW_BYTE_WIDTH: usize = 4;
 
 impl Display for Painted<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

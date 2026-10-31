@@ -55,6 +55,7 @@ use crate::{
             ArenaVec,
             Bump,
         },
+        raw_bytes,
         string_cache::StringCacheId,
     },
 };
@@ -122,7 +123,11 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
             self.find_header_from_path(
                 including_file,
                 header.source_vectors,
-                Path::new(header.name),
+                if self.context.raw_source_bytes {
+                    raw_bytes::path(self.scratch, header.name)
+                } else {
+                    Path::new(header.name)
+                },
                 header.is_system_header,
                 start,
             )

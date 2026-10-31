@@ -770,6 +770,9 @@ The following vocabulary entries retain the established diagnostic contracts:
   retain their exemption, and parser suppression still applies. The source is
   [GCC's alignment extension](https://gcc.gnu.org/onlinedocs/gcc/Alignment.html).
   Keyword availability and spelling checks are independent and unchanged.
+  Of a function type it is 1 under GCC's rules and 4 under Clang's, on every
+  target; of a function designator, the function's `aligned` attribute
+  replaces that (gcc.c-torture/execute/align-3.c).
 - `TypedefRedefinition` has C11 origin. Redefining a typedef to the identical,
   non-variably-modified type is accepted in every mode, reported as
   `typedef redefinition` with C11 origin under Warn/Deny before C11 (GNU
@@ -1020,6 +1023,28 @@ nonordinary prefixes. Phase 7 adds encoding-bearing literal, bit-precise
 integer, and imaginary constant token variants. Semantic analysis types the
 encoded literals (see `semantic-analysis.md`, "Type graph and target data
 model") and lowering emits their UTF-8, UTF-16 and UTF-32 units.
+
+Source text that is not UTF-8 keeps its bytes (`util/raw_bytes.rs`): phase 1
+reads each byte of malformed UTF-8 as a private-use stand-in, U+10FF00 plus
+the byte, and phase 5 turns a stand-in in a literal back into that byte, so
+`"\0\377"` and `"\0ÿ"` written in Latin-1 are the same three bytes
+(gcc.c-torture/execute/20000227-1.c). The stand-ins mean bytes only in a
+translation unit that read malformed UTF-8. As each compiler does:
+
+| Literal | GCC identity | Clang identity |
+|---|---|---|
+| unprefixed string or character | bytes kept, silent | bytes kept, one "illegal character encoding in string literal [-Winvalid-source-encoding]" (or "character literal") per literal, an error under `-pedantic-errors` |
+| `u8` | bytes kept, silent; a `u8` character constant of more than one byte is an error | error "illegal character encoding in string literal" |
+| `u`, `U`, `L` | error "converting to execution character set: Invalid or incomplete multibyte or wide character" | error "illegal character encoding in string literal" |
+
+An unprefixed literal joined to a prefixed one takes its prefix (C11
+§6.4.5p5), and so its row: Clang's warning becomes the prefixed literal's
+error, and GCC rejects bytes in a `u`, `U` or `L` result.
+
+A stray byte outside a literal is the error "stray byte <FF> in source", and
+source excerpts show each byte as `<FF>`, as Clang does. `-E` spells a
+string literal that is not UTF-8 with octal escapes (`"\377"`), which give
+the same bytes where GCC copies the byte.
 
 C23 `#elifdef`/`#elifndef`, `#warning`, `#embed`, `__has_include`,
 `__has_embed`, `__has_c_attribute`, and `__VA_OPT__` also work as earlier GNU

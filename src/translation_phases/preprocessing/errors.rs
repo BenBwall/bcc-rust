@@ -66,6 +66,23 @@ pub(crate) enum PreprocessorErrorType<'tu> {
     /// C99: implementation-defined wide encoding §6.4.4.4p11, p. 61;
     /// PDF p. 73. A UTF-16 wide character must occupy one `wchar_t`.
     WideCharacterOutOfRange,
+    /// A character or string literal holds bytes of malformed UTF-8, as
+    /// Clang reports them: a warning in the `invalid-source-encoding` group
+    /// for an unprefixed literal, which keeps the bytes, and an error for a
+    /// prefixed one. `character` tells a character constant from a string.
+    ///
+    /// C99: the mapping of source bytes is implementation-defined, phase 1,
+    /// §5.1.1.2 paragraph 1, p. 10; PDF p. 22.
+    IllegalCharacterEncoding {
+        character: bool,
+        prefixed:  bool,
+    },
+    /// A `u`, `U` or `L` literal holds bytes of malformed UTF-8, which no
+    /// wide execution character encodes: GCC's error. GCC keeps the bytes
+    /// of other literals silently.
+    ///
+    /// C11: §6.4.5 paragraph 6, p. 71; PDF p. 89.
+    UnconvertibleSourceCharacter,
     /// A violated lexical or directive constraint of a later standard, with
     /// its message.
     ///
@@ -1346,6 +1363,30 @@ impl PreprocessorErrorType<'_> {
                  this header came from none",
             ),
             | Self::LanguageConstraint(message) => new(format_in!(arena, "{message}")),
+            | Self::IllegalCharacterEncoding {
+                character,
+                prefixed,
+            } => new(format_in!(
+                arena,
+                "illegal character encoding in {} literal{}",
+                if *character { "character" } else { "string" },
+                if *prefixed {
+                    ""
+                } else {
+                    " [-Winvalid-source-encoding]"
+                }
+            ))
+            .label("holds bytes that are not UTF-8")
+            .note(if *prefixed {
+                "a prefixed literal must spell characters"
+            } else {
+                "an unprefixed literal keeps the bytes as they are"
+            }),
+            | Self::UnconvertibleSourceCharacter => new("converting to execution character set: \
+                                                         Invalid or incomplete multibyte or wide \
+                                                         character")
+            .label("holds bytes that are not UTF-8")
+            .note("a `u`, `U` or `L` literal must spell characters"),
             | Self::WideCharacterOutOfRange =>
                 new("wide character constant does not fit in wchar_t")
                     .label("requires more than one UTF-16 code unit")
@@ -1621,6 +1662,8 @@ impl GetSeverity for PreprocessorError<'_> {
             | PreprocessorErrorType::UnexpectedTokenAtPhase7(..)
             | PreprocessorErrorType::LanguageConstraint(..)
             | PreprocessorErrorType::WideCharacterOutOfRange
+            | PreprocessorErrorType::IllegalCharacterEncoding { prefixed: true, .. }
+            | PreprocessorErrorType::UnconvertibleSourceCharacter
             | PreprocessorErrorType::EmbeddedResourceNotFound(..)
             | PreprocessorErrorType::EmbeddedResourceUnreadable { .. }
             | PreprocessorErrorType::EmbeddedResourceTooLarge(..)
@@ -1662,6 +1705,7 @@ impl GetSeverity for PreprocessorError<'_> {
             | PreprocessorErrorType::LineDirectiveIsNotASimpleDigitSequence
             | PreprocessorErrorType::UnknownPragmaDirective
             | PreprocessorErrorType::UnknownEscapeSequence(_)
+            | PreprocessorErrorType::IllegalCharacterEncoding { prefixed: false, .. }
             | PreprocessorErrorType::UnknownPragmaSTDCArgument(..)
             | PreprocessorErrorType::ExtraTokensAfterPragmaOnce(..)
             | PreprocessorErrorType::ExtraTokensAfterPragmaOperator

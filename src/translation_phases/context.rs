@@ -79,6 +79,10 @@ use crate::{
     },
 };
 
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "Each flag is an independent fact about the translation unit's input."
+)]
 pub(crate) struct Context<'tu> {
     tu: &'tu Bump,
     pub(crate) configuration: CompilerConfiguration,
@@ -93,6 +97,9 @@ pub(crate) struct Context<'tu> {
     /// `#sccs` take effect; `#define` and `#undef` are read but, with
     /// replacement off, change nothing.
     pub(crate) preprocessed_input: bool,
+    /// A source file held malformed UTF-8, whose bytes its text carries as
+    /// [`crate::util::raw_bytes`] stand-ins; only then are they bytes.
+    pub(crate) raw_source_bytes: bool,
     /// Each `#include` that entered a header, in order, with its nesting
     /// depth (1 for a header the main file includes), when recorded for
     /// GCC's `-H` or `cl /showIncludes`. An inclusion whose include guard

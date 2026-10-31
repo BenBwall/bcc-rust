@@ -1546,7 +1546,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
         let result = self.types.scalar(self.types.target.size_t);
         let mut info = Self::expression_result(e, result);
-        let value = if align {
+        let value = if align && matches!(self.types.nodes[ty.index], TypeKind::Function { .. }) {
+            // GNU extension: GCC gives a function type the alignment 1 of
+            // its GNU size, and Clang 4.
+            Some(
+                match self.context.configuration.function_alignment_rules() {
+                    | crate::configuration::RuleSet::Gcc => 1,
+                    | crate::configuration::RuleSet::Clang => 4,
+                },
+            )
+        } else if align {
             self.types.alignment(ty)
         } else {
             self.types.layout(ty).map(|layout| layout.size)

@@ -1268,6 +1268,30 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
         global
     }
 
+    /// A fresh internal constant global holding the bytes `initializer`
+    /// gives an object of type `ty`, or `None` when they need relocations.
+    /// Every leaf must be an arithmetic constant or a string literal.
+    pub(super) fn constant_image(
+        &mut self,
+        ty: TypeId,
+        initializer: &'tu Initializer<'tu>,
+    ) -> Result<Option<GlobalId>, LoweringError> {
+        let size = types::layout(&self.sema.types, ty)
+            .map_err(|kind| at(kind, initializer.source_vectors))?
+            .size;
+        let align = super::alignment::storage_alignment(&self.sema.types, ty)
+            .map_err(|kind| at(kind, initializer.source_vectors))?;
+        let (bytes, relocations) = self.static_bytes(ty, size, initializer, None)?;
+        if !relocations.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(self.internal_constant(
+            ".initializer",
+            &bytes,
+            align.bytes(),
+        )))
+    }
+
     /// Encodes a literal and its terminator in the target's character units.
     /// C99: §6.4.5p5, pp. 62-63; PDF pp. 74-75;
     /// §6.7.8p14-15, p. 126; PDF p. 138.

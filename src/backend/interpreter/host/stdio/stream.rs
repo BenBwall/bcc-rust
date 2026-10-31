@@ -1280,7 +1280,7 @@ mod tests {
                 stdout:  Some(&mut stdout),
             };
             assert_eq!(stdin.read(&mut release), Some(b'x'));
-            *held = arena.read_to_str_lossy(&output).unwrap().len();
+            *held = arena.read_to_str_lossy(&output).unwrap().0.len();
         }
         std::fs::remove_file(&input).unwrap();
         std::fs::remove_file(&output).unwrap();

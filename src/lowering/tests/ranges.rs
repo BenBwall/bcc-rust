@@ -128,8 +128,9 @@ fn short_or_volatile_automatic_ranges_store_each_element() {
     assert!(!text.contains("copy "), "{text}");
     let text = lowered("void f(int n) { int a[16] = {[0 ... 15] = n}; }");
     assert_eq!(text.matches("copy ").count(), 4, "{text}");
+    // Only zeroes: one fill clears the whole object.
     let text = lowered("void f(void) { int a[64][64] = {[0 ... 63][0 ... 63] = 0}; }");
-    assert_eq!(text.matches("fill ").count(), 2, "{text}");
+    assert_eq!(text.matches("fill ").count(), 1, "{text}");
     assert!(!text.contains("copy "), "{text}");
 }
 

@@ -50,6 +50,7 @@ use crate::{
         CompilerIdentity,
         DiagnosticGroup,
         Feature,
+        RuleSet,
     },
     float_parsing::{
         FloatRangeError,
@@ -62,6 +63,7 @@ use crate::{
     translation_phases::{
         Context,
         SourceVectors,
+        TranslationError,
         interface::StrExt,
         preprocessor_tokenizer::{
             PreprocessorToken,
@@ -76,6 +78,8 @@ use crate::{
             Bump,
         },
         packed::Packed,
+        raw_bytes,
+        string_cache::StringCacheId,
     },
 };
 
@@ -383,6 +387,11 @@ impl<'pp> Expander<'_, '_, 'pp, '_> {
                     .units
                     .extend_from_slice(self.context.literal_units(first_contents));
                 builder.sources.push(first.source_vectors);
+                if matches!(first_kind, StringTokenType::String(_))
+                    && holds_raw_bytes(self.context, first.contents)
+                {
+                    builder.raw.push(first.source_vectors);
+                }
                 builder
                     .spelling
                     .push_str(self.context.string_cache.at(first.contents));
@@ -392,6 +401,11 @@ impl<'pp> Expander<'_, '_, 'pp, '_> {
                 .units
                 .extend_from_slice(self.context.literal_units(next_contents));
             builder.sources.push(next.source_vectors);
+            if matches!(next_kind, StringTokenType::String(_))
+                && holds_raw_bytes(self.context, next.contents)
+            {
+                builder.raw.push(next.source_vectors);
+            }
             builder.spelling.push(' ');
             builder
                 .spelling
@@ -401,6 +415,12 @@ impl<'pp> Expander<'_, '_, 'pp, '_> {
         let Some(builder) = builder else {
             return first;
         };
+        if wide || encoding.is_some() {
+            let wide = wide || encoding != Some(LiteralEncoding::Utf8);
+            for &source_vectors in &builder.raw {
+                Self::report_joined_raw_bytes(self.context, source_vectors, wide);
+            }
+        }
         let contents = self.context.intern_literal(&builder.units);
         let token = Token {
             kind:           TokenType::String(string_token_type(contents, encoding, wide)),
@@ -457,6 +477,8 @@ enum IntegerConstantType {
 struct LiteralBuilder<'pp> {
     units:    ArenaVec<'pp, LiteralUnit>,
     sources:  ArenaVec<'pp, SourceVectors>,
+    /// The unprefixed literals that hold bytes of malformed UTF-8.
+    raw:      ArenaVec<'pp, SourceVectors>,
     spelling: ArenaString<'pp>,
 }
 
@@ -748,11 +770,21 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
         };
         let mut failed = false;
         let mut escape_character = false;
+        let mut kept_bytes = false;
         while index < end {
             let c = string[index..].chars().next().unwrap();
             index += c.len_utf8();
             if c != '\\' {
-                units.push(LiteralUnit::Character(c));
+                // A byte of malformed UTF-8 stays a byte, as one numeric
+                // escape is, which fits every element type.
+                if context.raw_source_bytes
+                    && let Some(byte) = raw_bytes::raw_byte(c)
+                {
+                    kept_bytes = true;
+                    units.push(LiteralUnit::Numeric(u32::from(byte)));
+                } else {
+                    units.push(LiteralUnit::Character(c));
+                }
                 continue;
             }
             let mut error = None;
@@ -929,7 +961,95 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                 token.source_vectors,
             );
         }
+        if kept_bytes {
+            failed |= Self::report_raw_bytes(context, token, prefix != 0, wide, quote);
+        }
         failed
+    }
+
+    /// Reports the bytes of malformed UTF-8 in a literal as the identity's
+    /// compiler does, and returns whether that was an error. GCC and Clang
+    /// keep them in an unprefixed literal; Clang warns there and rejects
+    /// every prefixed literal, and GCC accepts `u8` ones too but cannot
+    /// convert them to the wide encodings.
+    /// C99: phase 1, §5.1.1.2 paragraph 1, p. 10; PDF p. 22; C11: §6.4.5
+    /// paragraph 6, p. 71; PDF p. 89.
+    fn report_raw_bytes(
+        context: &mut Context<'_>,
+        token: PreprocessorToken,
+        prefixed: bool,
+        wide: bool,
+        quote: Option<u8>,
+    ) -> bool {
+        let error_type = match context.configuration.source_encoding_rules() {
+            | RuleSet::Clang => PreprocessorErrorType::IllegalCharacterEncoding {
+                character: quote == Some(b'\''),
+                prefixed,
+            },
+            | RuleSet::Gcc if wide => PreprocessorErrorType::UnconvertibleSourceCharacter,
+            | RuleSet::Gcc => return false,
+        };
+        let error = prefixed;
+        if error
+            || context
+                .group_severity(DiagnosticGroup::InvalidSourceEncoding, token.source_vectors)
+                .is_some()
+        {
+            Context::raw_preprocessor_error(
+                &mut context.pending_errors,
+                PreprocessorError {
+                    error_type,
+                    source_vectors: token.source_vectors,
+                },
+            );
+        }
+        error
+    }
+
+    /// Reports an unprefixed literal holding bytes of malformed UTF-8 that
+    /// joins a prefixed one, whose prefix it takes (C11 §6.4.5p5): Clang
+    /// turns the piece's warning into the prefixed literal's error, and GCC
+    /// cannot convert the bytes to a wide encoding.
+    /// C11: §6.4.5 paragraph 5, p. 71; PDF p. 89.
+    fn report_joined_raw_bytes(
+        context: &mut Context<'_>,
+        source_vectors: SourceVectors,
+        wide: bool,
+    ) {
+        let error_type = match context.configuration.source_encoding_rules() {
+            | RuleSet::Clang => PreprocessorErrorType::IllegalCharacterEncoding {
+                character: false,
+                prefixed:  true,
+            },
+            | RuleSet::Gcc if wide => PreprocessorErrorType::UnconvertibleSourceCharacter,
+            | RuleSet::Gcc => return,
+        };
+        let warning = context
+            .pending_errors
+            .iter_mut()
+            .rev()
+            .find_map(|error| match error {
+                | TranslationError::Preprocessing(PreprocessorError {
+                    error_type:
+                        error_type @ PreprocessorErrorType::IllegalCharacterEncoding {
+                            prefixed: false,
+                            ..
+                        },
+                    source_vectors: warned,
+                }) if *warned == source_vectors => Some(error_type),
+                | _ => None,
+            });
+        if let Some(warning) = warning {
+            *warning = error_type;
+        } else {
+            Context::raw_preprocessor_error(
+                &mut context.pending_errors,
+                PreprocessorError {
+                    error_type,
+                    source_vectors,
+                },
+            );
+        }
     }
 
     /// A `wb` or `uwb` constant whose magnitude needs more than 64 bits:
@@ -1734,6 +1854,7 @@ impl<'pp> LiteralScratch<'pp> {
         self.builder.take().unwrap_or_else(|| LiteralBuilder {
             units:    ArenaVec::new_in(self.arena),
             sources:  ArenaVec::new_in(self.arena),
+            raw:      ArenaVec::new_in(self.arena),
             spelling: ArenaString::new_in(self.arena),
         })
     }
@@ -1741,6 +1862,7 @@ impl<'pp> LiteralScratch<'pp> {
     fn return_builder(&mut self, mut builder: LiteralBuilder<'pp>) {
         builder.units.clear();
         builder.sources.clear();
+        builder.raw.clear();
         builder.spelling.clear();
         self.builder = Some(builder);
     }
@@ -1752,6 +1874,17 @@ impl<'pp> LiteralScratch<'pp> {
             builder: None,
         }
     }
+}
+
+/// Whether the literal spelled by `contents` holds a byte of malformed
+/// UTF-8.
+fn holds_raw_bytes(context: &Context<'_>, contents: StringCacheId) -> bool {
+    context.raw_source_bytes
+        && context
+            .string_cache
+            .at(contents)
+            .chars()
+            .any(|c| raw_bytes::raw_byte(c).is_some())
 }
 
 /// A string literal's token type: encoding-prefixed, wide (`L`), or plain.

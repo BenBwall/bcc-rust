@@ -434,6 +434,19 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     operand.bit_field,
                     matches!(e.kind, E::AlignofExpr(_)),
                 );
+                // A function's `aligned` attribute replaces the alignment of
+                // its type, in GCC and Clang alike.
+                if matches!(e.kind, E::AlignofExpr(_))
+                    && matches!(
+                        self.types.nodes[operand.ty.index],
+                        TypeKind::Function { .. }
+                    )
+                    && let Some(binding) = operand.binding
+                    && let Some(alignment) = self.code_alignment(binding)
+                    && let Some(integer) = info.integer.as_mut()
+                {
+                    integer.value = i128::from(alignment);
+                }
                 if matches!(e.kind, E::SizeofExpr(_)) {
                     _ = self.size_query_sites.insert(
                         std::ptr::from_ref(e).addr(),
