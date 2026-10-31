@@ -97,6 +97,16 @@ pub(crate) struct Context<'tu> {
     /// `#sccs` take effect; `#define` and `#undef` are read but, with
     /// replacement off, change nothing.
     pub(crate) preprocessed_input: bool,
+    /// Phase 4 runs for a text of its tokens, as `-E` prints it; set before
+    /// the preprocessor is made. Adjacent string literals stay apart, which
+    /// phase 6 would concatenate, and phases 5 and 7 neither decode nor
+    /// check a token: each keeps its spelling, so a character no C token
+    /// starts with, a number that is no constant or an escape C does not
+    /// define passes through unreported, and a `'` or `"` that closes on no
+    /// line keeps the rest of its line with a warning, as in GCC's and
+    /// Clang's `-E`.
+    /// C99: §5.1.1.2 paragraph 1 items 3-7, p. 10; PDF p. 22.
+    pub(crate) phase_four_text: bool,
     /// A source file held malformed UTF-8, whose bytes its text carries as
     /// [`crate::util::raw_bytes`] stand-ins; only then are they bytes.
     pub(crate) raw_source_bytes: bool,

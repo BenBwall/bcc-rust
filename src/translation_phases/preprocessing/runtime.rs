@@ -118,7 +118,7 @@ pub(super) struct PreprocessorState<'pp> {
     pub(super) in_directive:        bool,
     pub(super) retain_placeholders: bool,
     /// Produce phase 4's tokens for a text of them, unconverted
-    /// ([`Preprocessor::read_as_text`]).
+    /// ([`Context::phase_four_text`](crate::translation_phases::Context::phase_four_text)).
     pub(super) as_text:             bool,
     pub(super) arena:               &'pp Bump,
     pub(super) once_set:            ArenaSet<'pp, u32>,

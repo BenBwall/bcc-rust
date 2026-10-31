@@ -98,11 +98,12 @@ pub(super) struct LexedFile<'a> {
     eof: SourcePosition,
     /// Sorted by entry.
     diagnostics: &'a [(u32, LexDiagnostic)],
-    /// Whether each extension diagnostic, by its index in `diagnostics`, was
-    /// reported. Its spelling is written once, so however often phase 4
-    /// reads the token (in a macro body, an argument prescan, or after a
-    /// lookahead rewinds), the diagnostic is reported once; reading it in a
-    /// skipped group, with tokenizer diagnostics ignored, does not count.
+    /// Whether each extension diagnostic or unclosed-quote warning, by its
+    /// index in `diagnostics`, was reported. Its spelling is written once, so
+    /// however often phase 4 reads the token (in a macro body, an argument
+    /// prescan, or after a lookahead rewinds), the diagnostic is reported once;
+    /// reading it in a skipped group, with tokenizer diagnostics ignored, does
+    /// not count.
     extensions_reported: &'a [Cell<bool>],
     /// Exact character spans for Other tokens, sorted by entry. Normal token
     /// spans still use the adjacent entry boundaries above.
@@ -205,6 +206,12 @@ impl<'a> LexedFile<'a> {
                             context.create_source_vectors(start, source_file_index, length);
                         context.report_extension(feature, spelling, vectors);
                     },
+                // A warning, unlike an error, is not folded into its
+                // repeats: report it once, as for an extension.
+                | LexDiagnostic::Tokenizer {
+                    error_type: PreprocessorTokenizerErrorType::MissingTerminatingQuote(_),
+                    ..
+                } if context.ignore_tokenizer_errors() || reported.replace(true) => {},
                 | LexDiagnostic::Tokenizer {
                     error_type,
                     start,

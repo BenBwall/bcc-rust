@@ -69,6 +69,14 @@ pub(crate) enum PreprocessorTokenizerErrorType {
     /// A new-line cannot occur in an `s-char`.
     /// C99: §6.4.5p1, p. 62; PDF p. 74.
     NewlineInString,
+    /// A `'` or `"` with no closing quote before the line or the file ends,
+    /// in the text of phase 4 (`-E`), where the rest of the line is kept as
+    /// it was written. Phase 7 never converts it, so only a directive that
+    /// reads it as a literal rejects it; the lexer warns, as GCC and Clang
+    /// do (Clang `-Winvalid-pp-token`).
+    /// C99: a `'` or `"` that begins no token is undefined, §6.4p3, p. 49;
+    /// PDF p. 61.
+    MissingTerminatingQuote(u8),
 }
 
 impl PreprocessorTokenizerErrorType {
@@ -115,6 +123,13 @@ impl PreprocessorTokenizerErrorType {
                     "close the literal on this line and start another on the next; adjacent \
                      literals are concatenated",
                 ),
+            | Self::MissingTerminatingQuote(quote) => new(if quote == b'"' {
+                "missing terminating `\"` character"
+            } else {
+                "missing terminating `'` character"
+            })
+            .label("the rest of the line is kept as written")
+            .note("C99 §6.4p3: a `'` or `\"` that begins no token is undefined"),
         }
     }
 }
@@ -125,7 +140,22 @@ impl PreprocessorTokenizerError {
             self.error_type,
             PreprocessorTokenizerErrorType::UnterminatedString
                 | PreprocessorTokenizerErrorType::NewlineInString
+                | PreprocessorTokenizerErrorType::MissingTerminatingQuote(b'"')
         ) && self.source_vector == *source
+    }
+
+    /// Reports a literal with no closing quote that a directive reads, in a
+    /// text of phase 4, where the lexer kept it as written.
+    pub(crate) fn unclosed_literal(source_vector: SourceVector, quote: u8) -> Self {
+        Self {
+            source_vector,
+            error_type: if quote == b'"' {
+                PreprocessorTokenizerErrorType::NewlineInString
+            } else {
+                PreprocessorTokenizerErrorType::NewlineInCharacter
+            },
+            character: None,
+        }
     }
 
     /// Reports a phase-3 character that survived preprocessing but cannot
@@ -168,6 +198,7 @@ impl GetSeverity for PreprocessorTokenizerError {
             | PreprocessorTokenizerErrorType::UnterminatedString
             | PreprocessorTokenizerErrorType::NewlineInCharacter
             | PreprocessorTokenizerErrorType::NewlineInString => ErrorSeverity::Error,
+            | PreprocessorTokenizerErrorType::MissingTerminatingQuote(_) => ErrorSeverity::Warning,
         }
     }
 }

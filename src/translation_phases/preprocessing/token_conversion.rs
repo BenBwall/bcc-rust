@@ -672,6 +672,7 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
     }
 
     pub(super) fn parse_character(&mut self, token: PreprocessorToken) -> CharacterTokenType {
+        self.check_literal_closed(token);
         let mut units = self.state.literal_scratch.take_units();
         let had_escape_error = Self::eval_escape_sequences(self.context, token, &mut units);
         let wide = self
@@ -717,6 +718,7 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
     ///
     /// C99: §6.4.5 paragraphs 1-3, p. 62; PDF p. 74.
     fn parse_string(&mut self, token: PreprocessorToken) -> StringTokenType {
+        self.check_literal_closed(token);
         let mut units = self.state.literal_scratch.take_units();
         _ = Self::eval_escape_sequences(self.context, token, &mut units);
         let cached_contents = self.context.intern_literal(&units);
@@ -727,6 +729,38 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
             literal_encoding(spelling),
             spelling.starts_with('L'),
         )
+    }
+
+    /// Rejects a literal that a text of phase 4 kept unclosed
+    /// ([`Context::phase_four_text`]) once a directive reads it as a
+    /// literal, as GCC and Clang do; the lexer closes it otherwise.
+    /// C99: §6.4.4.4 paragraph 1, p. 59; PDF p. 71; §6.4.5 paragraph 1,
+    /// p. 62; PDF p. 74.
+    fn check_literal_closed(&mut self, token: PreprocessorToken) {
+        if !self.state.as_text {
+            return;
+        }
+        let spelling = self.context.string_cache.at(token.contents);
+        let Some(open) = spelling.find(['"', '\'']) else {
+            return;
+        };
+        let quote = spelling.as_bytes()[open];
+        let mut bytes = spelling.as_bytes()[open + 1..].iter();
+        while let Some(&byte) = bytes.next() {
+            if byte == b'\\' {
+                _ = bytes.next();
+            } else if byte == quote {
+                return;
+            }
+        }
+        let source = self
+            .context
+            .first_source_vector(token.source_vectors)
+            .clone();
+        self.context
+            .preprocessor_tokenizer_error(PreprocessorTokenizerError::unclosed_literal(
+                source, quote,
+            ));
     }
 
     /// Appends the units `token` spells to `units`, which start empty, and
@@ -2018,7 +2052,7 @@ fn low_limb(value: u128) -> u64 {
 }
 
 /// Whether a text of phase 4
-/// ([`Preprocessor::read_as_text`](super::Preprocessor::read_as_text))
+/// ([`Context::phase_four_text`](crate::translation_phases::Context::phase_four_text))
 /// writes a token of `kind` by its spelling alone, unconverted and
 /// unchecked, which is all the text uses of it. An operator keeps its kind,
 /// a directive is still carried out, and a new-line still ends a line.
