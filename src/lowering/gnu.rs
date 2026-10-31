@@ -185,10 +185,10 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     Task::Statement(s)
                 }),
                 | BlockItem::Declaration(d) => self.tasks.push(Task::Declaration(d)),
-                | BlockItem::FunctionDefinition(_) => {
-                    self.tasks.push(Task::Statement(statement));
-                    break;
-                },
+                // A nested function is lowered as a function of its own
+                // (`nested.rs`); its definition runs nothing here.
+                | BlockItem::FunctionDefinition(definition) =>
+                    self.nested_definition(definition)?,
             }
         }
         Ok(())

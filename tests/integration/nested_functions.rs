@@ -1,8 +1,10 @@
 //! GNU nested functions under the GCC identity, on every back end: the IR
 //! interpreter (unoptimized and with bcc's optimizer), LLVM at `-O0` and
 //! `-O2`, and the native back end. `tests/fixtures/programs/nested_functions.c`
-//! prints what GCC prints. The Clang identity rejects them as Clang does,
-//! and what bcc does not implement yet is refused, never miscompiled.
+//! prints what GCC prints, and so does
+//! `tests/fixtures/programs/nested_statement_expressions.c`, on wasm32 too.
+//! The Clang identity rejects them as Clang does, and what bcc does not
+//! implement yet is refused, never miscompiled.
 
 #[cfg(test)]
 #[expect(
@@ -39,32 +41,110 @@ mod tests {
             eprintln!("skipping: the fixture runs on an x86-64 GNU/Linux host");
             return;
         }
-        let source = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures/programs/nested_functions.c");
-        let source = source.to_str().unwrap();
-        for mode in [
-            &["--interpret", "--opt=none"][..],
-            &["--interpret", "--opt=bcc"],
-        ] {
-            let output = bcc(&[&[GCC, source][..], mode].concat());
-            assert_eq!(
-                output.status.code(),
-                Some(0),
-                "{mode:?}: {}",
-                text(&output.stderr)
+        prints_on_every_back_end(&fixture("nested_functions.c"), EXPECTED);
+    }
+
+    const STATEMENT_EXPRESSIONS: &str = concat!(
+        "statement:2\n",
+        "value:3\n",
+        "uncalled:\n",
+        "around:1354\n",
+        "definition last:6\n",
+        "conditional:1\n",
+        "logical:02\n",
+        "for:13113213\n",
+        "break continue:02\n",
+        "return:78\n",
+        "sizeof:\n",
+        "typeof:\n",
+        "initializer:12\n",
+        "argument:3\n",
+        "nested:5\n",
+        "label:6\n",
+        "cleanup:21\n",
+        "vla:33\n",
+        "static:44\n",
+        "compound literal:56\n",
+        "97 1 1 7\n",
+    );
+
+    /// A nested function defined inside a statement expression runs only
+    /// when it is called, and the block around it once, as GCC runs it:
+    /// lowering once ran such a block whole and then its tail again.
+    #[test]
+    fn nested_definitions_in_statement_expressions_run_once() {
+        if !linux_host() {
+            eprintln!("skipping: the fixture runs on an x86-64 GNU/Linux host");
+            return;
+        }
+        let source = fixture("nested_statement_expressions.c");
+        prints_on_every_back_end(&source, STATEMENT_EXPRESSIONS);
+        // The fixture takes no trampoline, so the WebAssembly back end
+        // runs it too.
+        if !Command::new("node")
+            .arg("--version")
+            .output()
+            .is_ok_and(|output| output.status.success())
+        {
+            eprintln!("skipping wasm32: node is not on the path");
+            return;
+        }
+        let runner = Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts/wasm/run.mjs");
+        for mode in [&["-O0"][..], &["-O2"], &["--opt=bcc"]] {
+            let module = temporary("nested.wasm");
+            let built = bcc(&[
+                &[
+                    GCC,
+                    "--target=wasm32-wasip1",
+                    &source,
+                    "-o",
+                    module.to_str().unwrap(),
+                ][..],
+                mode,
+            ]
+            .concat());
+            assert!(
+                built.status.success(),
+                "wasm32 {mode:?}: {}",
+                text(&built.stderr)
             );
-            assert_eq!(text(&output.stdout), EXPECTED, "{mode:?}");
+            let run = run_native(
+                Command::new("node")
+                    .arg("--no-warnings")
+                    .arg(&runner)
+                    .arg(&module),
+            )
+            .unwrap();
+            assert_eq!(
+                run.status.code(),
+                Some(0),
+                "wasm32 {mode:?}: {}",
+                text(&run.stderr)
+            );
+            assert_eq!(text(&run.stdout), STATEMENT_EXPRESSIONS, "wasm32 {mode:?}");
+            std::fs::remove_file(module).unwrap();
         }
-        for mode in [&["-O0"][..], &["-O2"], &["--backend=native"]] {
-            let executable = temporary("nested.exe");
-            let built =
-                bcc(&[&[GCC, source, "-o", executable.to_str().unwrap()][..], mode].concat());
-            assert!(built.status.success(), "{mode:?}: {}", text(&built.stderr));
-            let run = run_native(&mut Command::new(&executable)).unwrap();
-            assert_eq!(run.status.code(), Some(0), "{mode:?}");
-            assert_eq!(text(&run.stdout), EXPECTED, "{mode:?}");
-            std::fs::remove_file(executable).unwrap();
+    }
+
+    /// The same through a trampoline, which only the x86-64 back ends make.
+    #[test]
+    fn trampolines_defined_in_statement_expressions_run_once() {
+        if !linux_host() {
+            eprintln!("skipping: the program runs on an x86-64 GNU/Linux host");
+            return;
         }
+        let input = temporary("trampoline.c");
+        std::fs::write(
+            &input,
+            "#include <stdio.h>\nstatic int calls;\nstatic int apply(int (*f)(int), int v) { \
+             calls++; return f(v); }\nint main(void) { int base = 10;\n  int r = ({ int t(int x) \
+             { return x + base; } apply(t, 4); });\n  r += ({ int u(int x) { return x * base; } \
+             int (*p)(int) = u; apply(p, 1) + apply(p, 2); });\n  printf(\"%d %d\\n\", r, \
+             calls);\n  return 0;\n}\n",
+        )
+        .unwrap();
+        prints_on_every_back_end(input.to_str().unwrap(), "44 3\n");
+        std::fs::remove_file(input).unwrap();
     }
 
     /// A module whose trampolines run on the stack marks it executable, as
@@ -304,6 +384,45 @@ mod tests {
             target_os = "linux",
             target_env = "gnu"
         ))
+    }
+
+    /// The program at `source`, built as GCC builds it by the IR
+    /// interpreter (unoptimized and with bcc's optimizer), LLVM at `-O0`
+    /// and `-O2`, and the native back end, exits 0 and prints `expected`.
+    fn prints_on_every_back_end(source: &str, expected: &str) {
+        for mode in [
+            &["--interpret", "--opt=none"][..],
+            &["--interpret", "--opt=bcc"],
+        ] {
+            let output = bcc(&[&[GCC, source][..], mode].concat());
+            assert_eq!(
+                output.status.code(),
+                Some(0),
+                "{mode:?}: {}",
+                text(&output.stderr)
+            );
+            assert_eq!(text(&output.stdout), expected, "{mode:?}");
+        }
+        for mode in [&["-O0"][..], &["-O2"], &["--backend=native"]] {
+            let executable = temporary("nested.exe");
+            let built =
+                bcc(&[&[GCC, source, "-o", executable.to_str().unwrap()][..], mode].concat());
+            assert!(built.status.success(), "{mode:?}: {}", text(&built.stderr));
+            let run = run_native(&mut Command::new(&executable)).unwrap();
+            assert_eq!(run.status.code(), Some(0), "{mode:?}");
+            assert_eq!(text(&run.stdout), expected, "{mode:?}");
+            std::fs::remove_file(executable).unwrap();
+        }
+    }
+
+    /// The path of the program fixture `name`.
+    fn fixture(name: &str) -> String {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/programs")
+            .join(name)
+            .to_str()
+            .unwrap()
+            .to_owned()
     }
 
     /// `source` compiled with `flags`, its output on stdout.
