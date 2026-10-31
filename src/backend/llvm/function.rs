@@ -79,18 +79,17 @@ impl<'a, 'id, 'm> Emitter<'a, 'id, 'm, '_> {
         duplicate.resize(body.block_count(), false);
         for block in body.blocks() {
             if edges.reachable[block.index()] || labeled[block.index()] {
-                if !labeled[block.index()] && only_traps(body, block) {
-                    if let Some(shared) = trap {
-                        blocks[block.index()] = Some(shared);
-                        duplicate[block.index()] = true;
-                        continue;
-                    }
+                let traps = !labeled[block.index()] && only_traps(body, block);
+                if traps && let Some(shared) = trap {
+                    blocks[block.index()] = Some(shared);
+                    duplicate[block.index()] = true;
+                    continue;
                 }
                 let llvm = api.block(
                     self.functions[id.index()],
                     api.name(&named(block, self.arena)),
                 );
-                if trap.is_none() && !labeled[block.index()] && only_traps(body, block) {
+                if traps {
                     trap = Some(llvm);
                 }
                 blocks[block.index()] = Some(llvm);

@@ -1524,22 +1524,29 @@ impl<'id> Session<'id> {
         let kind = "strictfp";
         // SAFETY: The counted attribute name is valid during lookup.
         let kind = unsafe { LLVMGetEnumAttributeKindForName(kind.as_ptr().cast(), kind.len()) };
-        // SAFETY: The function, its blocks and instructions belong to this
-        // live session; the walk only reads them and adds attributes to the
-        // calls it finds.
-        unsafe {
-            let attribute = LLVMCreateEnumAttribute(self.context, kind, 0);
-            let mut block = llvm_sys::core::LLVMGetFirstBasicBlock(function.0);
-            while !block.is_null() {
-                let mut inst = llvm_sys::core::LLVMGetFirstInstruction(block);
-                while !inst.is_null() {
-                    if !llvm_sys::core::LLVMIsACallInst(inst).is_null() {
+        // SAFETY: Known enum attribute without a payload, in the live
+        // context.
+        let attribute = unsafe { LLVMCreateEnumAttribute(self.context, kind, 0) };
+        // SAFETY: The function belongs to this live session by the type
+        // system; the walk below only reads its blocks and instructions.
+        let mut block = unsafe { llvm_sys::core::LLVMGetFirstBasicBlock(function.0) };
+        while !block.is_null() {
+            // SAFETY: `block` is a live block of the function.
+            let mut inst = unsafe { llvm_sys::core::LLVMGetFirstInstruction(block) };
+            while !inst.is_null() {
+                // SAFETY: `inst` is a live instruction of the block.
+                if !unsafe { llvm_sys::core::LLVMIsACallInst(inst) }.is_null() {
+                    // SAFETY: A live call instruction; the function index
+                    // addresses its function attributes.
+                    unsafe {
                         LLVMAddCallSiteAttribute(inst, u32::MAX, attribute);
                     }
-                    inst = llvm_sys::core::LLVMGetNextInstruction(inst);
                 }
-                block = llvm_sys::core::LLVMGetNextBasicBlock(block);
+                // SAFETY: `inst` is a live instruction of the block.
+                inst = unsafe { llvm_sys::core::LLVMGetNextInstruction(inst) };
             }
+            // SAFETY: `block` is a live block of the function.
+            block = unsafe { llvm_sys::core::LLVMGetNextBasicBlock(block) };
         }
     }
 
