@@ -494,6 +494,9 @@ pub(crate) enum UnmodeledType {
     Decimal64,
     Decimal128,
     Inferred,
+    /// GNU: a structure or union with a variably modified member, whose
+    /// layout is computed at run time.
+    VariableMembers,
     FixedEnum,
     PointerModifier,
     ExtendedVector,
@@ -508,6 +511,7 @@ impl UnmodeledType {
             | Self::Decimal64 => "_Decimal64 types",
             | Self::Decimal128 => "_Decimal128 types",
             | Self::Inferred => "inferred declaration types",
+            | Self::VariableMembers => "structures with variably modified members",
             | Self::FixedEnum => "fixed-underlying enum types",
             | Self::PointerModifier => "MSVC pointer modifiers",
             | Self::ExtendedVector => "ext_vector_type types",

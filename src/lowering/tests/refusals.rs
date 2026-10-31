@@ -191,6 +191,30 @@ fn unsupported_type_diagnostics_retain_the_actual_construct() {
     assert!(message.ends_with("_Decimal32 types"), "{message}");
 }
 
+/// GCC lays out a record with a variably modified member at run time;
+/// lowering refuses it by name, also as an `asm` operand, whose checked
+/// facts analysis does not retain.
+#[test]
+fn records_with_variably_modified_members_are_refused_under_gcc() {
+    for source in [
+        "int f(int n) { struct s { int a; int b[n]; int c; } s; s.c = 3; return s.c; }",
+        "char *p; void f(int n) { __asm__ volatile(\"\" : \"=m\"(*(struct { char x[n]; } *)p)); }",
+    ] {
+        let errors = lower_with(
+            source,
+            crate::configuration::CompilerConfiguration::default()
+                .with_gnu_extensions(true)
+                .with_compiler_identity(crate::configuration::CompilerIdentity::Gcc),
+        )
+        .expect_err("a run-time record layout is unsupported");
+        assert_eq!(
+            errors,
+            ["not yet supported by lowering: structures with variably modified members"],
+            "{source}"
+        );
+    }
+}
+
 /// File-scope basic assembly reaches the module in source order, with
 /// concatenated literals joined, between whatever functions and objects
 /// surround it (GCC manual, "Basic Asm").

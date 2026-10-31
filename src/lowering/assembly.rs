@@ -62,7 +62,10 @@ use crate::{
     },
     translation_phases::{
         SourceVectors,
-        parsing::syntax::Statement,
+        parsing::syntax::{
+            Statement,
+            StatementType,
+        },
         semantic_analysis::{
             AsmFacts,
             AsmOperandFacts,
@@ -659,16 +662,30 @@ impl<'tu, 's> FunctionLowerer<'_, '_, 'tu, '_, 's> {
         Ok(())
     }
 
+    /// The checked facts of an `asm` statement. Analysis retains none when
+    /// an operand's type is unanalyzed, which is refused as that type.
     fn assembly_facts(
         &self,
         statement: &'tu Statement<'tu>,
         source: SourceVectors,
     ) -> Result<AsmFacts<'tu>, LoweringError> {
-        self.unit
-            .sema
-            .assembly
-            .statement(statement)
-            .ok_or_else(|| LoweringError::missing("asm statement facts are not retained", source))
+        self.unit.sema.assembly.statement(statement).ok_or_else(|| {
+            let StatementType::Asm(asm) = statement.kind else {
+                return LoweringError::missing("asm statement facts are not retained", source);
+            };
+            let types = &self.unit.sema.types;
+            asm.operands
+                .iter()
+                .find_map(|operand| {
+                    let info = self.unit.sema.expression_info(operand.expression)?;
+                    types.unanalyzed(info.ty).then(|| {
+                        LoweringError::unanalyzed(types, info.ty, operand.expression.source_vectors)
+                    })
+                })
+                .unwrap_or_else(|| {
+                    LoweringError::missing("asm statement facts are not retained", source)
+                })
+        })
     }
 }
 

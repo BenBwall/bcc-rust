@@ -2950,3 +2950,45 @@ refusal, as C23 `auto` inference does. GCC's `_FloatN` aliases of the math
 functions (`__builtin_acoshf32`, …) stay unregistered: `floatN-builtin.c`
 needs them folded in static initializers with MPFR's correctly rounded
 results, which bcc has no evaluator for.
+
+## Variably modified members (2026-10-31)
+
+GCC accepts a structure or union member of variably modified type in block
+and prototype scope (`struct s { int a; int b[n]; int c; };`) and lays the
+record out at run time when its declaration is reached: `sizeof`, the
+offsets of the members after the variable one, copies and arrays of the
+record all read the bounds evaluated there. 19 of GCC 15.2's C torture
+tests use them (8 under `execute/`, 11 under `compile/`; found with
+Clang's "fields must have a constant size" error), with more in
+`gcc.dg`.
+
+bcc's lowering maps every record to an IR aggregate of constant layout, so
+it has no run-time record layout yet. Under the GCC identity, semantic
+analysis now accepts these members where GCC does, as it accepts other
+unmodeled types: the record is unmodeled, its uses are not checked
+further, and lowering refuses any declaration, expression or `asm` operand
+that needs it with "not yet supported by lowering: structures with
+variably modified members", so `-fsyntax-only` succeeds and code
+generation refuses instead of reporting a constraint violation GCC does not
+have. At file scope GCC rejects them ("variably modified 'a' at file
+scope"), and so does bcc. The Clang and clang-cl identities report
+"fields must have a constant size" for every such member, as Clang does in
+every scope; TCC and MSVC keep the C99 §6.7.5.2p2 error.
+
+Of those 19 torture tests under `--compiler-identity=gcc`, all pass
+analysis; 15 are refused by name at lowering, and the other 3 compile
+because nothing of their records is lowered (`920501-16.c` only declares
+the type, `pr77754-6.c` only names a pointer to it in a prototype, and
+`20050801-2.c` uses it in an inline definition that is not emitted). One
+(`pr39394.c`, an `asm` memory operand of the type) used to end in an
+internal error, because analysis retains no `asm` facts for an unanalyzed
+operand; lowering now refuses such an operand by its type, which also fixes
+the same internal error for `_Decimal32` and other unmodeled operand types.
+
+Left to do for full support: a run-time layout (offsets and size as size
+formulas with sums and alignment), member access and copies through byte
+offsets, arrays of and pointers to such records, `offsetof` with run-time
+offsets, and passing by value (`va_arg` of such a type in
+`20020412-1.c`). A record whose only variably modified member is a pointer
+to a VLA (`int (*p)[n]`) has a constant layout and would need only the
+member's bound evaluated where the record is declared.

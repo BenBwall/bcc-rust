@@ -1411,13 +1411,32 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     _ = self.member_alignments.insert((tag, name.name), alignment);
                 }
                 if self.variably_modified(ty) {
-                    invalid = true;
-                    self.error(
-                        SemanticErrorKind::FileScopeVariableType,
-                        name.map_or(d.source_vectors, |n| n.source_vectors),
-                        name.map(|n| n.name),
-                        None,
-                    );
+                    let identity = self.context.configuration.compiler_identity();
+                    if identity == crate::configuration::CompilerIdentity::Gcc
+                        && self.scopes[self.scope].kind != ScopeKind::File
+                    {
+                        // GNU extension: GCC accepts a variably modified
+                        // member in block and prototype scope and lays the
+                        // record out when its declaration is reached
+                        // (`variable_size` in GCC's `stor-layout.cc`).
+                        // Lowering has no run-time record layout, so the
+                        // record stays unmodeled and is refused by name.
+                        self.types.tags[tag]
+                            .unmodeled
+                            .set(Some(UnmodeledType::VariableMembers));
+                    } else {
+                        invalid = true;
+                        self.error(
+                            if identity.rules() == crate::configuration::RuleSet::Clang {
+                                SemanticErrorKind::VariableMember
+                            } else {
+                                SemanticErrorKind::FileScopeVariableType
+                            },
+                            name.map_or(d.source_vectors, |n| n.source_vectors),
+                            name.map(|n| n.name),
+                            None,
+                        );
+                    }
                     self.types.tags[tag].tainted.set(true);
                 }
                 if let Some(name) = name

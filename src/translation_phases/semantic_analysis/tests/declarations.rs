@@ -6,6 +6,7 @@ use super::*;
 use crate::configuration::{
     CStandard,
     CompilerConfiguration,
+    CompilerIdentity,
     ExtensionPolicy,
 };
 
@@ -631,17 +632,43 @@ fn gnu_folding_accepts_classic_offsetof_and_constant_p() {
     assert_eq!(kinds(builtin, CompilerConfiguration::default()), []);
 }
 
+/// Variably modified members: Clang rejects every one ("fields must have
+/// a constant size"); GCC accepts them in block and prototype scope, where
+/// lowering refuses the record by name, but not at file scope; TCC and
+/// MSVC have none.
 #[test]
 fn members_cannot_have_variably_modified_types() {
+    let source = "void f(int n) { struct { int (*p)[n]; int ok; } s; union { int a[n]; } u; s.ok \
+                  = sizeof u; } void g(int k, struct { int a[k]; } *p);";
+    for (identity, expected) in [
+        (
+            CompilerIdentity::Clang,
+            [SemanticErrorKind::VariableMember; 3],
+        ),
+        (
+            CompilerIdentity::Tcc,
+            [SemanticErrorKind::FileScopeVariableType; 3],
+        ),
+    ] {
+        assert_eq!(
+            kinds(source, gnu17().with_compiler_identity(identity)),
+            expected,
+            "{identity:?}"
+        );
+    }
     assert_eq!(
         kinds(
-            "void f(int n) { struct { int (*p)[n]; int ok; } s; union { int a[n]; } u; }",
-            gnu17()
+            source,
+            gnu17().with_compiler_identity(CompilerIdentity::Gcc)
         ),
-        [
-            SemanticErrorKind::FileScopeVariableType,
-            SemanticErrorKind::FileScopeVariableType,
-        ]
+        []
+    );
+    assert_eq!(
+        kinds(
+            "int n = 3; struct F { int a[n]; };",
+            gnu17().with_compiler_identity(CompilerIdentity::Gcc)
+        ),
+        [SemanticErrorKind::FileScopeVariableType]
     );
 }
 
@@ -1109,7 +1136,6 @@ fn microsoft_intrinsics_refuse_conflicting_declarations_and_definitions() {
 /// neither.
 #[test]
 fn reserved_builtin_reports_follow_the_identity() {
-    use crate::configuration::CompilerIdentity;
     let complex = "double _Complex z = __builtin_complex(1.0, 2.0);";
     let gcc = pedantic(CStandard::C89, true).with_compiler_identity(CompilerIdentity::Gcc);
     let reports = extensions(complex, gcc);
