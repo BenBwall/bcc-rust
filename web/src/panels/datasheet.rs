@@ -45,10 +45,14 @@ pub fn Datasheet(snapshot: Memo<Option<Snapshot>>, history: RwSignal<Vec<Snapsho
                         let Some(snapshot) = snapshot else {
                             return Vec::new();
                         };
+                        let ended: Vec<&str> = snapshot.objects.iter().filter(|object| !object.alive).map(|object| object.name.as_str()).collect();
                         born.with(|born| {
                             snapshot
                                 .objects
                                 .iter()
+                                // The objects of returned calls fold into one
+                                // row, unless the step used one.
+                                .filter(|object| object.alive || ended.len() <= 3 || snapshot.event.access.iter().any(|access| access.object == object.id))
                                 .map(|object| {
                                     let used = snapshot.event.access.iter().any(|access| access.object == object.id);
                                     let value = if object.alive {
@@ -69,6 +73,13 @@ pub fn Datasheet(snapshot: Memo<Option<Snapshot>>, history: RwSignal<Vec<Snapsho
                                         </tr>
                                     }
                                 })
+                                .map(IntoAny::into_any)
+                                .chain((ended.len() > 3).then(|| view! {
+                                    <tr class="is-ended is-folded">
+                                        <th scope="row">{format!("{} ended", ended.len())}</th>
+                                        <td colspan="4">{super::cells::tally(ended.iter().copied())}</td>
+                                    </tr>
+                                }.into_any()))
                                 .collect::<Vec<_>>()
                         })
                     })}

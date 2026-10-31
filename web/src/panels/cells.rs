@@ -129,7 +129,7 @@ fn strip(snapshot: &Snapshot) -> impl IntoView {
         <ol class="cells">
             {frames}
             {(!ended.is_empty()).then(|| {
-                let names = ended.iter().map(|object| object.name.as_str()).collect::<Vec<_>>().join(" ");
+                let names = tally(ended.iter().map(|object| object.name.as_str()));
                 let label = format!("Lifetimes over: {names}");
                 view! {
                     <li class="cell is-ended" aria-label=label>
@@ -141,6 +141,22 @@ fn strip(snapshot: &Snapshot) -> impl IntoView {
             })}
         </ol>
     }
+}
+
+/// Names, each once, with how many times it repeats: `x ×30 before`.
+pub(super) fn tally<'a>(names: impl Iterator<Item = &'a str>) -> String {
+    let mut counts: Vec<(&str, usize)> = Vec::new();
+    for name in names {
+        match counts.iter_mut().find(|(known, _)| *known == name) {
+            | Some((_, count)) => *count += 1,
+            | None => counts.push((name, 1)),
+        }
+    }
+    counts
+        .into_iter()
+        .map(|(name, count)| if count > 1 { format!("{name} ×{count}") } else { name.to_owned() })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// What a step did to a cell, in words.

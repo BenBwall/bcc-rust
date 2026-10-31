@@ -1077,9 +1077,8 @@ impl State {
                     &format!("{class} cat-{}", snapshot.event.category),
                     3,
                 );
-                if fault {
-                    mark.inline_class = Some("exec-fault-text".into());
-                }
+                // On the lit box the code is dark, whatever its token colour.
+                mark.inline_class = Some(if fault { "exec-fault-text" } else { "exec-current-text" }.into());
                 execution.push(mark);
                 execution.push(Decoration::line(
                     range.start.line,
@@ -2168,9 +2167,9 @@ fn Encoders(state: State) -> impl IntoView {
         let delay = state.run_delay.get();
         RUN_DELAYS.iter().position(|&known| known >= delay).unwrap_or(RUN_DELAYS.len() - 1)
     };
-    // ZOOM turns a quarter larger or smaller per detent, from a quarter of
-    // the fitted scale to four times it.
-    let zoom_position = Signal::derive(move || (state.zoom.get().log2() + 2.0) / 4.0);
+    // ZOOM turns a quarter larger or smaller per detent, from a sixteenth of
+    // the fitted scale (a whole long run) to four times it.
+    let zoom_position = Signal::derive(move || (state.zoom.get().log2() + 4.0) / 6.0);
     view! {
         <div class="encoders" role="group" aria-label="Tape controls">
             <Knob
@@ -2218,7 +2217,7 @@ fn Encoders(state: State) -> impl IntoView {
                     if (zoom - 1.0).abs() < 0.01 { "fit".to_owned() } else { format!("×{zoom:.2}") }
                 })
                 on_turn=Callback::new(move |detents: i32| {
-                    state.zoom.update(|zoom| *zoom = (*zoom * 1.25_f64.powi(detents)).clamp(0.25, 4.0));
+                    state.zoom.update(|zoom| *zoom = (*zoom * 1.25_f64.powi(detents)).clamp(0.0625, 4.0));
                 })
             />
         </div>

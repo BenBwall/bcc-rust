@@ -43,8 +43,9 @@ const BUS: f64 = 9.0;
 /// The narrowest and widest step a fitted tape gives each step.
 const FIT_MIN: f64 = 14.0;
 const FIT_MAX: f64 = 48.0;
-/// The narrowest and widest step the zoom knob reaches.
-const ZOOM_MIN: f64 = 6.0;
+/// The narrowest and widest step the zoom knob reaches: zoomed out, a run
+/// of a thousand steps fits a laptop's screen.
+const ZOOM_MIN: f64 = 1.0;
 const ZOOM_MAX: f64 = 64.0;
 /// Steps of blank tape drawn after the last recorded one.
 const LEADER: usize = 6;
@@ -318,10 +319,12 @@ fn rows(reel: &Reel, cursor: usize, opened: &[String]) -> Vec<Row> {
     });
     for at in order {
         let group = &reel.groups[at];
+        // A call stays open through the step that ends it, so its lanes are
+        // on screen while their objects' lifetimes end.
         let live = group
             .calls
             .iter()
-            .any(|call| call.first <= cursor && cursor <= call.last);
+            .any(|call| call.first <= cursor && cursor <= call.last + 1);
         let folded = !live && !opened.contains(&group.key);
         rows.push(Row::Group { at, folded, live });
         if !folded {
@@ -535,8 +538,12 @@ fn tape_svg(reel: Memo<Reel>, rows: Memo<Vec<Row>>, step: f64, cursor: usize, vi
                 }
             }
             let ahead = move |index: usize| if index > cursor { "is-ahead" } else { "" };
-            // Axis: a tick and a number every few steps, by zoom.
-            let every = if step >= 22.0 { 5 } else if step >= 12.0 { 10 } else { 20 };
+            // Axis: a tick and a number at the first round interval that
+            // leaves room for the number.
+            let every = [1, 2, 5, 10, 20, 50, 100, 200, 500, 1000]
+                .into_iter()
+                .find(|&every| px(every) * step >= 44.0)
+                .unwrap_or(2000);
             let ticks = (0..count)
                 .filter(|index| index % every == 0)
                 .map(|index| view! {
@@ -544,9 +551,10 @@ fn tape_svg(reel: Memo<Reel>, rows: Memo<Vec<Row>>, step: f64, cursor: usize, vi
                     <text class="tape-number" x=x(index) + 3.0 y="11">{reel.steps[index].0}</text>
                 })
                 .collect_view();
-            // The clock lane: one pulse per step, taller at a sequence point.
+            // The clock lane: one pulse per step, taller at a sequence point
+            // (a flat line where steps are too narrow to tell apart).
             let mut clock = format!("M0 {}", AXIS - 6.0);
-            for (index, &(_, sequence)) in reel.steps.iter().enumerate() {
+            for (index, &(_, sequence)) in reel.steps.iter().enumerate().filter(|_| step >= 3.0) {
                 let high = if sequence { AXIS - 19.0 } else { AXIS - 13.0 };
                 let (left, right) = (x(index) + 1.0, x(index) + step * 0.55);
                 _ = write!(
@@ -701,7 +709,7 @@ fn bus(segment: &Segment, y: f64, step: f64, cursor: usize, used: Option<String>
         class.push_str(" is-ahead");
     }
     let text = segment.value.clone().unwrap_or_else(|| "?".to_owned());
-    let text_width = px(text.chars().count()) * 7.3 + 5.0;
+    let text_width = px(text.chars().count()) * 7.6 + 6.0;
     let mut labels = Vec::new();
     let mut at = x0 + slope + 3.0;
     while at + text_width <= x1 - slope {
@@ -835,13 +843,13 @@ mod tests {
             .expect("bump's calls");
         assert_eq!(reel.groups[bump].calls.len(), 3, "one group for the loop's three calls");
         let last_call = reel.groups[bump].calls[2].last;
-        let after = rows(&reel, last_call + 1, &[]);
+        let after = rows(&reel, last_call + 2, &[]);
         assert!(after.contains(&Row::Group {
             at:     bump,
             folded: true,
             live:   false,
         }));
-        let opened = rows(&reel, last_call + 1, &[reel.groups[bump].key.clone()]);
+        let opened = rows(&reel, last_call + 2, &[reel.groups[bump].key.clone()]);
         assert!(opened.len() > after.len(), "an opened group shows its lanes");
     }
 

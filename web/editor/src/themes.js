@@ -57,10 +57,10 @@ function colors(palette) {
     'editor.background': palette.background,
     'editor.foreground': palette.foreground,
     'editorGutter.background': palette.background,
-    'editorLineNumber.foreground': '#7a7a73',
+    'editorLineNumber.foreground': '#8a8a82',
     // The number of the empty line after a final new-line, which Monaco
     // otherwise dims below 4.5:1.
-    'editorLineNumber.dimmedForeground': '#7a7a73',
+    'editorLineNumber.dimmedForeground': '#8a8a82',
     'editorLineNumber.activeForeground': '#f2f2ec',
     'editor.lineHighlightBackground': '#ffffff08',
     'editor.lineHighlightBorder': '#00000000',

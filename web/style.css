@@ -515,16 +515,16 @@
   .spool-axle { fill: var(--screen); }
   .deck-labels { border-right: 1px solid var(--screen-faint); font-size: 11px; color: var(--screen-dim); padding-top: 8px; padding-bottom: 8px; }
   .deck-label { height: var(--lane, 28px); display: flex; align-items: center; gap: 6px; padding: 0 8px; white-space: nowrap; overflow: hidden; }
-  .deck-label.is-axis { height: 30px; letter-spacing: .14em; text-transform: uppercase; font-size: 9.5px; color: #77776f; }
+  .deck-label.is-axis { height: 30px; letter-spacing: .14em; text-transform: uppercase; font-size: 9.5px; color: #8a8a82; }
   .deck-label.is-group { border-top: 1px solid var(--screen-faint); }
   .deck-label.is-group button { display: flex; align-items: center; gap: 5px; padding: 0; border: 0; background: none; color: var(--screen-ink); font-weight: 700; cursor: pointer; }
   .deck-label.is-group:not(.is-live) button { color: var(--screen-dim); font-weight: 400; }
   .deck-fold { font-size: 9px; width: 9px; }
-  .deck-count { color: #77776f; font-weight: 400; }
+  .deck-count { color: #8a8a82; font-weight: 400; }
   .deck-swatch { flex: none; width: 7px; height: 7px; background: var(--obj); }
   .deck-label.is-lane { --obj: var(--obj-screen); }
   .deck-name { color: var(--screen-ink); overflow: hidden; text-overflow: ellipsis; }
-  .deck-type { color: #77776f; }
+  .deck-type { color: #8a8a82; }
   .tape {
     position: relative; overflow-x: auto; overflow-y: hidden; padding: 8px 0;
     cursor: ew-resize; touch-action: pan-y; scroll-behavior: smooth;
@@ -535,7 +535,7 @@
   .tape-svg text { stroke: none; }
   .tape-now { fill: #1c1c1a; }
   .tape-grid { stroke: var(--screen-rule); stroke-width: 1; }
-  .tape-number { fill: #77776f; font-size: 9px; }
+  .tape-number { fill: #8a8a82; font-size: 9px; }
   .tape-clock { stroke: var(--screen-dim); stroke-width: 1; }
   .tape-call { stroke: var(--screen-ink); stroke-width: 3; }
   .tape-call.is-waiting { stroke-width: 1.5; stroke-dasharray: 5 4; }
@@ -593,6 +593,7 @@
   /* The note hangs off the playhead. */
   .notes-row { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); gap: 1px; background: var(--seam); border-top: 3px solid var(--accent); }
   .notes-row > * { background: var(--device); min-width: 0; }
+  .note.narration, .machine-side { background: var(--device); }
   .machine-side { display: grid; gap: 22px; align-content: start; padding: 16px 18px 20px; }
 
   .note.narration { position: relative; padding: 16px 20px 20px; }
@@ -741,6 +742,7 @@
   .datasheet tr.is-used td, .datasheet tr.is-used th { color: var(--accent-ink); }
   .datasheet tr.is-used th { box-shadow: inset 3px 0 0 var(--accent); padding-left: 7px; }
   .datasheet tr.is-ended td, .datasheet tr.is-ended th { color: var(--ink-3); text-decoration: line-through; text-decoration-thickness: 1px; }
+  .datasheet tr.is-folded td, .datasheet tr.is-folded th { text-decoration: none; white-space: normal; }
   .sheet-value { white-space: normal; overflow-wrap: anywhere; }
 
   /* The compiler pipeline: each stage a channel of the device. */
@@ -990,13 +992,13 @@
   .memory-grid { overflow-x: auto; padding: 8px 0; background: var(--screen); color: var(--screen-ink); font: 12px/1 var(--font-mono); }
   .memory-row { display: flex; align-items: center; gap: 14px; padding: 2px 12px; min-width: max-content; }
   /* Wide enough for any address of the stepper's 64 MiB of memory. */
-  .memory-address { width: 8ch; flex: none; text-align: right; color: #77776f; }
+  .memory-address { width: 8ch; flex: none; text-align: right; color: #8a8a82; }
   .memory-cells { display: grid; grid-template-columns: repeat(16, 2.6ch); gap: 3px; }
   .memory-row.is-words .memory-cells { grid-template-columns: repeat(4, 12ch); gap: 3px; }
   .memory-byte, .memory-word { position: relative; padding: 4px 0; text-align: center; color: var(--screen-dim); }
   .memory-word { text-align: right; padding-right: 8px; }
   .memory-row:not(.is-words) .memory-byte:nth-child(4n):not(:last-child) { margin-right: 5px; }
-  .memory-text { color: #77776f; letter-spacing: .04em; white-space: pre; }
+  .memory-text { color: #8a8a82; letter-spacing: .04em; white-space: pre; }
   .band-current { background: #3a2a14; color: var(--screen-ink); }
   .band-odd { background: #1f1f1d; }
   .band-even { background: #161a24; }
@@ -1068,7 +1070,7 @@
     font: 11px var(--font-mono); white-space: nowrap; pointer-events: none;
   }
   .monaco-editor .exec-current { background: var(--accent); }
-  .monaco-editor .exec-current + * { color: inherit; }
+  .monaco-editor .exec-current-text { color: var(--on-accent) !important; }
   .monaco-editor .exec-line { background: #1c1c1a; box-shadow: inset 3px 0 0 var(--accent); }
   .monaco-editor .exec-next { outline: 1px dashed var(--screen-dim); outline-offset: 1px; }
   .monaco-editor .exec-fault { background: color-mix(in srgb, #ff5b4b 25%, transparent); outline: 1.5px solid #ff6b5b; }
