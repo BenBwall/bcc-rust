@@ -2233,7 +2233,21 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     .integer(s)
                     .is_some_and(|(_, signed)| !signed)
             };
-            let (high, low) = if rank(ls) >= rank(rs) {
+            // Of two operands of equal rank, the unsigned one's type is
+            // the common type (§6.3.1.8p1): plain `char` where it is
+            // unsigned. Two complex integer parts of equal rank and
+            // signedness (`_Complex signed char` and `_Complex char`) give
+            // Clang the left operand's, and GCC the left's only if it is
+            // unsigned (its `c_common_type`), else the right's.
+            let right_first = rank(ls) == rank(rs)
+                && if self.context.configuration.complex_integer_rules()
+                    == crate::configuration::RuleSet::Gcc
+                {
+                    !unsigned(ls)
+                } else {
+                    unsigned(rs) && !unsigned(ls)
+                };
+            let (high, low) = if rank(ls) >= rank(rs) && !right_first {
                 (ls, rs)
             } else {
                 (rs, ls)

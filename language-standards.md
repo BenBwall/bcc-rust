@@ -2900,7 +2900,10 @@ Typing follows both compilers: a complex integer operand takes part in the
 usual arithmetic conversions through its real type unpromoted
 (`_Complex char + _Complex char` is `_Complex char`), a real integer
 operand promotes (`_Complex char + char` is `_Complex int`), and a floating
-operand makes the result complex floating. `~` on any complex value is its
+operand makes the result complex floating. Of two parts of equal rank, the
+unsigned one's type wins; of equal signedness too (`_Complex signed char`
+and `_Complex char`), Clang takes the left operand's type and GCC the
+left's only if it is unsigned, else the right's (its `c_common_type`). `~` on any complex value is its
 conjugate (also for complex floating types, a GNU extension Clang shares),
 `!` and conditions test both parts, `==` and `!=` compare both, and
 `__real__` and `__imag__` are lvalues. Conversions go part by part:

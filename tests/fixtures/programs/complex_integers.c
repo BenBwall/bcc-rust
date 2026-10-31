@@ -61,6 +61,16 @@ int main(void)
     printf("%zu %zu %zu %zu\n", sizeof((cc)0 + (cc)0), sizeof((cc)0 + (char)0),
            sizeof((cs)0 * 1), sizeof((ci)0 + 1.0));
 
+    /* Equal-rank parts: Clang takes the left operand's type, GCC the
+       left's only if it is unsigned. */
+    {
+        _Complex signed char sc = 1;
+        cc plain = 2;
+        int k = 1;
+#define NAME(e) _Generic((e), cc: "char", _Complex signed char: "signed char", cuc: "unsigned char", default: "other")
+        printf("%s %s %s %s\n", NAME(sc + plain), NAME(plain + sc), NAME(k ? sc : plain),
+               NAME((cuc)0 + plain));
+    }
     volatile ci x = 3 + 4i, y = -2 + 5i;
     ci s = x + y, d = x - y, p = x * y;
     SHOW(ci, s);

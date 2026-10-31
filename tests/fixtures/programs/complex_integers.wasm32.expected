@@ -1,5 +1,6 @@
 2 4 8 8 4 16
 2 8 8 16
+signed char char signed char unsigned char
 ci 1 9
 ci 5 -1
 ci -26 7
