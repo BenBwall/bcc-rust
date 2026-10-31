@@ -108,6 +108,21 @@ fn a_name_from_a_paste_operand_is_rescanned_with_the_pasting_list() {
 }
 
 #[test]
+fn a_pragma_operator_in_an_argument_takes_effect_where_the_argument_lands() {
+    // C99 6.10.3.1p1: an argument is replaced before it is substituted, but
+    // GCC and Clang carry out a `_Pragma` in it only where the replaced
+    // argument is rescanned, so `pack(1)` follows `struct a` here.
+    let source = "#define FOO(x) x\nFOO(struct a { char c; int i; }; _Pragma(\"pack(1)\") struct \
+                  b { char c; int i; };)\n";
+    with_tokens_of(source, "<test>", |tokens, context| {
+        assert_eq!(tokens.len(), 22);
+        let positions: Vec<_> = context.pack_pragmas.iter().map(|p| p.position).collect();
+        // After the 11 tokens of `struct a { char c; int i; };`.
+        assert_eq!(positions, [11]);
+    });
+}
+
+#[test]
 fn stringified_replacements_keep_only_the_invocations_spacing() {
     // C99 6.10.3p7: the white space before a replacement list is not part
     // of it, so `#` spaces a replacement as its invocation was spaced, as

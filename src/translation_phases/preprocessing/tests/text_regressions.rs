@@ -219,6 +219,39 @@ fn pragmas_are_written_back_as_spelled() {
 }
 
 #[test]
+fn a_pragma_operator_in_an_argument_is_written_where_the_argument_lands() {
+    // GCC and Clang defer a `_Pragma` that an argument's prescan meets to
+    // where the replaced argument is rescanned: once per use of the
+    // parameter, and a `#` of the replaced argument spells it
+    // (gcc.dg/cpp/Wunknown-pragmas-1.c).
+    let source = "#define FOO(x) x\n#define TWICE(x) x x\n#define S(x) #x\n#define XS(x) \
+                  S(x)\nFOO(int a; _Pragma(\"p1\") int b;)\nFOO(FOO(c _Pragma(\"p2\") \
+                  d))\nTWICE(e _Pragma(\"p3\") f)\nXS(g _Pragma(\"p4\") h)\n";
+    for identity in [CompilerIdentity::Gcc, CompilerIdentity::Clang] {
+        let text = text_of(source, identity);
+        assert_eq!(
+            text.tokens, r#"int a ; int b ; c d e f e f "g _Pragma(\"p4\") h""#,
+            "{identity:?}"
+        );
+        let pragmas: Vec<_> = text
+            .pragmas
+            .iter()
+            .map(|(position, line)| (*position, line.as_str()))
+            .collect();
+        assert_eq!(
+            pragmas,
+            [
+                (3, "#pragma p1"),
+                (7, "#pragma p2"),
+                (9, "#pragma p3"),
+                (11, "#pragma p3"),
+            ],
+            "{identity:?}"
+        );
+    }
+}
+
+#[test]
 fn pragmas_the_preprocessor_carries_out_are_not_written_back() {
     // Each compiler's `-E` leaves out the pragmas its preprocessor consumes:
     // GCC its `GCC warning`, Clang its own `clang` pragmas and MSVC's

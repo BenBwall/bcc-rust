@@ -467,6 +467,37 @@ mod tests {
     }
 
     #[test]
+    fn a_pragma_in_a_macro_argument_applies_where_the_argument_lands() {
+        let project = Project::new();
+        let source = "#define FOO(x) x\nFOO(struct a { char c; int i; }; _Pragma(\"pack(1)\") \
+                      struct b { char c; int i; };)\n_Static_assert(sizeof(struct a) == 8, \
+                      \"a\");\n_Static_assert(sizeof(struct b) == 5, \"b\");\n";
+        std::fs::write(project.path("arg.c"), source).unwrap();
+        // GCC and Clang carry out a `_Pragma` in a macro argument where the
+        // replaced argument lands, not when its prescan meets it, both when
+        // compiling and in -E's text, which then compiles the same.
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            succeeds(&project.bcc(&[mode, "-fsyntax-only", "arg.c"]));
+            let output = project.bcc(&[mode, "-E", "-P", "arg.c", "-o", "arg.i"]);
+            succeeds(&output);
+            let text = std::fs::read_to_string(project.path("arg.i")).unwrap();
+            assert_eq!(
+                text.lines()
+                    .map(str::trim_start)
+                    .take(3)
+                    .collect::<Vec<_>>(),
+                [
+                    "struct a { char c; int i; };",
+                    "#pragma pack(1)",
+                    "struct b { char c; int i; };",
+                ],
+                "{mode}: {text}"
+            );
+            succeeds(&project.bcc(&[mode, "-fsyntax-only", "arg.i"]));
+        }
+    }
+
+    #[test]
     fn preprocessing_writes_source_text_with_line_markers() {
         let project = Project::new();
         let output = project.bcc(&["-E", "main.c"]);

@@ -276,9 +276,11 @@ impl<'x> Expander<'_, '_, '_, 'x> {
             self.verbatim_fence
         };
         let mut tokens = ArenaVec::new_in(self.scratch);
+        self.state.prescans += usize::from(expand);
         while let Some(token) = self.next_preprocessor_token::<false>() {
             tokens.push(token);
         }
+        self.state.prescans -= usize::from(expand);
         self.operand_fence = fence;
         self.expansion_fence = expansion_fence;
         self.verbatim_fence = verbatim_fence;

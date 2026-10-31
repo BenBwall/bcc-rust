@@ -128,6 +128,12 @@ impl Expander<'_, '_, '_, '_> {
                     source_vectors: token.source_vectors,
                 })
             },
+            // In an argument's prescan the operator stays, to be carried
+            // out where the replaced argument is rescanned among the
+            // tokens around it, as GCC and Clang do: a pragma takes
+            // effect at its place in the output (C99 §6.10.3.1p1,
+            // §6.10.3.4p1), and a `#` of the replaced argument spells it.
+            | "_Pragma" if self.state.prescans != 0 => Some(token),
             // C99 §6.10.9p1: `_Pragma ( string-literal )` runs
             // the destringized literal, retokenized, as the
             // pp-tokens of a `#pragma`, and all four tokens

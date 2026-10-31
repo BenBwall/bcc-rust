@@ -145,6 +145,11 @@ impl<'pp: 'x, 'x> Expander<'_, '_, 'pp, 'x> {
             | "__STDC_EMBED_FOUND__" => 1,
             | "__STDC_EMBED_EMPTY__" => 2,
             | _ => {
+                let name = self.context.string_cache.at(token.contents);
+                // Deferred in a prescan, as `_Pragma` is.
+                if name == "__pragma" && self.state.prescans != 0 {
+                    return Some(token);
+                }
                 let from = self.invocation_location(token).index;
                 let tokens = self.query_arguments::<false>(token)?.leak();
                 let name = self.context.string_cache.at(token.contents);
