@@ -2912,7 +2912,9 @@ divisor part of larger magnitude first (`expand_complex_div_wide`:
 with `|c| < |d|`, `r = c / d`, `t = c r + d`, the quotient is
 `((a r + b) / t) + ((b r - a) / t)i`, and symmetrically), Clang computes
 `(ac + bd) / (cc + dd)` and `(bc - ad) / (cc + dd)`; both in the parts'
-type, wrapping, and both divide each part by a real divisor. Constant
+type, wrapping. GCC divides each part by a real divisor; Clang applies its
+formula to it as `c + 0i`, so `(100000 + 7i) / 70000` is `1` under GCC and
+`-2` under Clang, whose `cc` wraps. Constant
 expressions fold with the same rules, the parts held exactly in the floating
 carrier, so a complex integer constant initializes a static object.
 

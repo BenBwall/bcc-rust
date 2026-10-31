@@ -95,6 +95,14 @@ int main(void)
     DIVIDE(cl, 123456789, -987654321, 1000, 7);
     ci by_real = x / 2;
     SHOW(ci, by_real);
+    /* GCC divides each part by a real divisor; Clang takes it as c + 0i,
+       so c * c wraps. */
+    volatile ci wide = 100000 + 7i;
+    volatile int divisor = 70000;
+    ci wrapped = wide / divisor;
+    SHOW(ci, wrapped);
+    static const cu unsigned_quotient = (5u + 4000000000ui) / 4294967293u;
+    SHOW(cu, unsigned_quotient);
 
     volatile double real = 7.75;
     ci from_double = real;

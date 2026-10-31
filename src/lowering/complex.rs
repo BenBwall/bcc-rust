@@ -450,7 +450,8 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
     /// part (`(ac - bd) + (ad + bc)i`), equality of both parts, and a
     /// quotient by the identity's formula
     /// ([`CompilerConfiguration::complex_integer_rules`](crate::configuration::CompilerConfiguration::complex_integer_rules)).
-    /// A real divisor divides each part, as both compilers do.
+    /// GCC divides each part by a real divisor; Clang uses its formula with
+    /// the divisor as `c + 0i`, so `cc` may wrap.
     /// GNU extension: GCC manual, "Complex Numbers".
     fn complex_integer_binary(
         &mut self,
@@ -516,14 +517,14 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
             | B::Division => {
                 let signed = self.part_repr(ty, source)?.signed();
                 let divide = if signed { Opcode::Sdiv } else { Opcode::Udiv };
-                let pair = if domains & 2 == 0 {
+                let gcc = self.unit.context.configuration.complex_integer_rules()
+                    == crate::configuration::RuleSet::Gcc;
+                let pair = if domains & 2 == 0 && gcc {
                     [
                         self.binary_inst(divide, flags, a[0], b[0]),
                         self.binary_inst(divide, flags, a[1], b[0]),
                     ]
-                } else if self.unit.context.configuration.complex_integer_rules()
-                    == crate::configuration::RuleSet::Gcc
-                {
+                } else if gcc {
                     self.gcc_integer_quotient(a, b, signed)
                 } else {
                     // Clang: `(ac + bd) / (cc + dd)` and `(bc - ad) / (cc +

@@ -2099,8 +2099,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// Folds `+`, `-`, `*` and `/` of two GNU complex integer constants of
     /// type `ty`, whose exact parts the floating carrier holds, wrapping
     /// each step to the parts' width as the run-time operation does; a
-    /// quotient by a real divisor divides each part, another uses the
-    /// identity's formula, and a zero divisor does not fold.
+    /// quotient uses the identity's formula (GCC dividing each part by a
+    /// real divisor, Clang taking it as `c + 0i`), and a zero divisor does
+    /// not fold.
     /// GNU extension: GCC manual, "Complex Numbers".
     fn complex_integer_binary(
         &self,
@@ -2129,15 +2130,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let add = |x: i128, y: i128| wrap(x.wrapping_add(y));
         let sub = |x: i128, y: i128| wrap(x.wrapping_sub(y));
         let div = |x: i128, y: i128| (y != 0).then(|| wrap(x.wrapping_div(y)));
+        let gcc = self.context.configuration.complex_integer_rules()
+            == crate::configuration::RuleSet::Gcc;
         let [real, imaginary] = match op {
             | B::Addition => [add(a, c), add(b, d)],
             | B::Subtraction => [sub(a, c), sub(b, d)],
             | B::Multiplication => [sub(mul(a, c), mul(b, d)), add(mul(a, d), mul(b, c))],
-            | B::Division if real_divisor => [div(a, c)?, div(b, c)?],
-            | B::Division
-                if self.context.configuration.complex_integer_rules()
-                    == crate::configuration::RuleSet::Gcc =>
-            {
+            // GCC divides each part by a real divisor; Clang's formula
+            // takes it as `c + 0i` below.
+            | B::Division if real_divisor && gcc => [div(a, c)?, div(b, c)?],
+            | B::Division if gcc => {
                 // GCC's `expand_complex_div_wide`; see lowering's
                 // `gcc_integer_quotient`.
                 if wrap(c.abs()) < wrap(d.abs()) {
