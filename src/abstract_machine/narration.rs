@@ -415,7 +415,7 @@ impl Machine {
             | Type::Int => String::from("an int object"),
         };
         let summary = format!(
-            "The machine draws `{name}`, {kind} in {function}'s frame, here; C has it exist from \
+            "The machine draws `{name}` here, {kind} in {function}'s frame; C has it exist from \
              the start of its block, with no value until one is stored.",
             name = object.name,
         );
@@ -1268,28 +1268,49 @@ impl Machine {
             ),
         };
         let counts = if truth { "true" } else { "false" };
-        let summary = format!("`{condition}` is {shown}, which counts as {counts}, so {short}.");
+        // An omitted for condition is a nonzero constant; its range is the
+        // keyword.
+        let omitted = statement == "for" && condition == "for";
+        let summary = if omitted {
+            format!("This for statement has no condition, which counts as true, so {short}.")
+        } else {
+            format!("`{condition}` is {shown}, which counts as {counts}, so {short}.")
+        };
         let meaning = match value {
             | Value::Pointer { target: None, .. } => "a null pointer counts as false",
             | Value::Pointer { .. } => "a non-null pointer counts as true",
             | _ if truth => "any nonzero value counts as true",
             | _ => "zero counts as false",
         };
-        let text = format!(
-            "The controlling expression `{condition}` of this {statement} statement evaluated to \
-             {shown}. In C, {meaning}, so {outcome}. The condition is a full expression, so this \
-             is a sequence point."
-        );
+        let text = if omitted {
+            format!(
+                "This for statement omits its controlling expression, and C replaces an omitted \
+                 one with a nonzero constant, so {outcome}: the loop ends only by a return or a \
+                 jump out of it."
+            )
+        } else {
+            format!(
+                "The controlling expression `{condition}` of this {statement} statement evaluated \
+                 to {shown}. In C, {meaning}, so {outcome}. The condition is a full expression, \
+                 so this is a sequence point."
+            )
+        };
+        let cited: &[Clause] = if omitted {
+            &[clauses::OMITTED_CONDITION]
+        } else {
+            &[clause, clauses::FULL_EXPRESSION]
+        };
         let mut event = noted(
             explained(
                 Event::new(EventKind::Branch, range, format!("Condition is {title}")),
                 &summary,
                 &text,
-                &[clause, clauses::FULL_EXPRESSION],
+                cited,
             ),
             Topic::Condition,
         );
-        event.sequence_point = true;
+        // An omitted condition is no expression, so no sequence point.
+        event.sequence_point = !omitted;
         event.operands.push(Operand::Value(value.clone()));
         result(event, Operand::Value(value))
     }

@@ -192,6 +192,9 @@ clauses! {
     /// C99: §6.8.5 paragraph 4, p. 135; PDF p. 147.
     ITERATION = "6.8.5p4", "p. 135; PDF p. 147", "Iteration statements",
         "A loop runs its body repeatedly until its controlling expression compares equal to 0.";
+    /// C99: §6.8.5.3 paragraph 2, p. 136; PDF p. 148.
+    OMITTED_CONDITION = "6.8.5.3p2", "p. 136; PDF p. 148", "The for statement",
+        "A for statement's omitted controlling expression is replaced by a nonzero constant.";
     /// C99: §6.8.6.4 paragraph 3, p. 139; PDF p. 151.
     RETURN = "6.8.6.4p3", "p. 139; PDF p. 151", "The return statement",
         "return hands the expression's value back to the caller as the value of the call.";

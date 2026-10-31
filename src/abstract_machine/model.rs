@@ -385,12 +385,12 @@ impl Diagnostic {
         range: SourceRange,
         message: &str,
         clause: &'static Clause,
-        cause: Undefined,
+        undefined: Undefined,
     ) -> Self {
         Self {
             citation: Some(clause.citation),
             clause: Some(clause),
-            undefined: Some(cause),
+            undefined: Some(undefined),
             ..Self::new("undefined_behavior", range, message)
         }
     }

@@ -805,6 +805,25 @@ fn a_false_condition_says_whether_an_else_branch_runs() {
 }
 
 #[test]
+fn an_omitted_for_condition_is_a_nonzero_constant() {
+    let states = states("int main(void) { for (;;) { return 3; } }");
+    let branch = &states
+        .iter()
+        .find(|state| state.event.kind == EventKind::Branch)
+        .expect("the loop's test")
+        .event;
+    assert!(
+        branch
+            .summary
+            .starts_with("This for statement has no condition"),
+        "{}",
+        branch.summary
+    );
+    assert_eq!(branch.clauses[0].id, "6.8.5.3p2");
+    assert!(!branch.sequence_point);
+}
+
+#[test]
 fn undefined_behavior_is_titled_by_its_cause() {
     let title = |source: &str| run(source).state().event.title.clone();
     assert_eq!(
