@@ -148,6 +148,59 @@ mod tests {
         );
     }
 
+    /// An unprefixed literal joined to a prefixed one takes its prefix:
+    /// Clang's warning becomes the prefixed literal's error, and GCC
+    /// cannot convert the bytes to a wide encoding but keeps them in `u8`.
+    #[test]
+    fn malformed_utf8_joined_to_prefixed_literals_is_diagnosed() {
+        for (prefix, gcc_error) in [("L", true), ("u", true), ("u8", false)] {
+            let source = [
+                format!("const void *s = {prefix}\"a\" \"b").as_bytes(),
+                b"\xff\" ",
+                format!("{prefix}\"w\";\nconst char *n = \"c").as_bytes(),
+                b"\xff\" \"d\";\n",
+            ]
+            .concat();
+            let clang = check("--compiler-identity=clang", &source, &["-std=gnu23"]);
+            let stderr = text(&clang.stderr);
+            assert!(!clang.status.success(), "{prefix}: {stderr}");
+            assert_eq!(
+                stderr
+                    .matches("error: illegal character encoding in string literal\n")
+                    .count(),
+                1,
+                "{prefix}: {stderr}"
+            );
+            assert_eq!(
+                stderr
+                    .matches(
+                        "warning: illegal character encoding in string literal \
+                         [-Winvalid-source-encoding]"
+                    )
+                    .count(),
+                1,
+                "{prefix}: only the unprefixed join warns: {stderr}"
+            );
+            let clang = check(
+                "--compiler-identity=clang",
+                &source,
+                &["-std=gnu23", "-Wno-invalid-source-encoding"],
+            );
+            assert!(
+                !clang.status.success(),
+                "{prefix}: the group leaves the error"
+            );
+            let gcc = check("--compiler-identity=gcc", &source, &["-std=gnu23"]);
+            let stderr = text(&gcc.stderr);
+            assert_eq!(gcc.status.success(), !gcc_error, "{prefix}: {stderr}");
+            assert_eq!(
+                stderr.contains("error: converting to execution character set"),
+                gcc_error,
+                "{prefix}: {stderr}"
+            );
+        }
+    }
+
     /// `-E` spells a string literal that is not UTF-8 with octal escapes,
     /// which give the same bytes.
     #[test]
