@@ -69,7 +69,6 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         verbose: false,
         dry_run: false,
         machine: Vec::new(),
-        mmx: true,
         position: 0,
         positions: Vec::new(),
         linker_words: Vec::new(),
@@ -82,7 +81,7 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         }
     }
     let target = state.target.unwrap_or_else(|| host_target(personality));
-    state.machine_options(target);
+    let mmx = state.machine_options(target);
     state.check_inputs();
     let jobs = state.jobs();
     if state.errors != 0 {
@@ -107,7 +106,7 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
     common.push(format!("--driver-name={}", invocation.name).into());
     // Before the command line's `-D` and `-U`, as the compilers' own
     // macros come before them.
-    if !state.mmx {
+    if !mmx {
         common.push("-U__MMX__".into());
     }
     if invocation.name.ends_with("c89") {
@@ -320,9 +319,6 @@ struct State<'a> {
     /// The known `-m` options bcc does not implement, judged once the
     /// target is known, since `--target` may come after them.
     machine:         Vec<String>,
-    /// Whether `__MMX__` stays defined: `-mno-mmx` was not given, or a
-    /// later `-mmmx` restored it.
-    mmx:             bool,
     /// The position on the command line of the argument being read.
     position:        usize,
     /// The arguments Clang may report as unused, with their positions and
@@ -1047,19 +1043,21 @@ impl State<'_> {
 
     /// Applies [`treatment`] to the deferred `-m` options for `target`.
     /// `-mwindows` on MinGW-w64 links a GUI program, as GCC's driver does.
-    /// The last of `-mmmx` and `-mno-mmx` decides whether `__MMX__` is
-    /// defined, as in both compilers.
-    fn machine_options(&mut self, target: Target) {
+    /// Returns whether `__MMX__` stays defined: the last of `-mmmx` and
+    /// `-mno-mmx` decides, as in both compilers.
+    fn machine_options(&mut self, target: Target) -> bool {
+        let mut mmx = true;
         for option in std::mem::take(&mut self.machine) {
             if option == "-mwindows" && target == Target::WindowsGnu {
                 self.out.push("-Wl,--subsystem,windows".into());
             } else {
                 if let "-mmmx" | "-mno-mmx" = option.as_str() {
-                    self.mmx = option == "-mmmx";
+                    mmx = option == "-mmmx";
                 }
                 self.treat(&option, target);
             }
         }
+        mmx
     }
 
     /// Ignores, warns about or refuses a known option bcc does not

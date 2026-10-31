@@ -442,7 +442,7 @@ impl CompilerConfiguration {
 
     /// Whether signed integer `+`, `-` and `*` trap on overflow (`-ftrapv`).
     pub(crate) const fn trapv(self) -> bool {
-        self.trapv && !(self.wrapv && !self.trapv_last)
+        self.trapv && (self.trapv_last || !self.wrapv)
     }
 
     /// Sets the structure packing in effect before any `#pragma pack`, as
