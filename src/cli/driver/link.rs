@@ -271,6 +271,13 @@ fn assembler_arguments(args: &Cli, assembly: Assembly<'_>) -> Vec<OsString> {
         );
     }
     options.extend(args.driver.assembler_option.iter().map(OsString::from));
+    // Clang's warnings reach the user, so `-w` and `-Werror` apply to them.
+    let configuration = args.configuration();
+    if configuration.suppress_warnings() {
+        options.push("-w".into());
+    } else if configuration.warnings_are_errors() {
+        options.push("-Werror".into());
+    }
     if assembly.preprocessed() {
         // The startup preprocessing operations, as
         // `Cli::configure_preprocessing` reads them.
