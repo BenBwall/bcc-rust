@@ -3,8 +3,10 @@
 
 use std::path::PathBuf;
 
+use super::language_modes::mode;
 use crate::{
     configuration::{
+        CStandard,
         CompilerConfiguration,
         CompilerIdentity,
     },
@@ -248,5 +250,26 @@ fn pragmas_the_preprocessor_carries_out_are_not_written_back() {
             "#pragma clang diagnostic push",
             "#pragma",
         ]
+    );
+}
+
+#[test]
+fn stringizing_an_optional_replacement_spaces_it_as_each_compiler_does() {
+    // C23 6.10.5.1p3 leaves the white space at the ends of a `__VA_OPT__`
+    // replacement to `#`, which GCC drops and Clang keeps, the space before
+    // `)` even for an empty replacement; an empty one adds no space either
+    // way.
+    let source = "#define S(x) #x\n#define F(a, ...) S(-__VA_OPT__( a )-)\n#define H(a, ...) S(- \
+                  __VA_OPT__( a ) -)\n#define I(a, ...) S(-__VA_OPT__( a b )-)\n#define K(a, ...) \
+                  S(-__VA_OPT__( )-)\n#define L(...) S(x __VA_OPT__() y)\nF(x, 1) F(x) H(x, 1) \
+                  H(x) I(x, 1) K(x, 1) L(1) L()\n";
+    let c23 = |identity| mode(CStandard::C23).with_compiler_identity(identity);
+    assert_eq!(
+        text_in(source, c23(CompilerIdentity::Gcc)).tokens,
+        r#""-x-" "--" "- x -" "- -" "-x b-" "--" "x y" "x y""#
+    );
+    assert_eq!(
+        text_in(source, c23(CompilerIdentity::Clang)).tokens,
+        r#""- x -" "- -" "- x -" "- -" "- x b -" "- -" "x y" "x y""#
     );
 }

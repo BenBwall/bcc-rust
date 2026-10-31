@@ -160,6 +160,11 @@ impl Expander<'_, '_, '_, '_> {
                 pending_space = true;
                 continue;
             }
+            // The placemarker of an empty `__VA_OPT__` spells nothing, and
+            // the whitespace around it is one run (C23 §6.10.5.1p3).
+            if token.kind == PreprocessorTokenType::Placeholder {
+                continue;
+            }
             if take(&mut pending_space) {
                 synthetic_contents.push(' ');
             }

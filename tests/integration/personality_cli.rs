@@ -224,6 +224,24 @@ mod tests {
         );
     }
 
+    /// C23 leaves the white space at the ends of a `__VA_OPT__` replacement
+    /// to `#`, which GCC drops and Clang keeps.
+    #[test]
+    fn stringized_optional_replacements_space_as_each_compiler_does() {
+        let directory = Directory::new();
+        directory.write(
+            "va_opt.c",
+            "#define S(x) #x\n#define F(a, ...) S(-__VA_OPT__( a )-)\nF(x, 1) F(x)\n",
+        );
+        let strings = |mode: &str| {
+            let output = directory.bcc(mode, &["-std=c23", "-E", "-P", "va_opt.c"]);
+            succeeds(&output);
+            stdout(&output)
+        };
+        assert_eq!(strings("--gcc-mode"), "\"-x-\" \"--\"\n");
+        assert_eq!(strings("--clang-mode"), "\"- x -\" \"- -\"\n");
+    }
+
     /// A sign after `p` continues a preprocessing number from C99. Before
     /// C99, GCC reads it so only in its GNU modes and Clang only after a
     /// hexadecimal prefix, so strict C90 splits `0x1p+f` (GCC's
