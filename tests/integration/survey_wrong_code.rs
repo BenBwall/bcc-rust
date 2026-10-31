@@ -268,6 +268,28 @@ mod tests {
         assert_eq!(output.stdout, b"const char *t = \"\xffz\";\n");
     }
 
+    /// An initializer that a later one overrides entirely is not evaluated,
+    /// as GCC and Clang leave it (C11 §6.7.9p19, footnote 151; GCC's
+    /// gcc.dg/cpp/embed-12.c): `f` runs only for the values that reach the
+    /// object.
+    #[test]
+    fn overridden_initializers_are_not_evaluated() {
+        let source = b"#include <stdio.h>\n\
+            int n;\n\
+            int f(int x) { n++; return x; }\n\
+            struct p { int a, b; };\n\
+            int main(void) {\n\
+            int a[3] = { [1] = f(1), [1] = 5, [2] = f(2) };\n\
+            struct p s = { .a = f(3), .b = 1, .a = 4 };\n\
+            struct p t[2] = { [0] = { f(5), f(6) }, [0].a = 9, [1] = { f(7) }, [1] = { 4, 5 } };\n\
+            printf(\"%d %d %d %d %d %d %d\\n\", a[1], a[2], s.a, t[0].a, t[0].b, t[1].a, n);\n\
+            return 0;\n\
+            }\n";
+        for identity in IDENTITIES {
+            prints_on_every_back_end(identity, source, &["-w"], "5 2 4 9 6 4 2\n");
+        }
+    }
+
     #[test]
     fn long_double_union_zero_initializer_clears_every_byte() {
         let source = b"struct s { char s[sizeof(long double)]; };\n\
