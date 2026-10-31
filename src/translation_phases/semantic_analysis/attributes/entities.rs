@@ -1106,6 +1106,21 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         self.correspondence.entity(binding, self.bindings[binding])
     }
 
+    /// The code alignment GNU `aligned` gave function `binding` so far, if
+    /// any; `__alignof__` of the function reads it.
+    /// GNU extension: GCC manual, "Common Function Attributes", aligned.
+    pub(in crate::translation_phases::semantic_analysis) fn code_alignment(
+        &mut self,
+        binding: usize,
+    ) -> Option<u32> {
+        let entity = self.entity_of(binding);
+        self.attributes
+            .entities
+            .get(&entity)
+            .map(|attributes| attributes.code_alignment)
+            .filter(|&alignment| alignment > 0)
+    }
+
     /// A declaration of object `binding` specifies its alignment.
     pub(super) fn declares_alignment(&mut self, binding: usize) {
         let entity = self.entity_of(binding);

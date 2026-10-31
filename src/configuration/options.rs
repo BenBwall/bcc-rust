@@ -331,6 +331,29 @@ impl CompilerConfiguration {
         }
     }
 
+    /// GCC's rules (TCC's and MSVC's too) or Clang's (clang-cl's too) for
+    /// bytes of malformed UTF-8 in a literal: GCC keeps them silently in
+    /// unprefixed and `u8` literals and rejects the wide ones; Clang warns
+    /// in unprefixed literals and rejects every prefixed one.
+    pub(crate) const fn source_encoding_rules(self) -> super::RuleSet {
+        self.identity.rules()
+    }
+
+    /// GCC's rules (TCC's and MSVC's too) or Clang's (clang-cl's too) for
+    /// `__alignof__` of a function type: 1 for GCC and 4 for Clang, on
+    /// every target. GNU extension: GCC manual, "Alignment".
+    pub(crate) const fn function_alignment_rules(self) -> super::RuleSet {
+        self.identity.rules()
+    }
+
+    /// GCC's rules (TCC's and MSVC's too) or Clang's (clang-cl's too) for
+    /// an `alloca` block made inside a VLA's scope: GCC keeps it, and the
+    /// scope's stack, until the function returns; Clang releases it when
+    /// the scope ends. GNU extension: GCC manual, "Other Builtins".
+    pub(crate) const fn alloca_scope_rules(self) -> super::RuleSet {
+        self.identity.rules()
+    }
+
     /// GCC's rules (TCC's and MSVC's too) or Clang's (clang-cl's too) for a
     /// floating constant converted out of an integer's range: GCC's
     /// bit-field saturation, `-Woverflow` in static initializers and

@@ -89,8 +89,9 @@ fn compile_file_configured_measured(
     configure: impl FnOnce(&mut Context<'_>),
 ) -> io::Result<()> {
     let tu = Bump::new();
-    let source = tu.read_to_str_lossy(path)?;
+    let (source, raw_source_bytes) = tu.read_to_str_lossy(path)?;
     let mut context = Context::with_configuration(&tu, configuration);
+    context.raw_source_bytes = raw_source_bytes;
     configure(&mut context);
     measure(CompileStep::Parse, &mut || {
         let unit = parse_translation_unit(&mut context, path, source, HeaderSearch::default());

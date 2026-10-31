@@ -16,8 +16,13 @@ use super::{
     Leaf,
     LoweringError,
     at,
+    types::{
+        self,
+        Repr,
+    },
 };
 use crate::{
+    ir::Type,
     translation_phases::{
         SourceVectors,
         semantic_analysis::{
@@ -134,8 +139,22 @@ impl<'s> CoverageIndex<'s> {
     ) -> Result<Self, LoweringError> {
         let mut ranges = ArenaVec::with_capacity_in(leaves.len(), arena);
         for (index, &leaf) in leaves.iter().enumerate() {
-            let (start, stop) = leaf.bits(&sema.types).map_err(|kind| at(kind, source))?;
+            let (start, mut stop) = leaf.bits(&sema.types).map_err(|kind| at(kind, source))?;
             let ty = leaf.ty();
+            // An x87 `long double` holds 80 value bits in a larger object;
+            // the bytes after them are padding, which is zeroed with the
+            // rest, as in Clang's constant images. LLVM's SROA would
+            // otherwise copy a union through the `f80` member alone.
+            if let Leaf::Scalar {
+                bit_field: None, ..
+            } = leaf
+                && matches!(
+                    types::repr(&sema.types, ty),
+                    Ok(Repr::Float { ty: Type::F80 })
+                )
+            {
+                stop = stop.min(start + 80);
+            }
             ranges.push(Coverage {
                 index,
                 start,

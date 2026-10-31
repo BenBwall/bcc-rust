@@ -69,18 +69,18 @@ pub(super) fn compile(
     dependencies: Option<DependencyRequest>,
 ) -> Result<Generated, MainError> {
     let tu = Bump::new();
-    let read: Result<(&str, &Path), _> = match source {
-        | Source::Text(text) => Ok((tu.alloc_str(text), Path::new("<input>"))),
+    let read: Result<(&str, bool, &Path), _> = match source {
+        | Source::Text(text) => Ok((tu.alloc_str(text), false, Path::new("<input>"))),
         | Source::File(path) | Source::Preprocessed(path) if path == Path::new("-") => tu
             .read_from_lossy(io::stdin().lock())
-            .map(|text| (text, Path::new("<stdin>")))
+            .map(|(text, raw)| (text, raw, Path::new("<stdin>")))
             .map_err(|source| (path, source)),
         | Source::File(path) | Source::Preprocessed(path) => tu
             .read_to_str_lossy(path)
-            .map(|text| (text, path))
+            .map(|(text, raw)| (text, raw, path))
             .map_err(|source| (path, source)),
     };
-    let (input_string, source_filename) = match read {
+    let (input_string, raw_source_bytes, source_filename) = match read {
         | Ok(read) => read,
         // An unreadable input fails its own job alone: GCC reports it and
         // still runs the others, then skips the link.
@@ -132,6 +132,7 @@ pub(super) fn compile(
         dependencies::print_search(&search);
     }
     let mut context = Context::with_configuration(&tu, args.configuration());
+    context.raw_source_bytes = raw_source_bytes;
     context.library_builtins = args.library_builtins(&tu);
     context.code_assumptions = args.code_assumptions();
     if args.driver.header_tree || args.driver.show_includes {

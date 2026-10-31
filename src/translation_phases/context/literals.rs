@@ -10,10 +10,13 @@ use crate::{
         LiteralId,
         LiteralUnit,
     },
-    util::bump::{
-        ArenaString,
-        ArenaVec,
-        Bump,
+    util::{
+        bump::{
+            ArenaString,
+            ArenaVec,
+            Bump,
+        },
+        raw_bytes,
     },
 };
 
@@ -109,6 +112,49 @@ impl Context<'_> {
         let text = self.decode_literal_text(arena, id, wide)?.leak();
         // SAFETY: decoding checked that these bytes are UTF-8.
         Some(unsafe { std::str::from_utf8_unchecked(text) })
+    }
+
+    /// The narrow literal's bytes as text in `arena`, each byte that is not
+    /// part of UTF-8 written as its [`raw_bytes::stand_in`], and whether
+    /// there was any: a name, such as `#line`'s, keeps bytes as GCC and
+    /// Clang keep them.
+    pub(crate) fn literal_text_lossy_in<'a>(
+        &self,
+        arena: &'a Bump,
+        id: LiteralId,
+    ) -> (&'a str, bool) {
+        let mut bytes = ArenaVec::new_in(arena);
+        for unit in self.literal_units(id) {
+            match *unit {
+                | LiteralUnit::Character(c) =>
+                    bytes.extend_from_slice(c.encode_utf8(&mut [0; 4]).as_bytes()),
+                | LiteralUnit::Numeric(code) =>
+                    bytes.push(u8::try_from(code).expect("narrow escape checked during decoding")),
+            }
+        }
+        let mut text = ArenaString::new_in(arena);
+        let mut raw = false;
+        let mut rest = &bytes[..];
+        loop {
+            match std::str::from_utf8(rest) {
+                | Ok(valid) => {
+                    text.push_str(valid);
+                    break;
+                },
+                | Err(error) => {
+                    let (valid, after) = rest.split_at(error.valid_up_to());
+                    // SAFETY: `valid_up_to` bytes are UTF-8.
+                    text.push_str(unsafe { std::str::from_utf8_unchecked(valid) });
+                    let invalid = error.error_len().unwrap_or(after.len());
+                    for &byte in &after[..invalid] {
+                        text.push(raw_bytes::stand_in(byte));
+                    }
+                    raw = true;
+                    rest = &after[invalid..];
+                },
+            }
+        }
+        (text.into_str(), raw)
     }
 
     /// The literal as a C string literal in `arena`: quoted and escaped when

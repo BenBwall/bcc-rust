@@ -451,6 +451,13 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
                 ty,
                 mask,
             } => self.initialize_zero(object, offset, size, ty, mask),
+            | Task::InitializeBits {
+                object,
+                offset,
+                ty,
+                significand,
+                exponent,
+            } => self.initialize_bits(object, offset, ty, significand, exponent),
             | Task::InitializeCopies {
                 object,
                 offset,

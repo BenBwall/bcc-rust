@@ -125,6 +125,129 @@ mod tests {
         std::fs::remove_file(source).unwrap();
     }
 
+    /// GCC 13 folds `__builtin_assoc_barrier` of a constant but does not
+    /// make it an integer constant expression: a `case` label,
+    /// `_Static_assert`, enumerator, bit-field width and static initializer
+    /// take its value, and an array it bounds is variably modified.
+    #[test]
+    fn assoc_barrier_of_a_constant_folds_but_is_no_integer_constant() {
+        let compile = |source_text: &str, flags: &[&str]| {
+            let source = temporary("barrier.c");
+            std::fs::write(&source, source_text).unwrap();
+            let object = temporary("barrier.o");
+            let output = bcc(&[
+                &[
+                    "--compiler-identity=gcc",
+                    "-c",
+                    source.to_str().unwrap(),
+                    "-o",
+                    object.to_str().unwrap(),
+                ][..],
+                flags,
+            ]
+            .concat());
+            drop(std::fs::remove_file(object));
+            std::fs::remove_file(source).unwrap();
+            (output.status.success(), text(&output.stderr))
+        };
+        let folds =
+            "int f(int x) {\nswitch (x) { case __builtin_assoc_barrier(3): return 1; }\nreturn \
+             0;\n}\n_Static_assert(__builtin_assoc_barrier(3) == 3, \"folded\");\nenum { E = \
+             __builtin_assoc_barrier(3) };\nstruct s { int b : __builtin_assoc_barrier(3); \
+             };\nstatic int i = __builtin_assoc_barrier(3);\nstatic double d = \
+             __builtin_assoc_barrier(1.5);\nint a[1 ? 2 : __builtin_assoc_barrier(3)];\nstatic \
+             int *p = (int *)__builtin_assoc_barrier(3);\n";
+        let (accepted, stderr) = compile(folds, &[]);
+        assert!(accepted, "{stderr}");
+        assert_eq!(stderr, "", "folding is silent without -pedantic");
+        let (accepted, stderr) = compile(folds, &["-pedantic-errors"]);
+        assert!(!accepted, "-pedantic-errors refuses the folding: {stderr}");
+        for refused in [
+            "int a[__builtin_assoc_barrier(3)];\n",
+            "void f(void) { int a[__builtin_assoc_barrier(3)] = {0}; (void)a; }\n",
+            "void f(void) { goto l; int a[__builtin_assoc_barrier(3)]; (void)a; l:; }\n",
+            "void f(void) { static int t[__builtin_assoc_barrier(3)]; (void)t; }\n",
+        ] {
+            let (accepted, stderr) = compile(refused, &[]);
+            assert!(!accepted, "{refused}: {stderr}");
+        }
+    }
+
+    /// Builtin operand checks as GCC 14 and Clang 23 make them: a carry
+    /// pointer to the signed type or to a `const` one draws a warning and
+    /// one to another width an error; `__builtin_alloca_with_align` takes a
+    /// constant power of two from 8 bits to 2^31 (GCC) or 2^30 (Clang), and
+    /// `_and_max` a constant bound; and a refused builtin is named also
+    /// under a cast to `void`.
+    #[test]
+    fn builtin_operands_are_checked_as_gcc_and_clang_check_them() {
+        let check = |identity: &str, body: &str| {
+            let source = temporary("operands.c");
+            std::fs::write(
+                &source,
+                format!("void *f(unsigned long n) {{\n{body}\nreturn 0;\n}}\n"),
+            )
+            .unwrap();
+            let object = temporary("operands.o");
+            let output = bcc(&[
+                identity,
+                "-c",
+                source.to_str().unwrap(),
+                "-o",
+                object.to_str().unwrap(),
+            ]);
+            drop(std::fs::remove_file(object));
+            std::fs::remove_file(source).unwrap();
+            (output.status.success(), text(&output.stderr))
+        };
+        for identity in ["--compiler-identity=gcc", "--compiler-identity=clang"] {
+            let (accepted, stderr) = check(
+                identity,
+                "int s; const unsigned c = 0; __builtin_addc(1u, 1u, 0u, &s); __builtin_subc(1u, \
+                 1u, 0u, &c);",
+            );
+            assert!(accepted, "{identity}: {stderr}");
+            assert!(stderr.contains("-Wpointer-sign"), "{identity}: {stderr}");
+            assert!(
+                stderr.contains("discards qualifiers"),
+                "{identity}: {stderr}"
+            );
+            let (accepted, stderr) =
+                check(identity, "unsigned long c; __builtin_addc(1u, 1u, 0u, &c);");
+            assert!(!accepted, "{identity}: {stderr}");
+            for alignment in ["4", "24", "n", "1ul << 40"] {
+                let (accepted, stderr) = check(
+                    identity,
+                    &format!("__builtin_alloca_with_align(8, {alignment});"),
+                );
+                assert!(!accepted, "{identity} {alignment}: {stderr}");
+            }
+            let (accepted, stderr) = check(identity, "__builtin_alloca_with_align(8, 1ul << 29);");
+            assert!(accepted, "{identity}: {stderr}");
+            let (accepted, _) = check(identity, "__builtin_alloca_with_align(8, 1ul << 31);");
+            assert_eq!(accepted, identity.ends_with("gcc"), "{identity}: 2^31 bits");
+        }
+        let (accepted, stderr) = check(
+            "--compiler-identity=gcc",
+            "__builtin_alloca_with_align_and_max(8, 64, n);",
+        );
+        assert!(!accepted, "{stderr}");
+        assert!(
+            stderr.contains("the third argument must be a constant integer"),
+            "{stderr}"
+        );
+        for bound in ["1.5", "-1", "1 ? 2 : n", "__builtin_assoc_barrier(3)"] {
+            let (accepted, stderr) = check(
+                "--compiler-identity=gcc",
+                &format!("__builtin_alloca_with_align_and_max(8, 64, {bound});"),
+            );
+            assert!(accepted, "{bound}: {stderr}");
+        }
+        let (accepted, stderr) = check("--compiler-identity=gcc", "(void) __builtin_apply_args();");
+        assert!(!accepted, "{stderr}");
+        assert!(stderr.contains("`__builtin_apply_args`"), "{stderr}");
+    }
+
     /// `__builtin_bcopy`, `__builtin_bzero` and `__builtin_mempcpy` lower to
     /// LLVM's memory intrinsics on every target, as Clang lowers them, so
     /// the Microsoft C runtime, which has none of the three, needs no such
