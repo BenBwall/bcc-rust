@@ -1020,7 +1020,9 @@
      diagram and the expression tree side by side, so both are on screen
      with the narration. */
   @container insight (min-width: 580px) {
-    .machine-state { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); align-items: start; }
+    /* Even halves, so neither card changes width from step to step; a
+       tree wider than its half scrolls. */
+    .machine-state { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
   }
   @container insight (max-width: 800px) {
     .stage-row { column-gap: 10px; }
