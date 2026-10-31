@@ -156,9 +156,13 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         Ok(Item { operand, ..item })
     }
 
-    /// An `f32` rounded to the 16-bit type `ty`; a constant rounds here.
+    /// An `f32` rounded to the 16-bit type `ty`; a constant rounds here, and
+    /// a constant NaN keeps its payload's top and its signaling, as GCC and
+    /// Clang fold it (`(_Float16) __builtin_nansf16 ("3")` is `0x7c03`).
     pub(super) fn round_single(&mut self, value: Value, ty: Type) -> Value {
         match (self.single_constant(value), ty.half_format()) {
+            | (Some(single), Some(format)) if single.is_nan() =>
+                self.fconst(ty, u128::from(format.narrow_nan_f32(single.to_bits()))),
             | (Some(single), Some(format)) => self.fconst(ty, u128::from(format.round_f32(single))),
             | _ => self.convert(Opcode::Fptrunc, ty, value),
         }

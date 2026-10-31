@@ -79,6 +79,21 @@ impl HalfFormat {
         self.round_x87(X87::from_f32(value))
     }
 
+    /// A binary32 NaN narrowed as GCC and Clang fold a constant conversion:
+    /// the top of its fraction, the quiet bit included, so a signaling NaN
+    /// stays one, unlike `__truncsfhf2`'s run-time conversion; a fraction
+    /// the format cannot hold leaves a quiet NaN (C99 §F.3, conversions).
+    pub(crate) fn narrow_nan_f32(self, bits: u32) -> u16 {
+        let fraction_bits = self.fraction_bits();
+        let mut fraction = u16::try_from((bits & 0x007F_FFFF) >> (23 - fraction_bits))
+            .expect("a half fraction fits 16 bits");
+        if fraction == 0 {
+            fraction = 1 << (fraction_bits - 1);
+        }
+        let sign = u16::try_from(bits >> 31).expect("one bit") << 15;
+        sign | self.infinity() | fraction
+    }
+
     /// The encoding nearest a binary64 value, rounded once, as
     /// `__truncdfhf2` and `__truncdfbf2` give it.
     pub(crate) fn round_f64(self, value: f64) -> u16 {

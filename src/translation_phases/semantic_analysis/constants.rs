@@ -694,6 +694,27 @@ pub(super) fn round_half(value: LongDouble, format: HalfFormat) -> LongDouble {
         | HalfFormat::Binary16 => crate::ir::Type::F16,
         | HalfFormat::BFloat16 => crate::ir::Type::BF16,
     };
+    // A NaN keeps the top of its fraction, its quiet bit included, written
+    // into the carrier directly: widening it back through `float` would
+    // quiet a signaling one. A fraction the format cannot hold leaves a
+    // quiet NaN (C99 §F.3, conversions).
+    if let Some((sign, 0x7FFF, significand)) = value.x87_parts()
+        && significand << 1 != 0
+    {
+        let fraction = match format {
+            | HalfFormat::Binary16 => 10,
+            | HalfFormat::BFloat16 => 7,
+        };
+        let mut narrowed = significand & !((1_u64 << (63 - fraction)) - 1);
+        if narrowed << 1 == 0 {
+            narrowed |= 1 << 62;
+        }
+        let bits =
+            u128::from(narrowed) | u128::from(0x7FFF_u16 | if sign { 0x8000 } else { 0 }) << 64;
+        if let Some(carrier) = LongDouble::from_x87(X87::from_bits(bits)) {
+            return carrier;
+        }
+    }
     crate::float_parsing::bits::constant_bits(&value, ty)
         .and_then(|bits| u16::try_from(bits).ok())
         .map_or(value, |bits| {

@@ -138,6 +138,18 @@ static void floating(void) {
     dump(&h, 2);
     dump(&qa, 16);
     dump(&qc, 16);
+    /* The tag's payload sits in the 16-bit type's own fraction, and a
+       signaling NaN stays one, folded or assigned at run time. */
+    static volatile _Float16 hp = __builtin_nanf16("5"), hs3 = __builtin_nansf16("3");
+    h = hp;
+    dump(&h, 2);
+    h = hs3;
+    dump(&h, 2);
+    volatile _Float16 run;
+    run = __builtin_nansf16("3");
+    dump((const void *)&run, 2);
+    run = __builtin_nansf16("");
+    dump((const void *)&run, 2);
     volatile _Float16 m = -3, n = 1;
     h = __builtin_fabsf16(m);
     dump(&h, 2);
@@ -154,9 +166,15 @@ static void floating(void) {
                     hc = __builtin_copysignf16((_Float16)2, (_Float16)-0.0);
     dump(&ha, 2);
     dump(&hc, 2);
-    static volatile __bf16 bs = __builtin_nansf16b("");
+    static volatile __bf16 bs = __builtin_nansf16b(""), bs3 = __builtin_nansf16b("3");
     __bf16 bf = bs;
     dump(&bf, 2);
+    bf = bs3;
+    dump(&bf, 2);
+    volatile __bf16 brun = __builtin_nansf16b("3");
+    dump((const void *)&brun, 2);
+    volatile _Float16 signaling = __builtin_nansf16("");
+    printf("%d\n", __builtin_issignaling(signaling));
     static volatile __float128 qn = __builtin_nanq(""), qs = __builtin_nansq(""),
                                qi = __builtin_infq(), qh = __builtin_huge_valq();
     q = qn;

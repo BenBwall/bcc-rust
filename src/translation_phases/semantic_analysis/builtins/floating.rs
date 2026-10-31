@@ -81,7 +81,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
         let value = match tag {
             | Some(tag) => LongDouble::quiet_nan(
-                nan_payload(tag.as_bytes()),
+                half_payload(scalar, nan_payload(tag.as_bytes())),
                 self.floating_precision(scalar).unwrap_or(3),
             ),
             | None => LongDouble::from_double(f64::INFINITY),
@@ -483,4 +483,22 @@ fn payload_digits(tag: &[u8]) -> Option<(u32, impl Iterator<Item = u32>)> {
                     .filter_map(move |&byte| char::from(byte).to_digit(radix)),
             )
         })
+}
+
+/// A NaN payload for the carrier at `float` precision, where a 16-bit
+/// result's own fraction bits narrow from: GCC and Clang give `_Float16`
+/// and `__bf16` NaNs the tag's low payload bits in their own fraction
+/// (`__builtin_nanf16 ("5")` is `0x7e05`), which sit 13 and 16 bits higher
+/// in `float`'s. Any other type's payload is unchanged.
+/// C99: §7.12.11.2 paragraph 2, p. 237; PDF p. 249 (implementation-defined
+/// payload).
+pub(in crate::translation_phases::semantic_analysis) fn half_payload(
+    scalar: Scalar,
+    payload: u64,
+) -> u64 {
+    match scalar.real_type().half_format() {
+        | Some(crate::half_precision::HalfFormat::Binary16) => (payload & 0x1FF) << 13,
+        | Some(crate::half_precision::HalfFormat::BFloat16) => (payload & 0x3F) << 16,
+        | None => payload,
+    }
 }
