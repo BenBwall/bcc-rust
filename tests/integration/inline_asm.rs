@@ -228,12 +228,15 @@ int main(void) {
             eprintln!("skipping: the host is not an x86-64 target bcc supports");
             return;
         };
-        let source = "#include <stdio.h>\nint main(void) {\nregister long a __asm__(\"rdi\") = \
-                      42;\nregister long b __asm__(\"%rsi\") = 7;\nregister long c \
-                      __asm__(\"r9\") = 5;\nlong sum;\n__asm__(\"lea (%%rdi,%%rsi), %0\\n\\tadd \
-                      %%r9, %0\" : \"=r\"(sum) : \"r\"(a), \"r\"(b), \"r\"(c));\nregister long d \
-                      __asm__(\"rcx\");\n__asm__(\"mov $11, %%ecx\" : \"=r\"(d));\na = a + \
-                      1;\nprintf(\"%ld %ld %ld\\n\", sum, d, a);\nreturn 0;\n}\n";
+        // `long long`, 64 bits on LP64 and LLP64 alike: on Windows a `long`
+        // is 32 bits, which the 64-bit templates could not take.
+        let source = "#include <stdio.h>\nint main(void) {\nregister long long a __asm__(\"rdi\") \
+                      = 42;\nregister long long b __asm__(\"%rsi\") = 7;\nregister long long c \
+                      __asm__(\"r9\") = 5;\nlong long sum;\n__asm__(\"lea (%%rdi,%%rsi), \
+                      %0\\n\\tadd %%r9, %0\" : \"=r\"(sum) : \"r\"(a), \"r\"(b), \
+                      \"r\"(c));\nregister long long d __asm__(\"rcx\");\n__asm__(\"mov $11, \
+                      %%ecx\" : \"=r\"(d));\na = a + 1;\nprintf(\"%lld %lld %lld\\n\", sum, d, \
+                      a);\nreturn 0;\n}\n";
         for identity in ["--compiler-identity=clang", "--compiler-identity=gcc"] {
             for flags in [
                 &["--backend=llvm"][..],
