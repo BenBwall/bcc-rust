@@ -21,7 +21,6 @@
 use crate::{
     backend::native::mir::{
         MBlock,
-        MBlockData,
         MFunction,
         MInst,
     },
@@ -86,7 +85,7 @@ pub(super) fn split_critical_edges<'a>(func: &mut MFunction<'a>, arena: &'a Bump
             next += 1;
         }
     }
-    relayout(func, &order, arena);
+    func.relayout(&order, arena);
 }
 
 /// Sends branches to blocks that hold only a `jmp` straight to its target
@@ -170,7 +169,7 @@ pub(super) fn thread_jumps<'a>(func: &mut MFunction<'a>, arena: &'a Bump) {
     }
     let mut order = ArenaVec::with_capacity_in(blocks, arena);
     order.extend((0..blocks).filter(|&block| reached[block]));
-    relayout(func, &order, arena);
+    func.relayout(&order, arena);
 }
 
 /// The most instructions a block may have to be copied over a `jmp` to it.
@@ -242,44 +241,5 @@ pub(super) fn duplicate_tests<'a>(func: &mut MFunction<'a>, arena: &'a Bump) {
         let data = &mut func.blocks[block].insts;
         _ = data.pop();
         data.extend_from_slice(&copy);
-    }
-}
-
-/// Puts the blocks in `order` (old indices; blocks left out must be
-/// unreachable) and renumbers every reference to them.
-fn relayout<'a>(func: &mut MFunction<'a>, order: &[usize], arena: &'a Bump) {
-    let mut renumber = ArenaVec::with_capacity_in(func.blocks.len(), arena);
-    renumber.resize(func.blocks.len(), None);
-    for (new, &old) in order.iter().enumerate() {
-        renumber[old] = Some(MBlock::new(new));
-    }
-    let map = |block: MBlock| renumber[block.index()].expect("a kept block names only kept blocks");
-    let mut blocks = ArenaVec::with_capacity_in(order.len(), arena);
-    for &old in order {
-        let insts = std::mem::replace(&mut func.blocks[old].insts, ArenaVec::new_in(arena));
-        blocks.push(MBlockData { insts });
-    }
-    for data in &mut blocks {
-        if let Some(last) = data.insts.last_mut() {
-            match last {
-                | MInst::Jmp { target } => *target = map(*target),
-                | MInst::Jcc {
-                    taken, not_taken, ..
-                } => {
-                    *taken = map(*taken);
-                    *not_taken = map(*not_taken);
-                },
-                | _ => {},
-            }
-        }
-    }
-    func.blocks = blocks;
-    for targets in &mut func.indirect {
-        for block in targets.iter_mut() {
-            *block = map(*block);
-        }
-    }
-    for (_, block) in &mut func.labels {
-        *block = map(*block);
     }
 }

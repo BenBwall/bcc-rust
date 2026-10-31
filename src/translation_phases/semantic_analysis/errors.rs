@@ -561,6 +561,11 @@ pub(crate) enum SemanticErrorKind {
     InvalidVectorAttribute,
     InvalidAlignmentAttribute,
     InvalidStandardAlignment,
+    /// An alignment request above the 2^28 bytes GCC accepts, under GCC's
+    /// rules; Clang's ignore it. GNU extension: GCC manual, "Common
+    /// Variable Attributes", aligned.
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Common-Variable-Attributes.html>
+    ExcessiveAlignment,
     InvalidModeAttribute,
     /// A `transparent_union` attribute ignored, as Clang warns: it names no
     /// union definition, or the union has no member, a floating or vector
@@ -787,6 +792,7 @@ impl SemanticErrorKind {
             | Self::InvalidVectorAttribute => "invalid vector size or element type",
             | Self::InvalidAlignmentAttribute => "alignment must be a power-of-two constant",
             | Self::InvalidStandardAlignment => "invalid alignment specifier",
+            | Self::ExcessiveAlignment => "requested alignment exceeds maximum 268435456",
             | Self::InvalidModeAttribute => "invalid scalar machine mode",
             | Self::IgnoredTransparentUnion => "this union cannot be made transparent",
             | Self::TransparentUnionNotUnion => "not a union type",
@@ -1325,6 +1331,11 @@ impl SemanticErrorKind {
             | Self::InvalidStandardAlignment => (
                 "invalid alignment specifier",
                 "C11 §6.7.5p2-6: alignment requires an eligible object declaration and must be zero or a valid alignment that does not weaken its natural alignment",
+            ),
+            | Self::ExcessiveAlignment => (
+                "requested alignment exceeds maximum 268435456",
+                "GCC aligned and C11 §6.7.5 alignment requests: GCC rejects an alignment above \
+                 2^28 bytes, the most an object file section can carry on its targets",
             ),
             | Self::InvalidModeAttribute => (
                 "invalid mode attribute",

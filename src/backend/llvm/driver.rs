@@ -5,10 +5,7 @@ use std::{
     borrow::Cow,
     ffi::OsStr,
     fmt,
-    io::{
-        self,
-        Write as _,
-    },
+    io,
     path::{
         Path,
         PathBuf,
@@ -48,27 +45,59 @@ pub(crate) fn compile_module_checked(
     check: impl FnOnce(&[usize]) -> bool,
 ) -> io::Result<bool> {
     let arena = crate::util::bump::Bump::new();
+    // An executable's object goes to a temporary file beside it for the
+    // link; an object goes to the output itself.
+    let temporary = if options.kind == OutputKind::Object {
+        None
+    } else {
+        let (object, file) = TemporaryObject::create(out_path, "o", &arena)?;
+        drop(file);
+        Some(object)
+    };
+    let object_path = temporary
+        .as_ref()
+        .map_or(out_path, |object| object.0.as_path());
+    let stream = streamed_path(object_path, &arena);
     let buffer = super::api::Session::with_code(&arena, options.target, options.code, |api| {
         super::build_module(module, options.target, api, &arena)
             .map_err(|error| io::Error::other(error.to_string()))?;
-        api.emit_checked(
-            options.target,
-            options.opt,
-            options.disable_llvm_passes,
-            false,
-            |api| check(api.call_diagnostic_counts(diagnostic_count, &arena)),
-        )
-        .map_err(|error| io::Error::other(error.to_string()))
+        let Some(machine) = api
+            .prepare_checked(
+                options.target,
+                options.opt,
+                options.disable_llvm_passes,
+                |api| check(api.call_diagnostic_counts(diagnostic_count, &arena)),
+            )
+            .map_err(|error| io::Error::other(error.to_string()))?
+        else {
+            return Ok(None);
+        };
+        match stream {
+            | Some(name) => {
+                // Create or truncate the file as `std::fs::write` would, with
+                // its errors, before LLVM opens it.
+                drop(std::fs::File::create(object_path)?);
+                api.emit_object_file(&machine, name).map_err(|error| {
+                    drop(std::fs::remove_file(object_path));
+                    io::Error::other(error.to_string())
+                })?;
+                Ok(Some(None))
+            },
+            | None => api
+                .emit_to_memory(&machine, false)
+                .map(|buffer| Some(Some(buffer)))
+                .map_err(|error| io::Error::other(error.to_string())),
+        }
     })?;
     let Some(buffer) = buffer else {
         return Ok(false);
     };
-    if options.kind == OutputKind::Object {
-        return std::fs::write(out_path, buffer.bytes()).map(|()| true);
+    if let Some(buffer) = &buffer {
+        std::fs::write(object_path, buffer.bytes())?;
     }
-    let (object, mut file) = TemporaryObject::create(out_path, "o", &arena)?;
-    file.write_all(buffer.bytes())?;
-    drop(file);
+    let Some(object) = temporary else {
+        return Ok(true);
+    };
     let toolchain = Toolchain::bundled(options.target)?;
     let atomic = needs_atomic_runtime(module);
     let stack = module.uses_trampolines();
@@ -91,6 +120,25 @@ pub(crate) fn compile_module_checked(
     } else {
         Err(io::Error::other(ClangError(output)))
     }
+}
+
+/// `path` as LLVM opens it, when LLVM can write an object there as it goes:
+/// a regular file or one not yet created, named in UTF-8 (LLVM's encoding
+/// on Windows) and not `-`, which LLVM takes for stdout. A pipe or device
+/// keeps the in-memory object, since LLVM's object writers seek back to
+/// patch headers.
+fn streamed_path<'a>(
+    path: &Path,
+    arena: &'a crate::util::bump::Bump,
+) -> Option<&'a std::ffi::CStr> {
+    let name = path.to_str().filter(|name| *name != "-")?;
+    match std::fs::metadata(path) {
+        | Ok(metadata) if metadata.is_file() => {},
+        | Err(error) if error.kind() == io::ErrorKind::NotFound => {},
+        | _ => return None,
+    }
+    let bytes = arena.alloc_slice_fill_iter(name.bytes().chain([0]));
+    std::ffi::CStr::from_bytes_with_nul(bytes).ok()
 }
 
 /// The linker option that gives an executable the executable stack its

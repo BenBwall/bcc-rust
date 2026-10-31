@@ -152,8 +152,8 @@ fn macros(
             String::from_utf8_lossy(&output.stderr)
         );
     }
-    // bcc's `/EP` joins adjacent string literals, also across lines, so
-    // each pair ends with `;`.
+    // Whitespace is dropped, so each pair ends with `;` however `/EP` lays
+    // the text out.
     let text: String = String::from_utf8_lossy(&output.stdout)
         .chars()
         .filter(|c| !c.is_whitespace())

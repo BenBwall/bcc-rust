@@ -58,11 +58,15 @@ pub(crate) struct ReadAt {
 }
 
 impl<'tu> Preprocessor<'tu, '_> {
-    /// Leaves adjacent string literals apart, so the tokens read are phase
-    /// 4's, not concatenated as phase 6 does; call it before reading.
-    /// C99: §5.1.1.2 paragraph 1 items 4 and 6, p. 10; PDF p. 22.
-    pub(crate) fn keep_strings_apart(&mut self) {
-        self.resting_mut().state.strings_apart = true;
+    /// Reads phase 4's tokens for a text of them, as `-E` prints it; call
+    /// it before reading. Adjacent string literals stay apart, which phase
+    /// 6 would concatenate, and phases 5 and 7 neither decode nor check a
+    /// token: each keeps its spelling, so a character no C token starts
+    /// with, a number that is no constant or an escape C does not define
+    /// passes through unreported, as in GCC's and Clang's `-E`.
+    /// C99: §5.1.1.2 paragraph 1 items 4-7, p. 10; PDF p. 22.
+    pub(crate) fn read_as_text(&mut self) {
+        self.resting_mut().state.as_text = true;
     }
 
     /// Calls `visit` with each phase-6 token, as

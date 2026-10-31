@@ -155,7 +155,8 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             && !matches!(
                 info.category,
                 ValueCategory::Lvalue | ValueCategory::ModifiableLvalue
-            );
+            )
+            && !self.operates_on_signaling_nan(expression);
         // A folded binary128 constant has exact bits too.
         if let Some(folded) = info.binary128().filter(|_| folded_value) {
             match repr(&self.unit.sema.types, info.ty) {
@@ -489,6 +490,54 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         }
         self.prepare_expression_actions(expression)?;
         Ok(())
+    }
+
+    /// Under `-fsignaling-nans`, whether evaluating `expression`, which
+    /// semantic analysis may have folded, performs arithmetic or a
+    /// conversion on a signaling NaN, directly or in a folded operand. GCC
+    /// keeps such an operation, which raises the invalid exception and
+    /// gives a quiet NaN at run time, instead of folding it, so lowering
+    /// evaluates it. C99: §F.2.1 paragraph 1, p. 445; PDF p. 457 (signaling
+    /// NaNs are the implementation's choice); GNU extension: GCC manual,
+    /// "Optimize Options".
+    fn operates_on_signaling_nan(&self, expression: &'tu Expression<'tu>) -> bool {
+        use ExpressionType as E;
+        if !self.unit.context.configuration.signaling_nans() {
+            return false;
+        }
+        let operands = match expression.kind {
+            | E::Parenthesized { expression: inner } => [Some(inner), None],
+            | E::Binary {
+                operator:
+                    BinaryOperator::Addition
+                    | BinaryOperator::Subtraction
+                    | BinaryOperator::Multiplication
+                    | BinaryOperator::Division,
+                left_expression,
+                right_expression,
+            } => [Some(left_expression), Some(right_expression)],
+            | E::Cast {
+                operand_expression, ..
+            } => [Some(operand_expression), None],
+            | _ => return false,
+        };
+        operands.into_iter().flatten().any(|operand| {
+            self.info(operand).is_ok_and(|info| {
+                let standard = info.floating().is_some_and(|value| {
+                    [value.real, value.imag].into_iter().any(|part| {
+                        part.x87_parts().is_some_and(|(_, exponent, significand)| {
+                            exponent == 0x7FFF
+                                && significand >> 62 == 0b10
+                                && significand & ((1 << 62) - 1) != 0
+                        })
+                    })
+                });
+                let binary128 = info
+                    .binary128()
+                    .is_some_and(|value| value.real.is_signaling() || value.imag.is_signaling());
+                standard || binary128
+            }) || self.operates_on_signaling_nan(operand)
+        })
     }
 
     /// Completes an operator whose operands are on the stack.
@@ -1747,6 +1796,9 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 )),
         };
         let value = self.binary_inst(opcode, flags, a, b);
+        if signed {
+            self.trap_on_overflow(opcode, representation, [a, b], value);
+        }
         // A narrow bit-precise result is extended again where the operation
         // can reach the bits above its width; the others keep extended
         // operands extended.
@@ -1861,15 +1913,20 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             },
             | U::Plus | U::Extension => operand.operand,
             | U::Minus if matches!(operand.operand, Operand::Complex(_)) => {
+                let part = self.part_repr(info.ty, source)?;
                 let [real, imag] = self.complex_parts(operand, source)?;
-                let pair = [self.negate_part(real), self.negate_part(imag)];
+                let pair = [
+                    self.negate_checked_part(real, part),
+                    self.negate_checked_part(imag, part),
+                ];
                 self.complex_pair(pair)
             },
             // GNU: `~` of a complex value is its conjugate (GCC manual,
             // "Complex Numbers").
             | U::BitwiseNot if matches!(operand.operand, Operand::Complex(_)) => {
+                let part = self.part_repr(info.ty, source)?;
                 let [real, imag] = self.complex_parts(operand, source)?;
-                let pair = [real, self.negate_part(imag)];
+                let pair = [real, self.negate_checked_part(imag, part)];
                 self.complex_pair(pair)
             },
             | U::Minus => {
@@ -1888,6 +1945,9 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     InstFlags::empty()
                 };
                 let negated = self.binary_inst(Opcode::Isub, flags, zero, value);
+                if representation.signed() {
+                    self.trap_on_overflow(Opcode::Isub, representation, [zero, value], negated);
+                }
                 Operand::Value(self.normalize(negated, representation))
             },
             | U::BitwiseNot => {
@@ -2043,10 +2103,10 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 // arithmetic cannot overflow; the conversion back wraps. A
                 // narrow bit-precise type is not promoted: its IR type holds
                 // any step of its values, and its overflow is undefined.
-                let flags = if signed
+                let overflows = signed
                     && (ty.bits() >= self.int_bits() || u32::from(width) < ty.bits())
-                    && !atomic
-                {
+                    && !atomic;
+                let flags = if overflows {
                     self.signed_wrap()
                 } else {
                     InstFlags::empty()
@@ -2057,6 +2117,9 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     Opcode::Isub
                 };
                 let stepped = self.binary_inst(opcode, flags, value, one);
+                if overflows {
+                    self.trap_on_overflow(opcode, representation, [value, one], stepped);
+                }
                 Operand::Value(self.normalize(stepped, representation))
             },
             | _ =>
@@ -2133,6 +2196,11 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             *item = self.settle(*item);
         }
         let direct = self.resolved_direct_callee(call, source)?;
+        if let Some(binding) = direct
+            && let [argument] = items[..]
+        {
+            self.trap_on_absolute_minimum(binding, argument, source)?;
+        }
         // `(*f)(...)` of a function using the pack calls its copy too.
         let packed_callee = direct
             .is_none()
@@ -2802,6 +2870,19 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
     /// The negation of one part of a complex value: `fneg` of a floating
     /// part, and of a GNU complex integer's part its wrapping difference
     /// from zero. C99: §6.5.3.3 paragraph 3, p. 79; PDF p. 91.
+    /// [`Self::negate_part`] of a part of representation `part`, which
+    /// traps under `-ftrapv` when a signed part of `int` or wider
+    /// overflows, as GCC checks the negation of a complex integer.
+    fn negate_checked_part(&mut self, value: Value, part: Repr) -> Value {
+        let negated = self.negate_part(value);
+        let ty = self.draft.value_type(value);
+        if part.signed() && ty.is_int() && ty.bits() >= self.int_bits() {
+            let zero = self.iconst(ty, 0);
+            self.trap_on_overflow(Opcode::Isub, part, [zero, value], negated);
+        }
+        negated
+    }
+
     fn negate_part(&mut self, part: Value) -> Value {
         let ty = self.draft.value_type(part);
         if ty.is_float() {

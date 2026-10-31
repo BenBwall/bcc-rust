@@ -151,6 +151,7 @@ pub(super) fn compile(out_dir: &str) {
         .cpp(true)
         .cpp_link_stdlib(None)
         .file("build_support/llvm_target_options.cpp")
+        .file("build_support/llvm_attributes.cpp")
         .opt_level(3)
         .debug(true)
         .inherit_rustflags(false)

@@ -568,6 +568,8 @@ enum LanguageFlag {
     /// `-fno-signed-zeros`, `-freciprocal-math` and their relatives (true),
     /// or their opposites, such as `-fsigned-zeros`.
     RelaxedFloatingPoint(RelaxedFloatingPoint, bool),
+    /// `-fsignaling-nans` (true) or `-fno-signaling-nans`.
+    SignalingNans(bool),
     /// `-fno-fast-math` (true) or `-fno-unsafe-math-optimizations`, which
     /// restore the options they imply.
     StrictFloatingPoint {
@@ -579,6 +581,8 @@ enum LanguageFlag {
     DollarIdentifiers(bool),
     /// `-fwrapv` (true), or `-fno-wrapv` and `-fstrict-overflow`.
     Wrapv(bool),
+    /// `-ftrapv` (true) or `-fno-trapv`.
+    Trapv(bool),
     /// `-fpack-struct=N`.
     PackStruct(u32),
     /// `-fpack-struct` (true) or `-fno-pack-struct`, which also clears N.
@@ -648,6 +652,8 @@ impl LanguageFlag {
                     RelaxedFloatingPoint::CxFortranRules,
                     text == "-fcx-fortran-rules",
                 )),
+            | "-fsignaling-nans" => return Some(Self::SignalingNans(true)),
+            | "-fno-signaling-nans" => return Some(Self::SignalingNans(false)),
             | "-fno-fast-math" => return Some(Self::StrictFloatingPoint { fast_math: true }),
             | "-fno-unsafe-math-optimizations" =>
                 return Some(Self::StrictFloatingPoint { fast_math: false }),
@@ -660,6 +666,8 @@ impl LanguageFlag {
             // `Cli::code_assumptions` reads.
             | "-fwrapv" | "-fno-strict-overflow" => return Some(Self::Wrapv(true)),
             | "-fno-wrapv" | "-fstrict-overflow" => return Some(Self::Wrapv(false)),
+            | "-ftrapv" => return Some(Self::Trapv(true)),
+            | "-fno-trapv" => return Some(Self::Trapv(false)),
             | "-fwrapv-pointer"
             | "-fno-wrapv-pointer"
             | "-fdelete-null-pointer-checks"
@@ -746,6 +754,7 @@ impl LanguageFlag {
                 configuration.with_interchange_float_types(enabled),
             | Self::RelaxedFloatingPoint(option, relaxed) =>
                 configuration.with_relaxed_floating_point(option, relaxed),
+            | Self::SignalingNans(enabled) => configuration.with_signaling_nans(enabled),
             | Self::StrictFloatingPoint { fast_math } => {
                 let options: &[RelaxedFloatingPoint] = if fast_math {
                     &RelaxedFloatingPoint::FAST_MATH
@@ -761,6 +770,7 @@ impl LanguageFlag {
             | Self::Trigraphs(enabled) => configuration.with_trigraphs(enabled),
             | Self::DollarIdentifiers(enabled) => configuration.with_dollar_identifiers(enabled),
             | Self::Wrapv(enabled) => configuration.with_wrapv(enabled),
+            | Self::Trapv(enabled) => configuration.with_trapv(enabled),
             | Self::PackStruct(alignment) => configuration.with_default_pack(alignment),
             | Self::PackAll(true) => configuration.with_pack_structures(true),
             | Self::PackAll(false) => configuration

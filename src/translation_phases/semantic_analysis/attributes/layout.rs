@@ -20,6 +20,17 @@ use super::super::{
         TypeKind,
     },
 };
+use crate::{
+    configuration::RuleSet,
+    translation_phases::SourceVectors,
+};
+
+/// The largest alignment, in bytes, that GCC and Clang honour on every
+/// target. GCC rejects a larger request; Clang counts alignment in bits in
+/// 32 bits, so a larger power of two wraps to zero and the request has no
+/// effect. Honouring one would make the object file pad its section to that
+/// alignment: hundreds of MiB to GiB of zeros.
+pub(in crate::translation_phases::semantic_analysis) const MAXIMUM_ALIGNMENT: u64 = 1 << 28;
 
 /// Representation facts independent of a declaration's underlying C type.
 #[derive(Clone, Copy, Default)]
@@ -29,6 +40,23 @@ pub(in crate::translation_phases::semantic_analysis) struct LayoutAttributes {
 }
 
 impl<'tu> Analyzer<'_, 'tu, '_> {
+    /// Whether a valid power-of-two alignment request takes effect: one up
+    /// to [`MAXIMUM_ALIGNMENT`] does; a larger one is an error under GCC's
+    /// rules and ignored under Clang's.
+    pub(in crate::translation_phases::semantic_analysis) fn honours_alignment(
+        &mut self,
+        value: u64,
+        source: SourceVectors,
+    ) -> bool {
+        if value <= MAXIMUM_ALIGNMENT {
+            return true;
+        }
+        if self.context.configuration.compiler_identity().rules() == RuleSet::Gcc {
+            self.error(SemanticErrorKind::ExcessiveAlignment, source, None, None);
+        }
+        false
+    }
+
     /// GCC member attributes may follow a complete declarator, including
     /// grouped declarators. Walk those attribute lists without recursion.
     pub(in crate::translation_phases::semantic_analysis) fn packed_declarator(
@@ -114,6 +142,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                             self.types.alignment(self.operand_type(operand)),
                     };
                     value
+                        .filter(|&value| value <= MAXIMUM_ALIGNMENT)
                         .and_then(|value| u32::try_from(value).ok())
                         .unwrap_or(0)
                 },
@@ -129,6 +158,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         super::known_names(a, self.context)
             .filter(|(_, name)| *name == "aligned")
             .filter_map(|(index, _)| self.requested_attribute_alignment(a, index))
+            .filter(|&value| value <= MAXIMUM_ALIGNMENT)
             .filter_map(|value| u32::try_from(value).ok())
             .max()
             .unwrap_or(0)
@@ -213,6 +243,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     ) -> LayoutAttributes {
         let mut result = LayoutAttributes::default();
         let mut invalid = false;
+        let mut excessive = None;
         for (index, name) in super::known_names(a, self.context) {
             if name == "packed" {
                 result.packed = true;
@@ -221,11 +252,18 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 if let Some(value) =
                     value.filter(|value| value.is_power_of_two() && *value <= 1 << 31)
                 {
-                    result.alignment = result.alignment.max(u32::try_from(value).unwrap_or(0));
+                    if value <= MAXIMUM_ALIGNMENT {
+                        result.alignment = result.alignment.max(u32::try_from(value).unwrap_or(0));
+                    } else {
+                        excessive = Some(value);
+                    }
                 } else {
                     invalid = true;
                 }
             }
+        }
+        if let Some(value) = excessive {
+            _ = self.honours_alignment(value, a.source_vectors);
         }
         if invalid {
             self.error(
@@ -527,7 +565,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     if let Some(value) =
                         value.filter(|value| value.is_power_of_two() && *value <= 1 << 31)
                     {
-                        requested = requested.max(u32::try_from(value).unwrap_or(0));
+                        if self.honours_alignment(value, item.source_vectors) {
+                            requested = requested.max(u32::try_from(value).unwrap_or(0));
+                        }
                     } else {
                         self.error(
                             SemanticErrorKind::InvalidStandardAlignment,

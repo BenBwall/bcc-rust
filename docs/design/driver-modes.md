@@ -86,7 +86,7 @@ without a personality as well:
   headers;
 - `-fwrapv`, `-fpack-struct=N` and `-f[no-]trigraphs`, which the
   personalities map `-fwrapv`, `cl /ZpN` and `cl /Zc:trigraphs` onto, and
-  `-f[no-]common`, `-f[no-]wrapv-pointer`, `-f[no-]strict-overflow` and
+  `-f[no-]trapv`, `-f[no-]signaling-nans`, `-f[no-]common`, `-f[no-]wrapv-pointer`, `-f[no-]strict-overflow` and
   `-f[no-]delete-null-pointer-checks`;
 - `-v` (the header search and each command the driver runs, quoted as
   Clang quotes them), `-H` (the include tree), `-MG` (with `-M` or `-MM`,
@@ -182,7 +182,11 @@ to the options TCC itself implements; see [TCC](#tcc).
   outside MSVC, `cl /Gv`), instruction sets bcc's code needs (`-mno-sse`,
   `-mgeneral-regs-only`; `cl /arch:AVX2`, which also changes macros),
   language rules bcc does not follow (`-fsemantic-interposition`,
-  `-ffast-math`, `-frounding-math`, `cl /fp:strict`, `/volatile:ms`), and
+  `-ffast-math`, `-frounding-math`, `cl /fp:strict`, `/volatile:ms`),
+  run-time support bcc's code lacks (`-fsplit-stack`: bcc's functions run on
+  one contiguous stack, which a program that relies on split stacks, such
+  as GCC's `split-2.c` test recursing 10 MB deep on a thread, would
+  overflow), and
   instrumentation whose output a build expects (`-fsanitize=`,
   `-fprofile-arcs`, `--coverage`, `-finstrument-functions`, `-fopenmp`).
   An option the lists do not name is refused too, so a newly added option is
@@ -190,6 +194,18 @@ to the options TCC itself implements; see [TCC](#tcc).
 
 Where bcc can do what the option asks cheaply, the personality maps it
 instead: `-fwrapv` (lowering marks signed arithmetic without `nsw`),
+`-ftrapv` (signed `+`, `-`, `*`, negation and `++`/`--` of `int` and
+wider check for overflow, and so does `abs`, `labs` or `llabs` of the most
+negative value while the library builtins are on (`__builtin_abs` and
+its relatives always), and run the `trap`
+instruction, on every back end, where GCC's libgcc routines call `abort`,
+so the program ends with `SIGILL` rather than `SIGABRT`; GNU complex
+integers' sums, products, negation and conjugate are checked in their
+signed `int` or wider parts, as in GCC, and a narrow `_BitInt` is not
+checked; with `-fwrapv` also given, the last of the two decides
+in the GCC personality, and `-fno-wrapv` only turns `-fwrapv` off, as in
+GCC, while `-ftrapv` always wins in the Clang personality, which refuses
+`-fno-trapv` as Clang does; Clang's `-ftrapv-handler=` is refused),
 `-fwrapv-pointer` (pointer arithmetic without `inbounds`, so it wraps in
 LLVM and the interpreter), `-fno-strict-overflow` (both, as in GCC),
 `-fno-delete-null-pointer-checks` (every LLVM function is
@@ -218,6 +234,28 @@ GCC's warning), the options that give up part of IEC 60559 semantics
 `-fno-unsafe-math-optimizations`, which restore them): bcc's code keeps
 IEC 60559 semantics, which they permit, and the GCC identity's macros
 report them as GCC's do (`__GCC_IEC_559` 0, `__NO_SIGNED_ZEROS__`, ...),
+`-fsignaling-nans` (an arithmetic operation or conversion on a signaling
+NaN, a constant one included, is kept and raises `FE_INVALID` at run
+time, as in GCC: lowering does not use the value semantic analysis folded
+for it, the LLVM back end emits floating operations as constrained
+intrinsics with strict exception behavior in `strictfp` functions, so
+LLVM neither folds them nor applies identities such as `x * 1.0 == x`,
+and the native back end and bcc's optimizer never fold floating
+arithmetic; copies, negation, `fabs`, `copysign` and
+`__builtin_issignaling` keep the encoding; the GCC identity defines
+`__SUPPORT_SNAN__` and keeps trapping math, as GCC does. GCC folds a
+widening and narrowing round trip such as `(double)(long double)x` to
+`x`, keeping a signaling NaN; bcc converts twice, quieting it and raising
+`FE_INVALID`, as IEC 60559 conversions do. A unit with a `__bf16` value
+keeps LLVM's ordinary floating semantics: LLVM 23 lowers `bf16`
+conversions in `strictfp` code to `__truncsfbf2` and `__extendbfsf2`
+calls with the wrong register convention, a bug Clang's
+`-ffp-exception-behavior=strict` shares. Without the option, LLVM may
+fold such operations as GCC does), `-mno-mmx` (bcc's code uses no MMX register, and its MMX
+intrinsics work in SSE registers, as GCC's and Clang's do on x86-64, so the
+option changes only the macros: the GCC and Clang personalities pass
+`-U__MMX__` ahead of the command line's `-D` and `-U`, unless a later
+`-mmmx` restores it),
 `-fno-builtin` and `-fno-builtin-NAME` (the LLVM functions carry `no-builtins` or `no-builtin-NAME`, so LLVM neither replaces library
 calls nor forms them from loops; `-ffreestanding` implies it, and GCC's
 `-fno-tree-loop-distribute-patterns` maps onto `memset`, `memcpy` and

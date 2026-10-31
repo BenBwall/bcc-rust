@@ -41,6 +41,49 @@ fn stringification_discards_trailing_argument_whitespace() {
 }
 
 #[test]
+fn a_pasted_name_of_the_macro_being_replaced_stays_unreplaced() {
+    // C99 6.10.3.4p2: `##` makes `glue` inside glue's own replacement, so
+    // it is painted for good and the `(12)` after the invocation does not
+    // call it (GCC's gcc.dg/cpp/paste2.c).
+    let glue = "#define glue(a, b) a ## b\n";
+    assert_expansion(&format!("{glue}glue(gl, ue)(12)\n"), "glue ( 12 )");
+    assert_expansion(&format!("{glue}glue(, glue)(1, 2)\n"), "glue ( 1 , 2 )");
+    assert_expansion(&format!("{glue}glue(glue, )(1, 2)\n"), "glue ( 1 , 2 )");
+    // A name pasted in another macro's list is still replaced.
+    assert_expansion(
+        &format!("{glue}#define call(a, b) a ## b\ncall(gl, ue)(x, y)\n"),
+        "xy",
+    );
+}
+
+#[test]
+fn stringified_replacements_keep_only_the_invocations_spacing() {
+    // C99 6.10.3p7: the white space before a replacement list is not part
+    // of it, so `#` spaces a replacement as its invocation was spaced, as
+    // GCC and Clang do.
+    let prelude = "#define X 1\n#define Y 2\n#define NEG -X\n#define F(a) a\n#define G() \
+                   2\n#define T\t/* c */ 3\n#define S(x) #x\n#define XS(x) S(x)\n";
+    for (argument, expected) in [
+        ("-X", "\"-1\""),
+        ("X.Y", "\"1.2\""),
+        ("NEG", "\"-1\""),
+        ("F(X)+Y", "\"1+2\""),
+        ("[X]", "\"[1]\""),
+        ("-G()", "\"-2\""),
+        ("-T", "\"-3\""),
+        ("a X", "\"a 1\""),
+        ("X Y", "\"1 2\""),
+    ] {
+        assert_expansion(&format!("{prelude}XS({argument})\n"), expected);
+    }
+    // Nor is the white space after it, before the directive's new-line.
+    let prelude = "#define X 1 \n#define F(a) a\t/* c */\n#define S(x) #x\n#define XS(x) S(x)\n";
+    for (argument, expected) in [("X-", "\"1-\""), ("F(1)-", "\"1-\""), ("X X", "\"1 1\"")] {
+        assert_expansion(&format!("{prelude}XS({argument})\n"), expected);
+    }
+}
+
+#[test]
 fn empty_zero_parameter_invocations_have_zero_arguments() {
     assert_expansion(
         "#define F() marker\nF() F( ) F(\t) F(/*empty*/) F(\n)\n",

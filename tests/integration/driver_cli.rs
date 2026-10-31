@@ -364,6 +364,47 @@ mod tests {
     }
 
     #[test]
+    fn preprocessing_keeps_adjacent_string_literals_apart() {
+        let project = Project::new();
+        std::fs::write(
+            project.path("strings.c"),
+            "#define GREETING \"hello, \" \"world\"\nconst char *s = GREETING;\nconst char *t = \
+             \"one\"\n    \"two\";\nconst char *u = u8\"x\" \"y\";\n",
+        )
+        .unwrap();
+        // Phase 6 joins adjacent string literals; `-E` stops before it, so
+        // each literal stays where it was written, as GCC and Clang print it.
+        let output = project.bcc(&["-E", "-P", "strings.c"]);
+        succeeds(&output);
+        let text = stdout(&output);
+        for expected in [
+            "const char *s = \"hello, \" \"world\";",
+            "const char *t = \"one\"\n    \"two\";",
+            "const char *u = u8\"x\" \"y\";",
+        ] {
+            assert!(text.contains(expected), "{expected}\n{text}");
+        }
+        // The text compiles to the joined strings.
+        std::fs::write(project.path("strings.i"), text).unwrap();
+        succeeds(&project.bcc(&["-c", "strings.i", "-o", "strings.o"]));
+    }
+
+    #[test]
+    fn preprocessing_prints_tokens_as_spelled_without_checking_them() {
+        let project = Project::new();
+        let source = "a @ b ` c 08 1e+f 0x1p \\ $x\nchar *s = \"\\x41\\101\\q\"; int c = \'ab\' + \
+                      \'\\q\';\n";
+        std::fs::write(project.path("spelled.c"), source).unwrap();
+        // Phases 5 to 7 come after `-E`'s text: a character no C token starts
+        // with, a number that is no constant and an escape C does not define
+        // pass through as written, unreported, as GCC and Clang print them.
+        let output = project.bcc(&["-E", "-P", "spelled.c"]);
+        succeeds(&output);
+        assert_eq!(stdout(&output), source);
+        assert_eq!(stderr(&output), "");
+    }
+
+    #[test]
     fn preprocessing_writes_source_text_with_line_markers() {
         let project = Project::new();
         let output = project.bcc(&["-E", "main.c"]);

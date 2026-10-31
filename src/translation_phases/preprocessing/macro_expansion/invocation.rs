@@ -77,6 +77,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
             match md {
                 | MacroDefinition::ObjectLike { tokenizer } => {
                     self.warn_deprecated_macro(token);
+                    let tokenizer = self.without_leading_whitespace(tokenizer);
                     let frame = TokenizerFrame {
                         frame_type: TokenizerFrameType::ObjectLikeMacroInvocation {
                             invocation_end: self.expansion_end().unwrap_or_else(|| {
@@ -115,6 +116,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                         return Some(token);
                     };
                     self.warn_deprecated_macro(token);
+                    let tokenizer = self.without_leading_whitespace(tokenizer);
                     let (tokenizer, arguments) = if is_variadic {
                         self.prepare_variadic_body(token, tokenizer, arguments)
                     } else {
@@ -151,6 +153,28 @@ impl<'x> Expander<'_, '_, '_, 'x> {
             }
         }
         Some(token)
+    }
+
+    /// A replacement list read from its first token: the white space
+    /// before it, after the macro's name or parameters, is not part of the
+    /// list. A token the replacement begins with is then separated from the
+    /// one before the invocation only as the invocation was, which `#`
+    /// spells: with `#define X 1`, `-X` stringizes as `"-1"`.
+    ///
+    /// C99: §6.10.3 paragraph 7, p. 151; PDF p. 163; §6.10.3.2 paragraph 2,
+    /// p. 153; PDF p. 165.
+    fn without_leading_whitespace<'t>(
+        &mut self,
+        mut tokenizer: TokenSource<'t>,
+    ) -> TokenSource<'t> {
+        let blanks = tokenizer
+            .spellings()
+            .take_while(|&(kind, _)| kind == PreprocessorTokenType::Whitespace)
+            .count();
+        for _ in 0..blanks {
+            _ = tokenizer.next_item(self.context);
+        }
+        tokenizer
     }
 
     /// Capture an invocation whose opening, arguments, or closing delimiter
@@ -425,6 +449,32 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         name: StringCacheId,
     ) -> bool {
         Self::macro_is_disabled_in(Frames::of(&self.tokenizer_stack), name)
+    }
+
+    /// Whether `name`, which `##` made, is a macro being replaced where the
+    /// paste happened. The paste belongs to the replacement list that holds
+    /// the `##`, not to the argument its operand came from, so the
+    /// arguments being read above that list do not decide it: with
+    /// `#define glue(a, b) a ## b`, the `glue` of `glue(gl, ue)` stays
+    /// unreplaced, even before a `(`, as in GCC and Clang.
+    ///
+    /// C99: §6.10.3.3 paragraph 3, p. 154; PDF p. 166; §6.10.3.4
+    /// paragraph 2, p. 155; PDF p. 167.
+    pub(in crate::translation_phases::preprocessing) fn pasted_macro_is_disabled(
+        &self,
+        name: StringCacheId,
+    ) -> bool {
+        let stack = &self.tokenizer_stack[..];
+        let list = stack
+            .iter()
+            .rposition(|frame| {
+                !matches!(
+                    frame.frame_type,
+                    TokenizerFrameType::FunctionLikeMacroArgument { .. }
+                )
+            })
+            .map_or(0, |index| index + 1);
+        Self::macro_is_disabled_in(Frames::of(&stack[..list]), name)
     }
 
     /// Whether `name` is disabled in the frames owning a collected token.

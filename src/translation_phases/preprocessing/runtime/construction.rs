@@ -142,7 +142,7 @@ impl<'tu, 'pp> Preprocessor<'tu, 'pp> {
                     conditional_queries: false,
                     in_directive: false,
                     retain_placeholders: false,
-                    strings_apart: false,
+                    as_text: false,
                     arena: pp,
                     once_set: ArenaSet::with_hasher_in(FxBuildHasher, pp),
                     macro_definitions,

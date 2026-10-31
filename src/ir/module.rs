@@ -323,6 +323,18 @@ impl<'ir> Module<'ir> {
         self.null_pointer_is_valid
     }
 
+    /// Asks the back ends to keep every floating operation, and so the
+    /// invalid exception an operation on a signaling NaN raises, rather
+    /// than fold or simplify one away (`-fsignaling-nans`).
+    pub(crate) const fn set_signaling_nans(&mut self, signaling: bool) {
+        self.signaling_nans = signaling;
+    }
+
+    /// Whether floating operations keep their exceptions.
+    pub(crate) const fn signaling_nans(&self) -> bool {
+        self.signaling_nans
+    }
+
     /// Gives a global its initializer, copying the bytes and relocations
     /// into the module's arena.
     pub(crate) fn define_global(&mut self, global: GlobalId, init: GlobalInit<'_>) {
@@ -372,6 +384,7 @@ impl<'ir> Module<'ir> {
             asm_blocks: ArenaVec::new_in(arena),
             library_builtins: LibraryBuiltins::All,
             null_pointer_is_valid: false,
+            signaling_nans: false,
             inline_asm: Table::new_in(arena),
         }
     }

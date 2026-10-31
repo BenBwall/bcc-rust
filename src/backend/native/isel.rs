@@ -184,19 +184,54 @@ pub(crate) fn select<'a>(
         })
     });
     selector.func.dynamic = uses(&[Opcode::DynAlloca, Opcode::StackRestore]) || over_aligned_byval;
+    // The blocks selecting each IR block adds (its edges' copies, a
+    // switch's compares, an atomic retry loop), which follow it in the
+    // layout.
+    let mut spans = ArenaVec::with_capacity_in(body.block_count(), arena);
     for block in body.blocks() {
         if let Some(mblock) = selector.block_map[block.index()] {
             selector.current = mblock;
+            let first = selector.func.blocks.len();
             if block.index() == 0 {
                 selector.entry(uses_va_start)?;
             }
             for &inst in body.block_insts(block) {
                 selector.instruction(inst)?;
             }
+            spans.push((mblock.index(), first..selector.func.blocks.len()));
         }
     }
     selector.load_bases();
+    lay_out_added_blocks(&mut selector.func, &spans, arena);
     Ok(selector.func)
+}
+
+/// Lays out the blocks selection added after the IR block they serve,
+/// rather than at the end of the function: a value live across one of them
+/// (an edge out of a branch that passes arguments, say) would otherwise be
+/// live from its block to the function's end, and the allocator would
+/// carry it past every interval in between, which made a long function
+/// with many such edges (the overflow checks of `-ftrapv`) take quadratic
+/// time. Blocks made before selection (label landing blocks) stay last.
+fn lay_out_added_blocks<'a>(
+    func: &mut MFunction<'a>,
+    spans: &[(usize, core::ops::Range<usize>)],
+    arena: &'a Bump,
+) {
+    if spans.iter().all(|(_, added)| added.is_empty()) {
+        return;
+    }
+    let mut placed = ArenaVec::with_capacity_in(func.blocks.len(), arena);
+    placed.resize(func.blocks.len(), false);
+    let mut order = ArenaVec::with_capacity_in(func.blocks.len(), arena);
+    for (block, added) in spans {
+        for index in core::iter::once(*block).chain(added.clone()) {
+            order.push(index);
+            placed[index] = true;
+        }
+    }
+    order.extend((0..func.blocks.len()).filter(|&index| !placed[index]));
+    func.relayout(&order, arena);
 }
 
 /// How the selector represents an IR value.

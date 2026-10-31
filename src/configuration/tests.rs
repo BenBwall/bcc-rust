@@ -50,6 +50,13 @@ fn all_modes_derive_acceptance_and_native_features() {
                 configuration.accepts(Feature::UnicodeLiteralPrefixes),
                 standard >= CStandard::C11
             );
+            // GCC's GNU modes take them from gnu99 on.
+            assert_eq!(
+                configuration
+                    .with_compiler_identity(CompilerIdentity::Gcc)
+                    .accepts(Feature::UnicodeLiteralPrefixes),
+                standard >= CStandard::C11 || (gnu && standard >= CStandard::C99)
+            );
             assert_eq!(
                 configuration.is_native(Feature::ImplicitInt),
                 standard < CStandard::C99

@@ -197,7 +197,7 @@ fn run_job<'tu>(
             let text = TextOptions {
                 no_line_markers: args.driver.no_line_markers,
                 macros:          args.driver.dump_macros,
-                as_written:      false,
+                as_written:      true,
             };
             let failed = match output.filter(|path| *path != Path::new("-")) {
                 | Some(path) => std::fs::File::create(path)

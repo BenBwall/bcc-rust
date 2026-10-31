@@ -100,8 +100,14 @@ pub(crate) struct CompilerConfiguration {
     trigraphs: Option<bool>,
     /// `$` may appear in identifiers (`-f[no-]dollars-in-identifiers`).
     dollar_identifiers: bool,
-    /// Signed integer overflow wraps (`-fwrapv`).
+    /// `-fwrapv` is on: signed integer overflow wraps, unless `-ftrapv`
+    /// came after it.
     wrapv: bool,
+    /// `-ftrapv` is on: signed integer overflow traps, unless `-fwrapv`
+    /// came after it.
+    trapv: bool,
+    /// `-ftrapv` came after `-fwrapv`, deciding when both are on.
+    trapv_last: bool,
     /// Every structure is packed and `#pragma pack` ignored (`-fpack-struct`
     /// without a value).
     pack_structures: bool,
@@ -111,6 +117,9 @@ pub(crate) struct CompilerConfiguration {
     relaxed_floating_point: u8,
     /// One bit per [`RelaxedFloatingPoint`] option given in either form.
     given_floating_point: u8,
+    /// Signaling NaNs are to be kept apart from quiet ones
+    /// (`-fsignaling-nans`).
+    signaling_nans: bool,
     /// The structure packing in effect before any `#pragma pack`, and that
     /// `#pragma pack()` restores (`-fpack-struct=N`, `cl /ZpN`); 0 for
     /// none.
