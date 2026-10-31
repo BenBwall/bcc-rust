@@ -824,6 +824,50 @@ mod tests {
         assert!(output.ir_abi_lines.contains(&2));
     }
 
+    /// Each terminator is on its statement's line, the implicit return on
+    /// the closing brace, and code a `#include` brings into a body on none.
+    #[test]
+    fn ir_terminators_and_included_code_get_their_own_lines() {
+        let line_of = |output: &ExplorerOutput, needle: &str| {
+            let ir = output.ir.as_deref().expect("IR");
+            let index = ir
+                .lines()
+                .position(|line| line.trim_start().starts_with(needle))
+                .unwrap_or_else(|| panic!("{needle} in\n{ir}"));
+            output.ir_lines[index]
+        };
+        let source = "int sw(int x) {\n    x = x + 1;\n    switch (x) {\n    case 1: return 10;\n    \
+                      }\n    return x;\n}\nvoid side(int *p) {\n    *p = 2;\n}\n";
+        let output = compile(source, &options(false));
+        assert_eq!(line_of(&output, "switch"), 3, "{:?}", output.ir_lines);
+        let ir = output.ir.as_deref().unwrap();
+        let bare = ir
+            .lines()
+            .position(|line| line.trim() == "return")
+            .expect("side returns");
+        assert_eq!(
+            output.ir_lines[bare], 10,
+            "the implicit return is the closing brace's"
+        );
+        let options = ExplorerOptions {
+            files: vec![ExplorerFile {
+                name:     "body.inc".into(),
+                contents: "int k = n * 7;\n".into(),
+            }],
+            ..ExplorerOptions::default()
+        };
+        let output = compile(
+            "int f(int n) {\n#include \"body.inc\"\n    return k;\n}\n",
+            &options,
+        );
+        assert_eq!(
+            line_of(&output, "v2 = imul"),
+            0,
+            "the header's line is not the editor's"
+        );
+        assert_eq!(line_of(&output, "return"), 3);
+    }
+
     #[test]
     fn a_long_line_maps_in_linear_time() {
         // One line of 288 KB: every token used to recount the line.

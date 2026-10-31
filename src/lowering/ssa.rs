@@ -77,10 +77,12 @@ pub(super) struct DraftBlock<'s> {
     /// The source line of each instruction, or 0.
     pub(super) lines:           ArenaVec<'s, u32>,
     pub(super) terminator:      Option<Terminator<'s>>,
-    /// The source line of a `return` terminator, the return statement's,
-    /// or 0. Other terminators take the line of the block's last
-    /// instruction, as the WebAssembly source map expects (a function's
-    /// prologue keeps line 0).
+    /// The source line of the terminator: the line current when it was
+    /// created (the `if`, `switch` or loop statement, a `return`, the closing
+    /// brace for the implicit return), as GCC's and Clang's line tables
+    /// give it. 0 for the entry block's jump into the body, which belongs
+    /// to the prologue, and for a terminator with no line: those take the
+    /// line of the block's last instruction.
     pub(super) terminator_line: u32,
     /// Each incoming edge: the block it leaves and its index there.
     pub(super) preds:           ArenaVec<'s, (Block, u32)>,
@@ -352,10 +354,10 @@ impl<'s> Draft<'s> {
                 u32::try_from(index).expect("a terminator has few edges"),
             ));
         }
-        let line = if matches!(terminator, Terminator::Return(_)) {
-            self.line
-        } else {
+        let line = if block == Self::entry() && matches!(terminator, Terminator::Jump(_)) {
             0
+        } else {
+            self.line
         };
         self.blocks[block.index()].terminator = Some(terminator);
         self.blocks[block.index()].terminator_line = line;
