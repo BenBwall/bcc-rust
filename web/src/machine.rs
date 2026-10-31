@@ -115,6 +115,9 @@ fn rejected(diagnostic: &abstract_machine::Diagnostic, source: &str) -> Snapshot
             kind:           "fault".to_owned(),
             category:       "fault".to_owned(),
             title:          "This program is outside the supported subset".to_owned(),
+            summary:        "The abstract machine runs only a small subset of C, and this \
+                             program uses something outside it."
+                .to_owned(),
             explanation:    format!(
                 "The abstract machine could not compile it: {}. The compiler pipeline view may \
                  still show what bcc itself makes of it.",
@@ -169,6 +172,7 @@ fn snapshot(state: &State, program: &Program, source: &str) -> Snapshot {
             kind:           event.kind.name().to_owned(),
             category:       event.kind.category().to_owned(),
             title:          event.title.clone(),
+            summary:        event.summary.clone(),
             explanation:    event.explanation.clone(),
             note:           event.note.clone(),
             flow:           flow::flow(event, operator, state.status == "finished", &objects),
@@ -560,6 +564,7 @@ mod tests {
         let mut machine = Machine::default();
         for (key, status, result) in [
             ("tour", "finished", Some("15")),
+            ("path", "finished", Some("16")),
             ("pointers", "finished", Some("17")),
             ("recursion", "finished", Some("24")),
             ("promotion", "finished", Some("255")),
@@ -583,6 +588,13 @@ mod tests {
                     !state.event.clauses.is_empty(),
                     "{key} step {} cites C99",
                     state.step
+                );
+                assert!(
+                    state.event.summary.ends_with('.')
+                        && state.event.summary.len() < state.event.explanation.len().max(171),
+                    "{key} step {} leads with one sentence: {:?}",
+                    state.step,
+                    state.event.summary
                 );
             }
         }
@@ -650,7 +662,11 @@ mod tests {
     #[test]
     fn the_compiler_lessons_are_outside_the_machines_subset() {
         let mut machine = Machine::default();
-        for demo in demos::DEMOS.iter().filter(|demo| demo.stage.is_some()) {
+        // The whole-path lesson opens in the pipeline but runs here too.
+        for demo in demos::DEMOS
+            .iter()
+            .filter(|demo| demo.stage.is_some() && demo.path.is_empty())
+        {
             let rejected = machine.load(demo.source.to_owned());
             assert_eq!(rejected.status, "error", "{}", demo.key);
         }

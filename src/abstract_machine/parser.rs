@@ -411,10 +411,12 @@ impl<'a> Parser<'a> {
             let value = self.emit_expression(expression, false)?;
             let range = combined(name.range, self.expressions[expression].range);
             let node = self.tree("=", range, vec![target, value])?;
+            let char_value = self.expressions[expression].ty == Type::Char;
             self.emit_node(
                 Op::Store {
-                    initializer:     true,
+                    initializer: true,
                     full_expression: true,
+                    char_value,
                 },
                 range,
                 node,
@@ -450,6 +452,7 @@ impl<'a> Parser<'a> {
             Op::Store {
                 initializer:     true,
                 full_expression: last,
+                char_value:      false,
             },
             range,
             node,
@@ -477,10 +480,12 @@ impl<'a> Parser<'a> {
             let node = self.emit_expression(value, false)?;
             let range = combined(range, self.expressions[value].range);
             let root = self.tree("=", range, vec![target, node])?;
+            let char_value = self.expressions[value].ty == Type::Char;
             self.emit_node(
                 Op::Store {
-                    initializer:     false,
+                    initializer: false,
                     full_expression: true,
+                    char_value,
                 },
                 range,
                 root,

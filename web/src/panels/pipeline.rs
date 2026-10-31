@@ -68,6 +68,9 @@ pub fn PipelineView(
     source: Signal<String>,
     /// Show a source line, from a diagnostic.
     on_reveal: Callback<usize>,
+    /// Leave the last stage for the abstract machine, to watch the program
+    /// run.
+    on_run: Callback<()>,
 ) -> impl IntoView {
     let output = Memo::new(move |_| {
         let stage = stage.get();
@@ -129,6 +132,22 @@ pub fn PipelineView(
             .then(|| links.with(|links| links.first_output_for(hovered)))
             .flatten()
     });
+    // Whether the source is the lesson that follows one program through
+    // every stage.
+    let on_path = move || {
+        source.with(|source| demos::matching(source).is_some_and(|demo| !demo.path.is_empty()))
+    };
+    // The whole-path lesson's note on what this stage did to it, which
+    // describes its -O0 output.
+    let path_note = move || {
+        if optimize.get() {
+            return None;
+        }
+        let index = Stage::ALL.iter().position(|&each| each == stage.get())?;
+        source.with(|source| {
+            demos::matching(source).and_then(|demo| demo.path.get(index).copied())
+        })
+    };
     let on_hover = Callback::new(move |line| pointing.hover(Side::Output, line));
     let on_cursor = Callback::new(move |line| pointing.cursor(Side::Output, line));
     view! {
@@ -164,6 +183,34 @@ pub fn PipelineView(
                         | (None, None) => ().into_any(),
                     }
                 }}
+                <p class="stage-handoff">
+                    <span>{move || stage.get().handoff()}</span>
+                    // One button for every stage, so the keyboard focus stays
+                    // on it as it moves along. After the last stage the
+                    // whole-path lesson goes on to the abstract machine,
+                    // which runs it; other programs, which it may not, start
+                    // the path again.
+                    <button
+                        type="button"
+                        class="stage-next"
+                        on:click=move |_| match stage.get_untracked().next() {
+                            | Some(next) => stage.set(next),
+                            | None if on_path() => on_run.run(()),
+                            | None => stage.set(Stage::ALL[0]),
+                        }
+                    >
+                        {move || match stage.get().next() {
+                            | Some(next) => format!("Next: {}", next.label()),
+                            | None if on_path() => "Next: watch it run in the abstract machine".to_owned(),
+                            | None => format!("Start again: {}", Stage::ALL[0].label()),
+                        }}
+                        <span aria-hidden="true">" →"</span>
+                    </button>
+                </p>
+                <p class="stage-path-note" hidden=move || path_note().is_none()>
+                    <strong>"In this program: "</strong>
+                    {move || path_note().map(super::rich_text)}
+                </p>
                 <p class="stage-explanation">{move || stage.get().explanation()}</p>
                 <StageClauses stage />
                 <StopBanner compilation=shown />
@@ -718,6 +765,7 @@ mod tests {
                     filename=RwSignal::new("program.c".to_owned()).read_only()
                     source=Signal::stored("int main(void) { return 0; }\n".to_owned())
                     on_reveal=Callback::new(|_: usize| {})
+                    on_run=Callback::new(|()| {})
                 />
             }
             .to_html()

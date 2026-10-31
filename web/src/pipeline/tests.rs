@@ -328,3 +328,22 @@ fn a_functions_ends_stand_for_its_lines_only_without_lines_of_their_own() {
     assert_eq!(links.outputs_for(4), [1, 3]);
     assert_eq!(links.outputs_for(7), [4, 5, 6]);
 }
+
+#[test]
+fn the_stages_read_as_one_path_from_source_to_machine_code() {
+    let mut stage = Stage::Lines;
+    let mut visited = vec![stage];
+    while let Some(next) = stage.next() {
+        stage = next;
+        visited.push(stage);
+    }
+    assert_eq!(visited, Stage::ALL);
+    for stage in Stage::ALL {
+        let handoff = stage.handoff();
+        assert!(
+            handoff.ends_with('.') && handoff.len() <= 150,
+            "{}: {handoff}",
+            stage.label()
+        );
+    }
+}

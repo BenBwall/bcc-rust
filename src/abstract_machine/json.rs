@@ -135,6 +135,8 @@ fn event(output: &mut String, event: &Event) {
     range(output, event.range);
     output.push_str(",\"title\":");
     string(output, &event.title);
+    output.push_str(",\"summary\":");
+    string(output, &event.summary);
     output.push_str(",\"explanation\":");
     string(output, &event.explanation);
     output.push_str(",\"note\":");

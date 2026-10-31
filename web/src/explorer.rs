@@ -825,6 +825,77 @@ mod tests {
         );
     }
 
+    /// The whole-path lesson's notes describe its `-O0` output; this keeps
+    /// them true when the compiler changes.
+    #[test]
+    fn the_path_lessons_notes_match_what_bcc_makes_of_it() {
+        let demo = crate::demos::find("path").expect("the whole-path lesson");
+        assert_eq!(demo.path.len(), Stage::ALL.len());
+        let compilation = compile(demo.source, false);
+        let text = |stage: Option<&String>| stage.cloned().expect("the stage compiled");
+        let tokens = text(compilation.tokens.as_ref());
+        assert_eq!(tokens.lines().filter(|line| !line.is_empty()).count(), 38);
+        // Phases 1-2: no splices, and the comment is still in the text.
+        assert_eq!(compilation.logical_lines.len(), 10);
+        assert!(text(compilation.logical.as_ref()).starts_with("// One small program"));
+        // Phase 3: `square(side + 1)`, line 8 columns 16 to 31, is six
+        // preprocessing tokens.
+        // Phase 3 also lists the white space between them.
+        let line = demo.source.lines().nth(7).expect("line 8");
+        let call = compilation
+            .pp_ranges
+            .iter()
+            .filter(|range| range.line == 8 && (16..=31).contains(&range.column))
+            .filter(|range| !line[range.column - 1..range.end_column - 1].trim().is_empty())
+            .count();
+        assert_eq!(call, 6, "{:?}", compilation.pp_ranges);
+        let phase4 = &compilation.preprocessing;
+        assert!(phase4.directives.is_empty() && phase4.expansions.is_empty());
+        let tree = text(compilation.syntax_tree.as_ref());
+        for expected in [
+            "callee: identifier square",
+            "argument: binary +",
+            "return-value: binary *",
+        ] {
+            assert!(tree.contains(expected), "{expected}: {tree}");
+        }
+        let types = text(compilation.semantic_types.as_ref());
+        for expected in [
+            "function square type=\"int (int)\"",
+            "parameter n type=int size=4",
+            "object side type=int duration=automatic size=4",
+            "object area type=int duration=automatic size=4",
+            "kind=lvalue type=int",
+        ] {
+            assert!(types.contains(expected), "{expected}: {types}");
+        }
+        let ir = text(compilation.ir.as_ref());
+        assert!(ir.contains("iadd.i32 nsw v0, v1") && ir.contains("call @square(v2)"), "{ir}");
+        assert!(!ir.contains("stack_slot"), "{ir}");
+        let body = |ir: &str| ir[ir.find("function @square").expect("square")..].to_owned();
+        assert_eq!(body(&text(compilation.ir_abi.as_ref())), body(&ir));
+        let llvm = crate::pipeline::precomputed_llvm("path", false).expect("bundled LLVM IR");
+        assert!(llvm.contains("mul nsw i32 %v0, %v0"), "{llvm}");
+        let asm = text(compilation.asm.as_ref());
+        for expected in ["movq\t%rdi, %rax", "imull\t%edi, %eax", "callq\tsquare"] {
+            assert!(asm.contains(expected), "{expected}: {asm}");
+        }
+        let code = text(compilation.machine_code.as_ref());
+        // Each listing line is the offset, the bytes, then the instruction.
+        let bytes_of = |mnemonic: &str| {
+            code.lines()
+                .find(|line| line.split_whitespace().any(|word| word.starts_with(mnemonic)))
+                .map(|line| {
+                    line.split_whitespace()
+                        .skip(1)
+                        .take_while(|word| word.len() == 2 && word.chars().all(|c| c.is_ascii_hexdigit()))
+                        .collect::<Vec<_>>()
+                })
+        };
+        assert_eq!(bytes_of("ret"), Some(vec!["c3"]), "{code}");
+        assert_eq!(bytes_of("call"), Some(vec!["e8", "00", "00", "00", "00"]), "{code}");
+    }
+
     #[test]
     fn the_listing_numbers_each_function_and_its_lines() {
         let compilation = compile(crate::demos::DEMOS[0].source, false);

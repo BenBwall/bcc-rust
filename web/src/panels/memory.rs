@@ -25,6 +25,8 @@ pub fn Memory(snapshot: Memo<Option<Snapshot>>) -> impl IntoView {
     let canvas = NodeRef::<html::Div>::new();
     let arrows = RwSignal::new(Vec::<Arrow>::new());
     let size = RwSignal::new((0.0, 0.0));
+    // Whether the learner opened the ended calls' objects; they stay open.
+    let ended_open = RwSignal::new(false);
     Effect::new(move || {
         snapshot.track();
         arrows::schedule(canvas, arrows, size);
@@ -70,13 +72,34 @@ pub fn Memory(snapshot: Memo<Option<Snapshot>>) -> impl IntoView {
                                 </div>
                             }).collect_view()}
                         </div>
-                        {(!layout.ended.is_empty()).then(|| view! {
-                            <div class="ended-calls">
-                                <h3>"Ended with their calls"</h3>
-                                <div class="frame-objects">
-                                    {layout.ended.iter().map(|object| object_view(object, layout)).collect_view()}
-                                </div>
-                            </div>
+                        // Folded to one line, unless a live pointer still
+                        // points into them or the step used one.
+                        {(!layout.ended.is_empty()).then(|| {
+                            let needed = layout.ended_in_use();
+                            view! {
+                                <details
+                                    class="ended-calls"
+                                    prop:open=needed || ended_open.get_untracked()
+                                    on:toggle=move |toggle| {
+                                        if let Some(open) = is_open(&toggle) {
+                                            if !needed {
+                                                ended_open.set(open);
+                                            }
+                                            arrows::schedule(canvas, arrows, size);
+                                        }
+                                    }
+                                >
+                                    <summary>
+                                        <h3>"Ended with their calls"</h3>
+                                        <span class="ended-names">
+                                            {layout.ended.iter().map(|object| object.name.clone()).collect::<Vec<_>>().join(", ")}
+                                        </span>
+                                    </summary>
+                                    <div class="frame-objects">
+                                        {layout.ended.iter().map(|object| object_view(object, layout)).collect_view()}
+                                    </div>
+                                </details>
+                            }
                         })}
                     }.into_any(),
                     | Some(_) => view! { <p class="empty-state">"No objects yet. They appear as declarations run."</p> }.into_any(),
@@ -183,6 +206,24 @@ fn layout(snapshot: &Snapshot) -> Layout {
 }
 
 impl Layout {
+    /// Whether the ended calls' objects matter to this step: a live object
+    /// still points into one (a dangling pointer), or the step used one.
+    fn ended_in_use(&self) -> bool {
+        let ended: HashSet<usize> = self.ended.iter().map(|object| object.id).collect();
+        let points_into = |value: &Value| {
+            matches!(value, Value::Pointer { target: Some(target), .. } if ended.contains(target))
+        };
+        self.touched.iter().any(|id| ended.contains(id))
+            || self
+                .frames
+                .iter()
+                .flat_map(|frame| &frame.objects)
+                .any(|object| match &object.value {
+                    | Value::Array { elements } => elements.iter().any(points_into),
+                    | value => points_into(value),
+                })
+    }
+
     /// How the last step used `object` as a whole (`cell` `None`) or one of
     /// its elements.
     fn access(&self, object: usize, cell: Option<usize>) -> Option<&'static str> {
@@ -356,10 +397,22 @@ mod arrows {
 
     fn measure(canvas: &web_sys::HtmlDivElement) -> (Vec<Arrow>, (f64, f64)) {
         let origin = canvas.get_bounding_client_rect();
+        // The arrows' SVG is as large as the last extent, which would keep
+        // the canvas from ever shrinking: measure without it, then give it
+        // the new extent.
+        let svg = canvas.query_selector("svg.arrows").ok().flatten();
+        if let Some(svg) = &svg {
+            _ = svg.set_attribute("width", "0");
+            _ = svg.set_attribute("height", "0");
+        }
         let extent = (
             f64::from(canvas.scroll_width()),
             f64::from(canvas.scroll_height()),
         );
+        if let Some(svg) = &svg {
+            _ = svg.set_attribute("width", &extent.0.to_string());
+            _ = svg.set_attribute("height", &extent.1.to_string());
+        }
         let mut drawn = Vec::new();
         let Ok(sources) = canvas.query_selector_all("[data-points]") else {
             return (drawn, extent);
@@ -378,6 +431,13 @@ mod arrows {
             else {
                 continue;
             };
+            // A cell in a folded section is not on screen to draw from or
+            // to (a closed <details> may still lay its content out).
+            let folded =
+                |cell: &web_sys::Element| cell.closest("details:not([open])").ok().flatten().is_some();
+            if folded(&source) || folded(&target) {
+                continue;
+            }
             let from = source.get_bounding_client_rect();
             let to = target.get_bounding_client_rect();
             let scroll = (
@@ -435,4 +495,20 @@ mod arrows {
         }
         (drawn, extent)
     }
+}
+
+/// Whether a toggled `<details>` is now open.
+#[cfg(feature = "hydrate")]
+fn is_open(event: &leptos::ev::Event) -> Option<bool> {
+    use wasm_bindgen::JsCast;
+    event
+        .target()?
+        .dyn_into::<web_sys::Element>()
+        .ok()
+        .map(|element| element.has_attribute("open"))
+}
+
+#[cfg(not(feature = "hydrate"))]
+fn is_open(_event: &leptos::ev::Event) -> Option<bool> {
+    None
 }

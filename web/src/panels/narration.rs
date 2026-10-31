@@ -1,13 +1,20 @@
 //! The step narration: what the last operation did, why, and the rule of C
-//! that says so. The values the step took and produced are drawn as a row
-//! of chips; the first use of each term of the standard is marked, with its
-//! definition on hover or focus; each cited paragraph links to the standard.
+//! that says so, in layers. One sentence leads, with the values the step took
+//! and produced drawn as a row of chips and the cited paragraphs as links to
+//! the standard; the full explanation, each paragraph's gloss and the
+//! glossary entries wait behind "How C defines this step". The first use of
+//! each term of the standard is marked, with its definition on hover or
+//! focus, and the names of objects take their colour from the memory
+//! diagram.
 
 use std::collections::HashMap;
 
 use leptos::prelude::*;
 
-use super::category_label;
+use super::{
+    category_hint,
+    category_label,
+};
 use crate::{
     glossary::{
         self,
@@ -54,6 +61,10 @@ pub fn Narration(
             })
         })
     });
+    let names = object_names(snapshot);
+    // Whether the learner opened the details; it stays open (or closed)
+    // from step to step.
+    let details = RwSignal::new(false);
     let tip = RwSignal::new(None::<Tip>);
     // A new step's text replaces the term the tip belongs to.
     Effect::new(move || {
@@ -84,7 +95,7 @@ pub fn Narration(
         <article class="card narration" data-category=category aria-labelledby="narration-title" node_ref=card>
             <div class="narration-meta">
                 // No step has run before the engine loads, so no kind of step.
-                <span class="category-badge" hidden=move || event.with(Option::is_none)>{move || category_label(&category())}</span>
+                <span class="category-badge" title=move || category_hint(&category()) hidden=move || event.with(Option::is_none)>{move || category_label(&category())}</span>
                 <span class="narration-step">
                     {move || snapshot.with(|state| state.as_ref().map_or_else(String::new, |state| format!("Step {}", state.step)))}
                 </span>
@@ -92,7 +103,7 @@ pub fn Narration(
                     <span class="sequence-dot" aria-hidden="true"></span>"Sequence point"
                 </span>
             </div>
-            <h2 id="narration-title" class="narration-title">
+            <h2 id="narration-title" class="narration-title" tabindex="-1">
                 {move || event.with(|event| match event {
                     | Some(event) => super::rich_text(&event.title),
                     | None => "Loading the abstract machine…".into_any(),
@@ -101,9 +112,9 @@ pub fn Narration(
             <p class="flow" aria-hidden="true" hidden=move || event.with(|event| event.as_ref().is_none_or(|event| event.flow.is_empty()))>
                 {move || event.with(|event| event.as_ref().map(|event| flow_groups(&event.flow)))}
             </p>
-            <p class="narration-body">
+            <p class="narration-lead">
                 {move || event.with(|event| match event {
-                    | Some(event) => explained(&event.explanation, &mut Vec::new(), tip, card),
+                    | Some(event) => names.with(|names| explained(lead(event), &mut Vec::new(), names, tip, card)),
                     | None => placeholder.get().into_any(),
                 })}
             </p>
@@ -111,10 +122,10 @@ pub fn Narration(
                 <h3>"Why it matters"</h3>
                 <p>
                     {move || note.get().and_then(|note| event.with(|event| event.as_ref().map(|event| {
-                        // Terms the explanation marked stay plain here.
+                        // Terms the lead marked stay plain here.
                         let mut seen = Vec::new();
-                        let _ = explained_pieces(&event.explanation, &mut seen);
-                        explained(&note, &mut seen, tip, card)
+                        let _ = explained_pieces(lead(event), &mut seen);
+                        names.with(|names| explained(&note, &mut seen, names, tip, card))
                     })))}
                 </p>
             </aside>
@@ -129,17 +140,80 @@ pub fn Narration(
                 </p>
             </div>
             <Clauses event />
+            <Details event note names open=details tip card />
             <Recent recent on_jump />
             <TermTip tip />
         </article>
     }
 }
 
-/// The paragraphs of C99 the step applied, each linked to the standard.
+/// The names of the objects the program has created, so the text can colour
+/// them as the source, the tree and the memory diagram do.
+fn object_names(snapshot: Memo<Option<Snapshot>>) -> Memo<Vec<String>> {
+    Memo::new(move |_| {
+        snapshot.with(|state| {
+            state.as_ref().map_or_else(Vec::new, |state| {
+                state
+                    .objects
+                    .iter()
+                    .map(|object| object.name.clone())
+                    .collect()
+            })
+        })
+    })
+}
+
+/// The details behind the lead: the full explanation, what each cited
+/// paragraph says, and the step's terms in the glossary.
+#[component]
+fn Details(
+    event: Memo<Option<StepEvent>>,
+    note: Memo<Option<String>>,
+    names: Memo<Vec<String>>,
+    /// Whether the learner opened them; they stay open from step to step.
+    open: RwSignal<bool>,
+    tip: RwSignal<Option<Tip>>,
+    card: NodeRef<leptos::html::Article>,
+) -> impl IntoView {
+    view! {
+        <details
+            class="narration-details"
+            hidden=move || event.with(|event| event.as_ref().is_none_or(|event| event.explanation.is_empty() || event.explanation == event.summary))
+            prop:open=move || open.get()
+            on:toggle=move |toggle| {
+                if let Some(now) = is_open(&toggle) {
+                    open.set(now);
+                }
+            }
+        >
+            <summary>"How C defines this step"</summary>
+            // The badge's meaning, which its tooltip gives only to a mouse.
+            <p class="narration-kind">
+                {move || event.with(|event| event.as_ref().map(|event| category_hint(&event.category)))}
+            </p>
+            <p class="narration-body">
+                {move || event.with(|event| event.as_ref().map(|event| {
+                    // Terms marked in the lead or the note stay plain.
+                    let mut seen = Vec::new();
+                    let _ = explained_pieces(lead(event), &mut seen);
+                    if let Some(note) = note.get() {
+                        let _ = explained_pieces(&note, &mut seen);
+                    }
+                    names.with(|names| explained(&event.explanation, &mut seen, names, tip, card))
+                }))}
+            </p>
+            <Glosses event />
+            <Terms event note />
+        </details>
+    }
+}
+
+/// The paragraphs of C99 the step applied, each a link to the standard
+/// with its heading.
 #[component]
 fn Clauses(event: Memo<Option<StepEvent>>) -> impl IntoView {
     view! {
-        <ul class="clauses" aria-label="C standard rules applied">
+        <ul class="clauses" aria-label="C standard rules applied" hidden=move || event.with(|event| event.as_ref().is_none_or(|event| event.clauses.is_empty()))>
             {move || event.with(|event| {
                 event
                     .as_ref()
@@ -160,7 +234,6 @@ fn Clauses(event: Memo<Option<StepEvent>>) -> impl IntoView {
                             <li class="clause">
                                 {label}
                                 <span class="clause-title">{clause.title}</span>
-                                <span class="clause-gloss">{clause.gloss}</span>
                             </li>
                         }
                     })
@@ -170,12 +243,104 @@ fn Clauses(event: Memo<Option<StepEvent>>) -> impl IntoView {
     }
 }
 
-/// The steps before this one, to jump back to.
+/// What each cited paragraph says, in plain words.
+#[component]
+fn Glosses(event: Memo<Option<StepEvent>>) -> impl IntoView {
+    view! {
+        <dl class="clause-glosses" aria-label="What the cited rules say">
+            {move || event.with(|event| {
+                event
+                    .as_ref()
+                    .map(|event| event.clauses.clone())
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|clause| view! {
+                        <dt>{format!("§{}", clause.id)}</dt>
+                        <dd>{clause.gloss}</dd>
+                    })
+                    .collect_view()
+            })}
+        </dl>
+    }
+}
+
+/// Links to the glossary entries of the terms this step's text uses.
+#[component]
+fn Terms(event: Memo<Option<StepEvent>>, note: Memo<Option<String>>) -> impl IntoView {
+    let terms = move || {
+        event.with(|event| {
+            let Some(event) = event else {
+                return Vec::new();
+            };
+            let mut seen = Vec::new();
+            let _ = glossary::pieces(lead(event), &mut seen);
+            if let Some(note) = note.get() {
+                let _ = glossary::pieces(&note, &mut seen);
+            }
+            let _ = glossary::pieces(&event.explanation, &mut seen);
+            glossary::TERMS
+                .iter()
+                .filter(|term| seen.contains(&term.id))
+                .collect::<Vec<_>>()
+        })
+    };
+    view! {
+        <p class="narration-terms" hidden=move || terms().is_empty()>
+            <span class="narration-terms-label">"In the glossary: "</span>
+            {move || {
+                let terms = terms();
+                let count = terms.len();
+                terms
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, term)| view! {
+                        <a href=format!("#term-{}", term.id)>{term.name}</a>
+                        {(index + 1 < count).then_some(", ")}
+                    })
+                    .collect_view()
+            }}
+        </p>
+    }
+}
+
+/// The sentence the card leads with: the summary, or the explanation for
+/// an engine that sends none.
+fn lead(event: &StepEvent) -> &str {
+    if event.summary.is_empty() {
+        &event.explanation
+    } else {
+        &event.summary
+    }
+}
+
+/// Whether a toggled `<details>` is now open.
+#[cfg(feature = "hydrate")]
+fn is_open(event: &leptos::ev::Event) -> Option<bool> {
+    use wasm_bindgen::JsCast;
+    event
+        .target()?
+        .dyn_into::<web_sys::Element>()
+        .ok()
+        .map(|element| element.has_attribute("open"))
+}
+
+#[cfg(not(feature = "hydrate"))]
+fn is_open(_event: &leptos::ev::Event) -> Option<bool> {
+    None
+}
+
+/// The steps before this one, to jump back to, folded under their count so
+/// the expression tree and memory stay near the step.
 #[component]
 fn Recent(recent: Memo<Vec<(usize, String, String)>>, on_jump: Callback<usize>) -> impl IntoView {
     view! {
-        <div class="recent" hidden=move || recent.with(Vec::is_empty)>
-            <h3>"Earlier steps"</h3>
+        <details class="recent" hidden=move || recent.with(Vec::is_empty)>
+            <summary>
+                <h3>"Earlier steps"</h3>
+                <span class="recent-latest">
+                    {move || recent.with(|recent| recent.first().map(|(index, title, _)| format!("{index} · {}", title.replace('`', ""))))}
+                </span>
+            </summary>
             <ol>
                 {move || recent.get().into_iter().map(|(index, title, category)| view! {
                     <li>
@@ -187,7 +352,7 @@ fn Recent(recent: Memo<Vec<(usize, String, String)>>, on_jump: Callback<usize>) 
                     </li>
                 }).collect_view()}
             </ol>
-        </div>
+        </details>
     }
 }
 
@@ -249,16 +414,21 @@ fn TermTip(tip: RwSignal<Option<Tip>>) -> impl IntoView {
 }
 
 /// `text` with its `` `code` `` spans and the first use of each glossary
-/// term not in `seen` marked.
+/// term not in `seen` marked; code naming one of the program's objects takes
+/// its colour.
 fn explained(
     text: &str,
     seen: &mut Vec<&'static str>,
+    names: &[String],
     tip: RwSignal<Option<Tip>>,
     card: NodeRef<leptos::html::Article>,
 ) -> AnyView {
     explained_pieces(text, seen)
         .into_iter()
         .map(|(code, piece)| match piece {
+            | Piece::Text(text) if code && names.iter().any(|name| name == text) =>
+                view! { <code class=format!("is-object {}", palette::class(text))>{text.to_owned()}</code> }
+                    .into_any(),
             | Piece::Text(text) if code => view! { <code>{text.to_owned()}</code> }.into_any(),
             | Piece::Text(text) => prose(text),
             | Piece::Term(written, term) => term_button(written.to_owned(), term, tip, card),
@@ -466,5 +636,51 @@ fn chip(part: &FlowPart) -> AnyView {
             </span>
         }
         .into_any(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        explained_pieces,
+        lead,
+    };
+    use crate::{
+        glossary::Piece,
+        snapshot::StepEvent,
+    };
+
+    #[test]
+    fn the_card_leads_with_the_summary() {
+        let mut event = StepEvent {
+            summary: "One sentence.".to_owned(),
+            explanation: "The details.".to_owned(),
+            ..StepEvent::default()
+        };
+        assert_eq!(lead(&event), "One sentence.");
+        event.summary.clear();
+        assert_eq!(lead(&event), "The details.");
+    }
+
+    #[test]
+    fn a_term_the_lead_marks_stays_plain_in_the_details() {
+        let terms = |text: &str, seen: &mut Vec<&'static str>| {
+            explained_pieces(text, seen)
+                .into_iter()
+                .filter_map(|(_, piece)| match piece {
+                    | Piece::Term(_, term) => Some(term.id),
+                    | Piece::Text(_) => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        let mut seen = Vec::new();
+        assert_eq!(
+            terms("The name `x` is an lvalue.", &mut seen),
+            ["lvalue"]
+        );
+        assert_eq!(
+            terms("An lvalue designates an object.", &mut seen),
+            ["object"]
+        );
     }
 }

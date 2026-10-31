@@ -70,6 +70,7 @@ pub use model::{
     Program,
     SourceRange,
     State,
+    Undefined,
     Value,
 };
 
