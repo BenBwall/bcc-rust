@@ -92,6 +92,10 @@ pub struct Compilation {
     pub semantic_types:     Option<String>,
     pub ir:                 Option<String>,
     pub ir_abi:             Option<String>,
+    /// For each line of `ir`, the source line its instruction came from, or 0.
+    pub ir_lines:           Vec<usize>,
+    /// The same for `ir_abi`.
+    pub ir_abi_lines:       Vec<usize>,
     /// LLVM IR; only the native compiler produces it.
     pub llvm:               Option<String>,
     pub asm:                Option<String>,
@@ -131,8 +135,9 @@ pub struct SourceSpan {
 }
 
 /// One function definition's lines (1-based, inclusive) in the source and in
-/// each output. bcc's IR keeps no source locations, so the IR, assembly and
-/// machine code link per function rather than per line.
+/// each output. The assembly and machine code keep no source locations, so
+/// they link per function rather than per line; so does the IR where the
+/// optimizer dropped its lines.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FunctionLines {
@@ -744,6 +749,22 @@ impl Links {
             .collect()
     }
 
+    /// The output line to scroll to for `line` of the source: the first
+    /// that came from that line alone (an IR instruction rather than its
+    /// function's header), else the first linked at all.
+    pub fn first_output_for(&self, line: usize) -> Option<usize> {
+        let outputs = self.outputs_for(line);
+        self.exact
+            .as_ref()
+            .and_then(|exact| {
+                outputs
+                    .iter()
+                    .copied()
+                    .find(|&output| exact[output] == Some((line, line)))
+            })
+            .or_else(|| outputs.first().copied())
+    }
+
     /// Source lines that `line` of the output came from.
     pub fn sources_for(&self, line: usize) -> Vec<usize> {
         if let Some(exact) = &self.exact {
@@ -823,7 +844,8 @@ pub fn gutter(stage: Stage, compilation: &Compilation, headers: bool) -> Vec<Str
 /// stage places each line: the logical lines by the physical lines they
 /// were spliced from, preprocessing tokens by their exact range, the
 /// preprocessed text by its line markers, and tokens and the syntax tree by
-/// their location. The IR, assembly and machine code keep none, so the
+/// their location. Each IR instruction links to the line it came from
+/// ([`ir_links`]). The assembly and machine code keep no locations, so the
 /// compiler's line map links them per function; precomputed LLVM IR links
 /// to those functions by name.
 pub fn links(stage: Stage, compilation: &Compilation, source: &str, headers: bool) -> Links {
@@ -852,6 +874,7 @@ pub fn links(stage: Stage, compilation: &Compilation, source: &str, headers: boo
                 .collect(),
         ),
         | Stage::Preprocessor => rewritten,
+        | Stage::Ir | Stage::IrAbi => ir_links(stage, compilation),
         | _ => stage.locations().map(|locate| {
             std::iter::once(None)
                 .chain(
@@ -907,6 +930,47 @@ pub fn links(stage: Stage, compilation: &Compilation, source: &str, headers: boo
         ranges: Vec::new(),
         functions,
     }
+}
+
+/// The IR's links: each instruction to the source line it came from, and
+/// each function's header and closing brace to the whole function. A
+/// function whose instructions all lost their lines (the optimizer rebuilt
+/// it) links every line to the whole function, as the other back-end stages
+/// do. `None` when no line kept its source line, so the stage links per
+/// function and says so.
+fn ir_links(stage: Stage, compilation: &Compilation) -> Option<LineLinks> {
+    let sources = if stage == Stage::Ir {
+        &compilation.ir_lines
+    } else {
+        &compilation.ir_abi_lines
+    };
+    // At -O2 the optimizer may have rebuilt every body, and a program of
+    // declarations has none: no line to link one by one.
+    if sources.iter().all(|&line| line == 0) {
+        return None;
+    }
+    let mut links: LineLinks = std::iter::once(None)
+        .chain(
+            sources
+                .iter()
+                .map(|&line| (line > 0).then_some((line, line))),
+        )
+        .collect();
+    for function in &compilation.functions {
+        let Some((first, last)) = function.output(stage) else {
+            continue;
+        };
+        let Some(body) = links.get_mut(first..=last) else {
+            continue;
+        };
+        if body.iter().all(Option::is_none) {
+            body.fill(Some(function.source));
+        } else {
+            body[0] = Some(function.source);
+            body[body.len() - 1] = Some(function.source);
+        }
+    }
+    Some(links)
 }
 
 /// Each function's name and first and last line (1-based) in `text`: a

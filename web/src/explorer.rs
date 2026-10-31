@@ -157,6 +157,12 @@ pub fn compile(source: &str, optimize: bool) -> Compilation {
         semantic_types: output.semantic_types,
         ir: output.ir,
         ir_abi: output.ir_abi,
+        ir_lines: output.ir_lines.iter().map(|&line| line as usize).collect(),
+        ir_abi_lines: output
+            .ir_abi_lines
+            .iter()
+            .map(|&line| line as usize)
+            .collect(),
         llvm: None,
         asm: output.asm,
         machine_code,

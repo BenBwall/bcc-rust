@@ -56,8 +56,9 @@ pub(crate) struct Body<'ir> {
     /// outside the IR; these opaque IDs follow surviving calls through passes.
     pub(super) call_diagnostics: ArenaMap<'ir, Inst, u32>,
     /// The source line each instruction came from, or 0. Lowering records
-    /// lines only for back ends that report them (the WebAssembly back
-    /// end's source map); passes that rebuild a body do not keep them.
+    /// lines only where something reports them (the WebAssembly back end's
+    /// source map, the site's IR views); passes that rebuild a body do not
+    /// keep them.
     pub(super) lines:            Table<'ir, Inst, u32>,
 }
 

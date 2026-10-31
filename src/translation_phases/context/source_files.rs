@@ -394,6 +394,16 @@ impl<'tu> Context<'tu> {
         ))
     }
 
+    /// The 1-based physical line of byte `offset` in the physical file
+    /// behind `index`, as [`Self::physical_position`] gives it without the
+    /// column, which costs a scan of the line: a binary search over the
+    /// line starts.
+    pub(crate) fn physical_line(&self, index: u32, offset: usize) -> Option<u32> {
+        let starts = self.source_line_starts(self.physical_source_file(index))?;
+        let line = starts.partition_point(|&start| start <= offset).max(1);
+        Some(u32::try_from(line).unwrap_or(u32::MAX))
+    }
+
     /// Returns the exact source spelling covered by a single-segment range.
     pub(crate) fn source_spelling(&self, source_vectors: SourceVectors) -> Option<&str> {
         let [vector] = self.get_source_vectors(source_vectors) else {

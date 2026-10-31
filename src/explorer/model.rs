@@ -92,6 +92,11 @@ pub struct ExplorerOutput {
     /// The bcc IR after ABI lowering, as `--emit=ir-abi --backend=native`
     /// prints it.
     pub ir_abi:             Option<String>,
+    /// For each line of `ir`, the source line its instruction came from, or
+    /// 0 (a label, a declaration, or a line the optimizer dropped).
+    pub ir_lines:           Vec<u32>,
+    /// The same for `ir_abi`.
+    pub ir_abi_lines:       Vec<u32>,
     /// The native back end's assembly, as `--emit=asm --backend=native`
     /// prints it.
     pub asm:                Option<String>,

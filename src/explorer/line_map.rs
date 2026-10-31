@@ -1,7 +1,9 @@
 //! Maps each function definition's source lines to the lines its body
-//! became in the IR before and after ABI lowering and in the assembly. The
-//! IR keeps no source locations, so this is the granularity the outputs
-//! support: a function's header through its closing line in each text.
+//! became in the IR before and after ABI lowering and in the assembly: a
+//! function's header through its closing line in each text. The IR's lines
+//! also map one by one (`ir_lines`), from the source line lowering records
+//! for each instruction; the assembly keeps no source locations, so it maps
+//! per function only.
 //! Source lines are the editor's, physical lines of the input that `#line`
 //! does not change; a function that a macro expansion begins starts at the
 //! invocation, not in the macro's definition. A function is found in each
@@ -10,6 +12,7 @@
 
 #![expect(
     clippy::disallowed_types,
+    clippy::disallowed_macros,
     clippy::disallowed_methods,
     reason = "The explorer hands owned text and vectors across its interface, outside every arena."
 )]
@@ -18,14 +21,17 @@ use super::{
     ExplorerLineMapping,
     ExplorerLineRange,
 };
-use crate::translation_phases::{
-    Context,
-    SourceVector,
-    parsing::{
-        ExternalDeclaration,
-        ParsedTranslationUnit,
+use crate::{
+    ir::Module,
+    translation_phases::{
+        Context,
+        SourceVector,
+        parsing::{
+            ExternalDeclaration,
+            ParsedTranslationUnit,
+        },
+        semantic_analysis::SemanticTranslationUnit,
     },
-    semantic_analysis::SemanticTranslationUnit,
 };
 
 /// The mapping for every function defined in `input`, the source file, in
@@ -96,6 +102,73 @@ pub(super) fn map<'tu>(
         });
     }
     mappings
+}
+
+/// For each line of `text`, the IR `module` prints as, the source line its
+/// instruction came from, or 0: for a block label, a declaration, or an
+/// instruction lowering gave no line. Lowering records the lines only when
+/// asked (`lower_translation_unit_with_lines`), and optimizations that
+/// rebuild a body drop them. [`only_within`] then keeps the lines of the
+/// functions the input defines.
+pub(super) fn ir_lines(module: &Module<'_>, text: &str) -> Vec<u32> {
+    let lines: Vec<&str> = text.lines().collect();
+    let mut sources = vec![0; lines.len()];
+    // The printer writes the functions in module order, each from its
+    // `function` line; one with a body follows it with one line per stack
+    // slot and per block label, then each block's label line and one line
+    // per instruction (instruction text escapes control characters).
+    let mut headers = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, line)| line.starts_with("function "))
+        .map(|(index, _)| index);
+    for (_, function) in module.functions() {
+        let Some(start) = headers.next() else {
+            break;
+        };
+        let Some(body) = &function.body else {
+            continue;
+        };
+        let mut at = start + 1 + body.stack_slots().count() + body.labels().count();
+        for block in body.blocks() {
+            at += 1;
+            for &inst in body.block_insts(block) {
+                if let Some(source) = sources.get_mut(at) {
+                    *source = body.inst_line(inst);
+                }
+                at += 1;
+            }
+        }
+        debug_assert_eq!(
+            lines.get(at).copied(),
+            Some("}"),
+            "the IR layout of {}",
+            lines[start]
+        );
+    }
+    sources
+}
+
+/// Clears the source lines of `lines` outside `functions`, the 1-based
+/// output ranges of the functions defined in the input: a function from a
+/// header records the header's lines, which are not the editor's.
+pub(super) fn only_within(lines: &mut [u32], functions: impl Iterator<Item = ExplorerLineRange>) {
+    let mut keep = vec![false; lines.len()];
+    for range in functions {
+        for index in range.start.saturating_sub(1)..range.end {
+            if let Some(kept) = usize::try_from(index)
+                .ok()
+                .and_then(|index| keep.get_mut(index))
+            {
+                *kept = true;
+            }
+        }
+    }
+    for (line, kept) in lines.iter_mut().zip(keep) {
+        if !kept {
+            *line = 0;
+        }
+    }
 }
 
 /// A function's lines in the IR's text: from `function @name(…) … {` to

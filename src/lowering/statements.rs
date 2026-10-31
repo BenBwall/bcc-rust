@@ -1282,6 +1282,17 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
                 })
             },
         };
+        // The implicit return is the closing brace's, as in Clang's and
+        // GCC's line tables.
+        if self.unit.source_lines
+            && let Some(line) = self
+                .unit
+                .context
+                .user_source_end(source)
+                .and_then(|brace| self.home_line(&brace))
+        {
+            self.draft.line = line;
+        }
         self.draft
             .terminate_and_continue_dead(Terminator::Return(value));
         for index in 0..self.draft.blocks.len() {

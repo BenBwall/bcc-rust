@@ -122,7 +122,7 @@ pub fn PipelineView(
     let reveal = Signal::derive(move || {
         let hovered = hover_source.get();
         (hovered > 0)
-            .then(|| links.with(|links| links.outputs_for(hovered).first().copied()))
+            .then(|| links.with(|links| links.first_output_for(hovered)))
             .flatten()
     });
     let on_hover = Callback::new(move |line| hover_output.set(line));
@@ -163,14 +163,14 @@ pub fn PipelineView(
                 <StageClauses stage />
                 <StopBanner compilation=shown />
                 <FrontEndCard stage compilation on_reveal />
-                <OptimizerNote stage optimize compilation other />
+                <OptimizerNote stage optimize compilation other shown=Signal::derive(move || output.with(Option::is_some)) />
                 <div class="stage-toolbar">
                     <p class="stage-note is-link" hidden=move || shown_links.with(Links::is_empty)>
                         {move || if shown_links.with(Links::is_exact) {
                             "Hover a source line to find what it became here, or hover here to find its source."
                         } else {
-                            "Hover a source line to find its function here, or hover here to find the source. bcc's IR \
-                             keeps no source locations yet, so these stages link per function, not per line."
+                            "Hover a source line to find its function here, or hover here to find the source. These \
+                             lines keep no source locations, so they link per function, not per line."
                         }}
                     </p>
                     <button
@@ -199,13 +199,34 @@ pub fn PipelineView(
                     />
                 </div>
                 <div class="stage-missing" hidden=move || output.with(Option::is_some)>
-                    {move || shown.with(|compilation| {
-                        missing(stage.get(), lesson.get(), compilation.as_ref(), &live.get())
-                    })}
+                    <p>
+                        {move || shown.with(|compilation| {
+                            missing(stage.get(), lesson.get(), compilation.as_ref(), &live.get())
+                        })}
+                    </p>
+                    <div class="stage-missing-actions" hidden=move || stage.get() != Stage::Llvm || lesson.get()>
+                        <button type="button" class="button small" on:click=move |_| show_ir(stage)>
+                            "Show bcc IR, compiled live"
+                        </button>
+                        <code class="stage-command">{move || Stage::Llvm.command(&filename.get(), optimize.get()).map(|command| format!("$ {command}"))}</code>
+                    </div>
                 </div>
             </article>
             <Diagnostics compilation live on_reveal />
         </section>
+    }
+}
+
+/// Switches to the bcc IR stage and moves the focus to its tab, since the
+/// button that asked for it disappears with the empty state.
+fn show_ir(stage: RwSignal<Stage>) {
+    stage.set(Stage::Ir);
+    #[cfg(feature = "hydrate")]
+    if let Some(tab) = document()
+        .get_element_by_id(&format!("stage-tab-{}", Stage::Ir.key()))
+        .and_then(|tab| wasm_bindgen::JsCast::dyn_into::<web_sys::HtmlElement>(tab).ok())
+    {
+        _ = tab.focus();
     }
 }
 
@@ -250,6 +271,7 @@ fn StageStrip(stage: RwSignal<Stage>, compilation: Memo<Option<Compilation>>) ->
                     data-phase=entry.phase()
                     aria-selected=move || (stage.get() == entry).to_string()
                     aria-controls="stage-output"
+                    id=format!("stage-tab-{}", entry.key())
                     on:click=move |_| stage.set(entry)
                 >
                     <span class="stage-index">{move || if stopped(entry) { "✕".to_owned() } else { (index + 1).to_string() }}</span>
@@ -404,6 +426,8 @@ fn OptimizerNote(
     optimize: RwSignal<bool>,
     compilation: Memo<Option<Compilation>>,
     other: Memo<Option<Compilation>>,
+    /// Whether the stage has output to show; the note is about that output.
+    shown: Signal<bool>,
 ) -> impl IntoView {
     let changes = Memo::new(move |_| {
         let stage = stage.get();
@@ -426,7 +450,7 @@ fn OptimizerNote(
         }
     };
     view! {
-        <aside class="optimizer-note" data-level=move || if optimize.get() { "O2" } else { "O0" }>
+        <aside class="optimizer-note" data-level=move || if optimize.get() { "O2" } else { "O0" } hidden=move || !shown.get()>
             <p>{summary}</p>
             <ul hidden=move || changes.with(Vec::is_empty)>
                 {move || changes.get().into_iter().map(|change| view! { <li>{change}</li> }).collect_view()}
@@ -537,8 +561,11 @@ fn missing(
     live: &LiveCompile,
 ) -> String {
     if stage == Stage::Llvm && !lesson {
-        return "LLVM IR is precomputed for the bundled lessons only: the in-browser build of bcc \
-                has no LLVM. Every other stage is compiled live in your browser as you type."
+        return "LLVM IR comes from bcc's native build, which links LLVM. The copy of bcc running \
+                in your browser has no LLVM, so this stage is shown for the bundled lessons \
+                only; every other stage is compiled live as you type. bcc IR, two stages back, \
+                has the same shape: values in SSA form and explicit basic blocks. For this \
+                program's LLVM IR, run bcc on your machine:"
             .to_owned();
     }
     match live {
