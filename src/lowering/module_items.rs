@@ -108,6 +108,9 @@ pub(super) struct Unit<'a, 'tu, 'ir> {
     pub(super) reachable: ArenaSet<'a, usize>,
     /// Best-effort O0-only storage; required uses and `used` remain mandatory.
     pub(super) retain_local_statics: bool,
+    /// Whether instructions record the source line they came from: for the
+    /// WebAssembly back end's source map and for the site's IR views.
+    pub(super) source_lines: bool,
     /// Work spent associating retained parameter bindings (scaling regression).
     #[cfg(test)]
     pub(super) parameter_alias_visits: usize,
@@ -2364,6 +2367,7 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
         }
         Ok(Self {
             retain_local_statics: true,
+            source_lines: target.is_wasm(),
             reachable: ArenaSet::with_hasher_in(rustc_hash::FxBuildHasher, tables),
             #[cfg(test)]
             parameter_alias_visits: 0,

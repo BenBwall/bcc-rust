@@ -22,6 +22,8 @@ mod tests {
 
     use bcc_rust::explorer::{
         ExplorerFile,
+        ExplorerLineMapping,
+        ExplorerLineRange,
         ExplorerOptions,
         ExplorerOutput,
         compile,
@@ -263,6 +265,35 @@ mod tests {
                 "{name}"
             );
             assert!(mapping.source.start <= mapping.source.end);
+        }
+        // Each IR line that names a source line lies in a function of the
+        // input and names a line of that function.
+        let ir: fn(&ExplorerLineMapping) -> Option<ExplorerLineRange> = |mapping| mapping.ir;
+        let ir_abi: fn(&ExplorerLineMapping) -> Option<ExplorerLineRange> =
+            |mapping| mapping.ir_abi;
+        for (text, lines, range) in [
+            (&output.ir, &output.ir_lines, ir),
+            (&output.ir_abi, &output.ir_abi_lines, ir_abi),
+        ] {
+            assert_eq!(
+                lines.len(),
+                text.as_ref().unwrap().lines().count(),
+                "{name}"
+            );
+            for (index, &line) in lines.iter().enumerate().filter(|&(_, &line)| line != 0) {
+                let output_line = u32::try_from(index + 1).unwrap();
+                let mapping = output
+                    .line_map
+                    .iter()
+                    .find(|mapping| {
+                        range(mapping).is_some_and(|ir| (ir.start..=ir.end).contains(&output_line))
+                    })
+                    .unwrap_or_else(|| panic!("{name}: IR line {output_line} is in no function"));
+                assert!(
+                    (mapping.source.start..=mapping.source.end).contains(&line),
+                    "{name}: IR line {output_line} names line {line}, outside {mapping:?}"
+                );
+            }
         }
     }
 
@@ -773,6 +804,68 @@ mod tests {
             }
             assert!(from_header > 0, "{text}");
         }
+    }
+
+    #[test]
+    fn ir_lines_name_the_source_line_of_each_instruction() {
+        let source = "int square(int x) {\n    int y = x * x;\n    return y;\n}\n";
+        let output = compile(source, &options(false));
+        let ir = output.ir.as_deref().expect("IR");
+        let line_of = |needle: &str| {
+            let index = ir
+                .lines()
+                .position(|line| line.contains(needle))
+                .unwrap_or_else(|| panic!("{needle} in\n{ir}"));
+            output.ir_lines[index]
+        };
+        assert_eq!(line_of("imul"), 2, "{ir}\n{:?}", output.ir_lines);
+        assert_eq!(line_of("return"), 3, "{ir}\n{:?}", output.ir_lines);
+        assert_eq!(line_of("function @square"), 0);
+        assert!(output.ir_abi_lines.contains(&2));
+    }
+
+    /// Each terminator is on its statement's line, the implicit return on
+    /// the closing brace, and code a `#include` brings into a body on none.
+    #[test]
+    fn ir_terminators_and_included_code_get_their_own_lines() {
+        let line_of = |output: &ExplorerOutput, needle: &str| {
+            let ir = output.ir.as_deref().expect("IR");
+            let index = ir
+                .lines()
+                .position(|line| line.trim_start().starts_with(needle))
+                .unwrap_or_else(|| panic!("{needle} in\n{ir}"));
+            output.ir_lines[index]
+        };
+        let source = "int sw(int x) {\n    x = x + 1;\n    switch (x) {\n    case 1: return 10;\n    \
+                      }\n    return x;\n}\nvoid side(int *p) {\n    *p = 2;\n}\n";
+        let output = compile(source, &options(false));
+        assert_eq!(line_of(&output, "switch"), 3, "{:?}", output.ir_lines);
+        let ir = output.ir.as_deref().unwrap();
+        let bare = ir
+            .lines()
+            .position(|line| line.trim() == "return")
+            .expect("side returns");
+        assert_eq!(
+            output.ir_lines[bare], 10,
+            "the implicit return is the closing brace's"
+        );
+        let options = ExplorerOptions {
+            files: vec![ExplorerFile {
+                name:     "body.inc".into(),
+                contents: "int k = n * 7;\n".into(),
+            }],
+            ..ExplorerOptions::default()
+        };
+        let output = compile(
+            "int f(int n) {\n#include \"body.inc\"\n    return k;\n}\n",
+            &options,
+        );
+        assert_eq!(
+            line_of(&output, "v2 = imul"),
+            0,
+            "the header's line is not the editor's"
+        );
+        assert_eq!(line_of(&output, "return"), 3);
     }
 
     #[test]

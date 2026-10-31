@@ -11,13 +11,17 @@ use super::{
     BuiltinOperation,
     ConversionRule as C,
     DesignatorPolicy,
+    MemoryBuiltin,
     NamingPolicy,
     Signature,
     SignatureType as T,
     SyntaxForm,
     TypeRule,
 };
-use crate::target::Scalar as S;
+use crate::{
+    configuration::Feature,
+    target::Scalar as S,
+};
 
 pub(super) const BUILTINS: &[BuiltinDescriptor] = &[
     descriptor(
@@ -43,6 +47,78 @@ pub(super) const BUILTINS: &[BuiltinDescriptor] = &[
             variadic:   false,
         },
         &[A::value(C::Parameter(T::Scalar(S::Int)))],
+    ),
+    gcc_descriptor(
+        Id::LibraryAlignedAlloc,
+        "__builtin_aligned_alloc",
+        "aligned_alloc",
+        Signature {
+            result:     T::Pointer(S::Void, false),
+            parameters: &[T::Size, T::Size],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[
+            A::value(C::Parameter(T::Size)),
+            A::value(C::Parameter(T::Size)),
+        ],
+    ),
+    descriptor(
+        Id::LibraryBcmp,
+        "__builtin_bcmp",
+        "bcmp",
+        Signature {
+            result:     T::Scalar(S::Int),
+            parameters: &[
+                T::Pointer(S::Void, true),
+                T::Pointer(S::Void, true),
+                T::Size,
+            ],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[
+            A::value(C::Parameter(T::Pointer(S::Void, true))),
+            A::value(C::Parameter(T::Pointer(S::Void, true))),
+            A::value(C::Parameter(T::Size)),
+        ],
+    ),
+    memory_descriptor(
+        Id::LibraryBcopy,
+        MemoryBuiltin::Bcopy,
+        "__builtin_bcopy",
+        "bcopy",
+        Signature {
+            result:     T::Scalar(S::Void),
+            parameters: &[
+                T::Pointer(S::Void, true),
+                T::Pointer(S::Void, false),
+                T::Size,
+            ],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[
+            A::value(C::Parameter(T::Pointer(S::Void, true))),
+            A::value(C::Parameter(T::Pointer(S::Void, false))),
+            A::value(C::Parameter(T::Size)),
+        ],
+    ),
+    memory_descriptor(
+        Id::LibraryBzero,
+        MemoryBuiltin::Bzero,
+        "__builtin_bzero",
+        "bzero",
+        Signature {
+            result:     T::Scalar(S::Void),
+            parameters: &[T::Pointer(S::Void, false), T::Size],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[
+            A::value(C::Parameter(T::Pointer(S::Void, false))),
+            A::value(C::Parameter(T::Size)),
+        ],
     ),
     descriptor(
         Id::LibraryCalloc,
@@ -132,6 +208,189 @@ pub(super) const BUILTINS: &[BuiltinDescriptor] = &[
         &[A::value(C::Parameter(T::Pointer(S::Void, false)))],
     ),
     descriptor(
+        Id::LibraryIndex,
+        "__builtin_index",
+        "index",
+        Signature {
+            result:     T::Pointer(S::Char, false),
+            parameters: &[T::Pointer(S::Char, true), T::Scalar(S::Int)],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[
+            A::value(C::Parameter(T::Pointer(S::Char, true))),
+            A::value(C::Parameter(T::Scalar(S::Int))),
+        ],
+    ),
+    gcc_descriptor(
+        Id::LibraryIsalnum,
+        "__builtin_isalnum",
+        "isalnum",
+        Signature {
+            result:     T::Scalar(S::Int),
+            parameters: &[T::Scalar(S::Int)],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[A::value(C::Parameter(T::Scalar(S::Int)))],
+    ),
+    gcc_descriptor(
+        Id::LibraryIsalpha,
+        "__builtin_isalpha",
+        "isalpha",
+        Signature {
+            result:     T::Scalar(S::Int),
+            parameters: &[T::Scalar(S::Int)],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[A::value(C::Parameter(T::Scalar(S::Int)))],
+    ),
+    gcc_descriptor(
+        Id::LibraryIsblank,
+        "__builtin_isblank",
+        "isblank",
+        Signature {
+            result:     T::Scalar(S::Int),
+            parameters: &[T::Scalar(S::Int)],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[A::value(C::Parameter(T::Scalar(S::Int)))],
+    ),
+    gcc_descriptor(
+        Id::LibraryIscntrl,
+        "__builtin_iscntrl",
+        "iscntrl",
+        Signature {
+            result:     T::Scalar(S::Int),
+            parameters: &[T::Scalar(S::Int)],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[A::value(C::Parameter(T::Scalar(S::Int)))],
+    ),
+    gcc_descriptor(
+        Id::LibraryIsdigit,
+        "__builtin_isdigit",
+        "isdigit",
+        Signature {
+            result:     T::Scalar(S::Int),
+            parameters: &[T::Scalar(S::Int)],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[A::value(C::Parameter(T::Scalar(S::Int)))],
+    ),
+    gcc_descriptor(
+        Id::LibraryIsgraph,
+        "__builtin_isgraph",
+        "isgraph",
+        Signature {
+            result:     T::Scalar(S::Int),
+            parameters: &[T::Scalar(S::Int)],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[A::value(C::Parameter(T::Scalar(S::Int)))],
+    ),
+    gcc_descriptor(
+        Id::LibraryIslower,
+        "__builtin_islower",
+        "islower",
+        Signature {
+            result:     T::Scalar(S::Int),
+            parameters: &[T::Scalar(S::Int)],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[A::value(C::Parameter(T::Scalar(S::Int)))],
+    ),
+    gcc_descriptor(
+        Id::LibraryIsprint,
+        "__builtin_isprint",
+        "isprint",
+        Signature {
+            result:     T::Scalar(S::Int),
+            parameters: &[T::Scalar(S::Int)],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[A::value(C::Parameter(T::Scalar(S::Int)))],
+    ),
+    gcc_descriptor(
+        Id::LibraryIspunct,
+        "__builtin_ispunct",
+        "ispunct",
+        Signature {
+            result:     T::Scalar(S::Int),
+            parameters: &[T::Scalar(S::Int)],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[A::value(C::Parameter(T::Scalar(S::Int)))],
+    ),
+    gcc_descriptor(
+        Id::LibraryIsspace,
+        "__builtin_isspace",
+        "isspace",
+        Signature {
+            result:     T::Scalar(S::Int),
+            parameters: &[T::Scalar(S::Int)],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[A::value(C::Parameter(T::Scalar(S::Int)))],
+    ),
+    gcc_descriptor(
+        Id::LibraryIsupper,
+        "__builtin_isupper",
+        "isupper",
+        Signature {
+            result:     T::Scalar(S::Int),
+            parameters: &[T::Scalar(S::Int)],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[A::value(C::Parameter(T::Scalar(S::Int)))],
+    ),
+    gcc_descriptor(
+        Id::LibraryIsxdigit,
+        "__builtin_isxdigit",
+        "isxdigit",
+        Signature {
+            result:     T::Scalar(S::Int),
+            parameters: &[T::Scalar(S::Int)],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[A::value(C::Parameter(T::Scalar(S::Int)))],
+    ),
+    descriptor(
+        Id::LibraryLabs,
+        "__builtin_labs",
+        "labs",
+        Signature {
+            result:     T::Scalar(S::Long),
+            parameters: &[T::Scalar(S::Long)],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[A::value(C::Parameter(T::Scalar(S::Long)))],
+    ),
+    descriptor(
+        Id::LibraryLlabs,
+        "__builtin_llabs",
+        "llabs",
+        Signature {
+            result:     T::Scalar(S::LongLong),
+            parameters: &[T::Scalar(S::LongLong)],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[A::value(C::Parameter(T::Scalar(S::LongLong)))],
+    ),
+    descriptor(
         Id::LibraryMalloc,
         "__builtin_malloc",
         "malloc",
@@ -219,6 +478,27 @@ pub(super) const BUILTINS: &[BuiltinDescriptor] = &[
             A::value(C::Parameter(T::Size)),
         ],
     ),
+    memory_descriptor(
+        Id::LibraryMempcpy,
+        MemoryBuiltin::Mempcpy,
+        "__builtin_mempcpy",
+        "mempcpy",
+        Signature {
+            result:     T::Pointer(S::Void, false),
+            parameters: &[
+                T::Pointer(S::Void, false),
+                T::Pointer(S::Void, true),
+                T::Size,
+            ],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[
+            A::value(C::Parameter(T::Pointer(S::Void, false))),
+            A::value(C::Parameter(T::Pointer(S::Void, true))),
+            A::value(C::Parameter(T::Size)),
+        ],
+    ),
     descriptor(
         Id::LibraryMemset,
         "__builtin_memset",
@@ -272,6 +552,36 @@ pub(super) const BUILTINS: &[BuiltinDescriptor] = &[
         &[A::value(C::Parameter(T::Pointer(S::Char, true)))],
     ),
     descriptor(
+        Id::LibraryRealloc,
+        "__builtin_realloc",
+        "realloc",
+        Signature {
+            result:     T::Pointer(S::Void, false),
+            parameters: &[T::Pointer(S::Void, false), T::Size],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[
+            A::value(C::Parameter(T::Pointer(S::Void, false))),
+            A::value(C::Parameter(T::Size)),
+        ],
+    ),
+    descriptor(
+        Id::LibraryRindex,
+        "__builtin_rindex",
+        "rindex",
+        Signature {
+            result:     T::Pointer(S::Char, false),
+            parameters: &[T::Pointer(S::Char, true), T::Scalar(S::Int)],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[
+            A::value(C::Parameter(T::Pointer(S::Char, true))),
+            A::value(C::Parameter(T::Scalar(S::Int))),
+        ],
+    ),
+    descriptor(
         Id::LibrarySnprintf,
         "__builtin_snprintf",
         "snprintf",
@@ -300,6 +610,71 @@ pub(super) const BUILTINS: &[BuiltinDescriptor] = &[
             parameters: &[T::Pointer(S::Char, false), T::Pointer(S::Char, true)],
             prototype:  true,
             variadic:   true,
+        },
+        &[
+            A::value(C::Parameter(T::Pointer(S::Char, false))),
+            A::value(C::Parameter(T::Pointer(S::Char, true))),
+        ],
+    ),
+    descriptor(
+        Id::LibraryStpcpy,
+        "__builtin_stpcpy",
+        "stpcpy",
+        Signature {
+            result:     T::Pointer(S::Char, false),
+            parameters: &[T::Pointer(S::Char, false), T::Pointer(S::Char, true)],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[
+            A::value(C::Parameter(T::Pointer(S::Char, false))),
+            A::value(C::Parameter(T::Pointer(S::Char, true))),
+        ],
+    ),
+    descriptor(
+        Id::LibraryStpncpy,
+        "__builtin_stpncpy",
+        "stpncpy",
+        Signature {
+            result:     T::Pointer(S::Char, false),
+            parameters: &[
+                T::Pointer(S::Char, false),
+                T::Pointer(S::Char, true),
+                T::Size,
+            ],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[
+            A::value(C::Parameter(T::Pointer(S::Char, false))),
+            A::value(C::Parameter(T::Pointer(S::Char, true))),
+            A::value(C::Parameter(T::Size)),
+        ],
+    ),
+    descriptor(
+        Id::LibraryStrcasecmp,
+        "__builtin_strcasecmp",
+        "strcasecmp",
+        Signature {
+            result:     T::Scalar(S::Int),
+            parameters: &[T::Pointer(S::Char, true), T::Pointer(S::Char, true)],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[
+            A::value(C::Parameter(T::Pointer(S::Char, true))),
+            A::value(C::Parameter(T::Pointer(S::Char, true))),
+        ],
+    ),
+    descriptor(
+        Id::LibraryStrcat,
+        "__builtin_strcat",
+        "strcat",
+        Signature {
+            result:     T::Pointer(S::Char, false),
+            parameters: &[T::Pointer(S::Char, false), T::Pointer(S::Char, true)],
+            prototype:  true,
+            variadic:   false,
         },
         &[
             A::value(C::Parameter(T::Pointer(S::Char, false))),
@@ -352,6 +727,33 @@ pub(super) const BUILTINS: &[BuiltinDescriptor] = &[
         ],
     ),
     descriptor(
+        Id::LibraryStrcspn,
+        "__builtin_strcspn",
+        "strcspn",
+        Signature {
+            result:     T::Size,
+            parameters: &[T::Pointer(S::Char, true), T::Pointer(S::Char, true)],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[
+            A::value(C::Parameter(T::Pointer(S::Char, true))),
+            A::value(C::Parameter(T::Pointer(S::Char, true))),
+        ],
+    ),
+    descriptor(
+        Id::LibraryStrdup,
+        "__builtin_strdup",
+        "strdup",
+        Signature {
+            result:     T::Pointer(S::Char, false),
+            parameters: &[T::Pointer(S::Char, true)],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[A::value(C::Parameter(T::Pointer(S::Char, true)))],
+    ),
+    descriptor(
         Id::LibraryStrlen,
         "__builtin_strlen",
         "strlen",
@@ -362,6 +764,46 @@ pub(super) const BUILTINS: &[BuiltinDescriptor] = &[
             variadic:   false,
         },
         &[A::value(C::Parameter(T::Pointer(S::Char, true)))],
+    ),
+    descriptor(
+        Id::LibraryStrncasecmp,
+        "__builtin_strncasecmp",
+        "strncasecmp",
+        Signature {
+            result:     T::Scalar(S::Int),
+            parameters: &[
+                T::Pointer(S::Char, true),
+                T::Pointer(S::Char, true),
+                T::Size,
+            ],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[
+            A::value(C::Parameter(T::Pointer(S::Char, true))),
+            A::value(C::Parameter(T::Pointer(S::Char, true))),
+            A::value(C::Parameter(T::Size)),
+        ],
+    ),
+    descriptor(
+        Id::LibraryStrncat,
+        "__builtin_strncat",
+        "strncat",
+        Signature {
+            result:     T::Pointer(S::Char, false),
+            parameters: &[
+                T::Pointer(S::Char, false),
+                T::Pointer(S::Char, true),
+                T::Size,
+            ],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[
+            A::value(C::Parameter(T::Pointer(S::Char, false))),
+            A::value(C::Parameter(T::Pointer(S::Char, true))),
+            A::value(C::Parameter(T::Size)),
+        ],
     ),
     descriptor(
         Id::LibraryStrncmp,
@@ -404,6 +846,51 @@ pub(super) const BUILTINS: &[BuiltinDescriptor] = &[
         ],
     ),
     descriptor(
+        Id::LibraryStrndup,
+        "__builtin_strndup",
+        "strndup",
+        Signature {
+            result:     T::Pointer(S::Char, false),
+            parameters: &[T::Pointer(S::Char, true), T::Size],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[
+            A::value(C::Parameter(T::Pointer(S::Char, true))),
+            A::value(C::Parameter(T::Size)),
+        ],
+    ),
+    gcc_descriptor(
+        Id::LibraryStrnlen,
+        "__builtin_strnlen",
+        "strnlen",
+        Signature {
+            result:     T::Size,
+            parameters: &[T::Pointer(S::Char, true), T::Size],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[
+            A::value(C::Parameter(T::Pointer(S::Char, true))),
+            A::value(C::Parameter(T::Size)),
+        ],
+    ),
+    descriptor(
+        Id::LibraryStrpbrk,
+        "__builtin_strpbrk",
+        "strpbrk",
+        Signature {
+            result:     T::Pointer(S::Char, false),
+            parameters: &[T::Pointer(S::Char, true), T::Pointer(S::Char, true)],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[
+            A::value(C::Parameter(T::Pointer(S::Char, true))),
+            A::value(C::Parameter(T::Pointer(S::Char, true))),
+        ],
+    ),
+    descriptor(
         Id::LibraryStrrchr,
         "__builtin_strrchr",
         "strrchr",
@@ -418,6 +905,60 @@ pub(super) const BUILTINS: &[BuiltinDescriptor] = &[
             A::value(C::Parameter(T::Scalar(S::Int))),
         ],
     ),
+    descriptor(
+        Id::LibraryStrspn,
+        "__builtin_strspn",
+        "strspn",
+        Signature {
+            result:     T::Size,
+            parameters: &[T::Pointer(S::Char, true), T::Pointer(S::Char, true)],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[
+            A::value(C::Parameter(T::Pointer(S::Char, true))),
+            A::value(C::Parameter(T::Pointer(S::Char, true))),
+        ],
+    ),
+    descriptor(
+        Id::LibraryStrstr,
+        "__builtin_strstr",
+        "strstr",
+        Signature {
+            result:     T::Pointer(S::Char, false),
+            parameters: &[T::Pointer(S::Char, true), T::Pointer(S::Char, true)],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[
+            A::value(C::Parameter(T::Pointer(S::Char, true))),
+            A::value(C::Parameter(T::Pointer(S::Char, true))),
+        ],
+    ),
+    gcc_descriptor(
+        Id::LibraryTolower,
+        "__builtin_tolower",
+        "tolower",
+        Signature {
+            result:     T::Scalar(S::Int),
+            parameters: &[T::Scalar(S::Int)],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[A::value(C::Parameter(T::Scalar(S::Int)))],
+    ),
+    gcc_descriptor(
+        Id::LibraryToupper,
+        "__builtin_toupper",
+        "toupper",
+        Signature {
+            result:     T::Scalar(S::Int),
+            parameters: &[T::Scalar(S::Int)],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[A::value(C::Parameter(T::Scalar(S::Int)))],
+    ),
 ];
 
 pub(crate) fn ordinary(name: &str) -> Option<&'static BuiltinDescriptor> {
@@ -426,6 +967,60 @@ pub(crate) fn ordinary(name: &str) -> Option<&'static BuiltinDescriptor> {
         .ok()
         .map(|index| &BUILTINS[index])
         .or_else(|| super::math::ordinary(name))
+}
+
+/// Whether `name` is one of the POSIX and BSD functions here rather than an
+/// ISO C one. GCC declares these implicitly only in its GNU modes
+/// (`DEF_EXT_LIB_BUILTIN` in its `builtins.def`); a strict ISO mode leaves
+/// the ordinary name to the program, though the `__builtin_` alias stays.
+pub(crate) fn extension_name(name: &str) -> bool {
+    matches!(
+        name,
+        "bcmp"
+            | "bcopy"
+            | "bzero"
+            | "index"
+            | "mempcpy"
+            | "rindex"
+            | "stpcpy"
+            | "stpncpy"
+            | "strcasecmp"
+            | "strdup"
+            | "strncasecmp"
+            | "strndup"
+            | "strnlen"
+    )
+}
+
+/// A memory alias that executes as a copy or fill
+/// ([`super::BuiltinOperation::Memory`]); its ordinary name stays a library
+/// function.
+const fn memory_descriptor(
+    id: Id,
+    operation: MemoryBuiltin,
+    spelling: &'static str,
+    library: &'static str,
+    signature: Signature,
+    arguments: &'static [A],
+) -> BuiltinDescriptor {
+    let mut descriptor = descriptor(id, spelling, library, signature, arguments);
+    descriptor.operation = BuiltinOperation::Memory(operation);
+    descriptor
+}
+
+/// A library alias only GCC has: Clang 23 rejects `__builtin_aligned_alloc`,
+/// `__builtin_strnlen` and the `<ctype.h>` aliases as unknown builtins,
+/// though it knows the ordinary names as library functions.
+const fn gcc_descriptor(
+    id: Id,
+    spelling: &'static str,
+    library: &'static str,
+    signature: Signature,
+    arguments: &'static [A],
+) -> BuiltinDescriptor {
+    let mut descriptor = descriptor(id, spelling, library, signature, arguments);
+    descriptor.availability.feature = Some(Feature::GccOnlyBuiltins);
+    descriptor
 }
 
 const fn descriptor(

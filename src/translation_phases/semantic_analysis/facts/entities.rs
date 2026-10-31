@@ -15,21 +15,31 @@ use super::{
         DefinitionKind,
         Inlining,
         Linkage,
+        SemanticErrorKind,
         SemanticTranslationUnit,
         TypeId,
         TypeKind,
+        assembly::{
+            RegisterName,
+            register_variable,
+        },
     },
     EntityId,
     OccurrenceId,
 };
 use crate::{
+    configuration::RuleSet,
     translation_phases::{
         Context,
         SourceVectors,
-        parsing::declaration_syntax::{
-            Declarator,
-            DirectDeclarator,
-            Initializer,
+        parsing::{
+            Asm,
+            declaration_syntax::{
+                Declarator,
+                DirectDeclarator,
+                Initializer,
+            },
+            syntax::Identifier,
         },
         preprocessing::{
             StringTokenType,
@@ -45,17 +55,43 @@ use crate::{
     },
 };
 
+/// The register a GNU local register variable names.
+/// GNU extension: GCC manual, "Local Register Variables".
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum RegisterVariable {
+    /// A general register, by hardware encoding.
+    General(u8),
+    /// Another register the compiler accepts (SSE, x87, MMX, mask), which
+    /// lowering does not place operands in.
+    Other,
+}
+
 /// Finalized entities, independent of emitted-symbol collisions. Distinct
 /// entities can request the same assembler name; lowering checks their IR
 /// definitions and still keys private inline bodies by semantic identity.
 #[derive(Debug)]
 pub(crate) struct EntityFacts<'tu> {
-    records:             &'tu mut [EntityRecord<'tu>],
-    functions:           &'tu mut [(usize, FunctionPolicy)],
+    records: &'tu mut [EntityRecord<'tu>],
+    functions: &'tu mut [(usize, FunctionPolicy)],
     pub(crate) refusals: &'tu [SymbolRefusal],
+    /// GNU local register variables, `register int x asm("reg")`: each
+    /// automatic object's binding and the general register it names, by
+    /// hardware encoding, or `None` for another register (SSE, x87, MMX),
+    /// sorted by binding. Only an `asm` operand places one in its register.
+    /// GNU extension: GCC manual, "Local Register Variables".
+    pub(crate) register_variables: &'tu [(usize, RegisterVariable)],
 }
 
 impl<'tu> EntityFacts<'tu> {
+    /// The general register a GNU local register variable names (`None`
+    /// for another kind), if `binding` is one.
+    pub(crate) fn register_variable(&self, binding: usize) -> Option<RegisterVariable> {
+        self.register_variables
+            .binary_search_by_key(&binding, |&(variable, _)| variable)
+            .ok()
+            .map(|index| self.register_variables[index].1)
+    }
+
     pub(crate) fn entity(&self, id: EntityId) -> Option<Entity<'tu>> {
         let record = &self.records[record_index(self.records, id)?];
         let cold = record.cold.as_deref();
@@ -110,9 +146,10 @@ impl<'tu> EntityFacts<'tu> {
 
     pub(in crate::translation_phases::semantic_analysis) fn empty(_tu: &'tu Bump) -> Self {
         Self {
-            records:   &mut [],
-            functions: &mut [],
-            refusals:  &[],
+            records:            &mut [],
+            functions:          &mut [],
+            refusals:           &[],
+            register_variables: &[],
         }
     }
 
@@ -239,6 +276,7 @@ impl<'tu> EntityFacts<'tu> {
         // vector grows in place. Retain only the actual refusals, not a slot
         // for every valid assembler request.
         let mut refusals = ArenaVec::new_in(scratch);
+        let mut register_variables = ArenaVec::new_in(scratch);
         for request in requests {
             let binding = sema
                 .correspondence
@@ -254,6 +292,20 @@ impl<'tu> EntityFacts<'tu> {
                 continue;
             };
             let data = sema.bindings[binding];
+            // An automatic object's label names a register.
+            if data.kind == BindingKind::Object
+                && data.linkage == Linkage::None
+                && !data.duration.is_static_or_thread()
+                && let Some(name) = request.name
+            {
+                let rules = context.configuration.compiler_identity().rules();
+                let register = match register_variable(name, rules) {
+                    | RegisterName::General(register) => RegisterVariable::General(register),
+                    | _ => RegisterVariable::Other,
+                };
+                register_variables.push((binding, register));
+                continue;
+            }
             let name = request.name.filter(|_| {
                 matches!(data.kind, BindingKind::Object | BindingKind::Function)
                     && (data.linkage != Linkage::None || data.duration.is_static_or_thread())
@@ -372,6 +424,10 @@ impl<'tu> EntityFacts<'tu> {
             records,
             functions: tu.alloc_slice_fill_iter(functions.iter().map(|p| (p.0, p.2))),
             refusals: tu.alloc_slice_copy(&refusals),
+            register_variables: {
+                register_variables.sort_unstable_by_key(|&(binding, _)| binding);
+                tu.alloc_slice_copy(&register_variables)
+            },
         }
     }
 }
@@ -561,6 +617,53 @@ pub(in crate::translation_phases::semantic_analysis) struct PendingSymbolRequest
 }
 
 impl<'tu> Analyzer<'_, 'tu, '_> {
+    /// Checks the register a `register` automatic object's assembler label
+    /// names, as GCC or Clang does: a GNU local register variable.
+    /// GNU extension: GCC manual, "Local Register Variables".
+    pub(in crate::translation_phases::semantic_analysis) fn check_register_variable(
+        &mut self,
+        declarator: Declarator<'tu>,
+        name: Identifier,
+    ) {
+        for direct in declarator.kind {
+            let DirectDeclarator::AsmLabel(label) = *direct else {
+                continue;
+            };
+            let Some(text) = self.asm_label_text(label) else {
+                continue;
+            };
+            let rules = self.context.configuration.compiler_identity().rules();
+            let kind = match register_variable(text, rules) {
+                | RegisterName::General(register) => {
+                    _ = self
+                        .register_variables
+                        .insert(self.bindings.len() - 1, register);
+                    continue;
+                },
+                | RegisterName::Other => continue,
+                | RegisterName::Invalid if rules == RuleSet::Clang =>
+                    SemanticErrorKind::UnknownRegisterName,
+                | RegisterName::Invalid => SemanticErrorKind::InvalidRegisterName,
+                | RegisterName::Inaccessible => SemanticErrorKind::InaccessibleRegister,
+                | RegisterName::NotGeneral => SemanticErrorKind::RegisterNotGeneral,
+            };
+            self.error(kind, label.source_vectors, Some(name.name), None);
+        }
+    }
+
+    /// The text of an assembler label, if it spells a usable name.
+    fn asm_label_text(&self, label: &Asm<'tu>) -> Option<&'tu str> {
+        let Some(TokenType::String(StringTokenType::String(id))) =
+            label.template.map(|t| t.kind).filter(|_| !label.recovered)
+        else {
+            return None;
+        };
+        self.context
+            .literal_text_in(self.scratch, id, false)
+            .filter(|n| !n.is_empty() && !n.contains('\0') && !n.starts_with('\u{1}'))
+            .map(|n| &*self.types.tu.alloc_str(n))
+    }
+
     /// Decode at the existing type traversal, then associate the completed
     /// binding at TU finalization. Invalid requests stay capability refusals.
     /// GNU extension: assembler labels extend C99 §6.2.2p2, p. 30; PDF p. 42.

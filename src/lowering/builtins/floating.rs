@@ -54,7 +54,7 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
             self.issignaling(value, operand, source)?
         } else if matches!(
             operation,
-            FloatOperation::Signbit | FloatOperation::Copysign
+            FloatOperation::Signbit | FloatOperation::Copysign | FloatOperation::Fabs
         ) {
             let (address, byte) = self.floating_sign_byte(value, operand, source)?;
             let mask = self.iconst(Type::I8, 0x80);
@@ -64,12 +64,16 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
                 let yes = self.icmp(IntCC::Ne, sign, zero);
                 self.extend(yes, false, Type::I32)
             } else {
-                let second = self.value(items[1], source)?;
-                let (_, sign) = self.floating_sign_byte(second, operand, source)?;
-                let sign = self.plain(Opcode::And, sign, mask);
                 let magnitude_mask = self.iconst(Type::I8, 0x7F);
                 let magnitude = self.plain(Opcode::And, byte, magnitude_mask);
-                let bits = self.plain(Opcode::Or, magnitude, sign);
+                let bits = if operation == FloatOperation::Fabs {
+                    magnitude
+                } else {
+                    let second = self.value(items[1], source)?;
+                    let (_, sign) = self.floating_sign_byte(second, operand, source)?;
+                    let sign = self.plain(Opcode::And, sign, mask);
+                    self.plain(Opcode::Or, magnitude, sign)
+                };
                 let sign_address = self.offset_address(address, u64::from(ty.bits() / 8 - 1));
                 _ = self.draft.push(
                     self.memory_op(InstData::Store {
@@ -363,6 +367,7 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
             },
             | FloatOperation::Signbit
             | FloatOperation::Copysign
+            | FloatOperation::Fabs
             | FloatOperation::Issignaling
             | FloatOperation::Compare(_) =>
                 return Err(LoweringError::missing("not a classification", source)),

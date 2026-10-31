@@ -93,11 +93,9 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             "lowering reached an operand semantic analysis elided"
         );
         if self.unit.sema.types.unanalyzed(info.ty) {
-            return Err(LoweringError::unanalyzed(
-                &self.unit.sema.types,
-                info.ty,
-                source,
-            ));
+            return Err(self.opaque_builtin(expression).unwrap_or_else(|| {
+                LoweringError::unanalyzed(&self.unit.sema.types, info.ty, source)
+            }));
         }
         if let Some(operand) = self.unit.sema.branch_operand(expression) {
             let merge = self.draft.create_block(&[Type::I1]);
@@ -793,11 +791,9 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         self.plain_arm = arm == Some(false);
         for conversion in self.conversions(expression).iter().skip(skip).take(take) {
             if self.unit.sema.types.unanalyzed(conversion.ty) {
-                return Err(LoweringError::unanalyzed(
-                    &self.unit.sema.types,
-                    conversion.ty,
-                    source,
-                ));
+                return Err(self.opaque_builtin(expression).unwrap_or_else(|| {
+                    LoweringError::unanalyzed(&self.unit.sema.types, conversion.ty, source)
+                }));
             }
             item = match conversion.kind {
                 | ConversionKind::Lvalue => match item.operand {

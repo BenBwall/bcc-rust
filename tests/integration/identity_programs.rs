@@ -68,11 +68,150 @@ mod tests {
         matches_the_claimed_compiler("complex_integers.c");
     }
 
+    /// GCC's and Clang's library aliases (`__builtin_strcat`,
+    /// `__builtin_mempcpy`, `__builtin_bcopy`, ...), carry, aligned
+    /// `alloca`, complex-part and `_Float16`/`__float128` sign builtins,
+    /// and the NaN and infinity constructors, with GCC's `q`, `bswap128`,
+    /// `<ctype.h>` and `assoc_barrier` builtins under its identity.
+    #[test]
+    fn gnu_builtins_match_the_claimed_compiler() {
+        matches_the_claimed_compiler("gnu_builtins.c");
+    }
+
     /// Signed left shifts that wrap, and `__LINE__` as a macro argument in
     /// a replacement list.
     #[test]
     fn torture_semantics_match_the_claimed_compiler() {
         matches_the_claimed_compiler("torture_semantics.c");
+    }
+
+    /// `-fno-builtin` and `-fno-builtin-index` make `index` an ordinary
+    /// name, so a GNU89 call before the program's own `int index(int)` is
+    /// an implicit declaration, as in GCC and Clang; with library builtins
+    /// on, the call gets the library's `char *index(const char *, int)`,
+    /// whose two arguments both compilers then require.
+    #[test]
+    fn no_builtin_leaves_library_names_ordinary() {
+        let source = temporary("index.c");
+        std::fs::write(
+            &source,
+            "int main(void) { return index(3) - 4; }\nint index(int x) { return x + 1; }\n",
+        )
+        .unwrap();
+        let source = source.to_str().unwrap();
+        for identity in ["--compiler-identity=clang", "--compiler-identity=gcc"] {
+            for (flag, accepted) in [
+                ("-fno-builtin", true),
+                ("-fno-builtin-index", true),
+                ("-fbuiltin", false),
+            ] {
+                let output = bcc(&[identity, "-std=gnu89", "-w", flag, "--interpret", source]);
+                if accepted {
+                    assert_eq!(
+                        output.status.code(),
+                        Some(0),
+                        "{identity} {flag}: {}",
+                        text(&output.stderr)
+                    );
+                } else {
+                    assert!(
+                        text(&output.stderr).contains("wrong number of arguments"),
+                        "{identity} {flag}: {}",
+                        text(&output.stderr)
+                    );
+                }
+            }
+        }
+        std::fs::remove_file(source).unwrap();
+    }
+
+    /// `__builtin_bcopy`, `__builtin_bzero` and `__builtin_mempcpy` lower to
+    /// LLVM's memory intrinsics on every target, as Clang lowers them, so
+    /// the Microsoft C runtime, which has none of the three, needs no such
+    /// symbol.
+    #[test]
+    fn memory_aliases_lower_to_memory_intrinsics() {
+        let source = temporary("memory.c");
+        std::fs::write(
+            &source,
+            "char *f(char *d, const char *s, unsigned long n) {\n__builtin_bcopy(s, d, \
+             n);\n__builtin_bzero(d, n);\nreturn __builtin_mempcpy(d, s, n);\n}\n",
+        )
+        .unwrap();
+        for target in [
+            "x86_64-unknown-linux-gnu",
+            "x86_64-pc-windows-msvc",
+            "x86_64-w64-windows-gnu",
+        ] {
+            let target = format!("--target={target}");
+            let output = bcc(&[&target, "--emit=llvm", source.to_str().unwrap()]);
+            let ir = text(&output.stdout);
+            assert!(
+                output.status.success(),
+                "{target}: {}",
+                text(&output.stderr)
+            );
+            for intrinsic in ["@llvm.memmove", "@llvm.memset", "@llvm.memcpy"] {
+                assert!(ir.contains(intrinsic), "{target} {intrinsic}: {ir}");
+            }
+            for symbol in ["@bcopy", "@bzero", "@mempcpy"] {
+                assert!(!ir.contains(symbol), "{target} {symbol}: {ir}");
+            }
+        }
+        std::fs::remove_file(source).unwrap();
+    }
+
+    /// A wasm32 program's own `index`, `bcmp` and `stpcpy` replace the WASI
+    /// runtime's weak definitions instead of clashing with them, under
+    /// both identities and optimizers; without `node` this is skipped.
+    #[test]
+    fn wasm32_programs_define_posix_string_names() {
+        if !Command::new("node")
+            .arg("--version")
+            .output()
+            .is_ok_and(|output| output.status.success())
+        {
+            eprintln!("skipping wasm32: node is not on the path");
+            return;
+        }
+        let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/programs/posix_string_names.c")
+            .to_str()
+            .unwrap()
+            .to_owned();
+        let runner = Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts/wasm/run.mjs");
+        for identity in ["--compiler-identity=clang", "--compiler-identity=gcc"] {
+            for optimization in ["-O0", "-O2"] {
+                let module = temporary("names.wasm");
+                let built = bcc(&[
+                    identity,
+                    optimization,
+                    "-w",
+                    "--target=wasm32-wasip1",
+                    &source,
+                    "-o",
+                    module.to_str().unwrap(),
+                ]);
+                assert!(
+                    built.status.success(),
+                    "{identity} {optimization}: {}",
+                    text(&built.stderr)
+                );
+                let run = run_native(
+                    Command::new("node")
+                        .arg("--no-warnings")
+                        .arg(&runner)
+                        .arg(&module),
+                )
+                .unwrap();
+                assert_eq!(
+                    text(&run.stdout),
+                    "abcd 3 7\nxy\n",
+                    "{identity} {optimization}"
+                );
+                std::fs::remove_file(module).unwrap();
+            }
+        }
     }
 
     /// Each identity's value of `fixture` matches its compiler's build,

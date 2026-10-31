@@ -975,7 +975,14 @@ rather than producing wrong code.
 
 GNU assembler labels select the IR symbol name of functions and static-duration
 objects, and propagate across linked declarations. Labels must be nonempty,
-NUL-free UTF-8; automatic register labels are unsupported. Semantic completion
+NUL-free UTF-8. On an automatic object the label names a register: a GNU
+local register variable (`register long x asm("rdi")`, GCC manual, "Local
+Register Variables") is an ordinary object (`EntityFacts::register_variables`)
+except as a general-register `asm` operand, whose constraint lowering narrows
+to that register when the object is declared `register`, as GCC and Clang
+place it (without `register` both ignore the label); GCC's names are accepted (`rax`
+to `rdi` in every width, `ah` to `dh`, `r8` to `r15`), with or without `%`.
+A register outside the operand's class leaves the class alone. Semantic completion
 retains decoded requests and their inheritance; lowering checks IR symbol
 collisions and reports retained capability refusals. Semantic analysis resolves
 calling-convention modifiers on every declaration and type name, including
@@ -2781,3 +2788,46 @@ under each identity on all six arms (`identity_programs.rs`), and what
 wasi-sdk's Clang prints on wasm32 (`complex_integers.rs`);
 `complex_integers_abi.c` passes in all 16 caller/callee pairings of GCC,
 Clang and bcc's LLVM and native back ends, and interpreted.
+
+## GCC library and scalar builtins (2026-10-30)
+
+The library aliases added after the GCC testsuite survey (see
+`language-standards.md`) lower as calls of their C library function, with
+the external signature the interpreter checks. The interpreter's host now
+implements `mempcpy`, `stpncpy`, `bcopy`, `bzero`, `bcmp`, `index`,
+`rindex`, `strcasecmp`, `strncasecmp`, `labs`, `llabs` and `aligned_alloc`
+(a heap object at the requested power-of-two alignment); the WASI runtime's
+`string.c` adds `stpcpy`, `stpncpy`, `mempcpy`, `bcopy`, `bzero`, `bcmp`,
+`index` and `rindex`, weak (with `strcasecmp` and `strncasecmp`), since a
+program may define those identifiers itself (`int index;`). The aliases
+`__builtin_bcopy`, `__builtin_bzero` and `__builtin_mempcpy` do not call
+them: they lower to the IR's `copy` (overlapping for `bcopy`) and `fill`,
+LLVM's `llvm.memmove`, `llvm.memset` and `llvm.memcpy`, as Clang lowers them
+on every target, so the Microsoft C runtime, which lacks the three, needs
+no such symbol (`BuiltinOperation::Memory`).
+
+The scalar builtins lower in `lowering/builtins.rs` to existing IR:
+`__builtin_addc`/`__builtin_subc` add or subtract twice and `or` the two
+unsigned carries (`ult`/`ugt` against the previous partial result);
+`__builtin_alloca_with_align` is a `dyn_alloca` with the operand's
+alignment; `__builtin___clear_cache` and `__builtin_assoc_barrier` emit
+nothing beyond their operands; `__builtin_creal`, `__builtin_cimag` and
+`__builtin_conj` take or negate a component of the complex pair; and
+`__builtin_bswap128` swaps each 64-bit half and exchanges them, so no back
+end needs an `i128` `bswap`. `FloatOperation::Fabs` clears the sign byte
+through the same stored-object path as `copysign`, for every real format
+(`f16`, `f32`, `f64`, x87 and binary128).
+
+A call of an unregistered `__builtin_` name, whose result type semantic
+analysis could not analyze, is refused as
+`LoweringErrorKind::UnsupportedBuiltin`, naming the builtin when
+`crate::builtins::unimplemented` lists it as one GCC has.
+
+**Evidence.** `tests/fixtures/programs/gnu_builtins.c` runs under both
+identities against the host GCC's and the bundled Clang's builds,
+interpreted with and without the optimizer and built through LLVM (`-O0`,
+`-O2`) and the native back end (`identity_programs.rs`). The library and
+scalar parts also print GCC's output on wasm32 (`--target=wasm32-wasip1`,
+`-O0` and `-O2`, run with `scripts/wasm/run.mjs`), apart from `unsigned
+long` being 32 bits there; `_Float16`, `__bf16` and `__float128` do not
+exist on wasm32.

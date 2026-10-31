@@ -53,6 +53,7 @@ mod bits;
 mod x86_builtins;
 
 pub(super) use floating::{
+    half_payload,
     nan_payload,
     nan_payload_wide,
 };

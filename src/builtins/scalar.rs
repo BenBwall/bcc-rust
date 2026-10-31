@@ -13,6 +13,7 @@ use super::{
     BuiltinEffectClass,
     BuiltinId as Id,
     BuiltinOperation as B,
+    ComplexPart,
     ConstantConstraint as K,
     ConstraintDiagnostic as D,
     ConversionRule as C,
@@ -30,6 +31,323 @@ use super::{
 use crate::target::Scalar as S;
 
 pub(super) const BUILTINS: &[BuiltinDescriptor] = &[
+    descriptor(
+        Id::Addc,
+        "__builtin_addc",
+        B::Carry(false, S::UnsignedInt),
+        Signature {
+            result:     T::Scalar(S::UnsignedInt),
+            parameters: &[
+                T::Scalar(S::UnsignedInt),
+                T::Scalar(S::UnsignedInt),
+                T::Scalar(S::UnsignedInt),
+                T::Pointer(S::UnsignedInt, false),
+            ],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[
+            A::value(C::Parameter(T::Scalar(S::UnsignedInt))),
+            A::value(C::Parameter(T::Scalar(S::UnsignedInt))),
+            A::value(C::Parameter(T::Scalar(S::UnsignedInt))),
+            A::value(C::Parameter(T::Pointer(S::UnsignedInt, false))),
+        ],
+        4,
+    ),
+    descriptor(
+        Id::Addcl,
+        "__builtin_addcl",
+        B::Carry(false, S::UnsignedLong),
+        Signature {
+            result:     T::Scalar(S::UnsignedLong),
+            parameters: &[
+                T::Scalar(S::UnsignedLong),
+                T::Scalar(S::UnsignedLong),
+                T::Scalar(S::UnsignedLong),
+                T::Pointer(S::UnsignedLong, false),
+            ],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[
+            A::value(C::Parameter(T::Scalar(S::UnsignedLong))),
+            A::value(C::Parameter(T::Scalar(S::UnsignedLong))),
+            A::value(C::Parameter(T::Scalar(S::UnsignedLong))),
+            A::value(C::Parameter(T::Pointer(S::UnsignedLong, false))),
+        ],
+        4,
+    ),
+    descriptor(
+        Id::Addcll,
+        "__builtin_addcll",
+        B::Carry(false, S::UnsignedLongLong),
+        Signature {
+            result:     T::Scalar(S::UnsignedLongLong),
+            parameters: &[
+                T::Scalar(S::UnsignedLongLong),
+                T::Scalar(S::UnsignedLongLong),
+                T::Scalar(S::UnsignedLongLong),
+                T::Pointer(S::UnsignedLongLong, false),
+            ],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[
+            A::value(C::Parameter(T::Scalar(S::UnsignedLongLong))),
+            A::value(C::Parameter(T::Scalar(S::UnsignedLongLong))),
+            A::value(C::Parameter(T::Scalar(S::UnsignedLongLong))),
+            A::value(C::Parameter(T::Pointer(S::UnsignedLongLong, false))),
+        ],
+        4,
+    ),
+    descriptor(
+        Id::Subc,
+        "__builtin_subc",
+        B::Carry(true, S::UnsignedInt),
+        Signature {
+            result:     T::Scalar(S::UnsignedInt),
+            parameters: &[
+                T::Scalar(S::UnsignedInt),
+                T::Scalar(S::UnsignedInt),
+                T::Scalar(S::UnsignedInt),
+                T::Pointer(S::UnsignedInt, false),
+            ],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[
+            A::value(C::Parameter(T::Scalar(S::UnsignedInt))),
+            A::value(C::Parameter(T::Scalar(S::UnsignedInt))),
+            A::value(C::Parameter(T::Scalar(S::UnsignedInt))),
+            A::value(C::Parameter(T::Pointer(S::UnsignedInt, false))),
+        ],
+        4,
+    ),
+    descriptor(
+        Id::Subcl,
+        "__builtin_subcl",
+        B::Carry(true, S::UnsignedLong),
+        Signature {
+            result:     T::Scalar(S::UnsignedLong),
+            parameters: &[
+                T::Scalar(S::UnsignedLong),
+                T::Scalar(S::UnsignedLong),
+                T::Scalar(S::UnsignedLong),
+                T::Pointer(S::UnsignedLong, false),
+            ],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[
+            A::value(C::Parameter(T::Scalar(S::UnsignedLong))),
+            A::value(C::Parameter(T::Scalar(S::UnsignedLong))),
+            A::value(C::Parameter(T::Scalar(S::UnsignedLong))),
+            A::value(C::Parameter(T::Pointer(S::UnsignedLong, false))),
+        ],
+        4,
+    ),
+    descriptor(
+        Id::Subcll,
+        "__builtin_subcll",
+        B::Carry(true, S::UnsignedLongLong),
+        Signature {
+            result:     T::Scalar(S::UnsignedLongLong),
+            parameters: &[
+                T::Scalar(S::UnsignedLongLong),
+                T::Scalar(S::UnsignedLongLong),
+                T::Scalar(S::UnsignedLongLong),
+                T::Pointer(S::UnsignedLongLong, false),
+            ],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[
+            A::value(C::Parameter(T::Scalar(S::UnsignedLongLong))),
+            A::value(C::Parameter(T::Scalar(S::UnsignedLongLong))),
+            A::value(C::Parameter(T::Scalar(S::UnsignedLongLong))),
+            A::value(C::Parameter(T::Pointer(S::UnsignedLongLong, false))),
+        ],
+        4,
+    ),
+    descriptor(
+        Id::Creal,
+        "__builtin_creal",
+        B::ComplexPart(ComplexPart::Real),
+        Signature {
+            result:     T::Scalar(S::Double),
+            parameters: &[T::Scalar(S::ComplexDouble)],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[A::value(C::Parameter(T::Scalar(S::ComplexDouble)))],
+        1,
+    ),
+    descriptor(
+        Id::Crealf,
+        "__builtin_crealf",
+        B::ComplexPart(ComplexPart::Real),
+        Signature {
+            result:     T::Scalar(S::Float),
+            parameters: &[T::Scalar(S::ComplexFloat)],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[A::value(C::Parameter(T::Scalar(S::ComplexFloat)))],
+        1,
+    ),
+    descriptor(
+        Id::Creall,
+        "__builtin_creall",
+        B::ComplexPart(ComplexPart::Real),
+        Signature {
+            result:     T::Scalar(S::LongDouble),
+            parameters: &[T::Scalar(S::ComplexLongDouble)],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[A::value(C::Parameter(T::Scalar(S::ComplexLongDouble)))],
+        1,
+    ),
+    descriptor(
+        Id::Cimag,
+        "__builtin_cimag",
+        B::ComplexPart(ComplexPart::Imaginary),
+        Signature {
+            result:     T::Scalar(S::Double),
+            parameters: &[T::Scalar(S::ComplexDouble)],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[A::value(C::Parameter(T::Scalar(S::ComplexDouble)))],
+        1,
+    ),
+    descriptor(
+        Id::Cimagf,
+        "__builtin_cimagf",
+        B::ComplexPart(ComplexPart::Imaginary),
+        Signature {
+            result:     T::Scalar(S::Float),
+            parameters: &[T::Scalar(S::ComplexFloat)],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[A::value(C::Parameter(T::Scalar(S::ComplexFloat)))],
+        1,
+    ),
+    descriptor(
+        Id::Cimagl,
+        "__builtin_cimagl",
+        B::ComplexPart(ComplexPart::Imaginary),
+        Signature {
+            result:     T::Scalar(S::LongDouble),
+            parameters: &[T::Scalar(S::ComplexLongDouble)],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[A::value(C::Parameter(T::Scalar(S::ComplexLongDouble)))],
+        1,
+    ),
+    descriptor(
+        Id::Conj,
+        "__builtin_conj",
+        B::ComplexPart(ComplexPart::Conjugate),
+        Signature {
+            result:     T::Scalar(S::ComplexDouble),
+            parameters: &[T::Scalar(S::ComplexDouble)],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[A::value(C::Parameter(T::Scalar(S::ComplexDouble)))],
+        1,
+    ),
+    descriptor(
+        Id::Conjf,
+        "__builtin_conjf",
+        B::ComplexPart(ComplexPart::Conjugate),
+        Signature {
+            result:     T::Scalar(S::ComplexFloat),
+            parameters: &[T::Scalar(S::ComplexFloat)],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[A::value(C::Parameter(T::Scalar(S::ComplexFloat)))],
+        1,
+    ),
+    descriptor(
+        Id::Conjl,
+        "__builtin_conjl",
+        B::ComplexPart(ComplexPart::Conjugate),
+        Signature {
+            result:     T::Scalar(S::ComplexLongDouble),
+            parameters: &[T::Scalar(S::ComplexLongDouble)],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[A::value(C::Parameter(T::Scalar(S::ComplexLongDouble)))],
+        1,
+    ),
+    descriptor(
+        Id::AllocaWithAlign,
+        "__builtin_alloca_with_align",
+        B::AllocaAligned,
+        Signature {
+            result:     T::Pointer(S::Void, false),
+            parameters: &[T::Size, T::Size],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[
+            A::value(C::Parameter(T::Size)),
+            A::constrained(C::Parameter(T::Size), K::ConvertedPowerOfTwo, D::Alignment),
+        ],
+        2,
+    ),
+    gcc_only(descriptor(
+        Id::AllocaWithAlignAndMax,
+        "__builtin_alloca_with_align_and_max",
+        B::AllocaAligned,
+        Signature {
+            result:     T::Pointer(S::Void, false),
+            parameters: &[T::Size, T::Size, T::Size],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[
+            A::value(C::Parameter(T::Size)),
+            A::constrained(C::Parameter(T::Size), K::ConvertedPowerOfTwo, D::Alignment),
+            A::value(C::Parameter(T::Size)),
+        ],
+        3,
+    )),
+    gcc_only(descriptor(
+        Id::AssocBarrier,
+        "__builtin_assoc_barrier",
+        B::AssocBarrier,
+        Signature {
+            result:     T::Opaque,
+            parameters: &[],
+            prototype:  false,
+            variadic:   false,
+        },
+        &[A::value(C::Value)],
+        1,
+    )),
+    descriptor(
+        Id::ClearCache,
+        "__builtin___clear_cache",
+        B::ClearCache,
+        Signature {
+            result:     T::Scalar(S::Void),
+            parameters: &[T::Pointer(S::Char, false), T::Pointer(S::Char, false)],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[
+            A::value(C::Parameter(T::Pointer(S::Char, false))),
+            A::value(C::Parameter(T::Pointer(S::Char, false))),
+        ],
+        2,
+    ),
     descriptor(
         Id::AddOverflow,
         "__builtin_add_overflow",
@@ -129,6 +447,19 @@ pub(super) const BUILTINS: &[BuiltinDescriptor] = &[
         &[A::value(C::Parameter(T::Unsigned(64)))],
         1,
     ),
+    gcc_only(descriptor(
+        Id::Bswap128,
+        "__builtin_bswap128",
+        B::Bswap(128),
+        Signature {
+            result:     T::Scalar(S::UnsignedInt128),
+            parameters: &[T::Scalar(S::UnsignedInt128)],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[A::value(C::Parameter(T::Scalar(S::UnsignedInt128)))],
+        1,
+    )),
     descriptor(
         Id::Clrsb,
         "__builtin_clrsb",
@@ -264,6 +595,54 @@ pub(super) const BUILTINS: &[BuiltinDescriptor] = &[
             A::value(C::Parameter(T::Scalar(S::Float))),
         ],
         2,
+    ),
+    float_descriptor(
+        Id::Copysignf16,
+        "__builtin_copysignf16",
+        FloatOperation::Copysign,
+        S::Float16,
+        2,
+        crate::configuration::Feature::Float16,
+    ),
+    float_descriptor(
+        Id::Copysignf128,
+        "__builtin_copysignf128",
+        FloatOperation::Copysign,
+        S::Float128,
+        2,
+        crate::configuration::Feature::GnuBuiltins,
+    ),
+    float_descriptor(
+        Id::Copysignq,
+        "__builtin_copysignq",
+        FloatOperation::Copysign,
+        S::Float128,
+        2,
+        crate::configuration::Feature::GccOnlyBuiltins,
+    ),
+    float_descriptor(
+        Id::Fabsf16,
+        "__builtin_fabsf16",
+        FloatOperation::Fabs,
+        S::Float16,
+        1,
+        crate::configuration::Feature::Float16,
+    ),
+    float_descriptor(
+        Id::Fabsf128,
+        "__builtin_fabsf128",
+        FloatOperation::Fabs,
+        S::Float128,
+        1,
+        crate::configuration::Feature::GnuBuiltins,
+    ),
+    float_descriptor(
+        Id::Fabsq,
+        "__builtin_fabsq",
+        FloatOperation::Fabs,
+        S::Float128,
+        1,
+        crate::configuration::Feature::GccOnlyBuiltins,
     ),
     descriptor(
         Id::Copysignl,
@@ -1715,6 +2094,79 @@ pub(super) const BUILTINS: &[BuiltinDescriptor] = &[
     ),
 ];
 
+/// A builtin only GCC has, which Clang 23 rejects as an unknown builtin.
+const fn gcc_only(mut descriptor: BuiltinDescriptor) -> BuiltinDescriptor {
+    descriptor.availability.feature = Some(crate::configuration::Feature::GccOnlyBuiltins);
+    descriptor
+}
+
+/// A sign operation on one floating type, which exists where `feature` is
+/// accepted: `_Float16`'s where the type is, and GCC's `q` spellings of the
+/// `__float128` ones, which Clang lacks.
+/// GNU extension: GCC manual, "Other Builtins" and "Additional Floating
+/// Types". <https://gcc.gnu.org/onlinedocs/gcc/Floating-Types.html>
+const fn float_descriptor(
+    id: Id,
+    spelling: &'static str,
+    operation: FloatOperation,
+    scalar: S,
+    arguments: usize,
+    feature: crate::configuration::Feature,
+) -> BuiltinDescriptor {
+    let (signature, rules) = match (scalar, arguments) {
+        | (S::Float16, 1) => HALF_UNARY,
+        | (S::Float16, _) => HALF_BINARY,
+        | (_, 1) => QUAD_UNARY,
+        | _ => QUAD_BINARY,
+    };
+    let mut descriptor = descriptor(
+        id,
+        spelling,
+        B::Float(operation, Some(scalar)),
+        signature,
+        rules,
+        arguments,
+    );
+    descriptor.availability.feature = Some(feature);
+    descriptor
+}
+
+/// The signatures of the `_Float16` and `__float128` sign operations.
+const HALF_UNARY: (Signature, &[A]) = sign_contract(
+    &[T::Scalar(S::Float16)],
+    &[A::value(C::Parameter(T::Scalar(S::Float16)))],
+);
+const HALF_BINARY: (Signature, &[A]) = sign_contract(
+    &[T::Scalar(S::Float16), T::Scalar(S::Float16)],
+    &[
+        A::value(C::Parameter(T::Scalar(S::Float16))),
+        A::value(C::Parameter(T::Scalar(S::Float16))),
+    ],
+);
+const QUAD_UNARY: (Signature, &[A]) = sign_contract(
+    &[T::Scalar(S::Float128)],
+    &[A::value(C::Parameter(T::Scalar(S::Float128)))],
+);
+const QUAD_BINARY: (Signature, &[A]) = sign_contract(
+    &[T::Scalar(S::Float128), T::Scalar(S::Float128)],
+    &[
+        A::value(C::Parameter(T::Scalar(S::Float128))),
+        A::value(C::Parameter(T::Scalar(S::Float128))),
+    ],
+);
+
+const fn sign_contract(parameters: &'static [T], rules: &'static [A]) -> (Signature, &'static [A]) {
+    (
+        Signature {
+            result: parameters[0],
+            parameters,
+            prototype: true,
+            variadic: false,
+        },
+        rules,
+    )
+}
+
 const fn descriptor(
     id: Id,
     spelling: &'static str,
@@ -1748,6 +2200,12 @@ const fn descriptor(
             Some(crate::configuration::Feature::GnuBuiltins),
             SyntaxForm::OrdinaryCall,
         ),
+        | B::Carry(..) => (
+            TypeRule::Fixed,
+            BuiltinEffectClass::Write,
+            Some(crate::configuration::Feature::GnuBuiltins),
+            SyntaxForm::OrdinaryCall,
+        ),
         | B::Overflow(_, _, predicate) => (
             TypeRule::Overflow,
             if predicate {
@@ -1764,7 +2222,7 @@ const fn descriptor(
             Some(crate::configuration::Feature::GnuBuiltins),
             SyntaxForm::OrdinaryCall,
         ),
-        | B::Alloca => (
+        | B::Alloca | B::AllocaAligned => (
             TypeRule::Fixed,
             BuiltinEffectClass::Allocate,
             Some(crate::configuration::Feature::GnuBuiltins),
@@ -1776,7 +2234,7 @@ const fn descriptor(
             Some(crate::configuration::Feature::GnuBuiltins),
             SyntaxForm::OrdinaryCall,
         ),
-        | B::ReadTimestamp | B::DebugTrap => (
+        | B::ReadTimestamp | B::DebugTrap | B::ClearCache => (
             TypeRule::Fixed,
             BuiltinEffectClass::Write,
             None,
@@ -1821,4 +2279,30 @@ const fn descriptor(
             },
         },
     }
+}
+
+/// GCC builtins this compiler knows exist but does not implement: lowering
+/// refuses a call by name rather than as a type it could not analyze.
+/// `__builtin_apply`, `__builtin_apply_args` and `__builtin_return` forward
+/// a call's argument registers; `__builtin_call_with_static_chain` (which
+/// Clang has) calls through a nested function's chain; and
+/// `__builtin_clear_padding` needs every padding bit of a type.
+/// GNU extension: GCC manual, "Constructing Calls" and "Other Builtins".
+/// <https://gcc.gnu.org/onlinedocs/gcc/Constructing-Calls.html>
+pub(crate) fn unimplemented(name: &str) -> Option<&'static str> {
+    [
+        "__builtin_apply",
+        "__builtin_apply_args",
+        "__builtin_call_with_static_chain",
+        "__builtin_clear_padding",
+        "__builtin_powi",
+        "__builtin_powif",
+        "__builtin_powil",
+        "__builtin_return",
+        "__builtin_speculation_safe_value",
+        "__builtin_stack_restore",
+        "__builtin_stack_save",
+    ]
+    .into_iter()
+    .find(|&known| known == name)
 }

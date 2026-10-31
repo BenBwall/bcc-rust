@@ -72,6 +72,7 @@ use crate::{
         InlineCopies,
         MiddleEndError,
         analyze_translation_unit,
+        lower_translation_unit_with_lines,
         lower_translation_unit_with_locals,
         parse_translation_unit,
     },
@@ -285,10 +286,13 @@ impl<'tu> Stages<'_, '_, 'tu> {
             self.llvm = self.llvm_ir(&unit, &sema, &arena, optimizer, options.optimize);
             return;
         }
-        let Some(ir) = self.print_module(&unit, &sema, &arena, optimizer, Profile::PreAbi) else {
+        let Some((ir, mut ir_lines)) =
+            self.print_module(&unit, &sema, &arena, optimizer, Profile::PreAbi)
+        else {
             return;
         };
-        let Some(ir_abi) = self.print_module(&unit, &sema, &arena, optimizer, Profile::PostAbi)
+        let Some((ir_abi, mut ir_abi_lines)) =
+            self.print_module(&unit, &sema, &arena, optimizer, Profile::PostAbi)
         else {
             self.output.ir = Some(ir);
             return;
@@ -328,12 +332,25 @@ impl<'tu> Stages<'_, '_, 'tu> {
                     .map(|mapping| mapping.source);
             }
         }
+        let mappings = &self.output.line_map;
+        line_map::only_within(
+            &mut ir_lines,
+            mappings.iter().filter_map(|mapping| mapping.ir),
+        );
+        line_map::only_within(
+            &mut ir_abi_lines,
+            mappings.iter().filter_map(|mapping| mapping.ir_abi),
+        );
         self.output.ir = Some(ir);
         self.output.ir_abi = Some(ir_abi);
+        self.output.ir_lines = ir_lines;
+        self.output.ir_abi_lines = ir_abi_lines;
         self.output.asm = asm;
     }
 
-    /// `--emit=ir` or `--emit=ir-abi` with `--backend=native`.
+    /// `--emit=ir` or `--emit=ir-abi` with `--backend=native`, with the
+    /// source line of each line of it (`line_map::ir_lines`). Recording the
+    /// lines changes no instruction, so the text is the command line's.
     fn print_module(
         &mut self,
         unit: &ParsedTranslationUnit<'tu>,
@@ -341,21 +358,24 @@ impl<'tu> Stages<'_, '_, 'tu> {
         arena: &Bump,
         optimizer: Option<&OptimizerOptions<'_>>,
         profile: Profile,
-    ) -> Option<String> {
+    ) -> Option<(String, Vec<u32>)> {
         self.stage.set("middle-end");
         let context = &*self.context;
         let printed = crate::pipeline::with_optional_retention(true, |retain_locals| {
-            let diagnosed = lower(
+            let diagnosed = lower_translation_unit_with_lines(
                 context,
                 unit,
                 sema,
                 arena,
                 optimizer,
                 profile,
-                retain_locals,
-            )?;
+                (InlineCopies::Resolve, retain_locals),
+            )
+            .map_err(Failure::MiddleEnd)?;
             verify(&diagnosed.module)?;
-            Ok(diagnosed.module.to_string())
+            let text = diagnosed.module.to_string();
+            let lines = line_map::ir_lines(&diagnosed.module, &text);
+            Ok((text, lines))
         });
         self.accept(printed)
     }

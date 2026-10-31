@@ -219,7 +219,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             } else if nan {
                 // GCC's `__builtin_nans` family: a signaling NaN of the
                 // result's format whose payload the tag names.
-                let payload = super::builtins::nan_payload(tag.unwrap_or("").as_bytes());
+                let payload = super::builtins::half_payload(
+                    scalar,
+                    super::builtins::nan_payload(tag.unwrap_or("").as_bytes()),
+                );
                 let precision = self.floating_precision(scalar).unwrap_or(3);
                 result.set_floating(Some(Floating::real(LongDouble::signaling_nan(
                     payload, precision,
