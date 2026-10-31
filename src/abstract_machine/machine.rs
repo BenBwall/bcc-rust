@@ -9,6 +9,7 @@
 use std::mem::size_of;
 
 use super::{
+    clauses,
     model::{
         Diagnostic,
         Evaluation,
@@ -22,6 +23,7 @@ use super::{
         Program,
         State,
         Type,
+        Undefined,
         Value,
     },
     narration::{
@@ -175,6 +177,17 @@ impl Machine {
             | Op::Index => {
                 let index = self.pop_value()?;
                 let base = self.pop_value()?;
+                if matches!(base, Value::Pointer { target: None, .. }) {
+                    // C99 §6.5.2.1p2: p[i] is *(p + i), whose addition
+                    // already has no meaning for a null pointer.
+                    return Err(Diagnostic::ub(
+                        self.state.source_range,
+                        "subscripting a null pointer: p[i] means *(p + i), and a null pointer \
+                         points into no array",
+                        &clauses::SUBSCRIPT,
+                        Undefined::NullSubscript,
+                    ));
+                }
                 let pointer = self.binary_value("+", base.clone(), index.clone())?;
                 let (target, offset) = self.dereference(&pointer)?;
                 self.push(Operand::Address { target, offset })?;
@@ -233,7 +246,9 @@ impl Machine {
             | &Op::Increment { delta, prefix } => {
                 let (target, offset) = self.pop_address()?;
                 let current = self.read(target, offset)?;
-                let sum = self.binary_value("+", current.clone(), Value::Integer(delta))?;
+                // `--` subtracts 1, so an overflow reads as a subtraction.
+                let operator = if delta > 0 { "+" } else { "-" };
+                let sum = self.binary_value(operator, current.clone(), Value::Integer(1))?;
                 let stored = self.store(target, offset, sum.clone())?;
                 self.increment(
                     range, source, delta, prefix, target, offset, current, &sum, stored,

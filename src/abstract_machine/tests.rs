@@ -819,6 +819,7 @@ fn an_omitted_for_condition_is_a_nonzero_constant() {
         "{}",
         branch.summary
     );
+    assert_eq!(branch.title, "No condition: run the loop body");
     assert_eq!(branch.clauses[0].id, "6.8.5.3p2");
     assert!(!branch.sequence_point);
 }
@@ -842,6 +843,19 @@ fn undefined_behavior_is_titled_by_its_cause() {
         title("int main(void) { int a[2] = {1, 2}; int *p = a + 3; return *p; }"),
         "Undefined behavior: pointer outside its array"
     );
+    // p[0] is *(p + 0): the subscript is pointer arithmetic first.
+    let session = run("int main(void) { int *p = 0; return p[0]; }");
+    let event = &session.state().event;
+    assert_eq!(
+        event.title,
+        "Undefined behavior: subscript of a null pointer"
+    );
+    let cited = event
+        .clauses
+        .iter()
+        .map(|clause| clause.id)
+        .collect::<Vec<_>>();
+    assert_eq!(cited, ["6.5.2.1p2", "6.5.6p8"]);
     // Nothing is accessed: the arithmetic itself has no meaning.
     assert_eq!(
         title("int main(void) { int *p = 0; p = p + 1; return 0; }"),
@@ -856,6 +870,29 @@ fn undefined_behavior_is_titled_by_its_cause() {
         assert_eq!(event.title, "Undefined behavior: the quotient does not fit");
         assert!(event.clauses.iter().any(|clause| clause.id == "6.5.5p6"));
     }
+}
+
+#[test]
+fn a_decrement_is_narrated_as_a_subtraction() {
+    let states = states("int main(void) { char b = -128; b--; return b; }");
+    let decrement = &states
+        .iter()
+        .find(|state| state.event.kind == EventKind::Increment)
+        .expect("the decrement")
+        .event;
+    assert!(
+        decrement
+            .explanation
+            .contains("The subtraction happens in int"),
+        "{}",
+        decrement.explanation
+    );
+    let overflow = run("int main(void) { int m = -2147483647 - 1; m--; return m; }");
+    let message = &overflow.state().diagnostics[0].message;
+    assert!(
+        message.starts_with("-2147483648 - 1 = -2147483649"),
+        "{message}"
+    );
 }
 
 #[test]

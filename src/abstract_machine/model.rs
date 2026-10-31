@@ -355,12 +355,12 @@ pub enum Undefined {
     NullIndirection,
     /// Pointer arithmetic on a null pointer, which points into no array.
     NullArithmetic,
+    /// `p[i]` on a null pointer: `*(p + i)`'s addition has no meaning.
+    NullSubscript,
     /// An access to an object whose lifetime has ended (C99 §6.2.4p2).
     AfterLifetime,
     /// An access one past the end of an array (C99 §6.5.6p8).
     OnePastEnd,
-    /// An access further outside an object.
-    OutsideObject,
     /// Pointer arithmetic that leaves the array and its one-past position.
     PointerOutside,
 }

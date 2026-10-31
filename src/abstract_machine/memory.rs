@@ -210,10 +210,11 @@ impl Machine {
             .filter(|&offset| offset < length);
         index.ok_or_else(|| {
             let name = &object.name;
+            // Pointer arithmetic stops anything further out first.
             let cause = if usize::try_from(offset) == Ok(length) {
                 Undefined::OnePastEnd
             } else {
-                Undefined::OutsideObject
+                Undefined::PointerOutside
             };
             let message = match self.metadata[object.id - 1].ty {
                 | Type::Array(_) if usize::try_from(offset) == Ok(length) => format!(

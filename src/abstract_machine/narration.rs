@@ -267,8 +267,10 @@ pub(super) fn fault(diagnostic: &Diagnostic) -> Event {
     if diagnostic.kind == "indeterminate" && !dangling {
         event.clauses.push(clauses::TRAP_REPRESENTATION);
     }
-    if diagnostic.undefined == Some(Undefined::QuotientOverflow) {
-        event.clauses.push(clauses::QUOTIENT);
+    match diagnostic.undefined {
+        | Some(Undefined::QuotientOverflow) => event.clauses.push(clauses::QUOTIENT),
+        | Some(Undefined::NullSubscript) => event.clauses.push(clauses::POINTER_ARITHMETIC),
+        | _ => {},
     }
     match topic {
         | Some(topic) => noted(event, topic),
@@ -299,6 +301,11 @@ fn undefined(diagnostic: &Diagnostic) -> (&'static str, &'static str) {
             "Undefined behavior: null pointer dereference",
             "A null pointer points to no object, so there is nothing for `*` to designate.",
         ),
+        | Some(Undefined::NullSubscript) => (
+            "Undefined behavior: subscript of a null pointer",
+            "`p[i]` means `*(p + i)`, and a null pointer points into no array, so even the \
+             addition has no meaning.",
+        ),
         | Some(Undefined::NullArithmetic) => (
             "Undefined behavior: arithmetic on a null pointer",
             "Pointer arithmetic moves within an array, and a null pointer points into none, so C \
@@ -313,10 +320,6 @@ fn undefined(diagnostic: &Diagnostic) -> (&'static str, &'static str) {
             "Undefined behavior: access one past the end",
             "C lets a pointer stop just past the last element, so a loop can end there, but \
              reading or writing there has no meaning.",
-        ),
-        | Some(Undefined::OutsideObject) => (
-            "Undefined behavior: access outside the array",
-            "This access lands outside the object, where C says nothing about what happens.",
         ),
         | Some(Undefined::PointerOutside) => (
             "Undefined behavior: pointer outside its array",
@@ -1160,15 +1163,18 @@ impl Machine {
             "`{form}` reads {location} ({old}), {verb} it, and stores the result back: {location} \
              is now {new}."
         );
+        let arithmetic = if delta > 0 { "addition" } else { "subtraction" };
         if *sum != stored {
-            text.push_str(
-                " The addition happens in int; the int result did not fit in a char, so the \
-                 implementation-defined conversion kept its low 8 bits.",
+            let _ = write!(
+                text,
+                " The {arithmetic} happens in int; the int result did not fit in a char, so the \
+                 implementation-defined conversion kept its low 8 bits."
             );
         } else if self.object_type(target) == Some(Type::Char) {
-            text.push_str(
-                " The char is promoted to int for the addition, and the int result, which fits, \
-                 is converted back to char when it is stored.",
+            let _ = write!(
+                text,
+                " The char is promoted to int for the {arithmetic}, and the int result, which \
+                 fits, is converted back to char when it is stored."
             );
         }
         text.push_str(" The full expression ends here, a sequence point.");
@@ -1302,7 +1308,15 @@ impl Machine {
         };
         let mut event = noted(
             explained(
-                Event::new(EventKind::Branch, range, format!("Condition is {title}")),
+                Event::new(
+                    EventKind::Branch,
+                    range,
+                    if omitted {
+                        String::from("No condition: run the loop body")
+                    } else {
+                        format!("Condition is {title}")
+                    },
+                ),
                 &summary,
                 &text,
                 cited,
