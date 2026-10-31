@@ -102,11 +102,15 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         static_object: bool,
         declaration_site: Option<SourceVectors>,
     ) -> (TypeId, Option<FlexibleArray>) {
-        if initializer.recovered || self.types.unanalyzed(ty) {
+        // §6.7.8p3 excludes variable length array types, not pointers to them
+        // or arrays of such pointers. GCC's record with a variably modified
+        // member is variable-sized too ("variable-sized object may not be
+        // initialized"), though analysis does not model it otherwise.
+        let variable_size = self.variable_size(ty);
+        if initializer.recovered || (self.types.unanalyzed(ty) && !variable_size) {
             return (ty, None);
         }
-        // §6.7.8p3 excludes variable length array types, not pointers to them.
-        if (matches!(self.types.nodes[ty.index], TypeKind::Array(..)) && self.variably_modified(ty))
+        if variable_size
             || (!self.complete_object(ty)
                 && !matches!(
                     self.types.nodes[ty.index],
@@ -140,6 +144,21 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         );
         self.initializer_buffers = Some(buffers);
         checked
+    }
+
+    /// Whether an object of type `ty` has a size known only at run time: a
+    /// variable length array, an array of them, or GCC's record with a
+    /// variably modified member.
+    /// C99: §6.7.5.2 paragraph 4, p. 116; PDF p. 128.
+    pub(super) fn variable_size(&self, mut ty: TypeId) -> bool {
+        loop {
+            match self.types.nodes[ty.index] {
+                | TypeKind::Array(_, ArrayBound::Variable(_) | ArrayBound::Star) => return true,
+                | TypeKind::Array(element, _) => ty = element,
+                | TypeKind::Tag(_) => return self.variably_modified(ty),
+                | _ => return false,
+            }
+        }
     }
 
     /// [`Self::check_initializer`] once the object's type admits an

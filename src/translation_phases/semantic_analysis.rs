@@ -1428,6 +1428,8 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                         self.types.tags[tag]
                             .unmodeled
                             .set(Some(UnmodeledType::VariableMembers));
+                        let record = self.types.intern(TypeKind::Tag(tag));
+                        self.types.mark_variably_modified(record);
                     } else {
                         invalid = true;
                         self.error(
