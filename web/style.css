@@ -501,7 +501,7 @@
   .narration-kind { margin-top: 6px; color: var(--muted); font-size: 13px; }
   @media (max-width: 600px) {
     .clause-glosses { grid-template-columns: 1fr; gap: 0; }
-    .clause-glosses dd { margin-bottom: 8px; }
+    .clause-glosses dd { margin: 0 0 8px; }
   }
   .narration-terms { margin-top: 10px; color: var(--muted); font-size: 13px; }
   .narration-terms-label { font-weight: 600; }
