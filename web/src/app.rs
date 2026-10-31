@@ -1469,10 +1469,22 @@ fn Hero(state: State) -> impl IntoView {
                      effect happens. Step through real programs one evaluation at a time, then watch bcc, a C \
                      compiler written in Rust, translate the same code into IR, assembly and machine code."
                 </p>
+                // Each step is a link to where it happens; the second, which
+                // starts the first lesson, is where a first visit begins.
                 <ol class="hero-steps" aria-label="How to use this page">
-                    <li><span class="hero-step-number">"1"</span>"Pick a lesson"</li>
-                    <li><span class="hero-step-number">"2"</span>"Step through it with "<kbd>"→"</kbd></li>
-                    <li><span class="hero-step-number">"3"</span>"Open the compiler pipeline"</li>
+                    <li>
+                        <a href="#lessons"><span class="hero-step-number">"1"</span>"Pick a lesson"</a>
+                    </li>
+                    <li>
+                        <a class="is-primary" href="#workbench" on:click=move |_| state.open_view(Mode::Machine, None)>
+                            <span class="hero-step-number">"2"</span>"Step through it with "<kbd>"→"</kbd>
+                        </a>
+                    </li>
+                    <li>
+                        <a href="#workbench" on:click=move |_| state.open_view(Mode::Pipeline, None)>
+                            <span class="hero-step-number">"3"</span>"Open the compiler pipeline"
+                        </a>
+                    </li>
                 </ol>
             </div>
             <ReadingMap state />

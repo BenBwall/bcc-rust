@@ -231,11 +231,18 @@
   .lede { margin-top: 18px; max-width: 70ch; color: var(--text-2); font-size: 17.5px; line-height: 1.65; text-wrap: pretty; }
   .lede em { color: var(--text); font-style: normal; font-weight: 600; }
   .hero-steps { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 26px; }
-  .hero-steps li {
+  .hero-steps a {
     display: flex; align-items: center; gap: 9px; padding: 7px 14px 7px 7px;
     border: 1px solid var(--border); border-radius: 999px; background: var(--surface);
-    color: var(--text-2); font-size: 14px;
+    color: var(--text-2); font-size: 14px; text-decoration: none;
+    transition: border-color .2s var(--ease), background .2s var(--ease);
   }
+  .hero-steps a:hover { border-color: var(--accent); color: var(--text); }
+  /* The step a first visit starts with. */
+  .hero-steps a.is-primary { border-color: var(--accent); background: var(--accent); color: var(--accent-ink); font-weight: 650; box-shadow: 0 6px 18px -8px color-mix(in srgb, var(--accent) 80%, transparent); }
+  .hero-steps a.is-primary:hover { background: var(--accent-strong); border-color: var(--accent-strong); }
+  .hero-steps a.is-primary .hero-step-number { background: color-mix(in srgb, var(--accent-ink) 16%, transparent); color: var(--accent-ink); }
+  .hero-steps a.is-primary kbd { border-color: color-mix(in srgb, var(--accent-ink) 40%, transparent); color: var(--accent-ink); background: transparent; }
   .hero-step-number { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; background: var(--accent-soft); color: var(--accent); font-weight: 650; font-size: 12.5px; }
 
   /* Section headings */
@@ -962,6 +969,22 @@
     .stage-group-label[data-phase="Back end"] { grid-row: 3; }
     .stage-row:last-child .stage-item:nth-of-type(n + 4) { grid-row: 4; }
     .stage-item::after, .stage-row:first-child .stage-item:last-child::after { display: none; }
+    /* Compact cards: the number beside the name, not above it. */
+    .stage-strip { gap: 8px; }
+    .stage-row { row-gap: 6px; }
+    .stage-button { flex-direction: row; align-items: center; gap: 8px; padding: 6px 8px 7px; border-top-width: 2px; }
+    .stage-index { flex: none; }
+    .stage-name { font-size: 12.5px; }
+    .stage-phase { font-size: 10px; }
+  }
+  /* A phone's column: two cards a row, so every name fits. */
+  @container insight (max-width: 430px) {
+    .stage-row, .stage-row:first-child { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .stage-group-label[data-phase="Middle end"], .stage-group-label[data-phase="Back end"] { grid-column: 1 / -1; }
+    .stage-row:last-child .stage-item:nth-of-type(-n + 2) { grid-row: 2; }
+    .stage-row:last-child .stage-item:nth-of-type(3) { grid-row: 3; }
+    .stage-group-label[data-phase="Back end"] { grid-row: 4; }
+    .stage-row:last-child .stage-item:nth-of-type(n + 4) { grid-row: 5; }
   }
   /* The WebAssembly state cards pair up only where the column has room. */
   @container insight (max-width: 600px) {
@@ -1187,7 +1210,13 @@
   .map-source code { color: var(--text); font: 500 14px var(--font-mono); }
   /* One program, two roads: a fork from the source to each lane. */
   .map-lanes { position: relative; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 26px; }
-  .map-lanes::before { content: ""; position: absolute; top: -14px; left: 25%; right: 25%; height: 14px; border: 1.5px solid var(--line); border-bottom: 0; border-radius: 10px 10px 0 0; }
+  /* Each leg takes its lane's colour, so the fork reads as one line
+     splitting in two rather than an empty box. */
+  .map-lanes::before {
+    content: ""; position: absolute; top: -14px; left: 25%; right: 25%; height: 14px;
+    border: 1.5px solid var(--line); border-bottom: 0; border-radius: 10px 10px 0 0;
+    border-left-color: var(--cat-memory); border-right-color: var(--cat-convert);
+  }
   .map-lanes::after { content: ""; position: absolute; top: -26px; left: 50%; height: 12px; border-left: 1.5px solid var(--line); }
   .map-lane {
     --lane: var(--cat-memory);
