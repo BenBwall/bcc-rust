@@ -730,7 +730,7 @@ mod tests {
         let output = project.bcc(&["-E", "p.c", "-o", "p.i"]);
         succeeds(&output);
         let text = std::fs::read_to_string(project.path("p.i")).unwrap();
-        assert!(text.contains("#pragma pack ( push , 1 )\n"), "{text}");
+        assert!(text.contains("#pragma pack(push, 1)\n"), "{text}");
         assert!(text.contains("#pragma weak w\n"), "{text}");
         succeeds(&project.bcc(&["-c", "p.i", "-o", "p.o"]));
     }
