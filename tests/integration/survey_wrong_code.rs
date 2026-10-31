@@ -62,6 +62,21 @@ mod tests {
         prints_on_every_back_end("--compiler-identity=gcc", utf8, &["-std=gnu23"], "");
     }
 
+    /// A `#line` name keeps its bytes, so `__FILE__` spells them, as in GCC
+    /// and Clang.
+    #[test]
+    fn line_names_keep_malformed_utf8_bytes() {
+        let source = b"#include <stdio.h>\n#line 7 \"f\xff.c\"\n\
+            int main(void) {\n\
+            for (const char *p = __FILE__; *p; p++) printf(\"%02x \", (unsigned char)*p);\n\
+            printf(\"%d\\n\", __LINE__);\n\
+            return 0;\n\
+            }\n";
+        for identity in IDENTITIES {
+            prints_on_every_back_end(identity, source, &["-w"], "66 ff 2e 63 9\n");
+        }
+    }
+
     /// Clang warns once per unprefixed literal and rejects prefixed ones;
     /// GCC is silent but cannot convert them to the wide encodings.
     #[test]
