@@ -78,6 +78,37 @@ mod tests {
         }
     }
 
+    /// A quoted header name holding bytes of malformed UTF-8 opens the file
+    /// whose name holds those bytes, and `__FILE__` keeps them.
+    #[cfg(unix)]
+    #[test]
+    fn include_names_keep_malformed_utf8_bytes() {
+        use std::os::unix::ffi::OsStrExt as _;
+        let name = [
+            format!("bcc-survey-{}-h", std::process::id()).as_bytes(),
+            b"\xff.h",
+        ]
+        .concat();
+        let header = std::env::temp_dir().join(std::ffi::OsStr::from_bytes(&name));
+        std::fs::write(&header, b"static const char *header_file = __FILE__;\n").unwrap();
+        let source = [
+            &b"#include <stdio.h>\n#include <string.h>\n#include \""[..],
+            &name,
+            b"\"\n\
+            int main(void) {\n\
+            for (const char *p = strrchr(header_file, '/') + 1; *p; p++)\n\
+            printf(\"%02x \", (unsigned char)*p);\n\
+            return 0;\n\
+            }\n",
+        ]
+        .concat();
+        let expected: String = name.iter().map(|byte| format!("{byte:02x} ")).collect();
+        for identity in IDENTITIES {
+            prints_on_every_back_end(identity, &source, &["-w"], &expected);
+        }
+        std::fs::remove_file(header).unwrap();
+    }
+
     /// Clang warns once per unprefixed literal and rejects prefixed ones;
     /// GCC is silent but cannot convert them to the wide encodings.
     #[test]
