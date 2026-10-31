@@ -55,3 +55,17 @@ fn category_label(category: &str) -> &'static str {
         | _ => "Step",
     }
 }
+
+/// What a kind of step does, for the badge's tooltip.
+fn category_hint(category: &str) -> &'static str {
+    match category {
+        | "evaluate" => "Evaluate: an operator or constant produces a value",
+        | "convert" => "Convert: a value is read from an object or changes type or form",
+        | "memory" => "Memory: an object is designated, stored into or updated",
+        | "lifetime" => "Lifetime: a block begins or ends, or an object is created",
+        | "control" => "Control flow: a condition or jump picks what runs next",
+        | "call" => "Call: a function call begins or returns",
+        | "fault" => "Stopped: the run cannot go on, for undefined behavior or a limit of this machine",
+        | _ => "One evaluation of the abstract machine",
+    }
+}

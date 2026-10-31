@@ -4,7 +4,9 @@ An interactive introduction to how C programs run and how compilers translate
 them. Visitors pick a lesson (a small C program) and see it three ways:
 
 - **Abstract machine.** Step through the program one evaluation at a time.
-  Each step is explained in plain language from what the engine actually did
+  Each step leads with one plain sentence on what happened and why C says
+  so; the full explanation waits behind a disclosure. Both come from what
+  the engine actually did
   (which subexpression it evaluated, which values it read, converted or
   stored, which objects began or ended their lifetime) and cites the C99
   paragraph that requires it, linked to its page of the standard (N1256).
@@ -26,7 +28,9 @@ them. Visitors pick a lesson (a small C program) and see it three ways:
   types (every declaration's scope, type, linkage, storage duration and size,
   and every expression's type), bcc IR before and after ABI lowering, LLVM
   IR, native x86-64 assembly, and machine code with its encoded bytes, each
-  with a short explanation and, for the front end, the C99 rules it applies. The real compiler runs in the browser and recompiles as you
+  with a short explanation and, for the front end, the C99 rules it applies.
+  Each stage leads with one sentence on what it takes from the stage before
+  and hands to the next, with a button to that next stage. The real compiler runs in the browser and recompiles as you
   type, at `-O0` or `-O2`, with a note on what the optimizer changed. Its
   errors appear as squiggles in the source and in a diagnostics list, and the
   view says which stage stopped and why. Hovering a source line highlights
@@ -174,9 +178,17 @@ first read-only listing, whose folding arrows use it.
   Monaco's own toggle (`Ctrl+M`) cannot undo the option, and Firefox takes
   `Ctrl+M` to mute the tab.
 - The narration card names the rule each step applied, colour coded by kind
-  (evaluate, convert, memory, lifetime, control flow, call, stopped), marks
-  sequence points, and lists the cited C99 paragraphs with a gloss. Earlier
-  steps are listed below it and can be revisited.
+  (evaluate, convert, memory, lifetime, control flow, call, stopped), and
+  marks sequence points. It is layered: a one-sentence summary (the engine's
+  `Event::summary`) and the cited C99 paragraphs as links come first; **How C
+  defines this step** opens the full explanation, what each paragraph says,
+  and links to the glossary entries of the step's terms, and stays open from
+  step to step once opened. A name is narrated by what its operator does
+  with the object (read it, store into it, give it its initial value, take
+  its address, update it), binary operators and calls say that the operand
+  order is the machine's choice (C99 §6.5p3), and undefined behavior is
+  titled by its cause. Object names in the text take their memory-diagram
+  colour. Earlier steps are listed below it and can be revisited.
 - In the source, a solid box marks what the last step evaluated and a dashed
   underline what runs next; undefined behavior is marked in red. The compiler
   pipeline view drops these marks and shows the compiler's instead: the

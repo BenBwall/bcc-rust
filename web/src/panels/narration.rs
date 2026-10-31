@@ -11,7 +11,10 @@ use std::collections::HashMap;
 
 use leptos::prelude::*;
 
-use super::category_label;
+use super::{
+    category_hint,
+    category_label,
+};
 use crate::{
     glossary::{
         self,
@@ -92,7 +95,7 @@ pub fn Narration(
         <article class="card narration" data-category=category aria-labelledby="narration-title" node_ref=card>
             <div class="narration-meta">
                 // No step has run before the engine loads, so no kind of step.
-                <span class="category-badge" hidden=move || event.with(Option::is_none)>{move || category_label(&category())}</span>
+                <span class="category-badge" title=move || category_hint(&category()) hidden=move || event.with(Option::is_none)>{move || category_label(&category())}</span>
                 <span class="narration-step">
                     {move || snapshot.with(|state| state.as_ref().map_or_else(String::new, |state| format!("Step {}", state.step)))}
                 </span>
@@ -322,12 +325,18 @@ fn is_open(_event: &leptos::ev::Event) -> Option<bool> {
     None
 }
 
-/// The steps before this one, to jump back to.
+/// The steps before this one, to jump back to, folded under their count so
+/// the expression tree and memory stay near the step.
 #[component]
 fn Recent(recent: Memo<Vec<(usize, String, String)>>, on_jump: Callback<usize>) -> impl IntoView {
     view! {
-        <div class="recent" hidden=move || recent.with(Vec::is_empty)>
-            <h3>"Earlier steps"</h3>
+        <details class="recent" hidden=move || recent.with(Vec::is_empty)>
+            <summary>
+                <h3>"Earlier steps"</h3>
+                <span class="recent-latest">
+                    {move || recent.with(|recent| recent.first().map(|(index, title, _)| format!("{index} · {}", title.replace('`', ""))))}
+                </span>
+            </summary>
             <ol>
                 {move || recent.get().into_iter().map(|(index, title, category)| view! {
                     <li>
@@ -339,7 +348,7 @@ fn Recent(recent: Memo<Vec<(usize, String, String)>>, on_jump: Callback<usize>) 
                     </li>
                 }).collect_view()}
             </ol>
-        </div>
+        </details>
     }
 }
 
