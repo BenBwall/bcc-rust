@@ -96,6 +96,11 @@ impl CompilerConfiguration {
         self
     }
 
+    /// Whether `-Werror` makes warnings errors, as `-w` does not let it.
+    pub(crate) const fn warnings_are_errors(self) -> bool {
+        self.warnings_as_errors && !self.suppress_warnings
+    }
+
     /// Used for existing, ungrouped diagnostics from every translation phase.
     pub(crate) const fn warning_severity(self, severity: ErrorSeverity) -> ErrorSeverity {
         if matches!(severity, ErrorSeverity::Warning)

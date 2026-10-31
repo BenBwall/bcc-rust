@@ -844,6 +844,68 @@ mod tests {
         // `-x assembler` does not preprocess: the assembler reads the
         // directives as comments.
         succeeds(&project.bcc(&["-c", "-x", "assembler", "f.S", "-o", "f4.o"]));
+        // `-E` prints the text that assembly reads, as GCC and Clang do,
+        // with `-P` and `-dM` as for C, to stdout or `-o`.
+        let mut args = vec!["-E", "-P", "f.S"];
+        args.extend(options);
+        let preprocessed = project.bcc(&args);
+        succeeds(&preprocessed);
+        assert_eq!(
+            stdout(&preprocessed).trim(),
+            ".globl f\nf:\n movl $7, %eax\n ret"
+        );
+        let mut args = vec!["-E", "f.S", "-o", "pre.s"];
+        args.extend(options);
+        succeeds(&project.bcc(&args));
+        let text = std::fs::read_to_string(project.path("pre.s")).unwrap();
+        assert!(
+            text.contains("# 1 \"f.S\"") && text.contains("movl $7"),
+            "{text}"
+        );
+        let mut args = vec!["-E", "-dM", "f.S"];
+        args.extend(options);
+        let macros = project.bcc(&args);
+        succeeds(&macros);
+        assert!(
+            stdout(&macros)
+                .lines()
+                .any(|line| line == "#define INCLUDED 7"),
+            "{}",
+            stdout(&macros)
+        );
+        // Its errors fail the run.
+        assert_eq!(project.bcc(&["-E", "f.S"]).status.code(), Some(1));
+        // `.sx` is preprocessed too, though clang would take it for a
+        // linker input.
+        std::fs::write(project.path("g.sx"), assembly).unwrap();
+        let mut args = vec!["-E", "-P", "g.sx"];
+        args.extend(options);
+        let sx = project.bcc(&args);
+        succeeds(&sx);
+        assert!(stdout(&sx).contains("movl $7"), "{}", stdout(&sx));
+        // A dependency job does not print the assembly's text. It writes no
+        // rule for it either, where GCC writes `f.o: f.S inc.h`.
+        let mut args = vec!["-MM", "f.S"];
+        args.extend(options);
+        let rules = project.bcc(&args);
+        succeeds(&rules);
+        assert!(!stdout(&rules).contains("movl"), "{}", stdout(&rules));
+        // Clang's warnings reach stderr, and `-w` and `-Werror` apply.
+        std::fs::write(
+            project.path("w.S"),
+            "#warning careful\n.globl h\nh:\n ret\n",
+        )
+        .unwrap();
+        for stage in ["-E", "-c"] {
+            let warned = project.bcc(&[stage, "w.S", "-o", "w.out"]);
+            succeeds(&warned);
+            assert!(stderr(&warned).contains("careful"), "{}", stderr(&warned));
+            let quiet = project.bcc(&[stage, "-w", "w.S", "-o", "w.out"]);
+            succeeds(&quiet);
+            assert_eq!(stderr(&quiet), "", "{stage}");
+            let failed = project.bcc(&[stage, "-Werror", "w.S", "-o", "w.out"]);
+            assert_eq!(failed.status.code(), Some(1), "{stage}");
+        }
         // Assembler options reach assembly but not C sources, which bcc
         // assembles itself; `--noexecstack` is already true of them.
         let warned = project.bcc(&["-c", "-Wa,--noexecstack,-L", "a.c"]);
