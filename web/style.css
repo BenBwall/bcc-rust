@@ -609,8 +609,19 @@
   .object-access { padding: 0 7px; border-radius: 999px; font: 650 11px var(--font-sans); white-space: nowrap; color: var(--cat); background: color-mix(in srgb, var(--cat) 15%, transparent); }
   .object.is-touched .object-name { text-decoration: underline 2px; text-underline-offset: 4px; }
   .ended-calls { margin-top: 14px; padding-top: 12px; border-top: 1px dashed var(--border); }
-  .ended-calls h3 { margin-bottom: 4px; font-size: 11.5px; }
+  .ended-calls > summary { display: flex; align-items: baseline; gap: 10px; min-width: 0; padding: 2px 4px; border-radius: 6px; cursor: pointer; list-style: none; }
+  .ended-calls > summary::-webkit-details-marker { display: none; }
+  .ended-calls > summary::before {
+    content: ""; flex: none; width: 6px; height: 6px; margin: 0 2px 2px; border-right: 2px solid var(--muted); border-bottom: 2px solid var(--muted);
+    transform: rotate(-45deg); transition: transform .15s var(--ease);
+  }
+  .ended-calls[open] > summary::before { transform: rotate(45deg); }
+  .ended-calls > summary:hover { background: var(--surface-3); }
+  .ended-calls h3 { font-size: 11.5px; white-space: nowrap; }
+  .ended-names { overflow: hidden; color: var(--muted); font: 12.5px var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }
   .ended-calls .frame-objects { padding: 10px 0 0; }
+  /* Under "Ended with their calls" every object's lifetime has ended. */
+  .ended-calls .object-lifetime { display: none; }
   .arrows { position: absolute; left: 0; top: 0; pointer-events: none; overflow: visible; }
   .arrow { stroke: var(--obj); stroke-width: 1.8; fill: none; opacity: .9; }
   .arrowhead { fill: context-stroke; stroke: none; }
@@ -1016,13 +1027,16 @@
     .workbench-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .about-grid { grid-template-columns: minmax(0, 1fr); }
   }
-  /* A wide insight column (a window of 1200 px or more) holds the memory
-     diagram and the expression tree side by side, so both are on screen
-     with the narration. */
+  /* Where the insight column is at least 580 px wide, the memory diagram
+     and the expression tree share a row under the narration, so both card
+     tops are on screen with it. That is windows of about 1200 px and up,
+     beside the source, and windows of 650 to 820 px, where the column takes
+     the whole width; from 821 to 1199 px the column is half the window and
+     they stack. Memory, whose objects wrap, gets three fifths and tighter
+     spacing; a tall call stack still runs below the window. */
   @container insight (min-width: 580px) {
-    /* Even halves, so neither card changes width from step to step; a
-       tree wider than its half scrolls. */
-    .machine-state { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
+    .machine-state { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); align-items: start; }
+    .machine-state .frame .frame-objects { gap: 14px; padding: 10px 12px 24px; }
   }
   @container insight (max-width: 800px) {
     .stage-row { column-gap: 10px; }

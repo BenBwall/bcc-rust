@@ -57,9 +57,11 @@ The page opens with a map of how to read it: one C program, given meaning
 by the abstract machine and translated by the compiler stage by stage, each
 part a link to the view that shows it.
 
-Below the narration come the memory diagram and the expression tree, side by
-side where the column is at least 580 px wide (windows of about 1200 px and
-up), one above the other otherwise.
+Below the narration come the memory diagram and the expression tree. Where
+the insight column is at least 580 px wide they share a row, memory taking
+three fifths: windows of about 1200 px and up (beside the source) and 650 to
+820 px (one column, the full width). Between those, and on phones, memory
+comes first and the tree below it.
 
 Every variable keeps one colour across the source, the expression tree, the
 value flow and the memory diagram. The page has light and dark themes and works down to phone
