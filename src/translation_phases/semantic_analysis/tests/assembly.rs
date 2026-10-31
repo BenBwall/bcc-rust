@@ -443,3 +443,119 @@ fn only_the_att_dialect_alternative_is_checked() {
         );
     }
 }
+
+/// The errors a `register` local's assembler label gets under `identity`.
+fn register_variable_kinds(
+    identity: crate::configuration::CompilerIdentity,
+    label: &str,
+) -> Vec<SemanticErrorKind> {
+    let source =
+        format!("long f(long v) {{ register long x __asm__(\"{label}\") = v; return x; }}");
+    let mut kinds = Vec::new();
+    with_configuration(
+        &source,
+        crate::configuration::CompilerConfiguration::default().with_compiler_identity(identity),
+        |context, _| {
+            kinds.extend(
+                context
+                    .take_pending_errors()
+                    .iter()
+                    .filter_map(|e| match e {
+                        | TranslationError::Semantic(e) => Some(e.kind),
+                        | _ => None,
+                    }),
+            );
+        },
+    );
+    kinds
+}
+
+/// GNU local register variables name a register each compiler knows:
+/// GCC takes `sil`-`bpl` and the extended registers by their 64-bit names,
+/// Clang `r8d`-`r15b` but not `sil`-`bpl`; both take numbers in GCC's x86
+/// table and reject anything else.
+#[test]
+fn register_variable_names_follow_each_compiler() {
+    use crate::configuration::CompilerIdentity::{
+        Clang,
+        Gcc,
+    };
+    for label in [
+        "rdi", "%rdi", "edi", "di", "ah", "r8", "r15", "7", "xmm1", "mm0", "st", "st(1)",
+    ] {
+        for identity in [Gcc, Clang] {
+            assert_eq!(
+                register_variable_kinds(identity, label),
+                [],
+                "{identity:?} {label}"
+            );
+        }
+    }
+    for label in ["sil", "dil", "spl", "bpl"] {
+        assert_eq!(register_variable_kinds(Gcc, label), [], "{label}");
+        assert_eq!(
+            register_variable_kinds(Clang, label),
+            [SemanticErrorKind::UnknownRegisterName],
+            "{label}"
+        );
+    }
+    for label in ["r8d", "r15b", "%r8w"] {
+        assert_eq!(register_variable_kinds(Clang, label), [], "{label}");
+        assert_eq!(
+            register_variable_kinds(Gcc, label),
+            [SemanticErrorKind::InvalidRegisterName],
+            "{label}"
+        );
+    }
+    for label in ["foo", "rip", "%", "r08", "R8", "eflags", "cs", "200"] {
+        assert_eq!(
+            register_variable_kinds(Gcc, label),
+            [SemanticErrorKind::InvalidRegisterName],
+            "{label}"
+        );
+        assert_eq!(
+            register_variable_kinds(Clang, label),
+            [SemanticErrorKind::UnknownRegisterName],
+            "{label}"
+        );
+    }
+    for label in ["r16", "xmm16", "k1"] {
+        assert_eq!(
+            register_variable_kinds(Gcc, label),
+            [SemanticErrorKind::InaccessibleRegister],
+            "{label}"
+        );
+        assert_eq!(register_variable_kinds(Clang, label), [], "{label}");
+    }
+    assert_eq!(
+        register_variable_kinds(Gcc, "flags"),
+        [SemanticErrorKind::RegisterNotGeneral]
+    );
+    // Without `register`, the label of an automatic object is ignored.
+    assert_eq!(
+        kinds("long f(long v) { long x __asm__(\"foo\") = v; return x; }"),
+        []
+    );
+}
+
+/// An operand in a local register variable whose register the statement
+/// also clobbers is rejected, as GCC and Clang reject it.
+#[test]
+fn register_variable_operands_conflict_with_their_clobbers() {
+    assert_eq!(
+        kinds(
+            "long f(long v) { register long x __asm__(\"rbx\") = v; long y; __asm__(\"mov %1, \
+             %0\" : \"=r\"(y) : \"r\"(x) : \"rbx\"); return y; }"
+        ),
+        [SemanticErrorKind::InvalidAsm(
+            AsmFault::RegisterVariableClobbered
+        )]
+    );
+    assert_eq!(
+        kinds(
+            "long f(long v) { register long x __asm__(\"rbx\") = v; long y; __asm__(\"mov %1, \
+             %0\" : \"=r\"(y) : \"r\"(x) : \"rcx\"); return y; }"
+        ),
+        []
+    );
+}

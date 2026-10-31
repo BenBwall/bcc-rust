@@ -385,6 +385,66 @@ fn automatic_asm_labels_are_local_register_variables() {
     }
 }
 
+/// A local register variable whose register an operand cannot take, or
+/// that is no general register, is refused rather than left in another
+/// register: SSE, x87 and MMX registers, `%rsp` outside `r`, and under
+/// Clang's rules the high bytes `ah`-`dh`.
+#[test]
+fn unplaceable_register_variable_operands_are_refused() {
+    use crate::configuration::{
+        CompilerConfiguration,
+        CompilerIdentity,
+    };
+    for (identity, source) in [
+        (
+            CompilerIdentity::Gcc,
+            "double f(double v){register double d __asm__(\"xmm1\")=v; __asm__(\"addsd \
+             %%xmm1,%%xmm1\":\"+x\"(d)); return d;}",
+        ),
+        (
+            CompilerIdentity::Clang,
+            "double f(double v){register double d __asm__(\"xmm1\")=v; __asm__(\"addsd \
+             %%xmm1,%%xmm1\":\"+x\"(d)); return d;}",
+        ),
+        (
+            CompilerIdentity::Gcc,
+            "long f(void){register long x __asm__(\"st\"); __asm__(\"\":\"=r\"(x)); return x;}",
+        ),
+        (
+            CompilerIdentity::Gcc,
+            "long f(void){register long x __asm__(\"mm0\"); __asm__(\"\":\"=r\"(x)); return x;}",
+        ),
+        (
+            CompilerIdentity::Gcc,
+            "unsigned long f(void){register unsigned long sp __asm__(\"rsp\"); \
+             __asm__(\"\":\"=r\"(sp)); return sp;}",
+        ),
+        (
+            CompilerIdentity::Clang,
+            "int f(int v){register unsigned char c __asm__(\"bh\")=v; unsigned y; \
+             __asm__(\"movzbl %b1, %0\":\"=r\"(y):\"q\"(c)); return y;}",
+        ),
+    ] {
+        let errors = lower_with(
+            source,
+            CompilerConfiguration::default().with_compiler_identity(identity),
+        )
+        .expect_err(source);
+        assert!(
+            errors.iter().any(|error| error.contains(
+                "not yet supported by lowering: an asm operand in this local register variable's \
+                 register"
+            )),
+            "{identity:?} {source}: {errors:?}"
+        );
+    }
+    // A general register inside the operand's class is placed there.
+    let ir = lowered(
+        "long f(long v){register long x __asm__(\"rdi\")=v; __asm__(\"\":\"+r\"(x)); return x;}",
+    );
+    assert!(ir.contains("{rdi}"), "{ir}");
+}
+
 /// GCC's `__builtin_setjmp` stores the frame address and the stack position
 /// in words 0 and 2 before `sjlj_setjmp`, as Clang does, and
 /// `__builtin_longjmp` ends its block; the interpreter runs the pair. GNU
