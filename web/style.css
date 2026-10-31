@@ -198,6 +198,7 @@
     border-right: 1px solid var(--border);
   }
   .insight { min-width: 0; padding: 18px; display: flex; flex-direction: column; gap: 16px; container: insight / inline-size; }
+  .machine-state { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
 }
 
 @layer components {
@@ -694,7 +695,7 @@
   .stage-handoff { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px; margin-bottom: 8px; color: var(--text); font-size: 16px; line-height: 1.55; font-weight: 550; max-width: 76ch; }
   .stage-next {
     padding: 3px 10px; border: 1px solid var(--border-strong); border-radius: 999px; background: var(--surface-2);
-    color: var(--accent); font-size: 13px; font-weight: 650; white-space: nowrap; cursor: pointer;
+    max-width: 100%; color: var(--accent); font-size: 13px; font-weight: 650; text-align: left; cursor: pointer;
   }
   .stage-next:hover { border-color: var(--accent); background: var(--accent-soft); }
   .stage-path-note {
@@ -1014,6 +1015,12 @@
   @media (max-width: 1180px) {
     .workbench-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .about-grid { grid-template-columns: minmax(0, 1fr); }
+  }
+  /* A wide insight column (a window of 1200 px or more) holds the memory
+     diagram and the expression tree side by side, so both are on screen
+     with the narration. */
+  @container insight (min-width: 580px) {
+    .machine-state { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); align-items: start; }
   }
   @container insight (max-width: 800px) {
     .stage-row { column-gap: 10px; }

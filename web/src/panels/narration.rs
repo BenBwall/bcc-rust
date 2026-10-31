@@ -103,7 +103,7 @@ pub fn Narration(
                     <span class="sequence-dot" aria-hidden="true"></span>"Sequence point"
                 </span>
             </div>
-            <h2 id="narration-title" class="narration-title">
+            <h2 id="narration-title" class="narration-title" tabindex="-1">
                 {move || event.with(|event| match event {
                     | Some(event) => super::rich_text(&event.title),
                     | None => "Loading the abstract machine…".into_any(),

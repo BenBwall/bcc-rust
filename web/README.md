@@ -57,6 +57,10 @@ The page opens with a map of how to read it: one C program, given meaning
 by the abstract machine and translated by the compiler stage by stage, each
 part a link to the view that shows it.
 
+Below the narration come the memory diagram and the expression tree, side by
+side where the column is at least 580 px wide (windows of about 1200 px and
+up), one above the other otherwise.
+
 Every variable keeps one colour across the source, the expression tree, the
 value flow and the memory diagram. The page has light and dark themes and works down to phone
 width. At almost every size the line that runs and the narration of what it
@@ -305,8 +309,11 @@ The lesson "From source to a running program" (`demos/path.c`) follows one
 small program through the whole pipeline. It opens at the first stage; each
 stage adds a note on what it did to this program at `-O0` (`Demo::path`,
 checked against the compiler's output by a test in `src/explorer.rs`), and
-the last stage's **Next** opens the abstract machine to run it. The page's
-third "how to use" step opens it.
+the last stage's **Next** opens the abstract machine to run it, with the
+focus on the narration's heading; for any other program it starts the path
+again. The page's third "how to use" step opens the pipeline at its first
+stage: the whole-path lesson when the editor holds a bundled lesson, the
+learner's own program (opened or edited) otherwise.
 
 The lesson "Before the compiler: the preprocessor" (`demos/macros.c`)
 exercises these stages and opens at the preprocessor. The abstract machine

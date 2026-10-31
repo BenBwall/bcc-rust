@@ -137,8 +137,8 @@ pub static DEMOS: [Demo; 9] = [
 /// What each stage does to `demos/path.c` at `-O0`, checked against
 /// `bcc-rust`'s output for it: one step of the path to the next.
 const PATH: [&str; 11] = [
-    "This file splices nothing: its 10 physical lines are its 10 logical lines, and the comment \
-     on line 1 is still here, since comments go in phase 3.",
+    "This file splices nothing, so each physical line is a logical line, and the comment on line \
+     1 is still here, since comments go in phase 3.",
     "The comment on line 1 becomes one space, and `square(side + 1)` is cut into six \
      preprocessing tokens: `square`, `(`, `side`, `+`, `1` and `)`.",
     "This program has no directives and no macros, so phase 4 passes its preprocessing tokens on \
@@ -153,10 +153,10 @@ const PATH: [&str; 11] = [
      call is `call @square(v2)`.",
     "An int argument and an int result need no rewriting on x86-64, so for this program the \
      ABI-lowered IR is the same as the IR.",
-    "`n * n` is `mul nsw i32 %v0, %v0`: `nsw` (no signed wrap) passes on that signed overflow is \
-     undefined, so LLVM may assume it never happens.",
-    "`n` arrives in `%edi` (the low half of `%rdi`), `imull %edi, %eax` squares it, and the \
-     result leaves in `%eax` for main's `callq square`.",
+    "`n * n` is `mul nsw i32 %v0, %v0`; `nsw` (no signed wrap) tells LLVM the product never \
+     overflows, since signed overflow is undefined in C.",
+    "`n` arrives in `%rdi`; `movq %rdi, %rax` copies it, `imull %edi, %eax` multiplies the low \
+     32-bit halves, and `%eax` returns n * n to main's `callq square`.",
     "`ret` is the single byte c3, and the call is e8 then four zero bytes, where the linker will \
      write the distance to `square`.",
 ];

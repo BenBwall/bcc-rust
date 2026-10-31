@@ -132,6 +132,11 @@ pub fn PipelineView(
             .then(|| links.with(|links| links.first_output_for(hovered)))
             .flatten()
     });
+    // Whether the source is the lesson that follows one program through
+    // every stage.
+    let on_path = move || {
+        source.with(|source| demos::matching(source).is_some_and(|demo| !demo.path.is_empty()))
+    };
     // The whole-path lesson's note on what this stage did to it, which
     // describes its -O0 output.
     let path_note = move || {
@@ -180,18 +185,27 @@ pub fn PipelineView(
                 }}
                 <p class="stage-handoff">
                     <span>{move || stage.get().handoff()}</span>
-                    {move || match stage.get().next() {
-                        | Some(next) => view! {
-                            <button type="button" class="stage-next" on:click=move |_| stage.set(next)>
-                                "Next: "{next.label()}<span aria-hidden="true">" →"</span>
-                            </button>
-                        }.into_any(),
-                        | None => view! {
-                            <button type="button" class="stage-next" on:click=move |_| on_run.run(())>
-                                "Next: watch it run in the abstract machine"<span aria-hidden="true">" →"</span>
-                            </button>
-                        }.into_any(),
-                    }}
+                    // One button for every stage, so the keyboard focus stays
+                    // on it as it moves along. After the last stage the
+                    // whole-path lesson goes on to the abstract machine,
+                    // which runs it; other programs, which it may not, start
+                    // the path again.
+                    <button
+                        type="button"
+                        class="stage-next"
+                        on:click=move |_| match stage.get_untracked().next() {
+                            | Some(next) => stage.set(next),
+                            | None if on_path() => on_run.run(()),
+                            | None => stage.set(Stage::ALL[0]),
+                        }
+                    >
+                        {move || match stage.get().next() {
+                            | Some(next) => format!("Next: {}", next.label()),
+                            | None if on_path() => "Next: watch it run in the abstract machine".to_owned(),
+                            | None => format!("Start again: {}", Stage::ALL[0].label()),
+                        }}
+                        <span aria-hidden="true">" →"</span>
+                    </button>
                 </p>
                 <p class="stage-path-note" hidden=move || path_note().is_none()>
                     <strong>"In this program: "</strong>
