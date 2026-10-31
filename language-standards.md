@@ -183,7 +183,10 @@ Several options change rules the mode otherwise fixes. `-ftrigraphs` and
 on or off whatever the mode; the `cl` personality turns it off, as `cl`
 replaces trigraphs only under `/Zc:trigraphs`. `-fwrapv` makes signed integer
 `+`, `-`, `*`, negation and `++`/`--` wrap in two's complement, so lowering
-marks none of them `nsw`; pointer arithmetic is unaffected, as in GCC. A
+marks none of them `nsw`; pointer arithmetic is unaffected, as in GCC.
+`-ftrapv` instead traps when one of them overflows in `int` or a wider
+type, and the last of the two options given decides
+(`CompilerConfiguration::with_trapv`). A
 signed `<<` wraps in every mode: GCC documents that it does not treat its
 overflow as undefined, and Clang emits a plain shift. Constant expressions
 fold it to the same two's-complement value (`static int s = -1 << 4;` is

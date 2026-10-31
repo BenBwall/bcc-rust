@@ -412,14 +412,37 @@ impl CompilerConfiguration {
     /// Makes signed integer overflow wrap in two's complement instead of
     /// being undefined, as GCC's `-fwrapv` does. Extension:
     /// C99 §6.5 paragraph 5, p. 67; PDF p. 79 leaves the overflow undefined.
+    /// When `-ftrapv` is on too, the option given last decides, as in GCC,
+    /// where `-fno-wrapv` turns `-fwrapv` off without undoing what it
+    /// overrode: `-ftrapv -fwrapv -fno-wrapv` traps.
     pub(crate) const fn with_wrapv(mut self, enabled: bool) -> Self {
         self.wrapv = enabled;
+        if enabled {
+            self.trapv_last = false;
+        }
+        self
+    }
+
+    /// Makes signed integer `+`, `-` and `*` trap on overflow, as GCC's
+    /// `-ftrapv` does, where they would otherwise be undefined; with
+    /// `-fwrapv` also on, the option given last decides. Extension:
+    /// C99 §6.5 paragraph 5, p. 67; PDF p. 79 leaves the overflow undefined.
+    pub(crate) const fn with_trapv(mut self, enabled: bool) -> Self {
+        self.trapv = enabled;
+        if enabled {
+            self.trapv_last = true;
+        }
         self
     }
 
     /// Whether signed integer overflow wraps (`-fwrapv`).
     pub(crate) const fn wrapv(self) -> bool {
-        self.wrapv
+        self.wrapv && !(self.trapv && self.trapv_last)
+    }
+
+    /// Whether signed integer `+`, `-` and `*` trap on overflow (`-ftrapv`).
+    pub(crate) const fn trapv(self) -> bool {
+        self.trapv && !(self.wrapv && !self.trapv_last)
     }
 
     /// Sets the structure packing in effect before any `#pragma pack`, as
@@ -613,6 +636,8 @@ impl CompilerConfiguration {
             trigraphs: None,
             dollar_identifiers: true,
             wrapv: false,
+            trapv: false,
+            trapv_last: false,
             default_pack: 0,
             pack_structures: false,
             default_visibility: super::DefaultVisibility::Default,

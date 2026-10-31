@@ -1747,6 +1747,9 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 )),
         };
         let value = self.binary_inst(opcode, flags, a, b);
+        if signed {
+            self.trap_on_overflow(opcode, representation, [a, b], value);
+        }
         // A narrow bit-precise result is extended again where the operation
         // can reach the bits above its width; the others keep extended
         // operands extended.
@@ -1888,6 +1891,9 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     InstFlags::empty()
                 };
                 let negated = self.binary_inst(Opcode::Isub, flags, zero, value);
+                if representation.signed() {
+                    self.trap_on_overflow(Opcode::Isub, representation, [zero, value], negated);
+                }
                 Operand::Value(self.normalize(negated, representation))
             },
             | U::BitwiseNot => {
@@ -2043,10 +2049,10 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 // arithmetic cannot overflow; the conversion back wraps. A
                 // narrow bit-precise type is not promoted: its IR type holds
                 // any step of its values, and its overflow is undefined.
-                let flags = if signed
+                let overflows = signed
                     && (ty.bits() >= self.int_bits() || u32::from(width) < ty.bits())
-                    && !atomic
-                {
+                    && !atomic;
+                let flags = if overflows {
                     self.signed_wrap()
                 } else {
                     InstFlags::empty()
@@ -2057,6 +2063,9 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     Opcode::Isub
                 };
                 let stepped = self.binary_inst(opcode, flags, value, one);
+                if overflows {
+                    self.trap_on_overflow(opcode, representation, [value, one], stepped);
+                }
                 Operand::Value(self.normalize(stepped, representation))
             },
             | _ =>

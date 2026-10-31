@@ -15,7 +15,10 @@ use super::{
     FunctionLowerer,
     LoweringError,
     module_items::at,
-    ssa::Op,
+    ssa::{
+        Op,
+        Terminator,
+    },
     types::{
         self,
         Repr,
@@ -485,13 +488,106 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
 
     /// The flags of signed integer `+`, `-`, `*` and `<<`: `nsw`, because
     /// signed overflow is undefined (C99 §6.5p5, p. 67; PDF p. 79), unless
-    /// `-fwrapv` makes it wrap, an extension.
+    /// `-fwrapv` makes it wrap or `-ftrapv` checks it
+    /// ([`Self::trap_on_overflow`]), extensions.
     pub(super) fn signed_wrap(&self) -> InstFlags {
-        if self.unit.context.configuration.wrapv() {
+        let configuration = self.unit.context.configuration;
+        if configuration.wrapv() || configuration.trapv() {
             InstFlags::empty()
         } else {
             InstFlags::NSW
         }
+    }
+
+    /// Under `-ftrapv`, traps when the signed `iadd`, `isub` or `imul` of
+    /// `a` and `b`, whose wrapped result is `result`, overflowed, as GCC's
+    /// checking library calls (`__addvsi3` and the rest) abort; bcc's trap
+    /// needs no library, and the program ends with `SIGILL` rather than
+    /// `SIGABRT`. A narrow bit-precise operation, computed in a wider type,
+    /// is not checked. GNU extension: GCC manual, "Code Gen Options".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Code-Gen-Options.html>
+    pub(super) fn trap_on_overflow(
+        &mut self,
+        opcode: Opcode,
+        representation: Repr,
+        [a, b]: [Value; 2],
+        result: Value,
+    ) {
+        if !self.unit.context.configuration.trapv() || representation.narrow().is_some() {
+            return;
+        }
+        let ty = self.draft.value_type(result);
+        let plain = InstFlags::empty();
+        let zero = self.iconst(ty, 0);
+        let overflow = match opcode {
+            // The operands have one sign and the result the other.
+            | Opcode::Iadd => {
+                let left = self.binary_inst(Opcode::Xor, plain, a, result);
+                let right = self.binary_inst(Opcode::Xor, plain, b, result);
+                let both = self.binary_inst(Opcode::And, plain, left, right);
+                self.icmp(IntCC::Slt, both, zero)
+            },
+            // The operands' signs differ, and the result's is `b`'s.
+            | Opcode::Isub => {
+                let operands = self.binary_inst(Opcode::Xor, plain, a, b);
+                let changed = self.binary_inst(Opcode::Xor, plain, a, result);
+                let both = self.binary_inst(Opcode::And, plain, operands, changed);
+                self.icmp(IntCC::Slt, both, zero)
+            },
+            // The exact product in twice the width is not the result.
+            | Opcode::Imul if ty.bits() <= 64 => {
+                let wide = match ty.bits() {
+                    | 8 => Type::I16,
+                    | 16 => Type::I32,
+                    | 32 => Type::I64,
+                    | _ => Type::I128,
+                };
+                let a = self.extend(a, true, wide);
+                let b = self.extend(b, true, wide);
+                let product = self.binary_inst(Opcode::Imul, plain, a, b);
+                let wrapped = self.extend(result, true, wide);
+                self.icmp(IntCC::Ne, product, wrapped)
+            },
+            // A 128-bit product overflowed when dividing it by `a` does not
+            // give `b`, or when `a` is -1 and `b` the most negative value,
+            // whose quotient would overflow too.
+            | Opcode::Imul => {
+                let one = self.iconst(ty, 1);
+                let minus_one = self.iconst(ty, -1);
+                let minimum = self.iconst(ty, i128::MIN);
+                let a_zero = self.icmp(IntCC::Eq, a, zero);
+                let a_minus_one = self.icmp(IntCC::Eq, a, minus_one);
+                let special = self.binary_inst(Opcode::Or, plain, a_zero, a_minus_one);
+                let divisor = self.choose(special, one, a);
+                let quotient = self.binary_inst(Opcode::Sdiv, plain, result, divisor);
+                let differs = self.icmp(IntCC::Ne, quotient, b);
+                let no = self.iconst(Type::I1, 0);
+                let ordinary = self.icmp(IntCC::Eq, special, no);
+                let wrapped = self.binary_inst(Opcode::And, plain, differs, ordinary);
+                let b_minimum = self.icmp(IntCC::Eq, b, minimum);
+                let negated = self.binary_inst(Opcode::And, plain, a_minus_one, b_minimum);
+                self.binary_inst(Opcode::Or, plain, wrapped, negated)
+            },
+            | _ => return,
+        };
+        if self.draft.constant(overflow) == Some(0) {
+            return;
+        }
+        let trap = self.draft.create_block(&[]);
+        let next = self.draft.create_block(&[]);
+        self.draft.brif(overflow, trap, next);
+        self.draft.seal(trap);
+        self.draft.seal(next);
+        self.draft.switch_to(trap);
+        _ = self.draft.push(
+            Op::Inst(InstData::Nullary {
+                opcode: Opcode::Trap,
+                ty:     Type::Ptr,
+            }),
+            None,
+        );
+        self.draft.terminate(Terminator::Unreachable);
+        self.draft.switch_to(next);
     }
 
     pub(super) fn binary_inst(

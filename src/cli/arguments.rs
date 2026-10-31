@@ -581,6 +581,8 @@ enum LanguageFlag {
     DollarIdentifiers(bool),
     /// `-fwrapv` (true), or `-fno-wrapv` and `-fstrict-overflow`.
     Wrapv(bool),
+    /// `-ftrapv` (true) or `-fno-trapv`.
+    Trapv(bool),
     /// `-fpack-struct=N`.
     PackStruct(u32),
     /// `-fpack-struct` (true) or `-fno-pack-struct`, which also clears N.
@@ -664,6 +666,8 @@ impl LanguageFlag {
             // `Cli::code_assumptions` reads.
             | "-fwrapv" | "-fno-strict-overflow" => return Some(Self::Wrapv(true)),
             | "-fno-wrapv" | "-fstrict-overflow" => return Some(Self::Wrapv(false)),
+            | "-ftrapv" => return Some(Self::Trapv(true)),
+            | "-fno-trapv" => return Some(Self::Trapv(false)),
             | "-fwrapv-pointer"
             | "-fno-wrapv-pointer"
             | "-fdelete-null-pointer-checks"
@@ -766,6 +770,7 @@ impl LanguageFlag {
             | Self::Trigraphs(enabled) => configuration.with_trigraphs(enabled),
             | Self::DollarIdentifiers(enabled) => configuration.with_dollar_identifiers(enabled),
             | Self::Wrapv(enabled) => configuration.with_wrapv(enabled),
+            | Self::Trapv(enabled) => configuration.with_trapv(enabled),
             | Self::PackStruct(alignment) => configuration.with_default_pack(alignment),
             | Self::PackAll(true) => configuration.with_pack_structures(true),
             | Self::PackAll(false) => configuration

@@ -100,8 +100,14 @@ pub(crate) struct CompilerConfiguration {
     trigraphs: Option<bool>,
     /// `$` may appear in identifiers (`-f[no-]dollars-in-identifiers`).
     dollar_identifiers: bool,
-    /// Signed integer overflow wraps (`-fwrapv`).
+    /// `-fwrapv` is on: signed integer overflow wraps, unless `-ftrapv`
+    /// came after it.
     wrapv: bool,
+    /// `-ftrapv` is on: signed integer overflow traps, unless `-fwrapv`
+    /// came after it.
+    trapv: bool,
+    /// `-ftrapv` came after `-fwrapv`, deciding when both are on.
+    trapv_last: bool,
     /// Every structure is packed and `#pragma pack` ignored (`-fpack-struct`
     /// without a value).
     pack_structures: bool,

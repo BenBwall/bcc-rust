@@ -119,7 +119,10 @@ const REFUSED: &[(&str, &str)] = &[
         "-frounding-math",
         "bcc assumes the default rounding mode when it folds constants",
     ),
-    ("-ftrapv*", "bcc does not trap on signed overflow"),
+    (
+        "-ftrapv-*",
+        "bcc's -ftrapv traps on overflow directly, without a handler",
+    ),
     (
         "-fsplit-stack",
         "bcc's functions run on one contiguous stack, which a program that relies on split stacks \
@@ -378,6 +381,7 @@ const IGNORED: &[&str] = &[
     "-f[no-]prefetch-loop-arrays",
     "-f[no-]printf-return-value",
     "-f[no-]free",
+    "-f[no-]ree",
     "-f[no-]regmove",
     "-f[no-]rename-registers",
     "-f[no-]reorder-*",
@@ -1042,6 +1046,7 @@ mod tests {
             "-fcf-protection=none",
             "-ftree-vectorize",
             "-fno-tree-vectorize",
+            "-free",
             "-ffp-contract=off",
             "-fexcess-precision=standard",
             "-fno-sanitize=all",

@@ -1276,6 +1276,68 @@ mod tests {
         }
     }
 
+    /// `-ftrapv` traps on signed `+`, `-` and `*` overflow instead of
+    /// marking them `nsw`; with `-fwrapv` the last option given decides, as
+    /// in GCC, where `-fno-wrapv` only turns `-fwrapv` off.
+    #[test]
+    fn trapv_traps_on_signed_overflow() {
+        let directory = Directory::new();
+        directory.write("w.c", "int f(int x) { return x + 1; }\n");
+        let ir = |options: &[&str]| {
+            let mut args = vec!["--emit=ir"];
+            args.extend(options);
+            args.push("w.c");
+            let output = directory.bcc("", &args);
+            succeeds(&output);
+            stdout(&output)
+        };
+        let trapping = ir(&["-ftrapv"]);
+        assert!(trapping.contains("trap"), "{trapping}");
+        assert!(!trapping.contains("nsw"), "{trapping}");
+        for (options, traps) in [
+            (&["-ftrapv", "-fwrapv"][..], false),
+            (&["-fwrapv", "-ftrapv"], true),
+            (&["-ftrapv", "-fwrapv", "-fno-wrapv"], true),
+            (&["-ftrapv", "-fno-trapv"], false),
+            (&["-ftrapv", "-fno-strict-overflow"], false),
+        ] {
+            assert_eq!(ir(options).contains("trap"), traps, "{options:?}");
+        }
+        if cfg!(all(target_os = "linux", target_env = "gnu")) {
+            directory.write(
+                "m.c",
+                "#include <limits.h>\n__attribute__((noinline)) int add(int a, int b) { return a \
+                 + b; }\n__attribute__((noinline)) long mul(long a, long b) { return a * b; \
+                 }\n__attribute__((noinline)) __int128 mul128(__int128 a, __int128 b) { return a \
+                 * b; }\nint main(int argc, char **argv) {\n  (void)argv;\n  __int128 min = \
+                 (__int128)1 << 127;\n  if (add(INT_MAX, -1) != INT_MAX - 1 || mul(LONG_MIN, 1) \
+                 != LONG_MIN || mul128(-1, min + 1) != -(min + 1))\n    return 2;\n  if (argc == \
+                 2)\n    return add(INT_MAX, 1);\n  if (argc == 3)\n    return (int)mul(LONG_MIN, \
+                 -1);\n  if (argc == 4)\n    return (int)mul128(-1, min);\n  return 0;\n}\n",
+            );
+            for backend in [&[][..], &["-Xbcc", "--backend=native"]] {
+                let mut args = vec!["-O2", "-ftrapv", "m.c", "-o", "m"];
+                args.extend(backend);
+                succeeds(&directory.bcc("--gcc-mode", &args));
+                let run = |arguments: &[&str]| {
+                    Command::new(directory.path("m"))
+                        .args(arguments)
+                        .output()
+                        .unwrap()
+                        .status
+                };
+                assert_eq!(run(&[]).code(), Some(0), "{backend:?}");
+                for arguments in [&["a"][..], &["a", "b"], &["a", "b", "c"]] {
+                    let status = run(arguments);
+                    assert!(
+                        status.code().is_none(),
+                        "{backend:?} {arguments:?}: {status:?}"
+                    );
+                }
+            }
+        }
+    }
+
     #[test]
     fn packing_options_set_the_default_packing() {
         let directory = Directory::new();

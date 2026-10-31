@@ -86,7 +86,7 @@ without a personality as well:
   headers;
 - `-fwrapv`, `-fpack-struct=N` and `-f[no-]trigraphs`, which the
   personalities map `-fwrapv`, `cl /ZpN` and `cl /Zc:trigraphs` onto, and
-  `-f[no-]common`, `-f[no-]wrapv-pointer`, `-f[no-]strict-overflow` and
+  `-f[no-]trapv`, `-f[no-]signaling-nans`, `-f[no-]common`, `-f[no-]wrapv-pointer`, `-f[no-]strict-overflow` and
   `-f[no-]delete-null-pointer-checks`;
 - `-v` (the header search and each command the driver runs, quoted as
   Clang quotes them), `-H` (the include tree), `-MG` (with `-M` or `-MM`,
@@ -194,6 +194,12 @@ to the options TCC itself implements; see [TCC](#tcc).
 
 Where bcc can do what the option asks cheaply, the personality maps it
 instead: `-fwrapv` (lowering marks signed arithmetic without `nsw`),
+`-ftrapv` (signed `+`, `-`, `*`, negation and `++`/`--` of `int` and
+wider check for overflow and run the `trap` instruction, on every back end,
+where GCC's libgcc routines call `abort`, so the program ends with `SIGILL`
+rather than `SIGABRT`; a narrow `_BitInt` is not checked; with `-fwrapv`
+also given, the last of the two decides, and `-fno-wrapv` only turns
+`-fwrapv` off, as in GCC; Clang's `-ftrapv-handler=` is refused),
 `-fwrapv-pointer` (pointer arithmetic without `inbounds`, so it wraps in
 LLVM and the interpreter), `-fno-strict-overflow` (both, as in GCC),
 `-fno-delete-null-pointer-checks` (every LLVM function is
