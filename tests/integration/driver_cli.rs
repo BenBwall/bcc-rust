@@ -813,10 +813,10 @@ mod tests {
             stdout(&preprocessed).trim(),
             ".globl f\nf:\n movl $7, %eax\n ret"
         );
-        let mut args = vec!["-E", "f.S", "-o", "f.s"];
+        let mut args = vec!["-E", "f.S", "-o", "pre.s"];
         args.extend(options);
         succeeds(&project.bcc(&args));
-        let text = std::fs::read_to_string(project.path("f.s")).unwrap();
+        let text = std::fs::read_to_string(project.path("pre.s")).unwrap();
         assert!(
             text.contains("# 1 \"f.S\"") && text.contains("movl $7"),
             "{text}"
