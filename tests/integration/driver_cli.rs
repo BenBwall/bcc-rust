@@ -364,6 +364,32 @@ mod tests {
     }
 
     #[test]
+    fn preprocessing_keeps_adjacent_string_literals_apart() {
+        let project = Project::new();
+        std::fs::write(
+            project.path("strings.c"),
+            "#define GREETING \"hello, \" \"world\"\nconst char *s = GREETING;\nconst char *t = \
+             \"one\"\n    \"two\";\nconst char *u = u8\"x\" \"y\";\n",
+        )
+        .unwrap();
+        // Phase 6 joins adjacent string literals; `-E` stops before it, so
+        // each literal stays where it was written, as GCC and Clang print it.
+        let output = project.bcc(&["-E", "-P", "strings.c"]);
+        succeeds(&output);
+        let text = stdout(&output);
+        for expected in [
+            "const char *s = \"hello, \" \"world\";",
+            "const char *t = \"one\"\n    \"two\";",
+            "const char *u = u8\"x\" \"y\";",
+        ] {
+            assert!(text.contains(expected), "{expected}\n{text}");
+        }
+        // The text compiles to the joined strings.
+        std::fs::write(project.path("strings.i"), text).unwrap();
+        succeeds(&project.bcc(&["-c", "strings.i", "-o", "strings.o"]));
+    }
+
+    #[test]
     fn preprocessing_writes_source_text_with_line_markers() {
         let project = Project::new();
         let output = project.bcc(&["-E", "main.c"]);

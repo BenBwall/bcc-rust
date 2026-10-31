@@ -191,6 +191,7 @@ use llvm_sys::{
         LLVMDisposeTargetMachine,
         LLVMGetTargetFromTriple,
         LLVMRelocMode,
+        LLVMTargetMachineEmitToFile,
         LLVMTargetMachineEmitToMemoryBuffer,
         LLVMTargetMachineRef,
     },
@@ -1795,10 +1796,33 @@ impl<'id> Session<'id> {
         assembly: bool,
         check: impl FnOnce(&Self) -> bool,
     ) -> Result<Option<Buffer>, Message> {
-        let machine = self.prepare_emission(target, opt, skip_passes)?;
-        if !check(self) {
+        let Some(machine) = self.prepare_checked(target, opt, skip_passes, check)? else {
             return Ok(None);
-        }
+        };
+        self.emit_to_memory(&machine, assembly).map(Some)
+    }
+
+    /// Runs the IR pipeline and makes the target machine for emission, or
+    /// `None` when `check`, which sees the optimized module, refuses it.
+    pub(super) fn prepare_checked(
+        &self,
+        target: Target,
+        opt: Option<OptLevel>,
+        skip_passes: bool,
+        check: impl FnOnce(&Self) -> bool,
+    ) -> Result<Option<Machine>, Message> {
+        let machine = self.prepare_emission(target, opt, skip_passes)?;
+        Ok(check(self).then_some(machine))
+    }
+
+    /// The object or assembly for the prepared module, in memory. LLVM
+    /// builds it in a growing buffer and then copies it, so it costs about
+    /// twice its size at its peak.
+    pub(super) fn emit_to_memory(
+        &self,
+        machine: &Machine,
+        assembly: bool,
+    ) -> Result<Buffer, Message> {
         let mut error = ptr::null_mut();
         let mut buffer = ptr::null_mut();
         let kind = if assembly {
@@ -1825,7 +1849,33 @@ impl<'id> Session<'id> {
         if failed != 0 {
             return Err(message);
         }
-        Ok(buffer)
+        Ok(buffer.expect("successful emission produces a buffer"))
+    }
+
+    /// Writes the object for the prepared module into the regular file
+    /// named `path`, which LLVM creates or truncates and writes as it goes:
+    /// an object padded to a large section alignment costs no memory for
+    /// its padding. After an error the file may hold a corrupt object,
+    /// which the caller removes.
+    pub(super) fn emit_object_file(&self, machine: &Machine, path: &CStr) -> Result<(), Message> {
+        let mut error = ptr::null_mut();
+        // SAFETY: Verified live module and machine; the path is
+        // NUL-terminated and the error message is separately owned.
+        let failed = unsafe {
+            LLVMTargetMachineEmitToFile(
+                machine.0,
+                self.module,
+                path.as_ptr(),
+                LLVMCodeGenFileType::LLVMObjectFile,
+                &raw mut error,
+            )
+        };
+        let message = Message(error);
+        self.diagnostics.check()?;
+        if failed != 0 {
+            return Err(message);
+        }
+        Ok(())
     }
 }
 
@@ -1977,7 +2027,7 @@ impl Drop for Buffer {
     }
 }
 #[derive(Debug)]
-struct Machine(LLVMTargetMachineRef);
+pub(super) struct Machine(LLVMTargetMachineRef);
 
 unsafe extern "C" {
     /// Selects ELF initialization arrays on a live, unused target machine.

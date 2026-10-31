@@ -173,4 +173,43 @@ mod tests {
             );
         }
     }
+
+    /// GCC's `pr39323-1.c` asks for 2^29-byte alignment, which GCC rejects
+    /// and Clang ignores. Honouring it padded the object to 512 MiB, and
+    /// the LLVM back end held about twice that while building it.
+    #[test]
+    fn alignments_above_two_to_the_28_cost_no_padding() {
+        let source = "int foo __attribute__((aligned(1 << 29))) = 20;\n__attribute__((aligned(1 \
+                      << 30))) int f(void) { return foo; }\n";
+        for backend in ["--backend=llvm", "--backend=native"] {
+            compile_within(
+                source,
+                &["--compiler-identity=clang", "-w", backend],
+                Budget {
+                    megabytes: 160,
+                    seconds:   60,
+                },
+            );
+        }
+    }
+
+    /// An object holding a 2^28-aligned definition (GCC's `pr39323-2.c`) is
+    /// a 256 MiB file, nearly all padding. The LLVM back end built it in a
+    /// growing buffer and copied it before writing it: over 540 MiB
+    /// resident, where GCC's assembler and Clang stream it to the file in a
+    /// few MiB.
+    #[test]
+    fn large_objects_stream_to_their_file() {
+        let source = "int x __attribute__((aligned(1 << 28))) = 1;\n";
+        for optimization in ["-O0", "-O2"] {
+            compile_within(
+                source,
+                &["-w", optimization],
+                Budget {
+                    megabytes: 160,
+                    seconds:   60,
+                },
+            );
+        }
+    }
 }
