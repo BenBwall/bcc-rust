@@ -15,7 +15,10 @@ use super::{
     FunctionLowerer,
     LoweringError,
     module_items::at,
-    ssa::Op,
+    ssa::{
+        Op,
+        Terminator,
+    },
     types::{
         self,
         Repr,
@@ -485,13 +488,179 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
 
     /// The flags of signed integer `+`, `-`, `*` and `<<`: `nsw`, because
     /// signed overflow is undefined (C99 §6.5p5, p. 67; PDF p. 79), unless
-    /// `-fwrapv` makes it wrap, an extension.
+    /// `-fwrapv` makes it wrap or `-ftrapv` checks it
+    /// ([`Self::trap_on_overflow`]), extensions.
     pub(super) fn signed_wrap(&self) -> InstFlags {
-        if self.unit.context.configuration.wrapv() {
+        let configuration = self.unit.context.configuration;
+        if configuration.wrapv() || configuration.trapv() {
             InstFlags::empty()
         } else {
             InstFlags::NSW
         }
+    }
+
+    /// Under `-ftrapv`, traps when the signed `iadd`, `isub` or `imul` of
+    /// `a` and `b`, whose wrapped result is `result`, overflowed, as GCC's
+    /// checking library calls (`__addvsi3` and the rest) abort; bcc's trap
+    /// needs no library, and the program ends with `SIGILL` rather than
+    /// `SIGABRT`. A narrow bit-precise operation, computed in a wider type,
+    /// is not checked. GNU extension: GCC manual, "Code Gen Options".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Code-Gen-Options.html>
+    pub(super) fn trap_on_overflow(
+        &mut self,
+        opcode: Opcode,
+        representation: Repr,
+        [a, b]: [Value; 2],
+        result: Value,
+    ) {
+        if !self.unit.context.configuration.trapv() || representation.narrow().is_some() {
+            return;
+        }
+        let ty = self.draft.value_type(result);
+        let plain = InstFlags::empty();
+        let zero = self.iconst(ty, 0);
+        let overflow = match opcode {
+            // The operands have one sign and the result the other.
+            | Opcode::Iadd => {
+                let left = self.binary_inst(Opcode::Xor, plain, a, result);
+                let right = self.binary_inst(Opcode::Xor, plain, b, result);
+                let both = self.binary_inst(Opcode::And, plain, left, right);
+                self.icmp(IntCC::Slt, both, zero)
+            },
+            // The operands' signs differ, and the result's is `b`'s.
+            | Opcode::Isub => {
+                let operands = self.binary_inst(Opcode::Xor, plain, a, b);
+                let changed = self.binary_inst(Opcode::Xor, plain, a, result);
+                let both = self.binary_inst(Opcode::And, plain, operands, changed);
+                self.icmp(IntCC::Slt, both, zero)
+            },
+            // The exact product in twice the width is not the result.
+            | Opcode::Imul if ty.bits() <= 64 => {
+                let wide = match ty.bits() {
+                    | 8 => Type::I16,
+                    | 16 => Type::I32,
+                    | 32 => Type::I64,
+                    | _ => Type::I128,
+                };
+                let a = self.extend(a, true, wide);
+                let b = self.extend(b, true, wide);
+                let product = self.binary_inst(Opcode::Imul, plain, a, b);
+                let wrapped = self.extend(result, true, wide);
+                self.icmp(IntCC::Ne, product, wrapped)
+            },
+            // A 128-bit product overflowed when dividing it by `a` does not
+            // give `b`, or when `a` is -1 and `b` the most negative value,
+            // whose quotient would overflow too.
+            | Opcode::Imul => {
+                let one = self.iconst(ty, 1);
+                let minus_one = self.iconst(ty, -1);
+                let minimum = self.iconst(ty, i128::MIN);
+                let a_zero = self.icmp(IntCC::Eq, a, zero);
+                let a_minus_one = self.icmp(IntCC::Eq, a, minus_one);
+                let special = self.binary_inst(Opcode::Or, plain, a_zero, a_minus_one);
+                let divisor = self.choose(special, one, a);
+                let quotient = self.binary_inst(Opcode::Sdiv, plain, result, divisor);
+                let differs = self.icmp(IntCC::Ne, quotient, b);
+                let no = self.iconst(Type::I1, 0);
+                let ordinary = self.icmp(IntCC::Eq, special, no);
+                let wrapped = self.binary_inst(Opcode::And, plain, differs, ordinary);
+                let b_minimum = self.icmp(IntCC::Eq, b, minimum);
+                let negated = self.binary_inst(Opcode::And, plain, a_minus_one, b_minimum);
+                self.binary_inst(Opcode::Or, plain, wrapped, negated)
+            },
+            | _ => return,
+        };
+        self.trap_if(overflow);
+    }
+
+    /// Under `-ftrapv`, traps before a call of the library's `abs`, `labs`
+    /// or `llabs` (or their `__builtin_` forms) whose argument is the most
+    /// negative value, whose absolute value overflows, as GCC and Clang
+    /// check their expansions of these builtins; with the library builtins
+    /// off (`-fno-builtin-abs`), a call by the library's name is the
+    /// library's alone, as in GCC, while `__builtin_abs` still traps.
+    /// C99: §7.20.6.1 paragraph 2, p. 320; PDF p. 332.
+    pub(super) fn trap_on_absolute_minimum(
+        &mut self,
+        binding: usize,
+        argument: Item,
+        source: SourceVectors,
+    ) -> Result<(), LoweringError> {
+        use crate::{
+            builtins::BuiltinId,
+            configuration::LibraryBuiltins,
+            translation_phases::semantic_analysis::{
+                BindingOrigin,
+                Linkage,
+            },
+        };
+        if !self.unit.context.configuration.trapv() {
+            return Ok(());
+        }
+        let data = self.unit.sema.bindings[binding];
+        let library = match data.origin {
+            | BindingOrigin::Intrinsic(
+                id @ (BuiltinId::LibraryAbs | BuiltinId::LibraryLabs | BuiltinId::LibraryLlabs),
+            ) => id.descriptor().library,
+            // The C library's own declarations, as `<stdlib.h>` gives them.
+            | BindingOrigin::User if data.linkage == Linkage::External =>
+                Some(self.unit.symbol_name(binding))
+                    .filter(|name| matches!(*name, "abs" | "labs" | "llabs")),
+            | _ => None,
+        };
+        let Some(library) = library else {
+            return Ok(());
+        };
+        // `__builtin_abs` is the builtin whatever `-fno-builtin` says; the
+        // library's name only while the library builtins are on.
+        let spelled_builtin = self
+            .unit
+            .context
+            .string_cache
+            .at(data.name.name)
+            .starts_with("__builtin_");
+        let builtin = spelled_builtin
+            || match self.unit.module.library_builtins() {
+                | LibraryBuiltins::All => true,
+                | LibraryBuiltins::None => false,
+                | LibraryBuiltins::Except(names) => !names.contains(&library),
+            };
+        if !builtin {
+            return Ok(());
+        }
+        let value = self.value(argument, source)?;
+        let ty = self.draft.value_type(value);
+        if !ty.is_int() {
+            return Ok(());
+        }
+        let minimum = self.iconst(ty, i128::MIN >> (128 - ty.bits()));
+        let overflow = self.icmp(IntCC::Eq, value, minimum);
+        self.trap_if(overflow);
+        Ok(())
+    }
+
+    /// Traps when `condition` holds, in a block of its own for each check:
+    /// one block that every check of a long function branches to would
+    /// make the dominator tree of the back ends quadratic to compute.
+    fn trap_if(&mut self, condition: Value) {
+        if self.draft.constant(condition) == Some(0) {
+            return;
+        }
+        let trap = self.draft.create_block(&[]);
+        let next = self.draft.create_block(&[]);
+        self.draft.brif(condition, trap, next);
+        self.draft.seal(trap);
+        self.draft.seal(next);
+        self.draft.switch_to(trap);
+        _ = self.draft.push(
+            Op::Inst(InstData::Nullary {
+                opcode: Opcode::Trap,
+                ty:     Type::Ptr,
+            }),
+            None,
+        );
+        self.draft.terminate(Terminator::Unreachable);
+        self.draft.switch_to(next);
     }
 
     pub(super) fn binary_inst(

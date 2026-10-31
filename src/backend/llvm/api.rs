@@ -1557,6 +1557,53 @@ impl<'id> Session<'id> {
         )
     }
 
+    /// `!"name"` as a value, the rounding and exception-behavior operands
+    /// of a constrained floating intrinsic.
+    pub(super) fn metadata_string(&self, name: &str) -> Val<'id> {
+        // SAFETY: The context is live; LLVM copies the name bytes.
+        let string = unsafe {
+            llvm_sys::core::LLVMMDStringInContext2(self.context, name.as_ptr().cast(), name.len())
+        };
+        // SAFETY: The context and its metadata string are live.
+        Val(
+            unsafe { llvm_sys::core::LLVMMetadataAsValue(self.context, string) },
+            PhantomData,
+        )
+    }
+
+    /// Marks every call in `function` `strictfp`, as LLVM requires in a
+    /// `strictfp` function, so that it neither folds nor moves them past
+    /// the floating operations whose exceptions they may observe.
+    pub(super) fn strict_calls(&self, function: Val<'id>) {
+        let kind = "strictfp";
+        // SAFETY: The counted attribute name is valid during lookup.
+        let kind = unsafe { LLVMGetEnumAttributeKindForName(kind.as_ptr().cast(), kind.len()) };
+        // SAFETY: Known enum attribute without a payload, in the live
+        // context.
+        let attribute = unsafe { LLVMCreateEnumAttribute(self.context, kind, 0) };
+        // SAFETY: The function belongs to this live session by the type
+        // system; the walk below only reads its blocks and instructions.
+        let mut block = unsafe { llvm_sys::core::LLVMGetFirstBasicBlock(function.0) };
+        while !block.is_null() {
+            // SAFETY: `block` is a live block of the function.
+            let mut inst = unsafe { llvm_sys::core::LLVMGetFirstInstruction(block) };
+            while !inst.is_null() {
+                // SAFETY: `inst` is a live instruction of the block.
+                if !unsafe { llvm_sys::core::LLVMIsACallInst(inst) }.is_null() {
+                    // SAFETY: A live call instruction; the function index
+                    // addresses its function attributes.
+                    unsafe {
+                        LLVMAddCallSiteAttribute(inst, u32::MAX, attribute);
+                    }
+                }
+                // SAFETY: `inst` is a live instruction of the block.
+                inst = unsafe { llvm_sys::core::LLVMGetNextInstruction(inst) };
+            }
+            // SAFETY: `block` is a live block of the function.
+            block = unsafe { llvm_sys::core::LLVMGetNextBasicBlock(block) };
+        }
+    }
+
     /// Adds the string attribute `key`=`value` to the function `function`.
     pub(super) fn string_attribute(&self, function: Val<'id>, key: &str, value: &str) {
         let key_length = u32::try_from(key.len()).expect("attribute key fits in u32");

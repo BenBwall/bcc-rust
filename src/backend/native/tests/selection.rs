@@ -6,14 +6,17 @@ use super::{
     function_text,
     refusal,
     with_allocation,
+    with_selection,
 };
 use crate::{
     backend::native::mir::{
+        MBlock,
         MInst,
         Operand,
         Reg,
         Width,
     },
+    ir::Entity,
     target::Target,
 };
 
@@ -1903,4 +1906,34 @@ fn unsupported_atomics_are_refused() {
             format!("not yet supported by the native back end: {message} (in @f)")
         );
     }
+}
+
+#[test]
+fn edge_blocks_follow_the_branch_that_needs_them() {
+    // The copies of `block1(v1)` get a block of their own; laid out after
+    // the branch rather than at the end, a value live across the edge is
+    // not live from it to the end of a long function, which made the
+    // allocator quadratic in the length of `-ftrapv` code.
+    let ir = "abi lowered
+function @f(i32, i32) -> i32 external {
+block0(v0: i32, v1: i32):
+    brif v0, block1(v1), block2
+block2:
+    v2 = iadd.i32 v1, v1
+    jump block1(v2)
+block1(v3: i32):
+    return v3
+}
+";
+    with_selection(ir, "f", Target::LinuxGnu, |_, func, _| {
+        let Some(&MInst::Jcc { taken, .. }) = func.blocks[0].insts.last() else {
+            panic!("the entry ends in a branch: {:?}", func.blocks[0].insts);
+        };
+        assert_eq!(taken, MBlock::new(1));
+        assert!(
+            matches!(func.blocks[1].insts.last(), Some(MInst::Jmp { .. })),
+            "{:?}",
+            func.blocks[1].insts
+        );
+    });
 }
