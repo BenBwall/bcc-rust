@@ -2937,7 +2937,21 @@ identity (GCC 15 and Clang 23 checked):
 Deviations: bcc folds `__builtin_fabsq` and `__builtin_copysignq` in a
 static initializer, where GCC 15 reports "initializer element is not
 constant" (it folds the `f128` spellings), and folds the `f16` sign
-builtins under the Clang identity, which Clang 23 does not.
+builtins under the Clang identity, which Clang 23 does not. GCC's
+`__builtin_fabsf16` of a signaling NaN gives a quiet NaN (it computes in
+`float`); Clang and bcc clear only the sign bit, under both identities.
+
+Operand checks follow GCC 14 and Clang 23: the carry pointer of
+`__builtin_addc`/`subc` converts as a prototyped argument, so a pointer to
+the signed type or to a `const` one draws `-Wpointer-sign` or the
+discarded-qualifier warning and one to another width an error;
+`__builtin_alloca_with_align` takes a constant power of two from 8 bits to
+2^31 under GCC (2^30 under Clang, which allows at most 2147483647), and
+`_and_max` a constant bound. `__builtin_bswap*` of any arithmetic constant
+folds (an integer constant expression only if its operand is one);
+`__builtin_assoc_barrier` folds a constant and, as GCC, takes pointers and
+structures; and under the GCC identity `__builtin_creal`, `cimag` and `conj`
+of a constant fold, as GCC folds them and Clang does not.
 
 Still refused, now by name ("not yet supported by lowering:
 `__builtin_apply_args`"): `__builtin_apply`, `__builtin_apply_args`,

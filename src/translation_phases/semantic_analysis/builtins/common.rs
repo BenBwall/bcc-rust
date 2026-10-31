@@ -14,6 +14,7 @@ use crate::{
     builtins::{
         BuiltinDescriptor,
         BuiltinOperation as CommonBuiltin,
+        ComplexPart,
         ConstantConstraint,
         ConversionRule,
         OverflowOperation,
@@ -32,8 +33,10 @@ use crate::{
             ConstantClass,
             ConversionKind,
             ExpressionInfo,
+            Floating,
             Scalar,
             SemanticErrorKind,
+            TagKind,
             TypeId,
             TypeKind,
             integer::Integer,
@@ -153,11 +156,19 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         match builtin {
             // GCC types `__builtin_assoc_barrier` as its converted operand,
             // arithmetic or a GNU vector.
+            // GCC types `__builtin_assoc_barrier` as its converted operand,
+            // a scalar, a GNU vector or a structure or union, and folds a
+            // constant one, as in a static initializer.
             | CommonBuiltin::AssocBarrier => {
                 let operand = self.expression_info(args[0]);
                 let ty = self.converted(operand);
+                let record = matches!(
+                    self.types.nodes[ty.index],
+                    TypeKind::Tag(id) if self.types.tags[id].kind != TagKind::Enum
+                );
                 if !self.types.unanalyzed(ty)
-                    && !self.arithmetic(ty)
+                    && !self.scalar_type(ty)
+                    && !record
                     && !matches!(self.types.nodes[ty.index], TypeKind::Vector { .. })
                 {
                     self.error(
@@ -168,7 +179,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     );
                     return Some(Self::expression_result(e, self.types.unknown()));
                 }
-                return Some(Self::expression_result(e, ty));
+                let mut info = Self::expression_result(e, ty);
+                if operand.constant == ConstantClass::Arithmetic {
+                    info.integer = operand.integer;
+                    info.ice = operand.ice;
+                    info.constant = ConstantClass::Arithmetic;
+                    info.set_floating(operand.floating());
+                    info.set_binary128(operand.binary128());
+                }
+                return Some(info);
             },
             | CommonBuiltin::Float(operation, scalar) => {
                 return Some(self.floating_builtin(e, args, operation, scalar));
@@ -230,7 +249,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             // initialize a static object.
             | CommonBuiltin::Bswap(bits) => {
                 let value = self.expression_info(args[0]);
-                if value.ice
+                // An arithmetic constant folds, as GCC folds
+                // `__builtin_bswap32 ((unsigned) (1.0 + 1.0))`; the call is
+                // an integer constant expression only if its operand is.
+                let ice = value.ice;
+                if value.constant == ConstantClass::Arithmetic
                     && let Some(value) = value.integer
                 {
                     #[expect(
@@ -241,7 +264,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     let swapped = ((value.cast(bits, false).value as u128).swap_bytes()
                         >> (128 - bits)) as i128;
                     info.integer = Some(Integer::int(swapped).cast(bits, false));
-                    info.ice = true;
+                    info.ice = ice;
                     info.constant = ConstantClass::Arithmetic;
                 }
             },
@@ -400,6 +423,30 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             // Lowering substitutes the pack in a copy of this function per
             // call, so it must know which bodies evaluate it.
             | CommonBuiltin::ArgumentPack(_) => self.argument_pack_use(),
+            // GCC folds a part of a constant, as in a static initializer;
+            // Clang does not.
+            | CommonBuiltin::ComplexPart(part) => {
+                let operand = self.expression_info(args[0]);
+                if operand.constant == ConstantClass::Arithmetic
+                    && self.context.configuration.compiler_identity().rules()
+                        == crate::configuration::RuleSet::Gcc
+                    && let ConversionRule::Parameter(pattern) = descriptor.arguments[0].conversion
+                {
+                    let complex = self.signature_type(pattern);
+                    if let Some(value) = self.converted_floating(operand, complex) {
+                        let value = match part {
+                            | ComplexPart::Real => Floating::real(value.real),
+                            | ComplexPart::Imaginary => Floating::real(value.imag),
+                            | ComplexPart::Conjugate => Floating {
+                                real: value.real,
+                                imag: value.imag.negate(),
+                            },
+                        };
+                        info.set_floating(Some(value));
+                        info.constant = ConstantClass::Arithmetic;
+                    }
+                }
+            },
             | CommonBuiltin::Atomic(_)
             | CommonBuiltin::Bit(..)
             | CommonBuiltin::GenericBit(_)
@@ -407,7 +454,6 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | CommonBuiltin::Memory(_)
             | CommonBuiltin::AllocaAligned
             | CommonBuiltin::ClearCache
-            | CommonBuiltin::ComplexPart(_)
             | CommonBuiltin::Expect(_)
             | CommonBuiltin::Aligned
             | CommonBuiltin::Prefetch
@@ -480,7 +526,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             return;
         };
         let ty = self.signature_type(pattern);
-        let compatible = self.common_argument(argument, ty);
+        // The carry of `__builtin_addc` and `__builtin_subc` converts as a
+        // prototyped argument does: GCC 14 and Clang 23 warn for a pointer
+        // to the signed type or to a `const` one (`-Wpointer-sign`,
+        // discarded qualifiers) and refuse one to another width.
+        let compatible = if matches!(descriptor.operation, CommonBuiltin::Carry(..)) {
+            self.prototype_argument(argument, ty)
+        } else {
+            self.common_argument(argument, ty)
+        };
         if !compatible {
             return;
         }
@@ -508,6 +562,18 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 converted
                     .and_then(Integer::to_u64)
                     .is_some_and(|v| v == value)
+            },
+            | ConstantConstraint::AllocaAlignment => {
+                let largest = if self.context.configuration.compiler_identity().rules()
+                    == crate::configuration::RuleSet::Gcc
+                {
+                    1 << 31
+                } else {
+                    1 << 30
+                };
+                self.common_integer_constant(argument, ty)
+                    .and_then(Integer::to_u64)
+                    .is_some_and(|bits| bits.is_power_of_two() && (8..=largest).contains(&bits))
             },
             | ConstantConstraint::ConvertedPowerOfTwo => self
                 .common_integer_constant(argument, ty)
@@ -577,6 +643,25 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let info = self.expression_info(e);
         let compatible = !self.types.unanalyzed(info.ty) && self.assignment_compatible(ty, info);
         if !self.types.unanalyzed(info.ty) && !compatible {
+            self.error(
+                SemanticErrorKind::InvalidArgumentType,
+                e.source_vectors,
+                None,
+                None,
+            );
+        }
+        _ = self.converted(info);
+        self.convert(e, ty, ConversionKind::Assignment);
+        compatible
+    }
+
+    /// `e` converted to the parameter type `ty` as a prototyped call's
+    /// argument, with that conversion's warnings and errors.
+    /// C99: §6.5.2.2 paragraph 7, p. 72; PDF p. 84.
+    fn prototype_argument(&mut self, e: &'tu Expression<'tu>, ty: TypeId) -> bool {
+        let info = self.expression_info(e);
+        let compatible = self.types.unanalyzed(info.ty) || self.assignment_conversion(ty, info);
+        if !compatible {
             self.error(
                 SemanticErrorKind::InvalidArgumentType,
                 e.source_vectors,

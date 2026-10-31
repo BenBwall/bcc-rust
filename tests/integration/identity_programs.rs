@@ -117,6 +117,70 @@ mod tests {
         std::fs::remove_file(source).unwrap();
     }
 
+    /// Builtin operand checks as GCC 14 and Clang 23 make them: a carry
+    /// pointer to the signed type or to a `const` one draws a warning and
+    /// one to another width an error; `__builtin_alloca_with_align` takes a
+    /// constant power of two from 8 bits to 2^31 (GCC) or 2^30 (Clang), and
+    /// `_and_max` a constant bound; and a refused builtin is named also
+    /// under a cast to `void`.
+    #[test]
+    fn builtin_operands_are_checked_as_gcc_and_clang_check_them() {
+        let check = |identity: &str, body: &str| {
+            let source = temporary("operands.c");
+            std::fs::write(
+                &source,
+                format!("void *f(unsigned long n) {{\n{body}\nreturn 0;\n}}\n"),
+            )
+            .unwrap();
+            let object = temporary("operands.o");
+            let output = bcc(&[
+                identity,
+                "-c",
+                source.to_str().unwrap(),
+                "-o",
+                object.to_str().unwrap(),
+            ]);
+            drop(std::fs::remove_file(object));
+            std::fs::remove_file(source).unwrap();
+            (output.status.success(), text(&output.stderr))
+        };
+        for identity in ["--compiler-identity=gcc", "--compiler-identity=clang"] {
+            let (accepted, stderr) = check(
+                identity,
+                "int s; const unsigned c = 0; __builtin_addc(1u, 1u, 0u, &s); __builtin_subc(1u, \
+                 1u, 0u, &c);",
+            );
+            assert!(accepted, "{identity}: {stderr}");
+            assert!(stderr.contains("-Wpointer-sign"), "{identity}: {stderr}");
+            assert!(
+                stderr.contains("discards qualifiers"),
+                "{identity}: {stderr}"
+            );
+            let (accepted, stderr) =
+                check(identity, "unsigned long c; __builtin_addc(1u, 1u, 0u, &c);");
+            assert!(!accepted, "{identity}: {stderr}");
+            for alignment in ["4", "24", "n", "1ul << 40"] {
+                let (accepted, stderr) = check(
+                    identity,
+                    &format!("__builtin_alloca_with_align(8, {alignment});"),
+                );
+                assert!(!accepted, "{identity} {alignment}: {stderr}");
+            }
+            let (accepted, stderr) = check(identity, "__builtin_alloca_with_align(8, 1ul << 29);");
+            assert!(accepted, "{identity}: {stderr}");
+            let (accepted, _) = check(identity, "__builtin_alloca_with_align(8, 1ul << 31);");
+            assert_eq!(accepted, identity.ends_with("gcc"), "{identity}: 2^31 bits");
+        }
+        let (accepted, stderr) = check(
+            "--compiler-identity=gcc",
+            "__builtin_alloca_with_align_and_max(8, 64, n);",
+        );
+        assert!(!accepted, "{stderr}");
+        let (accepted, stderr) = check("--compiler-identity=gcc", "(void) __builtin_apply_args();");
+        assert!(!accepted, "{stderr}");
+        assert!(stderr.contains("`__builtin_apply_args`"), "{stderr}");
+    }
+
     /// `__builtin_bcopy`, `__builtin_bzero` and `__builtin_mempcpy` lower to
     /// LLVM's memory intrinsics on every target, as Clang lowers them, so
     /// the Microsoft C runtime, which has none of the three, needs no such

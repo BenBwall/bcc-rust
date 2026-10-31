@@ -233,6 +233,10 @@ pub(crate) enum ConstantConstraint {
     ConvertedIntegerRange(u64),
     OriginalIntegerRange(u64),
     ConvertedPowerOfTwo,
+    /// `__builtin_alloca_with_align`'s alignment in bits: after conversion,
+    /// a constant power of two from 8 to 2^31 (GCC) or 2^30 (Clang, which
+    /// takes at most 2147483647).
+    AllocaAlignment,
     ConvertedProbability,
     /// An x86 immediate: after prototype conversion, an integer constant in
     /// `[low, high]` that, with a nonzero mask, names a set bit of the mask.

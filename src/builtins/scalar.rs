@@ -298,7 +298,7 @@ pub(super) const BUILTINS: &[BuiltinDescriptor] = &[
         },
         &[
             A::value(C::Parameter(T::Size)),
-            A::constrained(C::Parameter(T::Size), K::ConvertedPowerOfTwo, D::Alignment),
+            A::constrained(C::Parameter(T::Size), K::AllocaAlignment, D::Alignment),
         ],
         2,
     ),
@@ -314,8 +314,12 @@ pub(super) const BUILTINS: &[BuiltinDescriptor] = &[
         },
         &[
             A::value(C::Parameter(T::Size)),
-            A::constrained(C::Parameter(T::Size), K::ConvertedPowerOfTwo, D::Alignment),
-            A::value(C::Parameter(T::Size)),
+            A::constrained(C::Parameter(T::Size), K::AllocaAlignment, D::Alignment),
+            A::constrained(
+                C::Parameter(T::Size),
+                K::ConvertedIntegerRange(u64::MAX),
+                D::ArgumentType,
+            ),
         ],
         3,
     )),
