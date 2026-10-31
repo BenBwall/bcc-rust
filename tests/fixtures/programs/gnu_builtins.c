@@ -119,11 +119,17 @@ static void scalars(void) {
     printf("%d\n", *pointer);
     void *m = __builtin_alloca_with_align_and_max(12, 256, 64);
     printf("%d\n", (int)((uintptr_t)m % 32));
+    /* GCC takes any arithmetic constant as the bound. */
+    void *bounded = __builtin_alloca_with_align_and_max(12, 256, 1.5);
+    printf("%d\n", (int)((uintptr_t)bounded % 32));
 #endif
     static const unsigned long swapped = __builtin_bswap64(1);
     printf("%lx\n", swapped);
     static const unsigned folded = __builtin_bswap32((unsigned)(1.0 + 1.0));
     printf("%x\n", folded);
+    /* A floating constant folds after its conversion to the parameter. */
+    static const unsigned from_double = __builtin_bswap32(2.0);
+    printf("%x\n", from_double);
     unsigned carry, r;
     unsigned long cl, rl;
     unsigned long long cll, rll;

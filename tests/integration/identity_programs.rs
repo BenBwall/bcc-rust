@@ -117,6 +117,54 @@ mod tests {
         std::fs::remove_file(source).unwrap();
     }
 
+    /// GCC 13 folds `__builtin_assoc_barrier` of a constant but does not
+    /// make it an integer constant expression: a `case` label,
+    /// `_Static_assert`, enumerator, bit-field width and static initializer
+    /// take its value, and an array it bounds is variably modified.
+    #[test]
+    fn assoc_barrier_of_a_constant_folds_but_is_no_integer_constant() {
+        let compile = |source_text: &str, flags: &[&str]| {
+            let source = temporary("barrier.c");
+            std::fs::write(&source, source_text).unwrap();
+            let object = temporary("barrier.o");
+            let output = bcc(&[
+                &[
+                    "--compiler-identity=gcc",
+                    "-c",
+                    source.to_str().unwrap(),
+                    "-o",
+                    object.to_str().unwrap(),
+                ][..],
+                flags,
+            ]
+            .concat());
+            drop(std::fs::remove_file(object));
+            std::fs::remove_file(source).unwrap();
+            (output.status.success(), text(&output.stderr))
+        };
+        let folds =
+            "int f(int x) {\nswitch (x) { case __builtin_assoc_barrier(3): return 1; }\nreturn \
+             0;\n}\n_Static_assert(__builtin_assoc_barrier(3) == 3, \"folded\");\nenum { E = \
+             __builtin_assoc_barrier(3) };\nstruct s { int b : __builtin_assoc_barrier(3); \
+             };\nstatic int i = __builtin_assoc_barrier(3);\nstatic double d = \
+             __builtin_assoc_barrier(1.5);\nint a[1 ? 2 : __builtin_assoc_barrier(3)];\nstatic \
+             int *p = (int *)__builtin_assoc_barrier(3);\n";
+        let (accepted, stderr) = compile(folds, &[]);
+        assert!(accepted, "{stderr}");
+        assert_eq!(stderr, "", "folding is silent without -pedantic");
+        let (accepted, stderr) = compile(folds, &["-pedantic-errors"]);
+        assert!(!accepted, "-pedantic-errors refuses the folding: {stderr}");
+        for refused in [
+            "int a[__builtin_assoc_barrier(3)];\n",
+            "void f(void) { int a[__builtin_assoc_barrier(3)] = {0}; (void)a; }\n",
+            "void f(void) { goto l; int a[__builtin_assoc_barrier(3)]; (void)a; l:; }\n",
+            "void f(void) { static int t[__builtin_assoc_barrier(3)]; (void)t; }\n",
+        ] {
+            let (accepted, stderr) = compile(refused, &[]);
+            assert!(!accepted, "{refused}: {stderr}");
+        }
+    }
+
     /// Builtin operand checks as GCC 14 and Clang 23 make them: a carry
     /// pointer to the signed type or to a `const` one draws a warning and
     /// one to another width an error; `__builtin_alloca_with_align` takes a
@@ -176,6 +224,17 @@ mod tests {
             "__builtin_alloca_with_align_and_max(8, 64, n);",
         );
         assert!(!accepted, "{stderr}");
+        assert!(
+            stderr.contains("the third argument must be a constant integer"),
+            "{stderr}"
+        );
+        for bound in ["1.5", "-1", "1 ? 2 : n", "__builtin_assoc_barrier(3)"] {
+            let (accepted, stderr) = check(
+                "--compiler-identity=gcc",
+                &format!("__builtin_alloca_with_align_and_max(8, 64, {bound});"),
+            );
+            assert!(accepted, "{bound}: {stderr}");
+        }
         let (accepted, stderr) = check("--compiler-identity=gcc", "(void) __builtin_apply_args();");
         assert!(!accepted, "{stderr}");
         assert!(stderr.contains("`__builtin_apply_args`"), "{stderr}");

@@ -317,8 +317,8 @@ pub(super) const BUILTINS: &[BuiltinDescriptor] = &[
             A::constrained(C::Parameter(T::Size), K::AllocaAlignment, D::Alignment),
             A::constrained(
                 C::Parameter(T::Size),
-                K::ConvertedIntegerRange(u64::MAX),
-                D::ArgumentType,
+                K::ArithmeticConstant,
+                D::AllocaMaximum,
             ),
         ],
         3,

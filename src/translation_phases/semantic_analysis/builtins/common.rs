@@ -155,10 +155,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
         match builtin {
             // GCC types `__builtin_assoc_barrier` as its converted operand,
-            // arithmetic or a GNU vector.
-            // GCC types `__builtin_assoc_barrier` as its converted operand,
-            // a scalar, a GNU vector or a structure or union, and folds a
-            // constant one, as in a static initializer.
+            // a scalar, a GNU vector or a structure or union. A constant one
+            // folds, as in a static initializer, but is no integer constant
+            // expression (§6.6p6): GCC 13 accepts it in a `case` label or
+            // `_Static_assert` as a folded constant, and an array it bounds
+            // is variably modified.
             | CommonBuiltin::AssocBarrier => {
                 let operand = self.expression_info(args[0]);
                 let ty = self.converted(operand);
@@ -182,7 +183,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 let mut info = Self::expression_result(e, ty);
                 if operand.constant == ConstantClass::Arithmetic {
                     info.integer = operand.integer;
-                    info.ice = operand.ice;
+                    info.ice = false;
+                    info.assoc_barrier = true;
                     info.constant = ConstantClass::Arithmetic;
                     info.set_floating(operand.floating());
                     info.set_binary128(operand.binary128());
@@ -250,11 +252,18 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | CommonBuiltin::Bswap(bits) => {
                 let value = self.expression_info(args[0]);
                 // An arithmetic constant folds, as GCC folds
-                // `__builtin_bswap32 ((unsigned) (1.0 + 1.0))`; the call is
-                // an integer constant expression only if its operand is.
+                // `__builtin_bswap32 ((unsigned) (1.0 + 1.0))`, a floating
+                // one after its conversion to the parameter type (§6.3.1.4p1);
+                // the call is an integer constant expression only if its
+                // operand is.
                 let ice = value.ice;
+                let integer = value.integer.or_else(|| {
+                    value.floating().and_then(|floating| {
+                        super::super::emission::floating_integer(&self.wide, floating, bits, false)
+                    })
+                });
                 if value.constant == ConstantClass::Arithmetic
-                    && let Some(value) = value.integer
+                    && let Some(value) = integer
                 {
                     #[expect(
                         clippy::cast_sign_loss,
@@ -575,6 +584,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     .and_then(Integer::to_u64)
                     .is_some_and(|bits| bits.is_power_of_two() && (8..=largest).contains(&bits))
             },
+            | ConstantConstraint::ArithmeticConstant =>
+                info.constant == ConstantClass::Arithmetic
+                    && (info.integer.is_some() || info.floating().is_some()),
             | ConstantConstraint::ConvertedPowerOfTwo => self
                 .common_integer_constant(argument, ty)
                 .and_then(Integer::to_u64)

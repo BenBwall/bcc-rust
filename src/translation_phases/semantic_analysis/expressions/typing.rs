@@ -1557,12 +1557,30 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 | ExpressionType::AlignofExpr(_)
                 | ExpressionType::AlignofType(_)
         ) {
-            super::super::emission::expression_children(self.scratch, info.expression, |child| {
-                info.runtime_query |= self
-                    .expression_indices
+            let record = |child: &Expression<'tu>| {
+                self.expression_indices
                     .get(&std::ptr::from_ref(child).addr())
-                    .is_some_and(|&index| self.expressions[index].runtime_query);
+                    .map(|&index| self.expressions[index])
+            };
+            super::super::emission::expression_children(self.scratch, info.expression, |child| {
+                let child = record(child);
+                info.runtime_query |= child.is_some_and(|child| child.runtime_query);
+                info.assoc_barrier |= child.is_some_and(|child| child.assoc_barrier);
             });
+            // A constant condition evaluates only its selected arm (C99
+            // §6.5.15p4), as GCC folds `1 ? 2 : __builtin_assoc_barrier (3)`.
+            if let ExpressionType::Conditional(conditional) = info.expression.kind
+                && let Some(condition) = record(conditional.condition_expression)
+                && let Some(truth) = Self::constant_truth(condition)
+            {
+                let selected = if truth {
+                    conditional.then_expression
+                } else {
+                    conditional.else_expression
+                };
+                info.assoc_barrier = condition.assoc_barrier
+                    || record(selected).is_some_and(|selected| selected.assoc_barrier);
+            }
         }
         self.expressions.push(info);
     }
@@ -1635,6 +1653,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             selected_expression: None,
             elided: false,
             runtime_query: false,
+            assoc_barrier: false,
             place_alignment: None,
             ty,
             operation_type: None,

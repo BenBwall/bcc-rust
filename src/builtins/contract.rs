@@ -245,6 +245,9 @@ pub(crate) enum ConstantConstraint {
     /// Clang check `__builtin_longjmp`'s; a constant the conversion changes
     /// gets `-Wconstant-conversion`.
     ConvertedIntegerValue(u64),
+    /// Any arithmetic constant, which GCC folds after the conversion,
+    /// floating or not an integer constant expression.
+    ArithmeticConstant,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -263,6 +266,8 @@ pub(crate) enum ConstraintDiagnostic {
     Immediate,
     /// A `__builtin_longjmp` value that is not the constant 1.
     LongjmpValue,
+    /// A `__builtin_alloca_with_align_and_max` bound that is no constant.
+    AllocaMaximum,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -730,6 +730,11 @@ pub(crate) struct ExpressionInfo<'tu> {
     /// constant context reads zero. Lowering evaluates it structurally.
     /// GNU extension: GCC manual, "Other Builtins".
     pub(crate) runtime_query: bool,
+    /// The value reads a folded `__builtin_assoc_barrier`, which GCC folds
+    /// wherever a constant is required but never in an array bound: the
+    /// array is variable length.
+    /// GNU extension: GCC manual, "Other Builtins".
+    pub(crate) assoc_barrier: bool,
     pub(crate) ty: TypeId,
     /// Arithmetic type before the final compound-assignment conversion.
     pub(crate) operation_type: Option<TypeId>,

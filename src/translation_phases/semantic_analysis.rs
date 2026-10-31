@@ -933,6 +933,10 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 // declarations requiring a constant bound with a warning.
                 // Automatic arrays and type names (including within sizeof)
                 // retain their variable bounds.
+                // GCC never folds a bound that reads `__builtin_assoc_barrier`.
+                if !info.ice && info.assoc_barrier {
+                    value = None;
+                }
                 if value.is_some() && !info.ice && info.folded_address() {
                     if fold_bounds {
                         self.error(SemanticErrorKind::FoldedArrayBound, source, None, None);

@@ -2074,7 +2074,7 @@ fn not_a_number(value: LongDouble) -> bool {
 /// The integer a real floating value converts to, truncated toward zero:
 /// none when it does not fit, which is undefined.
 /// C99: §6.3.1.4 paragraph 1, p. 43; PDF p. 55.
-fn floating_integer(
+pub(in crate::translation_phases::semantic_analysis) fn floating_integer(
     wide: &WideIntegers<'_>,
     value: Floating,
     bits: u32,
