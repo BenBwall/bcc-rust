@@ -410,7 +410,7 @@ pub fn WasmListing(
                 <span><i class="swatch swatch-current"></i>"just executed"</span>
                 <span><i class="swatch swatch-next-instruction"></i>"next"</span>
                 <span><i class="swatch swatch-breakpoint"></i>"click a line number to break there"</span>
-                <span class="legend-hover" hidden=move || !has_lines()><i class="swatch swatch-link"></i>"hover or move the cursor to link C and WebAssembly"</span>
+                <span class="legend-hover" hidden=move || !has_lines()><i class="swatch swatch-link"></i>"hover or click a line to link C and WebAssembly"</span>
                 <span class="legend-tap" hidden=move || !has_lines()><i class="swatch swatch-link"></i>"tap a line to link C and WebAssembly"</span>
             </footer>
         </div>

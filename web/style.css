@@ -381,6 +381,9 @@
   .fallback-number { display: inline-block; width: 56px; padding-right: 9px; text-align: right; color: var(--faint); user-select: none; }
   .code-editor:not([data-language="c"]) .fallback-number { width: 50px; padding-right: 25px; }
   .code-editor[data-language="wat"] .fallback-number { width: 58px; }
+  /* The machine-code listing numbers nothing: its offsets are its text. */
+  .code-editor[data-language="objdump"] .fallback-number { display: none; }
+  .code-editor[data-language="objdump"] .fallback-line { padding-left: 26px; }
   .monaco-host { position: absolute; inset: 0; opacity: 0; transition: opacity .3s var(--ease); }
   /* Until Monaco arrives, a press lands on the fallback (and asks for it). */
   .code-editor:not(.is-ready) .monaco-host { pointer-events: none; }
@@ -922,7 +925,7 @@
   .monaco-editor .link-line { background: color-mix(in srgb, var(--accent) 10%, transparent); }
   /* The cursor's line in the editor with the focus: where the links come
      from when the keyboard moves through the code. */
-  .monaco-editor.focused .view-overlays .current-line { box-shadow: inset 3px 0 0 var(--accent); }
+  .monaco-editor.focused .margin-view-overlays .current-line-margin { box-shadow: inset 3px 0 0 var(--accent); }
   .monaco-editor .link-range { outline: 1.5px solid color-mix(in srgb, var(--accent) 85%, transparent); background: color-mix(in srgb, var(--accent) 12%, transparent); border-radius: 3px; }
   /* What the front-end stages mark in the source and in their output. */
   .monaco-editor .src-splice { color: var(--accent) !important; font-weight: 700; background: color-mix(in srgb, var(--accent) 18%, transparent); border-radius: 3px; }
@@ -1214,10 +1217,11 @@
      splitting in two rather than an empty box. */
   .map-lanes::before {
     content: ""; position: absolute; top: -14px; left: 25%; right: 25%; height: 14px;
-    border: 1.5px solid var(--line); border-bottom: 0; border-radius: 10px 10px 0 0;
+    border: 2px solid transparent; border-bottom: 0; border-radius: 10px 10px 0 0;
     border-left-color: var(--cat-memory); border-right-color: var(--cat-convert);
+    background: linear-gradient(90deg, var(--cat-memory) 50%, var(--cat-convert) 50%) top / 100% 2px no-repeat border-box;
   }
-  .map-lanes::after { content: ""; position: absolute; top: -26px; left: 50%; height: 12px; border-left: 1.5px solid var(--line); }
+  .map-lanes::after { content: ""; position: absolute; top: -26px; left: calc(50% - 1px); height: 12px; border-left: 2px solid var(--line); }
   .map-lane {
     --lane: var(--cat-memory);
     display: flex; flex-direction: column; gap: 8px; padding: 13px 14px 14px;

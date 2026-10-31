@@ -74,6 +74,15 @@ function colors(palette, isDark) {
     'editorLineNumber.activeForeground': isDark ? '#c3cddb' : '#2b3445',
     'editor.lineHighlightBackground': isDark ? '#ffffff08' : '#0b62a308',
     'editor.lineHighlightBorder': '#00000000',
+    // Other places of the word under the cursor. Monaco's light default
+    // drops tokens below 4.5:1 where it meets the cursor's line; a light
+    // fill with an outline keeps every token readable.
+    'editor.wordHighlightBackground': isDark ? '#ffffff12' : '#0b62a30d',
+    'editor.wordHighlightBorder': isDark ? '#ffffff30' : '#0b62a340',
+    'editor.wordHighlightStrongBackground': isDark ? '#ffffff12' : '#0b62a30d',
+    'editor.wordHighlightStrongBorder': isDark ? '#ffffff30' : '#0b62a340',
+    'editor.wordHighlightTextBackground': isDark ? '#ffffff12' : '#0b62a30d',
+    'editor.wordHighlightTextBorder': isDark ? '#ffffff30' : '#0b62a340',
     'editor.selectionBackground': isDark ? '#3b82f640' : '#3b82f62e',
     'editor.inactiveSelectionBackground': isDark ? '#3b82f626' : '#3b82f61c',
     'editorCursor.foreground': isDark ? '#5eead4' : '#0b7a6d',

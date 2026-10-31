@@ -1948,7 +1948,7 @@ fn SourcePane(state: State) -> impl IntoView {
                 <span><i class="swatch swatch-squiggle"></i>"bcc error"</span>
             </footer>
             <footer class="source-legend" hidden=move || state.mode.get() != Mode::Pipeline>
-                <span class="legend-hover"><i class="swatch swatch-link"></i>"hover or move the cursor to a line to find what it became"</span>
+                <span class="legend-hover"><i class="swatch swatch-link"></i>"hover or click a line to find what it became"</span>
                 <span class="legend-tap"><i class="swatch swatch-link"></i>"tap a line to find what it became"</span>
                 <span><i class="swatch swatch-squiggle"></i>"bcc error"</span>
             </footer>
