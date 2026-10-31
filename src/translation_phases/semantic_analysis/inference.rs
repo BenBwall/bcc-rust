@@ -180,13 +180,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let mut derivations = ArenaVec::new_in(self.scratch);
         derivations_of(init.declarator, &mut derivations);
         match (rules, derivations.last()) {
-            | (_, None) => {},
+            | (_, None) | (RuleSet::Clang, Some(Derivation::Pointer)) => {},
             | (RuleSet::Gcc, Some(_)) => return Some((InferenceFault::NotPlainIdentifier, None)),
             | (RuleSet::Clang, Some(Derivation::Array)) =>
                 return Some((InferenceFault::ArrayDeclarator, None)),
             | (RuleSet::Clang, Some(Derivation::Function)) =>
                 return Some((InferenceFault::FunctionDeclarator, None)),
-            | (RuleSet::Clang, Some(Derivation::Pointer)) => {},
         }
         let Some(initializer) = init.initializer else {
             return Some((InferenceFault::MissingInitializer, None));
