@@ -92,8 +92,8 @@ clauses! {
         "A decimal constant without a suffix has type int when its value fits in an int.";
     /// C99: §6.5 paragraph 3, p. 67; PDF p. 79.
     EVALUATION_ORDER = "6.5p3", "p. 67; PDF p. 79", "Expressions",
-        "C leaves the order in which an operator's operands are evaluated unspecified (except for \
-         &&, ||, ?: and the comma operator); a program must not depend on it.";
+        "Except for the function-call (), &&, ||, ?: and comma operators, C leaves the order in \
+         which subexpressions are evaluated, and their side effects happen, unspecified.";
     /// C99: §6.5 paragraph 5, p. 67; PDF p. 79.
     EXCEPTIONAL_CONDITION = "6.5p5", "p. 67; PDF p. 79", "Expressions",
         "If a result is not mathematically defined or does not fit its type (such as signed int \
@@ -137,6 +137,10 @@ clauses! {
     DIVISION = "6.5.5p5", "p. 82; PDF p. 94", "Multiplicative operators",
         "/ gives the quotient (truncated toward zero) and % the remainder; dividing by zero is \
          undefined.";
+    /// C99: §6.5.5 paragraph 6, p. 82; PDF p. 94.
+    QUOTIENT = "6.5.5p6", "p. 82; PDF p. 94", "Multiplicative operators",
+        "/ discards the fraction, and a % b is defined by (a/b)*b + a%b == a when a/b is \
+         representable; C11 adds that otherwise both are undefined.";
     /// C99: §6.5.5 paragraph 4, p. 82; PDF p. 94.
     MULTIPLICATION = "6.5.5p4", "p. 82; PDF p. 94", "Multiplicative operators",
         "The result of * is the product of the operands.";

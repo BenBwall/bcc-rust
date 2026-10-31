@@ -22,6 +22,7 @@ use super::{
         MAX_OBJECTS,
         Object,
         Type,
+        Undefined,
         Value,
     },
 };
@@ -192,6 +193,7 @@ impl Machine {
                 self.state.source_range,
                 "indirection through a null pointer",
                 &clauses::INDIRECTION,
+                Undefined::NullIndirection,
             )),
             | _ => Err(self.error("indirection requires an int pointer")),
         }
@@ -208,6 +210,11 @@ impl Machine {
             .filter(|&offset| offset < length);
         index.ok_or_else(|| {
             let name = &object.name;
+            let cause = if usize::try_from(offset) == Ok(length) {
+                Undefined::OnePastEnd
+            } else {
+                Undefined::OutsideObject
+            };
             let message = match self.metadata[object.id - 1].ty {
                 | Type::Array(_) if usize::try_from(offset) == Ok(length) => format!(
                     "`{name}` has {length} elements, [0] to [{}], and this access is at \
@@ -235,6 +242,7 @@ impl Machine {
                 self.state.source_range,
                 &message,
                 &clauses::POINTER_ARITHMETIC,
+                cause,
             )
         })
     }
@@ -251,6 +259,7 @@ impl Machine {
                 self.state.source_range,
                 &format!("`{}` is accessed after its lifetime ended", object.name),
                 &clauses::LIFETIME,
+                Undefined::AfterLifetime,
             ));
         }
         Ok(object)
@@ -377,10 +386,16 @@ impl Machine {
                 i32::MAX
             )
         };
+        let cause = if matches!(operator, "/" | "%") {
+            Undefined::QuotientOverflow
+        } else {
+            Undefined::SignedOverflow
+        };
         Diagnostic::ub(
             self.state.source_range,
             &message,
             &clauses::EXCEPTIONAL_CONDITION,
+            cause,
         )
     }
 
@@ -390,6 +405,7 @@ impl Machine {
                 self.state.source_range,
                 "integer division or remainder by zero",
                 &clauses::DIVISION,
+                Undefined::DivisionByZero,
             ));
         }
         let result = match operator {
@@ -421,6 +437,7 @@ impl Machine {
                 self.state.source_range,
                 "pointer arithmetic requires a pointer to an object",
                 &clauses::POINTER_ARITHMETIC,
+                Undefined::NullArithmetic,
             ));
         };
         let object = self.live_object(target)?;
@@ -437,6 +454,7 @@ impl Machine {
                 self.state.source_range,
                 "pointer arithmetic leaves the object and its one-past position",
                 &clauses::POINTER_ARITHMETIC,
+                Undefined::PointerOutside,
             ));
         };
         let offset =

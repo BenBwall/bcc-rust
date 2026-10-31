@@ -212,6 +212,7 @@ impl Machine {
             | &Op::Store {
                 initializer,
                 full_expression,
+                char_value,
             } => {
                 let value = self.pop_value()?;
                 let (target, offset) = self.pop_address()?;
@@ -221,6 +222,7 @@ impl Machine {
                     range,
                     initializer,
                     full_expression,
+                    char_value,
                     target,
                     offset,
                     previous.as_ref(),

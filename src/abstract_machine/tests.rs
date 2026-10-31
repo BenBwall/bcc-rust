@@ -823,6 +823,68 @@ fn undefined_behavior_is_titled_by_its_cause() {
         title("int main(void) { int a[2] = {1, 2}; int *p = a + 3; return *p; }"),
         "Undefined behavior: pointer outside its array"
     );
+    // Nothing is accessed: the arithmetic itself has no meaning.
+    assert_eq!(
+        title("int main(void) { int *p = 0; p = p + 1; return 0; }"),
+        "Undefined behavior: arithmetic on a null pointer"
+    );
+    // The remainder 0 would fit; the quotient is what does not.
+    for operator in ["/", "%"] {
+        let session = run(&format!(
+            "int main(void) {{ int m = -2147483647 - 1; int n = -1; return m {operator} n; }}"
+        ));
+        let event = &session.state().event;
+        assert_eq!(event.title, "Undefined behavior: the quotient does not fit");
+        assert!(event.clauses.iter().any(|clause| clause.id == "6.5.5p6"));
+    }
+}
+
+#[test]
+fn storing_a_char_into_a_char_converts_nothing() {
+    let states =
+        states("int main(void) { char a = 5; char b = a; b = a; int i = 7; a = i; return b; }");
+    let stores = states
+        .iter()
+        .filter(|state| matches!(state.event.kind, EventKind::Initialize | EventKind::Assign))
+        .map(|state| &state.event)
+        .collect::<Vec<_>>();
+    let converts = stores
+        .iter()
+        .map(|event| event.explanation.contains("is converted to"))
+        .collect::<Vec<_>>();
+    // char a = 5 and a = i store ints; char b = a and b = a store chars.
+    assert_eq!(converts, [true, false, false, false, true], "{stores:#?}");
+}
+
+#[test]
+fn loop_conditions_and_exit_statuses_say_what_happens() {
+    let states = states("int main(void) { int i = 0; while (i < 2) { i = i + 1; } return -1; }");
+    let loops = states
+        .iter()
+        .filter(|state| state.event.kind == EventKind::Branch)
+        .map(|state| state.event.summary.as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        loops.iter().all(|summary| !summary.contains("again")),
+        "{loops:?}"
+    );
+    let returned = &states.last().expect("a final state").event;
+    assert!(
+        returned.summary.contains("a shell on Linux sees as 255"),
+        "{}",
+        returned.summary
+    );
+    // A declaration's lead does not claim the object starts there.
+    let declared = &states
+        .iter()
+        .find(|state| state.event.kind == EventKind::Declare)
+        .expect("a declaration")
+        .event;
+    assert!(
+        declared.summary.contains("from the start of its block"),
+        "{}",
+        declared.summary
+    );
 }
 
 #[test]

@@ -337,6 +337,32 @@ pub struct Diagnostic {
     pub citation:     Option<&'static str>,
     /// The same rule with its title and a plain-language gloss.
     pub clause:       Option<&'static Clause>,
+    /// What made the behavior undefined, for undefined behavior.
+    pub undefined:    Option<Undefined>,
+}
+
+/// What made a program's behavior undefined: the narration titles the
+/// stop by it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Undefined {
+    /// A `+`, `-`, `*` or unary `-` result outside int (C99 §6.5p5).
+    SignedOverflow,
+    /// `INT_MIN / -1` or `INT_MIN % -1`: the quotient does not fit.
+    QuotientOverflow,
+    /// `/` or `%` by zero (C99 §6.5.5p5).
+    DivisionByZero,
+    /// `*` applied to a null pointer (C99 §6.5.3.2p4).
+    NullIndirection,
+    /// Pointer arithmetic on a null pointer, which points into no array.
+    NullArithmetic,
+    /// An access to an object whose lifetime has ended (C99 §6.2.4p2).
+    AfterLifetime,
+    /// An access one past the end of an array (C99 §6.5.6p8).
+    OnePastEnd,
+    /// An access further outside an object.
+    OutsideObject,
+    /// Pointer arithmetic that leaves the array and its one-past position.
+    PointerOutside,
 }
 
 impl Diagnostic {
@@ -347,6 +373,7 @@ impl Diagnostic {
             source_range: range,
             citation: None,
             clause: None,
+            undefined: None,
         }
     }
 
@@ -354,10 +381,16 @@ impl Diagnostic {
         Self::new("limit", range, message)
     }
 
-    pub(super) fn ub(range: SourceRange, message: &str, clause: &'static Clause) -> Self {
+    pub(super) fn ub(
+        range: SourceRange,
+        message: &str,
+        clause: &'static Clause,
+        cause: Undefined,
+    ) -> Self {
         Self {
             citation: Some(clause.citation),
             clause: Some(clause),
+            undefined: Some(cause),
             ..Self::new("undefined_behavior", range, message)
         }
     }
@@ -418,6 +451,9 @@ pub(super) enum Op {
         initializer:     bool,
         /// Whether this store ends a full expression (C99 §6.8p4).
         full_expression: bool,
+        /// Whether the stored value is a char's, not an int's, so storing it
+        /// in a char converts nothing.
+        char_value:      bool,
     },
     Increment {
         delta:  i32,
