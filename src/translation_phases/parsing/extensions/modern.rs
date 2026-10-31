@@ -69,6 +69,11 @@ pub(crate) enum ExtendedType<'tu> {
         format:  InterchangeFloat,
         complex: bool,
     },
+    /// `_Complex` with the integer type specifiers of its real type, in any
+    /// order (`_Complex int`, `unsigned short _Complex`, `long _Complex
+    /// long`). GNU extension: GCC manual, "Complex Numbers".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Complex.html>
+    ComplexInteger(super::super::declaration_syntax::TypeSpecifiers<'tu>),
 }
 
 /// Specifier additions collected in reverse source order; immutable links avoid

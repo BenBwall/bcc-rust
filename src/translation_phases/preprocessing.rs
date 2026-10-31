@@ -89,6 +89,7 @@ pub(crate) use token::{
     CharacterTokenType,
     FloatTokenType,
     HalfConstant,
+    ImaginaryIntegerKind,
     IntegerTokenType,
     InterchangeFloat,
     KeywordTokenType,

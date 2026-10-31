@@ -1762,6 +1762,35 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
             }
             return Ok(());
         }
+        // A GNU complex integer constant: the exact integer parts the
+        // floating carrier holds, or an integer's value and zero.
+        if let Repr::Complex { component } = representation
+            && !component.is_float()
+        {
+            // The parts wrap to their width, as an integer conversion does
+            // (C99 §6.3.1.3p2).
+            let integer_part = |value: &crate::float_parsing::LongDouble| {
+                floats::to_integer(value, 128, true).map(|bits| bits & component.mask())
+            };
+            let [real, imag] = match (info.floating(), integer) {
+                | (Some(value), _) => [integer_part(&value.real), integer_part(&value.imag)],
+                | (None, Some(value)) => [Some(value.value.cast_unsigned()), Some(0)],
+                | (None, None) => [None, None],
+            };
+            let stride = size / 2;
+            for (index, bits) in [real.ok_or_else(unsupported)?, imag.ok_or_else(unsupported)?]
+                .into_iter()
+                .enumerate()
+            {
+                let target = bytes
+                    .get_mut(start + index * stride..start + (index + 1) * stride)
+                    .ok_or_else(unsupported)?;
+                for (byte, bits) in target.iter_mut().zip(floats::bytes(bits, stride)) {
+                    *byte = bits;
+                }
+            }
+            return Ok(());
+        }
         if let Repr::Complex { component } = representation {
             let real = match (info.floating(), integer) {
                 | _ if let Some(value) = info.binary128() =>

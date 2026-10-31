@@ -1125,6 +1125,7 @@ fn unanalyzed_extended(specifiers: super::TypeSpecifiers<'_>) -> bool {
                     | super::ExtendedType::Atomic(_)
                     | super::ExtendedType::Float128 { .. }
                     | super::ExtendedType::InterchangeFloat { .. }
+                    | super::ExtendedType::ComplexInteger(_)
                     | super::ExtendedType::Typeof { .. }
             )
     )

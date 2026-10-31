@@ -108,7 +108,7 @@ impl<'tu> Parser<'_, 'tu, '_> {
                     self.report(ParserErrorType::UnexpectedEndBeforeTypeSpecifier, None);
                 }
                 list.report_incomplete_complex(self);
-                return Some(list.finish());
+                return Some(list.finish(self));
             };
 
             // GNU extension: `__extension__` may lead a declaration or a
@@ -210,7 +210,7 @@ impl<'tu> Parser<'_, 'tu, '_> {
                     .merge_into(&mut list.source_vectors, index.source_vectors);
                 list.consumed = true;
                 if stopped_before_declaration {
-                    return Some(list.finish());
+                    return Some(list.finish(self));
                 }
                 continue;
             }
@@ -219,7 +219,7 @@ impl<'tu> Parser<'_, 'tu, '_> {
                 continue;
             }
             list.finish_before(self, token);
-            return Some(list.finish());
+            return Some(list.finish(self));
         }
     }
 
@@ -314,6 +314,10 @@ struct SpecifierList<'tu> {
     /// The `_Complex` keyword, retained to diagnose a list that never
     /// supplies its required real floating type.
     complex_token:         Option<Token>,
+    /// Whether `_Complex` combined with integer type specifiers, which
+    /// accumulate in `specifiers` as for the real type.
+    /// GNU extension: GCC manual, "Complex Numbers".
+    complex_integer:       bool,
     /// Provenance accumulated across the complete specifier sequence.
     source_vectors:        Option<SourceVectors>,
 }
@@ -329,13 +333,38 @@ impl<'tu> SpecifierList<'tu> {
             invalid_type_seen: false,
             type_conflict_seen: false,
             complex_token: None,
+            complex_integer: false,
             source_vectors: None,
         }
     }
 
-    fn finish(&mut self) -> DeclarationSpecifiers<'tu> {
+    fn finish(&mut self, parser: &mut Parser<'_, 'tu, '_>) -> DeclarationSpecifiers<'tu> {
         self.specifiers.source_vectors = self.source_vectors.unwrap_or_default();
+        if self.complex_integer {
+            self.finish_complex_integer(parser);
+        }
         self.specifiers
+    }
+
+    /// Wraps the integer type specifiers `_Complex` joined, or diagnoses a
+    /// list that left the integer types after it, as with `__int128`.
+    /// GNU extension: GCC manual, "Complex Numbers".
+    fn finish_complex_integer(&mut self, parser: &mut Parser<'_, 'tu, '_>) {
+        let real = self.specifiers.type_specifiers;
+        if !real.is_complex_integer_base() {
+            if !self.type_conflict_seen
+                && !self.invalid_type_seen
+                && let Some(token) = self.complex_token
+            {
+                real.report_conflict(parser, token.contents, token);
+            }
+            return;
+        }
+        if let Some(token) = self.complex_token {
+            parser.extension(Feature::ImaginaryConstants, "complex integer type", token);
+        }
+        self.specifiers.type_specifiers =
+            TypeSpecifiers::Extended(parser.alloc_syntax(ExtendedType::ComplexInteger(real)));
     }
 
     /// The signedness a sized extended integer type inherits from a
@@ -910,13 +939,18 @@ impl<'tu> SpecifierList<'tu> {
     ///
     /// C99: §6.7.2 paragraph 2, pp. 99-100; PDF pp. 111-112 lists only
     /// `float _Complex`, `double _Complex`, and `long double _Complex`.
-    fn report_incomplete_complex(&self, parser: &mut Parser<'_, 'tu, '_>) {
+    ///
+    /// A list ending in `_Complex long` names GCC's and Clang's complex
+    /// `long int` instead (GCC manual, "Complex Numbers").
+    fn report_incomplete_complex(&mut self, parser: &mut Parser<'_, 'tu, '_>) {
+        if self.specifiers.type_specifiers == TypeSpecifiers::ComplexLong {
+            self.specifiers.type_specifiers = TypeSpecifiers::Long;
+            self.complex_integer = true;
+            return;
+        }
         if !self.invalid_type_seen
             && !self.type_conflict_seen
-            && matches!(
-                self.specifiers.type_specifiers,
-                TypeSpecifiers::Complex | TypeSpecifiers::ComplexLong
-            )
+            && self.specifiers.type_specifiers == TypeSpecifiers::Complex
         {
             parser.report(
                 ParserErrorType::IncompleteComplexTypeSpecifier,
@@ -1007,6 +1041,47 @@ impl<'tu> SpecifierList<'tu> {
                     self.specifiers
                         .type_specifiers
                         .report_conflict(parser, token.contents, token);
+                }
+                return;
+            },
+            | _ => {},
+        }
+        // GNU complex integer types: an integer keyword after `_Complex`
+        // (or after `_Complex long`) continues the real type, and
+        // `_Complex` after an integer keyword other than a lone `long`
+        // (which `double` may still follow) marks it complex.
+        let integer = matches!(
+            specifier,
+            PrimitiveTypeSpecifier::Signed
+                | PrimitiveTypeSpecifier::Unsigned
+                | PrimitiveTypeSpecifier::Int
+                | PrimitiveTypeSpecifier::Short
+                | PrimitiveTypeSpecifier::Char
+        );
+        match (self.specifiers.type_specifiers, specifier) {
+            | (TypeSpecifiers::Complex, _) if integer => {
+                self.specifiers.type_specifiers = TypeSpecifiers::Empty;
+                self.complex_integer = true;
+            },
+            | (TypeSpecifiers::ComplexLong, PrimitiveTypeSpecifier::Long) => {
+                self.specifiers.type_specifiers = TypeSpecifiers::Long;
+                self.complex_integer = true;
+            },
+            | (TypeSpecifiers::ComplexLong, _) if integer => {
+                self.specifiers.type_specifiers = TypeSpecifiers::Long;
+                self.complex_integer = true;
+            },
+            | (real, PrimitiveTypeSpecifier::Complex)
+                if real.is_complex_integer_base() && real != TypeSpecifiers::Long =>
+            {
+                if self.complex_integer {
+                    parser.report(
+                        ParserErrorType::TypeSpecifierSpecifiedTwice(token.kind),
+                        Some(token),
+                    );
+                } else {
+                    self.complex_integer = true;
+                    self.complex_token = Some(token);
                 }
                 return;
             },

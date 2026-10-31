@@ -630,6 +630,17 @@ fn scalar_code(scalar: Scalar) -> &'static str {
         | Scalar::ComplexDouble
         | Scalar::ComplexLongDouble
         | Scalar::ComplexFloat128
-        | Scalar::ComplexFloat16 => unreachable!("complex types use vendor templates"),
+        | Scalar::ComplexFloat16
+        | Scalar::ComplexChar
+        | Scalar::ComplexSignedChar
+        | Scalar::ComplexUnsignedChar
+        | Scalar::ComplexShort
+        | Scalar::ComplexUnsignedShort
+        | Scalar::ComplexInt
+        | Scalar::ComplexUnsignedInt
+        | Scalar::ComplexLong
+        | Scalar::ComplexUnsignedLong
+        | Scalar::ComplexLongLong
+        | Scalar::ComplexUnsignedLongLong => unreachable!("complex types use vendor templates"),
     }
 }

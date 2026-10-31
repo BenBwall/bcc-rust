@@ -184,6 +184,21 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         if let Some(folded) = info.floating().filter(|_| folded_value)
             && let Ok(Repr::Complex { component }) = repr(&self.unit.sema.types, info.ty)
         {
+            // A GNU complex integer constant's parts are exact integers.
+            if !component.is_float() {
+                // The parts wrap to their width (C99 §6.3.1.3p2).
+                let part = |value| {
+                    floats::to_integer(value, 128, true)
+                        .map(|bits| (bits & component.mask()).cast_signed())
+                        .ok_or_else(|| LoweringError::missing("complex constant bits", source))
+                };
+                let real = part(&folded.real)?;
+                let imag = part(&folded.imag)?;
+                let values = [self.iconst(component, real), self.iconst(component, imag)];
+                let operand = self.complex_pair(values);
+                self.push_item(operand, info.ty);
+                return Ok(());
+            }
             // A folded `_Complex _Float16` keeps its excess, in `f32` parts.
             let component = if self.complex_half(info.ty) {
                 Type::F32
@@ -1139,6 +1154,13 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             | Operand::Truth(truth) => return Ok(truth),
             | Operand::Complex(id) => {
                 let [mut real, mut imag] = self.complex_values[id as usize];
+                let ty = self.draft.value_type(real);
+                if !ty.is_float() {
+                    let zero = self.iconst(ty, 0);
+                    let a = self.icmp(IntCC::Ne, real, zero);
+                    let b = self.icmp(IntCC::Ne, imag, zero);
+                    return Ok(self.binary_inst(Opcode::Or, InstFlags::empty(), a, b));
+                }
                 if self.draft.value_type(real).half_format().is_some() {
                     real = self.widen_half(real);
                     imag = self.widen_half(imag);
@@ -1840,11 +1862,14 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             | U::Plus | U::Extension => operand.operand,
             | U::Minus if matches!(operand.operand, Operand::Complex(_)) => {
                 let [real, imag] = self.complex_parts(operand, source)?;
-                let ty = self.draft.value_type(real);
-                let pair = [
-                    self.convert(Opcode::Fneg, ty, real),
-                    self.convert(Opcode::Fneg, ty, imag),
-                ];
+                let pair = [self.negate_part(real), self.negate_part(imag)];
+                self.complex_pair(pair)
+            },
+            // GNU: `~` of a complex value is its conjugate (GCC manual,
+            // "Complex Numbers").
+            | U::BitwiseNot if matches!(operand.operand, Operand::Complex(_)) => {
+                let [real, imag] = self.complex_parts(operand, source)?;
+                let pair = [real, self.negate_part(imag)];
                 self.complex_pair(pair)
             },
             | U::Minus => {
@@ -2630,6 +2655,18 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             | Repr::Complex {
                 component: Type::F128,
             } => &[Type::F128, Type::F128],
+            | Repr::Complex {
+                component: Type::I8,
+            } => &[Type::I8, Type::I8],
+            | Repr::Complex {
+                component: Type::I16,
+            } => &[Type::I16, Type::I16],
+            | Repr::Complex {
+                component: Type::I32,
+            } => &[Type::I32, Type::I32],
+            | Repr::Complex {
+                component: Type::I64,
+            } => &[Type::I64, Type::I64],
             | Repr::Complex { .. } => &[Type::F80, Type::F80],
             | Repr::Float { ty } => match ty {
                 | Type::F16 | Type::BF16 if self.half_in_float() => &[Type::F32],
@@ -2759,4 +2796,19 @@ pub(super) enum Folded<'tu> {
     Live(&'tu Expression<'tu>),
     /// The short-circuit truth of a folded `&&` or `||`.
     Truth(bool),
+}
+
+impl FunctionLowerer<'_, '_, '_, '_, '_> {
+    /// The negation of one part of a complex value: `fneg` of a floating
+    /// part, and of a GNU complex integer's part its wrapping difference
+    /// from zero. C99: §6.5.3.3 paragraph 3, p. 79; PDF p. 91.
+    fn negate_part(&mut self, part: Value) -> Value {
+        let ty = self.draft.value_type(part);
+        if ty.is_float() {
+            self.convert(Opcode::Fneg, ty, part)
+        } else {
+            let zero = self.iconst(ty, 0);
+            self.binary_inst(Opcode::Isub, InstFlags::empty(), zero, part)
+        }
+    }
 }
