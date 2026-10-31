@@ -201,6 +201,9 @@ pub(crate) struct Module<'ir> {
     /// take a dereference to prove a pointer non-null
     /// (`-fno-delete-null-pointer-checks`).
     null_pointer_is_valid: bool,
+    /// Signaling NaNs are kept apart from quiet ones (`-fsignaling-nans`),
+    /// so a back end keeps floating operations with their exceptions.
+    signaling_nans:        bool,
     /// The descriptors of the functions' `asm` instructions.
     inline_asm:            Table<'ir, AsmId, InlineAsm<'ir>>,
 }

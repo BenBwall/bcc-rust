@@ -475,6 +475,20 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
         };
         let a = parts(self, left, domains & 1 != 0)?;
         let b = parts(self, right, domains & 2 != 0)?;
+        // Under `-ftrapv` a signed part of `int` or wider traps on overflow,
+        // as GCC checks these sums and products.
+        let part = self.part_repr(ty, source)?;
+        let checked = part.signed()
+            && part
+                .value_type()
+                .is_some_and(|ty| ty.bits() >= self.int_bits());
+        let arithmetic = |lowerer: &mut Self, opcode: Opcode, x: Value, y: Value| {
+            let result = lowerer.binary_inst(opcode, InstFlags::empty(), x, y);
+            if checked {
+                lowerer.trap_on_overflow(opcode, part, [x, y], result);
+            }
+            result
+        };
         let operand = match operator {
             | B::Equal | B::NotEqual => {
                 let cc = if operator == B::Equal {
@@ -498,19 +512,19 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
                     Opcode::Isub
                 };
                 let pair = [
-                    self.binary_inst(opcode, flags, a[0], b[0]),
-                    self.binary_inst(opcode, flags, a[1], b[1]),
+                    arithmetic(self, opcode, a[0], b[0]),
+                    arithmetic(self, opcode, a[1], b[1]),
                 ];
                 self.complex_pair(pair)
             },
             | B::Multiplication => {
-                let ac = self.binary_inst(Opcode::Imul, flags, a[0], b[0]);
-                let bd = self.binary_inst(Opcode::Imul, flags, a[1], b[1]);
-                let ad = self.binary_inst(Opcode::Imul, flags, a[0], b[1]);
-                let bc = self.binary_inst(Opcode::Imul, flags, a[1], b[0]);
+                let ac = arithmetic(self, Opcode::Imul, a[0], b[0]);
+                let bd = arithmetic(self, Opcode::Imul, a[1], b[1]);
+                let ad = arithmetic(self, Opcode::Imul, a[0], b[1]);
+                let bc = arithmetic(self, Opcode::Imul, a[1], b[0]);
                 let pair = [
-                    self.binary_inst(Opcode::Isub, flags, ac, bd),
-                    self.binary_inst(Opcode::Iadd, flags, ad, bc),
+                    arithmetic(self, Opcode::Isub, ac, bd),
+                    arithmetic(self, Opcode::Iadd, ad, bc),
                 ];
                 self.complex_pair(pair)
             },

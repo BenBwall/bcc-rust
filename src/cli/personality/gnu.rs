@@ -81,7 +81,7 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         }
     }
     let target = state.target.unwrap_or_else(|| host_target(personality));
-    state.machine_options(target);
+    let mmx = state.machine_options(target);
     state.check_inputs();
     let jobs = state.jobs();
     if state.errors != 0 {
@@ -104,6 +104,11 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
     );
     common.push(format!("--target={}", target.triple()).into());
     common.push(format!("--driver-name={}", invocation.name).into());
+    // Before the command line's `-D` and `-U`, as the compilers' own
+    // macros come before them.
+    if !mmx {
+        common.push("-U__MMX__".into());
+    }
     if invocation.name.ends_with("c89") {
         common.push("-std=c89".into());
     } else if invocation.name.ends_with("c99") {
@@ -948,6 +953,11 @@ impl State<'_> {
         } else if LINK_ONLY_OPTIONS.contains(&text) {
             self.link_only(text.into());
         }
+        // Clang knows `-ftrapv` but not its negation.
+        if self.compiler == Compiler::Clang && text == "-fno-trapv" {
+            self.error(format_args!("unknown argument: '{text}'"));
+            return;
+        }
         if PLAIN_OPTIONS.contains(&text)
             || text.starts_with("-std=")
             || text.starts_with("-O")
@@ -1038,14 +1048,21 @@ impl State<'_> {
 
     /// Applies [`treatment`] to the deferred `-m` options for `target`.
     /// `-mwindows` on MinGW-w64 links a GUI program, as GCC's driver does.
-    fn machine_options(&mut self, target: Target) {
+    /// Returns whether `__MMX__` stays defined: the last of `-mmmx` and
+    /// `-mno-mmx` decides, as in both compilers.
+    fn machine_options(&mut self, target: Target) -> bool {
+        let mut mmx = true;
         for option in std::mem::take(&mut self.machine) {
             if option == "-mwindows" && target == Target::WindowsGnu {
                 self.out.push("-Wl,--subsystem,windows".into());
             } else {
+                if let "-mmmx" | "-mno-mmx" = option.as_str() {
+                    mmx = option == "-mmmx";
+                }
                 self.treat(&option, target);
             }
         }
+        mmx
     }
 
     /// Ignores, warns about or refuses a known option bcc does not

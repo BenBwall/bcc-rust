@@ -162,6 +162,46 @@ impl<'a> MFunction<'a> {
         block
     }
 
+    /// Puts the blocks in `order` (old indices; blocks left out must be
+    /// unreachable) and renumbers every reference to them.
+    pub(crate) fn relayout(&mut self, order: &[usize], arena: &'a Bump) {
+        let mut renumber = ArenaVec::with_capacity_in(self.blocks.len(), arena);
+        renumber.resize(self.blocks.len(), None);
+        for (new, &old) in order.iter().enumerate() {
+            renumber[old] = Some(MBlock::new(new));
+        }
+        let map =
+            |block: MBlock| renumber[block.index()].expect("a kept block names only kept blocks");
+        let mut blocks = ArenaVec::with_capacity_in(order.len(), arena);
+        for &old in order {
+            let insts = std::mem::replace(&mut self.blocks[old].insts, ArenaVec::new_in(arena));
+            blocks.push(MBlockData { insts });
+        }
+        for data in &mut blocks {
+            if let Some(last) = data.insts.last_mut() {
+                match last {
+                    | MInst::Jmp { target } => *target = map(*target),
+                    | MInst::Jcc {
+                        taken, not_taken, ..
+                    } => {
+                        *taken = map(*taken);
+                        *not_taken = map(*not_taken);
+                    },
+                    | _ => {},
+                }
+            }
+        }
+        self.blocks = blocks;
+        for targets in &mut self.indirect {
+            for block in targets.iter_mut() {
+                *block = map(*block);
+            }
+        }
+        for (_, block) in &mut self.labels {
+            *block = map(*block);
+        }
+    }
+
     /// Records that `vreg` would like the register `other` has.
     pub(crate) fn hint(&mut self, vreg: VReg, other: Reg) {
         let hint = &mut self.hints[vreg.index()];

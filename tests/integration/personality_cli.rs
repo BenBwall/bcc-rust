@@ -448,6 +448,7 @@ mod tests {
                         "__NO_SIGNED_ZEROS__",
                         "__NO_TRAPPING_MATH__",
                         "__RECIPROCAL_MATH__",
+                        "__SUPPORT_SNAN__",
                     ]
                     .iter()
                     .any(|prefix| name.starts_with(prefix))
@@ -470,10 +471,84 @@ mod tests {
         }
     }
 
+    /// The GCC identity defines GCC's evaluation method, its spellings of
+    /// the `signed char` and `long long` widths, and from C11 the UTF
+    /// literal macros, as the host GCC does where there is one.
+    #[test]
+    fn gcc_mode_defines_gccs_environment_macros() {
+        const NAMES: [&str; 5] = [
+            "__FLT_EVAL_METHOD__",
+            "__SCHAR_WIDTH__",
+            "__LONG_LONG_WIDTH__",
+            "__STDC_UTF_16__",
+            "__STDC_UTF_32__",
+        ];
+        for (standard, utf) in [
+            ("-std=gnu89", None),
+            ("-std=c99", None),
+            ("-std=gnu99", Some("1")),
+            ("-std=gnu11", Some("1")),
+        ] {
+            let listing = macros_with("--gcc-mode", &[standard]);
+            let expected = [Some("0"), Some("8"), Some("64"), utf, utf];
+            for (name, value) in NAMES.iter().zip(expected) {
+                assert_eq!(
+                    defines(&listing, name).as_deref(),
+                    value,
+                    "{standard} {name}"
+                );
+            }
+            if let Some(host) = host_gcc_macros(&[standard]) {
+                for name in NAMES {
+                    assert_eq!(
+                        defines(&listing, name),
+                        defines(&host, name),
+                        "{standard} {name}"
+                    );
+                }
+            }
+        }
+        let clang = macros_with("--clang-mode", &[]);
+        assert_eq!(defines(&clang, "__LONG_LONG_WIDTH__"), None);
+        // GCC takes the literals the macros describe from gnu99 on; Clang
+        // from C11 only.
+        let directory = Directory::new();
+        directory.write(
+            "u.c",
+            "const void *p = u\"x\", *q = U\"y\", *r = u8\"z\";\n",
+        );
+        for (mode, standard, accepted) in [
+            ("--gcc-mode", "-std=gnu99", true),
+            ("--gcc-mode", "-std=c99", false),
+            ("--gcc-mode", "-std=gnu89", false),
+            ("--clang-mode", "-std=gnu99", false),
+            ("--clang-mode", "-std=c11", true),
+        ] {
+            let output = directory.bcc(mode, &["-fsyntax-only", standard, "u.c"]);
+            assert_eq!(
+                output.status.success(),
+                accepted,
+                "{mode} {standard}: {}",
+                stderr(&output)
+            );
+        }
+    }
+
     /// GCC's options that give up part of IEC 60559 semantics, alone and
     /// in the combinations whose order or interplay decides the macros.
-    const FLOATING_POINT_OPTIONS: [&[&str]; 24] = [
+    const FLOATING_POINT_OPTIONS: [&[&str]; 29] = [
         &[],
+        &["-fsignaling-nans"],
+        &["-fsignaling-nans", "-fno-signaling-nans"],
+        // Signaling NaNs keep trapping math, in either order.
+        &["-fsignaling-nans", "-fno-trapping-math"],
+        &["-fno-trapping-math", "-fsignaling-nans"],
+        &[
+            "-fsignaling-nans",
+            "-fno-signed-zeros",
+            "-fno-trapping-math",
+            "-fassociative-math",
+        ],
         &["-fno-signed-zeros"],
         &["-freciprocal-math"],
         &["-fno-trapping-math"],
@@ -574,6 +649,14 @@ mod tests {
             ),
             (&["-fassociative-math"], "2", "2", &[]),
             (&["-fno-signed-zeros", "-fno-fast-math"], "2", "2", &[]),
+            (&["-fsignaling-nans"], "2", "2", &["__SUPPORT_SNAN__"]),
+            (
+                &["-fno-trapping-math", "-fsignaling-nans"],
+                "2",
+                "2",
+                &["__SUPPORT_SNAN__"],
+            ),
+            (&["-fsignaling-nans", "-fno-signaling-nans"], "2", "2", &[]),
         ] {
             let listing = macros_with("--gcc-mode", options);
             assert_eq!(
@@ -592,6 +675,7 @@ mod tests {
                 "__NO_SIGNED_ZEROS__",
                 "__NO_TRAPPING_MATH__",
                 "__RECIPROCAL_MATH__",
+                "__SUPPORT_SNAN__",
             ] {
                 assert_eq!(
                     defines(&listing, name).as_deref(),
@@ -602,9 +686,10 @@ mod tests {
         }
         // Clang defines none of these but `__NO_MATH_ERRNO__`, which bcc's
         // Clang identity leaves out with Clang's target-dependent default.
-        let clang = macros_with("--clang-mode", &["-fno-signed-zeros"]);
+        let clang = macros_with("--clang-mode", &["-fno-signed-zeros", "-fsignaling-nans"]);
         assert_eq!(defines(&clang, "__GCC_IEC_559"), None);
         assert_eq!(defines(&clang, "__NO_SIGNED_ZEROS__"), None);
+        assert_eq!(defines(&clang, "__SUPPORT_SNAN__"), None);
     }
 
     /// `gcc -std=gnu17 OPTIONS -dM -E` of an empty file, from a host GCC
@@ -1266,6 +1351,201 @@ mod tests {
             succeeds(&directory.bcc("--gcc-mode", &["-O2", "-fwrapv", "m.c", "-o", "m"]));
             let run = Command::new(directory.path("m")).output().unwrap();
             assert_eq!(run.status.code(), Some(1));
+        }
+    }
+
+    /// Under `-fsignaling-nans` an operation on a signaling NaN, a constant
+    /// one included, is kept and raises the invalid exception at run time,
+    /// as in GCC; LLVM's identities such as `x * 1.0` no longer drop it.
+    #[test]
+    fn signaling_nans_keep_their_operations() {
+        let directory = Directory::new();
+        directory.write("f.c", "double f(double x) { return x * 1.0; }\n");
+        let llvm = directory.bcc("", &["--emit=llvm", "-O2", "-fsignaling-nans", "f.c"]);
+        succeeds(&llvm);
+        assert!(
+            stdout(&llvm).contains("llvm.experimental.constrained.fmul"),
+            "{}",
+            stdout(&llvm)
+        );
+        if !cfg!(all(target_os = "linux", target_env = "gnu")) {
+            return;
+        }
+        directory.write(
+            "s.c",
+            "#include <fenv.h>\n__attribute__((noinline)) double one(double x) { return x * 1.0; \
+             }\n__attribute__((noinline)) double folded(void) { return __builtin_nans(\"\") * \
+             2.0; }\nstatic int raised(double r) {\n  int invalid = fetestexcept(FE_INVALID) != \
+             0;\n  feclearexcept(FE_ALL_EXCEPT);\n  return invalid && r != r && \
+             !__builtin_issignaling(r);\n}\nint main(void) {\n  volatile double s = \
+             __builtin_nans(\"\");\n  feclearexcept(FE_ALL_EXCEPT);\n  if (!raised(one(s)))\n    \
+             return 1;\n  if (!raised(folded()))\n    return 2;\n  return 0;\n}\n",
+        );
+        for options in [
+            &["-O0"][..],
+            &["-O2"],
+            &["-O2", "-Xbcc", "--backend=native"],
+        ] {
+            let mut args = vec!["-fsignaling-nans", "s.c", "-lm", "-o", "s"];
+            args.extend(options);
+            succeeds(&directory.bcc("--gcc-mode", &args));
+            let run = Command::new(directory.path("s")).output().unwrap();
+            assert_eq!(run.status.code(), Some(0), "{options:?}");
+        }
+        // A module with `__bf16` values keeps LLVM's ordinary floating
+        // semantics, since LLVM 23 miscompiles `bf16` in `strictfp` code.
+        directory.write(
+            "b.c",
+            "#include <stdio.h>\nvolatile float vf = 1.015625f;\nvolatile int vi = 3;\nint \
+             main(void) {\n  __bf16 b = (__bf16)vf;\n  __bf16 c = (__bf16)vi;\n  printf(\"%a %a \
+             %a\\n\", (float)b, (float)c, (float)(b + b));\n}\n",
+        );
+        for options in [
+            &["-O0"][..],
+            &["-O2"],
+            &["-O2", "-Xbcc", "--backend=native"],
+        ] {
+            let mut args = vec!["-fsignaling-nans", "b.c", "-o", "b"];
+            args.extend(options);
+            succeeds(&directory.bcc("--gcc-mode", &args));
+            let run = Command::new(directory.path("b")).output().unwrap();
+            assert_eq!(
+                stdout(&run),
+                "0x1.04p+0 0x1.8p+1 0x1.04p+1\n",
+                "{options:?}"
+            );
+        }
+    }
+
+    /// `-ftrapv` traps on signed `+`, `-` and `*` overflow and on `abs` of
+    /// the most negative value instead of marking them `nsw`; with
+    /// `-fwrapv` the last option given decides under the GCC identity, as
+    /// in GCC, where `-fno-wrapv` only turns `-fwrapv` off, and `-ftrapv`
+    /// under the Clang identity, as in Clang, which knows no `-fno-trapv`.
+    #[test]
+    fn trapv_traps_on_signed_overflow() {
+        let directory = Directory::new();
+        directory.write("w.c", "int f(int x) { return x + 1; }\n");
+        let ir = |options: &[&str]| {
+            let mut args = vec!["--emit=ir"];
+            args.extend(options);
+            args.push("w.c");
+            let output = directory.bcc("", &args);
+            succeeds(&output);
+            stdout(&output)
+        };
+        let trapping = ir(&["-ftrapv"]);
+        assert!(trapping.contains("trap"), "{trapping}");
+        assert!(!trapping.contains("nsw"), "{trapping}");
+        for (options, gcc, clang) in [
+            (&["-ftrapv", "-fwrapv"][..], false, true),
+            (&["-fwrapv", "-ftrapv"], true, true),
+            (&["-ftrapv", "-fwrapv", "-fno-wrapv"], true, true),
+            (&["-ftrapv", "-fno-trapv"], false, false),
+            (&["-ftrapv", "-fno-strict-overflow"], false, true),
+        ] {
+            let mut with_gcc = vec!["--compiler-identity=gcc"];
+            with_gcc.extend(options);
+            assert_eq!(ir(&with_gcc).contains("trap"), gcc, "gcc {options:?}");
+            assert_eq!(ir(options).contains("trap"), clang, "clang {options:?}");
+        }
+        let unknown = directory.bcc("--clang-mode", &["-c", "-fno-trapv", "w.c"]);
+        assert!(
+            stderr(&unknown).contains("unknown argument: '-fno-trapv'"),
+            "{}",
+            stderr(&unknown)
+        );
+        if cfg!(all(target_os = "linux", target_env = "gnu")) {
+            directory.write(
+                "m.c",
+                "#include <limits.h>\n#include <stdlib.h>\n__attribute__((noinline)) int add(int \
+                 a, int b) { return a + b; }\n__attribute__((noinline)) long absolute(long a) { \
+                 return labs(a); }\n__attribute__((noinline)) long mul(long a, long b) { return a \
+                 * b; }\n__attribute__((noinline)) __int128 mul128(__int128 a, __int128 b) { \
+                 return a * b; }\nint main(int argc, char **argv) {\n  (void)argv;\n  __int128 \
+                 min = (__int128)1 << 127;\n  if (add(INT_MAX, -1) != INT_MAX - 1 || \
+                 mul(LONG_MIN, 1) != LONG_MIN || mul128(-1, min + 1) != -(min + 1) || \
+                 absolute(LONG_MIN + 1) != LONG_MAX)\n    return 2;\n  if (argc == 2)\n    return \
+                 add(INT_MAX, 1);\n  if (argc == 3)\n    return (int)mul(LONG_MIN, -1);\n  if \
+                 (argc == 4)\n    return (int)mul128(-1, min);\n  if (argc == 5)\n    return \
+                 (int)absolute(LONG_MIN);\n  return 0;\n}\n",
+            );
+            for backend in [&[][..], &["-Xbcc", "--backend=native"]] {
+                let mut args = vec!["-O2", "-ftrapv", "m.c", "-o", "m"];
+                args.extend(backend);
+                succeeds(&directory.bcc("--gcc-mode", &args));
+                let run = |arguments: &[&str]| {
+                    Command::new(directory.path("m"))
+                        .args(arguments)
+                        .output()
+                        .unwrap()
+                        .status
+                };
+                assert_eq!(run(&[]).code(), Some(0), "{backend:?}");
+                for arguments in [
+                    &["a"][..],
+                    &["a", "b"],
+                    &["a", "b", "c"],
+                    &["a", "b", "c", "d"],
+                ] {
+                    let status = run(arguments);
+                    assert!(
+                        status.code().is_none(),
+                        "{backend:?} {arguments:?}: {status:?}"
+                    );
+                }
+            }
+            // GNU complex integers' sums and products are checked in their
+            // parts, as GCC checks them; a `_Complex short` is not.
+            directory.write(
+                "c.c",
+                "__attribute__((noinline)) _Complex int mul(_Complex int a, _Complex int b) { \
+                 return a * b; }\n__attribute__((noinline)) _Complex short smul(_Complex short a, \
+                 _Complex short b) { return a * b; }\nint main(int argc, char **argv) {\n  \
+                 (void)argv;\n  _Complex int z = mul(3 + 4i, 3 + 4i);\n  if (__real__ z != -7 || \
+                 __imag__ z != 24)\n    return 2;\n  _Complex short s = smul(30000, 30000);\n  \
+                 (void)s;\n  if (argc > 1)\n    z = mul(2147483647, 2147483647);\n  return \
+                 __real__ z == 5;\n}\n",
+            );
+            succeeds(&directory.bcc("--gcc-mode", &["-O2", "-ftrapv", "c.c", "-o", "c"]));
+            let run = |arguments: &[&str]| {
+                Command::new(directory.path("c"))
+                    .args(arguments)
+                    .output()
+                    .unwrap()
+                    .status
+            };
+            assert_eq!(run(&[]).code(), Some(0));
+            assert!(run(&["a"]).code().is_none());
+            // So are their negation and conjugate, and `__builtin_abs` even
+            // where `-fno-builtin` makes `abs` the library's alone.
+            directory.write(
+                "n.c",
+                "#include <limits.h>\n#include <stdlib.h>\n__attribute__((noinline)) _Complex int \
+                 negate(_Complex int z) { return -z; }\n__attribute__((noinline)) _Complex int \
+                 conjugate(_Complex int z) { return ~z; }\n__attribute__((noinline)) int \
+                 builtin(int x) { return __builtin_abs(x); }\n__attribute__((noinline)) int \
+                 library(int x) { return abs(x); }\nint main(int argc, char **argv) {\n  \
+                 (void)argv;\n  if (argc == 2)\n    return __real__ negate(INT_MIN) == 5;\n  if \
+                 (argc == 3)\n    return __imag__ conjugate(INT_MIN * 1i) == 5;\n  if (argc == \
+                 4)\n    return builtin(INT_MIN) == 5;\n  return library(INT_MIN) == INT_MIN && \
+                 __real__ negate(3) == -3 ? 0 : 1;\n}\n",
+            );
+            succeeds(&directory.bcc(
+                "--gcc-mode",
+                &["-O2", "-ftrapv", "-fno-builtin", "n.c", "-o", "n"],
+            ));
+            let run = |arguments: &[&str]| {
+                Command::new(directory.path("n"))
+                    .args(arguments)
+                    .output()
+                    .unwrap()
+                    .status
+            };
+            assert_eq!(run(&[]).code(), Some(0));
+            for arguments in [&["a"][..], &["a", "b"], &["a", "b", "c"]] {
+                assert!(run(arguments).code().is_none(), "{arguments:?}");
+            }
         }
     }
 
@@ -2255,6 +2535,47 @@ mod tests {
             "-o",
             "x.o",
         ]));
+    }
+
+    /// bcc's code uses no MMX register, and its MMX intrinsics work in SSE
+    /// registers, as GCC's and Clang's do on x86-64, so `-mno-mmx` only
+    /// leaves `__MMX__` undefined, as in both compilers: the last of
+    /// `-mmmx` and `-mno-mmx` decides, and the command line's `-D` and `-U`
+    /// come after.
+    #[test]
+    fn no_mmx_leaves_the_mmx_macro_undefined() {
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            for (options, defined) in [
+                (&[][..], Some("1")),
+                (&["-mno-mmx"], None),
+                (&["-mno-mmx", "-mmmx"], Some("1")),
+                (&["-mmmx", "-mno-mmx"], None),
+                (&["-D__MMX__=2", "-mno-mmx"], Some("2")),
+            ] {
+                let listing = macros_with(mode, options);
+                assert_eq!(
+                    defines(&listing, "__MMX__").as_deref(),
+                    defined,
+                    "{mode} {options:?}"
+                );
+            }
+        }
+        if cfg!(all(target_os = "linux", target_env = "gnu")) {
+            let directory = Directory::new();
+            directory.write(
+                "m.c",
+                "#include <mmintrin.h>\nint main(void) {\n  __m64 a = _mm_set_pi16(1, 2, 3, \
+                 4);\n  __m64 b = _mm_add_pi16(a, a);\n  _mm_empty();\n  return \
+                 _mm_cvtm64_si64(b) == 0x0002000400060008 ? 0 : 1;\n}\n",
+            );
+            for backend in [&[][..], &["-Xbcc", "--backend=native"]] {
+                let mut args = vec!["-O2", "-mno-mmx", "m.c", "-o", "m"];
+                args.extend(backend);
+                succeeds(&directory.bcc("--gcc-mode", &args));
+                let run = Command::new(directory.path("m")).output().unwrap();
+                assert_eq!(run.status.code(), Some(0), "{backend:?}");
+            }
+        }
     }
 
     #[test]
