@@ -1072,3 +1072,57 @@ int get_plain(void) { return plain; }
         );
     }
 }
+
+/// No alignment above 2^28 bytes takes effect: GCC rejects every such
+/// request, and Clang, which counts alignment in bits in 32 bits, sees it
+/// wrap to zero and ignores it. Honouring one made an object file pad to
+/// it: 512 MiB to over 1 GiB of zeros for GCC's `pr39323-1.c` and
+/// `attr-aligned.c`. 2^28 itself is honoured by both.
+#[test]
+fn alignments_above_two_to_the_28_take_no_effect() {
+    let source = r#"
+typedef int __attribute__((aligned(1 << 29))) int29;
+typedef int __attribute__((aligned(1 << 28))) int28;
+struct S { char c __attribute__((aligned(1 << 29))); };
+struct T { char c; } __attribute__((aligned(1 << 29)));
+struct M { int a; _Alignas(1 << 29) int b; };
+int x29 __attribute__((aligned(1 << 29)));
+_Alignas(1 << 29) int y29;
+__attribute__((aligned(1 << 29))) void f29(void) {}
+typedef int v4 __attribute__((vector_size(16), aligned(1u << 31)));
+void g(void) { int l __attribute__((aligned(1 << 29))); (void)&l; }
+_Static_assert(_Alignof(int29) == 4 && _Alignof(int28) == 1 << 28, "types");
+_Static_assert(_Alignof(struct S) == 1 && _Alignof(struct T) == 1, "tags");
+_Static_assert(_Alignof(struct M) == 4 && _Alignof(v4) == 16, "members");
+_Static_assert(__alignof__(x29) == 4 && __alignof__(y29) == 4, "objects");
+"#;
+    let gnu = || CompilerConfiguration::default().with_gnu_extensions(true);
+    with_configuration(
+        source,
+        gnu().with_compiler_identity(crate::configuration::CompilerIdentity::Clang),
+        |context, _| {
+            assert_eq!(
+                context.error_count(),
+                0,
+                "{:?}",
+                context.take_pending_errors()
+            );
+        },
+    );
+    with_configuration(
+        source,
+        gnu().with_compiler_identity(crate::configuration::CompilerIdentity::Gcc),
+        |context, _| {
+            let excessive = context
+                .take_pending_errors()
+                .iter()
+                .filter(|error| {
+                    matches!(error, TranslationError::Semantic(error)
+                        if error.kind == SemanticErrorKind::ExcessiveAlignment)
+                })
+                .count();
+            // Every request but `int28`'s, as GCC reports them.
+            assert_eq!(excessive, 9);
+        },
+    );
+}

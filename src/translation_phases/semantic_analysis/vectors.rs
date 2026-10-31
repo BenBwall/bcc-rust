@@ -591,7 +591,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if let Some((element, count, mut align)) = vector {
             if let Some(value) = alignment {
                 if let Some(value) = value.filter(|n| n.is_power_of_two()) {
-                    align = value;
+                    if self.honours_alignment(value, a.source_vectors) {
+                        align = value;
+                    }
                 } else {
                     self.error(
                         SemanticErrorKind::InvalidVectorAttribute,

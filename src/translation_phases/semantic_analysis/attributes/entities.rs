@@ -1075,7 +1075,11 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
 
     /// GCC `aligned` on a function: its requested code alignment, or the
     /// default maximum alignment without an operand.
-    fn function_alignment(&self, specifier: &AttributeSpecifier<'tu>, index: usize) -> Option<u64> {
+    fn function_alignment(
+        &mut self,
+        specifier: &AttributeSpecifier<'tu>,
+        index: usize,
+    ) -> Option<u64> {
         let has_operand = specifier
             .tokens
             .get(index + 1)
@@ -1085,7 +1089,10 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         } else {
             16
         };
-        (value.is_power_of_two() && value <= 1 << 31).then_some(value)
+        (value.is_power_of_two()
+            && value <= 1 << 31
+            && self.honours_alignment(value, specifier.source_vectors))
+        .then_some(value)
     }
 
     /// Whether a declaration of the linked name `name` has an `alias`

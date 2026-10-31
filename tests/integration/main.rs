@@ -29,6 +29,7 @@ mod complex_integers;
 mod diagnostic_parity;
 mod diagnostics_golden;
 mod driver_cli;
+mod excessive_alignment;
 mod explorer;
 mod file_scope_asm;
 mod freestanding_cli;
