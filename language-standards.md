@@ -185,7 +185,9 @@ replaces trigraphs only under `/Zc:trigraphs`. `-fwrapv` makes signed integer
 `+`, `-`, `*`, negation and `++`/`--` wrap in two's complement, so lowering
 marks none of them `nsw`; pointer arithmetic is unaffected, as in GCC.
 `-ftrapv` instead traps when one of them overflows in `int` or a wider
-type, and the last of the two options given decides
+type, or when the library's `abs`, `labs` or `llabs` (a builtin) gets the
+most negative value, and the last of the two options given decides under
+the GCC identity, `-ftrapv` under Clang's
 (`CompilerConfiguration::with_trapv`). A
 signed `<<` wraps in every mode: GCC documents that it does not treat its
 overflow as undefined, and Clang emits a plain shift. Constant expressions
@@ -550,7 +552,7 @@ mode gate and policy diagnostics (`Imaginary` reports an unsupported type); a
 | Digraphs | - | Y | Y | Y | Y | Y | Y | C95+ / GNU earlier | lexer/preprocessor |
 | LineComments | - | - | Y | Y | Y | Y | Y | GNU earlier | lexer/preprocessor |
 | Trigraphs | Y | Y | Y | Y | Y | - | - | strict through C17 | lexer/preprocessor |
-| UnicodeLiteralPrefixes | - | - | - | Y | Y | Y | Y | native | lexer/preprocessor |
+| UnicodeLiteralPrefixes | - | - | - | Y | Y | Y | Y | native; GNU C99 under the GCC identity | lexer/preprocessor |
 | Utf8CharacterConstants | - | - | - | - | - | Y | Y | native | lexer/preprocessor |
 | DigitSeparators | - | - | - | - | - | Y | Y | native | lexer/preprocessor |
 | BitIntSuffixes | - | - | - | - | - | Y | Y | native | lexer/preprocessor |
@@ -989,8 +991,10 @@ their origins under pedantic policy. Diagnostics are deferred with the batch
 token entries, so skipped conditional groups do not report extension spellings.
 
 Phase 3 recognizes `u`, `U`, and `u8` string prefixes and `u`/`U` character
-prefixes from C11, and `u8` character prefixes from C23. Earlier modes keep the
-identifier followed by a literal. C23 digit separators are part of pp-numbers
+prefixes from C11, and under the GCC identity from gnu99 too, as GCC does
+(where it also defines `__STDC_UTF_16__` and `__STDC_UTF_32__`), and `u8`
+character prefixes from C23. Earlier modes keep the identifier followed by a
+literal. C23 digit separators are part of pp-numbers
 and must lie between digits of the constant's radix. C23 binary constants,
 `wb`/`uwb` suffixes and C2y `0o`/`0O` octal prefixes convert to typed values.
 Suffix recognition follows the mode gates for pasted tokens too. GNU binary

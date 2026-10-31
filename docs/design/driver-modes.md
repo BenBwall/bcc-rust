@@ -195,11 +195,15 @@ to the options TCC itself implements; see [TCC](#tcc).
 Where bcc can do what the option asks cheaply, the personality maps it
 instead: `-fwrapv` (lowering marks signed arithmetic without `nsw`),
 `-ftrapv` (signed `+`, `-`, `*`, negation and `++`/`--` of `int` and
-wider check for overflow and run the `trap` instruction, on every back end,
-where GCC's libgcc routines call `abort`, so the program ends with `SIGILL`
-rather than `SIGABRT`; a narrow `_BitInt` is not checked; with `-fwrapv`
-also given, the last of the two decides, and `-fno-wrapv` only turns
-`-fwrapv` off, as in GCC; Clang's `-ftrapv-handler=` is refused),
+wider check for overflow, and so does `abs`, `labs` or `llabs` of the most
+negative value while the library builtins are on, and run the `trap`
+instruction, on every back end, where GCC's libgcc routines call `abort`,
+so the program ends with `SIGILL` rather than `SIGABRT`; a narrow
+`_BitInt` and GNU `_Complex int` arithmetic are not checked, where GCC
+checks the latter; with `-fwrapv` also given, the last of the two decides
+in the GCC personality, and `-fno-wrapv` only turns `-fwrapv` off, as in
+GCC, while `-ftrapv` always wins in the Clang personality, which refuses
+`-fno-trapv` as Clang does; Clang's `-ftrapv-handler=` is refused),
 `-fwrapv-pointer` (pointer arithmetic without `inbounds`, so it wraps in
 LLVM and the interpreter), `-fno-strict-overflow` (both, as in GCC),
 `-fno-delete-null-pointer-checks` (every LLVM function is

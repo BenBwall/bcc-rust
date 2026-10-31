@@ -483,7 +483,12 @@ mod tests {
             "__STDC_UTF_16__",
             "__STDC_UTF_32__",
         ];
-        for (standard, utf) in [("-std=c99", None), ("-std=gnu11", Some("1"))] {
+        for (standard, utf) in [
+            ("-std=gnu89", None),
+            ("-std=c99", None),
+            ("-std=gnu99", Some("1")),
+            ("-std=gnu11", Some("1")),
+        ] {
             let listing = macros_with("--gcc-mode", &[standard]);
             let expected = [Some("0"), Some("8"), Some("64"), utf, utf];
             for (name, value) in NAMES.iter().zip(expected) {
@@ -505,14 +510,45 @@ mod tests {
         }
         let clang = macros_with("--clang-mode", &[]);
         assert_eq!(defines(&clang, "__LONG_LONG_WIDTH__"), None);
+        // GCC takes the literals the macros describe from gnu99 on; Clang
+        // from C11 only.
+        let directory = Directory::new();
+        directory.write(
+            "u.c",
+            "const void *p = u\"x\", *q = U\"y\", *r = u8\"z\";\n",
+        );
+        for (mode, standard, accepted) in [
+            ("--gcc-mode", "-std=gnu99", true),
+            ("--gcc-mode", "-std=c99", false),
+            ("--gcc-mode", "-std=gnu89", false),
+            ("--clang-mode", "-std=gnu99", false),
+            ("--clang-mode", "-std=c11", true),
+        ] {
+            let output = directory.bcc(mode, &["-fsyntax-only", standard, "u.c"]);
+            assert_eq!(
+                output.status.success(),
+                accepted,
+                "{mode} {standard}: {}",
+                stderr(&output)
+            );
+        }
     }
 
     /// GCC's options that give up part of IEC 60559 semantics, alone and
     /// in the combinations whose order or interplay decides the macros.
-    const FLOATING_POINT_OPTIONS: [&[&str]; 26] = [
+    const FLOATING_POINT_OPTIONS: [&[&str]; 29] = [
         &[],
         &["-fsignaling-nans"],
         &["-fsignaling-nans", "-fno-signaling-nans"],
+        // Signaling NaNs keep trapping math, in either order.
+        &["-fsignaling-nans", "-fno-trapping-math"],
+        &["-fno-trapping-math", "-fsignaling-nans"],
+        &[
+            "-fsignaling-nans",
+            "-fno-signed-zeros",
+            "-fno-trapping-math",
+            "-fassociative-math",
+        ],
         &["-fno-signed-zeros"],
         &["-freciprocal-math"],
         &["-fno-trapping-math"],
@@ -614,6 +650,12 @@ mod tests {
             (&["-fassociative-math"], "2", "2", &[]),
             (&["-fno-signed-zeros", "-fno-fast-math"], "2", "2", &[]),
             (&["-fsignaling-nans"], "2", "2", &["__SUPPORT_SNAN__"]),
+            (
+                &["-fno-trapping-math", "-fsignaling-nans"],
+                "2",
+                "2",
+                &["__SUPPORT_SNAN__"],
+            ),
             (&["-fsignaling-nans", "-fno-signaling-nans"], "2", "2", &[]),
         ] {
             let listing = macros_with("--gcc-mode", options);
@@ -1312,9 +1354,11 @@ mod tests {
         }
     }
 
-    /// `-ftrapv` traps on signed `+`, `-` and `*` overflow instead of
-    /// marking them `nsw`; with `-fwrapv` the last option given decides, as
-    /// in GCC, where `-fno-wrapv` only turns `-fwrapv` off.
+    /// `-ftrapv` traps on signed `+`, `-` and `*` overflow and on `abs` of
+    /// the most negative value instead of marking them `nsw`; with
+    /// `-fwrapv` the last option given decides under the GCC identity, as
+    /// in GCC, where `-fno-wrapv` only turns `-fwrapv` off, and `-ftrapv`
+    /// under the Clang identity, as in Clang, which knows no `-fno-trapv`.
     #[test]
     fn trapv_traps_on_signed_overflow() {
         let directory = Directory::new();
@@ -1330,26 +1374,38 @@ mod tests {
         let trapping = ir(&["-ftrapv"]);
         assert!(trapping.contains("trap"), "{trapping}");
         assert!(!trapping.contains("nsw"), "{trapping}");
-        for (options, traps) in [
-            (&["-ftrapv", "-fwrapv"][..], false),
-            (&["-fwrapv", "-ftrapv"], true),
-            (&["-ftrapv", "-fwrapv", "-fno-wrapv"], true),
-            (&["-ftrapv", "-fno-trapv"], false),
-            (&["-ftrapv", "-fno-strict-overflow"], false),
+        for (options, gcc, clang) in [
+            (&["-ftrapv", "-fwrapv"][..], false, true),
+            (&["-fwrapv", "-ftrapv"], true, true),
+            (&["-ftrapv", "-fwrapv", "-fno-wrapv"], true, true),
+            (&["-ftrapv", "-fno-trapv"], false, false),
+            (&["-ftrapv", "-fno-strict-overflow"], false, true),
         ] {
-            assert_eq!(ir(options).contains("trap"), traps, "{options:?}");
+            let mut with_gcc = vec!["--compiler-identity=gcc"];
+            with_gcc.extend(options);
+            assert_eq!(ir(&with_gcc).contains("trap"), gcc, "gcc {options:?}");
+            assert_eq!(ir(options).contains("trap"), clang, "clang {options:?}");
         }
+        let unknown = directory.bcc("--clang-mode", &["-c", "-fno-trapv", "w.c"]);
+        assert!(
+            stderr(&unknown).contains("unknown argument: '-fno-trapv'"),
+            "{}",
+            stderr(&unknown)
+        );
         if cfg!(all(target_os = "linux", target_env = "gnu")) {
             directory.write(
                 "m.c",
-                "#include <limits.h>\n__attribute__((noinline)) int add(int a, int b) { return a \
-                 + b; }\n__attribute__((noinline)) long mul(long a, long b) { return a * b; \
-                 }\n__attribute__((noinline)) __int128 mul128(__int128 a, __int128 b) { return a \
-                 * b; }\nint main(int argc, char **argv) {\n  (void)argv;\n  __int128 min = \
-                 (__int128)1 << 127;\n  if (add(INT_MAX, -1) != INT_MAX - 1 || mul(LONG_MIN, 1) \
-                 != LONG_MIN || mul128(-1, min + 1) != -(min + 1))\n    return 2;\n  if (argc == \
-                 2)\n    return add(INT_MAX, 1);\n  if (argc == 3)\n    return (int)mul(LONG_MIN, \
-                 -1);\n  if (argc == 4)\n    return (int)mul128(-1, min);\n  return 0;\n}\n",
+                "#include <limits.h>\n#include <stdlib.h>\n__attribute__((noinline)) int add(int \
+                 a, int b) { return a + b; }\n__attribute__((noinline)) long absolute(long a) { \
+                 return labs(a); }\n__attribute__((noinline)) long mul(long a, long b) { return a \
+                 * b; }\n__attribute__((noinline)) __int128 mul128(__int128 a, __int128 b) { \
+                 return a * b; }\nint main(int argc, char **argv) {\n  (void)argv;\n  __int128 \
+                 min = (__int128)1 << 127;\n  if (add(INT_MAX, -1) != INT_MAX - 1 || \
+                 mul(LONG_MIN, 1) != LONG_MIN || mul128(-1, min + 1) != -(min + 1) || \
+                 absolute(LONG_MIN + 1) != LONG_MAX)\n    return 2;\n  if (argc == 2)\n    return \
+                 add(INT_MAX, 1);\n  if (argc == 3)\n    return (int)mul(LONG_MIN, -1);\n  if \
+                 (argc == 4)\n    return (int)mul128(-1, min);\n  if (argc == 5)\n    return \
+                 (int)absolute(LONG_MIN);\n  return 0;\n}\n",
             );
             for backend in [&[][..], &["-Xbcc", "--backend=native"]] {
                 let mut args = vec!["-O2", "-ftrapv", "m.c", "-o", "m"];
@@ -1363,7 +1419,12 @@ mod tests {
                         .status
                 };
                 assert_eq!(run(&[]).code(), Some(0), "{backend:?}");
-                for arguments in [&["a"][..], &["a", "b"], &["a", "b", "c"]] {
+                for arguments in [
+                    &["a"][..],
+                    &["a", "b"],
+                    &["a", "b", "c"],
+                    &["a", "b", "c", "d"],
+                ] {
                     let status = run(arguments);
                     assert!(
                         status.code().is_none(),

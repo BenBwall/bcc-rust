@@ -29,7 +29,6 @@ impl CompilerConfiguration {
                 | Feature::OldStyleFunctionDeclarators
                 | Feature::VoidExpressionReturn
                 | Feature::Digraphs
-                | Feature::UnicodeLiteralPrefixes
                 | Feature::Utf8CharacterConstants
                 | Feature::DigitSeparators
                 | Feature::BitIntSuffixes
@@ -67,6 +66,14 @@ impl CompilerConfiguration {
                 | Feature::Float16 | Feature::BFloat16 => self.half_precision_types(),
                 | Feature::Fp16 => self.storage_half_type(),
                 | Feature::GccOnlyBuiltins => matches!(self.identity, super::CompilerIdentity::Gcc),
+                // GCC's GNU modes from gnu99 on take C11's `u`, `U` and
+                // `u8` string prefixes too (its `uliterals` language
+                // flag); Clang's take them from C11 only.
+                | Feature::UnicodeLiteralPrefixes =>
+                    native
+                        || (self.gnu
+                            && (self.standard as u8) >= CStandard::C99 as u8
+                            && matches!(self.identity, super::CompilerIdentity::Gcc)),
                 | _ => true,
             };
             if accepted {
@@ -412,9 +419,10 @@ impl CompilerConfiguration {
     /// Makes signed integer overflow wrap in two's complement instead of
     /// being undefined, as GCC's `-fwrapv` does. Extension:
     /// C99 §6.5 paragraph 5, p. 67; PDF p. 79 leaves the overflow undefined.
-    /// When `-ftrapv` is on too, the option given last decides, as in GCC,
-    /// where `-fno-wrapv` turns `-fwrapv` off without undoing what it
-    /// overrode: `-ftrapv -fwrapv -fno-wrapv` traps.
+    /// When `-ftrapv` is on too, the option given last decides under GCC's
+    /// rules, where `-fno-wrapv` turns `-fwrapv` off without undoing what
+    /// it overrode (`-ftrapv -fwrapv -fno-wrapv` traps), and `-ftrapv`
+    /// always does under Clang's.
     pub(crate) const fn with_wrapv(mut self, enabled: bool) -> Self {
         self.wrapv = enabled;
         if enabled {
@@ -425,7 +433,8 @@ impl CompilerConfiguration {
 
     /// Makes signed integer `+`, `-` and `*` trap on overflow, as GCC's
     /// `-ftrapv` does, where they would otherwise be undefined; with
-    /// `-fwrapv` also on, the option given last decides. Extension:
+    /// `-fwrapv` also on, the option given last decides under GCC's rules
+    /// and `-ftrapv` under Clang's. Extension:
     /// C99 §6.5 paragraph 5, p. 67; PDF p. 79 leaves the overflow undefined.
     pub(crate) const fn with_trapv(mut self, enabled: bool) -> Self {
         self.trapv = enabled;
@@ -437,12 +446,13 @@ impl CompilerConfiguration {
 
     /// Whether signed integer overflow wraps (`-fwrapv`).
     pub(crate) const fn wrapv(self) -> bool {
-        self.wrapv && !(self.trapv && self.trapv_last)
+        self.wrapv && !self.trapv()
     }
 
     /// Whether signed integer `+`, `-` and `*` trap on overflow (`-ftrapv`).
     pub(crate) const fn trapv(self) -> bool {
-        self.trapv && (self.trapv_last || !self.wrapv)
+        let clang = matches!(self.identity.rules(), super::RuleSet::Clang);
+        self.trapv && (clang || self.trapv_last || !self.wrapv)
     }
 
     /// Sets the structure packing in effect before any `#pragma pack`, as

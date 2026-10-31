@@ -953,6 +953,11 @@ impl State<'_> {
         } else if LINK_ONLY_OPTIONS.contains(&text) {
             self.link_only(text.into());
         }
+        // Clang knows `-ftrapv` but not its negation.
+        if self.compiler == Compiler::Clang && text == "-fno-trapv" {
+            self.error(format_args!("unknown argument: '{text}'"));
+            return;
+        }
         if PLAIN_OPTIONS.contains(&text)
             || text.starts_with("-std=")
             || text.starts_with("-O")

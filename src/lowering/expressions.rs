@@ -2142,6 +2142,11 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             *item = self.settle(*item);
         }
         let direct = self.resolved_direct_callee(call, source)?;
+        if let Some(binding) = direct
+            && let [argument] = items[..]
+        {
+            self.trap_on_absolute_minimum(binding, argument, source)?;
+        }
         // `(*f)(...)` of a function using the pack calls its copy too.
         let packed_callee = direct
             .is_none()

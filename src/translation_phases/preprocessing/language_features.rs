@@ -1137,7 +1137,8 @@ pub(super) fn with_identity_macros<'a>(
 /// `-f[no-]cx-limited-range` only otherwise. Each
 /// option also defines its own macro. `-fassociative-math` counts only with
 /// `-fno-signed-zeros` and `-fno-trapping-math`, as GCC drops it otherwise.
-/// `-fsignaling-nans` defines `__SUPPORT_SNAN__`, as `c_cpp_builtins` does.
+/// `-fsignaling-nans` defines `__SUPPORT_SNAN__`, as `c_cpp_builtins` does,
+/// and keeps trapping math on, so it drops `-fno-trapping-math`.
 /// bcc's code keeps IEC 60559 semantics under all of these, which they
 /// permit. The options GCC also counts that change what a program means
 /// (`-ffinite-math-only`, `-fsingle-precision-constant`, `-ffast-math`) are
@@ -1147,7 +1148,12 @@ pub(super) fn with_identity_macros<'a>(
 /// p. 161; PDF p. 173.
 fn write_gcc_floating_point_macros(configuration: CompilerConfiguration, out: &mut impl Write) {
     use crate::configuration::RelaxedFloatingPoint as Relaxed;
-    let relaxed = |option| configuration.relaxes_floating_point(option);
+    // `-fsignaling-nans` keeps trapping math, whatever `-fno-trapping-math`
+    // asks, as GCC's `finish_options` does.
+    let relaxed = |option| {
+        configuration.relaxes_floating_point(option)
+            && !(option == Relaxed::NoTrappingMath && configuration.signaling_nans())
+    };
     let associative = relaxed(Relaxed::AssociativeMath)
         && relaxed(Relaxed::NoSignedZeros)
         && relaxed(Relaxed::NoTrappingMath);
@@ -1188,9 +1194,10 @@ fn write_gcc_floating_point_macros(configuration: CompilerConfiguration, out: &m
 /// bcc target evaluates each floating type in its own format; GCC's
 /// spellings of the widths of `signed char` and `long long`
 /// (`__SCHAR_WIDTH__`, and `__LONG_LONG_WIDTH__`, which Clang spells
-/// `__LLONG_WIDTH__`); and from C11, `__STDC_UTF_16__` and
-/// `__STDC_UTF_32__`, since bcc's `u` and `U` literals are UTF-16 and
-/// UTF-32, which GCC defines from C11 on.
+/// `__LLONG_WIDTH__`); and `__STDC_UTF_16__` and `__STDC_UTF_32__`,
+/// since bcc's `u` and `U` literals are UTF-16 and UTF-32, wherever the
+/// literals are accepted, as in GCC: from C11, and from gnu99 in the GNU
+/// modes.
 /// C99: §5.2.4.2.2 paragraph 8, p. 24; PDF p. 36; extension to §6.10.8
 /// paragraph 4, p. 161; PDF p. 173. C11: §6.10.8.2 paragraph 1, p. 176;
 /// PDF p. 194.
@@ -1204,7 +1211,7 @@ fn write_gcc_environment_macros(configuration: CompilerConfiguration, out: &mut 
         "#define __FLT_EVAL_METHOD__ 0\n#define __SCHAR_WIDTH__ 8\n#define __LONG_LONG_WIDTH__ \
          {long_long}\n"
     );
-    if configuration.standard() >= crate::configuration::CStandard::C11 {
+    if configuration.accepts(Feature::UnicodeLiteralPrefixes) {
         _ = out.write_str("#define __STDC_UTF_16__ 1\n#define __STDC_UTF_32__ 1\n");
     }
 }

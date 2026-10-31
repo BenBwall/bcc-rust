@@ -570,12 +570,75 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
             },
             | _ => return,
         };
-        if self.draft.constant(overflow) == Some(0) {
+        self.trap_if(overflow);
+    }
+
+    /// Under `-ftrapv`, traps before a call of the library's `abs`, `labs`
+    /// or `llabs` (or their `__builtin_` forms) whose argument is the most
+    /// negative value, whose absolute value overflows, as GCC and Clang
+    /// check their expansions of these builtins; with the library builtins
+    /// off (`-fno-builtin-abs`), the call is the library's alone, as in GCC.
+    /// C99: §7.20.6.1 paragraph 2, p. 320; PDF p. 332.
+    pub(super) fn trap_on_absolute_minimum(
+        &mut self,
+        binding: usize,
+        argument: Item,
+        source: SourceVectors,
+    ) -> Result<(), LoweringError> {
+        use crate::{
+            builtins::BuiltinId,
+            configuration::LibraryBuiltins,
+            translation_phases::semantic_analysis::{
+                BindingOrigin,
+                Linkage,
+            },
+        };
+        if !self.unit.context.configuration.trapv() {
+            return Ok(());
+        }
+        let data = self.unit.sema.bindings[binding];
+        let library = match data.origin {
+            | BindingOrigin::Intrinsic(
+                id @ (BuiltinId::LibraryAbs | BuiltinId::LibraryLabs | BuiltinId::LibraryLlabs),
+            ) => id.descriptor().library,
+            // The C library's own declarations, as `<stdlib.h>` gives them.
+            | BindingOrigin::User if data.linkage == Linkage::External =>
+                Some(self.unit.symbol_name(binding))
+                    .filter(|name| matches!(*name, "abs" | "labs" | "llabs")),
+            | _ => None,
+        };
+        let Some(library) = library else {
+            return Ok(());
+        };
+        let builtin = match self.unit.module.library_builtins() {
+            | LibraryBuiltins::All => true,
+            | LibraryBuiltins::None => false,
+            | LibraryBuiltins::Except(names) => !names.contains(&library),
+        };
+        if !builtin {
+            return Ok(());
+        }
+        let value = self.value(argument, source)?;
+        let ty = self.draft.value_type(value);
+        if !ty.is_int() {
+            return Ok(());
+        }
+        let minimum = self.iconst(ty, i128::MIN >> (128 - ty.bits()));
+        let overflow = self.icmp(IntCC::Eq, value, minimum);
+        self.trap_if(overflow);
+        Ok(())
+    }
+
+    /// Traps when `condition` holds, in a block of its own for each check:
+    /// one block that every check of a long function branches to would
+    /// make the dominator tree of the back ends quadratic to compute.
+    fn trap_if(&mut self, condition: Value) {
+        if self.draft.constant(condition) == Some(0) {
             return;
         }
         let trap = self.draft.create_block(&[]);
         let next = self.draft.create_block(&[]);
-        self.draft.brif(overflow, trap, next);
+        self.draft.brif(condition, trap, next);
         self.draft.seal(trap);
         self.draft.seal(next);
         self.draft.switch_to(trap);
