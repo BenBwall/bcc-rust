@@ -16,6 +16,7 @@ runs:
       uses: Swatinem/rust-cache@v2
       with:
         cache-targets: false
+        save-if: ${{ github.ref == 'refs/heads/main' }}
     - name: Restore LLVM installation
       uses: actions/cache/restore@v4
       with:
