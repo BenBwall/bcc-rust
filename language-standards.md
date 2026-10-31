@@ -1057,9 +1057,12 @@ An unprefixed literal joined to a prefixed one takes its prefix (C11
 error, and GCC rejects bytes in a `u`, `U` or `L` result.
 
 A stray byte outside a literal is the error "stray byte <FF> in source", and
-source excerpts show each byte as `<FF>`, as Clang does. `-E` spells a
-string literal that is not UTF-8 with octal escapes (`"\377"`), which give
-the same bytes where GCC copies the byte.
+source excerpts show each byte as `<FF>`, as Clang does. `-E` copies the
+bytes of a string literal that is not UTF-8, as GCC does. `-E` prints each
+token as it was spelled and leaves phases 5 to 7 to the compilation that
+reads its text: an escape C does not define, a number that is no constant
+or a character no C token starts with (`@`, `` ` ``) passes through
+unreported, as in GCC's and Clang's `-E`.
 
 C23 `#elifdef`/`#elifndef`, `#warning`, `#embed`, `__has_include`,
 `__has_embed`, `__has_c_attribute`, and `__VA_OPT__` also work as earlier GNU

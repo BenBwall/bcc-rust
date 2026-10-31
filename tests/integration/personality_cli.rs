@@ -210,10 +210,11 @@ mod tests {
         );
         // Where the sign ends the number, `f` and `l` are replaced; the
         // spacing between the tokens is not compared. The numbers are not
-        // valid constants, which bcc's `-E` still reports where GCC's does
-        // not, so only the text is compared.
+        // valid constants, which `-E` leaves to the compilation, as GCC's
+        // and Clang's do.
         let expand = |mode: &str, standard: &str| {
             let output = directory.bcc(mode, &[standard, "-E", "-P", "numbers.c"]);
+            succeeds(&output);
             stdout(&output).split_whitespace().collect::<String>()
         };
         let joined = "0x1p+f0x1p+l1p+f1p+l1e+f";

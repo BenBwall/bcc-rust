@@ -382,7 +382,7 @@ fn phase_four(
         header_search(&tu, options),
         options.trace.then_some(&trace_arena),
         |mut preprocessor, context, _pp| {
-            preprocessor.keep_strings_apart();
+            preprocessor.read_as_text();
             preprocessor.record_header_names();
             let mut ordinal = 0;
             preprocessor.for_each_iterator_item_read_at(context, |context, token, at| {

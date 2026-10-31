@@ -387,6 +387,11 @@ impl<'tu, 's> FunctionLowerer<'_, '_, 'tu, '_, 's> {
                         );
                     }
                 },
+                // A value later initializers override entirely is neither
+                // evaluated nor stored, as GCC and Clang leave it (C11
+                // §6.7.9p19, footnote 151).
+                | Leaf::Scalar { expression, .. } | Leaf::Copy { expression, .. }
+                    if sema.initializers.overridden(expression) => {},
                 | Leaf::Scalar {
                     offset,
                     ty,

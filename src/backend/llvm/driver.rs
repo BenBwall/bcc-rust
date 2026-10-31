@@ -96,7 +96,7 @@ pub(crate) fn compile_module_checked(
         return Ok(false);
     };
     if let Some(buffer) = &buffer {
-        std::fs::write(object_path, buffer.bytes())?;
+        crate::backend::write_object(object_path, buffer.bytes())?;
     }
     let Some(object) = temporary else {
         return Ok(true);
@@ -117,12 +117,21 @@ pub(crate) fn compile_module_checked(
     if stack {
         _ = command.arg(EXECUTABLE_STACK);
     }
-    let output = run(&mut command)?;
-    if output.status.success() {
-        Ok(true)
-    } else {
-        Err(io::Error::other(ClangError(output)))
+    finish(run(&mut command)?, out_path).map(|()| true)
+}
+
+/// Finishes a clang job that wrote `out_path`: its diagnostics are the error
+/// when it failed. For `-`, clang wrote the object, or LLD the executable, to
+/// the stdout that `run` captured, which goes to bcc's own, as Clang writes
+/// `-o -`.
+fn finish(output: Output, out_path: &Path) -> io::Result<()> {
+    if !output.status.success() {
+        return Err(io::Error::other(ClangError(output)));
     }
+    if out_path == Path::new("-") {
+        return crate::backend::write_object(out_path, &output.stdout);
+    }
+    Ok(())
 }
 
 /// `path` as LLVM opens it, when LLVM can write an object there as it goes:
@@ -439,12 +448,7 @@ impl Toolchain {
         out_path: &Path,
         options: LlvmOptions,
     ) -> io::Result<()> {
-        let output = run(&mut self.command(object, out_path, options))?;
-        if output.status.success() {
-            Ok(())
-        } else {
-            Err(io::Error::other(ClangError(output)))
-        }
+        finish(run(&mut self.command(object, out_path, options))?, out_path)
     }
 
     /// Assembles an assembly file into an object (`OutputKind::Object`) or
@@ -488,12 +492,7 @@ impl Toolchain {
         if kind != OutputKind::Object {
             _ = command.args(libraries);
         }
-        let output = run(&mut command)?;
-        if output.status.success() {
-            Ok(())
-        } else {
-            Err(io::Error::other(ClangError(output)))
-        }
+        finish(run(&mut command)?, out_path)
     }
 
     /// Links `inputs` (objects, archives, libraries and linker options such
@@ -531,12 +530,7 @@ impl Toolchain {
         if executable_stack {
             _ = command.arg(EXECUTABLE_STACK);
         }
-        let output = run(&mut command)?;
-        if output.status.success() {
-            Ok(())
-        } else {
-            Err(io::Error::other(ClangError(output)))
-        }
+        finish(run(&mut command)?, out_path)
     }
 
     /// Assembles or compiles one input the bundled clang understands, such as
@@ -555,7 +549,12 @@ impl Toolchain {
             .arg(operand(input).as_os_str())
             .arg("-o")
             .arg(out_path);
-        Self::run_foreign(&mut command).map(drop)
+        let output = Self::run_foreign(&mut command)?;
+        // Clang wrote the object for `-o -` to the stdout `run` captured.
+        if out_path == Path::new("-") {
+            return crate::backend::write_object(out_path, &output.stdout);
+        }
+        Ok(())
     }
 
     /// Preprocesses one input as [`Self::compile_foreign`] would before

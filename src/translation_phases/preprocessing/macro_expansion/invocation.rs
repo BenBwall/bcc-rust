@@ -451,6 +451,32 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         Self::macro_is_disabled_in(Frames::of(&self.tokenizer_stack), name)
     }
 
+    /// Whether `name`, which `##` made, is a macro being replaced where the
+    /// paste happened. The paste belongs to the replacement list that holds
+    /// the `##`, not to the argument its operand came from, so the
+    /// arguments being read above that list do not decide it: with
+    /// `#define glue(a, b) a ## b`, the `glue` of `glue(gl, ue)` stays
+    /// unreplaced, even before a `(`, as in GCC and Clang.
+    ///
+    /// C99: §6.10.3.3 paragraph 3, p. 154; PDF p. 166; §6.10.3.4
+    /// paragraph 2, p. 155; PDF p. 167.
+    pub(in crate::translation_phases::preprocessing) fn pasted_macro_is_disabled(
+        &self,
+        name: StringCacheId,
+    ) -> bool {
+        let stack = &self.tokenizer_stack[..];
+        let list = stack
+            .iter()
+            .rposition(|frame| {
+                !matches!(
+                    frame.frame_type,
+                    TokenizerFrameType::FunctionLikeMacroArgument { .. }
+                )
+            })
+            .map_or(0, |index| index + 1);
+        Self::macro_is_disabled_in(Frames::of(&stack[..list]), name)
+    }
+
     /// Whether `name` is disabled in the frames owning a collected token.
     ///
     /// C99: §6.10.3.4 paragraph 2, p. 155; PDF p. 167.

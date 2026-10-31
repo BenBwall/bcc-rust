@@ -197,7 +197,7 @@ fn run_job<'tu>(
             let text = TextOptions {
                 no_line_markers: args.driver.no_line_markers,
                 macros:          args.driver.dump_macros,
-                as_written:      false,
+                as_written:      true,
             };
             let failed = match output.filter(|path| *path != Path::new("-")) {
                 | Some(path) => std::fs::File::create(path)
@@ -261,6 +261,7 @@ fn run_job<'tu>(
     if generated.status != 0
         && options.object
         && let Some(output) = &options.output_path
+        && output.as_os_str() != "-"
     {
         output_file::remove_failed_object(output, context.tu_arena());
     }

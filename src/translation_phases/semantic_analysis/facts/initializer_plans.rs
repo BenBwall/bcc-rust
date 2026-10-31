@@ -48,13 +48,30 @@ use crate::{
 pub(crate) struct InitializerFacts<'tu> {
     pub(in crate::translation_phases::semantic_analysis) plans:
         ArenaMap<'tu, usize, InitializerPlan<'tu>>,
+    /// The values of automatic initializers that later ones override
+    /// entirely, by expression address.
+    pub(in crate::translation_phases::semantic_analysis) overridden: ArenaMap<'tu, usize, ()>,
 }
 
 impl<'tu> InitializerFacts<'tu> {
     pub(in crate::translation_phases::semantic_analysis) fn new(arena: &'tu Bump) -> Self {
         Self {
-            plans: ArenaMap::with_hasher_in(FxBuildHasher, arena),
+            plans:      ArenaMap::with_hasher_in(FxBuildHasher, arena),
+            overridden: ArenaMap::with_hasher_in(FxBuildHasher, arena),
         }
+    }
+
+    /// Whether `value`, a value of an automatic object's initializer, is
+    /// overridden entirely by the initializers after it, so that none of its
+    /// bits reaches the object. Such a value need not be evaluated (C11
+    /// footnote 151), and GCC and Clang do not evaluate it: in
+    /// `{ [1] = f(1), [1] = 5 }`, `f` is not called. A value holding a
+    /// label is never counted, since a jump may enter it.
+    /// C99: §6.7.8 paragraph 19, p. 127; PDF p. 139. C11: §6.7.9
+    /// paragraph 19 and footnote 151, p. 141; PDF p. 159.
+    pub(crate) fn overridden(&self, value: &Expression<'tu>) -> bool {
+        self.overridden
+            .contains_key(&std::ptr::from_ref(value).addr())
     }
 
     /// The plan semantic analysis accepted for `initializer`, an object
