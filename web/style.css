@@ -378,9 +378,9 @@
      moves when it replaces the fallback: the source has a glyph margin, the
      read-only views a folding margin, and the WebAssembly text a wider
      number column. */
-  .fallback-number { display: inline-block; width: 57px; padding-right: 10px; text-align: right; color: var(--faint); user-select: none; }
-  .code-editor:not([data-language="c"]) .fallback-number { width: 51px; padding-right: 26px; }
-  .code-editor[data-language="wat"] .fallback-number { width: 59px; }
+  .fallback-number { display: inline-block; width: 56px; padding-right: 9px; text-align: right; color: var(--faint); user-select: none; }
+  .code-editor:not([data-language="c"]) .fallback-number { width: 50px; padding-right: 25px; }
+  .code-editor[data-language="wat"] .fallback-number { width: 58px; }
   .monaco-host { position: absolute; inset: 0; opacity: 0; transition: opacity .3s var(--ease); }
   /* Until Monaco arrives, a press lands on the fallback (and asks for it). */
   .code-editor:not(.is-ready) .monaco-host { pointer-events: none; }
