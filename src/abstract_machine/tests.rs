@@ -844,11 +844,17 @@ fn undefined_behavior_is_titled_by_its_cause() {
         "Undefined behavior: pointer outside its array"
     );
     // p[0] is *(p + 0): the subscript is pointer arithmetic first.
-    let session = run("int main(void) { int *p = 0; return p[0]; }");
+    let session = run("int main(void) { int *q = 0; int i = 1; return q[i + 1]; }");
     let event = &session.state().event;
     assert_eq!(
         event.title,
         "Undefined behavior: subscript of a null pointer"
+    );
+    // The lead quotes the program's own subscript.
+    assert!(
+        event.summary.starts_with("`q[i + 1]` means `*(q + i + 1)`"),
+        "{}",
+        event.summary
     );
     let cited = event
         .clauses
@@ -874,8 +880,8 @@ fn undefined_behavior_is_titled_by_its_cause() {
 
 #[test]
 fn a_decrement_is_narrated_as_a_subtraction() {
-    let states = states("int main(void) { char b = -128; b--; return b; }");
-    let decrement = &states
+    let stepped = states("int main(void) { char b = -128; b--; return b; }");
+    let decrement = &stepped
         .iter()
         .find(|state| state.event.kind == EventKind::Increment)
         .expect("the decrement")
@@ -886,6 +892,28 @@ fn a_decrement_is_narrated_as_a_subtraction() {
             .contains("The subtraction happens in int"),
         "{}",
         decrement.explanation
+    );
+    let cited = |source: &str| {
+        states(source)
+            .into_iter()
+            .find(|state| state.event.kind == EventKind::Increment)
+            .map(|state| state.event.clauses[0].id)
+    };
+    assert_eq!(
+        cited("int main(void) { int c = 1; c--; return c; }"),
+        Some("6.5.2.4p3")
+    );
+    assert_eq!(
+        cited("int main(void) { int c = 1; --c; return c; }"),
+        Some("6.5.3.1p3")
+    );
+    assert_eq!(
+        cited("int main(void) { int c = 1; c++; return c; }"),
+        Some("6.5.2.4p2")
+    );
+    assert_eq!(
+        cited("int main(void) { int c = 1; ++c; return c; }"),
+        Some("6.5.3.1p2")
     );
     let overflow = run("int main(void) { int m = -2147483647 - 1; m--; return m; }");
     let message = &overflow.state().diagnostics[0].message;

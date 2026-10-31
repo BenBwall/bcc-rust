@@ -278,9 +278,19 @@ pub(super) fn fault(diagnostic: &Diagnostic) -> Event {
     }
 }
 
+/// The lead for a subscript of a null pointer, quoting the program's own
+/// base and index.
+pub(super) fn null_subscript(base: &str, index: &str) -> String {
+    format!(
+        "`{base}[{index}]` means `*({base} + {index})`, and a null pointer points into no array, \
+         so even the addition has no meaning."
+    )
+}
+
 /// The title and the one-sentence reason for undefined behavior, from its
 /// cause. The fault callout states the facts; this says why C gives them
-/// no meaning.
+/// no meaning. A null subscript's lead is generic here; the machine quotes
+/// the program's own (`null_subscript`).
 fn undefined(diagnostic: &Diagnostic) -> (&'static str, &'static str) {
     match diagnostic.undefined {
         | Some(Undefined::SignedOverflow) => (
@@ -1179,10 +1189,11 @@ impl Machine {
         }
         text.push_str(" The full expression ends here, a sequence point.");
         let summary = format!("`{form}` {verb} {location}, so it changes from {old} to {new}.");
-        let increment = if prefix {
-            clauses::PREFIX_INCREMENT
-        } else {
-            clauses::POSTFIX_INCREMENT
+        let increment = match (prefix, delta > 0) {
+            | (true, true) => clauses::PREFIX_INCREMENT,
+            | (true, false) => clauses::PREFIX_DECREMENT,
+            | (false, true) => clauses::POSTFIX_INCREMENT,
+            | (false, false) => clauses::POSTFIX_DECREMENT,
         };
         let mut event = noted(
             explained(

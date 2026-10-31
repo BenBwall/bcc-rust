@@ -115,9 +115,16 @@ clauses! {
     /// C99: §6.5.2.4 paragraph 2, p. 75; PDF p. 87.
     POSTFIX_INCREMENT = "6.5.2.4p2", "p. 75; PDF p. 87", "Postfix increment and decrement operators",
         "x++ yields x's old value; the stored value grows by one before the next sequence point.";
+    /// C99: §6.5.2.4 paragraph 3, p. 75; PDF p. 87.
+    POSTFIX_DECREMENT = "6.5.2.4p3", "p. 75; PDF p. 87", "Postfix increment and decrement operators",
+        "x-- yields x's old value, like x++, and the stored value shrinks by one before the next \
+         sequence point.";
     /// C99: §6.5.3.1 paragraph 2, p. 78; PDF p. 90.
     PREFIX_INCREMENT = "6.5.3.1p2", "p. 78; PDF p. 90", "Prefix increment and decrement operators",
         "++x adds one to x and yields the new value; it is equivalent to x += 1.";
+    /// C99: §6.5.3.1 paragraph 3, p. 78; PDF p. 90.
+    PREFIX_DECREMENT = "6.5.3.1p3", "p. 78; PDF p. 90", "Prefix increment and decrement operators",
+        "--x subtracts one from x and yields the new value, like ++x.";
     /// C99: §6.5.3.2 paragraph 3, pp. 78-79; PDF pp. 90-91.
     ADDRESS_OPERATOR = "6.5.3.2p3", "pp. 78-79; PDF pp. 90-91", "Address and indirection operators",
         "&x yields a pointer to x; &a[i] and &*p compute the address without reading anything.";

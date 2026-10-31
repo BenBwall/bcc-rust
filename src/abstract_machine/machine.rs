@@ -67,7 +67,16 @@ impl Machine {
                 }
                 self.state.event = event;
             },
-            | Err(diagnostic) => self.stop(diagnostic),
+            | Err(diagnostic) => {
+                let subscript = diagnostic.undefined == Some(Undefined::NullSubscript);
+                self.stop(diagnostic);
+                // The lead quotes the program's own subscript.
+                if subscript
+                    && let Some([base, index]) = self.subscript_texts(program, &instruction)
+                {
+                    self.state.event.summary = narration::null_subscript(&base, &index);
+                }
+            },
         }
         self.refresh(program);
     }
@@ -182,8 +191,7 @@ impl Machine {
                     // already has no meaning for a null pointer.
                     return Err(Diagnostic::ub(
                         self.state.source_range,
-                        "subscripting a null pointer: p[i] means *(p + i), and a null pointer \
-                         points into no array",
+                        "subscripting a null pointer, which points into no array",
                         &clauses::SUBSCRIPT,
                         Undefined::NullSubscript,
                     ));
@@ -294,6 +302,21 @@ impl Machine {
                     ));
                 },
         })
+    }
+
+    /// The base and index of the subscript `instruction` evaluates, as
+    /// written.
+    fn subscript_texts(&self, program: &Program, instruction: &Instruction) -> Option<[String; 2]> {
+        let function = &program.functions[self.activations[self.activations.len() - 1].function];
+        let node = function.nodes.get(instruction.node?)?;
+        let text = |child: usize| {
+            let range = function.nodes.get(child)?.range;
+            program.source.get(range.start..range.end).map(String::from)
+        };
+        match *node.children.as_slice() {
+            | [base, index] => Some([text(base)?, text(index)?]),
+            | _ => None,
+        }
     }
 
     /// What the operator around the name `instruction` evaluates will do
