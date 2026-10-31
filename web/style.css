@@ -697,6 +697,11 @@
     color: var(--accent); font-size: 13px; font-weight: 650; white-space: nowrap; cursor: pointer;
   }
   .stage-next:hover { border-color: var(--accent); background: var(--accent-soft); }
+  .stage-path-note {
+    margin-bottom: 10px; padding: 9px 12px; max-width: 76ch; border-left: 3px solid var(--accent);
+    border-radius: 0 var(--radius-s) var(--radius-s) 0; background: var(--accent-soft); color: var(--text); font-size: 14.5px; line-height: 1.6;
+  }
+  .stage-path-note[hidden] { display: none; }
   .stage-explanation { color: var(--text-2); font-size: 15px; line-height: 1.7; max-width: 76ch; }
   .stage-note { margin-top: 10px; font-size: 13px; color: var(--muted); }
   .stage-note.is-link::before { content: "↔ "; color: var(--accent); }

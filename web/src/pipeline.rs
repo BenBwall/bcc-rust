@@ -1293,7 +1293,8 @@ pub fn precomputed_llvm(stem: &str, optimize: bool) -> Option<&'static str> {
         "overflow",
         "bounds",
         "indeterminate",
-        "macros"
+        "macros",
+        "path"
     )
 }
 
@@ -1309,6 +1310,7 @@ pub fn precomputed_source(stem: &str) -> Option<&'static str> {
         | "bounds" => include_str!("../pipeline/bounds/source.c"),
         | "indeterminate" => include_str!("../pipeline/indeterminate/source.c"),
         | "macros" => include_str!("../pipeline/macros/source.c"),
+        | "path" => include_str!("../pipeline/path/source.c"),
         | _ => return None,
     })
 }

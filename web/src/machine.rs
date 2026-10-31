@@ -564,6 +564,7 @@ mod tests {
         let mut machine = Machine::default();
         for (key, status, result) in [
             ("tour", "finished", Some("15")),
+            ("path", "finished", Some("16")),
             ("pointers", "finished", Some("17")),
             ("recursion", "finished", Some("24")),
             ("promotion", "finished", Some("255")),
@@ -661,7 +662,11 @@ mod tests {
     #[test]
     fn the_compiler_lessons_are_outside_the_machines_subset() {
         let mut machine = Machine::default();
-        for demo in demos::DEMOS.iter().filter(|demo| demo.stage.is_some()) {
+        // The whole-path lesson opens in the pipeline but runs here too.
+        for demo in demos::DEMOS
+            .iter()
+            .filter(|demo| demo.stage.is_some() && demo.path.is_empty())
+        {
             let rejected = machine.load(demo.source.to_owned());
             assert_eq!(rejected.status, "error", "{}", demo.key);
         }

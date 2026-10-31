@@ -136,6 +136,7 @@ pub fn App() -> impl IntoView {
                                             filename=state.filename.read_only()
                                             source=state.editor_text.into()
                                             on_reveal=Callback::new(move |line| state.show_source_line(line))
+                                            on_run=Callback::new(move |()| state.open_view(Mode::Machine, None))
                                         />
                                     }
                                 >
@@ -149,8 +150,10 @@ pub fn App() -> impl IntoView {
                             }
                         >
                             <Narration snapshot=state.current recent=state.recent on_jump=Callback::new(move |index| state.jump(index)) placeholder=state.placeholder running=state.running.into() />
-                            <TreeView snapshot=state.current />
+                            // The machine's state comes right after the step, so
+                            // it stays near the narration at laptop heights.
                             <Memory snapshot=state.current />
+                            <TreeView snapshot=state.current />
                         </Show>
                     </div>
                 </div>
@@ -603,6 +606,15 @@ impl State {
 
     /// Open `mode` (and pipeline `stage`) from a link elsewhere on the page,
     /// which itself scrolls to the workbench.
+    /// Open the lesson that follows one program through the whole pipeline,
+    /// at its first stage.
+    fn follow_path(self) {
+        if let Some(demo) = DEMOS.iter().find(|demo| !demo.path.is_empty()) {
+            self.mode.set(Mode::Pipeline);
+            self.select_demo(demo);
+        }
+    }
+
     fn open_view(self, mode: Mode, stage: Option<Stage>) {
         if let Some(stage) = stage {
             self.stage.set(stage);
@@ -1481,8 +1493,9 @@ fn Hero(state: State) -> impl IntoView {
                         </a>
                     </li>
                     <li>
-                        <a href="#workbench" on:click=move |_| state.open_view(Mode::Pipeline, None)>
-                            <span class="hero-step-number">"3"</span>"Open the compiler pipeline"
+                        // The lesson that walks one program through every stage.
+                        <a href="#workbench" on:click=move |_| state.follow_path()>
+                            <span class="hero-step-number">"3"</span>"Follow it through the compiler"
                         </a>
                     </li>
                 </ol>

@@ -301,6 +301,13 @@ The page receives at most 20,000 phase-3 entries and 2,000 expansions and
 says how many more there were; source columns are mapped line by line, so a
 large source costs time in proportion to its size.
 
+The lesson "From source to a running program" (`demos/path.c`) follows one
+small program through the whole pipeline. It opens at the first stage; each
+stage adds a note on what it did to this program at `-O0` (`Demo::path`,
+checked against the compiler's output by a test in `src/explorer.rs`), and
+the last stage's **Next** opens the abstract machine to run it. The page's
+third "how to use" step opens it.
+
 The lesson "Before the compiler: the preprocessor" (`demos/macros.c`)
 exercises these stages and opens at the preprocessor. The abstract machine
 has no preprocessor, so it rejects that lesson as outside its subset.

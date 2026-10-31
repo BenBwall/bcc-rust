@@ -825,6 +825,43 @@ mod tests {
         );
     }
 
+    /// The whole-path lesson's notes describe its `-O0` output; this keeps
+    /// them true when the compiler changes.
+    #[test]
+    fn the_path_lessons_notes_match_what_bcc_makes_of_it() {
+        let demo = crate::demos::find("path").expect("the whole-path lesson");
+        assert_eq!(demo.path.len(), Stage::ALL.len());
+        let compilation = compile(demo.source, false);
+        let text = |stage: Option<&String>| stage.cloned().expect("the stage compiled");
+        let tokens = text(compilation.tokens.as_ref());
+        assert_eq!(tokens.lines().filter(|line| !line.is_empty()).count(), 38);
+        let phase4 = &compilation.preprocessing;
+        assert!(phase4.directives.is_empty() && phase4.expansions.is_empty());
+        assert_eq!(compilation.logical_lines.len(), 10);
+        let tree = text(compilation.syntax_tree.as_ref());
+        assert!(tree.contains("callee: identifier square") && tree.contains("binary *"), "{tree}");
+        let types = text(compilation.semantic_types.as_ref());
+        for expected in [
+            "function square type=\"int (int)\"",
+            "parameter n type=int size=4",
+            "object side type=int duration=automatic size=4",
+            "kind=lvalue type=int",
+        ] {
+            assert!(types.contains(expected), "{expected}: {types}");
+        }
+        let ir = text(compilation.ir.as_ref());
+        assert!(ir.contains("iadd.i32 nsw v0, v1") && ir.contains("call @square(v2)"), "{ir}");
+        assert!(!ir.contains("stack_slot"), "{ir}");
+        let body = |ir: &str| ir[ir.find("function @square").expect("square")..].to_owned();
+        assert_eq!(body(&text(compilation.ir_abi.as_ref())), body(&ir));
+        let llvm = crate::pipeline::precomputed_llvm("path", false).expect("bundled LLVM IR");
+        assert!(llvm.contains("mul nsw i32 %v0, %v0"), "{llvm}");
+        let asm = text(compilation.asm.as_ref());
+        assert!(asm.contains("imull\t%edi, %eax") && asm.contains("callq\tsquare"), "{asm}");
+        let code = text(compilation.machine_code.as_ref());
+        assert!(code.contains("c3") && code.contains("e8 00 00 00 00"), "{code}");
+    }
+
     #[test]
     fn the_listing_numbers_each_function_and_its_lines() {
         let compilation = compile(crate::demos::DEMOS[0].source, false);
