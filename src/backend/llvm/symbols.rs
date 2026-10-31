@@ -65,7 +65,7 @@ pub(super) fn declare<'id, 'a, 'm>(
             continue;
         }
         let value = api.function(api.name(function.name), ty);
-        function::attributes(api, value, signature, false);
+        api.add_attributes(value, &function::attributes(api, signature, arena), false);
         if module.returns_twice(id) {
             function::returns_twice(api, value, false);
         }

@@ -12,6 +12,7 @@ use std::{
     ffi::{
         CStr,
         c_char,
+        c_int,
         c_void,
     },
     fmt,
@@ -165,6 +166,7 @@ use llvm_sys::{
     ir_reader::LLVMParseIRInContext2,
     linker::LLVMLinkModules2,
     prelude::{
+        LLVMAttributeRef,
         LLVMBasicBlockRef,
         LLVMBuilderRef,
         LLVMContextRef,
@@ -271,6 +273,17 @@ pub(super) struct Val<'id>(LLVMValueRef, PhantomData<fn(&'id ()) -> &'id ()>);
 // ABI-identical to the LLVMBasicBlockRef it wraps, including in slices.
 #[repr(transparent)]
 pub(super) struct Block<'id>(LLVMBasicBlockRef, PhantomData<fn(&'id ()) -> &'id ()>);
+/// An attribute and the LLVM-C index it applies at: 0 for the result, `~0`
+/// for the function, `1 + n` for parameter `n`.
+#[derive(Clone, Copy)]
+// Layout-identical to `BccIndexedAttribute` in
+// `build_support/llvm_attributes.cpp`, including in slices.
+#[repr(C)]
+pub(super) struct IndexedAttribute<'id> {
+    index:     u32,
+    attribute: LLVMAttributeRef,
+    _brand:    PhantomData<fn(&'id ()) -> &'id ()>,
+}
 
 impl Session<'_> {
     /// A session for `target` with the default code options.
@@ -1460,17 +1473,7 @@ impl<'id> Session<'id> {
         ty: Option<Ty<'id>>,
         call: bool,
     ) {
-        // SAFETY: The counted attribute name is valid during lookup.
-        let kind = unsafe { LLVMGetEnumAttributeKindForName(name.as_ptr().cast(), name.len()) };
-        let attribute = if let Some(ty) = ty {
-            // SAFETY: The attribute kind is byval/sret and the type belongs to
-            // this context by the type system.
-            unsafe { LLVMCreateTypeAttribute(self.context, kind, ty.0) }
-        } else {
-            // SAFETY: Known enum attribute with its appropriate integer
-            // payload.
-            unsafe { LLVMCreateEnumAttribute(self.context, kind, number) }
-        };
+        let attribute = self.indexed_attribute(index, name, number, ty).attribute;
         if call {
             // SAFETY: A call instruction in this live session by the type
             // system, with a valid ABI argument/result index.
@@ -1483,6 +1486,57 @@ impl<'id> Session<'id> {
             unsafe {
                 LLVMAddAttributeAtIndex(value.0, index, attribute);
             }
+        }
+    }
+
+    /// The enum attribute `name` (with `number`, or the type `ty` for
+    /// `byval`/`sret`/`elementtype`) at the LLVM-C attribute `index`, for
+    /// [`Self::add_attributes`].
+    pub(super) fn indexed_attribute(
+        &self,
+        index: u32,
+        name: &str,
+        number: u64,
+        ty: Option<Ty<'id>>,
+    ) -> IndexedAttribute<'id> {
+        // SAFETY: The counted attribute name is valid during lookup.
+        let kind = unsafe { LLVMGetEnumAttributeKindForName(name.as_ptr().cast(), name.len()) };
+        let attribute = if let Some(ty) = ty {
+            // SAFETY: The attribute kind is byval/sret and the type belongs to
+            // this context by the type system.
+            unsafe { LLVMCreateTypeAttribute(self.context, kind, ty.0) }
+        } else {
+            // SAFETY: Known enum attribute with its appropriate integer
+            // payload.
+            unsafe { LLVMCreateEnumAttribute(self.context, kind, number) }
+        };
+        IndexedAttribute {
+            index,
+            attribute,
+            _brand: PhantomData,
+        }
+    }
+
+    /// Adds every attribute in `attributes` to the function or call `value`
+    /// at once. Adding them one at a time would make LLVM build and keep a
+    /// new attribute list per attribute, each as long as the highest index
+    /// so far: quadratic in a signature's parameter count.
+    pub(super) fn add_attributes(
+        &self,
+        value: Val<'id>,
+        attributes: &[IndexedAttribute<'id>],
+        call: bool,
+    ) {
+        // SAFETY: The type system ties the function or call and every
+        // attribute to this live session; the bridge only reads the counted
+        // array, whose element layout matches its `BccIndexedAttribute`.
+        unsafe {
+            bcc_llvm_add_attributes(
+                value.0,
+                c_int::from(call),
+                attributes.as_ptr(),
+                attributes.len(),
+            );
         }
     }
 
@@ -1881,6 +1935,14 @@ struct Machine(LLVMTargetMachineRef);
 unsafe extern "C" {
     /// Selects ELF initialization arrays on a live, unused target machine.
     fn bcc_llvm_use_init_array(machine: LLVMTargetMachineRef);
+    /// Merges the counted `attributes` into the attribute list of a live
+    /// function (`call` 0) or call instruction (`call` 1) in one step.
+    fn bcc_llvm_add_attributes(
+        value: LLVMValueRef,
+        call: c_int,
+        attributes: *const IndexedAttribute<'_>,
+        count: usize,
+    );
 }
 impl Drop for Machine {
     fn drop(&mut self) {
