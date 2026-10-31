@@ -187,6 +187,10 @@ fn Details(
             }
         >
             <summary>"How C defines this step"</summary>
+            // The badge's meaning, which its tooltip gives only to a mouse.
+            <p class="narration-kind">
+                {move || event.with(|event| event.as_ref().map(|event| category_hint(&event.category)))}
+            </p>
             <p class="narration-body">
                 {move || event.with(|event| event.as_ref().map(|event| {
                     // Terms marked in the lead or the note stay plain.

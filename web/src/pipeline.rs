@@ -350,11 +350,11 @@ impl Stage {
                 "Phase 3 cuts the logical lines into preprocessing tokens, with each comment now \
                  a space, for the preprocessor.",
             | Self::Preprocessor =>
-                "The preprocessor runs the directives and expands the macros, leaving the text of \
-                 one translation unit for phases 5 to 7.",
+                "The preprocessor runs the directives and expands the macros, leaving one \
+                 translation unit's preprocessing tokens, directives gone, for phases 5 to 7.",
             | Self::Tokens =>
-                "The preprocessed text becomes C tokens, keywords and typed constants among them, \
-                 which the parser reads.",
+                "Each preprocessing token becomes a C token, keywords and typed constants among \
+                 them, and the parser reads these.",
             | Self::SyntaxTree =>
                 "The parser fits the tokens to C's grammar and hands semantic analysis a tree of \
                  declarations, statements and expressions.",
@@ -368,11 +368,11 @@ impl Stage {
                 "The IR's calls and functions are rewritten to pass arguments and results the way \
                  x86-64 does, ready for a back end.",
             | Self::Llvm =>
-                "A second road from the IR: the native bcc-rust can hand it to LLVM instead of its \
-                 own back end, as this LLVM IR.",
+                "bcc-rust's default back end hands the IR to LLVM, which makes the machine code; \
+                 this LLVM IR is what LLVM receives.",
             | Self::Asm =>
-                "bcc's own back end turns the ABI-lowered IR into x86-64 instructions, with \
-                 registers and a stack frame chosen.",
+                "bcc's native back end, the one the browser runs, turns the ABI-lowered IR into \
+                 x86-64 instructions, choosing registers and a stack frame.",
             | Self::MachineCode =>
                 "Each instruction is encoded as the bytes the CPU runs: the end of the path from \
                  source to program.",

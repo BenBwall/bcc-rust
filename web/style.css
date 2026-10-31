@@ -498,6 +498,11 @@
   .clause-glosses { display: grid; grid-template-columns: auto 1fr; gap: 6px 12px; margin-top: 12px; font-size: 13.5px; line-height: 1.55; }
   .clause-glosses dt { font: 600 12px/1.9 var(--font-mono); color: var(--cat); white-space: nowrap; }
   .clause-glosses dd { color: var(--text-2); }
+  .narration-kind { margin-top: 6px; color: var(--muted); font-size: 13px; }
+  @media (max-width: 600px) {
+    .clause-glosses { grid-template-columns: 1fr; gap: 0; }
+    .clause-glosses dd { margin-bottom: 8px; }
+  }
   .narration-terms { margin-top: 10px; color: var(--muted); font-size: 13px; }
   .narration-terms-label { font-weight: 600; }
 
