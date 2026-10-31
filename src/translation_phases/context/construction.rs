@@ -50,6 +50,7 @@ impl<'tu> Context<'tu> {
             configuration,
             preprocessing_options: &[],
             preprocessed_input: false,
+            raw_source_bytes: false,
             include_entries: None,
             missing_headers_generated: false,
             generated_headers: ArenaVec::new_in(tu),

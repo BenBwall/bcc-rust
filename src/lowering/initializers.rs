@@ -29,11 +29,15 @@ use super::{
     FunctionLowerer,
     LoweringError,
     LoweringErrorKind,
+    floats,
     module_items::{
         at,
         peel,
     },
-    types,
+    types::{
+        self,
+        Repr,
+    },
     work::{
         BitFieldBits,
         Item,
@@ -213,6 +217,55 @@ impl<'tu, 's> FunctionLowerer<'_, '_, 'tu, '_, 's> {
             Storage::Automatic,
             self.scratch,
         )?;
+        // An initializer of zeroes clears the whole object at once, as
+        // Clang's does. A typed store would leave LLVM's SROA an `f80` view
+        // of a union, through which it copies other members' bytes on the
+        // x87 stack, which does not keep every bit pattern.
+        if leaves
+            .iter()
+            .all(|&leaf| plan::zero_leaf(self.unit.sema, leaf))
+        {
+            let size = types::layout(&self.unit.sema.types, ty)
+                .map_err(|kind| at(kind, initializer.source_vectors))?
+                .size;
+            self.tasks.push(Task::InitializeZero {
+                object,
+                ty,
+                offset: 0,
+                size,
+                mask: u8::MAX,
+            });
+            return Ok(());
+        }
+        // For the same reason, a constant initializer that stores an `f80`
+        // is copied from a constant image of the object where Clang copies
+        // one: an object of at most 32 bytes, or one that needs more than six
+        // stores besides its zeroes. Otherwise its zeroes are filled and its
+        // `f80` constants are stored as integers below, so a large, mostly
+        // zero object costs no image.
+        let sema = self.unit.sema;
+        let size = types::layout(&sema.types, ty)
+            .map_err(|kind| at(kind, initializer.source_vectors))?
+            .size;
+        if !types::is_volatile(ty)
+            && leaves.iter().any(|&leaf| plan::x87_leaf(sema, leaf))
+            && leaves.iter().all(|&leaf| plan::constant_leaf(sema, leaf))
+            && (size <= IMAGE_SIZE
+                || leaves
+                    .iter()
+                    .filter(|&&leaf| {
+                        !matches!(leaf, Leaf::Zero { .. }) && !plan::zero_leaf(sema, leaf)
+                    })
+                    .count()
+                    > IMAGE_STORES)
+            && let Some(global) = self.unit.constant_image(ty, initializer)?
+        {
+            let destination = self.object_address(object)?;
+            let source = self.inst(InstData::GlobalAddr { global }, Type::Ptr);
+            let length = self.iconst(Type::I64, i128::from(size));
+            self.memory_range(Opcode::Copy, [destination, source, length]);
+            return Ok(());
+        }
         let coverage = CoverageIndex::new(
             &leaves,
             self.unit.sema,
@@ -332,6 +385,33 @@ impl<'tu, 's> FunctionLowerer<'_, '_, 'tu, '_, 's> {
                             8 * (offset + size),
                             (cursor_ty, ty),
                         );
+                    }
+                },
+                | Leaf::Scalar {
+                    offset,
+                    ty,
+                    expression,
+                    ..
+                } if plan::x87_leaf(sema, leaf)
+                    && plan::constant_leaf(sema, leaf)
+                    && let Some((real, imag)) = x87_constant_bits(sema, expression, ty) =>
+                {
+                    // A complex `long double` holds its parts 16 bytes apart.
+                    for (offset, bits) in [(offset, Some(real)), (offset + 16, imag)] {
+                        if let Some(bits) = bits {
+                            #[expect(
+                                clippy::cast_possible_truncation,
+                                reason = "an `f80`'s 80 bits are its 64-bit significand and \
+                                          16-bit sign and exponent"
+                            )]
+                            tasks.push(Task::InitializeBits {
+                                object,
+                                offset,
+                                ty,
+                                significand: bits as u64,
+                                exponent: (bits >> 64) as u16,
+                            });
+                        }
                     }
                 },
                 | Leaf::Scalar {
@@ -493,6 +573,38 @@ impl<'tu, 's> FunctionLowerer<'_, '_, 'tu, '_, 's> {
             }),
             None,
         );
+        Ok(())
+    }
+
+    /// Stores a constant x87 `f80`'s significand and sign and exponent as
+    /// integers, which keep every bit pattern, at `offset` in `object`.
+    pub(super) fn initialize_bits(
+        &mut self,
+        object: Object,
+        offset: u64,
+        ty: TypeId,
+        significand: u64,
+        exponent: u16,
+    ) -> Result<(), LoweringError> {
+        let base = self.object_address(object)?;
+        let flags = self.initialization_flags(ty);
+        for (offset, ty, bits) in [
+            (offset, Type::I64, i128::from(significand)),
+            (offset + 8, Type::I16, i128::from(exponent)),
+        ] {
+            let address = self.offset_address(base, offset);
+            let value = self.iconst(ty, bits);
+            _ = self.draft.push(
+                self.memory_op(InstData::Store {
+                    ty,
+                    flags,
+                    align: Align::BYTE,
+                    tag: None,
+                    args: [value, address],
+                }),
+                None,
+            );
+        }
         Ok(())
     }
 
@@ -714,6 +826,41 @@ impl<'tu, 's> FunctionLowerer<'_, '_, 'tu, '_, 's> {
         );
         self.tasks.push(Task::PushSlot { slot, ty });
         self.initialize_aggregate(Object::Slot(slot), ty, initializer)
+    }
+}
+
+/// The largest object a constant initializer that stores an `f80` is
+/// copied whole into, and the most stores besides its zeroes it may need
+/// otherwise; Clang's `shouldUseBZeroPlusStoresToInitialize` limits.
+const IMAGE_SIZE: u64 = 32;
+const IMAGE_STORES: usize = 6;
+
+/// The `f80` bits a constant x87 scalar initializer stores: its real part,
+/// and its imaginary part when it is complex.
+/// C99: §6.3.1.4 paragraph 2, p. 43; PDF p. 55; §6.3.1.7, p. 45; PDF p. 57.
+fn x87_constant_bits<'tu>(
+    sema: &SemanticTranslationUnit<'tu>,
+    expression: &'tu Expression<'tu>,
+    ty: TypeId,
+) -> Option<(u128, Option<u128>)> {
+    let info = sema.expression_info(expression)?;
+    let floating = info.floating();
+    let real = match (floating, info.integer.filter(|_| info.ice)) {
+        | (Some(value), _) => floats::constant_bits(&value.real, Type::F80),
+        | (None, Some(value)) => sema.integer_float_bits(value, Type::F80),
+        | (None, None) => None,
+    }?;
+    match types::repr(&sema.types, ty) {
+        | Ok(Repr::Float { ty: Type::F80 }) => Some((real, None)),
+        | Ok(Repr::Complex {
+            component: Type::F80,
+        }) => Some((
+            real,
+            Some(floating.map_or(Some(0), |value| {
+                floats::constant_bits(&value.imag, Type::F80)
+            })?),
+        )),
+        | _ => None,
     }
 }
 

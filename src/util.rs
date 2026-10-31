@@ -14,6 +14,7 @@
 //!   `collections/dedup_arena.rs`, `collections/string_cache.rs`,
 //!   `collections/vector_slice.rs`, `collections/shared.rs` (tests only).
 //! - Scanning: `byte_scan.rs`.
+//! - Source bytes that are not UTF-8: `raw_bytes.rs`.
 //! - Packed values: `packed.rs`.
 
 // Storage
@@ -22,6 +23,7 @@ mod memory;
 
 // Scanning
 pub(crate) mod byte_scan;
+pub(crate) mod raw_bytes;
 
 // Representation
 pub(crate) mod packed;

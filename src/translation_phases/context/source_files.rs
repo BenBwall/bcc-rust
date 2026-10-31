@@ -60,7 +60,11 @@ impl<'tu> Context<'tu> {
         }
         let path = self.get_source_file(index);
         let text = match self.file_system {
-            | FileSystem::Host => self.tu.read_to_str_lossy(path)?,
+            | FileSystem::Host => {
+                let (text, raw_bytes) = self.tu.read_to_str_lossy(path)?;
+                self.raw_source_bytes |= raw_bytes;
+                text
+            },
             | FileSystem::InMemory(_) => self.in_memory_file(path).ok_or_else(not_found)?,
         };
         self.record_arena_source_text(index, text);
