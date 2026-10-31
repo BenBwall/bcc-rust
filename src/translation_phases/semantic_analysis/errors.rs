@@ -76,6 +76,17 @@ pub(crate) enum SemanticErrorKind {
     /// GNU extension: GCC manual, "Nested Functions".
     /// <https://gcc.gnu.org/onlinedocs/gcc/Nested-Functions.html>
     NestedFunctionStorage,
+    /// GCC: a local register variable's label names no register.
+    /// GNU extension: GCC manual, "Local Register Variables".
+    InvalidRegisterName,
+    /// Clang: a local register variable's label names no register.
+    /// GNU extension: GCC manual, "Local Register Variables".
+    UnknownRegisterName,
+    /// GCC: a local register variable's register is one the x86-64 target
+    /// cannot access without APX or AVX-512.
+    InaccessibleRegister,
+    /// GCC: a local register variable's register cannot hold a variable.
+    RegisterNotGeneral,
     /// C99: §6.9.1p3, p. 141; PDF p. 153.
     IncompleteFunctionReturn,
     /// C99: §6.9.1p5-6, p. 141; PDF p. 153.
@@ -907,6 +918,9 @@ impl SemanticErrorKind {
             | Self::InvalidFunctionDefinition => "not a function declarator",
             | Self::FunctionDefinitionStorage => "storage class is not allowed on a definition",
             | Self::NestedFunctionStorage => "storage class is not allowed on a nested definition",
+            | Self::InvalidRegisterName | Self::UnknownRegisterName => "not a register name",
+            | Self::InaccessibleRegister => "not accessible on this target",
+            | Self::RegisterNotGeneral => "not a register a variable can live in",
             | Self::IncompleteFunctionReturn => "incomplete return type",
             | Self::InvalidDefinitionParameterList => "invalid parameter list for a definition",
             | Self::UnnamedDefinitionParameter => "parameter has no name",
@@ -1356,6 +1370,25 @@ impl SemanticErrorKind {
                 "invalid storage class in function definition",
                 "C99 §6.9.1p4: a function definition permits only extern or static storage-class \
                  specifiers",
+            ),
+            | Self::InvalidRegisterName => (
+                "invalid register name for the register variable",
+                "GNU local register variables: the assembler label names an x86-64 register, \
+                 such as `rdi` or `r8`",
+            ),
+            | Self::UnknownRegisterName => (
+                "unknown register name in asm",
+                "GNU local register variables: the assembler label names an x86-64 register, \
+                 such as `rdi` or `r8d`",
+            ),
+            | Self::InaccessibleRegister => (
+                "the register specified for the variable cannot be accessed by the current target",
+                "x86-64 without APX or AVX-512 has no such register",
+            ),
+            | Self::RegisterNotGeneral => (
+                "the register specified for the variable is not general enough to be used as a \
+                 register variable",
+                "GNU local register variables: the flags hold no variable",
             ),
             | Self::NestedFunctionStorage => (
                 "invalid storage class in nested function definition",

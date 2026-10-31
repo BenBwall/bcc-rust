@@ -257,12 +257,15 @@ impl<'tu, 's> FunctionLowerer<'_, '_, 'tu, '_, 's> {
 
     /// `constraint`, narrowed to the register a GNU local register variable
     /// operand names, as GCC and Clang place one: the only effect of its
-    /// register (GCC manual, "Local Register Variables"). A register outside
-    /// the operand's class leaves the class alone.
-    fn pinned(&self, operand: &AsmOperandFacts<'tu>, constraint: AsmConstraint) -> AsmConstraint {
-        let AsmConstraint::General(mask) = constraint else {
-            return constraint;
-        };
+    /// register (GCC manual, "Local Register Variables"). Without `register`
+    /// GCC and Clang ignore the label. A register lowering cannot place the
+    /// operand in (not a general register, or outside the operand's class,
+    /// as `%rsp` is outside `r`) is refused, never ignored.
+    fn pinned(
+        &self,
+        operand: &AsmOperandFacts<'tu>,
+        constraint: AsmConstraint,
+    ) -> Result<AsmConstraint, LoweringError> {
         let mut expression = operand.expression;
         while let crate::translation_phases::parsing::syntax::ExpressionType::Parenthesized {
             expression: inner,
@@ -270,17 +273,29 @@ impl<'tu, 's> FunctionLowerer<'_, '_, 'tu, '_, 's> {
         {
             expression = inner;
         }
-        // Without `register` GCC and Clang ignore the label.
-        let pinned = self
+        let Some(register) = self
             .info(expression)
             .ok()
             .filter(|info| info.register)
             .and_then(|info| info.binding)
             .and_then(|binding| self.unit.sema.entities.register_variable(binding))
-            .and_then(general_register)
-            .map(|index| 1_u16 << index)
-            .filter(|pinned| mask & pinned != 0);
-        pinned.map_or(constraint, AsmConstraint::General)
+        else {
+            return Ok(constraint);
+        };
+        let refused = || {
+            LoweringError::unsupported(
+                Construct::RegisterVariableOperand,
+                operand.expression.source_vectors,
+            )
+        };
+        let (AsmConstraint::General(mask), Some(register)) = (constraint, register) else {
+            return Err(refused());
+        };
+        let pinned = 1_u16 << register;
+        if mask & pinned == 0 {
+            return Err(refused());
+        }
+        Ok(AsmConstraint::General(pinned))
     }
 
     /// The descriptor and value of an output: its address for memory, else
@@ -313,7 +328,7 @@ impl<'tu, 's> FunctionLowerer<'_, '_, 'tu, '_, 's> {
         let (constraint, register) = match operand.kind {
             | AsmOperandKind::Register(class) => {
                 let (constraint, register) = register_class(class, value_type, source)?;
-                (self.pinned(operand, constraint), register)
+                (self.pinned(operand, constraint)?, register)
             },
             | AsmOperandKind::Flag(condition) if value_type.is_int() => {
                 let index = ASM_CONDITIONS
@@ -427,7 +442,7 @@ impl<'tu, 's> FunctionLowerer<'_, '_, 'tu, '_, 's> {
                 let item = item.ok_or_else(missing)?;
                 let value_type = self.value_type(item.ty, source)?;
                 let (constraint, register) = register_class(class, value_type, source)?;
-                let constraint = self.pinned(operand, constraint);
+                let constraint = self.pinned(operand, constraint)?;
                 let value = self.register_value(item, register, source)?;
                 (descriptor(constraint, register), value)
             },
@@ -696,30 +711,6 @@ fn register_class(
         },
         | AsmRegisterClass::Other(_) => Err(unsupported()),
     }
-}
-
-/// The hardware number of the general register `name` spells (`rdi`,
-/// `%edi`, `di` or `dil` for 7), as GCC accepts a local register variable's
-/// register: the extended registers by their 64-bit names alone.
-fn general_register(name: &str) -> Option<u8> {
-    const LEGACY: [&[&str]; 8] = [
-        &["rax", "eax", "ax", "al", "ah"],
-        &["rcx", "ecx", "cx", "cl", "ch"],
-        &["rdx", "edx", "dx", "dl", "dh"],
-        &["rbx", "ebx", "bx", "bl", "bh"],
-        &["rsp", "esp", "sp", "spl"],
-        &["rbp", "ebp", "bp", "bpl"],
-        &["rsi", "esi", "si", "sil"],
-        &["rdi", "edi", "di", "dil"],
-    ];
-    let name = name.strip_prefix('%').unwrap_or(name);
-    if let Some(index) = LEGACY.iter().position(|names| names.contains(&name)) {
-        return u8::try_from(index).ok();
-    }
-    name.strip_prefix('r')?
-        .parse::<u8>()
-        .ok()
-        .filter(|number| (8..16).contains(number))
 }
 
 /// The IR clobbers of a statement.

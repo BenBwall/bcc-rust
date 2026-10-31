@@ -79,6 +79,9 @@ pub(crate) enum Construct {
     /// not implement: x87, MMX and register pairs, `__int128`, aggregates in
     /// registers, or an immediate address with an offset.
     InlineAssemblyOperand,
+    /// An `asm` operand that is a GNU local register variable whose
+    /// register its constraint cannot take or lowering cannot place it in.
+    RegisterVariableOperand,
     /// A file-scope assembly template with NUL or bytes that are not
     /// UTF-8, which Clang accepts.
     FileScopeAssembly,
@@ -166,6 +169,8 @@ impl Construct {
             | Self::InlineAssembly => "MSVC inline assembly",
             | Self::InlineAssemblyOperand =>
                 "inline assembly operands of this register class or type",
+            | Self::RegisterVariableOperand =>
+                "an asm operand in this local register variable's register",
             | Self::FileScopeAssembly =>
                 "file-scope assembly templates containing NUL or bytes that are not UTF-8",
             | Self::AssemblerLabel => "assembler labels",

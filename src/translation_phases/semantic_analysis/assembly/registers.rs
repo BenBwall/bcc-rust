@@ -1,12 +1,113 @@
 //! x86-64 register names in clobber lists, with or without `%`: every
 //! width of the sixteen general registers, `%xmm`/`%ymm`/`%zmm` 0-31, the
 //! x87 stack, MMX and mask registers, the flags under GCC's and LLVM's
-//! names, and `memory`.
+//! names, and `memory`; and the registers GNU local register variables name,
+//! as GCC and Clang each accept them.
 //! GNU extension: GCC manual, "Extended Asm", "Clobbers and Scratch
-//! Registers".
+//! Registers", and "Local Register Variables".
 //! <https://gcc.gnu.org/onlinedocs/gcc/Extended-Asm.html>
 
 use super::super::AsmClobbers;
+use crate::configuration::RuleSet;
+
+/// What the register of a GNU local register variable is.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(in crate::translation_phases::semantic_analysis) enum RegisterName {
+    /// A general register, by hardware encoding, which an `asm` operand
+    /// can be placed in.
+    General(u8),
+    /// A register the compiler accepts that is no general register (SSE,
+    /// MMX, x87, mask), which lowering does not place operands in.
+    Other,
+    /// No register: GCC's "invalid register name", Clang's "unknown
+    /// register name".
+    Invalid,
+    /// GCC: a register the x86-64 target without APX or AVX-512 cannot
+    /// access (`r16`, `xmm16`, `k1`).
+    Inaccessible,
+    /// GCC: a register no variable can live in (`flags`, `fpsr`).
+    NotGeneral,
+}
+
+/// The register `name` (with or without `%`) names for a local register
+/// variable under `rules`, as `gcc -m64` and the bundled Clang 23 accept
+/// them: GCC takes the extended general registers by their 64-bit names
+/// alone and `sil`-`bpl`; Clang takes `r8d`-`r15b` but not `sil`-`bpl`.
+pub(in crate::translation_phases::semantic_analysis) fn register_variable(
+    name: &str,
+    rules: RuleSet,
+) -> RegisterName {
+    let name = name.strip_prefix('%').unwrap_or(name);
+    let clang = rules == RuleSet::Clang;
+    if let Some(register) = general(name) {
+        let extended = register >= 8;
+        let byte_legacy = matches!(name, "sil" | "dil" | "spl" | "bpl");
+        let plain = name
+            .strip_prefix('r')
+            .is_some_and(|number| number.parse::<u8>().is_ok());
+        let suffix_l = extended && name.ends_with('l');
+        let accepted = if clang {
+            !byte_legacy && !suffix_l
+        } else {
+            !extended || plain
+        };
+        return if accepted {
+            RegisterName::General(u8::try_from(register).expect("sixteen registers"))
+        } else {
+            RegisterName::Invalid
+        };
+    }
+    let apx = name
+        .strip_prefix('r')
+        .map(|rest| {
+            ["d", "w", "b"]
+                .iter()
+                .find_map(|suffix| rest.strip_suffix(suffix))
+                .map_or((rest, false), |rest| (rest, true))
+        })
+        .and_then(|(number, suffixed)| {
+            (!number.starts_with('0'))
+                .then(|| number.parse::<u32>().ok())
+                .flatten()
+                .filter(|number| (16..32).contains(number))
+                .map(|_| suffixed)
+        });
+    if let Some(suffixed) = apx {
+        return match (clang, suffixed) {
+            | (true, _) => RegisterName::Other,
+            | (false, false) => RegisterName::Inaccessible,
+            | (false, true) => RegisterName::Invalid,
+        };
+    }
+    if let Some(register) = numbered(name, &["xmm", "ymm", "zmm"], 32) {
+        return if clang || register < 16 {
+            RegisterName::Other
+        } else {
+            RegisterName::Inaccessible
+        };
+    }
+    if numbered(name, &["mm"], 8).is_some()
+        || name == "st"
+        || name
+            .strip_prefix("st(")
+            .and_then(|rest| rest.strip_suffix(')'))
+            .is_some_and(|number| matches!(number, "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7"))
+    {
+        return RegisterName::Other;
+    }
+    if numbered(name, &["k"], 8).is_some() {
+        return if clang {
+            RegisterName::Other
+        } else {
+            RegisterName::Inaccessible
+        };
+    }
+    match name {
+        | "flags" | "fpsr" if !clang => RegisterName::NotGeneral,
+        | "flags" | "fpsr" | "dirflag" if clang => RegisterName::Other,
+        | _ => RegisterName::Invalid,
+    }
+}
 
 /// Adds the clobber `name` to `clobbers`; `false` for a name that is not
 /// an x86-64 register or `memory`.

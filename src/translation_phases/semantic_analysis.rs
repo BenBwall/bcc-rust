@@ -2023,6 +2023,8 @@ struct Analyzer<'a, 'tu, 's> {
     object_alignments:       ArenaMap<'s, usize, (u32, bool)>,
     member_alignments:       ArenaMap<'s, (usize, StringCacheId), u32>,
     register_bindings:       ArenaMap<'s, usize, bool>,
+    /// The general register each GNU local register variable names.
+    register_variables:      ArenaMap<'s, usize, u8>,
     ice_operands:            ArenaMap<'s, (usize, bool), bool>,
     functions:               functions::State<'tu, 's>,
     va_list_type:            Option<TypeId>,

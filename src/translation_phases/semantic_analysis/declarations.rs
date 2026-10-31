@@ -933,6 +933,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         self.record_declaration(self.bindings.len() - 1, spec, declarator, initialized);
         if spec.storage_class == Some(StorageClass::Register) {
             _ = self.register_bindings.insert(self.bindings.len() - 1, true);
+            if kind == BindingKind::Object && !file {
+                self.check_register_variable(declarator, name);
+            }
         }
     }
 
