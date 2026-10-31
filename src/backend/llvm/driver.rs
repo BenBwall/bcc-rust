@@ -7,7 +7,7 @@ use std::{
     fmt,
     io::{
         self,
-        Write as _,
+        Write,
     },
     path::{
         Path,
@@ -145,7 +145,7 @@ fn run(command: &mut Command) -> io::Result<Output> {
 /// `style`: a space before each word, then a newline. GCC's rule is
 /// `gcc.cc`'s `execute`.
 pub(crate) fn write_command<'a>(
-    out: &mut impl io::Write,
+    out: &mut impl Write,
     style: CommandStyle,
     program: &'a OsStr,
     arguments: impl IntoIterator<Item = &'a OsStr>,
@@ -498,20 +498,52 @@ impl Toolchain {
         target: Target,
         options: impl IntoIterator<Item = &'a OsStr>,
     ) -> io::Result<()> {
+        let mut command = self.foreign_command(target, options);
+        _ = command
+            .arg("-c")
+            .arg(operand(input).as_os_str())
+            .arg("-o")
+            .arg(out_path);
+        Self::run_foreign(&mut command).map(drop)
+    }
+
+    /// Preprocesses one input as [`Self::compile_foreign`] would before
+    /// assembling it (`-E`), and writes the text to `out`. `options` come
+    /// before the input, as there.
+    pub(crate) fn preprocess_foreign<'a>(
+        &self,
+        input: &Path,
+        target: Target,
+        options: impl IntoIterator<Item = &'a OsStr>,
+        out: &mut dyn Write,
+    ) -> io::Result<()> {
+        let mut command = self.foreign_command(target, options);
+        _ = command.arg("-E").arg(operand(input).as_os_str());
+        let output = Self::run_foreign(&mut command)?;
+        out.write_all(&output.stdout)?;
+        out.flush()
+    }
+
+    /// The bundled clang for `target`, in the sysroot, with `options`.
+    fn foreign_command<'a>(
+        &self,
+        target: Target,
+        options: impl IntoIterator<Item = &'a OsStr>,
+    ) -> Command {
         let mut command = Command::new(&self.clang);
         _ = command.arg(concat_os("--target=", target.triple().as_ref()));
         if let Some(sysroot) = &self.sysroot {
             _ = command.arg(concat_os("--sysroot=", sysroot.as_os_str()));
         }
-        _ = command
-            .args(options)
-            .arg("-c")
-            .arg(operand(input).as_os_str())
-            .arg("-o")
-            .arg(out_path);
-        let output = run(&mut command)?;
+        _ = command.args(options);
+        command
+    }
+
+    /// Runs a foreign job, with its diagnostics as the error when it fails.
+    fn run_foreign(command: &mut Command) -> io::Result<Output> {
+        let output = run(command)?;
         if output.status.success() {
-            Ok(())
+            Ok(output)
         } else {
             Err(io::Error::other(ClangError(output)))
         }

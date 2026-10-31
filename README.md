@@ -57,7 +57,8 @@ The driver takes several inputs and runs one job per input, as GCC does: C
 sources (`.c`, `.h`, or any file after `-x c`; `-` reads stdin), preprocessed
 C (`.i`, or `-x cpp-output`), assembly (`.s`, or `.S` and `.sx`, which the C
 preprocessor reads first with the `-D`, `-U`, `-include` and header search
-options; `-x assembler` and `-x assembler-with-cpp` reach the bundled clang),
+options; `-x assembler` and `-x assembler-with-cpp` reach the bundled clang,
+whose preprocessed text `-E` prints, with `-P` and `-dM` as for C),
 and objects, archives and libraries, which go to the linker in order with
 `-l`, `-L`, `-Wl,`, `-Xlinker`, `-static`, `-rdynamic`, `-pthread` and
 `-nostdlib`; `-pthread` also defines `_REENTRANT`, as in GCC and Clang.

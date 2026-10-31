@@ -803,6 +803,37 @@ mod tests {
         // `-x assembler` does not preprocess: the assembler reads the
         // directives as comments.
         succeeds(&project.bcc(&["-c", "-x", "assembler", "f.S", "-o", "f4.o"]));
+        // `-E` prints the text that assembly reads, as GCC and Clang do,
+        // with `-P` and `-dM` as for C, to stdout or `-o`.
+        let mut args = vec!["-E", "-P", "f.S"];
+        args.extend(options);
+        let preprocessed = project.bcc(&args);
+        succeeds(&preprocessed);
+        assert_eq!(
+            stdout(&preprocessed).trim(),
+            ".globl f\nf:\n movl $7, %eax\n ret"
+        );
+        let mut args = vec!["-E", "f.S", "-o", "f.s"];
+        args.extend(options);
+        succeeds(&project.bcc(&args));
+        let text = std::fs::read_to_string(project.path("f.s")).unwrap();
+        assert!(
+            text.contains("# 1 \"f.S\"") && text.contains("movl $7"),
+            "{text}"
+        );
+        let mut args = vec!["-E", "-dM", "f.S"];
+        args.extend(options);
+        let macros = project.bcc(&args);
+        succeeds(&macros);
+        assert!(
+            stdout(&macros)
+                .lines()
+                .any(|line| line == "#define INCLUDED 7"),
+            "{}",
+            stdout(&macros)
+        );
+        // Its errors fail the run.
+        assert_eq!(project.bcc(&["-E", "f.S"]).status.code(), Some(1));
         // Assembler options reach assembly but not C sources, which bcc
         // assembles itself; `--noexecstack` is already true of them.
         let warned = project.bcc(&["-c", "-Wa,--noexecstack,-L", "a.c"]);

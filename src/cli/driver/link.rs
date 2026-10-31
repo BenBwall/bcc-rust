@@ -197,6 +197,55 @@ pub(super) fn assemble(args: &Cli, assembly: Assembly<'_>, object: &Path) -> i32
     }
 }
 
+/// Preprocesses an assembly input that the C preprocessor reads first
+/// (`.S`, `.sx`, `-x assembler-with-cpp`) under `-E`, with the options its
+/// assembly would use, into `output` or stdout. bcc assembles such an input
+/// with the bundled clang, so the text is what that assembly reads, as
+/// GCC's and Clang's `-E` print it; `-P` and `-dM` apply as for C.
+#[expect(
+    clippy::disallowed_types,
+    reason = "Startup builds the clang command line beside clap's arguments."
+)]
+pub(super) fn preprocess_assembly(
+    args: &Cli,
+    assembly: Assembly<'_>,
+    output: Option<&Path>,
+) -> i32 {
+    let mut options = assembler_arguments(args, assembly);
+    if args.driver.no_line_markers {
+        options.push("-P".into());
+    }
+    if args.driver.dump_macros {
+        options.push("-dM".into());
+    }
+    let preprocessed = Toolchain::bundled(args.target).and_then(|toolchain| {
+        let toolchain = toolchain.with_sysroot(args.search.sysroot());
+        let options = options.iter().map(OsString::as_os_str);
+        match output.filter(|path| *path != Path::new("-")) {
+            | Some(path) => std::fs::File::create(path).and_then(|mut file| {
+                toolchain.preprocess_foreign(assembly.path, args.target, options, &mut file)
+            }),
+            | None => toolchain.preprocess_foreign(
+                assembly.path,
+                args.target,
+                options,
+                &mut std::io::stdout().lock(),
+            ),
+        }
+    });
+    match preprocessed {
+        | Ok(()) => 0,
+        | Err(error) => {
+            super::report(
+                args,
+                Severity::Error,
+                format_args!("cannot preprocess `{}`: {error}", assembly.path.display()),
+            );
+            FAILURE_STATUS
+        },
+    }
+}
+
 /// The clang options before an assembly input.
 #[expect(
     clippy::disallowed_types,
