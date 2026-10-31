@@ -115,10 +115,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     // The loader writes an imported object's address at
                     // run time, so it is not an address constant; an
                     // imported function's import thunk is (Clang).
-                    // C99: §6.6p9, p. 96; PDF p. 108.
+                    // C99: §6.6p9, p. 96; PDF p. 108. A GNU nested
+                    // function, which has no linkage, is called through a
+                    // trampoline its definer makes at run time, so its
+                    // address is no constant either, as in GCC.
                     info.static_address = (binding.duration == Duration::Static
                         && self.dll_storage(index) != Some(super::DllStorage::Import))
-                        || binding.kind == BindingKind::Function;
+                        || (binding.kind == BindingKind::Function
+                            && !(binding.linkage == super::Linkage::None && binding.scope != 0));
                     info.category = match binding.kind {
                         | BindingKind::Function => ValueCategory::FunctionDesignator,
                         | BindingKind::Enumerator => ValueCategory::Rvalue,

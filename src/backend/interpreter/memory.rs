@@ -51,6 +51,7 @@ use crate::{
         Align,
         FuncId,
         GlobalId,
+        TRAMPOLINE_SIZE,
         Type,
     },
     util::bump::{
@@ -77,6 +78,10 @@ pub(crate) struct Memory<'a> {
     /// The C library's other objects the program declares, by
     /// [`LibraryObject`].
     library_objects:  [Option<Pointer>; 1],
+    /// The function and static chain of each `trampoline` made, by the
+    /// object and address of its storage; a call through that address
+    /// calls the function with the chain.
+    trampolines:      ArenaMap<'a, (ObjectRef, u64), (FuncId, RuntimeValue)>,
 }
 
 /// One object of memory.
@@ -492,6 +497,43 @@ impl<'a> Memory<'a> {
         object.cursor = cursor;
     }
 
+    /// Makes the trampoline at `storage`, whose [`TRAMPOLINE_SIZE`] bytes
+    /// it overwrites, as the code that calls `func` with `chain` would.
+    /// GNU extension: GCC manual, "Nested Functions".
+    pub(crate) fn make_trampoline(
+        &mut self,
+        storage: RuntimeValue,
+        func: RuntimeValue,
+        chain: RuntimeValue,
+    ) -> Result<(), Fault> {
+        let func = self.function_at(func)?;
+        let size = RuntimeValue::Int(u128::from(TRAMPOLINE_SIZE));
+        self.fill(storage, RuntimeValue::Int(0), size, Align::TRAMPOLINE)?;
+        let RuntimeValue::Ptr(Pointer {
+            address,
+            provenance: Some(object),
+        }) = storage
+        else {
+            return Err(UbKind::OutOfBounds.into());
+        };
+        _ = self.trampolines.insert((object, address), (func, chain));
+        Ok(())
+    }
+
+    /// The function and static chain of the live trampoline `callee`
+    /// addresses, if it addresses one.
+    pub(crate) fn trampoline_at(&self, callee: RuntimeValue) -> Option<(FuncId, RuntimeValue)> {
+        let RuntimeValue::Ptr(Pointer {
+            address,
+            provenance: Some(object),
+        }) = callee
+        else {
+            return None;
+        };
+        _ = self.live_object(object)?;
+        self.trampolines.get(&(object, address)).copied()
+    }
+
     /// The function a pointer is the address of.
     pub(crate) fn function_at(&self, callee: RuntimeValue) -> Result<FuncId, Fault> {
         let RuntimeValue::Ptr(pointer) = callee else {
@@ -837,6 +879,7 @@ impl<'a> Memory<'a> {
             max_object_size,
             standard_streams: [None; 3],
             library_objects: [None; 1],
+            trampolines: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, arena),
         }
     }
 }

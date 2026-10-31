@@ -162,6 +162,15 @@ impl Selector<'_, '_, '_> {
             .entry_block()
             .expect("a selected body has an entry block");
         let params = body.block_params(entry);
+        // The static chain arrives in `%r10`, which the register allocator
+        // and the parameter copies below may use as scratch: take it first.
+        let chain = self.signature.chain_param();
+        if let Some(index) = chain {
+            let ValueKind::Reg(vreg) = self.kind(params[index]) else {
+                unreachable!("a static chain is a pointer");
+            };
+            self.copy(Reg::Virt(vreg), Reg::Phys(PReg::R10));
+        }
         if uses_va_start {
             self.save_argument_registers();
         }
@@ -180,6 +189,9 @@ impl Selector<'_, '_, '_> {
             self.result = ResultArea::Sret(pointer);
         }
         for (index, &param) in params.iter().enumerate() {
+            if chain == Some(index) {
+                continue;
+            }
             let vreg = match self.kind(param) {
                 | ValueKind::Reg(vreg) => vreg,
                 | ValueKind::Pair(low, high) => {
@@ -442,11 +454,16 @@ impl Selector<'_, '_, '_> {
         };
         let mut passed = ArenaVec::with_capacity_in(args.len() + 1, self.arena);
         let mut area = None;
+        let mut chain = None;
         let sret = signature
             .result
             .and_then(|ty| self.wide_result_area(ty, &mut passed));
         for (index, &arg) in args.iter().enumerate() {
             let fixed = index < signature.params.len();
+            if signature.chain_param() == Some(index) {
+                chain = Some(self.operand(arg, Width::B64));
+                continue;
+            }
             match signature.param_abi(index).filter(|_| fixed) {
                 | Some(ParamAbi::Registers(registers)) => area = Some((arg, registers)),
                 | Some(ParamAbi::ByVal(layout)) => passed.push(Passed::ByVal {
@@ -473,7 +490,7 @@ impl Selector<'_, '_, '_> {
                 },
             }
         }
-        self.call_sequence(callee, &passed, signature.variadic);
+        self.chained_call_sequence(callee, &passed, signature.variadic, chain);
         let twice = match data {
             | InstData::Call { func, .. } => self.module.returns_twice(func),
             | _ => self.indirect_returns_twice,
@@ -576,6 +593,20 @@ impl Selector<'_, '_, '_> {
         callee: Callee,
         args: &[Passed],
         variadic: bool,
+    ) {
+        self.chained_call_sequence(callee, args, variadic, None);
+    }
+
+    /// [`Self::call_sequence`] with the static chain of a GNU nested
+    /// function, which goes into `%r10` last, as GCC passes it: the
+    /// register allocator keeps `%r10` for its own scratch use, and
+    /// nothing runs between that move and the `call`.
+    fn chained_call_sequence(
+        &mut self,
+        callee: Callee,
+        args: &[Passed],
+        variadic: bool,
+        chain: Option<Operand>,
     ) {
         let mut assigner = self.conv.assigner();
         let mut registers = ArenaVec::new_in(self.arena);
@@ -718,6 +749,14 @@ impl Selector<'_, '_, '_> {
                 }),
             }
             uses = uses.with(register);
+        }
+        if let Some(chain) = chain {
+            self.emit(MInst::Mov {
+                width: Width::B64,
+                dst:   Reg::Phys(PReg::R10),
+                src:   chain,
+            });
+            uses = uses.with(PReg::R10);
         }
         if variadic && self.conv.kind == ConvKind::SystemV {
             // psABI §3.2.3: %al bounds the number of vector registers used.

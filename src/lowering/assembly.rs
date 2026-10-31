@@ -452,8 +452,7 @@ impl<'tu, 's> FunctionLowerer<'_, '_, 'tu, '_, 's> {
     ) -> Result<(Value, Type, u32), LoweringError> {
         let address = match place.operand {
             | Operand::Place(Place::Memory(address)) | Operand::Aggregate(address) => address,
-            | Operand::Place(Place::Function(func)) =>
-                self.inst(InstData::FuncAddr { func }, Type::Ptr),
+            | Operand::Place(Place::Function(func)) => self.nested_address(func, source)?,
             | _ =>
                 return Err(LoweringError::missing(
                     "an asm memory operand is not in memory",

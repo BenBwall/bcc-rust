@@ -209,6 +209,7 @@ fn gnu_surface_smoke() {
         with_parse_configuration(
             &format!("{source}\n"),
             CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Allow)
+                .with_compiler_identity(crate::configuration::CompilerIdentity::Gcc)
                 .with_gnu_extensions(true),
             |p| {
                 assert_eq!(parser_errors(p).count(), 0, "{source}\n{:?}", p.errors);
@@ -538,12 +539,17 @@ fn malformed_gnu_children_preserve_following_declarations() {
 fn nested_functions_have_separate_typedef_label_and_switch_contexts() {
     let source = "typedef int T; int f(void){ switch(1){default:; int nested(int T){default:; \
                   goto L; L: return T;} default:;} T x=1; return x; }\n";
-    with_parse_configuration(source, CompilerConfiguration::default(), |p| {
-        let errors: Vec<_> = parser_errors(p).collect();
-        assert_eq!(errors.len(), 1, "{errors:?}");
-        assert!(matches!(errors[0], ParserErrorType::DuplicateDefaultLabel));
-        assert_eq!(p.parser.switch_scopes.len(), 0);
-    });
+    with_parse_configuration(
+        source,
+        CompilerConfiguration::default()
+            .with_compiler_identity(crate::configuration::CompilerIdentity::Gcc),
+        |p| {
+            let errors: Vec<_> = parser_errors(p).collect();
+            assert_eq!(errors.len(), 1, "{errors:?}");
+            assert!(matches!(errors[0], ParserErrorType::DuplicateDefaultLabel));
+            assert_eq!(p.parser.switch_scopes.len(), 0);
+        },
+    );
 }
 
 #[test]
@@ -560,7 +566,9 @@ fn gnu_nodes_preserve_typed_children_and_inspection() {
         modern::SyntaxOperand,
     };
     let source = include_str!("../../../../tests/fixtures/diagnostics/language/gnu-parser.c");
-    let configuration = CompilerConfiguration::default().with_gnu_extensions(true);
+    let configuration = CompilerConfiguration::default()
+        .with_compiler_identity(crate::configuration::CompilerIdentity::Gcc)
+        .with_gnu_extensions(true);
     with_parse_configuration(source, configuration, |p| {
         assert_eq!(parser_errors(p).count(), 0, "{:?}", p.errors);
         let assemblies: Vec<_> = p.parser.syntax.iter::<Asm<'_>>().collect();
@@ -738,7 +746,8 @@ fn extension_marked_nested_definition_suppresses_its_head_and_body_only() {
     let source = "int f(void){ __extension__ int nested(void){return ({1;});} return ({2;}); }\n";
     with_parse_configuration(
         source,
-        CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Warn),
+        CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Warn)
+            .with_compiler_identity(crate::configuration::CompilerIdentity::Gcc),
         |p| {
             assert_eq!(parser_errors(p).count(), 0);
             assert_eq!(p.errors.len(), 1, "{:?}", p.errors);
@@ -759,9 +768,14 @@ fn allocation_fixture_has_complete_gnu_syntax() {
                   S,x)+__builtin_types_compatible_p(int,long)+__builtin_choose_expr(1,__real__ \
                   value,__imag__ value); }) ?: 2;}\n";
 
-    with_parse_configuration(source, CompilerConfiguration::default(), |p| {
-        assert!(p.errors.is_empty(), "{:?}", p.errors);
-    });
+    with_parse_configuration(
+        source,
+        CompilerConfiguration::default()
+            .with_compiler_identity(crate::configuration::CompilerIdentity::Gcc),
+        |p| {
+            assert!(p.errors.is_empty(), "{:?}", p.errors);
+        },
+    );
 }
 
 #[test]

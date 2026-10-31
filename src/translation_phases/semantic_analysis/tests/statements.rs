@@ -24,7 +24,15 @@ fn kinds(source: &str) -> Vec<SemanticErrorKind> {
 }
 
 fn clean(source: &str) {
-    with_source(source, |context, _| {
+    clean_with(
+        source,
+        crate::configuration::CompilerConfiguration::default(),
+    );
+}
+
+/// [`clean`] under `configuration`.
+fn clean_with(source: &str, configuration: crate::configuration::CompilerConfiguration) {
+    with_configuration(source, configuration, |context, _| {
         assert_eq!(
             context.pending_error_count(),
             0,
@@ -32,6 +40,12 @@ fn clean(source: &str) {
             context.take_pending_errors()
         );
     });
+}
+
+/// GCC's identity, whose GNU nested functions Clang's rejects.
+fn gcc() -> crate::configuration::CompilerConfiguration {
+    crate::configuration::CompilerConfiguration::default()
+        .with_compiler_identity(crate::configuration::CompilerIdentity::Gcc)
 }
 
 #[test]
@@ -510,7 +524,9 @@ fn inline_constraints_depend_on_all_file_scope_declarations() {
 
 #[test]
 fn gnu_statement_forms_keep_their_scopes_and_targets() {
-    let config = crate::configuration::CompilerConfiguration::default().with_gnu_extensions(true);
+    let config = crate::configuration::CompilerConfiguration::default()
+        .with_compiler_identity(crate::configuration::CompilerIdentity::Gcc)
+        .with_gnu_extensions(true);
     with_configuration(
         "int f(void) { __label__ L; void *p=&&L; goto *p; L:; {__label__ L; goto L; L:;} return \
          ({int x=1; x;}); }",
@@ -652,11 +668,15 @@ fn opaque_compiler_builtins_do_not_acquire_implicit_int_results() {
 
 #[test]
 fn nested_function_definitions_have_no_translation_unit_linkage() {
-    clean(
+    clean_with(
         "void f(void) {int nested(void) {return 1;} nested();} void g(void) {int nested(void) \
          {return 2;} nested();}",
+        gcc(),
     );
-    clean("void f(int n) {__label__ L; int a[n]; void nested(void) {goto L;} nested(); L:;}");
+    clean_with(
+        "void f(int n) {__label__ L; int a[n]; void nested(void) {goto L;} nested(); L:;}",
+        gcc(),
+    );
 }
 
 #[test]

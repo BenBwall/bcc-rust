@@ -111,6 +111,7 @@ impl<'ir> Module<'ir> {
             noundef: &[],
             result_noundef: false,
             variadic_noundef: false,
+            chain: false,
         })
     }
 
@@ -138,6 +139,7 @@ impl<'ir> Module<'ir> {
             noundef: arena.alloc_slice_copy(signature.noundef),
             result_noundef: signature.result_noundef,
             variadic_noundef: signature.variadic_noundef,
+            chain: signature.chain,
         };
         let id = self.signatures.push(signature);
         _ = self.signature_ids.insert(signature, id);
@@ -428,6 +430,21 @@ impl<'ir> Module<'ir> {
                 .is_some_and(|target| target.returns_twice)
     }
 
+    /// Whether any function body makes a `trampoline`, whose code runs
+    /// where its storage is: on the stack.
+    /// GNU extension: GCC manual, "Nested Functions".
+    pub(crate) fn uses_trampolines(&self) -> bool {
+        self.functions.iter().any(|(_, function)| {
+            function.body.as_ref().is_some_and(|body| {
+                body.blocks().any(|block| {
+                    body.block_insts(block)
+                        .iter()
+                        .any(|&inst| body.inst(inst).opcode() == Opcode::Trampoline)
+                })
+            })
+        })
+    }
+
     /// Whether the address of a function that may return twice escapes into
     /// a value (`func_addr`) or a global's relocation, so any indirect call
     /// in the module may reach it. Back ends and the inliner then treat
@@ -558,6 +575,10 @@ impl fmt::Debug for Module<'_> {
 /// is signed, unsigned or `_Bool` before ABI lowering, and how the target
 /// widens it after ([`Extension`]).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "Each flag is an independent fact about the signature's calls."
+)]
 pub(crate) struct Signature<'ir> {
     pub(crate) params:           &'ir [Type],
     pub(crate) result:           Option<Type>,
@@ -582,12 +603,25 @@ pub(crate) struct Signature<'ir> {
     pub(crate) result_noundef:   bool,
     /// Every argument after the fixed parameters requires a defined value.
     pub(crate) variadic_noundef: bool,
+    /// The last fixed parameter, a `ptr`, is the static chain of a GNU
+    /// nested function: the record of the function that defines it. A
+    /// target passes it in a register of its own (x86-64: `r10`), where a
+    /// trampoline puts it, so it takes no argument register.
+    /// GNU extension: GCC manual, "Nested Functions".
+    pub(crate) chain:            bool,
 }
 
 impl<'ir> Signature<'ir> {
     pub(crate) fn fixed_count(&self) -> usize {
         self.variadic_fixed
             .map_or(self.params.len(), |n| n as usize)
+    }
+
+    /// The index of the static-chain parameter ([`Self::chain`]), if any.
+    pub(crate) fn chain_param(&self) -> Option<usize> {
+        self.chain
+            .then(|| self.fixed_count().checked_sub(1))
+            .flatten()
     }
 
     /// Whether passing poison at this argument position is immediate UB.

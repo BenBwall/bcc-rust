@@ -87,11 +87,9 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     | Some(Local::Slot(slot)) =>
                         Place::Memory(self.inst(InstData::StackAddr { slot }, Type::Ptr)),
                     | Some(Local::Address(address)) => Place::Memory(address),
-                    | None =>
-                        return Err(LoweringError::missing(
-                            "an automatic object is used outside its function",
-                            source,
-                        )),
+                    // An object of an enclosing function, which a nested
+                    // function reaches through its static chain.
+                    | None => Place::Memory(self.captured_address(binding, source)?),
                 },
             },
             | BindingKind::Enumerator | BindingKind::Typedef =>

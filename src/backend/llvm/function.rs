@@ -264,6 +264,11 @@ pub(super) fn attributes<'id>(
         if signature.param_noundef(index) {
             api.attribute(value, llvm_index, "noundef", 0, None, call);
         }
+        // LLVM passes a `nest` parameter where trampolines put the static
+        // chain (`r10` on x86-64, `ecx` on i386), as GCC does.
+        if signature.chain_param() == Some(index) {
+            api.attribute(value, llvm_index, "nest", 0, None, call);
+        }
         llvm_index += 1;
     }
 }
@@ -458,6 +463,8 @@ impl<'id, 'm> BodyBuilder<'_, 'id, 'm, '_> {
                     // GCC's builtin non-local jumps, as Clang emits them.
                     | Opcode::SjljSetjmp => self.sjlj_setjmp(arg),
                     | Opcode::SjljLongjmp => self.intrinsic("llvm.eh.sjlj.longjmp", &[arg], &[]),
+                    | Opcode::AdjustTrampoline =>
+                        self.intrinsic("llvm.adjust.trampoline", &[arg], &[]),
                     | Opcode::Fneg => api.fneg(arg),
                     | Opcode::Freeze => api.freeze(arg),
                     | Opcode::VaArg => api.va_arg(arg, api.ty(ty)),
@@ -519,6 +526,21 @@ impl<'id, 'm> BodyBuilder<'_, 'id, 'm, '_> {
                 api.alignment(value, align.bytes());
                 api.volatile(value, flags.contains(InstFlags::VOLATILE));
                 value
+            },
+            | InstData::MemoryRange {
+                args: [storage, func, chain],
+                ..
+            } if opcode == Opcode::Trampoline => {
+                // `llvm.adjust.trampoline` gives the storage itself on the
+                // x86 targets, so the IR calls the storage. Using
+                // `llvm.init.trampoline` also leaves out the module's
+                // non-executable stack note, as GCC marks a module whose
+                // trampolines live on the stack.
+                self.intrinsic(
+                    "llvm.init.trampoline",
+                    &[self.value(storage)?, self.value(func)?, self.value(chain)?],
+                    &[],
+                )
             },
             | InstData::MemoryRange {
                 flags,

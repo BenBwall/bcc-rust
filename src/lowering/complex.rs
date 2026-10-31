@@ -426,6 +426,7 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
             result_extension: None,
             result_noundef:   false,
             variadic_noundef: false,
+            chain:            false,
         };
         let signature = self.unit.module.intern(signature);
         let function = match self.unit.module.symbol(name) {

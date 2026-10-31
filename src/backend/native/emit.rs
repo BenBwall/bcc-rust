@@ -1171,7 +1171,17 @@ impl<'o, 'm, 'ir> Emitter<'o, 'm, 'ir> {
             self.exports()?;
         }
         if self.elf {
-            writeln!(self.out, "\t.section\t.note.GNU-stack,\"\",@progbits")?;
+            // Trampolines run on the stack, which the module then needs
+            // executable, as GCC marks it.
+            let stack = if self.module.uses_trampolines() {
+                "x"
+            } else {
+                ""
+            };
+            writeln!(
+                self.out,
+                "\t.section\t.note.GNU-stack,\"{stack}\",@progbits"
+            )?;
         }
         Ok(())
     }

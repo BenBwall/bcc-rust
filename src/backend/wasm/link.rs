@@ -955,6 +955,7 @@ fn plain_signature(params: &[Type], result: Option<Type>) -> Signature<'_> {
         noundef: &[],
         result_noundef: false,
         variadic_noundef: false,
+        chain: false,
     }
 }
 

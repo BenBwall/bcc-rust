@@ -409,6 +409,18 @@ named! {
         Store = "store",
         Copy = "copy",
         Fill = "fill",
+        /// `trampoline storage, func, chain`: writes into the
+        /// [`TRAMPOLINE_SIZE`] bytes at `storage` (16-aligned, in a
+        /// frame the chain's function owns) code that calls `func` with
+        /// the static chain `chain`, so `storage` can be called through a
+        /// pointer of `func`'s signature without the chain.
+        /// GNU extension: GCC manual, "Nested Functions".
+        Trampoline = "trampoline",
+        /// `adjust_trampoline storage -> ptr`: the address to call the
+        /// trampoline `storage` holds through, which reads its code. It is
+        /// `storage` itself on the x86 targets; LLVM's
+        /// `llvm.adjust.trampoline`.
+        AdjustTrampoline = "adjust_trampoline",
         Call = "call",
         CallIndirect = "call_indirect",
         /// Inline assembly; see `inline_asm.rs`.
@@ -518,6 +530,8 @@ impl Opcode {
                 | Self::Subobject
                 | Self::Copy
                 | Self::Fill
+                | Self::Trampoline
+                | Self::AdjustTrampoline
                 | Self::Call
                 | Self::CallIndirect
                 | Self::InlineAsm
@@ -709,6 +723,12 @@ impl ObjectSizeQuery {
     }
 }
 
+/// The bytes a `trampoline` writes. x86-64 code needs 23 (`movabs` of the
+/// function into `r11` and of the chain into `r10`, then `jmp r11`), and
+/// LLVM's x86-64 lowering writes as many; GCC reserves 24 on x86-64.
+/// GNU extension: GCC manual, "Nested Functions".
+pub(crate) const TRAMPOLINE_SIZE: u64 = 32;
+
 /// A power-of-two alignment, stored as its base-2 logarithm. The IR limit
 /// fits LLVM-C's unsigned alignment argument for all memory operations.
 ///
@@ -723,6 +743,8 @@ impl Align {
     /// The base-2 logarithm of the largest alignment supported by bcc IR.
     /// LLVM's C++ maximum is 2^32, but `LLVMSetAlignment` takes a `u32`.
     pub(crate) const MAX_LOG2: u32 = 31;
+    /// The alignment of a trampoline's storage ([`TRAMPOLINE_SIZE`]).
+    pub(crate) const TRAMPOLINE: Self = Self(4);
 
     /// The alignment of `bytes`, if it is a power of two no greater than
     /// 2^31. This constructor enforces the limit for every IR alignment.

@@ -38,8 +38,13 @@ fn kinds_of(source: &str) -> Vec<SemanticErrorKind> {
 
 /// The `__PRETTY_FUNCTION__` text of each function that names it, in order.
 fn pretty(source: &str) -> Vec<String> {
+    pretty_with(source, CompilerConfiguration::default())
+}
+
+/// [`pretty`] under `configuration`.
+fn pretty_with(source: &str, configuration: CompilerConfiguration) -> Vec<String> {
     let mut texts = Vec::new();
-    with_source(source, |context, unit| {
+    with_configuration(source, configuration, |context, unit| {
         assert_eq!(
             context.pending_error_count(),
             0,
@@ -320,9 +325,11 @@ fn pretty_function_spells_the_va_list_parameter_of_each_target() {
 #[test]
 fn pretty_function_in_nested_constructs_names_the_innermost_function() {
     assert_eq!(
-        pretty(
+        pretty_with(
             "void outer(int a) { void inner(char b) { __PRETTY_FUNCTION__; } inner(0); \
-             __PRETTY_FUNCTION__; }"
+             __PRETTY_FUNCTION__; }",
+            CompilerConfiguration::default()
+                .with_compiler_identity(crate::configuration::CompilerIdentity::Gcc)
         ),
         ["void inner(char)", "void outer(int)"]
     );
