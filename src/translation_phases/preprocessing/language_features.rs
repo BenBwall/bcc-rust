@@ -1136,6 +1136,7 @@ pub(super) fn with_identity_macros<'a>(
 /// `-f[no-]cx-limited-range` only otherwise. Each
 /// option also defines its own macro. `-fassociative-math` counts only with
 /// `-fno-signed-zeros` and `-fno-trapping-math`, as GCC drops it otherwise.
+/// `-fsignaling-nans` defines `__SUPPORT_SNAN__`, as `c_cpp_builtins` does.
 /// bcc's code keeps IEC 60559 semantics under all of these, which they
 /// permit. The options GCC also counts that change what a program means
 /// (`-ffinite-math-only`, `-fsingle-precision-constant`, `-ffast-math`) are
@@ -1173,6 +1174,7 @@ fn write_gcc_floating_point_macros(configuration: CompilerConfiguration, out: &m
         (relaxed(Relaxed::NoSignedZeros), "__NO_SIGNED_ZEROS__"),
         (relaxed(Relaxed::NoTrappingMath), "__NO_TRAPPING_MATH__"),
         (relaxed(Relaxed::ReciprocalMath), "__RECIPROCAL_MATH__"),
+        (configuration.signaling_nans(), "__SUPPORT_SNAN__"),
     ] {
         if defined {
             _ = writeln!(out, "#define {name} 1");

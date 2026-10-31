@@ -119,8 +119,12 @@ const REFUSED: &[(&str, &str)] = &[
         "-frounding-math",
         "bcc assumes the default rounding mode when it folds constants",
     ),
-    ("-fsignaling-*", "bcc does not preserve signaling NaNs"),
     ("-ftrapv*", "bcc does not trap on signed overflow"),
+    (
+        "-fsplit-stack",
+        "bcc's functions run on one contiguous stack, which a program that relies on split stacks \
+         would overflow",
+    ),
     (
         "-fsemantic-interposition",
         "bcc does not promise interposable calls",
@@ -468,7 +472,6 @@ const IGNORED: &[&str] = &[
     // `-fno-signed-zeros` and its relatives, for the macros GCC defines.
     "-fno-finite-math-only",
     "-fno-rounding-math",
-    "-fno-signaling-*",
     "-f[no-]approx-func",
     "-fhonor-*",
     "-f[no-]protect-parens",
@@ -692,6 +695,13 @@ fn machine(option: &str, target: Target) -> Treatment {
         | Some(feature) => (true, feature),
         | None => (false, name),
     };
+    // bcc's code uses no MMX register, and its MMX intrinsics work in SSE
+    // registers, as GCC's and Clang's do on x86-64; the option changes only
+    // whether `__MMX__` is defined, which the GCC and Clang personalities
+    // follow.
+    if option == "-mno-mmx" {
+        return Treatment::Ignore;
+    }
     if BASELINE.contains(&feature) {
         return if negative {
             Treatment::Reject("bcc's x86-64 code uses the baseline instruction set")
@@ -999,6 +1009,7 @@ mod tests {
             "-fshort-enums",
             "-fexec-charset=latin1",
             "-ffast-math",
+            "-fsplit-stack",
             "-fsanitize=address",
             "-fprofile-arcs",
             "-fopenmp",
@@ -1043,6 +1054,7 @@ mod tests {
             "-mno-avx",
             "-mno-avx512f",
             "-mno-sse4.2",
+            "-mno-mmx",
             "-mtls-dialect=gnu2",
             "-mno-omit-leaf-frame-pointer",
             "-mlong-double-80",

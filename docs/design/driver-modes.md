@@ -182,7 +182,11 @@ to the options TCC itself implements; see [TCC](#tcc).
   outside MSVC, `cl /Gv`), instruction sets bcc's code needs (`-mno-sse`,
   `-mgeneral-regs-only`; `cl /arch:AVX2`, which also changes macros),
   language rules bcc does not follow (`-fsemantic-interposition`,
-  `-ffast-math`, `-frounding-math`, `cl /fp:strict`, `/volatile:ms`), and
+  `-ffast-math`, `-frounding-math`, `cl /fp:strict`, `/volatile:ms`),
+  run-time support bcc's code lacks (`-fsplit-stack`: bcc's functions run on
+  one contiguous stack, which a program that relies on split stacks, such
+  as GCC's `split-2.c` test recursing 10 MB deep on a thread, would
+  overflow), and
   instrumentation whose output a build expects (`-fsanitize=`,
   `-fprofile-arcs`, `--coverage`, `-finstrument-functions`, `-fopenmp`).
   An option the lists do not name is refused too, so a newly added option is
@@ -218,6 +222,16 @@ GCC's warning), the options that give up part of IEC 60559 semantics
 `-fno-unsafe-math-optimizations`, which restore them): bcc's code keeps
 IEC 60559 semantics, which they permit, and the GCC identity's macros
 report them as GCC's do (`__GCC_IEC_559` 0, `__NO_SIGNED_ZEROS__`, ...),
+`-fsignaling-nans` (bcc's code tells signaling NaNs from quiet ones under
+any option: an operation on one gives a quiet NaN, and copies, negation,
+`fabs`, `copysign` and `__builtin_issignaling` keep the encoding; the GCC
+identity defines `__SUPPORT_SNAN__`, as GCC does; like GCC at `-O2`, bcc may
+fold an operation on a constant signaling NaN without raising
+`FE_INVALID`), `-mno-mmx` (bcc's code uses no MMX register, and its MMX
+intrinsics work in SSE registers, as GCC's and Clang's do on x86-64, so the
+option changes only the macros: the GCC and Clang personalities pass
+`-U__MMX__` ahead of the command line's `-D` and `-U`, unless a later
+`-mmmx` restores it),
 `-fno-builtin` and `-fno-builtin-NAME` (the LLVM functions carry `no-builtins` or `no-builtin-NAME`, so LLVM neither replaces library
 calls nor forms them from loops; `-ffreestanding` implies it, and GCC's
 `-fno-tree-loop-distribute-patterns` maps onto `memset`, `memcpy` and

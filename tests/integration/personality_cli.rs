@@ -448,6 +448,7 @@ mod tests {
                         "__NO_SIGNED_ZEROS__",
                         "__NO_TRAPPING_MATH__",
                         "__RECIPROCAL_MATH__",
+                        "__SUPPORT_SNAN__",
                     ]
                     .iter()
                     .any(|prefix| name.starts_with(prefix))
@@ -472,8 +473,10 @@ mod tests {
 
     /// GCC's options that give up part of IEC 60559 semantics, alone and
     /// in the combinations whose order or interplay decides the macros.
-    const FLOATING_POINT_OPTIONS: [&[&str]; 24] = [
+    const FLOATING_POINT_OPTIONS: [&[&str]; 26] = [
         &[],
+        &["-fsignaling-nans"],
+        &["-fsignaling-nans", "-fno-signaling-nans"],
         &["-fno-signed-zeros"],
         &["-freciprocal-math"],
         &["-fno-trapping-math"],
@@ -574,6 +577,8 @@ mod tests {
             ),
             (&["-fassociative-math"], "2", "2", &[]),
             (&["-fno-signed-zeros", "-fno-fast-math"], "2", "2", &[]),
+            (&["-fsignaling-nans"], "2", "2", &["__SUPPORT_SNAN__"]),
+            (&["-fsignaling-nans", "-fno-signaling-nans"], "2", "2", &[]),
         ] {
             let listing = macros_with("--gcc-mode", options);
             assert_eq!(
@@ -592,6 +597,7 @@ mod tests {
                 "__NO_SIGNED_ZEROS__",
                 "__NO_TRAPPING_MATH__",
                 "__RECIPROCAL_MATH__",
+                "__SUPPORT_SNAN__",
             ] {
                 assert_eq!(
                     defines(&listing, name).as_deref(),
@@ -602,9 +608,10 @@ mod tests {
         }
         // Clang defines none of these but `__NO_MATH_ERRNO__`, which bcc's
         // Clang identity leaves out with Clang's target-dependent default.
-        let clang = macros_with("--clang-mode", &["-fno-signed-zeros"]);
+        let clang = macros_with("--clang-mode", &["-fno-signed-zeros", "-fsignaling-nans"]);
         assert_eq!(defines(&clang, "__GCC_IEC_559"), None);
         assert_eq!(defines(&clang, "__NO_SIGNED_ZEROS__"), None);
+        assert_eq!(defines(&clang, "__SUPPORT_SNAN__"), None);
     }
 
     /// `gcc -std=gnu17 OPTIONS -dM -E` of an empty file, from a host GCC
@@ -2255,6 +2262,47 @@ mod tests {
             "-o",
             "x.o",
         ]));
+    }
+
+    /// bcc's code uses no MMX register, and its MMX intrinsics work in SSE
+    /// registers, as GCC's and Clang's do on x86-64, so `-mno-mmx` only
+    /// leaves `__MMX__` undefined, as in both compilers: the last of
+    /// `-mmmx` and `-mno-mmx` decides, and the command line's `-D` and `-U`
+    /// come after.
+    #[test]
+    fn no_mmx_leaves_the_mmx_macro_undefined() {
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            for (options, defined) in [
+                (&[][..], Some("1")),
+                (&["-mno-mmx"], None),
+                (&["-mno-mmx", "-mmmx"], Some("1")),
+                (&["-mmmx", "-mno-mmx"], None),
+                (&["-D__MMX__=2", "-mno-mmx"], Some("2")),
+            ] {
+                let listing = macros_with(mode, options);
+                assert_eq!(
+                    defines(&listing, "__MMX__").as_deref(),
+                    defined,
+                    "{mode} {options:?}"
+                );
+            }
+        }
+        if cfg!(all(target_os = "linux", target_env = "gnu")) {
+            let directory = Directory::new();
+            directory.write(
+                "m.c",
+                "#include <mmintrin.h>\nint main(void) {\n  __m64 a = _mm_set_pi16(1, 2, 3, \
+                 4);\n  __m64 b = _mm_add_pi16(a, a);\n  _mm_empty();\n  return \
+                 _mm_cvtm64_si64(b) == 0x0002000400060008 ? 0 : 1;\n}\n",
+            );
+            for backend in [&[][..], &["-Xbcc", "--backend=native"]] {
+                let mut args = vec!["-O2", "-mno-mmx", "m.c", "-o", "m"];
+                args.extend(backend);
+                succeeds(&directory.bcc("--gcc-mode", &args));
+                let run = Command::new(directory.path("m")).output().unwrap();
+                assert_eq!(run.status.code(), Some(0), "{backend:?}");
+            }
+        }
     }
 
     #[test]

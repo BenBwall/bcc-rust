@@ -472,6 +472,25 @@ impl CompilerConfiguration {
         self.given_floating_point & option.bit() != 0
     }
 
+    /// Asks that signaling NaNs be told from quiet ones, as GCC's
+    /// `-fsignaling-nans` does. bcc's code always does: an operation on a
+    /// signaling NaN gives a quiet NaN, and the operations that only copy
+    /// or change the sign (assignment, `-`, `fabs`, `copysign`) and
+    /// `__builtin_issignaling` keep the encoding, under any option. Only
+    /// the GCC identity's `__SUPPORT_SNAN__` reads it.
+    /// C99: Annex F, §F.2.1 paragraph 1, p. 445; PDF p. 457 (signaling NaNs
+    /// need not be supported); GNU extension: GCC manual, "Optimize
+    /// Options".
+    pub(crate) const fn with_signaling_nans(mut self, enabled: bool) -> Self {
+        self.signaling_nans = enabled;
+        self
+    }
+
+    /// Whether `-fsignaling-nans` is in effect.
+    pub(crate) const fn signaling_nans(self) -> bool {
+        self.signaling_nans
+    }
+
     /// Packs every structure and union as the `packed` attribute does and
     /// ignores `#pragma pack`, as GCC's `-fpack-struct` without a value
     /// does. Implementation-defined: C99 §6.7.2.1 paragraph 12, p. 103;
@@ -599,6 +618,7 @@ impl CompilerConfiguration {
             default_visibility: super::DefaultVisibility::Default,
             relaxed_floating_point: 0,
             given_floating_point: 0,
+            signaling_nans: false,
             suppress_warnings: false,
             max_nesting_depth: super::DEFAULT_MAX_NESTING_DEPTH,
             warnings_as_errors: false,

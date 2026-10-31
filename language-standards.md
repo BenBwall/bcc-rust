@@ -137,7 +137,8 @@ so `-fcx-fortran-rules -fno-cx-limited-range` still gives `0` and
 `-f[no-]cx-limited-range` decides only otherwise. Those options, `-f[no-]trapping-math` and
 `-f[no-]math-errno` also define `__NO_SIGNED_ZEROS__`,
 `__RECIPROCAL_MATH__`, `__ASSOCIATIVE_MATH__`, `__NO_TRAPPING_MATH__` and
-`__NO_MATH_ERRNO__` there, and `-fno-fast-math` and
+`__NO_MATH_ERRNO__` there, `-fsignaling-nans` defines `__SUPPORT_SNAN__`
+(`CompilerConfiguration::with_signaling_nans`), and `-fno-fast-math` and
 `-fno-unsafe-math-optimizations` restore them as in GCC
 (`CompilerConfiguration::with_relaxed_floating_point`). bcc's code keeps
 IEC 60559 semantics under all of them, which they permit; the other

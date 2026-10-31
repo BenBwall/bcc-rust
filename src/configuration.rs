@@ -111,6 +111,9 @@ pub(crate) struct CompilerConfiguration {
     relaxed_floating_point: u8,
     /// One bit per [`RelaxedFloatingPoint`] option given in either form.
     given_floating_point: u8,
+    /// Signaling NaNs are to be kept apart from quiet ones
+    /// (`-fsignaling-nans`).
+    signaling_nans: bool,
     /// The structure packing in effect before any `#pragma pack`, and that
     /// `#pragma pack()` restores (`-fpack-struct=N`, `cl /ZpN`); 0 for
     /// none.

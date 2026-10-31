@@ -568,6 +568,8 @@ enum LanguageFlag {
     /// `-fno-signed-zeros`, `-freciprocal-math` and their relatives (true),
     /// or their opposites, such as `-fsigned-zeros`.
     RelaxedFloatingPoint(RelaxedFloatingPoint, bool),
+    /// `-fsignaling-nans` (true) or `-fno-signaling-nans`.
+    SignalingNans(bool),
     /// `-fno-fast-math` (true) or `-fno-unsafe-math-optimizations`, which
     /// restore the options they imply.
     StrictFloatingPoint {
@@ -648,6 +650,8 @@ impl LanguageFlag {
                     RelaxedFloatingPoint::CxFortranRules,
                     text == "-fcx-fortran-rules",
                 )),
+            | "-fsignaling-nans" => return Some(Self::SignalingNans(true)),
+            | "-fno-signaling-nans" => return Some(Self::SignalingNans(false)),
             | "-fno-fast-math" => return Some(Self::StrictFloatingPoint { fast_math: true }),
             | "-fno-unsafe-math-optimizations" =>
                 return Some(Self::StrictFloatingPoint { fast_math: false }),
@@ -746,6 +750,7 @@ impl LanguageFlag {
                 configuration.with_interchange_float_types(enabled),
             | Self::RelaxedFloatingPoint(option, relaxed) =>
                 configuration.with_relaxed_floating_point(option, relaxed),
+            | Self::SignalingNans(enabled) => configuration.with_signaling_nans(enabled),
             | Self::StrictFloatingPoint { fast_math } => {
                 let options: &[RelaxedFloatingPoint] = if fast_math {
                     &RelaxedFloatingPoint::FAST_MATH
