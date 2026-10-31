@@ -173,6 +173,12 @@ fn links_ir_instructions_to_their_lines() {
         [3, 5, 7],
         "the multiply, and the function's ends"
     );
+    assert_eq!(
+        ir.first_output_for(2),
+        Some(5),
+        "scroll to the instruction, not the header"
+    );
+    assert_eq!(ir.first_output_for(4), Some(3));
     assert_eq!(ir.outputs_for(3), [3, 6, 7]);
     assert_eq!(ir.sources_for(5), [2]);
     assert_eq!(

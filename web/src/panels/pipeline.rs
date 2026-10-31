@@ -122,7 +122,7 @@ pub fn PipelineView(
     let reveal = Signal::derive(move || {
         let hovered = hover_source.get();
         (hovered > 0)
-            .then(|| links.with(|links| links.outputs_for(hovered).first().copied()))
+            .then(|| links.with(|links| links.first_output_for(hovered)))
             .flatten()
     });
     let on_hover = Callback::new(move |line| hover_output.set(line));
@@ -547,11 +547,11 @@ fn missing(
     live: &LiveCompile,
 ) -> String {
     if stage == Stage::Llvm && !lesson {
-        return "LLVM IR comes from bcc's native build, which links LLVM. The copy of bcc running in \
-                your browser has no LLVM, so this stage is shown for the bundled lessons only; every \
-                other stage is compiled live as you type. bcc IR, two stages back, has the same \
-                shape: values in SSA form and explicit basic blocks. For this program's LLVM IR, run \
-                bcc on your machine:"
+        return "LLVM IR comes from bcc's native build, which links LLVM. The copy of bcc running \
+                in your browser has no LLVM, so this stage is shown for the bundled lessons \
+                only; every other stage is compiled live as you type. bcc IR, two stages back, \
+                has the same shape: values in SSA form and explicit basic blocks. For this \
+                program's LLVM IR, run bcc on your machine:"
             .to_owned();
     }
     match live {

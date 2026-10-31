@@ -749,6 +749,18 @@ impl Links {
             .collect()
     }
 
+    /// The output line to scroll to for `line` of the source: the first
+    /// that came from that line alone (an IR instruction rather than its
+    /// function's header), else the first linked at all.
+    pub fn first_output_for(&self, line: usize) -> Option<usize> {
+        let outputs = self.outputs_for(line);
+        outputs
+            .iter()
+            .copied()
+            .find(|&output| self.sources_for(output) == [line])
+            .or_else(|| outputs.first().copied())
+    }
+
     /// Source lines that `line` of the output came from.
     pub fn sources_for(&self, line: usize) -> Vec<usize> {
         if let Some(exact) = &self.exact {
