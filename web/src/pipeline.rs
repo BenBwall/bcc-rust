@@ -750,12 +750,33 @@ pub struct Links {
 pub type LineLinks = Vec<Option<(usize, usize)>>;
 
 impl Links {
-    /// Output lines that came from `line` of the source.
+    /// Output lines that came from `line` of the source. An output line
+    /// linked to several source lines (an IR function's header or closing
+    /// brace, which stand for the whole function, or a logical line spliced
+    /// from several) counts for the lines at either end, and for those
+    /// between only when none of them has an output line of its own, as in
+    /// a body the optimizer rebuilt: the statements of a function are not
+    /// "what became" of its header.
     pub fn outputs_for(&self, line: usize) -> Vec<usize> {
         if let Some(exact) = &self.exact {
+            let mut own: Vec<usize> = exact
+                .iter()
+                .flatten()
+                .filter(|(first, last)| first == last)
+                .map(|&(first, _)| first)
+                .collect();
+            own.sort_unstable();
+            own.dedup();
+            let has_own = |first: usize, last: usize| {
+                own.get(own.partition_point(|&each| each < first))
+                    .is_some_and(|&each| each <= last)
+            };
             return (0..exact.len())
                 .filter(|&output| {
-                    exact[output].is_some_and(|(first, last)| (first..=last).contains(&line))
+                    exact[output].is_some_and(|(first, last)| {
+                        (first..=last).contains(&line)
+                            && (line == first || line == last || !has_own(first, last))
+                    })
                 })
                 .collect();
         }

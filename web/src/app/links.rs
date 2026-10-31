@@ -111,15 +111,34 @@ impl Pointing {
 /// Announce where each cursor move links, once the cursor rests. Only the
 /// cursor's moves are announced (not the pointer's, nor recompilations
 /// while typing on one line), and a link is not repeated while the focus
-/// stays in the editors.
+/// stays in the editors. A move made before the view has anything to link
+/// (the compiler still loading) is announced when its output arrives.
 pub(super) fn announce(state: State) {
     let pointing = state.pointing;
     let timer = StoredValue::new_local(None::<Timeout>);
+    let waiting = StoredValue::new(None::<(Side, usize)>);
+    let say = move |side: Side, line: usize| {
+        let text = untrack(|| state.describe_link(side, line));
+        waiting.set_value(text.is_none().then_some((side, line)));
+        if let Some(text) = text
+            && pointing.announcement.get_untracked() != text
+        {
+            pointing.announcement.set(text);
+        }
+    };
+    Effect::new(move || {
+        state.compilation.track();
+        state.wasm.program.track();
+        if let Some((side, line)) = waiting.get_value() {
+            say(side, line);
+        }
+    });
     Effect::new(move || {
         let source = pointing.cursor_source.get();
         let output = pointing.cursor_output.get();
         // Dropping the pending timer cancels it.
         timer.set_value(None);
+        waiting.set_value(None);
         let (side, line) = match (source, output) {
             | (0, 0) => {
                 pointing.announcement.set(String::new());
@@ -128,14 +147,7 @@ pub(super) fn announce(state: State) {
             | (_, 0) => (Side::Source, source),
             | _ => (Side::Output, output),
         };
-        timer.set_value(Some(Timeout::new(ANNOUNCE_DELAY_MS, move || {
-            let Some(text) = untrack(|| state.describe_link(side, line)) else {
-                return;
-            };
-            if pointing.announcement.get_untracked() != text {
-                pointing.announcement.set(text);
-            }
-        })));
+        timer.set_value(Some(Timeout::new(ANNOUNCE_DELAY_MS, move || say(side, line))));
     });
 }
 
@@ -158,7 +170,17 @@ impl State {
                             | Side::Source => links.outputs_for(line),
                             | Side::Output => links.sources_for(line),
                         };
-                        describe(side, line, &linked, stage.view_name(), links.is_exact())
+                        // The machine code and the views that label their
+                        // lines with source lines show no line numbers to
+                        // refer to.
+                        let numbered = stage != pipeline::Stage::MachineCode
+                            && pipeline::gutter(stage, compilation, headers).is_empty();
+                        let view = View {
+                            name: stage.view_name(),
+                            exact: links.is_exact(),
+                            numbered,
+                        };
+                        describe(side, line, &linked, view)
                     })
                 })
             },
@@ -168,28 +190,58 @@ impl State {
                     | Side::Source => program.wat_lines_for(line),
                     | Side::Output => program.source_for(line).into_iter().collect(),
                 };
-                Some(describe(side, line, &linked, "WebAssembly text", true))
+                let view = View {
+                    name:     "WebAssembly text",
+                    exact:    true,
+                    numbered: true,
+                };
+                Some(describe(side, line, &linked, view))
             }),
         }
     }
 }
 
+/// The output view a link sentence names.
+#[derive(Clone, Copy)]
+struct View {
+    /// As in "line 3 of the bcc IR".
+    name:     &'static str,
+    /// Whether its lines link one by one rather than per function.
+    exact:    bool,
+    /// Whether its gutter numbers its lines, so a sentence can cite them.
+    numbered: bool,
+}
+
 /// A sentence saying that `line` of `side` links to the `linked` lines of
-/// the other side, where the output is `view` (such as `bcc IR`), linked
-/// line by line when `exact` and per function otherwise.
-fn describe(side: Side, line: usize, linked: &[usize], view: &str, exact: bool) -> String {
+/// the other side, the output being `view`.
+fn describe(side: Side, line: usize, linked: &[usize], view: View) -> String {
+    let View {
+        name,
+        exact,
+        numbered,
+    } = view;
     let lines = line_list(linked);
+    let outputs = if numbered {
+        lines.clone()
+    } else if linked.len() == 1 {
+        "1 line".to_owned()
+    } else {
+        format!("{} lines", linked.len())
+    };
+    let this = if numbered {
+        format!("Line {line} of the {name}")
+    } else {
+        format!("This line of the {name}")
+    };
     match (side, linked.is_empty(), exact) {
-        | (Side::Source, true, _) => format!("Nothing in the {view} came from source line {line}."),
-        | (Side::Source, false, true) => format!("Source line {line} became {lines} of the {view}."),
+        | (Side::Source, true, _) => format!("Nothing in the {name} came from source line {line}."),
+        | (Side::Source, false, true) => format!("Source line {line} became {outputs} of the {name}."),
         | (Side::Source, false, false) => {
-            format!("Source line {line} is in a function, on {lines} of the {view}.")
+            format!("Source line {line} is in a function, on {outputs} of the {name}.")
         },
-        | (Side::Output, true, _) => format!("Line {line} of the {view} has no source line."),
-        | (Side::Output, false, true) => format!("Line {line} of the {view} came from source {lines}."),
-        | (Side::Output, false, false) => {
-            format!("Line {line} of the {view} is in a function from source {lines}.")
-        },
+        | (Side::Output, true, _) => format!("{this} has no source line."),
+        | (Side::Output, false, true) => format!("{this} came from source {lines}."),
+        | (Side::Output, false, false) => format!("{this} is in a function from source {lines}."),
     }
 }
 
@@ -266,29 +318,49 @@ mod tests {
 
     #[test]
     fn links_read_as_sentences() {
+        let ir = View {
+            name:     "bcc IR",
+            exact:    true,
+            numbered: true,
+        };
+        let asm = View {
+            name:     "x86-64 assembly",
+            exact:    false,
+            numbered: true,
+        };
+        let machine = View {
+            name:     "machine code",
+            exact:    false,
+            numbered: false,
+        };
         assert_eq!(
-            describe(Side::Source, 5, &[12, 13, 14], "bcc IR", true),
+            describe(Side::Source, 5, &[12, 13, 14], ir),
             "Source line 5 became lines 12 to 14 of the bcc IR."
         );
         assert_eq!(
-            describe(Side::Source, 2, &[], "bcc IR", true),
+            describe(Side::Source, 2, &[], ir),
             "Nothing in the bcc IR came from source line 2."
         );
         assert_eq!(
-            describe(Side::Output, 14, &[5], "bcc IR", true),
+            describe(Side::Output, 14, &[5], ir),
             "Line 14 of the bcc IR came from source line 5."
         );
         assert_eq!(
-            describe(Side::Output, 1, &[], "x86-64 assembly", false),
+            describe(Side::Output, 1, &[], asm),
             "Line 1 of the x86-64 assembly has no source line."
         );
         assert_eq!(
-            describe(Side::Source, 7, &[3, 4, 5, 6], "x86-64 assembly", false),
+            describe(Side::Source, 7, &[3, 4, 5, 6], asm),
             "Source line 7 is in a function, on lines 3 to 6 of the x86-64 assembly."
         );
+        // The machine code shows offsets, not line numbers.
         assert_eq!(
-            describe(Side::Output, 8, &[3, 4, 9], "machine code", false),
-            "Line 8 of the machine code is in a function from source lines 3 to 4 and 9."
+            describe(Side::Output, 8, &[3, 4, 9], machine),
+            "This line of the machine code is in a function from source lines 3 to 4 and 9."
+        );
+        assert_eq!(
+            describe(Side::Source, 3, &[6, 7, 8], machine),
+            "Source line 3 is in a function, on 3 lines of the machine code."
         );
     }
 

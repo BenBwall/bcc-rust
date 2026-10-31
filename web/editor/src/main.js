@@ -159,7 +159,8 @@ class Editor {
       scrollBeyondLastLine: false,
       // A read-only view marks the cursor's line only while it has the
       // focus, for the reader moving through it with the arrow keys.
-      renderLineHighlight: 'line',
+      // The gutter too, where the focused editor's bar marks the line.
+      renderLineHighlight: 'all',
       renderLineHighlightOnlyWhenFocus: !!options.readOnly,
       // Clicking a read-only view's line number selects the line; keep the
       // spaces of the selection blank.
@@ -198,6 +199,21 @@ class Editor {
     this.listeners.push(this.editor.onDidChangeCursorPosition((event) => {
       if (event.source === 'keyboard') showCursorOnPage(this.editor);
     }));
+    // A read-only view the reader scrolled keeps its cursor where it was,
+    // often far off screen; Tab into it starts at the first line in view
+    // instead, so its links and announcement are about what is shown.
+    if (options.readOnly) {
+      this.listeners.push(this.editor.onDidFocusEditorText(() => {
+        const line = this.editor.getPosition()?.lineNumber ?? 1;
+        const visible = this.editor.getVisibleRanges();
+        if (visible.length && !visible.some((range) => line >= range.startLineNumber && line <= range.endLineNumber)) {
+          // Past the padding line Monaco half-shows at the top.
+          const top = visible[0].startLineNumber;
+          const first = this.editor.getTopForLineNumber(top) < this.editor.getScrollTop() ? top + 1 : top;
+          this.editor.setPosition({ lineNumber: Math.min(first, visible[0].endLineNumber), column: 1 });
+        }
+      }));
+    }
   }
 
   getValue() {
@@ -297,6 +313,9 @@ class Editor {
       report(this.editor.getPosition()?.lineNumber ?? 0);
     }));
     this.listeners.push(this.editor.onDidBlurEditorText(() => report(0)));
+    // The page may have moved the focus in before listening (from the
+    // highlighted fallback Monaco replaced).
+    if (this.editor.hasTextFocus()) report(this.editor.getPosition()?.lineNumber ?? 0);
   }
 
   /**

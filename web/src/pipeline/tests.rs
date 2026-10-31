@@ -170,8 +170,13 @@ fn links_ir_instructions_to_their_lines() {
     assert!(ir.is_exact());
     assert_eq!(
         ir.outputs_for(2),
-        [3, 5, 7],
-        "the multiply, and the function's ends"
+        [5],
+        "the multiply, not the function's ends"
+    );
+    assert_eq!(
+        ir.outputs_for(1),
+        [3, 7],
+        "the function's first line, its header and closing brace"
     );
     assert_eq!(
         ir.first_output_for(2),
@@ -179,7 +184,7 @@ fn links_ir_instructions_to_their_lines() {
         "scroll to the instruction, not the header"
     );
     assert_eq!(ir.first_output_for(4), Some(3));
-    assert_eq!(ir.outputs_for(3), [3, 6, 7]);
+    assert_eq!(ir.outputs_for(3), [6]);
     assert_eq!(ir.sources_for(5), [2]);
     assert_eq!(
         ir.sources_for(3),
@@ -296,4 +301,30 @@ fn a_trap_is_reported_by_its_cause() {
         TOO_DEEP
     );
     assert_eq!(trap_reason("Something else", None), "Something else");
+}
+
+#[test]
+fn a_functions_ends_stand_for_its_lines_only_without_lines_of_their_own() {
+    // `square` (source 1-4) keeps an instruction for line 2; `rebuilt`
+    // (source 6-9) has only its header, a body without lines, and its brace.
+    let links = Links {
+        exact: Some(vec![
+            None,
+            Some((1, 4)),
+            Some((2, 2)),
+            Some((1, 4)),
+            Some((6, 9)),
+            Some((6, 9)),
+            Some((6, 9)),
+        ]),
+        ..Links::default()
+    };
+    assert_eq!(links.outputs_for(2), [2]);
+    assert_eq!(
+        links.outputs_for(3),
+        Vec::<usize>::new(),
+        "a line with nothing of its own is not its function"
+    );
+    assert_eq!(links.outputs_for(4), [1, 3]);
+    assert_eq!(links.outputs_for(7), [4, 5, 6]);
 }

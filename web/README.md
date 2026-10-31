@@ -185,9 +185,12 @@ first read-only listing, whose folding arrows use it.
 - The links between the source and the pipeline's output or the
   WebAssembly text follow the pointer and the cursor of the editor with the
   keyboard focus, whichever moved last; a focused editor marks its cursor's
-  line with a bar at its left edge. When the cursor rests on a line, a
-  polite live region says what it links to ("Source line 13 became lines
-  14, 40 and 52 of the bcc IR."), once.
+  line with a bar in its gutter, and a read-only view the focus enters
+  starts at its first line in view. When the cursor rests on a line, a
+  polite live region says what it links to ("Source line 13 became line 40
+  of the bcc IR."), once, or as soon as the compiler's output arrives. An
+  IR function's header and closing brace stand for the whole function, so
+  they link from its first and last lines only, not from every line in it.
 - Back replays retained snapshots (up to 2,000); the engine stays at the newest
   state, and stepping forward replays history before asking it for more.
 - An announcement region narrates each step for screen readers.
