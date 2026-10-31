@@ -246,8 +246,17 @@ mod tests {
 
     /// `source` exits 0 and prints `expected` interpreted (unoptimized and
     /// with bcc's optimizer) and built by LLVM at `-O0` and `-O2` and by
-    /// the native back end.
+    /// the native back end. Only on an x86-64 GNU/Linux host: bcc's default
+    /// target is Linux on every host, and the programs need its C library.
     fn prints_on_every_back_end(identity: &str, source: &[u8], flags: &[&str], expected: &str) {
+        if !cfg!(all(
+            target_os = "linux",
+            target_arch = "x86_64",
+            target_env = "gnu"
+        )) {
+            eprintln!("skipping: the programs run on an x86-64 GNU/Linux host only");
+            return;
+        }
         let input = temporary("program.c");
         std::fs::write(&input, source).unwrap();
         let path = input.to_str().unwrap();
