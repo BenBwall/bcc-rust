@@ -815,6 +815,25 @@ mod tests {
     }
 
     #[test]
+    fn an_object_output_of_dash_goes_to_stdout() {
+        let project = Project::new();
+        // `-o -` writes the object to stdout, as Clang does, on every back
+        // end, and leaves no file named `-`.
+        for backend in [&[][..], &["--backend=native"]] {
+            let mut file = vec!["-c", "a.c", "-o", "a.o"];
+            file.extend(backend);
+            succeeds(&project.bcc(&file));
+            let expected = std::fs::read(project.path("a.o")).unwrap();
+            let mut dash = vec!["-c", "a.c", "-o", "-"];
+            dash.extend(backend);
+            let output = project.bcc(&dash);
+            succeeds(&output);
+            assert_eq!(output.stdout, expected, "{backend:?}");
+            assert!(!project.path("-").exists(), "{backend:?}");
+        }
+    }
+
+    #[test]
     fn preprocessed_input_is_not_preprocessed_again() {
         let project = Project::new();
         // GCC and Clang pass no -D to `.i` input and replace no macro in it.
