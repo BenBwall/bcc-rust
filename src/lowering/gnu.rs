@@ -52,8 +52,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 ) => {
                     let value = match place {
                         | super::Place::Memory(value) => value,
-                        | super::Place::Function(func) =>
-                            self.inst(crate::ir::InstData::FuncAddr { func }, crate::ir::Type::Ptr),
+                        | super::Place::Function(func) => self.nested_address(func, source)?,
                         | _ =>
                             return Err(LoweringError::missing(
                                 "a decayed condition has no address",

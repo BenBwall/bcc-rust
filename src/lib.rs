@@ -158,6 +158,7 @@ pub use benchmarking::{
     parse,
     parse_file,
     parse_file_with_library,
+    parse_gcc_source,
     parse_msvc_source,
     parse_source,
     preprocess,

@@ -276,10 +276,13 @@ fn m7_main_end_policy_follows_c_identifier_across_asm_renaming() {
 fn m7_nested_function_does_not_close_unrelated_external_signature() {
     // C99 §6.5.2.2p6, pp. 71-72; PDF pp. 83-84: default promotions
     // apply to the external f(), independently of the GNU nested definition.
-    let ir = lowered(
+    let ir = lower_with(
         "int f(); int g(void){return f(42);} inline int outer(void){int f(int x){return x;} \
          return f(1);}",
-    );
+        crate::configuration::CompilerConfiguration::default()
+            .with_compiler_identity(crate::configuration::CompilerIdentity::Gcc),
+    )
+    .unwrap();
     assert!(ir.contains("function @f(..."), "{ir}");
 }
 

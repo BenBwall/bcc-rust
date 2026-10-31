@@ -137,6 +137,8 @@ fn event(output: &mut String, event: &Event) {
     string(output, &event.title);
     output.push_str(",\"explanation\":");
     string(output, &event.explanation);
+    output.push_str(",\"note\":");
+    string(output, &event.note);
     output.push_str(",\"clauses\":[");
     for (index, entry) in event.clauses.iter().enumerate() {
         comma(output, index);

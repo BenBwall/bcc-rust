@@ -753,6 +753,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 spec.storage_class,
                 Some(StorageClass::Auto | StorageClass::Register | StorageClass::Static)
             )
+            // GNU: under GCC's identity `auto` declares a nested function
+            // ahead of its definition (GCC manual, "Nested Functions").
+            && !(spec.storage_class == Some(StorageClass::Auto)
+                && self.context.configuration.nested_function_refusal().is_none())
         {
             self.error(
                 SemanticErrorKind::InvalidFunctionStorage,
@@ -1014,6 +1018,17 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     && old.kind == kind
                     && old.ty == ty
                     && !self.variably_modified(ty);
+                // GNU: a nested function defined after its `auto`
+                // declaration, under GCC's identity.
+                let declared_nested = kind == BindingKind::Function
+                    && old.kind == kind
+                    && linkage == Linkage::None
+                    && old.linkage == Linkage::None
+                    && self
+                        .context
+                        .configuration
+                        .nested_function_refusal()
+                        .is_none();
                 if same_typedef {
                     if !self.tainted {
                         self.context.report_extension(
@@ -1022,7 +1037,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                             name.source_vectors,
                         );
                     }
-                } else {
+                } else if !declared_nested {
                     self.error(
                         SemanticErrorKind::DuplicateDeclaration,
                         name.source_vectors,

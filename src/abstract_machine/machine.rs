@@ -568,6 +568,7 @@ impl Machine {
         let event = &self.state.event;
         bytes += event.title.capacity()
             + event.explanation.capacity()
+            + event.note.capacity()
             + event.clauses.capacity() * size_of::<super::Clause>()
             + event.operands.capacity() * size_of::<Operand>()
             + event.objects.capacity() * size_of::<usize>()

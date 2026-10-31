@@ -25,6 +25,29 @@ pub fn parse_source(source: &str) -> ParseBenchmarkSummary {
     )
 }
 
+/// Runs phases 1 through 7 under GCC's identity, whose GNU nested functions
+/// Clang's rejects, for allocation tests.
+#[doc(hidden)]
+#[must_use]
+pub fn parse_gcc_source(source: &str) -> ParseBenchmarkSummary {
+    let tu = Bump::new();
+    let source = tu.alloc_str(source);
+    let mut context = benchmark_context(&tu);
+    context.configuration = context
+        .configuration
+        .with_compiler_identity(crate::configuration::CompilerIdentity::Gcc);
+    let unit = crate::pipeline::parse_translation_unit(
+        &mut context,
+        Path::new("<input>"),
+        source,
+        crate::headers::HeaderSearch::default(),
+    );
+    ParseBenchmarkSummary {
+        external_declarations: unit.external_declarations().len(),
+        diagnostics:           context.pending_error_count(),
+    }
+}
+
 /// Runs phases 1 through 7 with all MSVC groups enabled, for allocation tests.
 #[doc(hidden)]
 #[must_use]

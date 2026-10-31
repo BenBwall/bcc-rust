@@ -66,6 +66,10 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
             let value = self.emit_object_size(size, Some(address), source)?;
             args.push(value);
         }
+        // A nested cleanup function takes its static chain last.
+        if let Some(chain) = self.chain_for(func, source)? {
+            args.push(chain);
+        }
         let args = self.scratch.alloc_slice_copy(&args);
         _ = self.draft.push(Op::Call(func, args), signature.result);
         Ok(())

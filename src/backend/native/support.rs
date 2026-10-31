@@ -400,6 +400,9 @@ pub(crate) enum Construct {
         size:  u64,
         align: u64,
     },
+    /// A GNU nested function's static chain on `x86_64-pc-windows-msvc`,
+    /// whose stack probe `__chkstk` clobbers the `%r10` it arrives in.
+    StaticChain,
 }
 
 impl fmt::Display for Unsupported<'_> {
@@ -429,6 +432,8 @@ impl fmt::Display for Unsupported<'_> {
                 f,
                 "an atomic access of {size} bytes aligned to only {align}"
             )?,
+            | Construct::StaticChain =>
+                write!(f, "the static chain of a nested function on MSVC targets")?,
         }
         if let Some(function) = self.function {
             write!(f, " (in @{function})")?;

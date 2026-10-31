@@ -806,6 +806,11 @@ impl<'t, 's> BodyParser<'_, '_, 't, '_, '_, 's> {
                 ty: Type::I32,
                 arg: self.value()?,
             },
+            | Opcode::AdjustTrampoline => InstData::Unary {
+                opcode,
+                ty: Type::Ptr,
+                arg: self.value()?,
+            },
             | Opcode::DynAlloca => {
                 let size = self.value()?;
                 let align = if self.cursor.eat(TokenKind::Comma) {
@@ -976,7 +981,7 @@ impl<'t, 's> BodyParser<'_, '_, 't, '_, '_, 's> {
                     args,
                 }
             },
-            | Opcode::Copy | Opcode::Fill => {
+            | Opcode::Copy | Opcode::Fill | Opcode::Trampoline => {
                 let flags = self.cursor.flags();
                 let args = self.values::<3>()?;
                 self.cursor.expect(TokenKind::Comma, "`,`")?;
@@ -1494,8 +1499,9 @@ impl<'t> Cursor<'_, 't> {
         })
     }
 
-    /// `(ty [abi | extension], ..., [...]) [-> ty [extension]]`, with its
-    /// lists in `scratch`.
+    /// `(ty [abi | extension] [noundef] [chain], ..., [...]) [-> ty
+    /// [extension]]`, with its lists in `scratch`; `chain` marks the last
+    /// fixed parameter as a static chain, which the verifier checks.
     fn signature<'s>(&mut self, scratch: &'s Bump) -> Result<Signature<'s>, ParseError<'t>> {
         self.expect(TokenKind::LParen, "`(`")?;
         let mut params = ArenaVec::new_in(scratch);
@@ -1505,6 +1511,7 @@ impl<'t> Cursor<'_, 't> {
         let mut variadic_fixed = None;
         let mut noundef = ArenaVec::new_in(scratch);
         let mut variadic_noundef = false;
+        let mut chain = None;
         while !self.eat(TokenKind::RParen) {
             if !params.is_empty() || variadic {
                 self.expect(TokenKind::Comma, "`,` or `)`")?;
@@ -1531,7 +1538,14 @@ impl<'t> Cursor<'_, 't> {
                 if self.eat(TokenKind::Ident("noundef")) {
                     noundef.push(index);
                 }
+                if self.eat(TokenKind::Ident("chain")) {
+                    chain = Some(params.len());
+                }
             }
+        }
+        let fixed = variadic_fixed.map_or(params.len(), |n| n as usize);
+        if chain.is_some_and(|after| after != fixed) {
+            return Err(self.peek().expected("`chain` on the last fixed parameter"));
         }
         let (result, result_extension, result_noundef) = if self.eat(TokenKind::Arrow) {
             if self.eat(TokenKind::Ident("noundef")) {
@@ -1557,6 +1571,7 @@ impl<'t> Cursor<'_, 't> {
             noundef: scratch.alloc_slice_copy(&noundef),
             result_noundef,
             variadic_noundef,
+            chain: chain.is_some(),
         })
     }
 

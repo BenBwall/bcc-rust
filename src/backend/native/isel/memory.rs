@@ -415,11 +415,37 @@ impl Selector<'_, '_, '_> {
             } => match opcode {
                 | Opcode::Copy => self.copy_range(dst, src, size, flags),
                 | Opcode::Fill => self.fill_range(dst, src, size),
+                | Opcode::Trampoline => self.trampoline(dst, src, size),
                 | _ => return Err(Construct::Opcode(opcode)),
             },
             | _ => return Err(Construct::Opcode(data.opcode())),
         }
         Ok(())
+    }
+
+    /// Writes a trampoline at `storage`: `movabs $func, %r11`, `movabs
+    /// $chain, %r10`, `jmp *%r11`, as GCC's x86-64 trampoline does, which
+    /// runs on the stack the module marks executable.
+    /// GNU extension: GCC manual, "Nested Functions".
+    fn trampoline(&mut self, storage: Value, func: Value, chain: Value) {
+        let at = self.address(storage);
+        let func = self.reg(func);
+        let chain = self.reg(chain);
+        // REX.W+B `mov` with a 64-bit immediate into r11 and r10, and
+        // REX.B `jmp` through r11 with a `nop` after it.
+        for (offset, width, src) in [
+            (0, Width::B16, Operand::Imm(0xBB49)),
+            (2, Width::B64, Operand::Reg(func)),
+            (10, Width::B16, Operand::Imm(0xBA49)),
+            (12, Width::B64, Operand::Reg(chain)),
+            (20, Width::B32, Operand::Imm(0x90E3_FF49_u32.cast_signed())),
+        ] {
+            self.emit(MInst::Store {
+                width,
+                dst: at.offset(offset),
+                src,
+            });
+        }
     }
 
     /// `dst ← [mem]` of type `ty`; narrow loads zero-extend to 32 bits.

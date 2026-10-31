@@ -72,6 +72,8 @@ pub(crate) fn plan_signature<'ir: 's, 's>(
                 | Convention::Wasm32 => wasm::argument(layout),
             },
             | _ if convention == Convention::Win64 && ty == Type::I128 => ArgPlan::IndirectI128,
+            // The static chain has a register of its own.
+            | _ if signature.chain_param() == Some(index) => ArgPlan::Keep,
             | _ => {
                 // A scalar takes the registers it needs if they are free,
                 // else it goes on the stack and leaves them for later
@@ -388,6 +390,7 @@ pub(super) fn lowered_signature<'s>(
         // blanket promise must not reach aggregate register bytes (LLVM
         // LangRef, noundef; System V AMD64 ABI §3.2.3).
         variadic_noundef: signature.variadic_noundef && signature.variadic_fixed.is_none(),
+        chain:            signature.chain,
     }
 }
 

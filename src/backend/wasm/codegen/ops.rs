@@ -92,6 +92,11 @@ impl Codegen<'_, '_, '_, '_, '_> {
             | InstData::Store {
                 ty, align, args, ..
             } => self.store(ty, align, args[0], args[1]),
+            // WebAssembly cannot write code into memory and run it.
+            | InstData::MemoryRange {
+                opcode: Opcode::Trampoline,
+                ..
+            } => self.refuse("the address of a nested function"),
             | InstData::MemoryRange { opcode, args, .. } => self.memory_range(opcode, args),
             | InstData::Atomic {
                 op,
@@ -548,6 +553,10 @@ impl Codegen<'_, '_, '_, '_, '_> {
             },
             | Opcode::SjljLongjmp => {
                 self.refuse("__builtin_longjmp");
+                return;
+            },
+            | Opcode::AdjustTrampoline => {
+                self.refuse("the address of a nested function");
                 return;
             },
             | Opcode::VaArg => {

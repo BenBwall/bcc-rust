@@ -199,8 +199,9 @@ pub(super) fn generate_code<'tu>(
             },
         }),
         | retention::Output::Built => Generated {
-            status:         0,
-            atomic_runtime: prepared.atomic_runtime,
+            status:           0,
+            atomic_runtime:   prepared.atomic_runtime,
+            executable_stack: prepared.executable_stack,
         },
         | retention::Output::Interpret => Generated::status(interpret(
             &diagnosed.module,
@@ -217,10 +218,13 @@ pub(super) fn generate_code<'tu>(
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) struct Generated {
     /// The process's exit status.
-    pub(super) status:         i32,
+    pub(super) status:           i32,
     /// Whether the object built needs the atomic runtime (`-latomic`) at
     /// link time, as an executable built in one step links it.
-    pub(super) atomic_runtime: bool,
+    pub(super) atomic_runtime:   bool,
+    /// Whether the object built makes trampolines, which need the
+    /// executable stack an executable built in one step asks for.
+    pub(super) executable_stack: bool,
 }
 
 impl Generated {
@@ -228,6 +232,7 @@ impl Generated {
         Self {
             status,
             atomic_runtime: false,
+            executable_stack: false,
         }
     }
 }

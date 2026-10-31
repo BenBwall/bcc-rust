@@ -100,7 +100,7 @@ impl<'s> Uses<'s> {
                 self.access(draft, ty, flags, addr, false);
             },
             | InstData::MemoryRange {
-                opcode,
+                opcode: opcode @ (Opcode::Copy | Opcode::Fill),
                 flags,
                 args,
                 ..

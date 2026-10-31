@@ -87,8 +87,9 @@ pub(super) fn compile(
         | Err((path, source)) => {
             report_unreadable(args, path, &source, &tu);
             return Ok(Generated {
-                status:         FAILURE_STATUS,
-                atomic_runtime: false,
+                status:           FAILURE_STATUS,
+                atomic_runtime:   false,
+                executable_stack: false,
             });
         },
     };
@@ -186,8 +187,9 @@ fn run_job<'tu>(
             )
             .unwrap_or(true);
             return Ok(Generated {
-                status:         if failed { FAILURE_STATUS } else { 0 },
-                atomic_runtime: false,
+                status:           if failed { FAILURE_STATUS } else { 0 },
+                atomic_runtime:   false,
+                executable_stack: false,
             });
         },
         | Job::Preprocess(output) => {
@@ -223,8 +225,9 @@ fn run_job<'tu>(
                 .unwrap_or_else(|error| error.kind() != io::ErrorKind::BrokenPipe),
             };
             return Ok(Generated {
-                status:         if failed { FAILURE_STATUS } else { 0 },
-                atomic_runtime: false,
+                status:           if failed { FAILURE_STATUS } else { 0 },
+                atomic_runtime:   false,
+                executable_stack: false,
             });
         },
         | Job::Inspect if !args.code_generation.requested() => {
@@ -242,8 +245,9 @@ fn run_job<'tu>(
             // An error fails the command, as in any compiler, whichever
             // view printed it.
             return Ok(Generated {
-                status:         if errors == 0 { 0 } else { FAILURE_STATUS },
-                atomic_runtime: false,
+                status:           if errors == 0 { 0 } else { FAILURE_STATUS },
+                atomic_runtime:   false,
+                executable_stack: false,
             });
         },
         | Job::Inspect => &args.code_generation,

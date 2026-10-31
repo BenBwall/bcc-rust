@@ -134,11 +134,13 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     self.tasks.push(match *item {
                         | BlockItem::Statement(statement) => child(statement),
                         | BlockItem::Declaration(declaration) => Task::Declaration(declaration),
-                        | BlockItem::FunctionDefinition(definition) =>
-                            return Err(LoweringError::unsupported(
-                                Construct::NestedFunction,
-                                definition.source_vectors,
-                            )),
+                        // A nested function is lowered as a function of
+                        // its own (`nested.rs`); its definition runs
+                        // nothing here.
+                        | BlockItem::FunctionDefinition(definition) => {
+                            self.nested_definition(definition)?;
+                            continue;
+                        },
                     });
                 },
             | S::Expression(slot) => {
@@ -426,6 +428,12 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             | S::Break | S::Continue | S::Goto(_) => {
                 let target = self.cleanup_jump(statement)?;
                 let block = match target {
+                    // GNU: a nested function may jump to a label of the
+                    // function around it, which unwinds to that frame.
+                    | ControlTarget::Label(label)
+                        if self.unit.sema.control.labels[label.0].function
+                            != self.record.control.id =>
+                        return Err(LoweringError::unsupported(Construct::NonLocalGoto, source)),
                     | ControlTarget::Label(label) => self.label_block(label),
                     | ControlTarget::LoopBreak(id) | ControlTarget::SwitchBreak(id) => self
                         .targets
@@ -504,9 +512,9 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             | S::Declaration(declaration) => self.tasks.push(Task::Declaration(declaration)),
             | S::Attributed(attributed) => self.tasks.push(labeled_child(attributed.statement)),
             // GNU local labels only scope label names, which semantic
-            // analysis already resolved to label identities. Jumps to them
-            // from another function need nested functions, which lowering
-            // refuses, so every use here is an ordinary jump.
+            // analysis already resolved to label identities. Lowering
+            // refuses jumps to them from a nested function, so every use
+            // here is an ordinary jump.
             // GNU extension: GCC "Local Labels".
             | S::Null | S::LocalLabels(_) => {},
             | S::CaseRange(range) => {
@@ -1078,7 +1086,17 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
             vla_tokens: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, scratch),
             indirect: None,
             pack: None,
+            chain_in: None,
+            chain_record: None,
+            trampolines: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, scratch),
         };
+        if let Some(index) = signature.chain_param() {
+            lowerer.chain_in = lowerer
+                .draft
+                .block_params(Draft::entry())
+                .get(index)
+                .copied();
+        }
         // Address-taken labels become IR labels in their semantic address
         // order, so a label's address index is its IR label number, also in
         // static initializers lowered before this body.
@@ -1185,6 +1203,7 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
         if let Some(copy) = copy {
             lowerer.pack_items(copy.pack, ir_index, source)?;
         }
+        lowerer.build_chain_record(lowerer.chain_in)?;
         // Bound expressions refer to prototype bindings. Semantic analysis
         // retains their body correspondence; no translation-unit scan or
         // source-position matching belongs in a per-function constructor.

@@ -580,6 +580,9 @@ fn display_signature(signature: Signature<'_>) -> impl fmt::Display + '_ {
             if signature.param_noundef(index) {
                 f.write_str(" noundef")?;
             }
+            if signature.chain_param() == Some(index) {
+                f.write_str(" chain")?;
+            }
         }
         if signature.variadic && signature.variadic_fixed.is_none() {
             f.write_str(if signature.params.is_empty() {

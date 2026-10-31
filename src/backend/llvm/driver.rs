@@ -70,13 +70,21 @@ pub(crate) fn compile_module_checked(
     file.write_all(buffer.bytes())?;
     drop(file);
     let toolchain = Toolchain::bundled(options.target)?;
-    if !needs_atomic_runtime(module) {
+    let atomic = needs_atomic_runtime(module);
+    let stack = module.uses_trampolines();
+    if !atomic && !stack {
         return toolchain
             .link_object(&object.0, out_path, options)
             .map(|()| true);
     }
     let mut command = toolchain.command(&object.0, out_path, options);
-    _ = command.arg("-latomic");
+    if atomic {
+        _ = command.arg("-latomic");
+    }
+    // LLD will not infer the executable stack trampolines need.
+    if stack {
+        _ = command.arg(EXECUTABLE_STACK);
+    }
     let output = run(&mut command)?;
     if output.status.success() {
         Ok(true)
@@ -84,6 +92,10 @@ pub(crate) fn compile_module_checked(
         Err(io::Error::other(ClangError(output)))
     }
 }
+
+/// The linker option that gives an executable the executable stack its
+/// GNU nested functions' trampolines run on, as GCC's objects get one.
+pub(crate) const EXECUTABLE_STACK: &str = "-Wl,-z,execstack";
 
 /// How the toolchain prints each command it runs to stderr first, for the
 /// driver's `-v`: [`CommandStyle`] as a number, or 0 for not at all.
@@ -436,13 +448,14 @@ impl Toolchain {
     /// Links `inputs` (objects, archives, libraries and linker options such
     /// as `-lm` or `-Wl,...`, in command-line order) into `out_path`, the
     /// way the driver links several translation units. `atomic_runtime`
-    /// adds `-latomic` after them, as one object's link adds it.
+    /// adds `-latomic` after them, as one object's link adds it, and
+    /// `executable_stack` the executable stack trampolines need.
     pub(crate) fn link_inputs<'a>(
         &self,
         inputs: impl IntoIterator<Item = &'a OsStr>,
         out_path: &Path,
         options: LlvmOptions,
-        atomic_runtime: bool,
+        (atomic_runtime, executable_stack): (bool, bool),
     ) -> io::Result<()> {
         let mut command = Command::new(&self.clang);
         _ = command
@@ -463,6 +476,9 @@ impl Toolchain {
         }
         if atomic_runtime {
             _ = command.arg("-latomic");
+        }
+        if executable_stack {
+            _ = command.arg(EXECUTABLE_STACK);
         }
         let output = run(&mut command)?;
         if output.status.success() {

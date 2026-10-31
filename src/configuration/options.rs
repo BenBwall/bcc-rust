@@ -316,6 +316,21 @@ impl CompilerConfiguration {
         self.identity.rules()
     }
 
+    /// How the identity's compiler rejects a function definition in a
+    /// block, which only GCC accepts, as a GNU nested function: `None` for
+    /// GCC, else that compiler's message (Clang's and clang-cl's, TCC's,
+    /// and `cl`'s error C2601).
+    /// GNU extension: GCC manual, "Nested Functions".
+    pub(crate) const fn nested_function_refusal(self) -> Option<&'static str> {
+        match self.identity {
+            | super::CompilerIdentity::Gcc => None,
+            | super::CompilerIdentity::Clang | super::CompilerIdentity::ClangCl =>
+                Some("function definition is not allowed here"),
+            | super::CompilerIdentity::Tcc => Some("cannot use local functions"),
+            | super::CompilerIdentity::Msvc => Some("local function definitions are illegal"),
+        }
+    }
+
     /// GCC's rules (TCC's and MSVC's too) or Clang's (clang-cl's too) for a
     /// floating constant converted out of an integer's range: GCC's
     /// bit-field saturation, `-Woverflow` in static initializers and

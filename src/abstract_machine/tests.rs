@@ -294,7 +294,86 @@ fn indeterminate_policy_is_distinct_from_proven_ub() {
             session.state().diagnostics[0].citation.is_some(),
             "policy cites the underlying rule"
         );
+        let event = &session.state().event;
+        assert!(
+            !event.explanation.contains("prototype")
+                && !session.state().diagnostics[0].message.contains("prototype"),
+            "{}",
+            event.explanation
+        );
+        let dangling = source.contains("&x");
+        assert_eq!(
+            event.title,
+            if dangling {
+                "Use of a dangling pointer"
+            } else {
+                "Read of an indeterminate value"
+            }
+        );
+        // C99 §6.2.6.1p5: an indeterminate value may be a trap representation.
+        assert_eq!(
+            event.clauses.iter().any(|clause| clause.id == "6.2.6.1p5"),
+            !dangling
+        );
     }
+}
+
+#[test]
+fn out_of_bounds_access_names_the_array_and_index() {
+    let session = run("int main(void) { int a[3] = {2, 4, 6}; int *end = a + 3; return *end; }");
+    let message = &session.state().diagnostics[0].message;
+    assert!(
+        message.starts_with("`a` has 3 elements, [0] to [2], and this access is at [3], one past"),
+        "{message}"
+    );
+    // C99 §6.5.6p7: &x + 1 is the one-past position of an array of one.
+    let session = run("int main(void) { int x = 1; int *p = &x + 1; return *p; }");
+    let message = &session.state().diagnostics[0].message;
+    assert!(message.contains("at [1], one past the end"), "{message}");
+    let session = run("int main(void) { int x; return x; }");
+    let message = &session.state().diagnostics[0].message;
+    assert!(
+        message.starts_with("nothing has been stored in `x` yet"),
+        "{message}"
+    );
+}
+
+#[test]
+fn every_step_of_a_topic_carries_its_note() {
+    let run = states("int main(void) { int a = 1; int b = 2; b = a + b; b = b + a; return b; }");
+    let notes = |kind: EventKind| -> Vec<&str> {
+        run.iter()
+            .filter(|state| state.event.kind == kind)
+            .map(|state| state.event.note.as_str())
+            .collect()
+    };
+    // The site shows a note once; the engine attaches it to every step of
+    // its topic, so skipping steps (Run, Run to line) loses none.
+    let declarations = notes(EventKind::Declare);
+    assert!(
+        declarations[0].contains("automatic local variables"),
+        "{}",
+        declarations[0]
+    );
+    assert_eq!(declarations[0], declarations[1]);
+    let sums = notes(EventKind::Arithmetic);
+    assert!(sums[0].contains("2147483647"), "{}", sums[0]);
+    assert_eq!(sums[0], sums[1]);
+    let stores = notes(EventKind::Assign);
+    assert!(stores[0].contains("a[i] = i++"), "{}", stores[0]);
+    // Back and a replayed step see the same notes.
+    let program = compile("int main(void) { int a = 1; int b = a; return b; }").expect("compiles");
+    let mut session = program.session();
+    let first = session.step().clone();
+    let _ = session.step();
+    assert_eq!(session.back(), &first);
+    // C99 §6.7.8p17: without designators, elements are initialized in order.
+    let array = states("int main(void) { int a[2] = {1, 2}; return a[0]; }");
+    let select = array
+        .iter()
+        .find(|state| state.event.title.starts_with("Select"))
+        .expect("an element is selected");
+    assert_eq!(select.event.clauses[0].id, "6.7.8p17");
 }
 
 #[test]
@@ -651,7 +730,7 @@ fn subscripts_span_their_bracket_and_narration_agrees_in_number() {
     // C99 §6.5.3.2p3: &a[2] is a + 2; its range and title include the `]`.
     let address = event(EventKind::PointerArithmetic)[0];
     assert_eq!(text(address), "&a[2]");
-    assert_eq!(address.title, "Pointer arithmetic: &a[2]");
+    assert_eq!(address.title, "Compute the address &a[2]");
     assert!(
         address.explanation.contains("moves 2 ints") && address.explanation.contains("a + i"),
         "{}",
@@ -787,6 +866,24 @@ fn char_values_are_promoted_and_out_of_range_stores_wrap() {
             .clauses
             .iter()
             .any(|clause| clause.id == "6.3.1.3p3")
+    );
+    assert!(
+        wrapped
+            .event
+            .explanation
+            .starts_with("The value to store is the int 200.")
+            && wrapped.event.explanation.contains("implementation-defined"),
+        "{}",
+        wrapped.event.explanation
+    );
+    let increment = states
+        .iter()
+        .find(|state| state.event.kind == EventKind::Increment)
+        .expect("c++");
+    assert!(
+        increment.event.explanation.contains("promoted to int"),
+        "{}",
+        increment.event.explanation
     );
     returned("int main(void) { char c = 127; c++; return c; }", -128);
     for rejected in [

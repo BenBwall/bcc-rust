@@ -38,6 +38,7 @@ use inspection::summarize_parse;
 pub use inspection::{
     parse_file,
     parse_file_with_library,
+    parse_gcc_source,
     parse_msvc_source,
     parse_source,
 };

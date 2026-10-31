@@ -375,6 +375,13 @@ fn verify_signature(
         }
         previous = Some(index);
     }
+    if signature.chain
+        && signature.chain_param().is_none_or(|index| {
+            signature.params[index] != Type::Ptr || signature.param_abi(index).is_some()
+        })
+    {
+        report(VerifierErrorKind::StaticChain);
+    }
     if signature.variadic_noundef && !signature.variadic {
         report(VerifierErrorKind::Noundef(
             "variadic noundef requires a variadic signature",
@@ -761,6 +768,10 @@ impl Verifier<'_, '_, '_, '_> {
                     checker.operand(0, arg, ty);
                 },
                 | Opcode::Freeze => checker.operand(0, arg, ty),
+                | Opcode::AdjustTrampoline => {
+                    checker.require(ty == Type::Ptr, ty);
+                    checker.operand(0, arg, Type::Ptr);
+                },
                 | Opcode::VaArg
                 | Opcode::VaStart
                 | Opcode::VaEnd
@@ -916,6 +927,7 @@ impl Verifier<'_, '_, '_, '_> {
             | InstData::MemoryRange { args, .. } => match opcode {
                 | Opcode::Copy => checker.operands(&args, &[Type::Ptr, Type::Ptr, Type::I64]),
                 | Opcode::Fill => checker.operands(&args, &[Type::Ptr, Type::I8, Type::I64]),
+                | Opcode::Trampoline => checker.operands(&args, &[Type::Ptr; 3]),
                 | _ => checker.require(false, Type::Ptr),
             },
             | InstData::Call { func, args } => {
@@ -1396,6 +1408,8 @@ pub(crate) enum VerifierErrorKind {
     VariadicDescription,
     /// A defined-value contract describes a position that does not exist.
     Noundef(&'static str),
+    /// A static chain that is not a plain `ptr` last fixed parameter.
+    StaticChain,
     /// LLVM and the native symbol interfaces require NUL-free names.
     NulSymbolName,
     /// An alias, section, constructor or destructor request breaks the rule
@@ -1645,6 +1659,8 @@ impl fmt::Display for VerifierErrorKind {
             | Self::VariadicDescription =>
                 f.write_str("invalid trailing variadic argument descriptions"),
             | Self::Noundef(problem) => write!(f, "invalid noundef: {problem}"),
+            | Self::StaticChain =>
+                f.write_str("a static chain must be a plain `ptr` last fixed parameter"),
             | Self::NulSymbolName => f.write_str("a symbol name contains NUL"),
             | Self::AtomicContract =>
                 f.write_str("invalid atomic operand count or memory ordering"),

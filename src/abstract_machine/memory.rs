@@ -120,13 +120,15 @@ impl Machine {
         };
         if value == Value::Indeterminate {
             // C99 indeterminate values may be unspecified or trap
-            // representations; this prototype stops conservatively,
-            // rather than asserting every possible indeterminate
-            // read must be UB.
+            // representations; the machine stops conservatively, without
+            // asserting that every indeterminate read is undefined.
             return Err(Diagnostic::indeterminate(
                 self.state.source_range,
-                "read of an indeterminate value; prototype policy stops execution without \
-                 claiming all such reads are UB",
+                &format!(
+                    "nothing has been stored in {} yet, so its value is indeterminate; the \
+                     machine stops instead of making up a value",
+                    self.location(target, offset)
+                ),
                 &clauses::INDETERMINATE,
             ));
         }
@@ -205,9 +207,33 @@ impl Machine {
             .ok()
             .filter(|&offset| offset < length);
         index.ok_or_else(|| {
+            let name = &object.name;
+            let message = match self.metadata[object.id - 1].ty {
+                | Type::Array(_) if usize::try_from(offset) == Ok(length) => format!(
+                    "`{name}` has {length} elements, [0] to [{}], and this access is at \
+                     [{offset}], one past the end: a pointer may point there, but no element is \
+                     there to read or write",
+                    length - 1
+                ),
+                | Type::Array(_) => format!(
+                    "`{name}` has {length} elements, [0] to [{}], and this access is at \
+                     [{offset}], outside the array",
+                    length - 1
+                ),
+                // C99 §6.5.6p7: a single object acts as an array of one.
+                | _ if offset == 1 => format!(
+                    "`{name}` is a single object, which pointer arithmetic treats as an array of \
+                     one element, and this access is at [1], one past the end: a pointer may \
+                     point there, but no object is there to read or write"
+                ),
+                | _ => format!(
+                    "`{name}` is a single object, which pointer arithmetic treats as an array of \
+                     one element, and this access is at [{offset}], outside it"
+                ),
+            };
             Diagnostic::ub(
                 self.state.source_range,
-                "access outside an object or through a one-past pointer",
+                &message,
                 &clauses::POINTER_ARITHMETIC,
             )
         })
@@ -223,7 +249,7 @@ impl Machine {
         if object.lifetime != "alive" {
             return Err(Diagnostic::ub(
                 self.state.source_range,
-                "object accessed outside its lifetime",
+                &format!("`{}` is accessed after its lifetime ended", object.name),
                 &clauses::LIFETIME,
             ));
         }
@@ -243,8 +269,8 @@ impl Machine {
         {
             return Err(Diagnostic::indeterminate(
                 self.state.source_range,
-                "pointer became indeterminate when its target lifetime ended; prototype policy \
-                 stops on use",
+                "the object this pointer points to has reached the end of its lifetime, so the \
+                 pointer's value is indeterminate",
                 &clauses::LIFETIME,
             ));
         }

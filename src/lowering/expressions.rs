@@ -813,7 +813,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                         | Operand::Aggregate(address)
                         | Operand::Value(address) => address,
                         | Operand::Place(Place::Function(func)) =>
-                            self.inst(InstData::FuncAddr { func }, Type::Ptr),
+                            self.nested_address(func, source)?,
                         | _ =>
                             return Err(LoweringError::missing(
                                 "a decayed operand has no address",
@@ -1852,7 +1852,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             | U::AddressOf => match operand.operand {
                 | Operand::Place(Place::Memory(address)) => Operand::Value(address),
                 | Operand::Place(Place::Function(func)) =>
-                    Operand::Value(self.inst(InstData::FuncAddr { func }, Type::Ptr)),
+                    Operand::Value(self.nested_address(func, source)?),
                 | _ =>
                     return Err(LoweringError::missing(
                         "an address operand is not in memory",
@@ -2339,7 +2339,24 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     .unit
                     .direct_callee(binding)
                     .map_err(|kind| at(kind, source))?;
-                if self.unit.module.function(func).signature == sig {
+                if let Some(chain) = self.chain_for(func, source)? {
+                    // A nested function takes its static chain after the
+                    // fixed arguments.
+                    let chained = self.unit.chained(sig);
+                    let fixed = self.unit.module.signature(chained).fixed_count() - 1;
+                    let mut with_chain = ArenaVec::with_capacity_in(args.len() + 1, self.scratch);
+                    with_chain.extend_from_slice(&args[..fixed]);
+                    with_chain.push(chain);
+                    with_chain.extend_from_slice(&args[fixed..]);
+                    let args = self.scratch.alloc_slice_copy(&with_chain);
+                    if self.unit.module.function(func).signature == chained {
+                        self.draft.push(Op::Call(func, args), result)
+                    } else {
+                        let address = self.inst(InstData::FuncAddr { func }, Type::Ptr);
+                        self.draft
+                            .push(Op::CallIndirect(chained, address, args), result)
+                    }
+                } else if self.unit.module.function(func).signature == sig {
                     self.draft.push(Op::Call(func, args), result)
                 } else {
                     let address = self.inst(InstData::FuncAddr { func }, Type::Ptr);

@@ -165,6 +165,9 @@ pub(crate) fn select<'a>(
         })
     };
     let uses_va_start = uses(&[Opcode::VaStart]);
+    if target == Target::WindowsMsvc && module.signature(function.signature).chain {
+        return Err(Construct::StaticChain);
+    }
     // A call that copies an argument aligned above 16 bytes to the stack
     // realigns `%rsp` in the prologue, which then addresses the frame
     // from `%rbp` as a moving stack does.
@@ -638,6 +641,16 @@ impl<'a, 'm, 'ir> Selector<'a, 'm, 'ir> {
                 arg,
                 ..
             } => self.builtin_longjmp(arg),
+            // An x86-64 trampoline is called through its storage.
+            | InstData::Unary {
+                opcode: Opcode::AdjustTrampoline,
+                arg,
+                ..
+            } => {
+                let dst = self.result_reg(result);
+                let src = self.reg(arg);
+                self.copy(dst, src);
+            },
             | InstData::Binary { ty, args, .. } if opcode.is_float_binary() => {
                 let dst = self.result_reg(result);
                 self.float_binary(opcode, ty, dst, args)?;

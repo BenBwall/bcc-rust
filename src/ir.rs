@@ -123,6 +123,7 @@ pub(crate) use instructions::{
     MemoryOrder,
     ObjectSizeQuery,
     Opcode,
+    TRAMPOLINE_SIZE,
     ValueList,
 };
 pub(crate) use module::{
