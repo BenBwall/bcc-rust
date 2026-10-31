@@ -414,6 +414,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// it reported.
     /// C23 (N3220): §6.2.1 paragraph 7, p. 36; PDF p. 49.
     pub(super) fn inferred_self_reference(&mut self, name: Identifier) -> bool {
+        if self.inferences.is_empty() {
+            return false;
+        }
         let clang = self.context.configuration.compiler_identity().rules() == RuleSet::Clang;
         let Some(inference) = self.inferences.iter().rev().copied().find(|inference| {
             inference.name == Some(name.name)
