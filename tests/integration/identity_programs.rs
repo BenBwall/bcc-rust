@@ -78,6 +78,22 @@ mod tests {
         matches_the_claimed_compiler("gnu_builtins.c");
     }
 
+    /// GNU `__auto_type` objects of every kind of type, in the macros that
+    /// use it, with Clang keeping an atomic operand's `_Atomic` and GCC's
+    /// initializer seeing an outer declaration of the name; on wasm32 too.
+    #[test]
+    fn auto_type_matches_the_claimed_compiler() {
+        matches_the_claimed_compiler_in("auto_type.c", "-std=gnu17", true);
+    }
+
+    /// C23 `auto` objects at file and block scope, with storage classes and
+    /// qualifiers, and Clang's deduction through pointer and function
+    /// declarators; on wasm32 too.
+    #[test]
+    fn inferred_auto_matches_the_claimed_compiler() {
+        matches_the_claimed_compiler_in("inferred_auto.c", "-std=gnu2x", true);
+    }
+
     /// Signed left shifts that wrap, and `__LINE__` as a macro argument in
     /// a replacement list.
     #[test]
@@ -123,6 +139,129 @@ mod tests {
             }
         }
         std::fs::remove_file(source).unwrap();
+    }
+
+    /// GCC 13 folds `__builtin_assoc_barrier` of a constant but does not
+    /// make it an integer constant expression: a `case` label,
+    /// `_Static_assert`, enumerator, bit-field width and static initializer
+    /// take its value, and an array it bounds is variably modified.
+    #[test]
+    fn assoc_barrier_of_a_constant_folds_but_is_no_integer_constant() {
+        let compile = |source_text: &str, flags: &[&str]| {
+            let source = temporary("barrier.c");
+            std::fs::write(&source, source_text).unwrap();
+            let object = temporary("barrier.o");
+            let output = bcc(&[
+                &[
+                    "--compiler-identity=gcc",
+                    "-c",
+                    source.to_str().unwrap(),
+                    "-o",
+                    object.to_str().unwrap(),
+                ][..],
+                flags,
+            ]
+            .concat());
+            drop(std::fs::remove_file(object));
+            std::fs::remove_file(source).unwrap();
+            (output.status.success(), text(&output.stderr))
+        };
+        let folds =
+            "int f(int x) {\nswitch (x) { case __builtin_assoc_barrier(3): return 1; }\nreturn \
+             0;\n}\n_Static_assert(__builtin_assoc_barrier(3) == 3, \"folded\");\nenum { E = \
+             __builtin_assoc_barrier(3) };\nstruct s { int b : __builtin_assoc_barrier(3); \
+             };\nstatic int i = __builtin_assoc_barrier(3);\nstatic double d = \
+             __builtin_assoc_barrier(1.5);\nint a[1 ? 2 : __builtin_assoc_barrier(3)];\nstatic \
+             int *p = (int *)__builtin_assoc_barrier(3);\n";
+        let (accepted, stderr) = compile(folds, &[]);
+        assert!(accepted, "{stderr}");
+        assert_eq!(stderr, "", "folding is silent without -pedantic");
+        let (accepted, stderr) = compile(folds, &["-pedantic-errors"]);
+        assert!(!accepted, "-pedantic-errors refuses the folding: {stderr}");
+        for refused in [
+            "int a[__builtin_assoc_barrier(3)];\n",
+            "void f(void) { int a[__builtin_assoc_barrier(3)] = {0}; (void)a; }\n",
+            "void f(void) { goto l; int a[__builtin_assoc_barrier(3)]; (void)a; l:; }\n",
+            "void f(void) { static int t[__builtin_assoc_barrier(3)]; (void)t; }\n",
+        ] {
+            let (accepted, stderr) = compile(refused, &[]);
+            assert!(!accepted, "{refused}: {stderr}");
+        }
+    }
+
+    /// Builtin operand checks as GCC 14 and Clang 23 make them: a carry
+    /// pointer to the signed type or to a `const` one draws a warning and
+    /// one to another width an error; `__builtin_alloca_with_align` takes a
+    /// constant power of two from 8 bits to 2^31 (GCC) or 2^30 (Clang), and
+    /// `_and_max` a constant bound; and a refused builtin is named also
+    /// under a cast to `void`.
+    #[test]
+    fn builtin_operands_are_checked_as_gcc_and_clang_check_them() {
+        let check = |identity: &str, body: &str| {
+            let source = temporary("operands.c");
+            std::fs::write(
+                &source,
+                format!("void *f(unsigned long n) {{\n{body}\nreturn 0;\n}}\n"),
+            )
+            .unwrap();
+            let object = temporary("operands.o");
+            let output = bcc(&[
+                identity,
+                "-c",
+                source.to_str().unwrap(),
+                "-o",
+                object.to_str().unwrap(),
+            ]);
+            drop(std::fs::remove_file(object));
+            std::fs::remove_file(source).unwrap();
+            (output.status.success(), text(&output.stderr))
+        };
+        for identity in ["--compiler-identity=gcc", "--compiler-identity=clang"] {
+            let (accepted, stderr) = check(
+                identity,
+                "int s; const unsigned c = 0; __builtin_addc(1u, 1u, 0u, &s); __builtin_subc(1u, \
+                 1u, 0u, &c);",
+            );
+            assert!(accepted, "{identity}: {stderr}");
+            assert!(stderr.contains("-Wpointer-sign"), "{identity}: {stderr}");
+            assert!(
+                stderr.contains("discards qualifiers"),
+                "{identity}: {stderr}"
+            );
+            let (accepted, stderr) =
+                check(identity, "unsigned long c; __builtin_addc(1u, 1u, 0u, &c);");
+            assert!(!accepted, "{identity}: {stderr}");
+            for alignment in ["4", "24", "n", "1ul << 40"] {
+                let (accepted, stderr) = check(
+                    identity,
+                    &format!("__builtin_alloca_with_align(8, {alignment});"),
+                );
+                assert!(!accepted, "{identity} {alignment}: {stderr}");
+            }
+            let (accepted, stderr) = check(identity, "__builtin_alloca_with_align(8, 1ul << 29);");
+            assert!(accepted, "{identity}: {stderr}");
+            let (accepted, _) = check(identity, "__builtin_alloca_with_align(8, 1ul << 31);");
+            assert_eq!(accepted, identity.ends_with("gcc"), "{identity}: 2^31 bits");
+        }
+        let (accepted, stderr) = check(
+            "--compiler-identity=gcc",
+            "__builtin_alloca_with_align_and_max(8, 64, n);",
+        );
+        assert!(!accepted, "{stderr}");
+        assert!(
+            stderr.contains("the third argument must be a constant integer"),
+            "{stderr}"
+        );
+        for bound in ["1.5", "-1", "1 ? 2 : n", "__builtin_assoc_barrier(3)"] {
+            let (accepted, stderr) = check(
+                "--compiler-identity=gcc",
+                &format!("__builtin_alloca_with_align_and_max(8, 64, {bound});"),
+            );
+            assert!(accepted, "{bound}: {stderr}");
+        }
+        let (accepted, stderr) = check("--compiler-identity=gcc", "(void) __builtin_apply_args();");
+        assert!(!accepted, "{stderr}");
+        assert!(stderr.contains("`__builtin_apply_args`"), "{stderr}");
     }
 
     /// `__builtin_bcopy`, `__builtin_bzero` and `__builtin_mempcpy` lower to
@@ -218,6 +357,14 @@ mod tests {
     /// interpreted before and after optimization and built through LLVM
     /// and the native back end.
     fn matches_the_claimed_compiler(fixture: &str) {
+        matches_the_claimed_compiler_in(fixture, "-std=gnu17", false);
+    }
+
+    /// [`matches_the_claimed_compiler`] in the language mode `standard`;
+    /// with `wasm32`, also built for `wasm32-wasip1` and run by `node`
+    /// where it is on the path, printing the reference's lines except
+    /// those starting `x86:`, which use types wasm32 lacks.
+    fn matches_the_claimed_compiler_in(fixture: &str, standard: &str, wasm32: bool) {
         if !cfg!(all(
             target_arch = "x86_64",
             target_os = "linux",
@@ -238,12 +385,12 @@ mod tests {
             eprintln!("skipping the GCC identity: no host GCC");
         }
         for (identity, compiler) in references {
-            let expected = reference(compiler, &source);
+            let expected = reference(compiler, &source, standard);
             for flags in [
                 &["--interpret", "--opt=none"][..],
                 &["--interpret", "--opt=bcc"],
             ] {
-                let output = bcc(&[&[identity, "-std=gnu17", &source][..], flags].concat());
+                let output = bcc(&[&[identity, standard, &source][..], flags].concat());
                 assert_eq!(
                     output.status.code(),
                     Some(0),
@@ -266,7 +413,7 @@ mod tests {
                 let built = bcc(&[
                     &[
                         identity,
-                        "-std=gnu17",
+                        standard,
                         &source,
                         "-o",
                         executable.to_str().unwrap(),
@@ -288,14 +435,79 @@ mod tests {
                 );
                 std::fs::remove_file(executable).unwrap();
             }
+            if wasm32 {
+                let expected: String = expected
+                    .lines()
+                    .filter(|line| !line.starts_with("x86:"))
+                    .flat_map(|line| [line, "\n"])
+                    .collect();
+                matches_on_wasm32(fixture, &source, identity, standard, &expected);
+            }
         }
     }
 
-    /// The output of `source` built by `compiler`.
-    fn reference(compiler: &str, source: &str) -> String {
+    /// `source` built for `wasm32-wasip1` under `identity`, unoptimized and
+    /// optimized, prints `expected`; without `node` this is skipped.
+    fn matches_on_wasm32(
+        fixture: &str,
+        source: &str,
+        identity: &str,
+        standard: &str,
+        expected: &str,
+    ) {
+        if !Command::new("node")
+            .arg("--version")
+            .output()
+            .is_ok_and(|output| output.status.success())
+        {
+            eprintln!("skipping wasm32: node is not on the path");
+            return;
+        }
+        let runner = Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts/wasm/run.mjs");
+        for optimization in ["-O0", "-O2"] {
+            let module = temporary("program.wasm");
+            let built = bcc(&[
+                identity,
+                standard,
+                optimization,
+                "-w",
+                "--target=wasm32-wasip1",
+                source,
+                "-o",
+                module.to_str().unwrap(),
+            ]);
+            assert!(
+                built.status.success(),
+                "{fixture} {identity} wasm32 {optimization}: {}",
+                text(&built.stderr)
+            );
+            let run = run_native(
+                Command::new("node")
+                    .arg("--no-warnings")
+                    .arg(&runner)
+                    .arg(&module),
+            )
+            .unwrap();
+            assert_eq!(
+                run.status.code(),
+                Some(0),
+                "{fixture} {identity} wasm32 {optimization}"
+            );
+            assert_eq!(
+                text(&run.stdout),
+                expected,
+                "{fixture} {identity} wasm32 {optimization}"
+            );
+            std::fs::remove_file(module).unwrap();
+        }
+    }
+
+    /// The output of `source` built by `compiler` in the language mode
+    /// `standard`.
+    fn reference(compiler: &str, source: &str, standard: &str) -> String {
         let executable = temporary("reference.exe");
         let built = Command::new(compiler)
-            .args([source, "-std=gnu17", "-O0", "-w", "-o"])
+            .args([source, standard, "-O0", "-w", "-o"])
             .arg(&executable)
             .arg("-lm")
             .output()

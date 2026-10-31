@@ -770,6 +770,9 @@ The following vocabulary entries retain the established diagnostic contracts:
   retain their exemption, and parser suppression still applies. The source is
   [GCC's alignment extension](https://gcc.gnu.org/onlinedocs/gcc/Alignment.html).
   Keyword availability and spelling checks are independent and unchanged.
+  Of a function type it is 1 under GCC's rules and 4 under Clang's, on every
+  target; of a function designator, the function's `aligned` attribute
+  replaces that (gcc.c-torture/execute/align-3.c).
 - `TypedefRedefinition` has C11 origin. Redefining a typedef to the identical,
   non-variably-modified type is accepted in every mode, reported as
   `typedef redefinition` with C11 origin under Warn/Deny before C11 (GNU
@@ -819,7 +822,7 @@ functions.
 | C89/C90/C95 | Native implicit int; C99-origin mixed blocks, for declarations, designated initializers, compound literals, flexible array members, long long, trailing enum comma, `__func__`, and unambiguous qualified/static/`[*]` array syntax follow Allow/Warn/Deny | Variable bounds need constant evaluation to distinguish VLAs from constant arrays; flexible-member position and object layout |
 | C99 | Full C99 grammar; implicit int is retained with a removed-feature policy diagnostic | Type/name/control-flow constraints listed in the C99 checklist |
 | C11/C17 | `_Alignas` expression/type operands, `_Alignof` types (expression operands as a GNU extension), `_Atomic` type/qualifier, `_Generic` associations, `_Noreturn`, `_Static_assert`, `_Thread_local`, anonymous untagged aggregates; `_Alignas` in a plain type name is a constraint error | Alignment validity, storage-class combinations and aggregate layout; atomic eligibility and generic selection are analyzed |
-| C23 | All `[[...]]` attribute positions with standard/vendor names and balanced arguments; `bool`/`true`/`false`, `nullptr`, `constexpr`, `typeof`/`typeof_unqual`, message-optional `static_assert`, `alignas`/`alignof`/`thread_local` aliases; labels before declarations and at block end; `{}`; `_BitInt` with signedness; fixed enum underlying specifier-qualifier lists; `auto` type inference, alone or beside another storage class except `typedef`; unnamed definition parameters; ellipsis-only prototypes; empty parameter lists as prototypes; rejected identifier-list declarators; decimal type keywords; compound-literal storage classes | Attribute applicability/meaning, inferred types, width values, enum type legality, decimal literal support and literal object lifetime |
+| C23 | All `[[...]]` attribute positions with standard/vendor names and balanced arguments; `bool`/`true`/`false`, `nullptr`, `constexpr`, `typeof`/`typeof_unqual`, message-optional `static_assert`, `alignas`/`alignof`/`thread_local` aliases; labels before declarations and at block end; `{}`; `_BitInt` with signedness; fixed enum underlying specifier-qualifier lists; `auto` type inference, alone or beside another storage class except `typedef`; unnamed definition parameters; ellipsis-only prototypes; empty parameter lists as prototypes; rejected identifier-list declarators; decimal type keywords; compound-literal storage classes | Attribute applicability/meaning, width values, enum type legality, decimal literal support and literal object lifetime; inferred types are analyzed (see "Type inference") |
 | C2y subset | `_Countof` unary expression or parenthesized type; type-controlling `_Generic`; `if`/`switch` declaration headers with an optional following expression; case ranges; `break`/`continue` label | Array/type/count evaluation, selection conversion, range overlap, and named control-target resolution |
 
 The keyword classifier reports reserved keywords, so parser consumers do not
@@ -1020,6 +1023,28 @@ nonordinary prefixes. Phase 7 adds encoding-bearing literal, bit-precise
 integer, and imaginary constant token variants. Semantic analysis types the
 encoded literals (see `semantic-analysis.md`, "Type graph and target data
 model") and lowering emits their UTF-8, UTF-16 and UTF-32 units.
+
+Source text that is not UTF-8 keeps its bytes (`util/raw_bytes.rs`): phase 1
+reads each byte of malformed UTF-8 as a private-use stand-in, U+10FF00 plus
+the byte, and phase 5 turns a stand-in in a literal back into that byte, so
+`"\0\377"` and `"\0ÿ"` written in Latin-1 are the same three bytes
+(gcc.c-torture/execute/20000227-1.c). The stand-ins mean bytes only in a
+translation unit that read malformed UTF-8. As each compiler does:
+
+| Literal | GCC identity | Clang identity |
+|---|---|---|
+| unprefixed string or character | bytes kept, silent | bytes kept, one "illegal character encoding in string literal [-Winvalid-source-encoding]" (or "character literal") per literal, an error under `-pedantic-errors` |
+| `u8` | bytes kept, silent; a `u8` character constant of more than one byte is an error | error "illegal character encoding in string literal" |
+| `u`, `U`, `L` | error "converting to execution character set: Invalid or incomplete multibyte or wide character" | error "illegal character encoding in string literal" |
+
+An unprefixed literal joined to a prefixed one takes its prefix (C11
+§6.4.5p5), and so its row: Clang's warning becomes the prefixed literal's
+error, and GCC rejects bytes in a `u`, `U` or `L` result.
+
+A stray byte outside a literal is the error "stray byte <FF> in source", and
+source excerpts show each byte as `<FF>`, as Clang does. `-E` spells a
+string literal that is not UTF-8 with octal escapes (`"\377"`), which give
+the same bytes where GCC copies the byte.
 
 C23 `#elifdef`/`#elifndef`, `#warning`, `#embed`, `__has_include`,
 `__has_embed`, `__has_c_attribute`, and `__VA_OPT__` also work as earlier GNU
@@ -1505,8 +1530,8 @@ alignment, while explicit object alignment requests remain inherited.
 
 Lowering diagnostics for unmodeled types retain the actual construct through
 typedefs, arrays and record members: `_BitInt`, `constexpr`, decimal types,
-inferred declarations, fixed-underlying enums, MSVC pointer modifiers or
-`ext_vector_type`. They no longer list unrelated possible causes.
+types GCC infers from bit-fields, fixed-underlying enums, MSVC pointer
+modifiers or `ext_vector_type`. They no longer list unrelated possible causes.
 
 The reachable old-GCC glibc
 `tgmath.h` path uses these primitives, not `__builtin_tgmath`; the pinned
@@ -2985,7 +3010,21 @@ identity (GCC 15 and Clang 23 checked):
 Deviations: bcc folds `__builtin_fabsq` and `__builtin_copysignq` in a
 static initializer, where GCC 15 reports "initializer element is not
 constant" (it folds the `f128` spellings), and folds the `f16` sign
-builtins under the Clang identity, which Clang 23 does not.
+builtins under the Clang identity, which Clang 23 does not. GCC's
+`__builtin_fabsf16` of a signaling NaN gives a quiet NaN (it computes in
+`float`); Clang and bcc clear only the sign bit, under both identities.
+
+Operand checks follow GCC 14 and Clang 23: the carry pointer of
+`__builtin_addc`/`subc` converts as a prototyped argument, so a pointer to
+the signed type or to a `const` one draws `-Wpointer-sign` or the
+discarded-qualifier warning and one to another width an error;
+`__builtin_alloca_with_align` takes a constant power of two from 8 bits to
+2^31 under GCC (2^30 under Clang, which allows at most 2147483647), and
+`_and_max` a constant bound. `__builtin_bswap*` of any arithmetic constant
+folds (an integer constant expression only if its operand is one);
+`__builtin_assoc_barrier` folds a constant and, as GCC, takes pointers and
+structures; and under the GCC identity `__builtin_creal`, `cimag` and `conj`
+of a constant fold, as GCC folds them and Clang does not.
 
 Still refused, now by name ("not yet supported by lowering:
 `__builtin_apply_args`"): `__builtin_apply`, `__builtin_apply_args`,
@@ -2993,8 +3032,135 @@ Still refused, now by name ("not yet supported by lowering:
 `__builtin_clear_padding`, `__builtin_powi{,f,l}`,
 `__builtin_speculation_safe_value` and `__builtin_stack_{save,restore}`;
 any other unregistered `__builtin_` name is "a builtin this compiler does
-not know". `__auto_type` reports the existing "inferred declaration types"
-refusal, as C23 `auto` inference does. GCC's `_FloatN` aliases of the math
+not know". `__auto_type` and C23 `auto` inference are implemented since
+(see "Type inference"). GCC's `_FloatN` aliases of the math
 functions (`__builtin_acoshf32`, …) stay unregistered: `floatN-builtin.c`
 needs them folded in static initializers with MPFR's correctly rounded
 results, which bcc has no evaluator for.
+
+## Variably modified members (2026-10-31)
+
+GCC accepts a structure or union member of variably modified type in block
+and prototype scope (`struct s { int a; int b[n]; int c; };`) and lays the
+record out at run time when its declaration is reached: `sizeof`, the
+offsets of the members after the variable one, copies and arrays of the
+record all read the bounds evaluated there. 19 of GCC 15.2's C torture
+tests use them (8 under `execute/`, 11 under `compile/`; found with
+Clang's "fields must have a constant size" error), with more in
+`gcc.dg`.
+
+bcc's lowering maps every record to an IR aggregate of constant layout, so
+it has no run-time record layout yet. Under the GCC identity, semantic
+analysis now accepts these members where GCC does, as it accepts other
+unmodeled types, and lowering refuses any declaration, expression or `asm`
+operand that needs it, pointer arithmetic on a pointer to it included,
+with "not yet supported by lowering: structures with variably modified
+members", instead of reporting a constraint violation GCC does not have.
+The record's type is variably modified, as GCC's `C_TYPE_VARIABLE_SIZE`
+makes it, so what GCC rejects for a variable-sized type is rejected for it:
+an initializer or compound literal of it, a `static` or `extern` object, a
+function returning it, a jump or `switch` into the scope of an object of
+it or of a pointer to it, and a `_Generic` association naming it. An array
+of pointers to it (or to a VLA) has a constant size and may be initialized,
+as in GCC; bcc used to reject `int (*a[2])[n] = {0, 0};`. Its members are
+not modeled, though: `-fsyntax-only` accepts uses GCC rejects, such as a
+member it lacks (`s.zz`), or the record as an arithmetic, scalar or
+assignment operand (`s + 1`, `(int)s`, `s ? 1 : 0`, `s = 5`); code
+generation then refuses them by name. At file scope GCC rejects them ("variably modified 'a' at file
+scope"), and so does bcc. The Clang and clang-cl identities report
+"fields must have a constant size" for every such member, as Clang does in
+every scope; TCC and MSVC keep the C99 §6.7.5.2p2 error.
+
+Of those 19 torture tests under `--compiler-identity=gcc`, all pass
+analysis; 15 are refused by name at lowering, and the other 3 compile
+because nothing of their records is lowered (`920501-16.c` only declares
+the type, `pr77754-6.c` only names a pointer to it in a prototype, and
+`20050801-2.c` uses it in an inline definition that is not emitted). One
+(`pr39394.c`, an `asm` memory operand of the type) used to end in an
+internal error, because analysis retains no `asm` facts for an unanalyzed
+operand; lowering now refuses such an operand by its type, which also fixes
+the same internal error for `_Decimal32` and other unmodeled operand types.
+
+Left to do for full support: a run-time layout (offsets and size as size
+formulas with sums and alignment), member access and copies through byte
+offsets, arrays of and pointers to such records, `offsetof` with run-time
+offsets, and passing by value (`va_arg` of such a type in
+`20020412-1.c`). A record whose only variably modified member is a pointer
+to a VLA (`int (*p)[n]`) has a constant layout and would need only the
+member's bound evaluated where the record is declared.
+
+## Type inference: C23 `auto` and GNU `__auto_type` (2026-10-31)
+
+An object declared with C23 `auto` and no type specifier, or with GNU
+`__auto_type` (every mode; GCC and Clang accept it in C89 too), takes the
+type of its initializer after lvalue conversion and array and function
+decay, qualified by the declaration's qualifiers (C23 §6.7.10p2): `const
+auto k = c;` is `const int` for an `int` or `const int` `c`, `auto s =
+"ab";` is `char *`, and `auto f = g;` a pointer to `g`'s type. A lone
+`auto` is no storage-class specifier, so a file-scope `auto a = 3.5;` has
+external linkage; `static`, `extern`, `register` and `_Thread_local` keep
+their meaning beside it. Semantic analysis types the initializer before it
+binds the object, then binds and initializes it as an ordinary declaration,
+so every back end (the interpreter, LLVM, native and wasm32) lowers it
+without change; the macros the GCC manual shows, such as
+`({ __auto_type _a = (a); __auto_type _b = (b); _a > _b ? _a : _b; })`,
+evaluate each argument once. Variably modified types keep their run-time
+bounds (`__auto_type p = &vla;` reads the bound evaluated at `vla`'s
+declaration), and complex, vector, `_BitInt`, `_Float16` and `__float128`
+operands give those types; `_Float16` arithmetic gives `_Float16`, whatever
+precision computes it.
+
+The constraints and C23's implementation-defined forms follow the claimed
+compiler, as GCC 13.3, GCC 15's `c-parser.cc` and Clang 23 behave:
+
+| Declaration | GCC | Clang |
+| --- | --- | --- |
+| no initializer, or a braced one | error | error |
+| more than one declarator | error at the second | each deduced; error if they differ |
+| `*p`, `(*f)(int)`, `(*a)[3]` declarators | error ("plain identifier") | deduced through the derivations; error if the initializer does not match, an unsized `[]` matching only an unsized array |
+| `auto __auto_type x = 1;` in C23 | `auto` is a storage class | error |
+| array or function declarator | error | error |
+| the name in its own initializer | C23 `auto`: error; `__auto_type`: the outer declaration | error for both |
+| a bit-field member access, parenthesized or not | `__auto_type`: error; C23 `auto`: the bit-field's own type (refused by lowering) | error for both |
+| another operand of a bit-field's type: `(0, s.b)`, `(s.b = 1)`, `++s.b`, `s.b++`, `({ s.b; })` | the bit-field's own type (refused by lowering) | its promoted type, usually `int` |
+| an `_Atomic` operand | atomic dropped | `_Atomic` kept |
+| a tag declared in a C23 `auto` initializer | error | accepted |
+| C23 `auto` redeclaring a name of the same scope | error | error |
+| `__auto_type` redeclaring one | ordinary redeclaration rules | ordinary redeclaration rules |
+| in a parameter, member, type name, typedef or function definition | error | error |
+| `auto` with another storage class and a type specifier | error | error |
+
+Unit tests in `semantic_analysis/tests/inference.rs` pin each row under
+both identities; `sema-auto-type-{gcc,clang}` render the diagnostics, one
+per error the compiler reports for the same source. The
+`auto_type.c` (GNU17) and `inferred_auto.c` (GNU23) programs in
+`tests/integration/identity_programs.rs` run under both identities on every
+arm, wasm32 included, and print what GCC 13.3 and Clang 23 print.
+
+Deviations and limits:
+
+- `constexpr auto` infers its type but stays refused with every `constexpr`
+  object ("constexpr objects").
+- GCC types a C23 `auto` object inferred from a bit-field with the
+  bit-field's own type (`sizeof` 1 for a 2-bit field), which lowering
+  refuses ("types inferred from bit-fields"); GCC 13 and 15 agree.
+- Clang's `-Wauto-decl-extensions` pedantic warning for a deduced pointer or
+  function declarator is not reported: the extension policy has no feature
+  bit left for it.
+- A file-scope `register auto` is an error under both identities; GCC 13
+  accepts it without a diagnostic.
+- Clang keeps the shadowing name visible inside a `__auto_type` initializer
+  for typedef lookup too (`__auto_type T = (T)1;` is a syntax error there);
+  bcc's parser follows GCC and publishes the name after the initializer
+  under both identities.
+- GCC 13 has no `_BitInt`; GCC 14 and later infer it as Clang does.
+- Clang 23 reads C23 `auto` followed by a typedef name as an inferred
+  declaration of that name (`typedef int T; auto T x = 1;` is an error, and
+  `auto T = 1.0;` declares `T`), and rejects `auto _Atomic x = 1;` while it
+  accepts `_Atomic auto x = 1;`; bcc's parser takes the typedef name as the
+  type under both identities, as GCC does, and accepts both `_Atomic`
+  orders.
+- An attribute after the declarator (`auto x __attribute__((unused)) = 1;`,
+  `auto x [[maybe_unused]] = 1;`) used to be misread as an unknown type name
+  followed by a declarator; after a storage-class specifier the identifier
+  is now the declarator, as in GCC and Clang.

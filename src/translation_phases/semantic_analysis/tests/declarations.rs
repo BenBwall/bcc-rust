@@ -6,6 +6,7 @@ use super::*;
 use crate::configuration::{
     CStandard,
     CompilerConfiguration,
+    CompilerIdentity,
     ExtensionPolicy,
 };
 
@@ -631,18 +632,90 @@ fn gnu_folding_accepts_classic_offsetof_and_constant_p() {
     assert_eq!(kinds(builtin, CompilerConfiguration::default()), []);
 }
 
+/// Variably modified members: Clang rejects every one ("fields must have
+/// a constant size"); GCC accepts them in block and prototype scope, where
+/// lowering refuses the record by name, but not at file scope; TCC and
+/// MSVC have none.
 #[test]
 fn members_cannot_have_variably_modified_types() {
+    let source = "void f(int n) { struct { int (*p)[n]; int ok; } s; union { int a[n]; } u; s.ok \
+                  = sizeof u; } void g(int k, struct { int a[k]; } *p);";
+    for (identity, expected) in [
+        (
+            CompilerIdentity::Clang,
+            [SemanticErrorKind::VariableMember; 3],
+        ),
+        (
+            CompilerIdentity::Tcc,
+            [SemanticErrorKind::FileScopeVariableType; 3],
+        ),
+    ] {
+        assert_eq!(
+            kinds(source, gnu17().with_compiler_identity(identity)),
+            expected,
+            "{identity:?}"
+        );
+    }
     assert_eq!(
         kinds(
-            "void f(int n) { struct { int (*p)[n]; int ok; } s; union { int a[n]; } u; }",
-            gnu17()
+            source,
+            gnu17().with_compiler_identity(CompilerIdentity::Gcc)
         ),
-        [
-            SemanticErrorKind::FileScopeVariableType,
-            SemanticErrorKind::FileScopeVariableType,
-        ]
+        []
     );
+    assert_eq!(
+        kinds(
+            "int n = 3; struct F { int a[n]; };",
+            gnu17().with_compiler_identity(CompilerIdentity::Gcc)
+        ),
+        [SemanticErrorKind::FileScopeVariableType]
+    );
+}
+
+/// GCC's record with a variably modified member is variable-sized, so the
+/// uses GCC rejects for a VLA are rejected for it too; an array of
+/// pointers to it, or to a VLA, has a constant size and may be
+/// initialized.
+#[test]
+fn records_with_variably_modified_members_are_variable_sized() {
+    use SemanticErrorKind as K;
+    let gcc = gnu17().with_compiler_identity(CompilerIdentity::Gcc);
+    for (statement, expected) in [
+        ("struct S t = {0};", &[K::InvalidInitializer][..]),
+        ("static struct S st;", &[K::FileScopeVariableType]),
+        ("extern struct S et;", &[K::FileScopeVariableType]),
+        ("(void)sizeof (struct S){0};", &[K::InvalidInitializer]),
+        ("struct S f(void);", &[K::FileScopeVariableType]),
+        (
+            "goto in; { struct S u; in: (void)0; }",
+            &[K::JumpIntoVariableScope],
+        ),
+        (
+            "goto in2; { struct S *u = p; in2: (void)u; }",
+            &[K::JumpIntoVariableScope],
+        ),
+        (
+            "switch (n) { struct S w; case 1: break; }",
+            &[K::SwitchIntoVariableScope],
+        ),
+        (
+            "(void)_Generic(*p, struct S: 1, default: 0);",
+            &[K::InvalidGenericSelection],
+        ),
+        (
+            "(void)_Generic(p, struct S *: 1, default: 0);",
+            &[K::InvalidGenericSelection],
+        ),
+        ("struct S *a[3] = {p, p, 0}; (void)a;", &[]),
+        ("int (*v[2])[n] = {0, 0}; (void)v;", &[]),
+        ("static struct S *sp; (void)sp;", &[]),
+    ] {
+        let source = format!(
+            "void *vp; void h(int n) {{ struct S {{ int a; int b[n]; int c; }}; struct S *p = vp; \
+             {statement} }}"
+        );
+        assert_eq!(kinds(&source, gcc), expected, "{statement}");
+    }
 }
 
 #[test]
@@ -1109,7 +1182,6 @@ fn microsoft_intrinsics_refuse_conflicting_declarations_and_definitions() {
 /// neither.
 #[test]
 fn reserved_builtin_reports_follow_the_identity() {
-    use crate::configuration::CompilerIdentity;
     let complex = "double _Complex z = __builtin_complex(1.0, 2.0);";
     let gcc = pedantic(CStandard::C89, true).with_compiler_identity(CompilerIdentity::Gcc);
     let reports = extensions(complex, gcc);

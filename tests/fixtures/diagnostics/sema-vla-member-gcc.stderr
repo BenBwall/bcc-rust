@@ -1,0 +1,9 @@
+error: variably modified type is not permitted here: `a`
+ --> sema-vla-member-gcc.c:2:25
+  |
+2 | struct file_scope { int a[n]; };
+  |                         ^ variably modified type
+  |
+  = note: C99 §6.7.5.2p2: only an ordinary identifier with block or prototype scope and no linkage has a variably modified type; members never do (§6.7.2.1p8)
+
+1 error generated.

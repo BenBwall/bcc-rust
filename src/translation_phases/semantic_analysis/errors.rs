@@ -216,6 +216,10 @@ pub(crate) enum SemanticErrorKind {
     /// `__builtin_longjmp` must be the constant 1.
     /// <https://gcc.gnu.org/onlinedocs/gcc/Nonlocal-Gotos.html>
     InvalidLongjmpValue,
+    /// GNU extension: the bound of `__builtin_alloca_with_align_and_max`
+    /// must be a constant, as GCC 13 requires it ("third argument to
+    /// function ... must be a constant integer").
+    InvalidAllocaMaximum,
     /// Clang's `-Wconstant-conversion`: an implicit conversion changes an
     /// integer constant's value; the payload is the interned message.
     /// C99: §6.3.1.3p3, p. 43; PDF p. 55.
@@ -371,6 +375,10 @@ pub(crate) enum SemanticErrorKind {
     /// Implementation limit, C99: §5.2.4.1p1, pp. 20-21; PDF pp. 32-33;
     /// §6.5.6p9, pp. 83-84; PDF pp. 95-96.
     ObjectTooLarge,
+    /// A variably modified member, which Clang never accepts.
+    /// C99: §6.7.2.1 paragraph 8, p. 102; PDF p. 114; §6.7.5.2 paragraph 2,
+    /// p. 116; PDF p. 128.
+    VariableMember,
     /// C99: §6.7.5.2p2, p. 116; PDF p. 128; members §6.7.2.1p8, p. 102;
     /// PDF p. 114.
     FileScopeVariableType,
@@ -600,6 +608,11 @@ pub(crate) enum SemanticErrorKind {
     /// GNU extension: GCC manual, "Extended Asm"; C99 §J.5.10, p. 514;
     /// PDF p. 526.
     InvalidAsm(super::assembly::AsmFault),
+    /// C23 `auto` and GNU `__auto_type` inference constraints, with each
+    /// compiler's choices for the implementation-defined forms.
+    /// C23 (N3220): §6.7.10 paragraphs 1-2, pp. 134-135; PDF pp. 147-148;
+    /// §6.7.1 paragraph 12, p. 98; PDF p. 111.
+    InvalidInference(super::inference::InferenceFault),
     /// Clang `-Wunknown-attributes`: an attribute name no rule knows.
     /// C23: §6.7.13.2p2, p. 143; PDF p. 156 (unrecognized attributes are
     /// ignored). GNU extension: GCC manual, "Attribute Syntax".
@@ -784,6 +797,7 @@ impl SemanticErrorKind {
             | Self::InvalidImmediate => "expected an integer constant expression in range",
             | Self::ImmediateOutOfRange { .. } => "outside the builtin's valid range",
             | Self::InvalidAsm(fault) => fault.label(),
+            | Self::InvalidInference(fault) => fault.label(),
             | Self::CallAttribute | Self::CallAttributeWarning => "function attribute diagnostic",
             | Self::NoViableOverload => "no viable overload",
             | Self::AmbiguousOverload => "ambiguous overload",
@@ -839,6 +853,7 @@ impl SemanticErrorKind {
             | Self::InvalidBuiltinProbability => "expected a constant probability from 0 to 1",
             | Self::InvalidFrameLevel => "expected an integer constant frame level",
             | Self::InvalidLongjmpValue => "expected the constant 1",
+            | Self::InvalidAllocaMaximum => "expected a constant",
             | Self::ConstantConversion(_) => "the converted value differs",
             | Self::FloatOverflow(_) | Self::LiteralConversion(_) | Self::PedanticOverflow =>
                 "the value is not the integer's",
@@ -893,6 +908,7 @@ impl SemanticErrorKind {
             | Self::InvalidArrayBound => "invalid array size",
             | Self::InvalidStarBound => "`[*]` is not allowed here",
             | Self::ObjectTooLarge => "too large",
+            | Self::VariableMember => "variably modified member",
             | Self::FileScopeVariableType => "variably modified type",
             | Self::IncompatibleDeclaration | Self::IncompatibleIntrinsicDeclaration =>
                 "conflicting type",
@@ -1096,6 +1112,7 @@ impl SemanticErrorKind {
                     | crate::configuration::DiagnosticGroup::InconsistentDllimport
                     | crate::configuration::DiagnosticGroup::UnknownStdcPragma
                     | crate::configuration::DiagnosticGroup::UnknownEscapeSequence
+                    | crate::configuration::DiagnosticGroup::InvalidSourceEncoding
                     | crate::configuration::DiagnosticGroup::UnknownPragmas
                     | crate::configuration::DiagnosticGroup::UnusedFunction
                     | crate::configuration::DiagnosticGroup::InitializerOverrides
@@ -1153,6 +1170,11 @@ impl SemanticErrorKind {
                 "implicit conversion changes the value of an integer constant",
                 "C99 §6.3.1.3p3: the conversion to a signed type that cannot represent the value \
                  is implementation-defined; bcc, GCC and Clang reduce it modulo 2^N",
+            ),
+            | Self::InvalidAllocaMaximum => (
+                "the third argument must be a constant integer",
+                "GNU extension: GCC requires the maximum size of \
+                 __builtin_alloca_with_align_and_max to be a constant",
             ),
             | Self::InvalidLongjmpValue => (
                 "the value argument must be the integer constant 1",
@@ -1351,6 +1373,7 @@ impl SemanticErrorKind {
                  indices; convertvector requires equal lane counts",
             ),
             | Self::InvalidAsm(fault) => fault.explanation(),
+            | Self::InvalidInference(fault) => fault.explanation(),
             | Self::ImmediateOutOfRange { .. } => (
                 "argument value is outside the valid range",
                 "Clang x86 intrinsics: the immediate operand must lie in the builtin's \
@@ -1842,6 +1865,11 @@ impl SemanticErrorKind {
                 "object type is too large",
                 "C99 §5.2.4.1: this implementation limits an object to PTRDIFF_MAX bytes so that \
                  pointer differences within it are representable (§6.5.6p9)",
+            ),
+            | Self::VariableMember => (
+                "fields must have a constant size",
+                "C99 §6.7.5.2p2: members never have a variably modified type (§6.7.2.1p8); \
+                 Clang does not support GCC's variably modified members",
             ),
             | Self::FileScopeVariableType => (
                 "variably modified type is not permitted here",

@@ -51,9 +51,12 @@ use super::large_blocks::{
     BLOCK_OFFSET,
     LargeBlocks,
 };
-use crate::util::vm::{
-    GrowingRegion,
-    REGION_BYTES,
+use crate::util::{
+    raw_bytes,
+    vm::{
+        GrowingRegion,
+        REGION_BYTES,
+    },
 };
 
 /// An arena whose allocations remain at fixed addresses until it is reset or
@@ -121,15 +124,16 @@ impl Bump {
         unsafe { std::str::from_utf8_unchecked_mut(bytes) }
     }
 
-    /// Read a source file into stable arena storage, replacing malformed
-    /// UTF-8 in the same way as `String::from_utf8_lossy`.
+    /// Read a source file into stable arena storage, reading each byte of
+    /// malformed UTF-8 as its [`raw_bytes::stand_in`], and whether there
+    /// was any.
     ///
     /// Running out of arena memory is reported as
     /// [`std::io::ErrorKind::OutOfMemory`] rather than aborting, so a caller
     /// can turn it into a diagnostic. The file is read into the arena's tail,
     /// so it costs exactly its length and commits only what it fills.
     /// Files or repaired text exceeding `u32::MAX` bytes return `InvalidData`.
-    pub(crate) fn read_to_str_lossy(&self, path: &Path) -> std::io::Result<&str> {
+    pub(crate) fn read_to_str_lossy(&self, path: &Path) -> std::io::Result<(&str, bool)> {
         let file = std::fs::File::open(path)?;
         if file.metadata()?.len() > u64::from(u32::MAX) {
             return Err(oversized_source());
@@ -139,7 +143,7 @@ impl Bump {
 
     /// Reads everything `reader` gives, such as stdin, as
     /// [`Self::read_to_str_lossy`] reads a file.
-    pub(crate) fn read_from_lossy(&self, mut file: impl Read) -> std::io::Result<&str> {
+    pub(crate) fn read_from_lossy(&self, mut file: impl Read) -> std::io::Result<(&str, bool)> {
         let mut bytes = self.tail_vec();
         let mut buffer = [0_u8; 8192];
         loop {
@@ -159,24 +163,33 @@ impl Bump {
         }
         let bytes = bytes.into_slice();
         if let Ok(text) = std::str::from_utf8(bytes) {
-            return Ok(text);
+            return Ok((text, false));
         }
 
         let mut repaired = self.tail_vec();
         let mut remaining = &*bytes;
         while let Err(error) = std::str::from_utf8(remaining) {
             let valid = error.valid_up_to();
-            let replacement = "�".as_bytes();
+            let invalid = error.error_len().unwrap_or(remaining.len() - valid);
+            // Each invalid byte becomes a four-byte stand-in.
             if valid > u32::MAX as usize - repaired.len()
-                || replacement.len() > u32::MAX as usize - repaired.len() - valid
+                || 4 * invalid > u32::MAX as usize - repaired.len() - valid
             {
                 return Err(oversized_source());
             }
             repaired
                 .try_extend_from_slice(&remaining[..valid])
-                .and_then(|()| repaired.try_extend_from_slice(replacement))
                 .map_err(|_| out_of_arena_memory())?;
-            remaining = &remaining[valid + error.error_len().unwrap_or(remaining.len() - valid)..];
+            for &byte in &remaining[valid..valid + invalid] {
+                repaired
+                    .try_extend_from_slice(
+                        raw_bytes::stand_in(byte)
+                            .encode_utf8(&mut [0; 4])
+                            .as_bytes(),
+                    )
+                    .map_err(|_| out_of_arena_memory())?;
+            }
+            remaining = &remaining[valid + invalid..];
         }
         if remaining.len() > u32::MAX as usize - repaired.len() {
             return Err(oversized_source());
@@ -185,8 +198,8 @@ impl Bump {
             .try_extend_from_slice(remaining)
             .map_err(|_| out_of_arena_memory())?;
         let bytes = repaired.into_slice();
-        // SAFETY: each valid run was checked above and replacements are UTF-8.
-        Ok(unsafe { std::str::from_utf8_unchecked(bytes) })
+        // SAFETY: each valid run was checked above and stand-ins are UTF-8.
+        Ok((unsafe { std::str::from_utf8_unchecked(bytes) }, true))
     }
 
     /// The most bytes this arena has held at once, including alignment
@@ -978,7 +991,7 @@ mod tests {
 
     #[cfg(not(miri))]
     #[test]
-    fn file_reads_match_lossy_utf8_across_buffer_boundaries() {
+    fn file_reads_keep_malformed_utf8_bytes_across_buffer_boundaries() {
         let path = std::env::temp_dir().join(format!("bcc-bump-read-{}.c", std::process::id()));
         let mut source = vec![b'a'; 8191];
         source.extend_from_slice(&[0xE2, 0x82, 0xAC, 0xFF, 0xF0, 0x9F, 0x92]);
@@ -986,8 +999,16 @@ mod tests {
         std::fs::write(&path, &source).unwrap();
 
         let arena = Bump::new();
-        let text = arena.read_to_str_lossy(&path).unwrap();
-        assert_eq!(text, String::from_utf8_lossy(&source));
+        let (text, raw) = arena.read_to_str_lossy(&path).unwrap();
+        let mut expected = "a".repeat(8191);
+        expected.push('€');
+        expected.extend([0xFF, 0xF0, 0x9F, 0x92].map(super::raw_bytes::stand_in));
+        expected.push_str(&"b".repeat(9000));
+        assert!(raw);
+        assert_eq!(text, expected);
+        let mut written = Vec::new();
+        super::raw_bytes::write(&mut written, text, raw).unwrap();
+        assert_eq!(written, source);
         std::fs::remove_file(&path).unwrap();
         assert_eq!(
             arena.read_to_str_lossy(&path).unwrap_err().kind(),
@@ -1003,7 +1024,10 @@ mod tests {
         std::fs::write(&path, &source).unwrap();
         let arena = Bump::new();
         _ = arena.alloc(1_u8);
-        assert_eq!(arena.read_to_str_lossy(&path).unwrap(), source);
+        assert_eq!(
+            arena.read_to_str_lossy(&path).unwrap(),
+            (source.as_str(), false)
+        );
         assert_eq!(arena.used(), 1 + source.len());
         assert!(arena.committed() <= arena.used() + MAX_COMMIT_STEP);
         let empty = Bump::new();

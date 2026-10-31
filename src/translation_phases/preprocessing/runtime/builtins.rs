@@ -37,6 +37,7 @@ use crate::{
             ArenaString,
             Bump,
         },
+        raw_bytes,
         string_cache::StringCacheId,
     },
 };
@@ -55,8 +56,14 @@ impl Expander<'_, '_, '_, '_> {
             | "__FILE__" => {
                 let invocation = self.current_line_location(token);
                 let file = self.context.get_source_file(invocation.source_file_index);
-                let contents =
-                    intern_string_literal(self.context, self.scratch, &file.to_string_lossy());
+                // A name that is not UTF-8 keeps its bytes, as GCC's and
+                // Clang's do.
+                let contents = if let Some(text) = raw_bytes::path_text(self.scratch, file) {
+                    self.context.raw_source_bytes = true;
+                    intern_string_literal(self.context, self.scratch, text)
+                } else {
+                    intern_string_literal(self.context, self.scratch, &file.to_string_lossy())
+                };
                 Some(PreprocessorToken {
                     kind: PreprocessorTokenType::String,
                     contents,

@@ -605,18 +605,26 @@ impl DefaultHost<'_> {
             // C11 `aligned_alloc`: glibc gives at least `malloc`'s
             // alignment, and a stricter power of two when asked.
             | "aligned_alloc" => {
-                let alignment = u64::try_from(integer(arg(0))?)
-                    .ok()
-                    .and_then(|alignment| Align::from_bytes(alignment.max(16)));
-                let pointer = match alignment {
-                    | Some(alignment) =>
-                        allocate_aligned(memory, integer(arg(1))?, false, alignment)?,
-                    | None => RuntimeValue::NULL,
-                };
-                if pointer == RuntimeValue::NULL {
-                    self.set_errno(memory, errno::ENOMEM)?;
+                // glibc 2.38 and later refuse an alignment that is zero or
+                // not a power of two with EINVAL.
+                let requested = integer(arg(0))?;
+                if requested == 0 || !requested.is_power_of_two() {
+                    self.set_errno(memory, errno::EINVAL)?;
+                    RuntimeValue::NULL
+                } else {
+                    let alignment = u64::try_from(requested)
+                        .ok()
+                        .and_then(|alignment| Align::from_bytes(alignment.max(16)));
+                    let pointer = match alignment {
+                        | Some(alignment) =>
+                            allocate_aligned(memory, integer(arg(1))?, false, alignment)?,
+                        | None => RuntimeValue::NULL,
+                    };
+                    if pointer == RuntimeValue::NULL {
+                        self.set_errno(memory, errno::ENOMEM)?;
+                    }
+                    pointer
                 }
-                pointer
             },
             | "isprint" => {
                 let value = super::arithmetic::sext(Type::I32, integer(arg(0))?);

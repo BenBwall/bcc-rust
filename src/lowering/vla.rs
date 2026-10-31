@@ -12,6 +12,7 @@ use super::{
     ssa::Op,
 };
 use crate::{
+    configuration::RuleSet,
     ir::{
         InstData,
         InstFlags,
@@ -143,9 +144,15 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         if let Some(size) = facts.constant_size(ty) {
             return Ok(self.iconst(Type::I64, i128::from(size)));
         }
-        let formula = facts
-            .formula(ty)
-            .ok_or_else(|| LoweringError::missing("type size formula is not retained", source))?;
+        // An unanalyzed type, such as GCC's record with a variably modified
+        // member, has no formula; it is refused by name.
+        let formula = facts.formula(ty).ok_or_else(|| {
+            if self.unit.sema.types.unanalyzed(ty) {
+                LoweringError::unanalyzed(&self.unit.sema.types, ty, source)
+            } else {
+                LoweringError::missing("type size formula is not retained", source)
+            }
+        })?;
         self.emit_size_formula(formula, source)
     }
 
@@ -205,6 +212,25 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         self.draft.def_var(var, save);
         _ = self.vla_tokens.insert(region, var);
         Ok(())
+    }
+
+    /// Under GCC's rules, keeps an `alloca` block until the function
+    /// returns: leaving a VLA scope entered before it restores the stack to
+    /// where it is now, below the block, so the scope's arrays stay too, as
+    /// GCC keeps a scope's stack once it calls `alloca`. Each token is an
+    /// SSA variable, so an exit no `alloca` reached still releases
+    /// everything. Clang releases the block with the scope's arrays.
+    /// GNU extension: GCC manual, "Other Builtins" (`__builtin_alloca`).
+    pub(super) fn keep_stack(&mut self) {
+        if self.vla_tokens.is_empty()
+            || self.unit.context.configuration.alloca_scope_rules() == RuleSet::Clang
+        {
+            return;
+        }
+        let save = self.nullary(Opcode::StackSave);
+        for &var in self.vla_tokens.values() {
+            self.draft.def_var(var, save);
+        }
     }
 
     pub(super) fn cleanup_transition(

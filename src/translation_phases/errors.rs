@@ -74,6 +74,9 @@ impl TranslationError<'_> {
                 | P::UndefinedIdentifierInPreprocessorExpression(_) => Some(G::Undef),
                 | P::UnknownPragmaDirective => Some(G::UnknownPragmas),
                 | P::UnknownEscapeSequence(_) => Some(G::UnknownEscapeSequence),
+                | P::IllegalCharacterEncoding {
+                    prefixed: false, ..
+                } => Some(G::InvalidSourceEncoding),
                 | P::UnknownPragmaSTDCArgument(_) => Some(G::UnknownStdcPragma),
                 | P::ForcedSignedPromotion { .. } | P::ForcedUnsignedPromotion { .. } =>
                     Some(G::ConstantPromotion),

@@ -88,6 +88,15 @@ pub(super) enum Task<'tu> {
         ty:        TypeId,
         bit_field: Option<BitFieldBits>,
     },
+    /// Store the 80 value bits of a constant x87 `f80` as integers at
+    /// `offset`, so that no `f80` access views the object.
+    InitializeBits {
+        object:      Object,
+        offset:      u64,
+        ty:          TypeId,
+        significand: u64,
+        exponent:    u16,
+    },
     /// Zero omitted bytes, or only `mask` bits in a single shared byte.
     InitializeZero {
         ty:     TypeId,

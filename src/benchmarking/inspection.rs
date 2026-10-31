@@ -77,7 +77,7 @@ pub fn parse_msvc_source(source: &str) -> ParseBenchmarkSummary {
 #[doc(hidden)]
 pub fn parse_file(path: &Path) -> std::io::Result<ParseBenchmarkSummary> {
     let tu = Bump::new();
-    let source = tu.read_to_str_lossy(path)?;
+    let (source, _) = tu.read_to_str_lossy(path)?;
     Ok(summarize_parse(
         &tu,
         path,
@@ -98,7 +98,7 @@ pub fn parse_file_with_library(
     library: &Path,
 ) -> std::io::Result<ParseBenchmarkSummary> {
     let tu = Bump::new();
-    let source = tu.read_to_str_lossy(path)?;
+    let (source, _) = tu.read_to_str_lossy(path)?;
     let after = [library];
     Ok(summarize_parse(
         &tu,

@@ -148,10 +148,12 @@ impl Expander<'_, '_, '_, '_> {
             if let Some(token) = self.map_preprocessor_token(t) {
                 match token.kind {
                     | TokenType::String(StringTokenType::String(contents)) => {
-                        filename = self
-                            .context
-                            .literal_text_in(self.scratch, contents, false)
-                            .filter(|text| !text.contains('\0'));
+                        // Bytes that are not UTF-8 stay bytes, as their
+                        // stand-ins, as GCC keeps them in `__FILE__`.
+                        let (text, raw) =
+                            self.context.literal_text_lossy_in(self.scratch, contents);
+                        self.context.raw_source_bytes |= raw;
+                        filename = Some(text).filter(|text| !text.contains('\0'));
                         if filename.is_none() {
                             self.context.preprocessor_error(PreprocessorError {
                                 error_type:     PreprocessorErrorType::InvalidLineFilename,

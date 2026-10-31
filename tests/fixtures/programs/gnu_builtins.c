@@ -4,6 +4,7 @@
    host GCC's build, the Clang identity's the bundled Clang's; `__clang__`
    selects the builtins only GCC has, and GCC before 14, which has no
    `__builtin_addc`, computes the same carries in plain C. */
+#include <errno.h>
 #include <stdint.h>
 #include <stdio.h>
 
@@ -85,6 +86,10 @@ static void library(void) {
     void *a = __builtin_aligned_alloc(64, 128);
     printf("%d\n", (int)((uintptr_t)a % 64));
     __builtin_free(a);
+    /* glibc 2.38 and later refuse an alignment that is no power of two. */
+    errno = 0;
+    void *refused = __builtin_aligned_alloc(24, 48);
+    printf("%d %d\n", refused == 0, errno == EINVAL);
 #endif
     __builtin_free(p);
     __builtin_free(r);
@@ -105,11 +110,26 @@ static void scalars(void) {
     volatile v4 lanes = {1, 2, 3, 4};
     v4 doubled = lanes + __builtin_assoc_barrier(lanes);
     printf("%d %d\n", doubled[0], doubled[3]);
+    /* GCC folds these in static initializers, and takes a pointer. */
+    static double real = __builtin_creal(1.0 + 2.0i), imaginary = __builtin_cimag(1.0 + 2.0i);
+    static double _Complex conjugate = __builtin_conj(1.0 + 2.0i);
+    static double barrier = __builtin_assoc_barrier(1.5);
+    printf("%g %g %g %g %g\n", real, imaginary, __real__ conjugate, __imag__ conjugate, barrier);
+    int five = 5, *pointer = __builtin_assoc_barrier(&five);
+    printf("%d\n", *pointer);
     void *m = __builtin_alloca_with_align_and_max(12, 256, 64);
     printf("%d\n", (int)((uintptr_t)m % 32));
+    /* GCC takes any arithmetic constant as the bound. */
+    void *bounded = __builtin_alloca_with_align_and_max(12, 256, 1.5);
+    printf("%d\n", (int)((uintptr_t)bounded % 32));
 #endif
     static const unsigned long swapped = __builtin_bswap64(1);
     printf("%lx\n", swapped);
+    static const unsigned folded = __builtin_bswap32((unsigned)(1.0 + 1.0));
+    printf("%x\n", folded);
+    /* A floating constant folds after its conversion to the parameter. */
+    static const unsigned from_double = __builtin_bswap32(2.0);
+    printf("%x\n", from_double);
     unsigned carry, r;
     unsigned long cl, rl;
     unsigned long long cll, rll;

@@ -33,7 +33,27 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 .unwrap_or_else(|| self.types.unknown()),
         };
         if generic.recovered || self.types.unanalyzed(controlling) {
-            return Self::expression_result(e, self.types.unknown());
+            // C11 §6.5.1.1p2: an association of GCC's variably modified
+            // record type is invalid whatever the controlling type.
+            if !generic.recovered
+                && generic.associations.iter().any(|association| {
+                    association.type_name.is_some_and(|name| {
+                        self.resolved_type_names
+                            .get(&super::type_name_identity(name))
+                            .is_some_and(|&ty| self.types.variably_modified(ty))
+                    })
+                })
+            {
+                self.error(
+                    SemanticErrorKind::InvalidGenericSelection,
+                    e.source_vectors,
+                    None,
+                    None,
+                );
+                return Self::expression_result(e, self.types.unknown());
+            }
+            let ty = self.types.recovery_type(&[controlling]);
+            return Self::expression_result(e, ty);
         }
         let mut types = ArenaVec::new_in(self.scratch);
         let mut selected = None;
@@ -46,8 +66,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     .get(&super::type_name_identity(name))
                     .copied()
                     .unwrap_or_else(|| self.types.unknown());
-                if self.types.unanalyzed(ty) {
-                    return Self::expression_result(e, self.types.unknown());
+                // C11 §6.5.1.1p2 still rejects GCC's variably modified record.
+                if self.types.unanalyzed(ty) && !self.types.variably_modified(ty) {
+                    let ty = self.types.recovery_type(&[ty]);
+                    return Self::expression_result(e, ty);
                 }
                 invalid |= !self.complete_object(ty)
                     || self.types.variably_modified(ty)
