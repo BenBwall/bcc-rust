@@ -54,6 +54,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           key: wasm-explorer
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo build --lib --target wasm32-unknown-unknown --no-default-features --features explorer
       - run: cargo clippy --lib --target wasm32-unknown-unknown --no-default-features --features explorer,serde -- -D warnings
       - run: cargo clippy --lib --no-default-features --features explorer -- -D warnings

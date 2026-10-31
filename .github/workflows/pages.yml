@@ -61,6 +61,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: web -> target
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       # The Monaco editor bundle and the web fonts come from npm, pinned by
       # web/editor/package-lock.json, and are bundled into the site; nothing
       # is fetched from a CDN at run time.
@@ -120,6 +121,7 @@ jobs:
         with:
           workspaces: web -> target
           key: clippy
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Clippy (native)
         run: RUSTFLAGS= cargo clippy --workspace --all-targets --features ssr,worker,compiler -- -D warnings
       - name: Clippy (wasm32)
