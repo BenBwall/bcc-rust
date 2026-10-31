@@ -55,6 +55,17 @@ use crate::{
     },
 };
 
+/// The register a GNU local register variable names.
+/// GNU extension: GCC manual, "Local Register Variables".
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum RegisterVariable {
+    /// A general register, by hardware encoding.
+    General(u8),
+    /// Another register the compiler accepts (SSE, x87, MMX, mask), which
+    /// lowering does not place operands in.
+    Other,
+}
+
 /// Finalized entities, independent of emitted-symbol collisions. Distinct
 /// entities can request the same assembler name; lowering checks their IR
 /// definitions and still keys private inline bodies by semantic identity.
@@ -68,13 +79,13 @@ pub(crate) struct EntityFacts<'tu> {
     /// hardware encoding, or `None` for another register (SSE, x87, MMX),
     /// sorted by binding. Only an `asm` operand places one in its register.
     /// GNU extension: GCC manual, "Local Register Variables".
-    pub(crate) register_variables: &'tu [(usize, Option<u8>)],
+    pub(crate) register_variables: &'tu [(usize, RegisterVariable)],
 }
 
 impl<'tu> EntityFacts<'tu> {
     /// The general register a GNU local register variable names (`None`
     /// for another kind), if `binding` is one.
-    pub(crate) fn register_variable(&self, binding: usize) -> Option<Option<u8>> {
+    pub(crate) fn register_variable(&self, binding: usize) -> Option<RegisterVariable> {
         self.register_variables
             .binary_search_by_key(&binding, |&(variable, _)| variable)
             .ok()
@@ -289,8 +300,8 @@ impl<'tu> EntityFacts<'tu> {
             {
                 let rules = context.configuration.compiler_identity().rules();
                 let register = match register_variable(name, rules) {
-                    | RegisterName::General(register) => Some(register),
-                    | _ => None,
+                    | RegisterName::General(register) => RegisterVariable::General(register),
+                    | _ => RegisterVariable::Other,
                 };
                 register_variables.push((binding, register));
                 continue;

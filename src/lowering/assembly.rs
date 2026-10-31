@@ -288,7 +288,11 @@ impl<'tu, 's> FunctionLowerer<'_, '_, 'tu, '_, 's> {
                 operand.expression.source_vectors,
             )
         };
-        let (AsmConstraint::General(mask), Some(register)) = (constraint, register) else {
+        let (
+            AsmConstraint::General(mask),
+            crate::translation_phases::semantic_analysis::RegisterVariable::General(register),
+        ) = (constraint, register)
+        else {
             return Err(refused());
         };
         let pinned = 1_u16 << register;
