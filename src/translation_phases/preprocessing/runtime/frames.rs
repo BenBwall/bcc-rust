@@ -150,6 +150,14 @@ pub(in crate::translation_phases::preprocessing) enum TokenizerFrameType<'a> {
         /// As for macro replacements: a call read past the argument's end,
         /// so its disabled names no longer apply to later tokens.
         released:            bool,
+        /// The argument stands, as written, for a `##` operand of the
+        /// replacement list below, and is rescanned with that list: a name
+        /// read from it, or from a replacement it invokes, is disabled where
+        /// the argument was read or where the list is (C99 §6.10.3.3
+        /// paragraph 2, p. 154; PDF p. 166; §6.10.3.4 paragraphs 1-2,
+        /// p. 155; PDF p. 167). A prescanned argument is replaced where it
+        /// was read alone.
+        operand:             bool,
     },
 }
 

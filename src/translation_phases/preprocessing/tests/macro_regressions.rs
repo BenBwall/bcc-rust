@@ -85,6 +85,29 @@ fn a_paste_with_a_placemarker_keeps_the_other_operands_paint() {
 }
 
 #[test]
+fn a_name_from_a_paste_operand_is_rescanned_with_the_pasting_list() {
+    // C99 6.10.3.3p2 and 6.10.3.4p1-2: the argument of a `##` operand is
+    // substituted as written and rescanned with the replacement list
+    // holding the `##`, whose macro is still being replaced, so neither the
+    // rest of the operand nor what a pasted name expands to may call glue
+    // again, as in GCC and Clang.
+    let source = "#define glue(a,b) a ## b\n#define CALL glue(gl, ue) (\n#define OBJ \
+                  glue\n#define K glue(C, ALL)\n";
+    for (invocation, expected) in [
+        ("glue(CA, LL) 3, 4)", "glue ( gl , ue ) ( 3 , 4 )"),
+        ("glue(CA, LL x) 3, 4)", "glue ( gl , ue ) ( x 3 , 4 )"),
+        ("glue(,CALL) 5, 6)", "glue ( gl , ue ) ( 5 , 6 )"),
+        ("glue(CALL,) 7, 8)", "glue ( gl , ue ) ( 7 , 8 )"),
+        ("K 7, 8)", "glue ( gl , ue ) ( 7 , 8 )"),
+        ("glue(x, y glue(1,2))", "xy glue ( 1 , 2 )"),
+        ("glue(O, BJ)(1,2)", "glue ( 1 , 2 )"),
+        ("glue(, OBJ)(1,2)", "glue ( 1 , 2 )"),
+    ] {
+        assert_expansion(&format!("{source}{invocation}\n"), expected);
+    }
+}
+
+#[test]
 fn stringified_replacements_keep_only_the_invocations_spacing() {
     // C99 6.10.3p7: the white space before a replacement list is not part
     // of it, so `#` spaces a replacement as its invocation was spaced, as

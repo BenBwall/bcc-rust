@@ -172,6 +172,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                     paren_depth:         (!arg.substituted).then_some(1),
                     has_generated_token: false,
                     released:            false,
+                    operand:             false,
                 },
                 tokenizer:  arg.tokenizer.clone(),
             };
@@ -204,11 +205,13 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         let TokenizerFrameType::FunctionLikeMacroArgument {
             argument,
             paren_depth,
+            operand,
             ..
         } = &mut frame.frame_type
         else {
             unreachable!("macro arguments are read by argument frames");
         };
+        *operand = true;
         if argument.enclosing_arguments.is_some() {
             let tokens = self.replace_operand_argument(argument);
             let empty_location = self
@@ -312,6 +315,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                 paren_depth: (!argument.substituted).then_some(1),
                 has_generated_token: false,
                 released: false,
+                operand: false,
             },
             tokenizer:  argument.tokenizer.clone(),
         });
