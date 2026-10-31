@@ -83,7 +83,10 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn include_names_keep_malformed_utf8_bytes() {
-        use std::os::unix::ffi::OsStrExt as _;
+        use std::{
+            fmt::Write as _,
+            os::unix::ffi::OsStrExt as _,
+        };
         let name = [
             format!("bcc-survey-{}-h", std::process::id()).as_bytes(),
             b"\xff.h",
@@ -102,7 +105,10 @@ mod tests {
             }\n",
         ]
         .concat();
-        let expected: String = name.iter().map(|byte| format!("{byte:02x} ")).collect();
+        let expected = name.iter().fold(String::new(), |mut text, byte| {
+            write!(text, "{byte:02x} ").unwrap();
+            text
+        });
         for identity in IDENTITIES {
             prints_on_every_back_end(identity, &source, &["-w"], &expected);
         }
