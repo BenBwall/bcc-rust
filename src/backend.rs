@@ -46,8 +46,12 @@ pub(crate) fn write_object(path: &std::path::Path, bytes: &[u8]) -> std::io::Res
     use std::io::Write as _;
     if path == std::path::Path::new("-") {
         let mut out = std::io::stdout().lock();
-        out.write_all(bytes)?;
-        return out.flush();
+        // A reader that stops early, such as `head`, ends the output quietly,
+        // as `-S` and `-E` treat it.
+        return match out.write_all(bytes).and_then(|()| out.flush()) {
+            | Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => Ok(()),
+            | result => result,
+        };
     }
     std::fs::write(path, bytes)
 }

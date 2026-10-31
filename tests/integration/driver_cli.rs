@@ -831,6 +831,26 @@ mod tests {
             assert_eq!(output.stdout, expected, "{backend:?}");
             assert!(!project.path("-").exists(), "{backend:?}");
         }
+        // Assembly that the bundled clang assembles goes there too.
+        std::fs::write(project.path("s.s"), ".globl g\ng:\n ret\n").unwrap();
+        succeeds(&project.bcc(&["-c", "s.s", "-o", "s.o"]));
+        let assembled = project.bcc(&["-c", "s.s", "-o", "-"]);
+        succeeds(&assembled);
+        assert_eq!(
+            assembled.stdout,
+            std::fs::read(project.path("s.o")).unwrap()
+        );
+        // A failed job leaves alone a file that happens to be named `-`.
+        std::fs::write(project.path("-"), "precious\n").unwrap();
+        std::fs::write(project.path("bad.c"), "int f( {\n").unwrap();
+        assert_eq!(
+            project.bcc(&["-c", "bad.c", "-o", "-"]).status.code(),
+            Some(1)
+        );
+        assert_eq!(
+            std::fs::read_to_string(project.path("-")).unwrap(),
+            "precious\n"
+        );
     }
 
     #[test]
