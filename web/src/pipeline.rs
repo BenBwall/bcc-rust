@@ -339,6 +339,52 @@ impl Stage {
         }
     }
 
+    /// One sentence on what the stage takes from the one before and hands
+    /// to the one after, so the stages read as one path.
+    pub fn handoff(self) -> &'static str {
+        match self {
+            | Self::Lines =>
+                "First, the file's bytes become characters, and lines ending in a backslash are \
+                 joined: these logical lines go to phase 3.",
+            | Self::PpTokens =>
+                "Phase 3 cuts the logical lines into preprocessing tokens, with each comment now \
+                 a space, for the preprocessor.",
+            | Self::Preprocessor =>
+                "The preprocessor runs the directives and expands the macros, leaving the text of \
+                 one translation unit for phases 5 to 7.",
+            | Self::Tokens =>
+                "The preprocessed text becomes C tokens, keywords and typed constants among them, \
+                 which the parser reads.",
+            | Self::SyntaxTree =>
+                "The parser fits the tokens to C's grammar and hands semantic analysis a tree of \
+                 declarations, statements and expressions.",
+            | Self::SemanticTypes =>
+                "Semantic analysis gives every name its declaration and every expression a type; \
+                 bcc lowers this typed tree to its IR.",
+            | Self::Ir =>
+                "The typed tree becomes simple operations on values, the form bcc's optimizer and \
+                 back ends work on.",
+            | Self::IrAbi =>
+                "The IR's calls and functions are rewritten to pass arguments and results the way \
+                 x86-64 does, ready for a back end.",
+            | Self::Llvm =>
+                "A second road from the IR: the native bcc-rust can hand it to LLVM instead of its \
+                 own back end, as this LLVM IR.",
+            | Self::Asm =>
+                "bcc's own back end turns the ABI-lowered IR into x86-64 instructions, with \
+                 registers and a stack frame chosen.",
+            | Self::MachineCode =>
+                "Each instruction is encoded as the bytes the CPU runs: the end of the path from \
+                 source to program.",
+        }
+    }
+
+    /// The stage after this one on the path from source to machine code.
+    pub fn next(self) -> Option<Self> {
+        let index = Self::ALL.iter().position(|&stage| stage == self)?;
+        Self::ALL.get(index + 1).copied()
+    }
+
     /// The stage's output as named in a sentence ("line 3 of the …").
     pub fn view_name(self) -> &'static str {
         match self {

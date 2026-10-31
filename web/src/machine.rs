@@ -588,6 +588,13 @@ mod tests {
                     "{key} step {} cites C99",
                     state.step
                 );
+                assert!(
+                    state.event.summary.ends_with('.')
+                        && state.event.summary.len() < state.event.explanation.len().max(171),
+                    "{key} step {} leads with one sentence: {:?}",
+                    state.step,
+                    state.event.summary
+                );
             }
         }
     }

@@ -1105,8 +1105,10 @@ impl Machine {
             topic = topic.or(Some(Topic::SequencePoint));
         }
         if full_expression {
-            summary.pop();
-            summary.push_str(", ending the full expression: a sequence point.");
+            summary = format!(
+                "{}, ending the full expression: a sequence point.",
+                summary.trim_end_matches('.')
+            );
         }
         let mut event = explained(Event::new(kind, range, title), &summary, &text, &cited);
         if let Some(topic) = topic {

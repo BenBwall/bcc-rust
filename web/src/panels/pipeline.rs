@@ -164,6 +164,14 @@ pub fn PipelineView(
                         | (None, None) => ().into_any(),
                     }
                 }}
+                <p class="stage-handoff">
+                    <span>{move || stage.get().handoff()}</span>
+                    {move || stage.get().next().map(|next| view! {
+                        <button type="button" class="stage-next" on:click=move |_| stage.set(next)>
+                            "Next: "{next.label()}<span aria-hidden="true">" →"</span>
+                        </button>
+                    })}
+                </p>
                 <p class="stage-explanation">{move || stage.get().explanation()}</p>
                 <StageClauses stage />
                 <StopBanner compilation=shown />

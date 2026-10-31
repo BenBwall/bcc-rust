@@ -461,6 +461,34 @@
   .recent-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--cat); }
   .recent-index { font: 12px var(--font-mono); color: var(--faint); text-align: right; }
   .recent-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* The card in layers: one sentence, the rules as links, then the details
+     on demand. */
+  .narration-lead { margin-top: 12px; color: var(--text); font-size: 16.5px; line-height: 1.6; max-width: 68ch; text-wrap: pretty; }
+  .narration code.is-object { color: var(--obj); background: color-mix(in srgb, var(--obj) 11%, var(--surface)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--obj) 30%, transparent); font-weight: 600; }
+  .narration .clauses { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 14px; }
+  .narration .clauses[hidden] { display: none; }
+  .narration .clause { display: inline-flex; align-items: baseline; gap: 7px; padding: 0; border: 0; background: none; }
+  .narration .clause-id { grid-row: auto; font-size: 11.5px; }
+  .narration .clause-title { font-size: 12.5px; font-weight: 550; color: var(--muted); }
+  .narration-details { margin-top: 14px; border-top: 1px solid var(--border); }
+  .narration-details[hidden] { display: none; }
+  .narration-details > summary {
+    display: inline-flex; align-items: center; gap: 8px; margin-top: 10px; padding: 4px 10px 4px 6px; border-radius: 6px;
+    color: var(--text-2); font-size: 13.5px; font-weight: 600; cursor: pointer; list-style: none; user-select: none;
+  }
+  .narration-details > summary::-webkit-details-marker { display: none; }
+  .narration-details > summary::before {
+    content: ""; width: 7px; height: 7px; margin: 0 4px 0 3px; border-right: 2px solid currentColor; border-bottom: 2px solid currentColor;
+    transform: rotate(-45deg); transition: transform .15s var(--ease);
+  }
+  .narration-details[open] > summary::before { transform: rotate(45deg); }
+  .narration-details > summary:hover { background: var(--surface-2); color: var(--text); }
+  .narration-details .narration-body { margin-top: 6px; }
+  .clause-glosses { display: grid; grid-template-columns: auto 1fr; gap: 6px 12px; margin-top: 12px; font-size: 13.5px; line-height: 1.55; }
+  .clause-glosses dt { font: 600 12px/1.9 var(--font-mono); color: var(--cat); white-space: nowrap; }
+  .clause-glosses dd { color: var(--text-2); }
+  .narration-terms { margin-top: 10px; color: var(--muted); font-size: 13px; }
+  .narration-terms-label { font-weight: 600; }
 
   /* Expression tree */
   .tree-scroll { overflow-x: auto; padding: 4px 0 8px; }
@@ -647,6 +675,12 @@
   .stop-icon { display: grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; background: var(--danger); color: var(--bg); font-size: 11px; }
   .stage-button.is-stopped { opacity: .62; border-style: dashed; }
   .stage-button.is-stopped .stage-index { background: var(--danger-soft); color: var(--danger); }
+  .stage-handoff { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px; margin-bottom: 8px; color: var(--text); font-size: 16px; line-height: 1.55; font-weight: 550; max-width: 76ch; }
+  .stage-next {
+    padding: 3px 10px; border: 1px solid var(--border-strong); border-radius: 999px; background: var(--surface-2);
+    color: var(--accent); font-size: 13px; font-weight: 650; white-space: nowrap; cursor: pointer;
+  }
+  .stage-next:hover { border-color: var(--accent); background: var(--accent-soft); }
   .stage-explanation { color: var(--text-2); font-size: 15px; line-height: 1.7; max-width: 76ch; }
   .stage-note { margin-top: 10px; font-size: 13px; color: var(--muted); }
   .stage-note.is-link::before { content: "↔ "; color: var(--accent); }
