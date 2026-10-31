@@ -322,6 +322,33 @@ mod tests {
         assert_eq!(strings("--clang-mode"), "\"- x -\" \"- -\"\n");
     }
 
+    /// GCC stores the scalars of a `scalar_storage_order` type in the given
+    /// byte order, which bcc does not implement, so the GCC identity refuses
+    /// it rather than store the other order; Clang ignores it with a warning.
+    #[test]
+    fn scalar_storage_order_is_refused_where_gcc_honours_it() {
+        let directory = Directory::new();
+        directory.write(
+            "sso.c",
+            "struct __attribute__((scalar_storage_order(\"big-endian\"))) S { int x; };\nstruct S \
+             s;\n",
+        );
+        let gcc = directory.bcc("--gcc-mode", &["-fsyntax-only", "sso.c"]);
+        assert_eq!(gcc.status.code(), Some(1), "{}", stderr(&gcc));
+        assert!(
+            stderr(&gcc).contains("`scalar_storage_order` is not supported"),
+            "{}",
+            stderr(&gcc)
+        );
+        let clang = directory.bcc("--clang-mode", &["-fsyntax-only", "sso.c"]);
+        succeeds(&clang);
+        assert!(
+            stderr(&clang).contains("unknown attribute"),
+            "{}",
+            stderr(&clang)
+        );
+    }
+
     /// A sign after `p` continues a preprocessing number from C99. Before
     /// C99, GCC reads it so only in its GNU modes and Clang only after a
     /// hexadecimal prefix, so strict C90 splits `0x1p+f` (GCC's

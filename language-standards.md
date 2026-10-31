@@ -1981,7 +1981,10 @@ availability queries remain zero. Unknown names warn as Clang's `-Wunknown-attri
 `clang::` is unknown, as in Clang. GCC attributes Clang lacks that bcc
 accepts (`noipa`, `access`, `optimize` and others in the table) keep their
 GNU and `gnu::` spellings, while `__has_attribute` answers Clang's 0 for
-them. Unknown-attribute and dropped-attribute warnings follow
+them. GCC's `scalar_storage_order` is an error under GCC's rules, which
+honour it: bcc stores scalars in the target's byte order, so ignoring it
+would silently give the other order. Under Clang's rules it is an unknown
+attribute, as Clang ignores it. Unknown-attribute and dropped-attribute warnings follow
 `-Wno-unknown-attributes` and `-Wno-ignored-attributes`, respectively, and
 the matching `-Werror=` options. Warnings are withheld inside system headers,
 so library headers stay quiet.

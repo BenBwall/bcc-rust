@@ -76,6 +76,7 @@ use super::{
     },
 };
 use crate::{
+    configuration::RuleSet,
     target::Target,
     translation_phases::{
         SourceVectors,
@@ -123,6 +124,16 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 // GNU spellings included, as unsupported in that spelling.
                 let kind = if specifier.syntax == AttributeSyntax::Msvc {
                     SemanticErrorKind::UnsupportedDeclspec
+                } else if attribute.namespace.is_none()
+                    && matches!(
+                        attribute.name,
+                        "scalar_storage_order" | "__scalar_storage_order__"
+                    )
+                    && self.context.configuration.compiler_identity().rules() == RuleSet::Gcc
+                {
+                    // GCC honours it, and bcc does not implement it; Clang
+                    // ignores it, which the warning below models.
+                    SemanticErrorKind::UnsupportedScalarStorageOrder
                 } else {
                     SemanticErrorKind::UnknownAttribute
                 };
