@@ -78,7 +78,7 @@ pub(super) fn repr(types: &Types<'_>, mut ty: TypeId) -> Result<Repr, LoweringEr
     while let TypeKind::Atomic(inner) = types.kind(ty) {
         if matches!(
             types.kind(inner),
-            TypeKind::Scalar(s) if matches!(
+            TypeKind::Scalar(s) if s.complex_integer() || matches!(
                 s.representation(),
                 Scalar::ComplexFloat16
                     | Scalar::ComplexFloat
@@ -136,7 +136,16 @@ fn long_double_type(types: &Types<'_>) -> Type {
     }
 }
 
-fn scalar_repr(types: &Types<'_>, scalar: Scalar) -> Result<Repr, LoweringErrorKind> {
+pub(super) fn scalar_repr(types: &Types<'_>, scalar: Scalar) -> Result<Repr, LoweringErrorKind> {
+    // GNU complex integers: two parts of the real integer type.
+    if scalar.complex_integer() {
+        let Repr::Int { ty, .. } = scalar_repr(types, scalar.real_type())? else {
+            return Err(LoweringErrorKind::MissingFact(
+                "a complex integer type has no integer parts",
+            ));
+        };
+        return Ok(Repr::Complex { component: ty });
+    }
     match scalar.representation() {
         | Scalar::Void => Ok(Repr::Void),
         | Scalar::Bool => Ok(Repr::Bool),
@@ -686,6 +695,18 @@ fn scalar_leaves(
     scalars: &mut ArenaVec<'_, AggregateScalar>,
 ) -> Result<(), LoweringErrorKind> {
     let long_double = || long_double_type(types);
+    if scalar.complex_integer() {
+        let (bits, _) =
+            types
+                .target
+                .integer(scalar.real_type())
+                .ok_or(LoweringErrorKind::MissingFact(
+                    "an integer type has no width",
+                ))?;
+        let ty = int_type(bits);
+        push_scalar(scalars, offset, ty)?;
+        return push_scalar(scalars, offset + u64::from(ty.bytes()), ty);
+    }
     let (ty, parts) = match scalar.representation() {
         | Scalar::Void =>
             return Err(LoweringErrorKind::MissingFact(

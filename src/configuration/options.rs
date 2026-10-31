@@ -341,6 +341,19 @@ impl CompilerConfiguration {
         self.identity.rules()
     }
 
+    /// GCC's rules (TCC's and MSVC's too) or Clang's (clang-cl's too) for
+    /// complex integers. Division: GCC divides by the larger part of the
+    /// divisor first (its `expand_complex_div_wide`) and each part by a
+    /// real divisor, Clang computes `(ac + bd) / (cc + dd)` and
+    /// `(bc - ad) / (cc + dd)` for any divisor, each in the parts' type.
+    /// Common type: of two parts of equal rank and signedness Clang takes
+    /// the left operand's, GCC the left's if it is unsigned, else the
+    /// right's. GNU extension: GCC manual,
+    /// "Complex Numbers".
+    pub(crate) const fn complex_integer_rules(self) -> super::RuleSet {
+        self.identity.rules()
+    }
+
     /// Selects the compiler the identity macros claim, and with it whether
     /// the `_FloatN` keywords are accepted.
     pub(crate) const fn with_compiler_identity(

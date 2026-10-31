@@ -185,6 +185,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         self.retain_expression(info);
                         return;
                     },
+                    | IntegerTokenType::Imaginary(magnitude, kind) => {
+                        self.imaginary_integer(&mut info, magnitude.get(), kind);
+                        self.retain_expression(info);
+                        return;
+                    },
                     | IntegerTokenType::WideBitInt(spelling, width, unsigned) => {
                         info.ty = self.types.intern(TypeKind::BitInt {
                             width,
@@ -194,10 +199,6 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         info.integer = Some(self.wide.literal(spelling, width, !unsigned));
                         info.ice = true;
                         info.constant = ConstantClass::Arithmetic;
-                        self.retain_expression(info);
-                        return;
-                    },
-                    | _ => {
                         self.retain_expression(info);
                         return;
                     },
@@ -821,4 +822,36 @@ impl ExpressionInfo<'_> {
 pub(in crate::translation_phases::semantic_analysis) enum FoldedFloating {
     Standard(Floating),
     Binary128([u8; 32]),
+}
+
+impl Analyzer<'_, '_, '_> {
+    /// GNU: an integer imaginary constant has the complex type of its real
+    /// constant's type, held exactly in the floating carrier as complex
+    /// constants are. GNU extension: GCC manual, "Complex Numbers".
+    fn imaginary_integer(
+        &mut self,
+        info: &mut ExpressionInfo<'_>,
+        magnitude: u64,
+        kind: crate::translation_phases::preprocessing::ImaginaryIntegerKind,
+    ) {
+        use crate::translation_phases::preprocessing::ImaginaryIntegerKind as K;
+        let real = match kind {
+            | K::Int => Scalar::Int,
+            | K::UnsignedInt => Scalar::UnsignedInt,
+            | K::Long => Scalar::Long,
+            | K::UnsignedLong => Scalar::UnsignedLong,
+            | K::LongLong => Scalar::LongLong,
+            | K::UnsignedLongLong => Scalar::UnsignedLongLong,
+        };
+        info.ty = self.types.scalar(real.complex_type());
+        if let Some(imag) =
+            self.integer_value(Integer::int(i128::from(magnitude)), crate::ir::Type::F80)
+        {
+            info.set_floating(Some(Floating {
+                real: LongDouble::ZERO,
+                imag,
+            }));
+            info.constant = ConstantClass::Arithmetic;
+        }
+    }
 }

@@ -333,6 +333,25 @@ fn scalar<'tu>(
             )
     });
     if let Some(s) = scalar {
+        // GNU complex integer constants hold exact integer parts in the
+        // floating carrier. GNU extension: GCC manual, "Complex Numbers".
+        if s.complex_integer() {
+            // The parts wrap to their width (C99 §6.3.1.3p2).
+            let (bits, _) = sema.types.target.integer(s.real_type())?;
+            let mask = u128::MAX >> (128 - bits);
+            let parts = match (info.floating(), integer) {
+                | (Some(value), _) => [
+                    bits::to_integer(&value.real, 128, true)? & mask,
+                    bits::to_integer(&value.imag, 128, true)? & mask,
+                ],
+                | (None, Some(value)) => [value.value as u128, 0],
+                | (None, None) => return None,
+            };
+            let component = width / 2;
+            image.bits(start, component, parts[0])?;
+            image.bits(start + component, component, parts[1])?;
+            return Some(());
+        }
         if s.integer() {
             let value = if s == Scalar::Bool {
                 if let Some(value) = info.integer {
