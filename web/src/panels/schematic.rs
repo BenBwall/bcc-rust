@@ -74,7 +74,11 @@ fn walk(tree: &Tree, index: usize, row: &mut [f64], leaves: &mut usize) -> f64 {
         *leaves += 1;
         px(*leaves - 1)
     } else {
-        let rows: Vec<f64> = node.children.iter().map(|&child| walk(tree, child, row, leaves)).collect();
+        let rows: Vec<f64> = node
+            .children
+            .iter()
+            .map(|&child| walk(tree, child, row, leaves))
+            .collect();
         f64::midpoint(rows[0], rows[rows.len() - 1])
     };
     row[index] = y;
@@ -169,7 +173,10 @@ fn wire_state(evaluated: bool, active: bool) -> &'static str {
 /// The tree as nested lists, for screen readers.
 fn outline(tree: &Tree, index: usize) -> AnyView {
     let node = &tree.nodes[index];
-    let value = node.value.clone().unwrap_or_else(|| "not evaluated yet".to_owned());
+    let value = node
+        .value
+        .clone()
+        .unwrap_or_else(|| "not evaluated yet".to_owned());
     let children = node.children.clone();
     view! {
         <li>

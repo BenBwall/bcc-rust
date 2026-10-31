@@ -67,7 +67,10 @@ fn step_at(x: f64, step: f64) -> usize {
 }
 
 /// A scroll offset in whole pixels.
-#[expect(clippy::cast_possible_truncation, reason = "Tapes are far narrower than 2^31 pixels.")]
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "Tapes are far narrower than 2^31 pixels."
+)]
 fn whole(x: f64) -> i32 {
     x.round() as i32
 }
@@ -75,16 +78,16 @@ fn whole(x: f64) -> i32 {
 /// Every object of the run over the recorded steps (history indices).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Reel {
-    pub groups:     Vec<Group>,
-    pub flows:      Vec<Flow>,
+    pub groups: Vec<Group>,
+    pub flows:  Vec<Flow>,
     /// Each recorded step's number, and whether it ended at a sequence
     /// point.
-    pub steps:      Vec<(usize, bool)>,
+    pub steps:  Vec<(usize, bool)>,
     /// Whether the engine can record another step after the last.
-    pub open:       bool,
+    pub open:   bool,
     /// What each step did to each object it used: `read`, `write`,
     /// `create`, `end`, `designate` or `address`.
-    pub access:     Vec<Vec<(usize, String)>>,
+    pub access: Vec<Vec<(usize, String)>>,
 }
 
 /// The calls of one function at one depth of the call stack, and the lanes
@@ -141,7 +144,10 @@ pub struct Flow {
 
 impl Reel {
     /// The tape of `history`, in order.
-    #[expect(clippy::too_many_lines, reason = "One pass over the history: calls, objects, flows.")]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "One pass over the history: calls, objects, flows."
+    )]
     pub fn record(history: &[Snapshot]) -> Self {
         let mut reel = Self::default();
         let mut group_of_frame: HashMap<usize, usize> = HashMap::new();
@@ -192,7 +198,11 @@ impl Reel {
                     continue;
                 };
                 let group = &mut reel.groups[at];
-                let lane = match group.lanes.iter_mut().position(|lane| lane.name == object.name) {
+                let lane = match group
+                    .lanes
+                    .iter_mut()
+                    .position(|lane| lane.name == object.name)
+                {
                     | Some(lane) => &mut group.lanes[lane],
                     | None => {
                         group.lanes.push(Lane {
@@ -225,7 +235,9 @@ impl Reel {
                             value,
                         }),
                     }
-                } else if last.is_some_and(|segment| segment.object == object.id && segment.to == step) {
+                } else if last
+                    .is_some_and(|segment| segment.object == object.id && segment.to == step)
+                {
                     lane.ends.push(step);
                 }
             }
@@ -306,8 +318,15 @@ pub fn value_text(value: &Value, objects: &[Object]) -> Option<String> {
 /// One row of the deck: the axis, a group's header, or one of its lanes.
 #[derive(Clone, Debug, PartialEq)]
 enum Row {
-    Group { at: usize, folded: bool, live: bool },
-    Lane { group: usize, lane: usize },
+    Group {
+        at:     usize,
+        folded: bool,
+        live:   bool,
+    },
+    Lane {
+        group: usize,
+        lane:  usize,
+    },
 }
 
 fn rows(reel: &Reel, cursor: usize, opened: &[String]) -> Vec<Row> {
@@ -315,7 +334,10 @@ fn rows(reel: &Reel, cursor: usize, opened: &[String]) -> Vec<Row> {
     let mut order: Vec<usize> = (0..reel.groups.len()).collect();
     order.sort_by_key(|&at| {
         let group = &reel.groups[at];
-        (group.depth, group.calls.first().map_or(0, |call| call.first))
+        (
+            group.depth,
+            group.calls.first().map_or(0, |call| call.first),
+        )
     });
     for at in order {
         let group = &reel.groups[at];
@@ -339,7 +361,10 @@ fn rows(reel: &Reel, cursor: usize, opened: &[String]) -> Vec<Row> {
 /// steps; the arrow keys step (through the page's shortcuts), Home and End go
 /// to the first and last recorded step.
 #[component]
-#[expect(clippy::too_many_lines, reason = "The deck's parts and its pointer and key handling.")]
+#[expect(
+    clippy::too_many_lines,
+    reason = "The deck's parts and its pointer and key handling."
+)]
 pub fn Deck(
     history: RwSignal<Vec<Snapshot>>,
     cursor: RwSignal<Option<usize>>,
@@ -363,7 +388,9 @@ pub fn Deck(
     });
     let step_width = Memo::new(move |_| {
         let count = px(reel.with(|reel| reel.steps.len()));
-        let fit = (width.get() / (count + 3.0)).floor().clamp(FIT_MIN, FIT_MAX);
+        let fit = (width.get() / (count + 3.0))
+            .floor()
+            .clamp(FIT_MIN, FIT_MAX);
         (fit * zoom.get()).clamp(ZOOM_MIN, ZOOM_MAX)
     });
     observe_width(tape, width);
@@ -515,7 +542,13 @@ pub fn Deck(
 
 /// The tape itself, as one SVG.
 #[expect(clippy::too_many_lines, reason = "One block per layer of the drawing.")]
-fn tape_svg(reel: Memo<Reel>, rows: Memo<Vec<Row>>, step: f64, cursor: usize, view: f64) -> AnyView {
+fn tape_svg(
+    reel: Memo<Reel>,
+    rows: Memo<Vec<Row>>,
+    step: f64,
+    cursor: usize,
+    view: f64,
+) -> AnyView {
     reel.with(|reel| {
         rows.with(|rows| {
             let count = reel.steps.len();
@@ -817,7 +850,11 @@ mod tests {
                 .expect("a lane")
         };
         // `side` is indeterminate until its initializer stores 3.
-        let values: Vec<_> = lane(0, "side").segments.iter().map(|segment| segment.value.as_deref()).collect();
+        let values: Vec<_> = lane(0, "side")
+            .segments
+            .iter()
+            .map(|segment| segment.value.as_deref())
+            .collect();
         assert_eq!(values, [None, Some("3")]);
         assert_eq!(lane(1, "n").segments[0].value.as_deref(), Some("4"));
         assert_eq!(lane(1, "n").ends.len(), 1, "n ends when square returns");
@@ -828,8 +865,16 @@ mod tests {
         let side = lane(0, "side").objects[0];
         let n = lane(1, "n").objects[0];
         let area = lane(0, "area").objects[0];
-        assert!(reel.flows.iter().any(|flow| flow.from.0 == side && flow.to.0 == n));
-        assert!(reel.flows.iter().any(|flow| flow.from.0 == n && flow.to.0 == area));
+        assert!(
+            reel.flows
+                .iter()
+                .any(|flow| flow.from.0 == side && flow.to.0 == n)
+        );
+        assert!(
+            reel.flows
+                .iter()
+                .any(|flow| flow.from.0 == n && flow.to.0 == area)
+        );
     }
 
     #[test]
@@ -841,7 +886,11 @@ mod tests {
             .iter()
             .position(|group| group.name == "bump")
             .expect("bump's calls");
-        assert_eq!(reel.groups[bump].calls.len(), 3, "one group for the loop's three calls");
+        assert_eq!(
+            reel.groups[bump].calls.len(),
+            3,
+            "one group for the loop's three calls"
+        );
         let last_call = reel.groups[bump].calls[2].last;
         let after = rows(&reel, last_call + 2, &[]);
         assert!(after.contains(&Row::Group {
@@ -850,7 +899,10 @@ mod tests {
             live:   false,
         }));
         let opened = rows(&reel, last_call + 2, &[reel.groups[bump].key.clone()]);
-        assert!(opened.len() > after.len(), "an opened group shows its lanes");
+        assert!(
+            opened.len() > after.len(),
+            "an opened group shows its lanes"
+        );
     }
 
     #[test]
@@ -874,8 +926,17 @@ mod tests {
             one_past,
             ended: false,
         };
-        assert_eq!(value_text(&pointer(1, false), &objects).as_deref(), Some("→values[1]"));
-        assert_eq!(value_text(&pointer(3, true), &objects).as_deref(), Some("→values+3"));
-        assert_eq!(value_text(&objects[0].value, &objects).as_deref(), Some("{?,?,?}"));
+        assert_eq!(
+            value_text(&pointer(1, false), &objects).as_deref(),
+            Some("→values[1]")
+        );
+        assert_eq!(
+            value_text(&pointer(3, true), &objects).as_deref(),
+            Some("→values+3")
+        );
+        assert_eq!(
+            value_text(&objects[0].value, &objects).as_deref(),
+            Some("{?,?,?}")
+        );
     }
 }

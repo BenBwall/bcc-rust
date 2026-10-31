@@ -11,7 +11,10 @@ use crate::{
 };
 
 #[component]
-pub fn Datasheet(snapshot: Memo<Option<Snapshot>>, history: RwSignal<Vec<Snapshot>>) -> impl IntoView {
+pub fn Datasheet(
+    snapshot: Memo<Option<Snapshot>>,
+    history: RwSignal<Vec<Snapshot>>,
+) -> impl IntoView {
     // The step each object was created at.
     let born = Memo::new(move |_| {
         history.with(|history| {

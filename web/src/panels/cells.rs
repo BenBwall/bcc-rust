@@ -42,7 +42,9 @@ fn strip(snapshot: &Snapshot) -> impl IntoView {
             .iter()
             .find(|access| {
                 access.object == object
-                    && (access.cell == cell || access.cell.is_none() || (cell.is_none() && access.cell == Some(0)))
+                    && (access.cell == cell
+                        || access.cell.is_none()
+                        || (cell.is_none() && access.cell == Some(0)))
             })
             .map(|access| access.kind.clone())
     };
@@ -64,7 +66,9 @@ fn strip(snapshot: &Snapshot) -> impl IntoView {
     let pointed = |object: usize, offset: usize| {
         pointers
             .iter()
-            .filter(|(target, at, _)| *target == object && usize::try_from(*at).ok() == Some(offset))
+            .filter(|(target, at, _)| {
+                *target == object && usize::try_from(*at).ok() == Some(offset)
+            })
             .map(|(_, _, name)| format!("◂{name}"))
             .collect::<Vec<_>>()
             .join(" ")
@@ -124,7 +128,11 @@ fn strip(snapshot: &Snapshot) -> impl IntoView {
             }
         })
         .collect_view();
-    let ended: Vec<&Object> = snapshot.objects.iter().filter(|object| !object.alive).collect();
+    let ended: Vec<&Object> = snapshot
+        .objects
+        .iter()
+        .filter(|object| !object.alive)
+        .collect();
     view! {
         <ol class="cells">
             {frames}
@@ -154,7 +162,13 @@ pub(super) fn tally<'a>(names: impl Iterator<Item = &'a str>) -> String {
     }
     counts
         .into_iter()
-        .map(|(name, count)| if count > 1 { format!("{name} ×{count}") } else { name.to_owned() })
+        .map(|(name, count)| {
+            if count > 1 {
+                format!("{name} ×{count}")
+            } else {
+                name.to_owned()
+            }
+        })
         .collect::<Vec<_>>()
         .join(" ")
 }
