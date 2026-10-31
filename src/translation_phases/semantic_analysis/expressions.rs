@@ -61,7 +61,6 @@ use super::{
         Floating,
     },
     integer::Integer,
-    scopes::Namespace,
     types::{
         ArrayBound,
         Scalar,
