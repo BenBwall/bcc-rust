@@ -471,6 +471,42 @@ mod tests {
         }
     }
 
+    /// The GCC identity defines GCC's evaluation method, its spellings of
+    /// the `signed char` and `long long` widths, and from C11 the UTF
+    /// literal macros, as the host GCC does where there is one.
+    #[test]
+    fn gcc_mode_defines_gccs_environment_macros() {
+        const NAMES: [&str; 5] = [
+            "__FLT_EVAL_METHOD__",
+            "__SCHAR_WIDTH__",
+            "__LONG_LONG_WIDTH__",
+            "__STDC_UTF_16__",
+            "__STDC_UTF_32__",
+        ];
+        for (standard, utf) in [("-std=c99", None), ("-std=gnu11", Some("1"))] {
+            let listing = macros_with("--gcc-mode", &[standard]);
+            let expected = [Some("0"), Some("8"), Some("64"), utf, utf];
+            for (name, value) in NAMES.iter().zip(expected) {
+                assert_eq!(
+                    defines(&listing, name).as_deref(),
+                    value,
+                    "{standard} {name}"
+                );
+            }
+            if let Some(host) = host_gcc_macros(&[standard]) {
+                for name in NAMES {
+                    assert_eq!(
+                        defines(&listing, name),
+                        defines(&host, name),
+                        "{standard} {name}"
+                    );
+                }
+            }
+        }
+        let clang = macros_with("--clang-mode", &[]);
+        assert_eq!(defines(&clang, "__LONG_LONG_WIDTH__"), None);
+    }
+
     /// GCC's options that give up part of IEC 60559 semantics, alone and
     /// in the combinations whose order or interplay decides the macros.
     const FLOATING_POINT_OPTIONS: [&[&str]; 26] = [

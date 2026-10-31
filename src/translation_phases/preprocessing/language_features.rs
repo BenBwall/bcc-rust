@@ -1078,6 +1078,7 @@ pub(super) fn with_identity_macros<'a>(
     }
     if identity == CompilerIdentity::Gcc {
         write_gcc_floating_point_macros(configuration, &mut out);
+        write_gcc_environment_macros(configuration, &mut out);
     }
     // The relocation model `-fpic` and its family select, as Clang spells
     // it (GCC manual, "Code Gen Options").
@@ -1179,6 +1180,32 @@ fn write_gcc_floating_point_macros(configuration: CompilerConfiguration, out: &m
         if defined {
             _ = writeln!(out, "#define {name} 1");
         }
+    }
+}
+
+/// Macros GCC predefines that the pinned Clang's frozen target macros lack:
+/// `__FLT_EVAL_METHOD__`, 0 as `<float.h>`'s `FLT_EVAL_METHOD`, since every
+/// bcc target evaluates each floating type in its own format; GCC's
+/// spellings of the widths of `signed char` and `long long`
+/// (`__SCHAR_WIDTH__`, and `__LONG_LONG_WIDTH__`, which Clang spells
+/// `__LLONG_WIDTH__`); and from C11, `__STDC_UTF_16__` and
+/// `__STDC_UTF_32__`, since bcc's `u` and `U` literals are UTF-16 and
+/// UTF-32, which GCC defines from C11 on.
+/// C99: §5.2.4.2.2 paragraph 8, p. 24; PDF p. 36; extension to §6.10.8
+/// paragraph 4, p. 161; PDF p. 173. C11: §6.10.8.2 paragraph 1, p. 176;
+/// PDF p. 194.
+fn write_gcc_environment_macros(configuration: CompilerConfiguration, out: &mut impl Write) {
+    let long_long = configuration
+        .layout()
+        .integer(crate::target::Scalar::LongLong)
+        .map_or(64, |(bits, _)| bits);
+    _ = write!(
+        out,
+        "#define __FLT_EVAL_METHOD__ 0\n#define __SCHAR_WIDTH__ 8\n#define __LONG_LONG_WIDTH__ \
+         {long_long}\n"
+    );
+    if configuration.standard() >= crate::configuration::CStandard::C11 {
+        _ = out.write_str("#define __STDC_UTF_16__ 1\n#define __STDC_UTF_32__ 1\n");
     }
 }
 
