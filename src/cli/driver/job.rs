@@ -261,6 +261,7 @@ fn run_job<'tu>(
     if generated.status != 0
         && options.object
         && let Some(output) = &options.output_path
+        && output.as_os_str() != "-"
     {
         output_file::remove_failed_object(output, context.tu_arena());
     }

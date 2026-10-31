@@ -199,7 +199,7 @@ fn encode_object(
         | Err(error) => return refused(error),
     };
     if kind == OutputKind::Object {
-        return std::fs::write(out_path, &bytes);
+        return crate::backend::write_object(out_path, &bytes);
     }
     let (object, mut file) = TemporaryObject::create(out_path, "o", &arena)?;
     file.write_all(&bytes)?;

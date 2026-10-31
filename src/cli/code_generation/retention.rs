@@ -132,7 +132,7 @@ pub(super) fn prepare<'ir>(
                     .map_err(|e| message(arena, format_args!("error: {e}"), FAILURE_STATUS))?;
                 // Preserve the driver's read-only-file policy before a tool
                 // that may unlink an unwritable output gets to open it.
-                if path.is_file() {
+                if path.as_os_str() != "-" && path.is_file() {
                     std::fs::OpenOptions::new()
                         .write(true)
                         .open(path)

@@ -38,6 +38,24 @@ pub(crate) mod wasm;
 #[cfg(feature = "native")]
 pub(crate) mod interpreter;
 
+/// Writes an object a back end made to `path`, or to stdout for `-`, as
+/// Clang writes `-c -o -` (GCC refuses it, as its assembler cannot write an
+/// object to a pipe; its `-S` and `-E` take `-` for stdout too).
+#[cfg(feature = "native")]
+pub(crate) fn write_object(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write as _;
+    if path == std::path::Path::new("-") {
+        let mut out = std::io::stdout().lock();
+        // A reader that stops early, such as `head`, ends the output quietly,
+        // as `-S` and `-E` treat it.
+        return match out.write_all(bytes).and_then(|()| out.flush()) {
+            | Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => Ok(()),
+            | result => result,
+        };
+    }
+    std::fs::write(path, bytes)
+}
+
 // Differential tests
 #[cfg(test)]
 #[expect(
