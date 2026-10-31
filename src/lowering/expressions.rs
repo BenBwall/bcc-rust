@@ -1913,15 +1913,20 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             },
             | U::Plus | U::Extension => operand.operand,
             | U::Minus if matches!(operand.operand, Operand::Complex(_)) => {
+                let part = self.part_repr(info.ty, source)?;
                 let [real, imag] = self.complex_parts(operand, source)?;
-                let pair = [self.negate_part(real), self.negate_part(imag)];
+                let pair = [
+                    self.negate_checked_part(real, part),
+                    self.negate_checked_part(imag, part),
+                ];
                 self.complex_pair(pair)
             },
             // GNU: `~` of a complex value is its conjugate (GCC manual,
             // "Complex Numbers").
             | U::BitwiseNot if matches!(operand.operand, Operand::Complex(_)) => {
+                let part = self.part_repr(info.ty, source)?;
                 let [real, imag] = self.complex_parts(operand, source)?;
-                let pair = [real, self.negate_part(imag)];
+                let pair = [real, self.negate_checked_part(imag, part)];
                 self.complex_pair(pair)
             },
             | U::Minus => {
@@ -2865,6 +2870,19 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
     /// The negation of one part of a complex value: `fneg` of a floating
     /// part, and of a GNU complex integer's part its wrapping difference
     /// from zero. C99: §6.5.3.3 paragraph 3, p. 79; PDF p. 91.
+    /// [`Self::negate_part`] of a part of representation `part`, which
+    /// traps under `-ftrapv` when a signed part of `int` or wider
+    /// overflows, as GCC checks the negation of a complex integer.
+    fn negate_checked_part(&mut self, value: Value, part: Repr) -> Value {
+        let negated = self.negate_part(value);
+        let ty = self.draft.value_type(value);
+        if part.signed() && ty.is_int() && ty.bits() >= self.int_bits() {
+            let zero = self.iconst(ty, 0);
+            self.trap_on_overflow(Opcode::Isub, part, [zero, value], negated);
+        }
+        negated
+    }
+
     fn negate_part(&mut self, part: Value) -> Value {
         let ty = self.draft.value_type(part);
         if ty.is_float() {

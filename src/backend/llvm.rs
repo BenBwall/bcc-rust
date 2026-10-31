@@ -177,7 +177,8 @@ fn build_module<'m>(
     for text in module.module_asm() {
         api.append_module_asm(text);
     }
-    let (functions, globals) = symbols::declare(module, api, target, arena)?;
+    let strict = function::strict(module);
+    let (functions, globals) = symbols::declare(module, api, target, strict, arena)?;
     symbols::special_arrays(module, api, target, arena, &functions, &globals);
     let emitter = Emitter {
         module,
@@ -188,6 +189,7 @@ fn build_module<'m>(
         globals: &globals,
         labels: &[],
         indirect_returns_twice: module.returns_twice_escapes(),
+        strict,
     };
     // Bodies first: a relocation may take the address of a labeled block,
     // which exists once its function is built.
@@ -218,6 +220,8 @@ struct Emitter<'a, 'id, 'm, 'ir> {
     /// A returns-twice function's address escapes, so every indirect call
     /// is marked `returns_twice` ([`Module::returns_twice_escapes`]).
     indirect_returns_twice: bool,
+    /// Floating operations keep their exceptions (`function::strict`).
+    strict:                 bool,
 }
 
 fn uses_pre_abi_signature(module: &Module<'_>) -> bool {

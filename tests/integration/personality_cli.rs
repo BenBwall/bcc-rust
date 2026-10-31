@@ -1392,6 +1392,29 @@ mod tests {
             let run = Command::new(directory.path("s")).output().unwrap();
             assert_eq!(run.status.code(), Some(0), "{options:?}");
         }
+        // A module with `__bf16` values keeps LLVM's ordinary floating
+        // semantics, since LLVM 23 miscompiles `bf16` in `strictfp` code.
+        directory.write(
+            "b.c",
+            "#include <stdio.h>\nvolatile float vf = 1.015625f;\nvolatile int vi = 3;\nint \
+             main(void) {\n  __bf16 b = (__bf16)vf;\n  __bf16 c = (__bf16)vi;\n  printf(\"%a %a \
+             %a\\n\", (float)b, (float)c, (float)(b + b));\n}\n",
+        );
+        for options in [
+            &["-O0"][..],
+            &["-O2"],
+            &["-O2", "-Xbcc", "--backend=native"],
+        ] {
+            let mut args = vec!["-fsignaling-nans", "b.c", "-o", "b"];
+            args.extend(options);
+            succeeds(&directory.bcc("--gcc-mode", &args));
+            let run = Command::new(directory.path("b")).output().unwrap();
+            assert_eq!(
+                stdout(&run),
+                "0x1.04p+0 0x1.8p+1 0x1.04p+1\n",
+                "{options:?}"
+            );
+        }
     }
 
     /// `-ftrapv` traps on signed `+`, `-` and `*` overflow and on `abs` of
@@ -1494,6 +1517,35 @@ mod tests {
             };
             assert_eq!(run(&[]).code(), Some(0));
             assert!(run(&["a"]).code().is_none());
+            // So are their negation and conjugate, and `__builtin_abs` even
+            // where `-fno-builtin` makes `abs` the library's alone.
+            directory.write(
+                "n.c",
+                "#include <limits.h>\n#include <stdlib.h>\n__attribute__((noinline)) _Complex int \
+                 negate(_Complex int z) { return -z; }\n__attribute__((noinline)) _Complex int \
+                 conjugate(_Complex int z) { return ~z; }\n__attribute__((noinline)) int \
+                 builtin(int x) { return __builtin_abs(x); }\n__attribute__((noinline)) int \
+                 library(int x) { return abs(x); }\nint main(int argc, char **argv) {\n  \
+                 (void)argv;\n  if (argc == 2)\n    return __real__ negate(INT_MIN) == 5;\n  if \
+                 (argc == 3)\n    return __imag__ conjugate(INT_MIN * 1i) == 5;\n  if (argc == \
+                 4)\n    return builtin(INT_MIN) == 5;\n  return library(INT_MIN) == INT_MIN && \
+                 __real__ negate(3) == -3 ? 0 : 1;\n}\n",
+            );
+            succeeds(&directory.bcc(
+                "--gcc-mode",
+                &["-O2", "-ftrapv", "-fno-builtin", "n.c", "-o", "n"],
+            ));
+            let run = |arguments: &[&str]| {
+                Command::new(directory.path("n"))
+                    .args(arguments)
+                    .output()
+                    .unwrap()
+                    .status
+            };
+            assert_eq!(run(&[]).code(), Some(0));
+            for arguments in [&["a"][..], &["a", "b"], &["a", "b", "c"]] {
+                assert!(run(arguments).code().is_none(), "{arguments:?}");
+            }
         }
     }
 

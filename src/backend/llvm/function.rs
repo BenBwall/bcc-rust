@@ -178,7 +178,7 @@ impl<'a, 'id, 'm> Emitter<'a, 'id, 'm, '_> {
                 }
             }
         }
-        if self.module.signaling_nans() {
+        if self.strict {
             api.strict_calls(self.functions[id.index()]);
         }
         let mut labels = ArenaVec::with_capacity_in(body.label_count(), self.arena);
@@ -187,6 +187,26 @@ impl<'a, 'id, 'm> Emitter<'a, 'id, 'm, '_> {
         }
         Ok(self.arena.alloc_slice_copy(&labels))
     }
+}
+
+/// Whether the module's floating operations keep their exceptions under
+/// `-fsignaling-nans`: its functions are `strictfp`, and the operations are
+/// LLVM's constrained intrinsics. Not in a module with a `bf16` value: in a
+/// `strictfp` function LLVM 23 lowers `bf16` conversions, its own ones for
+/// arguments and results included, to calls of libgcc's `__truncsfbf2` and
+/// `__extendbfsf2` that pass the value in a general register, where libgcc
+/// takes and returns it in `%xmm0`, so they compute garbage (Clang's
+/// `-ffp-exception-behavior=strict` shares the bug), and inlining a function
+/// into a `strictfp` one makes its operations constrained. Such a module
+/// keeps LLVM's ordinary floating semantics.
+pub(super) fn strict(module: &Module<'_>) -> bool {
+    module.signaling_nans()
+        && module.functions().all(|(_, function)| {
+            function.body.as_ref().is_none_or(|body| {
+                (0..body.value_count())
+                    .all(|index| body.value_type(Value::new(index)) != Type::BF16)
+            })
+        })
 }
 
 /// Whether `block` takes no parameters and holds only `trap` and
@@ -415,7 +435,7 @@ impl<'id, 'm> BodyBuilder<'_, 'id, 'm, '_> {
                     | Opcode::VaCopy =>
                         self.intrinsic("llvm.va_copy", &[a, b], &[api.ty(Type::Ptr)]),
                     | Opcode::Fadd | Opcode::Fsub | Opcode::Fmul | Opcode::Fdiv | Opcode::Frem
-                        if self.emitter.module.signaling_nans() =>
+                        if self.strict(&[ty]) =>
                     {
                         let name = match opcode {
                             | Opcode::Fadd => "llvm.experimental.constrained.fadd",
@@ -542,7 +562,7 @@ impl<'id, 'm> BodyBuilder<'_, 'id, 'm, '_> {
                     | Opcode::Uitofp
                     | Opcode::Fptosi
                     | Opcode::Fptoui
-                        if self.emitter.module.signaling_nans() =>
+                        if self.strict(&[ty, from]) =>
                     {
                         let (name, rounds) = match opcode {
                             | Opcode::Fpext => ("llvm.experimental.constrained.fpext", false),
@@ -564,7 +584,7 @@ impl<'id, 'm> BodyBuilder<'_, 'id, 'm, '_> {
             // invalid exception for a signaling NaN only.
             | InstData::FloatCompare {
                 cond, args: [a, b], ..
-            } if self.emitter.module.signaling_nans() => {
+            } if self.strict(&[self.body.value_type(a)]) => {
                 let operand = api.ty(self.body.value_type(a));
                 let (a, b) = (self.value(a)?, self.value(b)?);
                 let predicate = api.metadata_string(float_condition_name(cond));
@@ -876,6 +896,12 @@ impl<'id, 'm> BodyBuilder<'_, 'id, 'm, '_> {
             returns_twice(api, call, true);
         }
         call
+    }
+
+    /// Whether an operation on values of `types` is emitted as a constrained
+    /// one, keeping its exceptions under `-fsignaling-nans` ([`strict`]).
+    fn strict(&self, types: &[Type]) -> bool {
+        self.emitter.strict && !types.contains(&Type::BF16)
     }
 
     /// A constrained floating operation, which keeps its exceptions under

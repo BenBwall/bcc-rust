@@ -577,7 +577,8 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
     /// or `llabs` (or their `__builtin_` forms) whose argument is the most
     /// negative value, whose absolute value overflows, as GCC and Clang
     /// check their expansions of these builtins; with the library builtins
-    /// off (`-fno-builtin-abs`), the call is the library's alone, as in GCC.
+    /// off (`-fno-builtin-abs`), a call by the library's name is the
+    /// library's alone, as in GCC, while `__builtin_abs` still traps.
     /// C99: §7.20.6.1 paragraph 2, p. 320; PDF p. 332.
     pub(super) fn trap_on_absolute_minimum(
         &mut self,
@@ -610,11 +611,20 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
         let Some(library) = library else {
             return Ok(());
         };
-        let builtin = match self.unit.module.library_builtins() {
-            | LibraryBuiltins::All => true,
-            | LibraryBuiltins::None => false,
-            | LibraryBuiltins::Except(names) => !names.contains(&library),
-        };
+        // `__builtin_abs` is the builtin whatever `-fno-builtin` says; the
+        // library's name only while the library builtins are on.
+        let spelled_builtin = self
+            .unit
+            .context
+            .string_cache
+            .at(data.name.name)
+            .starts_with("__builtin_");
+        let builtin = spelled_builtin
+            || match self.unit.module.library_builtins() {
+                | LibraryBuiltins::All => true,
+                | LibraryBuiltins::None => false,
+                | LibraryBuiltins::Except(names) => !names.contains(&library),
+            };
         if !builtin {
             return Ok(());
         }

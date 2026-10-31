@@ -48,6 +48,7 @@ pub(super) fn declare<'id, 'a, 'm>(
     module: &'m Module<'_>,
     api: &Session<'id>,
     platform: Target,
+    strict: bool,
     arena: &'a Bump,
 ) -> Result<(ArenaVec<'a, Val<'id>>, ArenaVec<'a, Val<'id>>), EmitError<'m>> {
     let mut functions = ArenaVec::new_in(arena);
@@ -85,7 +86,7 @@ pub(super) fn declare<'id, 'a, 'm>(
         if function.body.is_some() {
             library_builtins(api, value, module.library_builtins(), arena);
             null_pointer_validity(api, value, module);
-            strict_floating_point(api, value, module);
+            strict_floating_point(api, value, strict);
         }
         sections(api, value, function.attributes);
         functions.push(value);
@@ -100,7 +101,7 @@ pub(super) fn declare<'id, 'a, 'm>(
             // declared without one, so it takes the builtin controls here.
             library_builtins(api, value, module.library_builtins(), arena);
             null_pointer_validity(api, value, module);
-            strict_floating_point(api, value, module);
+            strict_floating_point(api, value, strict);
             if let Some(keyword) = function.inlining.keyword() {
                 api.attribute(value, FUNCTION_INDEX, keyword, 0, None, false);
             }
@@ -344,8 +345,8 @@ fn null_pointer_validity<'id>(api: &Session<'id>, function: Val<'id>, module: &M
 /// Clang marks every function under `-ffp-exception-behavior=strict`; its
 /// floating operations are LLVM's constrained intrinsics, and its calls
 /// are marked too (`function.rs`).
-fn strict_floating_point<'id>(api: &Session<'id>, function: Val<'id>, module: &Module<'_>) {
-    if module.signaling_nans() {
+fn strict_floating_point<'id>(api: &Session<'id>, function: Val<'id>, strict: bool) {
+    if strict {
         api.attribute(function, FUNCTION_INDEX, "strictfp", 0, None, false);
     }
 }
