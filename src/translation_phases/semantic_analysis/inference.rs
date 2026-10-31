@@ -406,6 +406,21 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         Some(ty)
     }
 
+    /// The binding an identifier expression names, and whether it names the
+    /// object an inferred declaration is declaring, which has none yet
+    /// (reported by [`Self::inferred_self_reference`]).
+    /// C99: §6.5.1 paragraph 2, p. 69; PDF p. 81.
+    pub(super) fn identifier_lookup(&mut self, name: Identifier) -> (Option<usize>, bool) {
+        if self.inferred_self_reference(name) {
+            return (None, true);
+        }
+        let found = self
+            .lookup(Namespace::Ordinary, name.name)
+            .map(|entry| entry.binding)
+            .or_else(|| self.predefined_identifier(name));
+        (found, false)
+    }
+
     /// Reports a use of the identifier an inferred declaration is
     /// declaring inside its own initializer: C23 `auto` under every
     /// identity, and `__auto_type` under Clang's, which declares the
@@ -413,7 +428,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// initializer that shadows the name is used normally. Returns whether
     /// it reported.
     /// C23 (N3220): §6.2.1 paragraph 7, p. 36; PDF p. 49.
-    pub(super) fn inferred_self_reference(&mut self, name: Identifier) -> bool {
+    fn inferred_self_reference(&mut self, name: Identifier) -> bool {
         if self.inferences.is_empty() {
             return false;
         }

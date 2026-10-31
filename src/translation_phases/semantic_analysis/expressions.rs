@@ -90,12 +90,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let mut info = Self::expression_result(e, self.types.unknown());
         match e.kind {
             | E::Identifier(name) => {
-                let self_reference = self.inferred_self_reference(name);
-                let found = self
-                    .lookup(Namespace::Ordinary, name.name)
-                    .map(|entry| entry.binding)
-                    .or_else(|| self.predefined_identifier(name))
-                    .filter(|_| !self_reference);
+                let (found, self_reference) = self.identifier_lookup(name);
                 if let Some(index) = found {
                     let binding = self.bindings[index];
                     info.ty = binding.ty;

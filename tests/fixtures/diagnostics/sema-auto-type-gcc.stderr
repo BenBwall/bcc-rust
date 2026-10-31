@@ -78,7 +78,7 @@ error: an inferred type cannot come from a bit-field: `field`
 15 |     __auto_type field = s.b;
    |                 ^^^^^ bit-field operand
    |
-   = note: GCC rejects __auto_type of a bit-field member and Clang any inferred type that refers to a bit-field: no declaration can name a bit-field's type
+   = note: GCC rejects __auto_type of a bit-field member access and Clang any inferred type of one, parenthesized or not: no declaration can name a bit-field's type
 
 error: a tag is declared in an underspecified object initializer: `local`
   --> sema-auto-type-gcc.c:16:20
