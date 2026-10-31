@@ -202,10 +202,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             && let Some(entry) = self.lookup(Namespace::Ordinary, name.name)
             && entry.scope == self.scope
         {
-            return Some((
-                InferenceFault::Redeclared,
-                Some(entry.name.source_vectors),
-            ));
+            return Some((InferenceFault::Redeclared, Some(entry.name.source_vectors)));
         }
         None
     }
@@ -228,7 +225,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let info = self.expression_info(e);
         let bit_field = info.bit_field.is_some() || info.promotion_width.is_some();
         let mut fault = None;
-        let ty = if self.types.unanalyzed(info.ty) {
+        let ty = if let Some(reason) = self.unmodeled_extension_reason(spec.extensions) {
+            // `constexpr auto` stays as unmodeled as any `constexpr` object.
+            self.types.unmodeled(reason)
+        } else if self.types.unanalyzed(info.ty) {
             self.types.unknown()
         } else if bit_field {
             // Clang rejects every operand that refers to a bit-field
@@ -412,7 +412,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if inference_keyword(specifiers).is_none() {
             return false;
         }
-        self.error(SemanticErrorKind::InvalidInference(fault), source, None, None);
+        self.error(
+            SemanticErrorKind::InvalidInference(fault),
+            source,
+            None,
+            None,
+        );
         true
     }
 }
@@ -496,15 +501,15 @@ pub(super) enum InferenceKeyword {
 /// An inferred declaration whose initializer is being analyzed.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Inference {
-    name:       Option<StringCacheId>,
+    name:     Option<StringCacheId>,
     /// The bindings that existed before the initializer, which a use of
     /// `name` must not find.
-    bindings:   usize,
-    keyword:    InferenceKeyword,
+    bindings: usize,
+    keyword:  InferenceKeyword,
     /// The object's storage duration, which its specifiers decide.
-    duration:   Duration,
+    duration: Duration,
     /// Whether the object has block scope and no linkage.
-    local:      bool,
+    local:    bool,
 }
 
 impl Inference {

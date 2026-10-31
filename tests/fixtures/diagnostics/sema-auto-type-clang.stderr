@@ -1,0 +1,107 @@
+error: an underspecified declaration redeclares an identifier of the same scope: `e`
+ --> sema-auto-type-clang.c:4:6
+  |
+3 | extern int e;
+  |            - previous declaration is here
+4 | auto e = 1;
+  |      ^ already declared in this scope
+  |
+  = note: C23 §6.7.1p12: redeclaring an identifier of the same scope this way is implementation-defined; GCC and Clang reject it
+
+error: type inference is only allowed in an initialized object declaration
+ --> sema-auto-type-clang.c:5:8
+  |
+5 | void f(__auto_type a);
+  |        ^^^^^^^^^^^ inferred type here
+  |
+  = note: C23 §6.7.10p1-2: only an object definition with an initializer infers its type; GCC and Clang accept __auto_type in the same places
+
+error: type inference is only allowed in an initialized object declaration
+ --> sema-auto-type-clang.c:6:17
+  |
+6 | struct member { __auto_type m; };
+  |                 ^^^^^^^^^^^^^^ inferred type here
+  |
+  = note: C23 §6.7.10p1-2: only an object definition with an initializer infers its type; GCC and Clang accept __auto_type in the same places
+
+error: a declaration with an inferred type requires an initializer: `missing`
+ --> sema-auto-type-clang.c:8:17
+  |
+8 |     __auto_type missing;
+  |                 ^^^^^^^ no initializer
+  |
+  = note: C23 §6.7.10p2: an inferred object definition has the form `direct-declarator = assignment-expression`
+
+error: an inferred type cannot come from a braced initializer list: `braced`
+  --> sema-auto-type-clang.c:9:10
+   |
+ 9 |     auto braced = {1};
+   |          ^^^^^^ braced initializer
+   |
+   = note: C23 §6.7.10p2: the type is that of an assignment expression
+
+error: the inferred type differs between declarators: `second`
+  --> sema-auto-type-clang.c:10:21
+   |
+10 |     auto first = 1, second = 2.0;
+   |                     ^^^^^^ deduced as a different type
+   |
+   = note: C23 §6.7.1p12: an underspecified declaration of more than one identifier is implementation-defined; Clang requires one deduced type
+
+error: an inferred type cannot declare an array: `array`
+  --> sema-auto-type-clang.c:12:17
+   |
+12 |     __auto_type array[2] = {1, 2};
+   |                 ^^^^^^^^ array declarator
+   |
+   = note: C23 §6.7.10p2: a declarator other than an identifier is implementation-defined; Clang deduces through pointer and function declarators but not an array
+
+error: a variable with an inferred type is used in its own initializer: `outer`
+  --> sema-auto-type-clang.c:13:25
+   |
+13 |     __auto_type outer = outer;
+   |                         ^^^^^ used in its own initializer
+   |
+   = note: C23 §6.2.1p7: an underspecified identifier's scope starts when its definition is completed
+
+error: the initializer's type does not match the inferred declarator: `mismatch`
+  --> sema-auto-type-clang.c:14:10
+   |
+14 |     auto *mismatch = 0;
+   |          ^^^^^^^^^ incompatible initializer
+   |
+   = note: C23 §6.7.10p2: a declarator other than an identifier is implementation-defined; Clang deduces the type its pointer and function derivations leave
+
+error: an inferred type cannot declare a function: `function`
+  --> sema-auto-type-clang.c:15:10
+   |
+15 |     auto function(void);
+   |          ^^^^^^^^^^^^^^ function declarator
+   |
+   = note: C23 §6.7.10p2 and §6.7.1p12: an inferred declaration defines an object
+
+error: a variable with an inferred type is used in its own initializer: `inner`
+  --> sema-auto-type-clang.c:16:18
+   |
+16 |     auto inner = inner + 1;
+   |                  ^^^^^ used in its own initializer
+   |
+   = note: C23 §6.2.1p7: an underspecified identifier's scope starts when its definition is completed
+
+error: an inferred type cannot come from a bit-field: `field`
+  --> sema-auto-type-clang.c:17:17
+   |
+17 |     __auto_type field = s.b;
+   |                 ^^^^^ bit-field operand
+   |
+   = note: GCC rejects __auto_type of a bit-field member and Clang any inferred type that refers to a bit-field: no declaration can name a bit-field's type
+
+error: auto beside another storage-class specifier requires an inferred type
+  --> sema-auto-type-clang.c:19:5
+   |
+19 |     static auto int typed = 1;
+   |     ^^^^^^^^^^^^^^^ auto with a type specifier
+   |
+   = note: C23 §6.7.2p4: auto joins another storage-class specifier only if the type is inferred from an initializer
+
+13 errors generated.

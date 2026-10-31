@@ -21,13 +21,13 @@
 //!   stack balance; `collection.rs` builds scratch lists; `scopes.rs` installs,
 //!   finds and restores names; `results.rs` defines the retained output.
 //! - Syntax and constraints: `traversal.rs` schedules child syntax;
-//!   `declarations.rs` constructs types and bindings; `inference.rs` types
-//!   C23 `auto` and GNU `__auto_type` objects from their initializers;
+//!   `declarations.rs` constructs types and bindings; `inference.rs` types C23
+//!   `auto` and GNU `__auto_type` objects from their initializers;
 //!   `expressions.rs` and `expressions/` type expressions and conversions;
-//!   `initializers.rs` walks subobjects; `statements.rs` checks jumps and returns; `functions.rs`
-//!   checks definitions and completes the translation unit; `emission.rs`
-//!   models which code Clang's code generation skips in folded switches and
-//!   after calls that do not return.
+//!   `initializers.rs` walks subobjects; `statements.rs` checks jumps and
+//!   returns; `functions.rs` checks definitions and completes the translation
+//!   unit; `emission.rs` models which code Clang's code generation skips in
+//!   folded switches and after calls that do not return.
 //! - Retained facts: `facts/` records lexical/VM/block-expression regions and
 //!   resolved destinations on the same work stack, then finalizes compact
 //!   transitions using iterative heavy-light indexing. It also retains
@@ -1861,12 +1861,7 @@ enum Work<'tu, 's> {
     InferQualified(&'tu Declaration<'tu>, usize),
     /// The inferred declarator is bound; initialize it, recording whether
     /// unreachable code omits the initialization.
-    InferInitialization(
-        &'tu Declaration<'tu>,
-        usize,
-        bool,
-        functions::ReferenceMark,
-    ),
+    InferInitialization(&'tu Declaration<'tu>, usize, bool, functions::ReferenceMark),
     /// An inferred declarator's initializer has been analyzed.
     EndInference,
     InitializeDone(usize, &'tu Initializer<'tu>),

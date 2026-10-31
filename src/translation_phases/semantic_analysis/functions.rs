@@ -698,8 +698,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 // data select by Clang's constant-context value, which
                 // differs from function code's for some queries.
                 let info = self.expression_info(condition);
-                let constant_context = arm.is_none()
-                    || self.initializing_static();
+                let constant_context = arm.is_none() || self.initializing_static();
                 let value = if info.runtime_query && constant_context {
                     Self::constant_truth(info)
                 } else {

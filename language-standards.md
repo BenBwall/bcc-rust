@@ -819,7 +819,7 @@ functions.
 | C89/C90/C95 | Native implicit int; C99-origin mixed blocks, for declarations, designated initializers, compound literals, flexible array members, long long, trailing enum comma, `__func__`, and unambiguous qualified/static/`[*]` array syntax follow Allow/Warn/Deny | Variable bounds need constant evaluation to distinguish VLAs from constant arrays; flexible-member position and object layout |
 | C99 | Full C99 grammar; implicit int is retained with a removed-feature policy diagnostic | Type/name/control-flow constraints listed in the C99 checklist |
 | C11/C17 | `_Alignas` expression/type operands, `_Alignof` types (expression operands as a GNU extension), `_Atomic` type/qualifier, `_Generic` associations, `_Noreturn`, `_Static_assert`, `_Thread_local`, anonymous untagged aggregates; `_Alignas` in a plain type name is a constraint error | Alignment validity, storage-class combinations and aggregate layout; atomic eligibility and generic selection are analyzed |
-| C23 | All `[[...]]` attribute positions with standard/vendor names and balanced arguments; `bool`/`true`/`false`, `nullptr`, `constexpr`, `typeof`/`typeof_unqual`, message-optional `static_assert`, `alignas`/`alignof`/`thread_local` aliases; labels before declarations and at block end; `{}`; `_BitInt` with signedness; fixed enum underlying specifier-qualifier lists; `auto` type inference, alone or beside another storage class except `typedef`; unnamed definition parameters; ellipsis-only prototypes; empty parameter lists as prototypes; rejected identifier-list declarators; decimal type keywords; compound-literal storage classes | Attribute applicability/meaning, inferred types, width values, enum type legality, decimal literal support and literal object lifetime |
+| C23 | All `[[...]]` attribute positions with standard/vendor names and balanced arguments; `bool`/`true`/`false`, `nullptr`, `constexpr`, `typeof`/`typeof_unqual`, message-optional `static_assert`, `alignas`/`alignof`/`thread_local` aliases; labels before declarations and at block end; `{}`; `_BitInt` with signedness; fixed enum underlying specifier-qualifier lists; `auto` type inference, alone or beside another storage class except `typedef`; unnamed definition parameters; ellipsis-only prototypes; empty parameter lists as prototypes; rejected identifier-list declarators; decimal type keywords; compound-literal storage classes | Attribute applicability/meaning, width values, enum type legality, decimal literal support and literal object lifetime; inferred types are analyzed (see "Type inference") |
 | C2y subset | `_Countof` unary expression or parenthesized type; type-controlling `_Generic`; `if`/`switch` declaration headers with an optional following expression; case ranges; `break`/`continue` label | Array/type/count evaluation, selection conversion, range overlap, and named control-target resolution |
 
 The keyword classifier reports reserved keywords, so parser consumers do not
@@ -1505,8 +1505,8 @@ alignment, while explicit object alignment requests remain inherited.
 
 Lowering diagnostics for unmodeled types retain the actual construct through
 typedefs, arrays and record members: `_BitInt`, `constexpr`, decimal types,
-inferred declarations, fixed-underlying enums, MSVC pointer modifiers or
-`ext_vector_type`. They no longer list unrelated possible causes.
+types GCC infers from bit-fields, fixed-underlying enums, MSVC pointer
+modifiers or `ext_vector_type`. They no longer list unrelated possible causes.
 
 The reachable old-GCC glibc
 `tgmath.h` path uses these primitives, not `__builtin_tgmath`; the pinned
@@ -2945,8 +2945,73 @@ Still refused, now by name ("not yet supported by lowering:
 `__builtin_clear_padding`, `__builtin_powi{,f,l}`,
 `__builtin_speculation_safe_value` and `__builtin_stack_{save,restore}`;
 any other unregistered `__builtin_` name is "a builtin this compiler does
-not know". `__auto_type` reports the existing "inferred declaration types"
-refusal, as C23 `auto` inference does. GCC's `_FloatN` aliases of the math
+not know". `__auto_type` and C23 `auto` inference are implemented since
+(see "Type inference"). GCC's `_FloatN` aliases of the math
 functions (`__builtin_acoshf32`, …) stay unregistered: `floatN-builtin.c`
 needs them folded in static initializers with MPFR's correctly rounded
 results, which bcc has no evaluator for.
+
+## Type inference: C23 `auto` and GNU `__auto_type` (2026-10-31)
+
+An object declared with C23 `auto` and no type specifier, or with GNU
+`__auto_type` (every mode; GCC and Clang accept it in C89 too), takes the
+type of its initializer after lvalue conversion and array and function
+decay, qualified by the declaration's qualifiers (C23 §6.7.10p2): `const
+auto k = c;` is `const int` for an `int` or `const int` `c`, `auto s =
+"ab";` is `char *`, and `auto f = g;` a pointer to `g`'s type. A lone
+`auto` is no storage-class specifier, so a file-scope `auto a = 3.5;` has
+external linkage; `static`, `extern`, `register` and `_Thread_local` keep
+their meaning beside it. Semantic analysis types the initializer before it
+binds the object, then binds and initializes it as an ordinary declaration,
+so every back end (the interpreter, LLVM, native and wasm32) lowers it
+without change; the macros the GCC manual shows, such as
+`({ __auto_type _a = (a); __auto_type _b = (b); _a > _b ? _a : _b; })`,
+evaluate each argument once. Variably modified types keep their run-time
+bounds (`__auto_type p = &vla;` reads the bound evaluated at `vla`'s
+declaration), and complex, vector, `_BitInt`, `_Float16` and `__float128`
+operands give those types; `_Float16` arithmetic gives `_Float16`, whatever
+precision computes it.
+
+The constraints and C23's implementation-defined forms follow the claimed
+compiler, as GCC 13.3, GCC 15's `c-parser.cc` and Clang 23 behave:
+
+| Declaration | GCC | Clang |
+| --- | --- | --- |
+| no initializer, or a braced one | error | error |
+| more than one declarator | error at the second | each deduced; error if they differ |
+| `*p`, `(*f)(int)`, `(*a)[3]` declarators | error ("plain identifier") | deduced through the derivations; error if the initializer does not match |
+| array or function declarator | error | error |
+| the name in its own initializer | C23 `auto`: error; `__auto_type`: the outer declaration | error for both |
+| a bit-field operand | `__auto_type` of a member: error; otherwise the bit-field's own type (refused by lowering) | error for both (`refersToBitField`) |
+| an `_Atomic` operand | atomic dropped | `_Atomic` kept |
+| a tag declared in a C23 `auto` initializer | error | accepted |
+| C23 `auto` redeclaring a name of the same scope | error | error |
+| `__auto_type` redeclaring one | ordinary redeclaration rules | ordinary redeclaration rules |
+| in a parameter, member, type name, typedef or function definition | error | error |
+| `auto` with another storage class and a type specifier | error | error |
+
+Unit tests in `semantic_analysis/tests/inference.rs` pin each row under
+both identities; `sema-auto-type-{gcc,clang}` render the diagnostics, one
+per error the compiler reports for the same source. The
+`auto_type.c` (GNU17) and `inferred_auto.c` (GNU23) programs in
+`tests/integration/identity_programs.rs` run under both identities on every
+arm, wasm32 included, and print what GCC 13.3 and Clang 23 print.
+
+Deviations and limits:
+
+- `constexpr auto` infers its type but stays refused with every `constexpr`
+  object ("constexpr objects").
+- GCC types a C23 `auto` object inferred from a bit-field with the
+  bit-field's own type (`sizeof` 1 for a 2-bit field), which lowering
+  refuses ("types inferred from bit-fields"); GCC 13 and 15 agree.
+- Clang's `-Wauto-decl-extensions` pedantic warning for a deduced pointer or
+  function declarator is not reported: the extension policy has no feature
+  bit left for it.
+- A file-scope `register auto` is an error under both identities; GCC 13
+  accepts it without a diagnostic.
+- Clang keeps the shadowing name visible inside a `__auto_type` initializer
+  for typedef lookup too (`__auto_type T = (T)1;` is a syntax error there);
+  bcc's parser follows GCC and publishes the name after the initializer
+  under both identities.
+- GCC 13 has no `_BitInt`; GCC 14 and later infer it as Clang does.
+
