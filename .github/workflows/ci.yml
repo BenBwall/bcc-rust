@@ -184,52 +184,8 @@ jobs:
           git config --global core.autocrlf false
           git config --global core.eol lf
       - uses: actions/checkout@v5
-      - name: Compute cache keys
-        id: key
-        shell: bash
-        run: |
-          rust=$(git rev-parse HEAD:vendor/rust)
-          echo "rust=$rust" >> "$GITHUB_OUTPUT"
-          echo "tools=llvm-windows-gnu-tools-$rust-${{ hashFiles('build_support/llvm/tools.rs', 'rust-toolchain.toml') }}" >> "$GITHUB_OUTPUT"
-          echo "libraries=llvm-windows-gnu-libraries-$rust-${{ hashFiles('build_support/llvm.rs', 'build_support/llvm/tools.rs', 'rust-toolchain.toml', '.github/actions/setup-windows/action.yml') }}" >> "$GITHUB_OUTPUT"
-      - name: Restore the LLVM tools
-        id: tools
-        uses: actions/cache/restore@v4
-        with:
-          path: |
-            target/llvm
-            !target/llvm/build
-          key: ${{ steps.key.outputs.tools }}
-      - name: Restore the LLVM libraries
-        id: libraries
-        uses: actions/cache/restore@v4
-        with:
-          path: |
-            target/llvm-libs
-            !target/llvm-libs/build
-          key: ${{ steps.key.outputs.libraries }}
-      - uses: ./.github/actions/setup-windows
-      - name: Fetch pinned Rust and LLVM sources
-        if: steps.tools.outputs.cache-hit != 'true' || steps.libraries.outputs.cache-hit != 'true'
-        shell: bash
-        run: |
-          git config --global core.longpaths true
-          sparse_fetch() {
-            git init -q "$1"
-            git -C "$1" remote add origin "$2"
-            git -C "$1" config remote.origin.promisor true
-            git -C "$1" config remote.origin.partialclonefilter blob:none
-            git -C "$1" config core.sparseCheckout true
-            git -C "$1" config core.sparseCheckoutCone false
-            cp "$3" "$1/.git/info/sparse-checkout"
-            git -C "$1" fetch -q --depth 1 --filter=blob:none origin "$4"
-            git -C "$1" checkout -q --detach "$4"
-          }
-          sparse_fetch vendor/rust https://github.com/rust-lang/rust.git \
-            build_support/rust.sparse "${{ steps.key.outputs.rust }}"
-          llvm=$(git -C vendor/rust rev-parse HEAD:src/llvm-project)
-          sparse_fetch vendor/rust/src/llvm-project https://github.com/rust-lang/llvm-project.git \
-            build_support/llvm.sparse "$llvm"
+      - id: llvm
+        uses: ./.github/actions/windows-llvm
       # The build script builds whichever LLVM installation is missing.
       - run: cargo test --all-targets --no-fail-fast
       # Which Visual Studio installation the cl.exe comparisons used, if any;
@@ -239,21 +195,21 @@ jobs:
         run: cargo test --test integration msvc::toolchain::probe -- --ignored --nocapture
       # Saved even when tests fail, once an installation is complete.
       - name: Save the LLVM tools
-        if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.tools.outputs.cache-hit != 'true' && hashFiles('target/llvm/.installed-version') != ''
+        if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.llvm.outputs.tools-hit != 'true' && hashFiles('target/llvm/.installed-version') != ''
         uses: actions/cache/save@v4
         with:
           path: |
             target/llvm
             !target/llvm/build
-          key: ${{ steps.key.outputs.tools }}
+          key: ${{ steps.llvm.outputs.tools-key }}
       - name: Save the LLVM libraries
-        if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.libraries.outputs.cache-hit != 'true' && hashFiles('target/llvm-libs/.installed-version') != ''
+        if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.llvm.outputs.libraries-hit != 'true' && hashFiles('target/llvm-libs/.installed-version') != ''
         uses: actions/cache/save@v4
         with:
           path: |
             target/llvm-libs
             !target/llvm-libs/build
-          key: ${{ steps.key.outputs.libraries }}
+          key: ${{ steps.llvm.outputs.libraries-key }}
 
   bench:
     name: Benchmarks
@@ -270,5 +226,27 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: criterion
+          path: target/criterion
+          if-no-files-found: ignore
+
+  # The benchmarks on the Windows GNU host the tests use. It restores the
+  # LLVM installations the Windows tests save on main and saves nothing.
+  bench-windows:
+    name: Benchmarks (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 300
+    steps:
+      - name: Keep LF line endings
+        run: |
+          git config --global core.autocrlf false
+          git config --global core.eol lf
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/windows-llvm
+      - run: cargo bench --features benchmarking-internals --bench bench -- --noplot
+      - name: Upload Criterion results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: criterion-windows
           path: target/criterion
           if-no-files-found: ignore
