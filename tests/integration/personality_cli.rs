@@ -246,6 +246,29 @@ mod tests {
         succeeds(&directory.bcc("--gcc-mode", &["-fsyntax-only", "-w", "gcc.i"]));
     }
 
+    /// GCC warns of an unclosed quote in a skipped group, compiling as well
+    /// as under `-E`; Clang does not.
+    #[test]
+    fn unclosed_quotes_in_skipped_groups_warn_as_gcc_does() {
+        let directory = Directory::new();
+        directory.write("skipped.c", "#if 0\nit's\n#endif\nint x;\n");
+        for args in [
+            &["-fsyntax-only", "skipped.c"][..],
+            &["-E", "-P", "skipped.c"],
+        ] {
+            let gcc = directory.bcc("--gcc-mode", args);
+            succeeds(&gcc);
+            assert!(
+                stderr(&gcc).contains("warning: missing terminating `'` character"),
+                "{args:?}: {}",
+                stderr(&gcc)
+            );
+            let clang = directory.bcc("--clang-mode", args);
+            succeeds(&clang);
+            assert_eq!(stderr(&clang), "", "{args:?}");
+        }
+    }
+
     /// C23 leaves the white space at the ends of a `__VA_OPT__` replacement
     /// to `#`, which GCC drops and Clang keeps.
     #[test]

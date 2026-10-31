@@ -80,6 +80,17 @@ pub(crate) enum PreprocessorTokenizerErrorType {
 }
 
 impl PreprocessorTokenizerErrorType {
+    /// The quote of a character constant or string literal that closes on
+    /// no line, which this diagnoses.
+    pub(crate) const fn unclosed_quote(self) -> Option<u8> {
+        match self {
+            | Self::UnterminatedCharacter | Self::NewlineInCharacter => Some(b'\''),
+            | Self::UnterminatedString | Self::NewlineInString => Some(b'"'),
+            | Self::MissingTerminatingQuote(quote) => Some(quote),
+            | Self::UnknownToken | Self::UnterminatedBlockComment => None,
+        }
+    }
+
     /// Describes the error; `spelling` is the source text it points at.
     pub(crate) fn explain_in<'d>(self, arena: &'d Bump, spelling: Option<&str>) -> Explanation<'d> {
         let new = |message: &'d str| Explanation::new(arena, message);

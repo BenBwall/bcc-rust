@@ -121,7 +121,14 @@ impl Expander<'_, '_, '_, '_> {
     ///
     /// C99: §6.10.1 paragraph 6, p. 149; PDF p. 161, and the relaxed syntax
     /// of skipped groups, §6.10 paragraph 4, p. 147; PDF p. 159.
-    fn skip_over_dead_code(&mut self, mut at_line_start: bool, mode: SkipMode) {
+    fn skip_over_dead_code(&mut self, at_line_start: bool, mode: SkipMode) {
+        self.context.skipping_group = true;
+        self.skip_group_lines(at_line_start, mode);
+        self.context.skipping_group = false;
+    }
+
+    /// The loop of [`Self::skip_over_dead_code`].
+    fn skip_group_lines(&mut self, mut at_line_start: bool, mode: SkipMode) {
         let depth = self.state.open_conditionals.len();
         // Where the skipped group starts and where the directive that ends
         // it starts, as byte offsets, for the trace: `#line` changes the

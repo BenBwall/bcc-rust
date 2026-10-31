@@ -165,6 +165,23 @@ fn an_unclosed_quote_keeps_the_rest_of_its_line_with_a_warning() {
 }
 
 #[test]
+fn an_unclosed_quote_in_a_skipped_group_warns_as_gcc_does() {
+    // GCC warns of an unclosed quote even in a group it skips, as for
+    // English text in `#if 0`; Clang does not look.
+    let source = "#if 0\nit's\n#endif\nx\n";
+    let gcc = text_of(source, CompilerIdentity::Gcc);
+    assert_eq!(gcc.tokens, "x");
+    assert_eq!(
+        gcc.diagnostics,
+        [(
+            ErrorSeverity::Warning,
+            "MissingTerminatingQuote(39)".to_owned()
+        )]
+    );
+    assert_eq!(text_of(source, CompilerIdentity::Clang).diagnostics, []);
+}
+
+#[test]
 fn a_directive_rejects_an_unclosed_literal_it_reads() {
     // GCC and Clang reject the literal where a directive needs one.
     let text = text_of("#if 'a\n#endif\n#line 5 \"f\nx\n", CompilerIdentity::Clang);

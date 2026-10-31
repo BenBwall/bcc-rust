@@ -166,6 +166,9 @@ pub(crate) struct Context<'tu> {
     /// for the whole translation unit, so semantic diagnostics can use them.
     expansion_starts: [ExpansionSites<'tu>; 3],
     ignore_tokenizer_errors: bool,
+    /// Phase 4 is skipping a conditional group, whose lines it reads only
+    /// for conditional directives (C99 §6.10.1p6).
+    pub(crate) skipping_group: bool,
     pub(super) pending_errors: ArenaQueue<'tu, TranslationError<'tu>>,
     suppressed_errors: usize,
     /// Error-severity diagnostics already taken from `pending_errors`.

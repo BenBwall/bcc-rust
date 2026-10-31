@@ -18,7 +18,10 @@ use super::{
     PreprocessorTokenizerErrorType,
 };
 use crate::{
-    configuration::Feature,
+    configuration::{
+        Feature,
+        RuleSet,
+    },
     translation_phases::{
         Context,
         SourcePosition,
@@ -205,6 +208,37 @@ impl<'a> LexedFile<'a> {
                         let vectors =
                             context.create_source_vectors(start, source_file_index, length);
                         context.report_extension(feature, spelling, vectors);
+                    },
+                // GCC warns of an unclosed quote even in a skipped group,
+                // where every other lexical diagnostic is ignored; Clang
+                // does not.
+                | LexDiagnostic::Tokenizer {
+                    error_type,
+                    start,
+                    length,
+                    ..
+                } if context.ignore_tokenizer_errors()
+                    && context.skipping_group
+                    && let Some(quote) = error_type.unclosed_quote() =>
+                    if context.configuration.compiler_identity().rules() == RuleSet::Gcc
+                        && !reported.replace(true)
+                    {
+                        let error = PreprocessorTokenizerError {
+                            source_vector: SourceVector {
+                                index: source_offset(start.index),
+                                column: start.column,
+                                line: start.line.wrapping_add(line_delta),
+                                source_file_index,
+                                length: source_offset(length),
+                            },
+                            error_type:    PreprocessorTokenizerErrorType::MissingTerminatingQuote(
+                                quote,
+                            ),
+                            character:     None,
+                        };
+                        context.set_ignore_tokenizer_errors(false);
+                        context.preprocessor_tokenizer_error(error);
+                        context.set_ignore_tokenizer_errors(true);
                     },
                 // A warning, unlike an error, is not folded into its
                 // repeats: report it once, as for an extension.
