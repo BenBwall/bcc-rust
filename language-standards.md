@@ -3014,4 +3014,3 @@ Deviations and limits:
   bcc's parser follows GCC and publishes the name after the initializer
   under both identities.
 - GCC 13 has no `_BitInt`; GCC 14 and later infer it as Clang does.
-
