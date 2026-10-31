@@ -191,6 +191,36 @@ fn unsupported_type_diagnostics_retain_the_actual_construct() {
     assert!(message.ends_with("_Decimal32 types"), "{message}");
 }
 
+/// GCC lays out a record with a variably modified member at run time;
+/// lowering refuses it by name, also as an `asm` operand, whose checked
+/// facts analysis does not retain.
+#[test]
+fn records_with_variably_modified_members_are_refused_under_gcc() {
+    for source in [
+        "int f(int n) { struct s { int a; int b[n]; int c; } s; s.c = 3; return s.c; }",
+        "void *vp, *vq; long f(int n) { struct s { int b[n]; } *p = vp, *q = vq; return p - q; }",
+        "void *vp; int f(int n) { struct s { int b[n]; } *p = vp; p++; return p != 0; }",
+        "void *vp; int f(int n) { struct s { int b[n]; } *p = vp; void *v = p + 1; return v != 0; \
+         }",
+        "void *vp; int f(int n) { struct s { int b[n]; } *p = vp; return p[1].b[0]; }",
+        "void *vp; int f(int n) { struct s { int b[n]; } *p = vp; return (int)sizeof *p; }",
+        "char *p; void f(int n) { __asm__ volatile(\"\" : \"=m\"(*(struct { char x[n]; } *)p)); }",
+    ] {
+        let errors = lower_with(
+            source,
+            crate::configuration::CompilerConfiguration::default()
+                .with_gnu_extensions(true)
+                .with_compiler_identity(crate::configuration::CompilerIdentity::Gcc),
+        )
+        .expect_err("a run-time record layout is unsupported");
+        assert_eq!(
+            errors,
+            ["not yet supported by lowering: structures with variably modified members"],
+            "{source}"
+        );
+    }
+}
+
 /// GCC gives a C23 `auto` object inferred from a bit-field the bit-field's
 /// own type, which lowering has no type for; Clang rejects the operand.
 #[test]

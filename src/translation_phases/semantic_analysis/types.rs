@@ -387,6 +387,14 @@ impl<'tu, 's> TypeInterner<'tu, 's> {
         unmodeled_type(&self.nodes, &self.tags, ty)
     }
 
+    /// GNU extension: a record with a variably modified member is itself
+    /// variably modified (GCC's `C_TYPE_VARIABLE_SIZE`), so the declarations,
+    /// jumps and initializers that may not involve a VLA cannot involve it.
+    /// Types derived from it afterwards inherit the state.
+    pub(crate) fn mark_variably_modified(&mut self, ty: TypeId) {
+        self.variably_modified[ty.index] = true;
+    }
+
     pub(crate) fn unmodeled(&mut self, reason: UnmodeledType) -> TypeId {
         self.intern(TypeKind::Unmodeled(reason))
     }
@@ -494,6 +502,9 @@ pub(crate) enum UnmodeledType {
     Decimal64,
     Decimal128,
     Inferred,
+    /// GNU: a structure or union with a variably modified member, whose
+    /// layout is computed at run time.
+    VariableMembers,
     /// GCC types an object inferred from a bit-field with the bit-field's
     /// own type, which no declaration can name.
     InferredBitField,
@@ -511,6 +522,7 @@ impl UnmodeledType {
             | Self::Decimal64 => "_Decimal64 types",
             | Self::Decimal128 => "_Decimal128 types",
             | Self::Inferred => "inferred declaration types",
+            | Self::VariableMembers => "structures with variably modified members",
             | Self::InferredBitField => "types inferred from bit-fields",
             | Self::FixedEnum => "fixed-underlying enum types",
             | Self::PointerModifier => "MSVC pointer modifiers",

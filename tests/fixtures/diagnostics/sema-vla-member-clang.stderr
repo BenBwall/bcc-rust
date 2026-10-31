@@ -1,0 +1,25 @@
+error: fields must have a constant size: `a`
+ --> sema-vla-member-clang.c:2:25
+  |
+2 | struct file_scope { int a[n]; };
+  |                         ^ variably modified member
+  |
+  = note: C99 §6.7.5.2p2: members never have a variably modified type (§6.7.2.1p8); Clang does not support GCC's variably modified members
+
+error: fields must have a constant size: `b`
+ --> sema-vla-member-clang.c:4:31
+  |
+4 |     struct inner { int a; int b[m]; int c; } s;
+  |                               ^ variably modified member
+  |
+  = note: C99 §6.7.5.2p2: members never have a variably modified type (§6.7.2.1p8); Clang does not support GCC's variably modified members
+
+error: fields must have a constant size: `p`
+ --> sema-vla-member-clang.c:5:19
+  |
+5 |     union { int (*p)[m]; char c; } u;
+  |                   ^ variably modified member
+  |
+  = note: C99 §6.7.5.2p2: members never have a variably modified type (§6.7.2.1p8); Clang does not support GCC's variably modified members
+
+3 errors generated.

@@ -375,6 +375,10 @@ pub(crate) enum SemanticErrorKind {
     /// Implementation limit, C99: §5.2.4.1p1, pp. 20-21; PDF pp. 32-33;
     /// §6.5.6p9, pp. 83-84; PDF pp. 95-96.
     ObjectTooLarge,
+    /// A variably modified member, which Clang never accepts.
+    /// C99: §6.7.2.1 paragraph 8, p. 102; PDF p. 114; §6.7.5.2 paragraph 2,
+    /// p. 116; PDF p. 128.
+    VariableMember,
     /// C99: §6.7.5.2p2, p. 116; PDF p. 128; members §6.7.2.1p8, p. 102;
     /// PDF p. 114.
     FileScopeVariableType,
@@ -904,6 +908,7 @@ impl SemanticErrorKind {
             | Self::InvalidArrayBound => "invalid array size",
             | Self::InvalidStarBound => "`[*]` is not allowed here",
             | Self::ObjectTooLarge => "too large",
+            | Self::VariableMember => "variably modified member",
             | Self::FileScopeVariableType => "variably modified type",
             | Self::IncompatibleDeclaration | Self::IncompatibleIntrinsicDeclaration =>
                 "conflicting type",
@@ -1860,6 +1865,11 @@ impl SemanticErrorKind {
                 "object type is too large",
                 "C99 §5.2.4.1: this implementation limits an object to PTRDIFF_MAX bytes so that \
                  pointer differences within it are representable (§6.5.6p9)",
+            ),
+            | Self::VariableMember => (
+                "fields must have a constant size",
+                "C99 §6.7.5.2p2: members never have a variably modified type (§6.7.2.1p8); \
+                 Clang does not support GCC's variably modified members",
             ),
             | Self::FileScopeVariableType => (
                 "variably modified type is not permitted here",

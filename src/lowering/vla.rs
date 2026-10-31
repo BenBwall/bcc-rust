@@ -144,9 +144,15 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         if let Some(size) = facts.constant_size(ty) {
             return Ok(self.iconst(Type::I64, i128::from(size)));
         }
-        let formula = facts
-            .formula(ty)
-            .ok_or_else(|| LoweringError::missing("type size formula is not retained", source))?;
+        // An unanalyzed type, such as GCC's record with a variably modified
+        // member, has no formula; it is refused by name.
+        let formula = facts.formula(ty).ok_or_else(|| {
+            if self.unit.sema.types.unanalyzed(ty) {
+                LoweringError::unanalyzed(&self.unit.sema.types, ty, source)
+            } else {
+                LoweringError::missing("type size formula is not retained", source)
+            }
+        })?;
         self.emit_size_formula(formula, source)
     }
 

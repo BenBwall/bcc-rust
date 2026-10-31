@@ -529,7 +529,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if self.scopes[b.scope].kind == ScopeKind::Prototype
             || self.functions.current.is_none()
             || !self.variably_modified(b.ty)
-            || self.types.unanalyzed(b.ty)
+            || (self.types.unanalyzed(b.ty) && !self.variable_size(b.ty))
         {
             return;
         }

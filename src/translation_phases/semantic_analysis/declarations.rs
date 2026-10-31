@@ -872,8 +872,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if self.variably_modified(ty)
             && (file
                 || linkage != Linkage::None
-                || (duration == Duration::Static
-                    && matches!(self.types.nodes[ty.index], TypeKind::Array(..))))
+                || (duration == Duration::Static && self.variable_size(ty)))
         {
             self.error(
                 SemanticErrorKind::FileScopeVariableType,
