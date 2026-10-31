@@ -3052,12 +3052,21 @@ Clang's "fields must have a constant size" error), with more in
 bcc's lowering maps every record to an IR aggregate of constant layout, so
 it has no run-time record layout yet. Under the GCC identity, semantic
 analysis now accepts these members where GCC does, as it accepts other
-unmodeled types: the record is unmodeled, its uses are not checked
-further, and lowering refuses any declaration, expression or `asm` operand
-that needs it with "not yet supported by lowering: structures with
-variably modified members", so `-fsyntax-only` succeeds and code
-generation refuses instead of reporting a constraint violation GCC does not
-have. At file scope GCC rejects them ("variably modified 'a' at file
+unmodeled types, and lowering refuses any declaration, expression or `asm`
+operand that needs it, pointer arithmetic on a pointer to it included,
+with "not yet supported by lowering: structures with variably modified
+members", instead of reporting a constraint violation GCC does not have.
+The record's type is variably modified, as GCC's `C_TYPE_VARIABLE_SIZE`
+makes it, so what GCC rejects for a variable-sized type is rejected for it:
+an initializer or compound literal of it, a `static` or `extern` object, a
+function returning it, a jump or `switch` into the scope of an object of
+it or of a pointer to it, and a `_Generic` association naming it. An array
+of pointers to it (or to a VLA) has a constant size and may be initialized,
+as in GCC; bcc used to reject `int (*a[2])[n] = {0, 0};`. Its members are
+not modeled, though: `-fsyntax-only` accepts uses GCC rejects, such as a
+member it lacks (`s.zz`), or the record as an arithmetic, scalar or
+assignment operand (`s + 1`, `(int)s`, `s ? 1 : 0`, `s = 5`); code
+generation then refuses them by name. At file scope GCC rejects them ("variably modified 'a' at file
 scope"), and so does bcc. The Clang and clang-cl identities report
 "fields must have a constant size" for every such member, as Clang does in
 every scope; TCC and MSVC keep the C99 §6.7.5.2p2 error.

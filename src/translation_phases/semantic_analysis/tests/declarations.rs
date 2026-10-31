@@ -672,6 +672,37 @@ fn members_cannot_have_variably_modified_types() {
     );
 }
 
+/// GCC's record with a variably modified member is variable-sized, so the
+/// uses GCC rejects for a VLA are rejected for it too; an array of
+/// pointers to it, or to a VLA, has a constant size and may be
+/// initialized.
+#[test]
+fn records_with_variably_modified_members_are_variable_sized() {
+    use SemanticErrorKind as K;
+    let gcc = gnu17().with_compiler_identity(CompilerIdentity::Gcc);
+    for (statement, expected) in [
+        ("struct S t = {0};", &[K::InvalidInitializer][..]),
+        ("static struct S st;", &[K::FileScopeVariableType]),
+        ("extern struct S et;", &[K::FileScopeVariableType]),
+        ("(void)sizeof (struct S){0};", &[K::InvalidInitializer]),
+        ("struct S f(void);", &[K::FileScopeVariableType]),
+        ("goto in; { struct S u; in: (void)0; }", &[K::JumpIntoVariableScope]),
+        ("goto in2; { struct S *u = p; in2: (void)u; }", &[K::JumpIntoVariableScope]),
+        ("switch (n) { struct S w; case 1: break; }", &[K::SwitchIntoVariableScope]),
+        ("(void)_Generic(*p, struct S: 1, default: 0);", &[K::InvalidGenericSelection]),
+        ("(void)_Generic(p, struct S *: 1, default: 0);", &[K::InvalidGenericSelection]),
+        ("struct S *a[3] = {p, p, 0}; (void)a;", &[]),
+        ("int (*v[2])[n] = {0, 0}; (void)v;", &[]),
+        ("static struct S *sp; (void)sp;", &[]),
+    ] {
+        let source = format!(
+            "void *vp; void h(int n) {{ struct S {{ int a; int b[n]; int c; }}; struct S *p = \
+             vp; {statement} }}"
+        );
+        assert_eq!(kinds(&source, gcc), expected, "{statement}");
+    }
+}
+
 #[test]
 fn objects_larger_than_ptrdiff_max_are_rejected() {
     assert_eq!(
