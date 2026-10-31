@@ -2,13 +2,37 @@
    sign builtins, and the constructors of `_Float16`, `__bf16` and
    `__float128` NaNs and infinities. The GCC identity's reference is the
    host GCC's build, the Clang identity's the bundled Clang's; `__clang__`
-   selects the builtins only GCC has, and GCC before 14 has no
-   `__builtin_addc`. */
+   selects the builtins only GCC has, and GCC before 14, which has no
+   `__builtin_addc`, computes the same carries in plain C. */
 #include <stdint.h>
 #include <stdio.h>
 
 #if defined __clang__ || __GNUC__ >= 14
-#define CARRY 1
+#define ADDC __builtin_addc
+#define SUBC __builtin_subc
+#define ADDCL __builtin_addcl
+#define SUBCLL __builtin_subcll
+#else
+/* GCC before 14 has no carry builtins: the same sums in plain C, so its
+   build prints what bcc's GCC 14 identity prints. */
+#define CARRY_ADD(name, type)                                                  \
+    static type name(type a, type b, type in, type *out) {                     \
+        type sum = a + b;                                                      \
+        type result = sum + in;                                                \
+        *out = (sum < a) | (result < sum);                                     \
+        return result;                                                         \
+    }
+#define CARRY_SUB(name, type)                                                  \
+    static type name(type a, type b, type in, type *out) {                     \
+        type difference = a - b;                                               \
+        type result = difference - in;                                         \
+        *out = (a < b) | (difference < in);                                    \
+        return result;                                                         \
+    }
+CARRY_ADD(ADDC, unsigned)
+CARRY_SUB(SUBC, unsigned)
+CARRY_ADD(ADDCL, unsigned long)
+CARRY_SUB(SUBCLL, unsigned long long)
 #endif
 
 static void dump(const void *p, int n) {
@@ -86,27 +110,25 @@ static void scalars(void) {
 #endif
     static const unsigned long swapped = __builtin_bswap64(1);
     printf("%lx\n", swapped);
-#ifdef CARRY
     unsigned carry, r;
     unsigned long cl, rl;
     unsigned long long cll, rll;
-    r = __builtin_addc(0xffffffffu, 1u, 0u, &carry);
+    r = ADDC(0xffffffffu, 1u, 0u, &carry);
     printf("%u %u\n", r, carry);
-    r = __builtin_addc(1u, 42u, 1u, &carry);
+    r = ADDC(1u, 42u, 1u, &carry);
     printf("%u %u\n", r, carry);
-    r = __builtin_addc(0xfffffffeu, 1u, 1u, &carry);
+    r = ADDC(0xfffffffeu, 1u, 1u, &carry);
     printf("%u %u\n", r, carry);
-    r = __builtin_subc(0u, 1u, 0u, &carry);
+    r = SUBC(0u, 1u, 0u, &carry);
     printf("%u %u\n", r, carry);
-    r = __builtin_subc(5u, 3u, 1u, &carry);
+    r = SUBC(5u, 3u, 1u, &carry);
     printf("%u %u\n", r, carry);
-    r = __builtin_subc(3u, 3u, 1u, &carry);
+    r = SUBC(3u, 3u, 1u, &carry);
     printf("%u %u\n", r, carry);
-    rl = __builtin_addcl(~0ul, ~0ul, 1ul, &cl);
+    rl = ADDCL(~0ul, ~0ul, 1ul, &cl);
     printf("%lu %lu\n", rl, cl);
-    rll = __builtin_subcll(0ull, ~0ull, 1ull, &cll);
+    rll = SUBCLL(0ull, ~0ull, 1ull, &cll);
     printf("%llu %llu\n", rll, cll);
-#endif
     void *p = __builtin_alloca_with_align(10, 512);
     printf("%d\n", (int)((uintptr_t)p % 64));
     char buffer[4];
