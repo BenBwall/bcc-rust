@@ -2894,7 +2894,10 @@ imaginary constants (`2i`, `2li`) have the complex type of their real
 constant's type, as in both compilers. `_Complex _Bool` is refused, as both
 refuse it; `_Complex __int128`, which GCC accepts and Clang refuses, is
 refused under both identities ("cannot combine"), and plain `_Complex`
-(GCC's `_Complex double`) stays an error.
+(GCC's `_Complex double`) stays an error. A repeated `_Complex` is an error
+under both identities, as in GCC; Clang 23 only warns
+(`-Wduplicate-decl-specifier`), as for `_Complex _Complex double`, which bcc
+already refused.
 
 Typing follows both compilers: a complex integer operand takes part in the
 usual arithmetic conversions through its real type unpromoted
