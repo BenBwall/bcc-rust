@@ -12,6 +12,7 @@ use crate::translation_phases::semantic_analysis::{
     Scalar,
     TypeId,
     TypeKind,
+    TypeQualifiers,
 };
 
 impl Analyzer<'_, '_, '_> {
@@ -105,14 +106,22 @@ impl Analyzer<'_, '_, '_> {
         let unit = self.types.scalar(unit);
         let order = self.types.scalar(Scalar::Int);
         let void = self.types.scalar(Scalar::Void);
+        // GCC's `volatile void *` operand, `const volatile void *` for a
+        // load, and the plain `void *` of the expected value.
+        let volatile = self
+            .types
+            .intern(TypeKind::Pointer(void.qualified(TypeQualifiers::VOLATILE)));
+        let source = self.types.intern(TypeKind::Pointer(
+            void.qualified(TypeQualifiers::CONST | TypeQualifiers::VOLATILE),
+        ));
         let pointer = self.types.intern(TypeKind::Pointer(void));
         let truth = self.types.scalar(Scalar::Bool);
         let (result, parameters): (TypeId, &[TypeId]) = match shape {
-            | AtomicShape::Load => (unit, &[pointer, order]),
-            | AtomicShape::Store => (void, &[pointer, unit, order]),
-            | AtomicShape::Exchange => (unit, &[pointer, unit, order]),
+            | AtomicShape::Load => (unit, &[source, order]),
+            | AtomicShape::Store => (void, &[volatile, unit, order]),
+            | AtomicShape::Exchange => (unit, &[volatile, unit, order]),
             | AtomicShape::CompareExchange =>
-                (truth, &[pointer, pointer, unit, truth, order, order]),
+                (truth, &[volatile, pointer, unit, truth, order, order]),
         };
         let parameters = self.types.tu.alloc_slice_copy(parameters);
         Some(self.types.intern(TypeKind::Function {
@@ -144,13 +153,13 @@ impl Analyzer<'_, '_, '_> {
 /// The parameters and result of a size-specific atomic routine.
 #[derive(Clone, Copy)]
 enum AtomicShape {
-    /// `I (void *, int)`.
+    /// `I (const volatile void *, int)`.
     Load,
-    /// `void (void *, I, int)`.
+    /// `void (volatile void *, I, int)`.
     Store,
-    /// `I (void *, I, int)`: an exchange or a read-modify-write.
+    /// `I (volatile void *, I, int)`: an exchange or a read-modify-write.
     Exchange,
-    /// `bool (void *, void *, I, bool, int, int)`.
+    /// `bool (volatile void *, void *, I, bool, int, int)`.
     CompareExchange,
 }
 

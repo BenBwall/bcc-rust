@@ -745,7 +745,9 @@ mod tests {
     /// GCC declares the size-specific atomic routines, libatomic's entry
     /// points, with their operand types, so a 16-byte store passes all 128
     /// bits rather than an implicitly declared `int`. Built only: the
-    /// interpreter has no libatomic.
+    /// interpreter has no libatomic. bcc calls libatomic for every size,
+    /// where GCC inlines those up to 8 bytes; it needed `-latomic` for them
+    /// before as well.
     #[test]
     fn sized_atomic_routines_have_gccs_prototypes() {
         let source = b"__int128 i;\n\
@@ -765,6 +767,22 @@ mod tests {
             return 0;\n\
             }\n";
         builds_on_every_back_end("--compiler-identity=gcc", source, &["-latomic"], "");
+        // Their pointers are GCC's `volatile void *`, and `const volatile
+        // void *` for a load, so qualified operands draw no warning.
+        let qualified = b"const int ci = 3;\n\
+            volatile int vi;\n\
+            int main(void) {\n\
+            __atomic_store_4(&vi, __atomic_load_4(&ci, 5), 5);\n\
+            int e = 3;\n\
+            return !__atomic_compare_exchange_4(&vi, &e, 9, 0, 5, 5);\n\
+            }\n";
+        let output = check(
+            "--compiler-identity=gcc",
+            qualified,
+            &["-Wall", "-fsyntax-only"],
+        );
+        let stderr = text(&output.stderr);
+        assert!(output.status.success() && stderr.is_empty(), "{stderr}");
     }
 
     /// [`prints_on_every_back_end`] for the compiled back ends alone.
