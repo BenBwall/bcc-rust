@@ -4,8 +4,9 @@
 //! read-only editor, compiled live in the browser at `-O0` or `-O2`. The
 //! front-end stages add what they did to this program (`front_end.rs`).
 //! Hovering a source line, or moving the cursor to it, highlights the output
-//! lines that came from it (and the reverse; see `app/links.rs`). When an error stops bcc, the view says which stage stopped
-//! and why, and the diagnostics list every message.
+//! lines that came from it (and the reverse; see `app/links.rs`). When an error
+//! stops bcc, the view says which stage stopped and why, and the diagnostics
+//! list every message.
 
 use leptos::prelude::*;
 
@@ -144,9 +145,7 @@ pub fn PipelineView(
             return None;
         }
         let index = Stage::ALL.iter().position(|&each| each == stage.get())?;
-        source.with(|source| {
-            demos::matching(source).and_then(|demo| demo.path.get(index).copied())
-        })
+        source.with(|source| demos::matching(source).and_then(|demo| demo.path.get(index).copied()))
     };
     let on_hover = Callback::new(move |line| pointing.hover(Side::Output, line));
     let on_cursor = Callback::new(move |line| pointing.cursor(Side::Output, line));
@@ -361,8 +360,13 @@ fn StageStrip(stage: RwSignal<Stage>, compilation: Memo<Option<Compilation>>) ->
         if strip.scroll_width() <= strip.client_width() {
             return;
         }
-        if let Some(key) = strip.query_selector("[aria-selected=\"true\"]").ok().flatten() {
-            let offset = key.get_bounding_client_rect().left() - strip.get_bounding_client_rect().left();
+        if let Some(key) = strip
+            .query_selector("[aria-selected=\"true\"]")
+            .ok()
+            .flatten()
+        {
+            let offset =
+                key.get_bounding_client_rect().left() - strip.get_bounding_client_rect().left();
             let left = f64::from(strip.scroll_left()) + offset - 12.0;
             let options = web_sys::ScrollToOptions::new();
             options.set_left(left.max(0.0));

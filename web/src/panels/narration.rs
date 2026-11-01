@@ -677,10 +677,7 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         let mut seen = Vec::new();
-        assert_eq!(
-            terms("The name `x` is an lvalue.", &mut seen),
-            ["lvalue"]
-        );
+        assert_eq!(terms("The name `x` is an lvalue.", &mut seen), ["lvalue"]);
         assert_eq!(
             terms("An lvalue designates an object.", &mut seen),
             ["object"]

@@ -47,8 +47,8 @@ const CHAR: f64 = 8.0;
 /// The narrowest and widest step a fitted tape gives each step.
 const FIT_MIN: f64 = 14.0;
 const FIT_MAX: f64 = 48.0;
-/// The narrowest and widest step the zoom knob reaches: zoomed out, a run
-/// of a thousand steps fits a laptop's screen.
+/// The narrowest step the zoom knob reaches short of the whole run (which
+/// it fits, however long, turned fully left), and the widest.
 const ZOOM_MIN: f64 = 1.0;
 const ZOOM_MAX: f64 = 64.0;
 /// Steps of blank tape drawn after the last recorded one.
@@ -306,11 +306,35 @@ impl Reel {
     }
 }
 
+impl Reel {
+    /// What the tape calls `object`'s lane: its name, numbered where
+    /// another object of that name has a lane of its own (`x #2`).
+    pub fn label_of(&self, object: usize) -> Option<String> {
+        self.groups
+            .iter()
+            .flat_map(|group| &group.lanes)
+            .find(|lane| lane.objects.contains(&object))
+            .map(Lane::label)
+    }
+}
+
+impl Lane {
+    fn label(&self) -> String {
+        if self.ordinal > 1 {
+            format!("{} #{}", self.name, self.ordinal)
+        } else {
+            self.name.clone()
+        }
+    }
+}
+
 impl Group {
     /// The lane for a new `object`: the first of its name whose occupant is
     /// no longer alive, or a new one beside them.
     fn place(&mut self, object: &Object, alive: impl Fn(usize) -> bool) -> usize {
-        let same = |lane: &&Lane| lane.name == object.name;
+        // A lane holds one type: an `int x` and a later `int *x` of the
+        // same name get lanes of their own.
+        let same = |lane: &&Lane| lane.name == object.name && lane.ty == object.ty;
         if let Some(place) = self
             .lanes
             .iter()
@@ -318,7 +342,12 @@ impl Group {
         {
             return place;
         }
-        let ordinal = self.lanes.iter().filter(same).count() + 1;
+        let ordinal = self
+            .lanes
+            .iter()
+            .filter(|lane| lane.name == object.name)
+            .count()
+            + 1;
         self.lanes.push(Lane {
             key: format!("{}:{}:{ordinal}", self.key, object.name),
             name: object.name.clone(),
@@ -465,15 +494,19 @@ enum Row {
 /// the two innermost, where a recursion is doing its work.
 const OPEN_DEPTHS: usize = 3;
 
+/// The deck's rows. Functions come in the order of their first call, each
+/// function's groups by depth. Every folded group of a function shares one
+/// ladder row, however its calls interleave with another function's, so a
+/// recursion takes a bounded number of rows.
 fn rows(reel: &Reel, cursor: usize, opened: &[String]) -> Vec<Row> {
-    let mut order: Vec<usize> = (0..reel.groups.len()).collect();
-    order.sort_by_key(|&at| {
-        let group = &reel.groups[at];
-        (
-            group.depth,
-            group.calls.first().map_or(0, |call| call.first),
-        )
-    });
+    let mut functions: Vec<&str> = Vec::new();
+    let mut first: Vec<usize> = (0..reel.groups.len()).collect();
+    first.sort_by_key(|&at| reel.groups[at].calls.first().map_or(0, |call| call.first));
+    for &at in &first {
+        if !functions.contains(&reel.groups[at].name.as_str()) {
+            functions.push(&reel.groups[at].name);
+        }
+    }
     // A call stays open through the step that ends it, so its lanes are on
     // screen while their objects' lifetimes end.
     let live = |at: usize| {
@@ -482,73 +515,64 @@ fn rows(reel: &Reel, cursor: usize, opened: &[String]) -> Vec<Row> {
             .iter()
             .any(|call| call.first <= cursor && cursor <= call.last + 1)
     };
-    let mut folded: Vec<bool> = order.iter().map(|&at| !live(at)).collect();
-    // A deep recursion keeps its outermost and innermost calls open.
-    for name in reel.groups.iter().map(|group| &group.name) {
-        let open: Vec<usize> = (0..order.len())
-            .filter(|&place| !folded[place] && reel.groups[order[place]].name == *name)
+    let mut rows: Vec<Row> = Vec::new();
+    for name in functions {
+        let mut groups: Vec<usize> = (0..reel.groups.len())
+            .filter(|&at| reel.groups[at].name == name)
             .collect();
+        groups.sort_by_key(|&at| reel.groups[at].depth);
+        let mut folded: Vec<bool> = groups.iter().map(|&at| !live(at)).collect();
+        // A deep recursion keeps its outermost and innermost calls open.
+        let open: Vec<usize> = (0..groups.len()).filter(|&place| !folded[place]).collect();
         if open.len() > OPEN_DEPTHS {
             for &place in &open[1..open.len() + 1 - OPEN_DEPTHS] {
                 folded[place] = true;
             }
         }
-    }
-    for (place, &at) in order.iter().enumerate() {
-        if opened.contains(&reel.groups[at].key) {
-            folded[place] = false;
-        }
-    }
-    let mut rows: Vec<Row> = Vec::new();
-    for (place, &at) in order.iter().enumerate() {
-        let group = &reel.groups[at];
-        if folded[place] {
-            // Folded groups of one function at consecutive depths share a
-            // row.
-            let previous = match rows.last() {
-                | Some(Row::Ladder { groups }) => groups.last().copied(),
-                | Some(&Row::Group {
-                    at, folded: true, ..
-                }) => Some(at),
-                | _ => None,
-            };
-            if previous.is_some_and(|last| {
-                reel.groups[last].name == group.name && reel.groups[last].depth + 1 == group.depth
-            }) {
-                let mut groups = match rows.pop() {
-                    | Some(Row::Ladder { groups }) => groups,
-                    | Some(Row::Group { at, .. }) => vec![at],
-                    | _ => Vec::new(),
-                };
-                groups.push(at);
-                rows.push(Row::Ladder { groups });
-                continue;
+        for (place, &at) in groups.iter().enumerate() {
+            if opened.contains(&reel.groups[at].key) {
+                folded[place] = false;
             }
-            rows.push(Row::Group {
-                at,
-                folded: true,
-                live: live(at),
-            });
-        } else {
-            rows.push(Row::Group {
-                at,
-                folded: false,
-                live: live(at),
-            });
-            rows.extend((0..group.lanes.len()).map(|lane| Row::Lane { group: at, lane }));
+        }
+        let ladder: Vec<usize> = groups
+            .iter()
+            .zip(&folded)
+            .filter(|&(_, &folded)| folded)
+            .map(|(&at, _)| at)
+            .collect();
+        let mut laddered = false;
+        for (&at, &folded) in groups.iter().zip(&folded) {
+            if !folded {
+                rows.push(Row::Group {
+                    at,
+                    folded: false,
+                    live: live(at),
+                });
+                rows.extend(
+                    (0..reel.groups[at].lanes.len()).map(|lane| Row::Lane { group: at, lane }),
+                );
+            } else if ladder.len() < 2 {
+                rows.push(Row::Group {
+                    at,
+                    folded: true,
+                    live: live(at),
+                });
+            } else if !laddered {
+                laddered = true;
+                rows.push(Row::Ladder {
+                    groups: ladder.clone(),
+                });
+            }
         }
     }
     rows
 }
 
-/// How many steps the fitted scale makes room for: the run's length rounded
-/// up to a doubling, so the scale holds still while a run grows.
+/// How many steps the fitted scale makes room for: the run's length and a
+/// little more, rounded up to four steps, so a short run fills the tape
+/// while the scale changes only every few steps of a Run.
 fn fit_slots(count: usize) -> usize {
-    let mut slots = 24;
-    while slots < count + 3 {
-        slots *= 2;
-    }
-    slots
+    (count + 6).div_ceil(4).max(3) * 4
 }
 
 /// The source of `range`, on one line, for a slant's label; `None` for a
@@ -604,6 +628,8 @@ fn shorten(text: &str, chars: usize) -> String {
 pub fn Deck(
     history: RwSignal<Vec<Snapshot>>,
     cursor: RwSignal<Option<usize>>,
+    /// The run's tape (`Reel::record` of the history).
+    reel: Memo<Reel>,
     /// The program the engine runs, for the slants' labels.
     source: Signal<String>,
     /// The scale, as a factor of the one that fits the recorded run to the
@@ -617,7 +643,6 @@ pub fn Deck(
     head: RwSignal<Option<f64>>,
     on_jump: Callback<usize>,
 ) -> impl IntoView {
-    let reel = Memo::new(move |_| history.with(|history| Reel::record(history)));
     let opened = RwSignal::new(Vec::<String>::new());
     let tape = NodeRef::<html::Div>::new();
     let width = RwSignal::new(760.0_f64);
@@ -628,9 +653,14 @@ pub fn Deck(
         reel.with(|reel| opened.with(|opened| rows(reel, cursor, opened)))
     });
     let step_width = Memo::new(move |_| {
-        let slots = px(fit_slots(reel.with(|reel| reel.steps.len())));
-        let fit = (width.get() / slots).floor().clamp(FIT_MIN, FIT_MAX);
-        (fit * zoom.get()).clamp(ZOOM_MIN, ZOOM_MAX)
+        let count = reel.with(|reel| reel.steps.len());
+        let fit = (width.get() / px(fit_slots(count)))
+            .floor()
+            .clamp(FIT_MIN, FIT_MAX);
+        // Turned fully left, ZOOM fits the whole recorded run, however
+        // long, with room for the end of the tape.
+        let whole = ((width.get() - 140.0) / px(count.max(1))).max(0.05);
+        (fit * zoom.get()).clamp(whole.min(ZOOM_MIN), ZOOM_MAX)
     });
     observe_width(tape, width);
     // A step moves the tape, not the head: keep the playhead in the middle
@@ -705,8 +735,13 @@ pub fn Deck(
                 <b>"Figure 1"</b>" — Every object of the run, recorded on tape. Drag the tape, or use "<kbd>"←"</kbd>" "<kbd>"→"</kbd>"."
             </figcaption>
             <Spool side="left" fill=Signal::derive(played) turn=Signal::derive(move || px(at()) * 37.0) />
-            <div class="deck-labels" aria-hidden="true" style:--lane=format!("{LANE}px") style:--axis=format!("{AXIS}px")>
-                <div class="deck-label is-axis">"Step"</div>
+            // The labels and the tape scroll down together where a run has
+            // more rows than the deck's height.
+            <div class="deck-body">
+            // The lane names repeat what Table 1 lists for screen readers;
+            // the fold keys are real buttons.
+            <div class="deck-labels" style:--lane=format!("{LANE}px") style:--axis=format!("{AXIS}px")>
+                <div class="deck-label is-axis" aria-hidden="true">"Step"</div>
                 {move || rows.with(|rows| reel.with(|reel| rows.iter().map(|row| match row {
                     | &Row::Group { at, folded, live } => {
                         let group = &reel.groups[at];
@@ -716,10 +751,15 @@ pub fn Deck(
                         let recursive = reel.groups.iter().filter(|other| other.name == group.name).count() > 1;
                         view! {
                             <div class="deck-label is-group" class:is-folded=folded class:is-live=live>
-                                <button type="button" tabindex="-1" on:click=move |_| toggle(keys.clone())>
-                                    <span class="deck-fold">{if folded { "▸" } else { "▾" }}</span>
+                                <button
+                                    type="button"
+                                    aria-expanded=(!folded).to_string()
+                                    aria-label=format!("{}(){}: {} its objects on the tape", group.name, if recursive { format!(" at depth {}", group.depth) } else { String::new() }, if folded { "show" } else { "fold" })
+                                    on:click=move |_| toggle(keys.clone())
+                                >
+                                    <span class="deck-fold" aria-hidden="true">{if folded { "▸" } else { "▾" }}</span>
                                     <span class="deck-call">{format!("{}()", group.name)}</span>
-                                    {recursive.then(|| view! { <span class="deck-depth">{format!("depth {}", group.depth)}</span> })}
+                                    {recursive.then(|| view! { <span class="deck-depth" title=format!("depth {} on the call stack", group.depth)>{format!("d{}", group.depth)}</span> })}
                                     {(count > 1).then(|| view! { <span class="deck-count">{format!("×{count}")}</span> })}
                                 </button>
                             </div>
@@ -731,10 +771,15 @@ pub fn Deck(
                         let keys: Vec<String> = groups.iter().map(|&at| reel.groups[at].key.clone()).collect();
                         view! {
                             <div class="deck-label is-group is-folded is-ladder">
-                                <button type="button" tabindex="-1" on:click=move |_| toggle(keys.clone())>
-                                    <span class="deck-fold">"▸"</span>
+                                <button
+                                    type="button"
+                                    aria-expanded="false"
+                                    aria-label=format!("{}() at depths {} to {}: show their objects on the tape", first.name, first.depth, last.depth)
+                                    on:click=move |_| toggle(keys.clone())
+                                >
+                                    <span class="deck-fold" aria-hidden="true">"▸"</span>
                                     <span class="deck-call">{format!("{}()", first.name)}</span>
-                                    <span class="deck-depth">{format!("depth {}–{}", first.depth, last.depth)}</span>
+                                    <span class="deck-depth" title=format!("depths {}–{} on the call stack", first.depth, last.depth)>{format!("d{}–{}", first.depth, last.depth)}</span>
                                 </button>
                             </div>
                         }.into_any()
@@ -742,7 +787,7 @@ pub fn Deck(
                     | &Row::Lane { group, lane } => {
                         let lane = &reel.groups[group].lanes[lane];
                         view! {
-                            <div class=format!("deck-label is-lane {}", palette::class(&lane.name)) title=format!("{} {}", lane.ty, lane.name)>
+                            <div class=format!("deck-label is-lane {}", palette::class(&lane.name)) title=format!("{} {}", lane.ty, lane.name) aria-hidden="true">
                                 <span class="deck-swatch"></span>
                                 <span class="deck-name">{lane.name.clone()}</span>
                                 {(lane.ordinal > 1).then(|| view! { <span class="deck-ordinal">{format!("#{}", lane.ordinal)}</span> })}
@@ -802,11 +847,124 @@ pub fn Deck(
                     }
                 }
             >
-                {move || source.with(|source| tape_svg(reel, rows, source, step_width.get(), at(), width.get()))}
+                {move || tape_svg(reel, rows, step_width.get(), at(), width.get())}
+                // The slants' labels, placed in the tape's visible window.
+                {move || {
+                    let step = step_width.get();
+                    let (cursor, left, view) = (at(), scroll.get(), width.get());
+                    reel.with(|reel| rows.with(|rows| source.with(|source| {
+                        let layer = place_labels(reel, rows, source, step, cursor, (left, left + view));
+                        view! {
+                            <svg class="tape-labels" aria-hidden="true" width=left + view height=AXIS + px(rows.len()) * LANE + 8.0>
+                                {layer.into_iter().map(|label| view! {
+                                    <text class="tape-flow-label" x=label.left y=label.middle + 3.5>{label.text}</text>
+                                }).collect_view()}
+                            </svg>
+                        }
+                    })))
+                }}
+            </div>
             </div>
             <Spool side="right" fill=Signal::derive(move || 1.0 - played()) turn=Signal::derive(move || px(at()) * 37.0) />
         </figure>
     }
+}
+
+/// A slant's label as placed: its text, the left edge and middle of its
+/// box, and the box's right edge.
+#[derive(Clone, Debug, PartialEq)]
+struct Placed {
+    text:   String,
+    left:   f64,
+    right:  f64,
+    middle: f64,
+}
+
+/// Width of one character of a label (Space Mono at 10 px).
+const LABEL_CHAR: f64 = 6.2;
+/// Half the height of a label's box.
+const LABEL_HALF: f64 = 5.0;
+
+/// The slants' labels: each in the gap between its target lane and the
+/// lane its value came from the side of, ending just before the
+/// arrowhead, moved into the visible `window` of the tape, and dropped
+/// where it would cover another label. A gap holds no bus segment, so a
+/// label never reads as a lane's value.
+fn place_labels(
+    reel: &Reel,
+    rows: &[Row],
+    source: &str,
+    step: f64,
+    cursor: usize,
+    window: (f64, f64),
+) -> Vec<Placed> {
+    if step < 6.0 {
+        return Vec::new();
+    }
+    let Layout {
+        objects, folded, ..
+    } = layout(reel, rows);
+    let bottom = AXIS + px(rows.len()) * LANE;
+    let mut placed: Vec<Placed> = Vec::new();
+    for flow in reel.flows.iter().filter(|flow| flow.to.1 <= cursor) {
+        let Some(&(to, _)) = objects.get(&flow.to.0) else {
+            continue;
+        };
+        let from: Vec<f64> = flow
+            .from
+            .iter()
+            .filter_map(|&(object, _)| {
+                objects
+                    .get(&object)
+                    .map(|&(y, _)| y)
+                    .or_else(|| folded.get(&object).copied())
+            })
+            .filter(|from| (from - to).abs() >= 1.0)
+            .collect();
+        let (Some(&first), Some(range)) = (from.first(), flow.label) else {
+            continue;
+        };
+        let Some(text) = source_text(source, range) else {
+            continue;
+        };
+        let text = format!("{text} → {}", reel.label_of(flow.to.0).unwrap_or_default());
+        let width = px(text.chars().count()) * LABEL_CHAR;
+        // The gap on the side the value came from, or the other one at the
+        // tape's top or bottom.
+        let above = to - LANE / 2.0;
+        let below = to + LANE / 2.0;
+        let middle = if (first < to && above > AXIS + 1.0) || below > bottom - 1.0 {
+            above
+        } else {
+            below
+        };
+        let x1 = px(flow.to.1) * step;
+        let mut right = x1 - 3.0;
+        right = right.min(window.1 - 4.0);
+        let mut left = right - width;
+        if left < window.0 + 4.0 {
+            left = window.0 + 4.0;
+            right = left + width;
+        }
+        if right > window.1 - 4.0 {
+            continue;
+        }
+        let label = Placed {
+            text,
+            left,
+            right,
+            middle,
+        };
+        if placed.iter().any(|other| overlaps(other, &label)) {
+            continue;
+        }
+        placed.push(label);
+    }
+    placed
+}
+
+fn overlaps(a: &Placed, b: &Placed) -> bool {
+    a.left < b.right && b.left < a.right && (a.middle - b.middle).abs() < 2.0 * LABEL_HALF
 }
 
 /// Whether the reader asked for reduced motion.
@@ -880,7 +1038,6 @@ fn layout<'a>(reel: &'a Reel, rows: &[Row]) -> Layout<'a> {
 fn tape_svg(
     reel: Memo<Reel>,
     rows: Memo<Vec<Row>>,
-    source: &str,
     step: f64,
     cursor: usize,
     view: f64,
@@ -999,7 +1156,7 @@ fn tape_svg(
                 .flows
                 .iter()
                 .filter_map(|flow| {
-                    let &(to, name) = objects.get(&flow.to.0)?;
+                    let &(to, _) = objects.get(&flow.to.0)?;
                     let x1 = x(flow.to.1) + 2.0;
                     let slants: Vec<(f64, f64, f64)> = flow
                         .from
@@ -1012,14 +1169,9 @@ fn tape_svg(
                         // + next) needs no slant: the lane carries it.
                         .filter(|&(_, from, _)| (from - to).abs() >= 1.0)
                         .collect();
-                    // The label sits on the longest slant, once the store
-                    // has happened and there is room for it.
-                    let longest = slants.iter().copied().max_by(|a, b| (x1 - a.0).total_cmp(&(x1 - b.0)))?;
-                    let label = flow
-                        .label
-                        .filter(|_| flow.to.1 <= cursor && step >= 8.0 && x1 - longest.0 >= 28.0)
-                        .and_then(|range| source_text(source, range))
-                        .map(|text| format!("{text} → {name}"));
+                    if slants.is_empty() {
+                        return None;
+                    }
                     let drawn = slants.into_iter().map(|(x0, from, to)| {
                         let down = if to > from { 1.0 } else if to < from { -1.0 } else { 0.0 };
                         view! {
@@ -1027,17 +1179,9 @@ fn tape_svg(
                             <circle cx=x0 cy=from r="2.4" />
                         }
                     }).collect_view();
-                    let (mid_x, mid_y) = (f64::midpoint(longest.0, x1), f64::midpoint(longest.1, longest.2));
                     Some(view! {
                         <g class=format!("tape-flow {}", ahead(flow.to.1))>
                             {drawn}
-                            {label.map(|label| {
-                                // Left of the slant, unless that runs off
-                                // the tape's start.
-                                let room = px(label.chars().count()) * 6.8;
-                                let (at, anchor) = if mid_x - 5.0 - room > 0.0 { (mid_x - 5.0, "end") } else { (mid_x + 5.0, "start") };
-                                view! { <text class="tape-flow-label" x=at y=mid_y + 3.5 text-anchor=anchor>{label}</text> }
-                            })}
                         </g>
                     })
                 })
@@ -1363,13 +1507,104 @@ mod tests {
         assert_eq!(ladder, [3, 4, 5, 6]);
     }
 
+    /// Every label against every bus segment drawn, at each step of `history`.
+    fn labels_clear_the_buses(history: &[Snapshot], source: &str) -> usize {
+        let reel = Reel::record(history);
+        let mut checked = 0;
+        for cursor in 0..history.len() {
+            let rows = rows(&reel, cursor, &[]);
+            let step = 20.0;
+            let placed = place_labels(&reel, &rows, source, step, cursor, (0.0, 1.0e9));
+            for (place, row) in rows.iter().enumerate() {
+                let &Row::Lane { group, lane } = row else {
+                    continue;
+                };
+                let y = AXIS + px(place) * LANE + LANE / 2.0;
+                for segment in &reel.groups[group].lanes[lane].segments {
+                    let (x0, x1) = (px(segment.from) * step, px(segment.to) * step);
+                    for label in &placed {
+                        let clear = label.right <= x0
+                            || x1 <= label.left
+                            || label.middle + LABEL_HALF <= y - BUS
+                            || y + BUS <= label.middle - LABEL_HALF;
+                        assert!(
+                            clear,
+                            "step {cursor}: \"{}\" covers a segment of {}",
+                            label.text, reel.groups[group].lanes[lane].name
+                        );
+                    }
+                }
+            }
+            checked += placed.len();
+        }
+        checked
+    }
+
+    #[test]
+    fn slant_labels_sit_in_the_gaps_between_lanes() {
+        let mut checked = 0;
+        for key in ["path", "recursion", "tour", "pointers"] {
+            checked += labels_clear_the_buses(&run(key), demos::find(key).unwrap().source);
+        }
+        let source = "int main(void) {\n    int a = 5;\n    int b = 7;\n    int c = 0;\n    int d \
+                      = 1;\n    c = a + 1;\n    d = a * b + c;\n    b = d - a;\n    a = b + c + \
+                      d;\n    return a;\n}\n";
+        checked += labels_clear_the_buses(&execute(source), source);
+        assert!(checked > 20, "labels were placed: {checked}");
+    }
+
+    #[test]
+    fn each_recursive_function_folds_into_one_ladder() {
+        let history = execute(
+            "int sum(int n) {\n    if (n == 0) {\n        return 0;\n    }\n    int s = sum(n - \
+             1);\n    return s + n;\n}\n\nint down(int n) {\n    if (n <= 0) {\n        return \
+             0;\n    }\n    int r = down(n - 1);\n    return r + 1;\n}\n\nint main(void) {\n    \
+             int total = sum(8);\n    int d = down(6);\n    return total + d;\n}\n",
+        );
+        let reel = Reel::record(&history);
+        let rows = rows(&reel, history.len() - 1, &[]);
+        let ladders: Vec<(String, usize)> = rows
+            .iter()
+            .filter_map(|row| match row {
+                | Row::Ladder { groups } =>
+                    Some((reel.groups[groups[0]].name.clone(), groups.len())),
+                | _ => None,
+            })
+            .collect();
+        assert_eq!(ladders, [("sum".to_owned(), 9), ("down".to_owned(), 7)]);
+        // main's group and lanes, then one ladder per function.
+        assert_eq!(rows.len(), 1 + reel.groups[0].lanes.len() + 2);
+    }
+
+    #[test]
+    fn a_lane_keeps_one_type() {
+        let history = execute(
+            "int main(void) {\n    int v = 3;\n    {\n        int x = 1;\n        x = x + v;\n    \
+             }\n    {\n        int *x = &v;\n        *x = 9;\n    }\n    return v;\n}\n",
+        );
+        let reel = Reel::record(&history);
+        let lanes: Vec<(String, &str)> = reel.groups[0]
+            .lanes
+            .iter()
+            .map(|lane| (lane.label(), lane.ty.as_str()))
+            .collect();
+        assert_eq!(
+            lanes,
+            [
+                ("v".to_owned(), "int"),
+                ("x".to_owned(), "int"),
+                ("x #2".to_owned(), "int *")
+            ]
+        );
+    }
+
     #[test]
     fn long_values_are_cut_short_whole_elements_first() {
         assert_eq!(shorten("{3,1,4,1,5,9,2,6}", 10), "{3,1,4,…}");
         assert_eq!(shorten("2147483647", 10), "2147483647");
         assert_eq!(shorten("→a_rather_long_name", 8), "→a_rath…");
-        assert_eq!(fit_slots(10), 24);
-        assert_eq!(fit_slots(22), 48);
+        assert_eq!(fit_slots(10), 16);
+        assert_eq!(fit_slots(22), 28);
     }
 
     #[test]

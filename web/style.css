@@ -224,7 +224,7 @@
   }
   .workbench-grid {
     display: grid;
-    grid-template-columns: minmax(300px, 4fr) minmax(0, 8fr);
+    grid-template-columns: minmax(300px, 3.4fr) minmax(0, 8.6fr);
     gap: 1px;
     align-items: stretch;
     background: var(--seam);
@@ -501,13 +501,22 @@
   .machine-view > * { background: var(--device); min-width: 0; }
 
   .deck {
-    display: grid; grid-template-columns: 112px 176px minmax(0, 1fr) 112px; grid-template-rows: auto 1fr;
+    display: grid; grid-template-columns: 96px minmax(0, 1fr) 96px; grid-template-rows: auto 1fr;
     background: var(--screen); color: var(--screen-ink);
   }
   .deck-caption { grid-column: 1 / -1; margin: 0 14px; padding-top: 12px; border-bottom-color: var(--screen-faint); color: var(--screen-dim); }
   .deck-caption b { color: var(--screen-ink); }
   .deck-caption kbd { --key: var(--screen-2); --key-edge: #4a4a45; --key-ink: var(--screen-ink); box-shadow: none; border-width: 1px; }
   .spool { display: flex; align-items: center; justify-content: center; }
+  .spool svg { width: 80px; height: 80px; }
+  /* The labels and the tape, scrolling down together where a run has more
+     rows than the deck's height, so the note stays on the first screen. */
+  .deck-body {
+    display: grid; grid-template-columns: 168px minmax(0, 1fr); align-items: start;
+    max-height: clamp(236px, calc(100svh - var(--sticky-bottom) - 330px), 560px);
+    overflow-y: auto; overscroll-behavior: contain;
+    scrollbar-width: thin; scrollbar-color: #3a3a36 transparent;
+  }
   .spool svg { stroke: none; }
   .spool-turn { transform-origin: 0 0; transform-box: view-box; transition: transform .35s cubic-bezier(.3, .7, .3, 1); }
   .spool-pack { fill: #2a2a27; transition: r .35s var(--ease); }
@@ -518,7 +527,7 @@
   .deck-label { height: var(--lane, 34px); display: flex; align-items: center; gap: 6px; padding: 0 8px; white-space: nowrap; overflow: hidden; }
   .deck-label.is-axis { height: var(--axis, 32px); letter-spacing: .14em; text-transform: uppercase; font-size: 9.5px; color: #8a8a82; }
   .deck-label.is-group { border-top: 1px solid var(--screen-faint); }
-  .deck-label.is-group button { display: flex; align-items: baseline; gap: 6px; min-width: 0; padding: 0; border: 0; background: none; color: var(--screen-ink); font-weight: 700; cursor: pointer; }
+  .deck-label.is-group button { display: flex; align-items: baseline; gap: 6px; min-width: 0; max-width: 100%; padding: 0; border: 0; background: none; color: var(--screen-ink); font-weight: 700; cursor: pointer; }
   .deck-label.is-group:not(.is-live) button { color: var(--screen-dim); font-weight: 400; }
   .deck-fold { font-size: 9px; width: 9px; }
   .deck-count { color: #8a8a82; font-weight: 400; }
@@ -529,7 +538,8 @@
   .deck-type { min-width: 0; overflow: hidden; text-overflow: clip; color: #8a8a82; }
   .deck-ordinal { flex: none; color: var(--screen-ink); font-size: 10px; }
   .deck-depth { flex: none; color: #8a8a82; font-size: 10px; font-weight: 400; letter-spacing: .04em; }
-  .deck-call { flex: none; }
+  .deck-call { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .deck-label.is-group button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .tape {
     position: relative; overflow-x: auto; overflow-y: hidden; padding: 10px 0;
     min-height: 236px; cursor: ew-resize; touch-action: pan-y;
@@ -537,6 +547,8 @@
   }
   .tape:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
   .tape-svg { display: block; stroke: none; fill: none; font-family: var(--font-mono); }
+  /* The slants' labels, over the tape, moved with its scroll. */
+  .tape-labels { position: absolute; left: 0; top: 10px; pointer-events: none; font-family: var(--font-mono); overflow: visible; }
   .tape-svg text { stroke: none; }
   .tape-now { fill: #1c1c1a; }
   .tape-grid { stroke: var(--screen-rule); stroke-width: 1; }
@@ -561,7 +573,7 @@
   .tape-end { stroke: var(--screen-dim); stroke-width: 1.5; }
   .tape-flow line { stroke: var(--flow); stroke-width: 1.4; }
   .tape-flow circle { fill: var(--flow); }
-  .tape-flow-label { fill: var(--flow); font-size: 11px; paint-order: stroke; stroke: var(--screen); stroke-width: 4px; stroke-linejoin: round; }
+  .tape-flow-label { fill: var(--flow); font-size: 10px; paint-order: stroke; stroke: var(--screen); stroke-width: 4px; stroke-linejoin: round; }
   .tape-arrowhead { fill: var(--flow); }
   .is-ahead { opacity: .32; }
   /* Recorded steps after the playhead: the shapes dim, the values stay
@@ -579,9 +591,9 @@
 
   /* Under the head. */
   .head-row { position: relative; padding: 12px 16px 14px; }
-  .hanger { position: absolute; top: -1px; bottom: -1px; left: calc(var(--deck-offset, 288px) + var(--head-x, 0px) - 1px); width: 2px; background: var(--accent); z-index: 2; pointer-events: none; }
+  .hanger { position: absolute; top: -1px; bottom: -1px; left: calc(var(--deck-offset, 264px) + var(--head-x, 0px) - 1px); width: 2px; background: var(--accent); z-index: 2; pointer-events: none; }
   .hanger::after { content: ""; position: absolute; left: -5px; bottom: -6px; border: 6px solid transparent; border-top: 7px solid var(--accent); border-bottom: 0; }
-  .head-cells .module-caption { border: 0; padding: 0; margin-bottom: 7px; }
+  .head-cells .module-caption { position: relative; z-index: 3; width: fit-content; max-width: 100%; border: 0; padding: 0 8px 0 0; margin-bottom: 7px; background: var(--device); }
   .cells-empty { color: var(--ink-3); font-size: 12px; }
   .cells { display: flex; gap: 1px; width: max-content; max-width: 100%; overflow-x: auto; padding: 1px; background: var(--ink); }
   .cell-frame { display: flex; gap: 1px; }
@@ -957,8 +969,8 @@
   .swatch-arrow { width: 0; height: 0; border: 5px solid transparent; border-left: 8px solid var(--accent); margin-right: -6px; }
   .swatch-next-instruction { border: 1.5px dashed var(--accent); height: 10px; }
   .swatch-breakpoint { width: 16px; height: 12px; background: var(--danger); }
-  .wat-compiler { padding: 0 6px; font-size: 10.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; background: var(--accent); color: var(--on-accent); white-space: nowrap; }
-  .wat-compiler[data-compiler="clang"] { background: var(--flow); }
+  .wat-compiler { font-size: 10.5px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--screen-ink); white-space: nowrap; }
+  .wat-compiler::before { content: "· "; color: var(--screen-dim); }
   .wat-header .pane-title { flex-wrap: wrap; }
 
   .value-type { display: inline-block; min-width: 3.4ch; font-size: 10.5px; font-weight: 700; line-height: 18px; letter-spacing: .04em; color: var(--ink-3); }
@@ -1247,9 +1259,10 @@
     .transport .button { flex: 1; padding: 0 6px; height: 42px; }
     main { padding-bottom: 72px; }
     .site-footer { margin-bottom: 64px; }
-    .deck { grid-template-columns: 128px minmax(0, 1fr); }
+    .deck { grid-template-columns: minmax(0, 1fr); }
+    .deck-body { grid-template-columns: 136px minmax(0, 1fr); }
     .spool { display: none; }
-    .hanger { --deck-offset: 128px; }
+    .hanger { --deck-offset: 136px; }
     .tape { min-height: 0; }
     .deck-type { display: none; }
     .head-row { padding: 10px 12px 12px; }

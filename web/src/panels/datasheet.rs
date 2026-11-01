@@ -4,7 +4,10 @@
 
 use leptos::prelude::*;
 
-use super::tape::value_text;
+use super::tape::{
+    Reel,
+    value_text,
+};
 use crate::{
     palette,
     snapshot::Snapshot,
@@ -14,6 +17,8 @@ use crate::{
 pub fn Datasheet(
     snapshot: Memo<Option<Snapshot>>,
     history: RwSignal<Vec<Snapshot>>,
+    /// The tape, whose lane names (`x #2`) the rows take.
+    reel: Memo<Reel>,
 ) -> impl IntoView {
     // The step each object was created at.
     let born = Memo::new(move |_| {
@@ -71,7 +76,7 @@ pub fn Datasheet(
                                     view! {
                                         <tr class:is-used=used class:is-ended=!object.alive>
                                             <th scope="row" class=palette::class(&object.name)>
-                                                <span class="sheet-swatch" aria-hidden="true"></span>{object.name.clone()}
+                                                <span class="sheet-swatch" aria-hidden="true"></span>{reel.with(|reel| reel.label_of(object.id)).unwrap_or_else(|| object.name.clone())}
                                             </th>
                                             <td>{object.ty.clone()}</td>
                                             <td>{place}</td>

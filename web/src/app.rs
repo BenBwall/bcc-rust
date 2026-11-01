@@ -50,6 +50,7 @@ use crate::{
         LiveCompile,
         Narration,
         PipelineView,
+        Reel,
         Schematic,
         WasmListing,
         WasmView,
@@ -619,7 +620,9 @@ impl State {
     /// gives way to the lesson that follows one program through every
     /// stage; the learner's own program, opened or edited, stays.
     fn follow_path(self) {
-        let lesson = self.editor_text.with_untracked(|text| demos::matching(text).is_some());
+        let lesson = self
+            .editor_text
+            .with_untracked(|text| demos::matching(text).is_some());
         match DEMOS.iter().find(|demo| !demo.path.is_empty()) {
             | Some(demo) if lesson => {
                 self.mode.set(Mode::Pipeline);
@@ -1043,6 +1046,7 @@ impl State {
     /// The source editor's decorations: execution marks, run target, object
     /// colours, and in the pipeline view the stage's own marks and the line
     /// links (with the exact range of a hovered preprocessing token).
+    #[expect(clippy::too_many_lines, reason = "One block per layer of marks.")]
     fn source_layers(self) -> Vec<Layer> {
         if self.mode.get() == Mode::Wasm {
             let (execution, links) = if self.wasm.stale(&self.editor_text.get()) {
@@ -1078,7 +1082,14 @@ impl State {
                     3,
                 );
                 // On the lit box the code is dark, whatever its token colour.
-                mark.inline_class = Some(if fault { "exec-fault-text" } else { "exec-current-text" }.into());
+                mark.inline_class = Some(
+                    if fault {
+                        "exec-fault-text"
+                    } else {
+                        "exec-current-text"
+                    }
+                    .into(),
+                );
                 execution.push(mark);
                 execution.push(Decoration::line(
                     range.start.line,
@@ -1566,7 +1577,10 @@ fn ReadingMap(state: State) -> impl IntoView {
     // The compiler's train: a dwell at each station, then down to the next.
     let mut track = format!("M118 {:.0}", row(0) - 34.0);
     for index in 0..STATIONS.len() {
-        _ = std::fmt::Write::write_fmt(&mut track, format_args!(" L{:.0} {:.0} h18", stop(index), row(index)));
+        _ = std::fmt::Write::write_fmt(
+            &mut track,
+            format_args!(" L{:.0} {:.0} h18", stop(index), row(index)),
+        );
     }
     view! {
         <figure class="reading-map" aria-labelledby="map-title">
@@ -2112,7 +2126,10 @@ fn tape_summary(state: &Snapshot) -> Option<String> {
         .access
         .iter()
         .filter_map(|access| {
-            let object = state.objects.iter().find(|object| object.id == access.object)?;
+            let object = state
+                .objects
+                .iter()
+                .find(|object| object.id == access.object)?;
             let value = crate::panels::value_text(&object.value, &state.objects)
                 .unwrap_or_else(|| "indeterminate".to_owned());
             Some(match access.kind.as_str() {
@@ -2132,11 +2149,13 @@ fn tape_summary(state: &Snapshot) -> Option<String> {
 /// The playhead's line drops through the cells into the note.
 #[component]
 fn MachineView(state: State) -> impl IntoView {
+    let reel = Memo::new(move |_| state.history.with(|history| Reel::record(history)));
     view! {
         <div class="machine-view" style:--head-x=move || state.head.get().map_or_else(String::new, |x| format!("{x:.1}px"))>
             <Deck
                 history=state.history
                 cursor=state.cursor
+                reel
                 source=state.source.into()
                 zoom=state.zoom
                 running=state.running.into()
@@ -2151,7 +2170,7 @@ fn MachineView(state: State) -> impl IntoView {
                 <Narration snapshot=state.current recent=state.recent on_jump=Callback::new(move |index| state.jump(index)) placeholder=state.placeholder running=state.running.into() />
                 <div class="machine-side">
                     <Schematic snapshot=state.current />
-                    <Datasheet snapshot=state.current history=state.history />
+                    <Datasheet snapshot=state.current history=state.history reel />
                 </div>
             </div>
         </div>
@@ -2169,11 +2188,15 @@ fn Encoders(state: State) -> impl IntoView {
     });
     let speed_index = move || {
         let delay = state.run_delay.get();
-        RUN_DELAYS.iter().position(|&known| known >= delay).unwrap_or(RUN_DELAYS.len() - 1)
+        RUN_DELAYS
+            .iter()
+            .position(|&known| known >= delay)
+            .unwrap_or(RUN_DELAYS.len() - 1)
     };
-    // ZOOM turns a quarter larger or smaller per detent, from a sixteenth of
-    // the fitted scale (a whole long run) to four times it.
-    let zoom_position = Signal::derive(move || (state.zoom.get().log2() + 4.0) / 6.0);
+    // ZOOM turns a quarter larger or smaller per detent, from a sixty-fourth
+    // of the fitted scale (where the whole run fits, however long) to four
+    // times it.
+    let zoom_position = Signal::derive(move || (state.zoom.get().log2() + 6.0) / 8.0);
     view! {
         <div class="encoders" role="group" aria-label="Tape controls">
             <Knob
@@ -2221,7 +2244,7 @@ fn Encoders(state: State) -> impl IntoView {
                     if (zoom - 1.0).abs() < 0.01 { "fit".to_owned() } else { format!("×{zoom:.2}") }
                 })
                 on_turn=Callback::new(move |detents: i32| {
-                    state.zoom.update(|zoom| *zoom = (*zoom * 1.25_f64.powi(detents)).clamp(0.0625, 4.0));
+                    state.zoom.update(|zoom| *zoom = (*zoom * 1.25_f64.powi(detents)).clamp(1.0 / 64.0, 4.0));
                 })
             />
         </div>

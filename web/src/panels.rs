@@ -30,6 +30,7 @@ pub use pipeline::{
 pub use schematic::Schematic;
 pub use tape::{
     Deck,
+    Reel,
     px,
     value_text,
 };
@@ -77,7 +78,8 @@ fn category_hint(category: &str) -> &'static str {
         | "lifetime" => "Lifetime: a block begins or ends, or an object is created",
         | "control" => "Control flow: a condition or jump picks what runs next",
         | "call" => "Call: a function call begins or returns",
-        | "fault" => "Stopped: the run cannot go on, for undefined behavior or a limit of this machine",
+        | "fault" =>
+            "Stopped: the run cannot go on, for undefined behavior or a limit of this machine",
         | _ => "One evaluation of the abstract machine",
     }
 }
