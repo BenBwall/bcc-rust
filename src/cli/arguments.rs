@@ -647,12 +647,13 @@ impl FloatingPointGroup {
             .fold(configuration, |configuration, &option| {
                 configuration.with_implied_floating_point(option, relaxed)
             });
-        // GCC's `-ffast-math` also turns `-fsignaling-nans` off
-        // (`set_fast_math_flags`); Clang ignores `-fsignaling-nans`.
-        let configuration = if self == Self::Fast && relaxed {
-            configuration.with_signaling_nans(false)
-        } else {
-            configuration
+        // GCC's `-ffast-math` also turns `-fsignaling-nans` off and makes
+        // excess precision fast (`set_fast_math_flags`), unless a later
+        // `-fno-fast-math` cancels it; Clang ignores both options.
+        let configuration = match (self, relaxed) {
+            | (Self::Fast, true) => configuration.with_fast_math_side_effects(),
+            | (Self::Fast, false) => configuration.with_fast_math_cancelled(),
+            | _ => configuration,
         };
         let configuration = match self {
             | Self::Fast => configuration.with_fast_math_given(false, relaxed),

@@ -148,7 +148,8 @@ option deciding, as in GCC 13 and Clang 23; `-ffast-math` and
 `-f[no-]cx-limited-range` was given, as GCC's `set_fast_math_flags` does
 (Clang's `-fno-fast-math` would reset it even then, a difference only its
 macros-free complex lowering would show); GCC's `-ffast-math` also turns
-`-fsignaling-nans` off. bcc's own command line also takes Clang's
+`-fsignaling-nans` off and makes excess precision fast, unless a later
+`-fno-fast-math` cancels it (GCC's driver drops the cancelled option). bcc's own command line also takes Clang's
 `-f[no-]honor-nans`, `-f[no-]honor-infinities` and `-f[no-]approx-func`,
 which only the Clang personality passes on, and `-fexcess-precision=standard`
 or `=fast`, which only GCC's `__FAST_MATH__` reads. The GCC and Clang
@@ -160,7 +161,10 @@ Clang personality reports `-Ofast` as deprecated (`-Wdeprecated-ofast`,
 under `-Wdeprecated`), as Clang 23 does, reads `-ffp-model=precise` as
 `-fno-fast-math`, `=fast` as `-ffast-math -fno-finite-math-only` and
 `=aggressive` as `-ffast-math` (`=strict` asks for rounding math, which bcc
-refuses), and refuses `-ffp-eval-method=` beside reassociation, reciprocals
+refuses); a model after a final `-Ofast` loses to it (`fast` then keeps the
+default semantics, as Clang 23 does), and Clang's `-Woverriding-option` and
+`-Woverriding-complex-range` warnings report a model that overrides another
+model, `-Ofast` or `-ffast-math`. It refuses `-ffp-eval-method=` beside reassociation, reciprocals
 or approximate functions in Clang's words. Both identities define
 `__FINITE_MATH_ONLY__` as `1` when NaNs and infinities are given up, and
 `__FAST_MATH__` when their compiler's own set is given up: GCC's

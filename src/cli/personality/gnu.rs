@@ -73,6 +73,9 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         ofast: Ofast::Absent,
         ofast_at: 0,
         eval_method: false,
+        fp_model: None,
+        basic_complex: None,
+        overrides: Vec::new(),
         positions: Vec::new(),
         linker_words: Vec::new(),
     };
@@ -99,7 +102,8 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
             (reciprocal, "freciprocal"),
         ] {
             if conflict {
-                state.error(format_args!(
+                state.errors += 1;
+                super::frontend_error(format_args!(
                     "option 'ffp-eval-method' cannot be used with option '{name}'"
                 ));
             }
@@ -113,6 +117,21 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
                  optimizations, or consult the documentation for the same behavior"
             ),
         );
+    }
+    // Clang's driver reports the floating-point models a later option
+    // overrides, after `-Ofast`'s deprecation; a final `-Ofast` overrides
+    // every model but `aggressive`.
+    if state.ofast == Ofast::Last
+        && let Some(model) = state.fp_model
+        && model != "aggressive"
+    {
+        state.overrides.push((
+            "overriding-option",
+            format!("overriding '-ffp-model={model}' option with '-Ofast'"),
+        ));
+    }
+    for (group, message) in std::mem::take(&mut state.overrides) {
+        state.clang_warning(group, format_args!("{message}"));
     }
     let target = state.target.unwrap_or_else(|| host_target(personality));
     let mmx = state.machine_options(target);
@@ -378,6 +397,14 @@ struct State<'a> {
     /// Clang's `-ffp-eval-method=` was given, which it refuses beside
     /// reassociation, reciprocals and approximate functions.
     eval_method:     bool,
+    /// The last Clang `-ffp-model=`.
+    fp_model:        Option<&'static str>,
+    /// The option that last set Clang's complex range to "basic"
+    /// (`-ffast-math`), which a later model overrides with a warning.
+    basic_complex:   Option<&'static str>,
+    /// Clang's warnings about overridden floating-point options, with
+    /// their groups, reported once the warning options are known.
+    overrides:       Vec<(&'static str, String)>,
     /// The arguments Clang may report as unused, with their positions and
     /// as Clang spells them: the stage options, `-fsyntax-only`, and the
     /// options that only the link uses (`-L/usr/lib`, `-T x.ld`, `-s`).
@@ -854,6 +881,43 @@ impl State<'_> {
         self.clang_warning("unused-command-line-argument", message);
     }
 
+    /// Clang's `-ffp-model=MODEL`: `precise` is its default semantics,
+    /// `fast` gives up all but NaNs and infinities, and `aggressive` is
+    /// `-ffast-math`. A model after a live `-Ofast` loses to it, and `fast`
+    /// then leaves the default semantics (Clang 23 keeps only contraction
+    /// there). A model after another, or after `-ffast-math`'s "basic"
+    /// complex range, draws Clang's override warnings.
+    fn fp_model_option(&mut self, model: &'static str) {
+        if let Some(previous) = self.fp_model
+            && previous != model
+        {
+            self.overrides.push((
+                "overriding-option",
+                format!("overriding '-ffp-model={previous}' option with '-ffp-model={model}'"),
+            ));
+        }
+        if let Some(by) = self.basic_complex
+            && model != "aggressive"
+        {
+            let range = if model == "fast" { "promoted" } else { "full" };
+            self.overrides.push((
+                "overriding-complex-range",
+                format!(
+                    "'-ffp-model={model}' sets complex range to \"{range}\" overriding the \
+                     setting of \"basic\" that was implied by '{by}'"
+                ),
+            ));
+            self.basic_complex = None;
+        }
+        self.fp_model = Some(model);
+        let options: &[&str] = match model {
+            | "fast" if self.ofast != Ofast::Last => &["-ffast-math", "-fno-finite-math-only"],
+            | "aggressive" => &["-ffast-math"],
+            | _ => &["-fno-fast-math"],
+        };
+        self.out.extend(options.iter().map(Into::into));
+    }
+
     /// Reports a warning of Clang's driver in `group`, which is on by
     /// default: suppressed by `-w` or `-Wno-GROUP`, an error under
     /// `-Werror` or `-Werror=GROUP`. The GCC personality reports none.
@@ -1059,14 +1123,19 @@ impl State<'_> {
         // `aggressive` is `-ffast-math`. `strict` asks for rounding math,
         // which bcc does not implement (`treatment`).
         if self.compiler == Compiler::Clang {
-            let model: &[&str] = match text {
-                | "-ffp-model=precise" => &["-fno-fast-math"],
-                | "-ffp-model=fast" => &["-ffast-math", "-fno-finite-math-only"],
-                | "-ffp-model=aggressive" => &["-ffast-math"],
-                | _ => &[],
+            match text {
+                | "-ffast-math" => self.basic_complex = Some("-ffast-math"),
+                | "-fno-fast-math" => self.basic_complex = None,
+                | _ => {},
+            }
+            let model = match text {
+                | "-ffp-model=precise" => Some("precise"),
+                | "-ffp-model=fast" => Some("fast"),
+                | "-ffp-model=aggressive" => Some("aggressive"),
+                | _ => None,
             };
-            if !model.is_empty() {
-                self.out.extend(model.iter().map(Into::into));
+            if let Some(model) = model {
+                self.fp_model_option(model);
                 return;
             }
             if text.starts_with("-ffp-eval-method=") {

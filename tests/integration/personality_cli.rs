@@ -1049,7 +1049,7 @@ mod tests {
 
     /// GCC's options that give up part of IEC 60559 semantics, alone and
     /// in the combinations whose order or interplay decides the macros.
-    const FLOATING_POINT_OPTIONS: [&[&str]; 48] = [
+    const FLOATING_POINT_OPTIONS: [&[&str]; 50] = [
         &[],
         &["-fsignaling-nans"],
         &["-fsignaling-nans", "-fno-signaling-nans"],
@@ -1129,6 +1129,8 @@ mod tests {
         &["-ffast-math", "-fsignaling-nans"],
         &["-fsignaling-nans", "-ffast-math"],
         &["-ffast-math", "-fexcess-precision=standard"],
+        &["-fexcess-precision=standard", "-ffast-math"],
+        &["-fsignaling-nans", "-ffast-math", "-fno-fast-math"],
         &["-ffast-math", "-fno-unsafe-math-optimizations"],
         &["-fcx-limited-range", "-ffast-math", "-fno-fast-math"],
         &["-fno-finite-math-only", "-Ofast"],
@@ -1997,6 +1999,10 @@ mod tests {
             (&["-ffast-math", "-ffp-model=precise"], false, false, false),
             (&["-ffp-model=fast"], false, false, true),
             (&["-ffp-model=aggressive"], true, true, true),
+            // A model after a live `-Ofast` loses to it, and `fast` then
+            // keeps Clang's default semantics.
+            (&["-Ofast", "-ffp-model=fast"], false, false, false),
+            (&["-ffp-model=fast", "-Ofast"], true, true, true),
             (
                 &[
                     "-fno-signed-zeros",
@@ -2054,6 +2060,32 @@ mod tests {
             "{}",
             stderr(&error)
         );
+        // Clang's driver warns of a floating-point option a later one
+        // overrides.
+        for (options, warning) in [
+            (
+                &["-ffp-model=fast", "-ffp-model=precise"][..],
+                "clang: warning: overriding '-ffp-model=fast' option with '-ffp-model=precise' \
+                 [-Woverriding-option]",
+            ),
+            (
+                &["-Ofast", "-ffp-model=precise", "-Wno-deprecated"],
+                "clang: warning: overriding '-ffp-model=precise' option with '-Ofast' \
+                 [-Woverriding-option]",
+            ),
+            (
+                &["-ffast-math", "-ffp-model=fast"],
+                "clang: warning: '-ffp-model=fast' sets complex range to \"promoted\" overriding \
+                 the setting of \"basic\" that was implied by '-ffast-math' \
+                 [-Woverriding-complex-range]",
+            ),
+        ] {
+            let mut args = vec!["-c", "x.c"];
+            args.extend(options);
+            let output = directory.bcc("--clang-mode", &args);
+            succeeds(&output);
+            assert_eq!(stderr(&output), format!("{warning}\n"), "{options:?}");
+        }
         let quiet = directory.bcc("--clang-mode", &["-c", "x.c", "-Ofast", "-Wno-deprecated"]);
         succeeds(&quiet);
         assert_eq!(stderr(&quiet), "");

@@ -529,6 +529,31 @@ impl CompilerConfiguration {
     /// Records `-fexcess-precision=standard` (true) or `=fast`.
     pub(crate) const fn with_standard_excess_precision(mut self, standard: bool) -> Self {
         self.standard_excess_precision = standard;
+        self.fast_math_saved = 0;
+        self
+    }
+
+    /// `-ffast-math`'s side effects in GCC: signaling NaNs off and fast
+    /// excess precision, kept for a later `-fno-fast-math` to give back
+    /// ([`Self::with_fast_math_cancelled`]).
+    pub(crate) const fn with_fast_math_side_effects(mut self) -> Self {
+        self.fast_math_saved = 1
+            | if self.signaling_nans { 2 } else { 0 }
+            | if self.standard_excess_precision { 4 } else { 0 };
+        self.signaling_nans = false;
+        self.standard_excess_precision = false;
+        self
+    }
+
+    /// `-fno-fast-math` after a `-ffast-math` whose side effects no
+    /// explicit option has replaced: GCC's driver drops the cancelled
+    /// `-ffast-math`, so they never happened.
+    pub(crate) const fn with_fast_math_cancelled(mut self) -> Self {
+        if self.fast_math_saved & 1 != 0 {
+            self.signaling_nans = self.fast_math_saved & 2 != 0;
+            self.standard_excess_precision = self.fast_math_saved & 4 != 0;
+        }
+        self.fast_math_saved = 0;
         self
     }
 
@@ -632,6 +657,7 @@ impl CompilerConfiguration {
     /// Options".
     pub(crate) const fn with_signaling_nans(mut self, enabled: bool) -> Self {
         self.signaling_nans = enabled;
+        self.fast_math_saved = 0;
         self
     }
 
@@ -771,6 +797,7 @@ impl CompilerConfiguration {
             given_floating_point: 0,
             fast_math_given: 0,
             standard_excess_precision: false,
+            fast_math_saved: 0,
             signaling_nans: false,
             suppress_warnings: false,
             max_nesting_depth: super::DEFAULT_MAX_NESTING_DEPTH,

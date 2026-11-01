@@ -127,6 +127,11 @@ pub(crate) struct CompilerConfiguration {
     /// defining `__FAST_MATH__`; bcc evaluates in each type's own format
     /// either way.
     standard_excess_precision: bool,
+    /// What the last `-ffast-math` turned off, kept so that a later
+    /// `-fno-fast-math` gives it back: GCC's driver drops a `-ffast-math`
+    /// its negation cancels. Bit 0: a save is held; bit 1: signaling NaNs;
+    /// bit 2: standard excess precision.
+    fast_math_saved: u8,
     /// Signaling NaNs are to be kept apart from quiet ones
     /// (`-fsignaling-nans`).
     signaling_nans: bool,
