@@ -887,11 +887,12 @@ mod tests {
         // With --sysroot one source links in two steps; the rule is the same.
         succeeds(&project.bcc(&["--sysroot=/", "-MD", "solo.c", "-o", "rooted"]));
         assert_eq!(read("rooted.d"), "rooted: solo.c h.h\n");
-        // Several sources each write their own rule.
+        // Several sources each write the output's rule, so the last one's
+        // stands, as GCC and Clang write it; `-MF` keeps the target.
         succeeds(&project.bcc(&["-MMD", "a.c", "main.c", "-o", "app2"]));
-        assert_eq!(read("a.d"), "a.o: a.c h.h\n");
-        assert_eq!(read("main.d"), "main.o: main.c h.h\n");
-        assert!(!project.path("app2.d").exists());
+        assert_eq!(read("app2.d"), "app2: main.c h.h\n");
+        succeeds(&project.bcc(&["-MMD", "-MF", "custom.d", "a.c", "main.c", "-o", "app3"]));
+        assert_eq!(read("custom.d"), "app3: main.c h.h\n");
     }
 
     #[test]
