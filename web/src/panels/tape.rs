@@ -589,7 +589,9 @@ fn fit_slots(count: usize) -> usize {
 /// window less the room kept for the end of the run), at `zoom` times the
 /// fitted scale.
 fn fitted_step(count: usize, tape: f64, zoom: f64) -> f64 {
-    let fit = (tape / px(fit_slots(count))).floor().clamp(FIT_MIN, FIT_MAX);
+    let fit = (tape / px(fit_slots(count)))
+        .floor()
+        .clamp(FIT_MIN, FIT_MAX);
     // Turned fully left, ZOOM fits the whole recorded run, however long.
     let whole = ((tape - 10.0) / px(count.max(1))).max(0.05);
     (fit * zoom).clamp(whole.min(ZOOM_MIN), ZOOM_MAX)
@@ -669,7 +671,7 @@ pub fn Deck(
     let body = NodeRef::<html::Div>::new();
     let tape = NodeRef::<html::Div>::new();
     let width = RwSignal::new(760.0_f64);
-    // The deck body's whole width, names and tape: below COMPACT_BELOW the
+    // The deck body's whole width, names and tape: below `COMPACT_BELOW` the
     // names ride on the lanes.
     let full = RwSignal::new(900.0_f64);
     let compact = Memo::new(move |_| full.get() < COMPACT_BELOW);
@@ -702,13 +704,19 @@ pub fn Deck(
         let (generation, last_view) = glides.get_value();
         glides.set_value((generation + 1, view));
         if (from - to).abs() < 0.5
-            || view != last_view
+            || (view - last_view).abs() > 0.5
             || running.get_untracked()
             || reduced_motion()
         {
             step_width.set(to);
         } else {
-            glide(step_width, glides, generation + 1, (from, to), js_sys::Date::now());
+            glide(
+                step_width,
+                glides,
+                generation + 1,
+                (from, to),
+                js_sys::Date::now(),
+            );
         }
     });
     observe_width(body, width, full);
@@ -718,7 +726,8 @@ pub fn Deck(
     Effect::new(move || {
         let x = (px(at()) + 0.5) * step_width.get();
         // While the scale glides the tape follows it frame by frame.
-        let running = running.get() || step_width.get_untracked() != fitted.get_untracked();
+        let running =
+            running.get() || (step_width.get_untracked() - fitted.get_untracked()).abs() > 0.01;
         let Some(element) = body.get() else {
             return;
         };
@@ -931,8 +940,14 @@ pub fn Deck(
                     let (cursor, left, view, compact) = (at(), scroll.get(), width.get(), compact.get());
                     reel.with(|reel| rows.with(|rows| source.with(|source| {
                         let window = (left, left + view);
-                        let avoid = if compact { tags(reel, rows, left) } else { Vec::new() };
-                        let layer = place_labels(reel, rows, source, step, cursor, window, &avoid);
+                        // A compact tape's labels stay left of the head:
+                        // past it is only the narrow blank.
+                        let (avoid, labelled) = if compact {
+                            (tags(reel, rows, left), (left, window.1.min((px(cursor) + 0.5) * step - 3.0)))
+                        } else {
+                            (Vec::new(), window)
+                        };
+                        let layer = place_labels(reel, rows, source, step, cursor, labelled, &avoid);
                         let values = if compact { pinned_values(reel, rows, step, cursor, window) } else { Vec::new() };
                         view! {
                             <svg class="tape-labels" aria-hidden="true" width="1" height="1">
@@ -1120,7 +1135,7 @@ fn reduced_motion() -> bool {
         .is_some_and(|query| query.matches())
 }
 
-/// Move `scale` from one step width to another over GLIDE_MS, easing out,
+/// Move `scale` from one step width to another over `GLIDE_MS`, easing out,
 /// one animation frame at a time, until a newer glide (`generation`) takes
 /// over or the deck is gone.
 fn glide(
@@ -1243,7 +1258,7 @@ fn tape_svg(
                             // under the rule on a compact tape, where the
                             // group's name rides above it.
                             let text = format!("waiting for {on}");
-                            let baseline = if compact { y + 13.0 } else { y - 5.0 };
+                            let baseline = if compact { y + 11.0 } else { y - 5.0 };
                             let text_width = px(text.chars().count()) * 6.0 + 12.0;
                             let mut at = x(*from) + 6.0;
                             while !rung && at + text_width <= x(*to) {
@@ -2037,7 +2052,11 @@ mod tests {
     #[test]
     fn a_short_run_fits_its_window_and_the_scale_changes_seldom() {
         for view in [360.0, 390.0, 670.0, 1070.0] {
-            let room = if view < COMPACT_BELOW { ROOM_COMPACT } else { ROOM };
+            let room = if view < COMPACT_BELOW {
+                ROOM_COMPACT
+            } else {
+                ROOM
+            };
             let mut scales = Vec::new();
             for count in 1..=64 {
                 let step = fitted_step(count, view - room, 1.0);
@@ -2087,7 +2106,10 @@ mod tests {
         // The lane under the window's left edge still says what it holds.
         let rows = rows(&reel, history.len() - 1, &[]);
         let values = pinned_values(&reel, &rows, 18.0, history.len() - 1, (200.0, 500.0));
-        assert!(values.iter().any(|value| value.left == 206.0), "{values:?}");
+        assert!(
+            values.iter().any(|value| (value.left - 206.0).abs() < 0.01),
+            "{values:?}"
+        );
     }
 
     #[test]
