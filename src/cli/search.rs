@@ -26,6 +26,12 @@ use crate::{
 };
 
 impl CliHeaderSearch {
+    /// Whether the standard directories are searched: not after
+    /// `-nostdinc`.
+    pub(super) const fn standard_includes(&self) -> bool {
+        !self.nostdinc
+    }
+
     /// Groups the directories in search order. GCC searches `CPATH` like
     /// trailing `-I` directories and `C_INCLUDE_PATH` like trailing
     /// `-isystem` ones; `-isystem`, `C_INCLUDE_PATH`, the resource

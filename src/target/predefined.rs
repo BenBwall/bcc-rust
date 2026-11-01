@@ -28,6 +28,27 @@ impl Target {
         arena.alloc_str(source)
     }
 
+    /// GCC 14.2's target definitions, which the GCC identity reads instead
+    /// of Clang's where bcc has GCC's own listing: the Linux targets, frozen
+    /// from GCC's `cc1` by `scripts/update_gcc_target_macros.py` (with
+    /// `-mmusl` for musl). GCC defines none of Clang's own families, and
+    /// glibc's `int_fast16_t` and `int_fast32_t` are `long`, as GCC's
+    /// `__INT_FAST16_TYPE__` says. `None` elsewhere: MinGW-w64 GCC and the
+    /// WebAssembly targets have no frozen listing, so the identity filters
+    /// Clang's instead.
+    /// C99: implementation-defined limits §5.2.4.2, pp. 21-27; PDF pp. 33-39;
+    /// minimum-width and fastest integer types §7.18.1.2-3, p. 256; PDF
+    /// p. 268.
+    pub(crate) fn gcc_predefined_macros(self, gnu: bool) -> Option<&'static str> {
+        Some(match (self, gnu) {
+            | (Self::LinuxGnu, false) => include_str!("gcc/x86_64-unknown-linux-gnu-c11.h"),
+            | (Self::LinuxGnu, true) => include_str!("gcc/x86_64-unknown-linux-gnu-gnu17.h"),
+            | (Self::LinuxMusl, false) => include_str!("gcc/x86_64-unknown-linux-musl-c11.h"),
+            | (Self::LinuxMusl, true) => include_str!("gcc/x86_64-unknown-linux-musl-gnu17.h"),
+            | _ => return None,
+        })
+    }
+
     /// Clang and GCC expose char8 atomic lock-free macros with C23 keywords;
     /// Clang's MSVC target omits GCC spellings. C23: §7.17.1 paragraph 4,
     /// p. 293; PDF p. 306 specifies the corresponding header macro.
@@ -118,6 +139,45 @@ mod tests {
                 assert_eq!(actual, expected, "{} {mode}", target.triple());
             }
         }
+    }
+
+    /// Every name the frozen GCC listings leave out is documented, alone or
+    /// in its family (`__FLT32_*`), and the listings define each name once.
+    #[test]
+    fn gcc_listings_document_their_exclusions_and_define_each_name_once() {
+        let documentation = include_str!("../../language-standards.md");
+        for line in include_str!("gcc/macro-exclusions.tsv").lines() {
+            let (name, _) = line.split_once('\t').unwrap();
+            // A family is documented as its prefix, `__FLT32_*`.
+            let family = name
+                .match_indices('_')
+                .any(|(at, _)| documentation.contains(&format!("`{}*`", &name[..=at])));
+            assert!(
+                documentation.contains(&format!("`{name}`")) || family,
+                "undocumented GCC exclusion: {name}"
+            );
+        }
+        for target in [Target::LinuxGnu, Target::LinuxMusl] {
+            for gnu in [false, true] {
+                let listing = target.gcc_predefined_macros(gnu).unwrap();
+                let mut names: Vec<&str> = listing
+                    .lines()
+                    .map(|line| {
+                        line.strip_prefix("#define ")
+                            .unwrap()
+                            .split([' ', '('])
+                            .next()
+                            .unwrap()
+                    })
+                    .collect();
+                let count = names.len();
+                names.sort_unstable();
+                names.dedup();
+                assert_eq!(names.len(), count, "{target:?} {gnu}");
+                assert!(listing.contains("#define __INT_FAST16_TYPE__ "));
+            }
+        }
+        assert!(Target::WindowsGnu.gcc_predefined_macros(true).is_none());
     }
 
     #[test]

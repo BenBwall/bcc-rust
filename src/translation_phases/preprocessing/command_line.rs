@@ -35,6 +35,11 @@ pub(super) fn source<'tu>(context: &Context<'tu>) -> &'tu str {
             | PreprocessingOption::Include(_) => {},
         }
     }
+    // GCC reads its default header after the definitions and before the
+    // `-include` files, as a `<...>` name, which only it is.
+    if let Some(header) = context.preinclude {
+        _ = writeln!(source, "#include <{header}>");
+    }
     for option in context.preprocessing_options {
         if let PreprocessingOption::Include(file) = option {
             _ = write!(source, "#include \"");

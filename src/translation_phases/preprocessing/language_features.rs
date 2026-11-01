@@ -993,11 +993,26 @@ pub(super) fn with_identity_macros<'a>(
     let identity = configuration.compiler_identity();
     // The frozen Clang tables describe `_Float16` as Clang does; GCC spells
     // its constants to 36 digits, and MSVC and TCC have no such type.
+    // GCC defines none of Clang's own macros, which the Clang tables the
+    // GCC identity falls back to (`Target::gcc_predefined_macros`) hold; it
+    // spells the lock-free macros `__GCC_ATOMIC_*`, which Clang's MSVC
+    // target lacks, so the Clang spelling is renamed rather than dropped.
     if configuration.half_precision_types() && identity != CompilerIdentity::Gcc {
         out.push_str(definitions);
     } else {
         for line in definitions.split_inclusive('\n') {
-            if !line.starts_with("#define __FLT16_") {
+            let name = line
+                .strip_prefix("#define ")
+                .and_then(|definition| definition.split([' ', '(', '\n']).next())
+                .unwrap_or("");
+            if identity == CompilerIdentity::Gcc
+                && let Some(atomic) = line.strip_prefix("#define __CLANG_ATOMIC_")
+            {
+                out.push_str("#define __GCC_ATOMIC_");
+                out.push_str(atomic);
+            } else if !name.starts_with("__FLT16_")
+                && (identity != CompilerIdentity::Gcc || !clang_only_macro(name))
+            {
                 out.push_str(line);
             }
         }
@@ -1055,7 +1070,24 @@ pub(super) fn with_identity_macros<'a>(
         out.push_str("#define _MSC_EXTENSIONS 1\n");
     }
     if configuration.accepts(Feature::C23Keywords) {
-        out.push_str(configuration.target().atomic_c23_macros());
+        let atomics = configuration.target().atomic_c23_macros();
+        if identity == CompilerIdentity::Gcc {
+            // GCC 14 names `char8_t`'s type for C23's `<uchar.h>`, beside
+            // its lock-free macro, and has no Clang spelling of the latter.
+            // C23: §7.30 paragraph 2, p. 408; PDF p. 421.
+            out.push_str("#define __CHAR8_TYPE__ unsigned char\n");
+            for line in atomics.split_inclusive('\n') {
+                match line.strip_prefix("#define __CLANG_ATOMIC_") {
+                    | Some(atomic) => {
+                        out.push_str("#define __GCC_ATOMIC_");
+                        out.push_str(atomic);
+                    },
+                    | None => out.push_str(line),
+                }
+            }
+        } else {
+            out.push_str(atomics);
+        }
     }
     // GCC and Clang mark an unsigned plain `char`, which `<limits.h>` reads
     // for `CHAR_MIN` and `CHAR_MAX` (C99 §5.2.4.2.1p2, p. 23; PDF p. 35).
@@ -1269,6 +1301,40 @@ fn write_gcc_environment_macros(configuration: CompilerConfiguration, out: &mut 
     if configuration.accepts(Feature::UnicodeLiteralPrefixes) {
         _ = out.write_str("#define __STDC_UTF_16__ 1\n#define __STDC_UTF_32__ 1\n");
     }
+}
+
+/// Whether `name` is a macro only Clang predefines, which GCC 14.2 does not
+/// for any target: Clang's identity and literal encodings, its
+/// `__CLANG_ATOMIC_*` spelling of the lock-free macros, the `printf` formats
+/// (`__INT8_FMTd__`) and constant suffixes (`__INT64_C_SUFFIX__`) of the
+/// integer types, the widths GCC leaves out or spells otherwise
+/// (`__LLONG_WIDTH__` for GCC's `__LONG_LONG_WIDTH__`), and the target facts
+/// GCC does not report. GCC extension: GCC preprocessor manual, "Common
+/// Predefined Macros". <https://gcc.gnu.org/onlinedocs/cpp/Common-Predefined-Macros.html>
+/// C99: §6.10.8 paragraph 4, p. 161; PDF p. 173.
+fn clang_only_macro(name: &str) -> bool {
+    let printf_format = name.strip_suffix("__").is_some_and(|stem| {
+        stem.rsplit_once("_FMT")
+            .is_some_and(|(_, conversion)| matches!(conversion, "d" | "i" | "o" | "u" | "x" | "X"))
+    });
+    printf_format
+        || name.starts_with("__clang")
+        || name.starts_with("__CLANG_ATOMIC_")
+        || name.ends_with("_C_SUFFIX__")
+        || matches!(
+            name,
+            "__llvm__"
+                | "__VERSION__"
+                | "__LITTLE_ENDIAN__"
+                | "__POINTER_WIDTH__"
+                | "__NO_MATH_INLINES"
+                | "__FLOAT128__"
+                | "__BOOL_WIDTH__"
+                | "__LLONG_WIDTH__"
+                | "__UINTMAX_WIDTH__"
+                | "__UINTPTR_WIDTH__"
+                | "__WINT_UNSIGNED__"
+        )
 }
 
 /// The macros that change when bcc claims another compiler than Clang

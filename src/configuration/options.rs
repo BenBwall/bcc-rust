@@ -726,6 +726,19 @@ impl CompilerConfiguration {
         self.standard
     }
 
+    /// `__STDC_VERSION__`, NUL-terminated, or `None` in C89. GCC 14, which
+    /// the GCC identity claims, still spells C23 as the draft's `202000L`
+    /// (GCC 15 has C23's `202311L`), so headers test C23 as
+    /// `__STDC_VERSION__ > 201710L`.
+    /// C99: §6.10.8p1, p. 160; PDF p. 172. C23: §6.10.10.2p1, p. 199;
+    /// PDF p. 212.
+    pub(crate) const fn version_macro(self) -> Option<&'static str> {
+        match (self.standard, self.identity) {
+            | (CStandard::C23, super::CompilerIdentity::Gcc) => Some("202000L\0"),
+            | (standard, _) => standard.version_macro(),
+        }
+    }
+
     pub(crate) const fn target(self) -> crate::target::Target {
         self.target
     }

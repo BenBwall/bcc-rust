@@ -7,7 +7,7 @@
 #define true 1
 #define false 0
 #else
-#if __STDC_VERSION__ < 202311L
+#if __STDC_VERSION__ <= 201710L
 #define bool _Bool
 #define true 1
 #define false 0

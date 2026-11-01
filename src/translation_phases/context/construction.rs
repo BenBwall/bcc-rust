@@ -53,6 +53,7 @@ impl<'tu> Context<'tu> {
             phase_four_text: false,
             raw_source_bytes: false,
             include_entries: None,
+            preinclude: None,
             missing_headers_generated: false,
             generated_headers: ArenaVec::new_in(tu),
             library_builtins: crate::configuration::LibraryBuiltins::All,

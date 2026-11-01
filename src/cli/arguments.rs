@@ -456,6 +456,35 @@ impl Cli {
         }
     }
 
+    /// The header GCC reads before the main file on a glibc target,
+    /// `<stdc-predef.h>`, as its `TARGET_C_PREINCLUDE` names it: under the
+    /// GCC identity, hosted, without `-nostdinc`, and only when the search
+    /// finds it, since GCC ignores a missing one. Clang reads none.
+    /// GCC internals: "Target Macros", `TARGET_C_PREINCLUDE`.
+    /// <https://gcc.gnu.org/onlinedocs/gccint/Misc.html>
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "Startup probes the header directories once, joining a path."
+    )]
+    pub(super) fn preinclude(
+        &self,
+        search: &crate::headers::HeaderSearch<'_>,
+    ) -> Option<&'static str> {
+        const HEADER: &str = "stdc-predef.h";
+        let configuration = self.configuration();
+        (configuration.compiler_identity() == CompilerIdentity::Gcc
+            && configuration.target() == Target::LinuxGnu
+            && configuration.hosted()
+            && self.search.standard_includes()
+            && search
+                .angled
+                .iter()
+                .chain(search.system)
+                .chain(search.after)
+                .any(|directory| directory.join(HEADER).is_file()))
+        .then_some(HEADER)
+    }
+
     pub(super) fn configure_preprocessing(&self, context: &mut Context<'_>) {
         let tu = context.tu_arena();
         context.preprocessing_options =

@@ -33,9 +33,13 @@ extern "C" {
 
 /* 7.17.1 Introduction */
 
+/* bcc: Clang spells these __CLANG_ATOMIC_*, and its MSVC target defines
+   only that spelling; GCC, which bcc claims under --gcc-mode, spells them
+   __GCC_ATOMIC_*, as its own <stdatomic.h> reads them. */
+#ifdef __CLANG_ATOMIC_BOOL_LOCK_FREE
 #define ATOMIC_BOOL_LOCK_FREE       __CLANG_ATOMIC_BOOL_LOCK_FREE
 #define ATOMIC_CHAR_LOCK_FREE       __CLANG_ATOMIC_CHAR_LOCK_FREE
-#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 202311L
+#if defined(__STDC_VERSION__) && __STDC_VERSION__ > 201710L
 #define ATOMIC_CHAR8_T_LOCK_FREE    __CLANG_ATOMIC_CHAR8_T_LOCK_FREE
 #endif
 #define ATOMIC_CHAR16_T_LOCK_FREE   __CLANG_ATOMIC_CHAR16_T_LOCK_FREE
@@ -46,16 +50,31 @@ extern "C" {
 #define ATOMIC_LONG_LOCK_FREE       __CLANG_ATOMIC_LONG_LOCK_FREE
 #define ATOMIC_LLONG_LOCK_FREE      __CLANG_ATOMIC_LLONG_LOCK_FREE
 #define ATOMIC_POINTER_LOCK_FREE    __CLANG_ATOMIC_POINTER_LOCK_FREE
+#else
+#define ATOMIC_BOOL_LOCK_FREE       __GCC_ATOMIC_BOOL_LOCK_FREE
+#define ATOMIC_CHAR_LOCK_FREE       __GCC_ATOMIC_CHAR_LOCK_FREE
+#if defined(__STDC_VERSION__) && __STDC_VERSION__ > 201710L
+#define ATOMIC_CHAR8_T_LOCK_FREE    __GCC_ATOMIC_CHAR8_T_LOCK_FREE
+#endif
+#define ATOMIC_CHAR16_T_LOCK_FREE   __GCC_ATOMIC_CHAR16_T_LOCK_FREE
+#define ATOMIC_CHAR32_T_LOCK_FREE   __GCC_ATOMIC_CHAR32_T_LOCK_FREE
+#define ATOMIC_WCHAR_T_LOCK_FREE    __GCC_ATOMIC_WCHAR_T_LOCK_FREE
+#define ATOMIC_SHORT_LOCK_FREE      __GCC_ATOMIC_SHORT_LOCK_FREE
+#define ATOMIC_INT_LOCK_FREE        __GCC_ATOMIC_INT_LOCK_FREE
+#define ATOMIC_LONG_LOCK_FREE       __GCC_ATOMIC_LONG_LOCK_FREE
+#define ATOMIC_LLONG_LOCK_FREE      __GCC_ATOMIC_LLONG_LOCK_FREE
+#define ATOMIC_POINTER_LOCK_FREE    __GCC_ATOMIC_POINTER_LOCK_FREE
+#endif
 
 /* 7.17.2 Initialization */
-#if (defined(__STDC_VERSION__) && __STDC_VERSION__ < 202311L) ||               \
+#if (defined(__STDC_VERSION__) && __STDC_VERSION__ <= 201710L) ||               \
     defined(__cplusplus)
 /* ATOMIC_VAR_INIT was removed in C23, but still remains in C++23. */
 #define ATOMIC_VAR_INIT(value) (value)
 #endif
 
 #if ((defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201710L &&              \
-      __STDC_VERSION__ < 202311L) ||                                           \
+      __STDC_VERSION__ <= 201710L) ||                                           \
      (defined(__cplusplus) && __cplusplus >= 202002L)) &&                      \
     !defined(_CLANG_DISABLE_CRT_DEPRECATION_WARNINGS)
 /* ATOMIC_VAR_INIT was deprecated in C17 and C++20. */
@@ -107,7 +126,7 @@ typedef _Atomic(long)               atomic_long;
 typedef _Atomic(unsigned long)      atomic_ulong;
 typedef _Atomic(long long)          atomic_llong;
 typedef _Atomic(unsigned long long) atomic_ullong;
-#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 202311L
+#if defined(__STDC_VERSION__) && __STDC_VERSION__ > 201710L
 typedef _Atomic(unsigned char)      atomic_char8_t;
 #endif
 typedef _Atomic(uint_least16_t)     atomic_char16_t;

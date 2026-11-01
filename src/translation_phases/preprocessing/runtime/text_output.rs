@@ -141,17 +141,23 @@ impl<'tu> Preprocessor<'tu, '_> {
                     tokenizer
                 },
             };
+            // One space follows the name or parameters even before an empty
+            // replacement list (`#define __USER_LABEL_PREFIX__ `), as GCC
+            // and Clang write it.
+            line.push(' ');
             let mut replacement = tokenizer.clone();
-            let mut space = true;
+            let mut space = false;
+            let mut started = false;
             while let Some(token) = replacement.next_item(context) {
                 match token.kind {
                     | PreprocessorTokenType::Newline => break,
-                    | PreprocessorTokenType::Whitespace => space = true,
+                    | PreprocessorTokenType::Whitespace => space = started,
                     | _ => {
                         if space {
                             line.push(' ');
                             space = false;
                         }
+                        started = true;
                         line.push_str(
                             context
                                 .string_cache
@@ -186,10 +192,7 @@ fn builtin_value(context: &Context<'_>, name: &str) -> Option<&'static str> {
             } else {
                 "0"
             },
-        | "__STDC_VERSION__" => configuration
-            .standard()
-            .version_macro()?
-            .trim_end_matches('\0'),
+        | "__STDC_VERSION__" => configuration.version_macro()?.trim_end_matches('\0'),
         | "__STDC_EMBED_NOT_FOUND__" if configuration.accepts(Feature::Embed) => "0",
         | "__STDC_EMBED_FOUND__" if configuration.accepts(Feature::Embed) => "1",
         | "__STDC_EMBED_EMPTY__" if configuration.accepts(Feature::Embed) => "2",
