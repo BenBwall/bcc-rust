@@ -121,8 +121,16 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             | None => {},
         }
         // An integer constant expression has an exact value (§6.6p6), unless
-        // function code computes a constant query differently.
-        if info.ice
+        // function code computes a constant query differently. Under GCC's
+        // rules so has a floating constant converted out of an integer's
+        // range, and what is computed from it: GCC folds the conversion to
+        // the bound it saturates to in code as in initializers, where Clang
+        // converts at run time. The conversion is undefined (C99 §6.3.1.4
+        // paragraph 1, p. 43; PDF p. 55).
+        let saturated = info.folding.overflowed()
+            && self.unit.context.configuration.float_conversion_rules()
+                == crate::configuration::RuleSet::Gcc;
+        if (info.ice || saturated)
             && !info.runtime_query
             && let Some(value) = info.integer
             && let Ok(representation @ (Repr::Int { .. } | Repr::Bool)) =

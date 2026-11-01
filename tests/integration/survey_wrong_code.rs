@@ -17,6 +17,9 @@
 //! - Under C90 a selection or iteration statement forms no block, so a tag or
 //!   enumeration constant declared in its controlling expression stays visible
 //!   after it (gcc.dg/c90-scope-1.c).
+//! - Under GCC's rules a floating constant converted out of an integer's range
+//!   folds to the bound GCC saturates it to
+//!   (gcc.c-torture/execute/20031003-1.c).
 
 #[cfg(test)]
 #[expect(
@@ -512,6 +515,23 @@ mod tests {
             return x;\n\
             }\n";
         prints_on_every_back_end(IDENTITIES[0], declaration, &["-std=gnu89", "-w"], "");
+    }
+
+    /// GCC folds a floating constant converted out of an integer type's
+    /// range to the bound it saturates to (0 for a NaN) in code, as in a
+    /// static initializer; the conversion is undefined, and Clang converts
+    /// at run time.
+    #[test]
+    fn out_of_range_float_constants_fold_to_gccs_bound() {
+        let source = b"__attribute__((noinline)) int f1(void) { return (int)2147483648.0f; }\n\
+            __attribute__((noinline)) int f2(void) { return (int)(float)2147483647; }\n\
+            __attribute__((noinline)) unsigned f3(void) { return (unsigned)-1.0; }\n\
+            __attribute__((noinline)) int f4(void) { return (int)__builtin_nan(\"\"); }\n\
+            __attribute__((noinline)) int f5(void) { return (int)-1e10 == -2147483647 - 1; }\n\
+            int main(void) {\n\
+            return f1() != 2147483647 || f2() != 2147483647 || f3() != 0 || f4() != 0 || !f5();\n\
+            }\n";
+        prints_on_every_back_end("--compiler-identity=gcc", source, &["-w"], "");
     }
 
     /// `source` exits 0 and prints `expected` interpreted (unoptimized and
