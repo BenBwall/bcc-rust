@@ -48,14 +48,18 @@ pub fn Datasheet(
                         let Some(snapshot) = snapshot else {
                             return Vec::new();
                         };
-                        let ended: Vec<&str> = snapshot.objects.iter().filter(|object| !object.alive).map(|object| object.name.as_str()).collect();
+                        // The objects of returned calls fold into one row,
+                        // unless the step used one; those it used are
+                        // listed, not counted.
+                        let shown = |object: &crate::snapshot::Object| {
+                            object.alive || snapshot.event.access.iter().any(|access| access.object == object.id)
+                        };
+                        let ended: Vec<&str> = snapshot.objects.iter().filter(|object| !shown(object)).map(|object| object.name.as_str()).collect();
                         born.with(|born| {
                             snapshot
                                 .objects
                                 .iter()
-                                // The objects of returned calls fold into one
-                                // row, unless the step used one.
-                                .filter(|object| object.alive || ended.len() <= 3 || snapshot.event.access.iter().any(|access| access.object == object.id))
+                                .filter(|object| shown(object) || ended.len() <= 3)
                                 .map(|object| {
                                     let used = snapshot.event.access.iter().any(|access| access.object == object.id);
                                     let value = if object.alive {

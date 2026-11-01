@@ -1525,7 +1525,7 @@ fn Hero(state: State) -> impl IntoView {
                     </li>
                     <li>
                         <a class="is-primary" href="#workbench" on:click=move |_| state.open_view(Mode::Machine, None)>
-                            <span class="hero-step-number">"2"</span>"Step through it with "<kbd>"→"</kbd>
+                            <span class="hero-step-number">"2"</span>"Step through it"<kbd class="hero-key" aria-hidden="true">"→"</kbd>
                         </a>
                     </li>
                     <li>
@@ -1574,6 +1574,7 @@ fn ReadingMap(state: State) -> impl IntoView {
                 <b>"Figure 0"</b>" — How to read this page: one statement, two journeys"
             </figcaption>
             <div class="map-screen">
+                <div class="map-screen-inner">
                 <svg class="map-graph" viewBox="0 0 560 300" role="presentation" aria-hidden="true">
                     <line class="map-station" x1="112" y1="24" x2="548" y2="24" />
                     <line class="map-station" x1="112" y1="40" x2="548" y2="40" />
@@ -1607,6 +1608,7 @@ fn ReadingMap(state: State) -> impl IntoView {
                         }
                     }).collect_view()}
                 </ol>
+                </div>
             </div>
             <p class="map-legend">
                 <span class="map-key is-run">"Orange: "</span>"the abstract machine gives the statement its meaning, one evaluation at a time. "
@@ -2135,7 +2137,9 @@ fn MachineView(state: State) -> impl IntoView {
             <Deck
                 history=state.history
                 cursor=state.cursor
+                source=state.source.into()
                 zoom=state.zoom
+                running=state.running.into()
                 head=state.head
                 on_jump=Callback::new(move |index| state.jump(index))
             />

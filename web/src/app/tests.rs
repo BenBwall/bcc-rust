@@ -205,7 +205,9 @@ fn each_step_announces_what_it_did_on_the_tape() {
         | Ok(Answer::Snapshot(snapshot)) => *snapshot,
         | _ => panic!("a snapshot"),
     };
-    let mut states = vec![snapshot(Command::Load(demos::find("path").unwrap().source.to_owned()))];
+    let mut states = vec![snapshot(Command::Load(
+        demos::find("path").unwrap().source.to_owned(),
+    ))];
     while states.last().is_some_and(Snapshot::can_step) {
         states.push(snapshot(Command::Step));
     }
@@ -217,9 +219,15 @@ fn each_step_announces_what_it_did_on_the_tape() {
         "Tape: track n begins, 4.",
         "Tape: track area now 16.",
     ] {
-        assert!(summaries.iter().any(|summary| summary == expected), "{expected} in {summaries:#?}");
+        assert!(
+            summaries.iter().any(|summary| summary == expected),
+            "{expected} in {summaries:#?}"
+        );
     }
     // A constant touches no object, so it says nothing about the tape.
-    let constant = states.iter().find(|state| state.event.kind == "constant").unwrap();
+    let constant = states
+        .iter()
+        .find(|state| state.event.kind == "constant")
+        .unwrap();
     assert_eq!(tape_summary(constant), None);
 }

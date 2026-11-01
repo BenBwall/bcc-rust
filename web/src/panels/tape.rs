@@ -29,17 +29,21 @@ use crate::{
     palette,
     snapshot::{
         Object,
+        Range,
         Snapshot,
+        Tree,
         Value,
     },
 };
 
 /// Height of one lane, in pixels.
-const LANE: f64 = 28.0;
+const LANE: f64 = 34.0;
 /// Height of the step axis and clock lane above the lanes.
-const AXIS: f64 = 30.0;
+const AXIS: f64 = 32.0;
 /// Half the height of a bus segment.
-const BUS: f64 = 9.0;
+const BUS: f64 = 11.0;
+/// Width of one character of a segment's value (Space Mono at 13 px).
+const CHAR: f64 = 8.0;
 /// The narrowest and widest step a fitted tape gives each step.
 const FIT_MIN: f64 = 14.0;
 const FIT_MAX: f64 = 48.0;
@@ -64,15 +68,6 @@ pub fn px(count: usize) -> f64 {
 )]
 fn step_at(x: f64, step: f64) -> usize {
     (x / step).floor().max(0.0) as usize
-}
-
-/// A scroll offset in whole pixels.
-#[expect(
-    clippy::cast_possible_truncation,
-    reason = "Tapes are far narrower than 2^31 pixels."
-)]
-fn whole(x: f64) -> i32 {
-    x.round() as i32
 }
 
 /// Every object of the run over the recorded steps (history indices).
@@ -112,11 +107,16 @@ pub struct Call {
     pub waiting: Vec<(usize, usize, String)>,
 }
 
-/// One object name of a group, over every call of the group.
+/// One object name of a group, over every call of the group. Objects of
+/// the same name whose lifetimes overlap (a block's `x` shadowing the
+/// function's) each get a lane of their own, numbered from 1.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Lane {
     pub key:      String,
     pub name:     String,
+    pub ordinal:  usize,
+    /// The object on the lane now, while recording.
+    occupant:     Option<usize>,
     pub ty:       String,
     pub objects:  Vec<usize>,
     pub segments: Vec<Segment>,
@@ -134,12 +134,14 @@ pub struct Segment {
     pub value:  Option<String>,
 }
 
-/// A value read from one object at one step and stored into (or passed to)
-/// another at a later one.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// The values read (object, step) that a store or a call's parameter took
+/// its value from, and the source of the expression that combined them, for
+/// the slant's label.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Flow {
-    pub from: (usize, usize),
-    pub to:   (usize, usize),
+    pub from:  Vec<(usize, usize)>,
+    pub to:    (usize, usize),
+    pub label: Option<Range>,
 }
 
 impl Reel {
@@ -151,9 +153,13 @@ impl Reel {
     pub fn record(history: &[Snapshot]) -> Self {
         let mut reel = Self::default();
         let mut group_of_frame: HashMap<usize, usize> = HashMap::new();
+        let mut lane_of: HashMap<usize, usize> = HashMap::new();
         let mut index: HashMap<String, usize> = HashMap::new();
-        // Objects read since the last store, call or full expression.
-        let mut reads: Vec<(usize, usize)> = Vec::new();
+        // Values read since the last store, call or full expression, and the
+        // operands of `[]` and `*` in that time: reads inside one computed an
+        // address, not a value.
+        let mut reads: Vec<(usize, usize, Option<Range>)> = Vec::new();
+        let mut addresses: Vec<Range> = Vec::new();
         for (step, snapshot) in history.iter().enumerate() {
             reel.steps
                 .push((snapshot.step, snapshot.event.sequence_point));
@@ -193,29 +199,22 @@ impl Reel {
                     }
                 }
             }
+            let alive: Vec<usize> = snapshot
+                .objects
+                .iter()
+                .filter(|object| object.alive)
+                .map(|object| object.id)
+                .collect();
             for object in &snapshot.objects {
                 let Some(&at) = group_of_frame.get(&object.frame_id) else {
                     continue;
                 };
                 let group = &mut reel.groups[at];
-                let lane = match group
-                    .lanes
-                    .iter_mut()
-                    .position(|lane| lane.name == object.name)
-                {
-                    | Some(lane) => &mut group.lanes[lane],
-                    | None => {
-                        group.lanes.push(Lane {
-                            key:      format!("{}:{}", group.key, object.name),
-                            name:     object.name.clone(),
-                            ty:       object.ty.clone(),
-                            objects:  Vec::new(),
-                            segments: Vec::new(),
-                            ends:     Vec::new(),
-                        });
-                        group.lanes.last_mut().expect("just pushed")
-                    },
-                };
+                let place = *lane_of
+                    .entry(object.id)
+                    .or_insert_with(|| group.place(object, |occupant| alive.contains(&occupant)));
+                let lane = &mut group.lanes[place];
+                lane.occupant = Some(object.id);
                 if !lane.objects.contains(&object.id) {
                     lane.objects.push(object.id);
                 }
@@ -254,32 +253,160 @@ impl Reel {
                     .access
                     .iter()
                     .filter(|access| access.kind == "read")
-                    .map(|access| (access.object, step)),
+                    .map(|access| (access.object, step, event.range)),
             );
-            let call = event.kind == "call";
-            let stores: Vec<usize> = event
-                .access
-                .iter()
-                .filter(|access| access.kind == "write" || (call && access.kind == "create"))
-                .map(|access| access.object)
-                .collect();
-            for &object in &stores {
-                for &read in &reads {
-                    reel.flows.push(Flow {
-                        from: read,
-                        to:   (object, step),
-                    });
-                }
+            if matches!(event.kind.as_str(), "subscript" | "dereference")
+                && let Some(range) = event.range
+            {
+                addresses.push(range);
             }
+            let values: Vec<(usize, usize, Option<Range>)> = reads
+                .iter()
+                .copied()
+                .filter(|&(_, _, range)| {
+                    range.is_none_or(|range| {
+                        !addresses
+                            .iter()
+                            .any(|&address| address != range && within(address, range))
+                    })
+                })
+                .collect();
+            let call = event.kind == "call";
+            if call {
+                reel.flows.extend(arguments(history, step, &values));
+            } else if let Some(store) = event.access.iter().find(|access| access.kind == "write")
+                && !values.is_empty()
+            {
+                // The expression whose value was stored: the operand of the
+                // assignment, initializer or return that took the values.
+                let label = history[values[values.len() - 1].1]
+                    .tree
+                    .as_ref()
+                    .and_then(|tree| {
+                        let ranges: Vec<Range> =
+                            values.iter().filter_map(|&(_, _, range)| range).collect();
+                        operand(tree, &ranges)
+                    });
+                reel.flows.push(Flow {
+                    from: values.iter().map(|&(object, at, _)| (object, at)).collect(),
+                    to: (store.object, step),
+                    label,
+                });
+            }
+            let stored = call || event.access.iter().any(|access| access.kind == "write");
             // A return keeps what its expression read: the value flows on
             // into the caller's store.
-            if !stores.is_empty() || (event.sequence_point && !call && event.kind != "return") {
+            if stored || (event.sequence_point && event.kind != "return") {
                 reads.clear();
+                addresses.clear();
             }
         }
         reel.open = history.last().is_some_and(Snapshot::can_step);
         reel
     }
+}
+
+impl Group {
+    /// The lane for a new `object`: the first of its name whose occupant is
+    /// no longer alive, or a new one beside them.
+    fn place(&mut self, object: &Object, alive: impl Fn(usize) -> bool) -> usize {
+        let same = |lane: &&Lane| lane.name == object.name;
+        if let Some(place) = self
+            .lanes
+            .iter()
+            .position(|lane| same(&lane) && lane.occupant.is_none_or(|occupant| !alive(occupant)))
+        {
+            return place;
+        }
+        let ordinal = self.lanes.iter().filter(same).count() + 1;
+        self.lanes.push(Lane {
+            key: format!("{}:{}:{ordinal}", self.key, object.name),
+            name: object.name.clone(),
+            ordinal,
+            occupant: None,
+            ty: object.ty.clone(),
+            objects: Vec::new(),
+            segments: Vec::new(),
+            ends: Vec::new(),
+        });
+        self.lanes.len() - 1
+    }
+}
+
+/// Whether `inner` lies within `outer`.
+fn within(outer: Range, inner: Range) -> bool {
+    let at = |position: crate::snapshot::Position| (position.line, position.column);
+    at(outer.start) <= at(inner.start) && at(inner.end) <= at(outer.end)
+}
+
+/// Whether a tree node takes its operand's value: an assignment, an
+/// initializer, a call or a return.
+fn consumes(label: &str) -> bool {
+    label == "return"
+        || label.ends_with("()")
+        || (label.ends_with('=') && !matches!(label, "==" | "!=" | "<=" | ">="))
+}
+
+/// The operand that combined the values read at `ranges`: the smallest node
+/// of `tree` holding them all, widened to the whole operand of the node
+/// that consumed it (`side + 1` in `square(side + 1)`).
+fn operand(tree: &Tree, ranges: &[Range]) -> Option<Range> {
+    let mut at = tree.nodes.iter().position(|node| {
+        node.range
+            .is_some_and(|range| ranges.iter().all(|&read| within(range, read)))
+    })?;
+    if consumes(&tree.nodes[at].label) {
+        return None;
+    }
+    while let Some(parent) = tree
+        .nodes
+        .iter()
+        .position(|node| node.children.contains(&at))
+        && !consumes(&tree.nodes[parent].label)
+    {
+        at = parent;
+    }
+    tree.nodes[at].range
+}
+
+/// What a call at `step` passed: each parameter it created took the values
+/// read inside its own argument.
+fn arguments(
+    history: &[Snapshot],
+    step: usize,
+    values: &[(usize, usize, Option<Range>)],
+) -> Vec<Flow> {
+    let event = &history[step].event;
+    let parameters = event.access.iter().filter(|access| access.kind == "create");
+    let Some(call) = step
+        .checked_sub(1)
+        .and_then(|before| history[before].tree.as_ref())
+        .and_then(|tree| {
+            tree.nodes
+                .iter()
+                .find(|node| node.range == event.range && node.label.ends_with("()"))
+                .map(|node| (tree, node))
+        })
+    else {
+        return Vec::new();
+    };
+    let (tree, node) = call;
+    parameters
+        .zip(&node.children)
+        .filter_map(|(parameter, &argument)| {
+            let range = tree.nodes[argument].range?;
+            let from: Vec<(usize, usize)> = values
+                .iter()
+                .filter(|&&(_, _, read)| read.is_some_and(|read| within(range, read)))
+                .map(|&(object, at, _)| (object, at))
+                .collect();
+            (!from.is_empty()).then_some(Flow {
+                from,
+                to: (parameter.object, step),
+                label: Some(range),
+            })
+        })
+        .collect()
 }
 
 /// An object's value as the tape and the cells write it, or `None` while it
@@ -315,7 +442,9 @@ pub fn value_text(value: &Value, objects: &[Object]) -> Option<String> {
     }
 }
 
-/// One row of the deck: the axis, a group's header, or one of its lanes.
+/// One row of the deck: a group's header, one of its lanes, or a ladder of
+/// folded groups of one function at consecutive depths (a recursion's
+/// returned or waiting calls), each drawn as a thin rung of call bars.
 #[derive(Clone, Debug, PartialEq)]
 enum Row {
     Group {
@@ -327,10 +456,16 @@ enum Row {
         group: usize,
         lane:  usize,
     },
+    Ladder {
+        groups: Vec<usize>,
+    },
 }
 
+/// How many live groups of one function stay open: the outermost call and
+/// the two innermost, where a recursion is doing its work.
+const OPEN_DEPTHS: usize = 3;
+
 fn rows(reel: &Reel, cursor: usize, opened: &[String]) -> Vec<Row> {
-    let mut rows = Vec::new();
     let mut order: Vec<usize> = (0..reel.groups.len()).collect();
     order.sort_by_key(|&at| {
         let group = &reel.groups[at];
@@ -339,21 +474,122 @@ fn rows(reel: &Reel, cursor: usize, opened: &[String]) -> Vec<Row> {
             group.calls.first().map_or(0, |call| call.first),
         )
     });
-    for at in order {
-        let group = &reel.groups[at];
-        // A call stays open through the step that ends it, so its lanes are
-        // on screen while their objects' lifetimes end.
-        let live = group
+    // A call stays open through the step that ends it, so its lanes are on
+    // screen while their objects' lifetimes end.
+    let live = |at: usize| {
+        reel.groups[at]
             .calls
             .iter()
-            .any(|call| call.first <= cursor && cursor <= call.last + 1);
-        let folded = !live && !opened.contains(&group.key);
-        rows.push(Row::Group { at, folded, live });
-        if !folded {
+            .any(|call| call.first <= cursor && cursor <= call.last + 1)
+    };
+    let mut folded: Vec<bool> = order.iter().map(|&at| !live(at)).collect();
+    // A deep recursion keeps its outermost and innermost calls open.
+    for name in reel.groups.iter().map(|group| &group.name) {
+        let open: Vec<usize> = (0..order.len())
+            .filter(|&place| !folded[place] && reel.groups[order[place]].name == *name)
+            .collect();
+        if open.len() > OPEN_DEPTHS {
+            for &place in &open[1..open.len() + 1 - OPEN_DEPTHS] {
+                folded[place] = true;
+            }
+        }
+    }
+    for (place, &at) in order.iter().enumerate() {
+        if opened.contains(&reel.groups[at].key) {
+            folded[place] = false;
+        }
+    }
+    let mut rows: Vec<Row> = Vec::new();
+    for (place, &at) in order.iter().enumerate() {
+        let group = &reel.groups[at];
+        if folded[place] {
+            // Folded groups of one function at consecutive depths share a
+            // row.
+            let previous = match rows.last() {
+                | Some(Row::Ladder { groups }) => groups.last().copied(),
+                | Some(&Row::Group {
+                    at, folded: true, ..
+                }) => Some(at),
+                | _ => None,
+            };
+            if previous.is_some_and(|last| {
+                reel.groups[last].name == group.name && reel.groups[last].depth + 1 == group.depth
+            }) {
+                let mut groups = match rows.pop() {
+                    | Some(Row::Ladder { groups }) => groups,
+                    | Some(Row::Group { at, .. }) => vec![at],
+                    | _ => Vec::new(),
+                };
+                groups.push(at);
+                rows.push(Row::Ladder { groups });
+                continue;
+            }
+            rows.push(Row::Group {
+                at,
+                folded: true,
+                live: live(at),
+            });
+        } else {
+            rows.push(Row::Group {
+                at,
+                folded: false,
+                live: live(at),
+            });
             rows.extend((0..group.lanes.len()).map(|lane| Row::Lane { group: at, lane }));
         }
     }
     rows
+}
+
+/// How many steps the fitted scale makes room for: the run's length rounded
+/// up to a doubling, so the scale holds still while a run grows.
+fn fit_slots(count: usize) -> usize {
+    let mut slots = 24;
+    while slots < count + 3 {
+        slots *= 2;
+    }
+    slots
+}
+
+/// The source of `range`, on one line, for a slant's label; `None` for a
+/// range over several lines.
+fn source_text(source: &str, range: Range) -> Option<String> {
+    if range.start.line != range.end.line {
+        return None;
+    }
+    let line = source.lines().nth(range.start.line.checked_sub(1)?)?;
+    // Columns count UTF-16 code units from 1.
+    let units: Vec<u16> = line.encode_utf16().collect();
+    let text = String::from_utf16_lossy(
+        units.get(range.start.column.checked_sub(1)?..range.end.column.checked_sub(1)?)?,
+    );
+    let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    Some(shorten(&text, 26))
+}
+
+/// `text` cut to `chars` characters, ending in `…` when it was longer. An
+/// array keeps whole elements: `{3,1,4,…}`.
+fn shorten(text: &str, chars: usize) -> String {
+    if text.chars().count() <= chars {
+        return text.to_owned();
+    }
+    if text.starts_with('{') {
+        let mut shown = String::from("{");
+        for element in text.trim_matches(['{', '}']).split(',') {
+            if shown.chars().count() + element.chars().count() + 3 > chars {
+                break;
+            }
+            shown.push_str(element);
+            shown.push(',');
+        }
+        if shown.len() > 1 {
+            shown.push_str("…}");
+            return shown;
+        }
+    }
+    let mut shown: String = text.chars().take(chars.saturating_sub(1)).collect();
+    shown.push('…');
+    shown
 }
 
 /// The deck: reels, the lane labels, and the scrolling tape with its
@@ -368,9 +604,14 @@ fn rows(reel: &Reel, cursor: usize, opened: &[String]) -> Vec<Row> {
 pub fn Deck(
     history: RwSignal<Vec<Snapshot>>,
     cursor: RwSignal<Option<usize>>,
+    /// The program the engine runs, for the slants' labels.
+    source: Signal<String>,
     /// The scale, as a factor of the one that fits the recorded run to the
     /// screen.
     zoom: RwSignal<f64>,
+    /// Whether Run is stepping: the tape then jumps to the playhead rather
+    /// than glide behind it.
+    running: Signal<bool>,
     /// Where the playhead is on screen, relative to the start of the tape's
     /// viewport, for the line it drops into the note.
     head: RwSignal<Option<f64>>,
@@ -387,25 +628,33 @@ pub fn Deck(
         reel.with(|reel| opened.with(|opened| rows(reel, cursor, opened)))
     });
     let step_width = Memo::new(move |_| {
-        let count = px(reel.with(|reel| reel.steps.len()));
-        let fit = (width.get() / (count + 3.0))
-            .floor()
-            .clamp(FIT_MIN, FIT_MAX);
+        let slots = px(fit_slots(reel.with(|reel| reel.steps.len())));
+        let fit = (width.get() / slots).floor().clamp(FIT_MIN, FIT_MAX);
         (fit * zoom.get()).clamp(ZOOM_MIN, ZOOM_MAX)
     });
     observe_width(tape, width);
     // A step moves the tape, not the head: keep the playhead in the middle
-    // stretch of the viewport.
+    // stretch of the viewport. The tape glides a short way, and jumps when
+    // Run is stepping, for a long way, or when motion is reduced.
     Effect::new(move || {
         let x = (px(at()) + 0.5) * step_width.get();
+        let running = running.get();
         let Some(element) = tape.get() else {
             return;
         };
         let view = f64::from(element.client_width());
         let left = f64::from(element.scroll_left());
-        if x < left + view * 0.15 || x > left + view * 0.8 {
-            let target = (x - view * 0.7).max(0.0);
-            element.set_scroll_left(whole(target));
+        if x < left + view * 0.15 || x > left + view * 0.7 {
+            let target = (x - view * 0.6).max(0.0);
+            let glide = !running && (target - left).abs() < view && !reduced_motion();
+            let options = web_sys::ScrollToOptions::new();
+            options.set_left(target.round());
+            options.set_behavior(if glide {
+                web_sys::ScrollBehavior::Smooth
+            } else {
+                web_sys::ScrollBehavior::Instant
+            });
+            element.scroll_to_with_scroll_to_options(&options);
         }
     });
     Effect::new(move || {
@@ -435,12 +684,12 @@ pub fn Deck(
             })
         })
     };
-    let toggle = move |key: String| {
+    let toggle = move |keys: Vec<String>| {
         opened.update(|opened| {
-            if let Some(place) = opened.iter().position(|open| *open == key) {
-                opened.remove(place);
+            if keys.iter().all(|key| opened.contains(key)) {
+                opened.retain(|open| !keys.contains(open));
             } else {
-                opened.push(key);
+                opened.extend(keys);
             }
         });
     };
@@ -454,29 +703,47 @@ pub fn Deck(
                 <b>"Figure 1"</b>" — Every object of the run, recorded on tape. Drag the tape, or use "<kbd>"←"</kbd>" "<kbd>"→"</kbd>"."
             </figcaption>
             <Spool side="left" fill=Signal::derive(played) turn=Signal::derive(move || px(at()) * 37.0) />
-            <div class="deck-labels" aria-hidden="true" style:--lane=format!("{LANE}px")>
+            <div class="deck-labels" aria-hidden="true" style:--lane=format!("{LANE}px") style:--axis=format!("{AXIS}px")>
                 <div class="deck-label is-axis">"Step"</div>
-                {move || rows.with(|rows| reel.with(|reel| rows.iter().map(|row| match *row {
-                    | Row::Group { at, folded, live } => {
+                {move || rows.with(|rows| reel.with(|reel| rows.iter().map(|row| match row {
+                    | &Row::Group { at, folded, live } => {
                         let group = &reel.groups[at];
-                        let key = group.key.clone();
+                        let keys = vec![group.key.clone()];
                         let count = group.calls.len();
+                        // The depth tells a recursion's calls apart.
+                        let recursive = reel.groups.iter().filter(|other| other.name == group.name).count() > 1;
                         view! {
                             <div class="deck-label is-group" class:is-folded=folded class:is-live=live>
-                                <button type="button" tabindex="-1" on:click=move |_| toggle(key.clone())>
+                                <button type="button" tabindex="-1" on:click=move |_| toggle(keys.clone())>
                                     <span class="deck-fold">{if folded { "▸" } else { "▾" }}</span>
-                                    {format!("{}()", group.name)}
+                                    <span class="deck-call">{format!("{}()", group.name)}</span>
+                                    {recursive.then(|| view! { <span class="deck-depth">{format!("depth {}", group.depth)}</span> })}
                                     {(count > 1).then(|| view! { <span class="deck-count">{format!("×{count}")}</span> })}
                                 </button>
                             </div>
                         }.into_any()
                     },
-                    | Row::Lane { group, lane } => {
+                    | Row::Ladder { groups } => {
+                        let first = &reel.groups[groups[0]];
+                        let last = &reel.groups[groups[groups.len() - 1]];
+                        let keys: Vec<String> = groups.iter().map(|&at| reel.groups[at].key.clone()).collect();
+                        view! {
+                            <div class="deck-label is-group is-folded is-ladder">
+                                <button type="button" tabindex="-1" on:click=move |_| toggle(keys.clone())>
+                                    <span class="deck-fold">"▸"</span>
+                                    <span class="deck-call">{format!("{}()", first.name)}</span>
+                                    <span class="deck-depth">{format!("depth {}–{}", first.depth, last.depth)}</span>
+                                </button>
+                            </div>
+                        }.into_any()
+                    },
+                    | &Row::Lane { group, lane } => {
                         let lane = &reel.groups[group].lanes[lane];
                         view! {
-                            <div class=format!("deck-label is-lane {}", palette::class(&lane.name))>
+                            <div class=format!("deck-label is-lane {}", palette::class(&lane.name)) title=format!("{} {}", lane.ty, lane.name)>
                                 <span class="deck-swatch"></span>
                                 <span class="deck-name">{lane.name.clone()}</span>
+                                {(lane.ordinal > 1).then(|| view! { <span class="deck-ordinal">{format!("#{}", lane.ordinal)}</span> })}
                                 <span class="deck-type">{lane.ty.clone()}</span>
                             </div>
                         }.into_any()
@@ -533,11 +800,55 @@ pub fn Deck(
                     }
                 }
             >
-                {move || tape_svg(reel, rows, step_width.get(), at(), width.get())}
+                {move || source.with(|source| tape_svg(reel, rows, source, step_width.get(), at(), width.get()))}
             </div>
             <Spool side="right" fill=Signal::derive(move || 1.0 - played()) turn=Signal::derive(move || px(at()) * 37.0) />
         </figure>
     }
+}
+
+/// Whether the reader asked for reduced motion.
+fn reduced_motion() -> bool {
+    web_sys::window()
+        .and_then(|window| {
+            window
+                .match_media("(prefers-reduced-motion: reduce)")
+                .ok()
+                .flatten()
+        })
+        .is_some_and(|query| query.matches())
+}
+
+/// Where each row's drawing sits: the y of each group's call bars (a rung
+/// of its ladder, if folded into one) and of each object's lane, and the
+/// lane name each object is drawn under.
+struct Layout<'a> {
+    calls:   Vec<(usize, f64, bool)>,
+    objects: HashMap<usize, (f64, &'a str)>,
+}
+
+fn layout<'a>(reel: &'a Reel, rows: &[Row]) -> Layout<'a> {
+    let mut calls = Vec::new();
+    let mut objects = HashMap::new();
+    for (place, row) in rows.iter().enumerate() {
+        let top = AXIS + px(place) * LANE;
+        match row {
+            | &Row::Group { at, .. } => calls.push((at, top + LANE / 2.0, false)),
+            | Row::Ladder { groups } => {
+                let rungs = px(groups.len().max(2) - 1);
+                for (rung, &at) in groups.iter().enumerate() {
+                    calls.push((at, top + 6.0 + px(rung) * (LANE - 12.0) / rungs, true));
+                }
+            },
+            | &Row::Lane { group, lane } => {
+                let lane = &reel.groups[group].lanes[lane];
+                for &object in &lane.objects {
+                    objects.insert(object, (top + LANE / 2.0, lane.name.as_str()));
+                }
+            },
+        }
+    }
+    Layout { calls, objects }
 }
 
 /// The tape itself, as one SVG.
@@ -545,6 +856,7 @@ pub fn Deck(
 fn tape_svg(
     reel: Memo<Reel>,
     rows: Memo<Vec<Row>>,
+    source: &str,
     step: f64,
     cursor: usize,
     view: f64,
@@ -552,36 +864,29 @@ fn tape_svg(
     reel.with(|reel| {
         rows.with(|rows| {
             let count = reel.steps.len();
-            let width = (px(count + LEADER) * step).max(view);
-            let height = AXIS + px(rows.len()) * LANE + 8.0;
             let x = move |index: usize| px(index) * step;
-            let mut y_of_group = HashMap::new();
-            let mut y_of_object = HashMap::new();
-            for (place, row) in rows.iter().enumerate() {
-                let y = AXIS + px(place) * LANE + LANE / 2.0;
-                match *row {
-                    | Row::Group { at, .. } => {
-                        y_of_group.insert(at, y);
-                    },
-                    | Row::Lane { group, lane } => {
-                        for &object in &reel.groups[group].lanes[lane].objects {
-                            y_of_object.insert(object, y);
-                        }
-                    },
-                }
-            }
+            // Room after the last step for "NOT YET RUN" and the flag.
+            let width = (x(count) + 130.0).max(px(count + LEADER) * step).max(view);
+            let height = AXIS + px(rows.len()) * LANE + 8.0;
+            let Layout { calls: call_rows, objects } = layout(reel, rows);
             let ahead = move |index: usize| if index > cursor { "is-ahead" } else { "" };
+            let head = x(cursor) + step / 2.0;
+            let number = reel.steps.get(cursor).map_or(0, |step| step.0).to_string();
+            let flag = px(number.len()) * 7.0 + 10.0;
             // Axis: a tick and a number at the first round interval that
-            // leaves room for the number.
+            // leaves room for the number, and none under the flag.
             let every = [1, 2, 5, 10, 20, 50, 100, 200, 500, 1000]
                 .into_iter()
                 .find(|&every| px(every) * step >= 44.0)
                 .unwrap_or(2000);
             let ticks = (0..count)
                 .filter(|index| index % every == 0)
-                .map(|index| view! {
-                    <line class="tape-grid" x1=x(index) y1=AXIS - 4.0 x2=x(index) y2=height />
-                    <text class="tape-number" x=x(index) + 3.0 y="11">{reel.steps[index].0}</text>
+                .map(|index| {
+                    let clear = (x(index) + 3.0 - head).abs() > flag / 2.0 + 22.0;
+                    view! {
+                        <line class="tape-grid" x1=x(index) y1=AXIS - 4.0 x2=x(index) y2=height />
+                        {clear.then(|| view! { <text class="tape-number" x=x(index) + 3.0 y="11">{reel.steps[index].0}</text> })}
+                    }
                 })
                 .collect_view();
             // The clock lane: one pulse per step, taller at a sequence point
@@ -597,55 +902,57 @@ fn tape_svg(
                 );
             }
             _ = write!(clock, " L{:.1} {}", x(count), AXIS - 6.0);
-            let calls = rows
+            let calls = call_rows
                 .iter()
-                .filter_map(|row| match *row {
-                    | Row::Group { at, .. } => Some(at),
-                    | Row::Lane { .. } => None,
-                })
-                .flat_map(|at| {
-                    let y = y_of_group[&at];
+                .flat_map(|&(at, y, rung)| {
+                    let class = if rung { "tape-call is-rung" } else { "tape-call" };
                     reel.groups[at].calls.iter().map(move |call| {
                         let mut parts = Vec::new();
                         let mut start = call.first;
                         for (from, to, on) in &call.waiting {
                             if *from > start {
-                                parts.push(view! { <line class=format!("tape-call {}", ahead(start)) x1=x(start) y1=y x2=x(*from) y2=y /> }.into_any());
+                                parts.push(view! { <line class=format!("{class} {}", ahead(start)) x1=x(start) y1=y x2=x(*from) y2=y /> }.into_any());
                             }
-                            parts.push(view! { <line class=format!("tape-call is-waiting {}", ahead(*from)) x1=x(*from) y1=y x2=x(*to) y2=y /> }.into_any());
-                            if x(*to) - x(*from) > 170.0 {
+                            parts.push(view! { <line class=format!("{class} is-waiting {}", ahead(*from)) x1=x(*from) y1=y x2=x(*to) y2=y /> }.into_any());
+                            // Repeated along the wait, so one is in view.
+                            let text = format!("waiting for {on}");
+                            let text_width = px(text.chars().count()) * 6.0 + 12.0;
+                            let mut at = x(*from) + 6.0;
+                            while !rung && at + text_width <= x(*to) {
                                 parts.push(view! {
-                                    <text class=format!("tape-waiting {}", ahead(*from)) x=x(*from) + 6.0 y=y - 5.0>{format!("waiting for {on}")}</text>
+                                    <text class=format!("tape-waiting {}", ahead(*from)) x=at y=y - 5.0>{text.clone()}</text>
                                 }.into_any());
+                                at += (text_width + 80.0).max(360.0);
                             }
                             start = *to;
                         }
                         if call.last + 1 > start {
-                            parts.push(view! { <line class=format!("tape-call {}", ahead(start)) x1=x(start) y1=y x2=x(call.last + 1) y2=y /> }.into_any());
+                            parts.push(view! { <line class=format!("{class} {}", ahead(start)) x1=x(start) y1=y x2=x(call.last + 1) y2=y /> }.into_any());
                         }
-                        for edge in [call.first, call.last + 1] {
-                            if edge < count {
-                                parts.push(view! { <line class=format!("tape-edge {}", ahead(edge)) x1=x(edge) y1=y - 6.0 x2=x(edge) y2=y + 6.0 /> }.into_any());
+                        let edge = if rung { 3.0 } else { 6.0 };
+                        for at in [call.first, call.last + 1] {
+                            if at < count {
+                                parts.push(view! { <line class=format!("tape-edge {}", ahead(at)) x1=x(at) y1=y - edge x2=x(at) y2=y + edge /> }.into_any());
                             }
                         }
                         parts.into_iter().collect_view()
                     })
                 })
                 .collect_view();
+            let used = |object: usize| {
+                reel.access
+                    .get(cursor)
+                    .and_then(|access| access.iter().find(|(id, _)| *id == object))
+                    .map(|(_, kind)| kind.clone())
+            };
             let lanes = rows
                 .iter()
                 .filter_map(|row| match *row {
                     | Row::Lane { group, lane } => Some(&reel.groups[group].lanes[lane]),
-                    | Row::Group { .. } => None,
+                    | _ => None,
                 })
                 .map(|lane| {
-                    let y = y_of_object.get(&lane.objects[0]).copied().unwrap_or(0.0);
-                    let used = |object: usize| {
-                        reel.access
-                            .get(cursor)
-                            .and_then(|access| access.iter().find(|(id, _)| *id == object))
-                            .map(|(_, kind)| kind.clone())
-                    };
+                    let y = objects.get(&lane.objects[0]).map_or(0.0, |&(y, _)| y);
                     let segments = lane
                         .segments
                         .iter()
@@ -655,7 +962,7 @@ fn tape_svg(
                         })
                         .collect_view();
                     let ends = lane.ends.iter().map(|&end| view! {
-                        <line class=format!("tape-end {}", ahead(end)) x1=x(end) y1=y - 7.0 x2=x(end) y2=y + 7.0 />
+                        <line class=format!("tape-end {}", ahead(end)) x1=x(end) y1=y - 8.0 x2=x(end) y2=y + 8.0 />
                     }).collect_view();
                     view! { <g class=palette::class(&lane.name)>{segments}{ends}</g> }
                 })
@@ -664,23 +971,38 @@ fn tape_svg(
                 .flows
                 .iter()
                 .filter_map(|flow| {
-                    let (from, to) = (*y_of_object.get(&flow.from.0)?, *y_of_object.get(&flow.to.0)?);
-                    if (from - to).abs() < 1.0 && flow.from.1 == flow.to.1 {
-                        return None;
-                    }
-                    let down = if to > from { 1.0 } else { -1.0 };
-                    let (x0, x1) = (x(flow.from.1) + step / 2.0, x(flow.to.1) + 2.0);
+                    let &(to, name) = objects.get(&flow.to.0)?;
+                    let x1 = x(flow.to.1) + 2.0;
+                    let slants: Vec<(f64, f64, f64)> = flow
+                        .from
+                        .iter()
+                        .filter_map(|&(object, at)| Some((x(at) + step / 2.0, objects.get(&object)?.0, to)))
+                        .filter(|&(x0, from, _)| (from - to).abs() >= 1.0 || x1 - x0 > 1.0)
+                        .collect();
+                    // The label sits on the longest slant, once the store
+                    // has happened and there is room for it.
+                    let longest = slants.iter().copied().max_by(|a, b| (x1 - a.0).total_cmp(&(x1 - b.0)))?;
+                    let label = flow
+                        .label
+                        .filter(|_| flow.to.1 <= cursor && step >= 8.0 && x1 - longest.0 >= 28.0)
+                        .and_then(|range| source_text(source, range))
+                        .map(|text| format!("{text} → {name}"));
+                    let drawn = slants.into_iter().map(|(x0, from, to)| {
+                        let down = if to > from { 1.0 } else if to < from { -1.0 } else { 0.0 };
+                        view! {
+                            <line x1=x0 y1=from + down * 8.0 x2=x1 y2=to - down * 8.0 marker-end="url(#tape-arrow)" />
+                            <circle cx=x0 cy=from r="2.4" />
+                        }
+                    }).collect_view();
+                    let (mid_x, mid_y) = (f64::midpoint(longest.0, x1), f64::midpoint(longest.1, longest.2));
                     Some(view! {
                         <g class=format!("tape-flow {}", ahead(flow.to.1))>
-                            <line x1=x0 y1=from + down * 7.0 x2=x1 y2=to - down * 7.0 marker-end="url(#tape-arrow)" />
-                            <circle cx=x0 cy=from r="2.4" />
+                            {drawn}
+                            {label.map(|label| view! { <text class="tape-flow-label" x=mid_x - 5.0 y=mid_y + 3.5 text-anchor="end">{label}</text> })}
                         </g>
                     })
                 })
                 .collect_view();
-            let head = x(cursor) + step / 2.0;
-            let number = reel.steps.get(cursor).map_or(0, |step| step.0).to_string();
-            let flag = px(number.len()) * 7.0 + 10.0;
             view! {
                 <svg class="tape-svg" width=width height=height viewBox=format!("0 0 {width} {height}") aria-hidden="true">
                     <defs>
@@ -698,7 +1020,7 @@ fn tape_svg(
                     {lanes}
                     {flows}
                     <rect class="tape-blank" x=x(count) y=AXIS - 2.0 width=(width - x(count)).max(0.0) height=height />
-                    {reel.open.then(|| view! { <text class="tape-unrun" x=x(count) + 10.0 y=AXIS + 14.0>"NOT YET RUN"</text> })}
+                    {reel.open.then(|| view! { <text class="tape-unrun" x=x(count) + 10.0 y=AXIS + 16.0>"NOT YET RUN"</text> })}
                     {(count > 0).then(|| view! {
                         <line class="tape-head" x1=head y1="14" x2=head y2=height />
                         <rect class="tape-flag" x=head - flag / 2.0 y="0" width=flag height="15" />
@@ -712,13 +1034,13 @@ fn tape_svg(
 }
 
 /// One bus segment: a hexagon between two transitions, with its value
-/// written inside (repeated along a long segment, so one is always in view).
-/// `used` is what the step at the playhead did to it, if it is the segment
-/// there: a store lights it, a read outlines it in the flow's blue, a
-/// designation dashes it.
+/// written inside (cut short where it does not fit, and repeated along a
+/// long segment, so one is always in view). `used` is what the step at the
+/// playhead did to it, if it is the segment there: a store lights it, a
+/// read outlines it in the flow's blue, a designation dashes it.
 fn bus(segment: &Segment, y: f64, step: f64, cursor: usize, used: Option<String>) -> AnyView {
     let (x0, x1) = (px(segment.from) * step + 1.5, px(segment.to) * step - 1.5);
-    let slope = (4.0_f64).min((x1 - x0) / 2.0);
+    let slope = (5.0_f64).min((x1 - x0) / 2.0);
     let points = format!(
         "{x0:.1},{y:.1} {:.1},{:.1} {:.1},{:.1} {x1:.1},{y:.1} {:.1},{:.1} {:.1},{:.1}",
         x0 + slope,
@@ -741,21 +1063,37 @@ fn bus(segment: &Segment, y: f64, step: f64, cursor: usize, used: Option<String>
     if segment.from > cursor {
         class.push_str(" is-ahead");
     }
+    let room = ((x1 - x0 - 2.0 * slope - 8.0).min(320.0) / CHAR).floor();
     let text = segment.value.clone().unwrap_or_else(|| "?".to_owned());
-    let text_width = px(text.chars().count()) * 7.6 + 6.0;
+    let text = if room >= 3.0 {
+        shorten(&text, chars_in(room))
+    } else {
+        String::new()
+    };
+    let text_width = px(text.chars().count()) * CHAR + 6.0;
     let mut labels = Vec::new();
-    let mut at = x0 + slope + 3.0;
-    while at + text_width <= x1 - slope {
+    let mut at = x0 + slope + 4.0;
+    while !text.is_empty() && at + text_width <= x1 - slope + 1.0 {
         labels.push(at);
         at += (text_width + 60.0).max(240.0);
     }
     view! {
         <g class=class data-object=segment.object data-access=used>
             <polygon points=points />
-            {labels.into_iter().map(|at| view! { <text x=at y=y + 4.0>{text.clone()}</text> }).collect_view()}
+            {labels.into_iter().map(|at| view! { <text x=at y=y + 4.5>{text.clone()}</text> }).collect_view()}
         </g>
     }
     .into_any()
+}
+
+/// A whole number of characters, from a measured `room`.
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "A small, non-negative count: at most 40 characters."
+)]
+fn chars_in(room: f64) -> usize {
+    room.clamp(0.0, 40.0) as usize
 }
 
 /// A reel: its hub turns as the playhead moves, and its pack of tape grows
@@ -764,7 +1102,7 @@ fn bus(segment: &Segment, y: f64, step: f64, cursor: usize, used: Option<String>
 fn Spool(side: &'static str, fill: Signal<f64>, turn: Signal<f64>) -> impl IntoView {
     view! {
         <div class=format!("spool is-{side}") aria-hidden="true">
-            <svg viewBox="-28 -28 56 56" width="56" height="56">
+            <svg viewBox="-28 -28 56 56" width="92" height="92">
                 <g class="spool-turn" style:transform=move || format!("rotate({:.0}deg)", turn.get())>
                     <circle class="spool-pack" r=move || format!("{:.1}", 11.0 + 15.0 * fill.get()) />
                     <circle class="spool-rim" r="26" />
@@ -821,12 +1159,16 @@ mod tests {
     };
 
     fn run(key: &str) -> Vec<Snapshot> {
+        execute(demos::find(key).expect("a lesson").source)
+    }
+
+    fn execute(source: &str) -> Vec<Snapshot> {
         let mut machine = Machine::default();
         let snapshot = |answer| match answer {
             | Ok(Answer::Snapshot(snapshot)) => *snapshot,
             | _ => panic!("a snapshot"),
         };
-        let source = demos::find(key).expect("a lesson").source.to_owned();
+        let source = source.to_owned();
         let mut history = vec![snapshot(machine.run(Command::Load(source)))];
         while history.last().is_some_and(Snapshot::can_step) {
             history.push(snapshot(machine.run(Command::Step)));
@@ -860,21 +1202,135 @@ mod tests {
         assert_eq!(lane(1, "n").ends.len(), 1, "n ends when square returns");
         // main waits while square runs.
         assert_eq!(reel.groups[0].calls[0].waiting[0].2, "square(side + 1)");
-        // side flows into n at the call; n flows into area through the
-        // return.
+        // side flows into n at the call, labelled with the argument; n
+        // flows into area through the return, labelled with what returned.
         let side = lane(0, "side").objects[0];
         let n = lane(1, "n").objects[0];
         let area = lane(0, "area").objects[0];
-        assert!(
-            reel.flows
+        let source = demos::find("path").unwrap().source;
+        let label = |to: usize| {
+            let flow = reel
+                .flows
                 .iter()
-                .any(|flow| flow.from.0 == side && flow.to.0 == n)
+                .find(|flow| flow.to.0 == to)
+                .expect("a flow");
+            (
+                flow.from
+                    .iter()
+                    .map(|&(object, _)| object)
+                    .collect::<Vec<_>>(),
+                flow.label.and_then(|range| source_text(source, range)),
+            )
+        };
+        assert_eq!(label(n), (vec![side], Some("side + 1".to_owned())));
+        assert_eq!(label(area), (vec![n, n], Some("n * n".to_owned())));
+    }
+
+    #[test]
+    fn a_shadowing_object_gets_a_lane_of_its_own() {
+        let history = execute(
+            "int main(void) {\n    int x = 1;\n    {\n        int x = 20;\n        x = x + 1;\n    }\n    for \
+             (int i = 0; i < 2; i = i + 1) {\n        int x = i;\n    }\n    return x;\n}\n",
         );
-        assert!(
-            reel.flows
+        let reel = Reel::record(&history);
+        let lanes: Vec<(&str, usize, usize)> = reel.groups[0]
+            .lanes
+            .iter()
+            .map(|lane| (lane.name.as_str(), lane.ordinal, lane.objects.len()))
+            .collect();
+        // The outer x lives throughout; each inner x takes the second lane
+        // in turn, once the one before it has ended.
+        assert_eq!(lanes, [("x", 1, 1), ("x", 2, 3), ("i", 1, 1)]);
+        for lane in &reel.groups[0].lanes {
+            for pair in lane.segments.windows(2) {
+                assert!(
+                    pair[0].to <= pair[1].from,
+                    "one value at a time on {}",
+                    lane.key
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn reads_that_only_find_an_address_do_not_slant() {
+        let source =
+            "int fill(int *p, int n, int v) {\n    for (int i = 0; i < n; i = i + 1) {\n        \
+             p[i] = v * 10 + i;\n    }\n    return n;\n}\n\nint main(void) {\n    int \
+             numbers[3];\n    return fill(numbers, 3, 7);\n}\n";
+        let history = execute(source);
+        let reel = Reel::record(&history);
+        let name = |object: usize| {
+            reel.groups
                 .iter()
-                .any(|flow| flow.from.0 == n && flow.to.0 == area)
+                .flat_map(|group| &group.lanes)
+                .find(|lane| lane.objects.contains(&object))
+                .map(|lane| lane.name.as_str())
+        };
+        let into_numbers: Vec<&Flow> = reel
+            .flows
+            .iter()
+            .filter(|flow| name(flow.to.0) == Some("numbers"))
+            .collect();
+        assert_eq!(into_numbers.len(), 3);
+        for flow in into_numbers {
+            // v and the second i are values; p and the subscript's i only
+            // find the element.
+            let from: Vec<_> = flow
+                .from
+                .iter()
+                .filter_map(|&(object, _)| name(object))
+                .collect();
+            assert_eq!(from, ["v", "i"]);
+            assert_eq!(
+                flow.label
+                    .and_then(|range| source_text(source, range))
+                    .as_deref(),
+                Some("v * 10 + i")
+            );
+        }
+    }
+
+    #[test]
+    fn a_deep_recursion_keeps_its_ends_open_and_folds_the_rest_to_a_ladder() {
+        let history = execute(
+            "int depth(int n) {\n    if (n <= 0) {\n        return 0;\n    }\n    int r = depth(n \
+             - 1);\n    return r + 1;\n}\n\nint main(void) {\n    return depth(6);\n}\n",
         );
+        let reel = Reel::record(&history);
+        // The innermost call: every depth is live.
+        let deepest = (0..history.len())
+            .max_by_key(|&at| history[at].stack.len())
+            .unwrap();
+        let rows = rows(&reel, deepest, &[]);
+        let open: Vec<usize> = rows
+            .iter()
+            .filter_map(|row| match *row {
+                | Row::Group {
+                    at, folded: false, ..
+                } if reel.groups[at].name == "depth" => Some(reel.groups[at].depth),
+                | _ => None,
+            })
+            .collect();
+        assert_eq!(open, [2, 7, 8], "the outermost call and the two innermost");
+        let ladder: Vec<usize> = rows
+            .iter()
+            .find_map(|row| match row {
+                | Row::Ladder { groups } =>
+                    Some(groups.iter().map(|&at| reel.groups[at].depth).collect()),
+                | _ => None,
+            })
+            .expect("a ladder");
+        assert_eq!(ladder, [3, 4, 5, 6]);
+    }
+
+    #[test]
+    fn long_values_are_cut_short_whole_elements_first() {
+        assert_eq!(shorten("{3,1,4,1,5,9,2,6}", 10), "{3,1,4,…}");
+        assert_eq!(shorten("2147483647", 10), "2147483647");
+        assert_eq!(shorten("→a_rather_long_name", 8), "→a_rath…");
+        assert_eq!(fit_slots(10), 24);
+        assert_eq!(fit_slots(22), 48);
     }
 
     #[test]
