@@ -562,10 +562,9 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
                 otherwise,
                 merge,
                 ty,
-            } => {
-                self.conditional_arms(conditional, then, otherwise, merge, ty);
-                Ok(())
-            },
+                distribution,
+            } => self.conditional_arms(conditional, then, otherwise, merge, ty, distribution),
+            | Task::ConvertArm(index) => self.convert_arm(index),
         }
     }
 }
@@ -601,6 +600,9 @@ struct FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
     /// GCC's rules, with the constant's bits and type, until the next
     /// conversions or store (`saturation.rs`).
     floating_conversion: Option<(crate::ir::Value, u128, Type)>,
+    /// The expressions whose integer conversion GCC folds into the arms of
+    /// a floating `?:` (`saturation.rs`).
+    distributions:       ArenaVec<'s, saturation::Distribution<'s>>,
     initializer_values:  ArenaVec<'s, Item>,
     /// The guaranteed alignment of each known backing address.
     alignments:          ArenaMap<'s, crate::ir::Value, crate::ir::Align>,

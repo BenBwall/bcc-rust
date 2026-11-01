@@ -20,6 +20,9 @@
 //! - Under GCC's rules a floating constant converted out of an integer's range
 //!   folds to the bound GCC saturates it to
 //!   (gcc.c-torture/execute/20031003-1.c).
+//! - Under GCC's rules the arms of a floating `?:` converted to an integer
+//!   saturate one by one, to a bit-field's width when stored into one (review
+//!   of #231).
 //! - A trailing array reached through a pointer has no subobject size of its
 //!   own for `__builtin_object_size` mode 1 (`gcc.dg/pr101836_5.c`).
 //! - Under GCC's rules the size-specific atomic routines such as
@@ -595,6 +598,76 @@ mod tests {
             &["-w"],
             "15 31 / 15 31 / -1 31 / 4 4 / -1 31 / 7 0\n",
         );
+    }
+
+    /// GCC folds the conversion of a floating `?:` to an integer into its
+    /// arms: each constant arm saturates on its own, to a bit-field's width
+    /// when the `?:` is stored into one, also through nested `?:`,
+    /// parentheses, casts to floating types and arms converted to the
+    /// `?:`'s type, while a run-time arm converts as it would alone and a
+    /// cast to an integer type ends the saturation. Clang converts the
+    /// merged value at run time.
+    #[test]
+    fn conditional_floating_constants_saturate_arm_by_arm() {
+        let source = b"#include <stdio.h>\n\
+            struct B { int s : 5; unsigned u : 5; };\n\
+            volatile double e = 7.0;\n\
+            __attribute__((noinline)) void f(int c, int k) {\n\
+            struct B b;\n\
+            b.s = c ? 100.0 : 200.0; b.u = c ? 100.0 : 200.0; printf(\"a %d %u\\n\", b.s, b.u);\n\
+            b.s = c ? 100.0 : 100.0; b.u = c ? -1e10 : 1e10; printf(\"b %d %u\\n\", b.s, b.u);\n\
+            b.s = c ? (k ? 100.0 : 3.0) : -100.0; b.u = c ? (k ? 100.0 : 3.0) : 2.0;\n\
+            printf(\"c %d %u\\n\", b.s, b.u);\n\
+            b.s = c ? 100.0 : e; b.u = c ? 100.0 : e; printf(\"d %d %u\\n\", b.s, b.u);\n\
+            b.s = (double)(c ? 100.0 : 200.0); b.u = (float)(c ? 100.0 : 200.0);\n\
+            printf(\"e %d %u\\n\", b.s, b.u);\n\
+            b.s = (int)(c ? 100.0 : 200.0); b.u = (unsigned)(c ? 100.0 : 200.0);\n\
+            printf(\"f %d %u\\n\", b.s, b.u);\n\
+            b.s = c ? 100 : 200.0; printf(\"g %d\\n\", b.s);\n\
+            b.s = c ? 100.0f : 200.0; printf(\"i %d\\n\", b.s);\n\
+            int x = c ? 1e10 : 2e10; b.s = x; printf(\"j %d %d\\n\", x, b.s);\n\
+            }\n\
+            int main(void) { f(0, 0); f(1, 0); f(1, 1); return 0; }\n";
+        let expected = [
+            "a 15 31\nb 15 31\nc -16 2\nd 7 7\ne 15 31\nf 8 8\ng 15\ni 15\nj 2147483647 -1\n",
+            "a 15 31\nb 15 0\nc 3 3\nd 15 31\ne 15 31\nf 4 4\ng 15\ni 15\nj 2147483647 -1\n",
+            "a 15 31\nb 15 0\nc 15 31\nd 15 31\ne 15 31\nf 4 4\ng 15\ni 15\nj 2147483647 -1\n",
+        ]
+        .concat();
+        prints_on_every_back_end("--compiler-identity=gcc", source, &["-w"], &expected);
+        // Initializers, arguments and returns, of `int` and wider types.
+        let contexts = b"#include <stdio.h>\n\
+            struct B { int s : 5; unsigned u : 5; };\n\
+            __attribute__((noinline)) int id(int x) { return x; }\n\
+            __attribute__((noinline)) int ret(int c) { return c ? 1e10 : -1e10; }\n\
+            __attribute__((noinline)) unsigned char retc(int c) { return c ? 300.0 : -5.0; }\n\
+            __attribute__((noinline)) void f(int c) {\n\
+            struct B a = { c ? 100.0 : 200.0, (c ? 100.0 : 200.0) };\n\
+            struct B l[1] = { { c ? -100.0 : 1.0, c ? 3.0 : 40.0 } };\n\
+            printf(\"%d %u %d %u %d %d %d\", a.s, a.u, l[0].s, l[0].u, id(c ? 1e10 : 2.0), ret(c),\n\
+            retc(c));\n\
+            unsigned u = c ? -1.0 : 5e9; long long w = c ? 1e30 : -1e30;\n\
+            printf(\" %u %lld\\n\", u, w);\n\
+            }\n\
+            int main(void) { f(0); f(1); return 0; }\n";
+        prints_on_every_back_end(
+            "--compiler-identity=gcc",
+            contexts,
+            &["-w"],
+            "15 31 1 31 2 -2147483648 0 4294967295 -9223372036854775808\n15 31 -16 3 2147483647 \
+             2147483647 255 0 9223372036854775807\n",
+        );
+        let stored = b"#include <stdio.h>\n\
+            struct B { int s : 5; unsigned u : 5; };\n\
+            __attribute__((noinline)) void f(int c) {\n\
+            struct B b;\n\
+            b.s = c ? 100.0 : 200.0;\n\
+            b.u = c ? 100.0 : 200.0;\n\
+            printf(\"%d %u\\n\", b.s, b.u);\n\
+            }\n\
+            int main(void) { f(0); f(1); return 0; }\n";
+        prints_on_every_back_end("--compiler-identity=gcc", stored, &["-w"], "15 31\n15 31\n");
+        prints_on_every_back_end("--compiler-identity=clang", stored, &["-w"], "8 8\n4 4\n");
     }
 
     /// A trailing array member reached through a pointer may extend past

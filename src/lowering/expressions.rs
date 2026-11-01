@@ -248,7 +248,10 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             return Ok(());
         }
         match expression.kind {
-            | E::Parenthesized { expression: inner }
+            | E::Parenthesized { expression: inner } => {
+                _ = self.distribute(expression, &[], None)?;
+                self.tasks.push(Task::Evaluate(inner));
+            },
             | E::Unary {
                 operator: UnaryOperator::Extension,
                 operand_expression: inner,
@@ -306,6 +309,13 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     self.tasks.push(Task::Evaluate(left_expression));
                 },
                 | BinaryOperator::Assignment => {
+                    // GCC saturates a floating `?:` stored into a bit-field
+                    // to the field's width, arm by arm (`saturation.rs`).
+                    let left = *self.info(left_expression)?;
+                    if let Some(width) = left.bit_field {
+                        let signed = self.repr(left.ty, source)?.signed();
+                        _ = self.distribute(right_expression, &[], Some((width, signed)))?;
+                    }
                     self.tasks.push(Task::Finish(expression));
                     self.tasks.push(Task::Evaluate(right_expression));
                     self.tasks.push(Task::EvaluateRaw(left_expression));
@@ -408,25 +418,37 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             },
             | E::IndirectMember {
                 base_expression, ..
-            }
-            | E::Cast {
-                operand_expression: base_expression,
-                ..
             } => {
                 self.tasks.push(Task::Finish(expression));
                 self.tasks.push(Task::Evaluate(base_expression));
             },
+            | E::Cast {
+                operand_expression: base_expression,
+                ..
+            } => {
+                _ = self.distribute(expression, &[], None)?;
+                self.tasks.push(Task::Finish(expression));
+                self.tasks.push(Task::Evaluate(base_expression));
+            },
             | E::Conditional(conditional) => {
+                // GCC folds an integer conversion into a floating `?:`'s
+                // arms (`saturation.rs`).
+                _ = self.distribute(expression, &[], None)?;
+                let distribution = self.distributed_arms(expression);
+                let ty = distribution
+                    .and_then(|index| self.distributions[index as usize].result())
+                    .unwrap_or(info.ty);
                 let then = self.draft.create_block(&[]);
                 let otherwise = self.draft.create_block(&[]);
-                let merge_params = self.merge_params(info.ty, source)?;
+                let merge_params = self.merge_params(ty, source)?;
                 let merge = self.draft.create_block(merge_params);
                 self.tasks.push(Task::ConditionalArms {
                     conditional,
                     then,
                     otherwise,
                     merge,
-                    ty: info.ty,
+                    ty,
+                    distribution,
                 });
                 self.tasks.push(Task::Condition {
                     expression: conditional.condition_expression,
@@ -688,6 +710,11 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     self.push_item(Operand::Place(place), access_ty);
                 }
             },
+            // The arms of the `?:` it casts converted already.
+            | E::Cast { .. } if self.distribution(expression).is_some() => {
+                let item = self.pop();
+                self.operands.push(item);
+            },
             | E::Cast { .. } => {
                 // A cast rounds an excess, but not GCC's widened value.
                 let item = self.pop_excess();
@@ -838,6 +865,11 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         update: bool,
     ) -> Result<(), LoweringError> {
         let source = expression.source_vectors;
+        // The arms of a distributed `?:` applied these conversions.
+        if skip == 0 && take == usize::MAX && self.distribution(expression).is_some() {
+            self.floating_conversion = None;
+            return Ok(());
+        }
         let mut item = self.pop_excess();
         let address = std::ptr::from_ref(expression).addr();
         let arm = self
@@ -1141,7 +1173,34 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 let single = self.widen_half(value);
                 self.float_from(single, Repr::Float { ty: Type::F32 }, to, source)?
             },
+            // Under GCC's rules a finite `float` constant widens exactly to a
+            // `double` one, whose conversion GCC folds (`saturation.rs`).
+            | Repr::Float { ty: Type::F32 }
+                if to == Type::F64
+                    && let Some(bits) = self.gcc_floating_constant(value)
+                    && let Ok(single) = u32::try_from(bits)
+                    && f32::from_bits(single).is_finite() =>
+                self.fconst(
+                    Type::F64,
+                    u128::from(f64::from(f32::from_bits(single)).to_bits()),
+                ),
             | Repr::Float { ty } if ty.bits() < to.bits() => self.convert(Opcode::Fpext, to, value),
+            // Under GCC's rules a finite `double` constant rounds to a
+            // `float` one as GCC folds it, to nearest.
+            | Repr::Float { ty: Type::F64 }
+                if to == Type::F32
+                    && self.gcc_floating_constant(value).is_some_and(|bits| {
+                        u64::try_from(bits).is_ok_and(|bits| f64::from_bits(bits).is_finite())
+                    }) =>
+            {
+                let bits = self.draft.float_constant(value).unwrap_or_default();
+                #[expect(
+                    clippy::cast_possible_truncation,
+                    reason = "the conversion rounds to nearest, as GCC folds it"
+                )]
+                let single = f64::from_bits(u64::try_from(bits).unwrap_or_default()) as f32;
+                self.fconst(Type::F32, u128::from(single.to_bits()))
+            },
             | Repr::Float { .. } => self.convert(Opcode::Fptrunc, to, value),
             | Repr::Int { .. } | Repr::Bool => {
                 let signed = from.signed();
@@ -1584,7 +1643,8 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         otherwise: Block,
         merge: Block,
         ty: TypeId,
-    ) {
+        distribution: Option<u32>,
+    ) -> Result<(), LoweringError> {
         // GCC converts both arms to the excess type when either arm is
         // evaluated with excess precision, and otherwise to the result type.
         if self.half_in_float() {
@@ -1604,7 +1664,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             merge,
             truth: false,
         });
-        self.tasks.push(Task::Evaluate(conditional.else_expression));
+        self.arm(conditional.else_expression, distribution)?;
         self.tasks.push(Task::Enter {
             block: otherwise,
             seal:  true,
@@ -1613,11 +1673,27 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             merge,
             truth: false,
         });
-        self.tasks.push(Task::Evaluate(conditional.then_expression));
+        self.arm(conditional.then_expression, distribution)?;
         self.tasks.push(Task::Enter {
             block: then,
             seal:  true,
         });
+        Ok(())
+    }
+
+    /// Schedules an arm of a `?:`, converted as its distribution gives.
+    fn arm(
+        &mut self,
+        arm: &'tu Expression<'tu>,
+        distribution: Option<u32>,
+    ) -> Result<(), LoweringError> {
+        match distribution {
+            | Some(index) => self.schedule_arm(arm, index),
+            | None => {
+                self.tasks.push(Task::Evaluate(arm));
+                Ok(())
+            },
+        }
     }
 }
 

@@ -9,13 +9,75 @@
 //! constant's bits: assignment, initialization, argument, return and the
 //! usual arithmetic conversions of its operand.
 
-use super::FunctionLowerer;
-use crate::ir::{
-    Type,
-    Value,
+//! GCC folds a conversion of a conditional expression into its arms, so each
+//! constant arm of a floating `?:` converted to an integer saturates on its
+//! own, to a bit-field's width when the `?:` is stored into one, and a
+//! run-time arm converts as it would alone. [`FunctionLowerer::distribute`]
+//! moves such a conversion, with those of the parentheses and floating casts
+//! around the `?:`, into each arm (`conditional_arms`), whose merged value
+//! is then the integer.
+
+use super::{
+    FunctionLowerer,
+    LoweringError,
+    types::{
+        Repr,
+        repr,
+    },
+    work::{
+        Operand,
+        Task,
+    },
+};
+use crate::{
+    ir::{
+        Type,
+        Value,
+    },
+    translation_phases::{
+        SourceVectors,
+        parsing::syntax::{
+            Expression,
+            ExpressionType,
+        },
+        semantic_analysis::{
+            ConversionKind,
+            TypeId,
+        },
+    },
+    util::bump::ArenaVec,
 };
 
-impl FunctionLowerer<'_, '_, '_, '_, '_> {
+/// An expression whose conversion GCC folds into the arms of a floating
+/// `?:` ([`FunctionLowerer::distribute`]), by address.
+#[derive(Clone, Copy)]
+pub(super) struct Distribution<'s> {
+    expression: usize,
+    /// For the `?:` itself, the types each arm converts to in turn, the
+    /// last an integer type, and the bit-field width and signedness the
+    /// result is stored into; `None` for a parenthesis or floating cast
+    /// around it, which passes the converted value through.
+    arms:       Option<Arms<'s>>,
+}
+
+/// What each arm of a distributed `?:` converts to.
+#[derive(Clone, Copy)]
+struct Arms<'s> {
+    /// The types the arm converts to in turn, the last an integer type.
+    chain: &'s [TypeId],
+    /// The width and signedness of the bit-field the value is stored into.
+    field: Option<(u32, bool)>,
+}
+
+impl Distribution<'_> {
+    /// The type of a distributed `?:`'s merged value: the last its arms
+    /// convert to.
+    pub(super) fn result(&self) -> Option<TypeId> {
+        self.arms.and_then(|arms| arms.chain.last().copied())
+    }
+}
+
+impl<'tu, 's> FunctionLowerer<'_, '_, 'tu, '_, 's> {
     /// The bits of `value` when it is a floating constant whose conversion
     /// to an integer GCC folds, under GCC's rules.
     pub(super) fn gcc_floating_constant(&self, value: Value) -> Option<u128> {
@@ -68,6 +130,173 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
             return None;
         }
         self.saturated_constant(bits, from, ty, width, signed)
+    }
+
+    /// Under GCC's rules, moves the conversion of `expression` to an
+    /// integer into the arms of the floating `?:` it is, through
+    /// parentheses and casts to floating types, and says whether it did.
+    /// `outer` are the conversions that follow, from an enclosing `?:`
+    /// whose arm this is, and `field` the bit-field the value is stored
+    /// into. A cast to an integer type takes the conversion into the arms
+    /// of its operand but is converted itself as usual afterwards.
+    pub(super) fn distribute(
+        &mut self,
+        expression: &'tu Expression<'tu>,
+        outer: &[TypeId],
+        field: Option<(u32, bool)>,
+    ) -> Result<bool, LoweringError> {
+        if self.unit.context.configuration.float_conversion_rules()
+            != crate::configuration::RuleSet::Gcc
+        {
+            return Ok(false);
+        }
+        if self.distribution(expression).is_some() {
+            return Ok(true);
+        }
+        let mut wrappers = ArenaVec::new_in(self.scratch);
+        let mut node = expression;
+        while let ExpressionType::Parenthesized { expression: inner } = node.kind {
+            wrappers.push(node);
+            node = inner;
+        }
+        let mut chain = ArenaVec::new_in(self.scratch);
+        for &converted in core::iter::once(&node).chain(wrappers.iter().rev()) {
+            for conversion in self.conversions(converted) {
+                if !matches!(
+                    conversion.kind,
+                    ConversionKind::Arithmetic
+                        | ConversionKind::Assignment
+                        | ConversionKind::DefaultArgument
+                ) {
+                    return Ok(false);
+                }
+                chain.push(conversion.ty);
+            }
+        }
+        chain.extend_from_slice(outer);
+        let types = &self.unit.sema.types;
+        let floating = |ty: TypeId| matches!(repr(types, ty), Ok(Repr::Float { ty }) if ty.half_format().is_none());
+        let integer = |ty: TypeId| matches!(repr(types, ty), Ok(Repr::Int { .. }));
+        let own = self.info(node)?.ty;
+        let ends_integer = chain.last().is_some_and(|&ty| integer(ty))
+            && chain.iter().all(|&ty| floating(ty) || integer(ty));
+        let distributed = match node.kind {
+            // A `?:` semantic analysis folded has one arm to evaluate.
+            | ExpressionType::Conditional(_) => {
+                if !floating(own) || !ends_integer || self.folded(node)?.is_some() {
+                    return Ok(false);
+                }
+                let chain = self.scratch.alloc_slice_copy(&chain);
+                self.distributions.push(Distribution {
+                    expression: std::ptr::from_ref(node).addr(),
+                    arms:       Some(Arms { chain, field }),
+                });
+                true
+            },
+            | ExpressionType::Cast {
+                operand_expression, ..
+            } if integer(own) => {
+                _ = self.distribute(operand_expression, &[own], None)?;
+                false
+            },
+            | ExpressionType::Cast {
+                operand_expression, ..
+            } if floating(own) && ends_integer => {
+                let mut inner = ArenaVec::new_in(self.scratch);
+                inner.push(own);
+                inner.extend_from_slice(&chain);
+                if !self.distribute(operand_expression, &inner, field)? {
+                    return Ok(false);
+                }
+                self.distributions.push(Distribution {
+                    expression: std::ptr::from_ref(node).addr(),
+                    arms:       None,
+                });
+                true
+            },
+            | _ => false,
+        };
+        if distributed {
+            for wrapper in wrappers {
+                self.distributions.push(Distribution {
+                    expression: std::ptr::from_ref(wrapper).addr(),
+                    arms:       None,
+                });
+            }
+        }
+        Ok(distributed)
+    }
+
+    /// The distribution of `expression`, if its conversion was moved into
+    /// a `?:`'s arms.
+    pub(super) fn distribution(&self, expression: &Expression<'_>) -> Option<Distribution<'s>> {
+        let address = std::ptr::from_ref(expression).addr();
+        self.distributions
+            .iter()
+            .rev()
+            .find(|distribution| distribution.expression == address)
+            .copied()
+    }
+
+    /// The index of the distribution of the `?:` `expression`, whose arms
+    /// take its conversion.
+    pub(super) fn distributed_arms(&self, expression: &Expression<'_>) -> Option<u32> {
+        let address = std::ptr::from_ref(expression).addr();
+        self.distributions
+            .iter()
+            .rposition(|distribution| {
+                distribution.expression == address && distribution.arms.is_some()
+            })
+            .and_then(|index| u32::try_from(index).ok())
+    }
+
+    /// Schedules an arm of the `?:` of distribution `index`: a nested `?:`
+    /// takes the conversion into its own arms, any other arm is converted
+    /// once evaluated ([`Task::ConvertArm`]).
+    pub(super) fn schedule_arm(
+        &mut self,
+        arm: &'tu Expression<'tu>,
+        index: u32,
+    ) -> Result<(), LoweringError> {
+        let Some(Arms { chain, field }) = self.distributions[index as usize].arms else {
+            return Err(LoweringError::missing(
+                "a distributed conditional has no arms",
+                arm.source_vectors,
+            ));
+        };
+        if !self.distribute(arm, chain, field)? {
+            self.tasks.push(Task::ConvertArm(index));
+        }
+        self.tasks.push(Task::Evaluate(arm));
+        Ok(())
+    }
+
+    /// Converts the arm on the stack to each type of distribution `index`
+    /// in turn, and a constant one to its bit-field's width.
+    pub(super) fn convert_arm(&mut self, index: u32) -> Result<(), LoweringError> {
+        let source = SourceVectors::empty();
+        let Some(Arms { chain, field }) = self.distributions[index as usize].arms else {
+            return Err(LoweringError::missing(
+                "a distributed conditional has no arms",
+                source,
+            ));
+        };
+        let mut item = self.pop_excess();
+        self.floating_conversion = None;
+        for &ty in chain {
+            item = self.convert_value(item, ty, source)?;
+        }
+        if let Some((width, signed)) = field
+            && let Operand::Value(value) = item.operand
+        {
+            let ty = self.value_type(item.ty, source)?;
+            if let Some(saturated) = self.field_constant(value, ty, width, signed) {
+                item.operand = Operand::Value(saturated);
+            }
+        }
+        self.floating_conversion = None;
+        self.operands.push(item);
+        Ok(())
     }
 }
 
