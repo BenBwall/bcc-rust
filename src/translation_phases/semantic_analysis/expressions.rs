@@ -551,6 +551,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     let (ty, _) = self.value_conversion(tail);
                     info = Self::expression_result(e, ty);
                     info.unfolded_binary128 = tail.unfolded_binary128;
+                    // GCC keeps a wide bit-field tail's own type, so
+                    // `({ s.u40; }) + 1` wraps at 40 bits.
+                    if self.context.configuration.compiler_identity()
+                        == crate::configuration::CompilerIdentity::Gcc
+                    {
+                        info.promotion_width = tail.promotion_width;
+                    }
                 } else {
                     info = Self::expression_result(e, self.types.scalar(Scalar::Void));
                 }

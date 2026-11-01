@@ -318,6 +318,50 @@ mod tests {
         );
     }
 
+    /// GCC also keeps a bit-field's own type in the value a postfix
+    /// operator or a statement expression yields, narrow fields included
+    /// (promoted to `int`); Clang and TCC keep the declared type there and
+    /// in arithmetic. Only the GCC identity follows GCC (the TCC and MSVC
+    /// identities use GCC's rule set elsewhere).
+    #[test]
+    fn bit_field_values_keep_their_type_through_postfix_and_statement_expressions() {
+        let source = b"#include <stdio.h>\n\
+            struct s { unsigned x3:3; unsigned long long u40:40; } \
+            x = {1, 0xFFFFFFFFFFull}, y = {1, 0xFFFFFFFFFFull};\n\
+            int main(void) {\n\
+            int a = (x.x3++) - 5 < 0;\n\
+            int b = ({ y.x3; }) - 5 < 0;\n\
+            unsigned long long c = (x.u40++) + 1;\n\
+            unsigned long long d = ({ y.u40; }) + 1;\n\
+            unsigned long long e = y.u40 + 1;\n\
+            printf(\"%d %d %llx %llx %llx\\n\", a, b, c, d, e);\n\
+            return 0;\n\
+            }\n";
+        prints_on_every_back_end("--compiler-identity=gcc", source, &["-w"], "1 1 0 0 0\n");
+        prints_on_every_back_end(
+            "--compiler-identity=clang",
+            source,
+            &["-w"],
+            "0 0 10000000000 10000000000 10000000000\n",
+        );
+        // TCC itself prints `0 1 …`: it promotes a narrow field read
+        // through a statement expression, which bcc does not follow.
+        let tcc = b"#include <stdio.h>\n\
+            struct s { unsigned long long u40:40; } x = {0xFFFFFFFFFFull}, y = {0xFFFFFFFFFFull};\n\
+            int main(void) {\n\
+            printf(\"%llx %llx %llx %llx\\n\", (unsigned long long)((x.u40++) + 1), \
+            (unsigned long long)(({ y.u40; }) + 1), (unsigned long long)(y.u40 << 8), \
+            (unsigned long long)~y.u40);\n\
+            return 0;\n\
+            }\n";
+        prints_on_every_back_end(
+            "--compiler-identity=tcc",
+            tcc,
+            &["-w"],
+            "10000000000 10000000000 ffffffffff00 ffffff0000000000\n",
+        );
+    }
+
     #[test]
     fn long_double_union_zero_initializer_clears_every_byte() {
         let source = b"struct s { char s[sizeof(long double)]; };\n\
