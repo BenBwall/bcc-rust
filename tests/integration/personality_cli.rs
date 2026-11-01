@@ -733,10 +733,14 @@ mod tests {
                 .unwrap_or_default()
                 .to_owned()
         };
-        let signed = "(- 127 - 1) (char)-1 < 0 __CHAR_UNSIGNED__ _CHAR_UNSIGNED";
+        // GCC spells `__SCHAR_MAX__` in hex.
+        let signed = |mode: &str| {
+            let max = if mode == "--gcc-mode" { "0x7f" } else { "127" };
+            format!("(- {max} - 1) (char)-1 < 0 __CHAR_UNSIGNED__ _CHAR_UNSIGNED")
+        };
         let unsigned = "0 (char)-1 < 0 1 _CHAR_UNSIGNED";
         for mode in ["--gcc-mode", "--clang-mode", "--tcc-mode"] {
-            assert_eq!(expand(mode, &[]), signed, "{mode}");
+            assert_eq!(expand(mode, &[]), signed(mode), "{mode}");
             for options in [
                 &["-funsigned-char"][..],
                 &["-fno-signed-char"],
@@ -749,7 +753,7 @@ mod tests {
                 &["-funsigned-char", "-fsigned-char"],
                 &["-fno-signed-char", "-fno-unsigned-char"],
             ] {
-                assert_eq!(expand(mode, options), signed, "{mode} {options:?}");
+                assert_eq!(expand(mode, options), signed(mode), "{mode} {options:?}");
             }
         }
         // `cl /J` defines `_CHAR_UNSIGNED`, as clang-cl's does; bcc keeps
@@ -930,9 +934,8 @@ mod tests {
         }
     }
 
-    /// The floating-point macros of the GCC identity are the host GCC's,
-    /// apart from the standard types' constants, which bcc spells as Clang
-    /// does, and what glibc's `stdc-predef.h` adds.
+    /// The floating-point macros of the GCC identity are the host GCC's
+    /// under each floating-point option.
     #[test]
     fn gcc_mode_floating_macros_match_the_host_gcc() {
         if host_gcc_macros(&[]).is_none() {
@@ -980,6 +983,87 @@ mod tests {
                 compared(&macros_with("--gcc-mode", options)),
                 compared(&host),
                 "{options:?}"
+            );
+        }
+    }
+
+    /// The GCC identity predefines exactly the host GCC's macros, spelled as
+    /// GCC spells them, in each language mode: GCC 14.2's frozen target
+    /// listing, the macros that follow the options, and what glibc's
+    /// `<stdc-predef.h>`, which GCC reads first, defines. Left out are the
+    /// GCC version, which bcc claims as 14.2, the frozen listing's
+    /// documented exclusions that bcc does not define, Ubuntu's driver
+    /// defaults (`-fstack-protector-strong`, `-fcf-protection`), and bcc's
+    /// own and protected macros.
+    #[test]
+    fn gcc_mode_predefines_the_host_gccs_macros() {
+        if host_gcc_macros(&[]).is_none() || !Path::new("/usr/include/stdc-predef.h").is_file() {
+            eprintln!("skipping: no x86-64 Linux GCC 13 or later with glibc on the host");
+            return;
+        }
+        let excluded: Vec<&str> = include_str!("../../src/target/gcc/macro-exclusions.tsv")
+            .lines()
+            .map(|line| line.split_once('\t').unwrap().0)
+            .collect();
+        let name = |line: &str| -> String {
+            line.strip_prefix("#define ")
+                .unwrap_or(line)
+                .split([' ', '('])
+                .next()
+                .unwrap()
+                .to_owned()
+        };
+        for standard in [
+            "-std=c99",
+            "-std=gnu89",
+            "-std=c11",
+            "-std=gnu17",
+            "-std=c2x",
+            "-O2",
+        ] {
+            let bcc = macros_with("--gcc-mode", &[standard]);
+            let host = host_gcc_macros(&[standard]).unwrap();
+            let bcc_names: std::collections::BTreeSet<String> = bcc.lines().map(name).collect();
+            let compared = |listing: &str| -> std::collections::BTreeSet<String> {
+                listing
+                    .lines()
+                    .filter(|line| {
+                        let name = name(line);
+                        let ignored = name.starts_with("__GNUC")
+                            || name.starts_with("__bcc")
+                            || name.starts_with("__STDC_EMBED_")
+                            || matches!(
+                                name.as_str(),
+                                "__VERSION__"
+                                    | "__GXX_ABI_VERSION"
+                                    | "__BITINT_MAXWIDTH__"
+                                    | "__SSP_STRONG__"
+                                    | "__CET__"
+                                    | "__GCC_HAVE_DWARF2_CFI_ASM"
+                                    | "__pic__"
+                                    | "__PIC__"
+                                    | "__pie__"
+                                    | "__PIE__"
+                                    | "_FORTIFY_SOURCE"
+                                    | "__STDC_MB_MIGHT_NEQ_WC__"
+                            );
+                        // An exclusion counts only where bcc defines it.
+                        !ignored
+                            && (!excluded.contains(&name.as_str()) || bcc_names.contains(&name))
+                    })
+                    .map(str::to_owned)
+                    .collect()
+            };
+            let (bcc, host) = (compared(&bcc), compared(&host));
+            assert_eq!(
+                bcc.difference(&host).collect::<Vec<_>>(),
+                Vec::<&String>::new(),
+                "{standard}: bcc only"
+            );
+            assert_eq!(
+                host.difference(&bcc).collect::<Vec<_>>(),
+                Vec::<&String>::new(),
+                "{standard}: GCC only"
             );
         }
     }
@@ -4675,8 +4759,17 @@ mod tests {
             "g.c",
             "#include \"gen.h\"\n#include <missing/sys.h>\n#include \"a.h\"\nint y;\n",
         );
+        // GCC first reads glibc's `<stdc-predef.h>`, which `-M` lists.
+        let predef = if cfg!(all(target_os = "linux", target_env = "gnu"))
+            && Path::new("/usr/include/stdc-predef.h").is_file()
+        {
+            " /usr/include/stdc-predef.h"
+        } else {
+            ""
+        };
+        let gcc_all = format!("g.o: g.c{predef} gen.h missing/sys.h a.h b.h\n");
         for (mode, option, expected) in [
-            ("--gcc-mode", "-M", "g.o: g.c gen.h missing/sys.h a.h b.h\n"),
+            ("--gcc-mode", "-M", gcc_all.as_str()),
             ("--gcc-mode", "-MM", "g.o: g.c gen.h a.h b.h\n"),
             (
                 "--clang-mode",

@@ -241,7 +241,10 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
     ) {
         let guarded = include_guard(header, self.context)
             .is_some_and(|guard| self.state.macro_definitions.contains_key(&guard));
-        if guarded {
+        // GCC's `-H` leaves out its default header (`Context::preinclude`),
+        // the only `<...>` name the command line includes.
+        let preinclude = angled && Some(includer) == self.state.command_line_file;
+        if guarded || preinclude {
             return;
         }
         let depth = u32::try_from(depth).expect("the include nesting limit is small");

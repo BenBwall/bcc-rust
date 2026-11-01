@@ -1,0 +1,177 @@
+__ATOMIC_HLE_ACQUIRE	Hardware lock elision memory-order bits are not implemented.
+__ATOMIC_HLE_RELEASE	Hardware lock elision memory-order bits are not implemented.
+__BFLT16_DECIMAL_DIG__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__BFLT16_DENORM_MIN__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__BFLT16_DIG__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__BFLT16_EPSILON__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__BFLT16_HAS_DENORM__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__BFLT16_HAS_INFINITY__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__BFLT16_HAS_QUIET_NAN__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__BFLT16_IS_IEC_60559__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__BFLT16_MANT_DIG__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__BFLT16_MAX_10_EXP__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__BFLT16_MAX_EXP__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__BFLT16_MAX__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__BFLT16_MIN_10_EXP__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__BFLT16_MIN_EXP__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__BFLT16_MIN__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__BFLT16_NORM_MAX__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__BITINT_MAXWIDTH__	The widest _BitInt follows the compiler identity; defined beside the identity macros.
+__DBL_IS_IEC_60559__	Part of the GCC identity claim, written beside the identity macros.
+__DEC128_EPSILON__	Decimal floating types are not implemented.
+__DEC128_MANT_DIG__	Decimal floating types are not implemented.
+__DEC128_MAX_EXP__	Decimal floating types are not implemented.
+__DEC128_MAX__	Decimal floating types are not implemented.
+__DEC128_MIN_EXP__	Decimal floating types are not implemented.
+__DEC128_MIN__	Decimal floating types are not implemented.
+__DEC128_SUBNORMAL_MIN__	Decimal floating types are not implemented.
+__DEC32_EPSILON__	Decimal floating types are not implemented.
+__DEC32_MANT_DIG__	Decimal floating types are not implemented.
+__DEC32_MAX_EXP__	Decimal floating types are not implemented.
+__DEC32_MAX__	Decimal floating types are not implemented.
+__DEC32_MIN_EXP__	Decimal floating types are not implemented.
+__DEC32_MIN__	Decimal floating types are not implemented.
+__DEC32_SUBNORMAL_MIN__	Decimal floating types are not implemented.
+__DEC64_EPSILON__	Decimal floating types are not implemented.
+__DEC64_MANT_DIG__	Decimal floating types are not implemented.
+__DEC64_MAX_EXP__	Decimal floating types are not implemented.
+__DEC64_MAX__	Decimal floating types are not implemented.
+__DEC64_MIN_EXP__	Decimal floating types are not implemented.
+__DEC64_MIN__	Decimal floating types are not implemented.
+__DEC64_SUBNORMAL_MIN__	Decimal floating types are not implemented.
+__DECIMAL_BID_FORMAT__	Decimal floating types are not implemented.
+__DEC_EVAL_METHOD__	Decimal floating types are not implemented.
+__FLT128_DECIMAL_DIG__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT128_DENORM_MIN__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT128_DIG__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT128_EPSILON__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT128_HAS_DENORM__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT128_HAS_INFINITY__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT128_HAS_QUIET_NAN__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT128_IS_IEC_60559__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT128_MANT_DIG__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT128_MAX_10_EXP__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT128_MAX_EXP__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT128_MAX__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT128_MIN_10_EXP__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT128_MIN_EXP__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT128_MIN__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT128_NORM_MAX__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT16_DECIMAL_DIG__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT16_DENORM_MIN__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT16_DIG__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT16_EPSILON__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT16_HAS_DENORM__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT16_HAS_INFINITY__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT16_HAS_QUIET_NAN__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT16_IS_IEC_60559__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT16_MANT_DIG__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT16_MAX_10_EXP__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT16_MAX_EXP__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT16_MAX__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT16_MIN_10_EXP__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT16_MIN_EXP__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT16_MIN__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT16_NORM_MAX__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT32X_DECIMAL_DIG__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT32X_DENORM_MIN__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT32X_DIG__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT32X_EPSILON__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT32X_HAS_DENORM__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT32X_HAS_INFINITY__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT32X_HAS_QUIET_NAN__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT32X_IS_IEC_60559__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT32X_MANT_DIG__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT32X_MAX_10_EXP__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT32X_MAX_EXP__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT32X_MAX__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT32X_MIN_10_EXP__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT32X_MIN_EXP__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT32X_MIN__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT32X_NORM_MAX__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT32_DECIMAL_DIG__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT32_DENORM_MIN__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT32_DIG__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT32_EPSILON__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT32_HAS_DENORM__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT32_HAS_INFINITY__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT32_HAS_QUIET_NAN__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT32_IS_IEC_60559__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT32_MANT_DIG__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT32_MAX_10_EXP__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT32_MAX_EXP__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT32_MAX__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT32_MIN_10_EXP__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT32_MIN_EXP__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT32_MIN__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT32_NORM_MAX__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT64X_DECIMAL_DIG__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT64X_DENORM_MIN__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT64X_DIG__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT64X_EPSILON__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT64X_HAS_DENORM__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT64X_HAS_INFINITY__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT64X_HAS_QUIET_NAN__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT64X_IS_IEC_60559__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT64X_MANT_DIG__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT64X_MAX_10_EXP__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT64X_MAX_EXP__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT64X_MAX__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT64X_MIN_10_EXP__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT64X_MIN_EXP__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT64X_MIN__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT64X_NORM_MAX__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT64_DECIMAL_DIG__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT64_DENORM_MIN__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT64_DIG__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT64_EPSILON__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT64_HAS_DENORM__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT64_HAS_INFINITY__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT64_HAS_QUIET_NAN__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT64_IS_IEC_60559__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT64_MANT_DIG__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT64_MAX_10_EXP__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT64_MAX_EXP__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT64_MAX__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT64_MIN_10_EXP__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT64_MIN_EXP__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT64_MIN__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT64_NORM_MAX__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT_EVAL_METHOD_TS_18661_3__	Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs).
+__FLT_EVAL_METHOD__	Follows the options and language mode; written by the GCC identity's macros.
+__FLT_IS_IEC_60559__	Part of the GCC identity claim, written beside the identity macros.
+__FXSR__	Vector/CPU intrinsics, inline assembly and address-space semantics are not implemented.
+__GCC_ASM_FLAG_OUTPUTS__	Vector/CPU intrinsics, inline assembly and address-space semantics are not implemented.
+__GCC_CONSTRUCTIVE_SIZE	Vector/CPU intrinsics, inline assembly and address-space semantics are not implemented.
+__GCC_DESTRUCTIVE_SIZE	Vector/CPU intrinsics, inline assembly and address-space semantics are not implemented.
+__GCC_HAVE_DWARF2_CFI_ASM	DWARF CFI assembly and unwind code generation are not implemented.
+__GCC_IEC_559	Follows the options and language mode; written by the GCC identity's macros.
+__GCC_IEC_559_COMPLEX	Follows the options and language mode; written by the GCC identity's macros.
+__GNUC_EXECUTION_CHARSET_NAME	Compiler identity/version or hosted-mode contract owned separately.
+__GNUC_MINOR__	Compiler identity/version or hosted-mode contract owned separately.
+__GNUC_PATCHLEVEL__	Compiler identity/version or hosted-mode contract owned separately.
+__GNUC_STDC_INLINE__	Compiler identity/version or hosted-mode contract owned separately.
+__GNUC_WIDE_EXECUTION_CHARSET_NAME	Compiler identity/version or hosted-mode contract owned separately.
+__GNUC__	Compiler identity/version or hosted-mode contract owned separately.
+__GXX_ABI_VERSION	C++ ABI and type-info semantics are not implemented.
+__HAVE_SPECULATION_SAFE_VALUE	__builtin_speculation_safe_value is not implemented.
+__LDBL_IS_IEC_60559__	Part of the GCC identity claim, written beside the identity macros.
+__LONG_LONG_WIDTH__	Follows the options and language mode; written by the GCC identity's macros.
+__NO_INLINE__	Follows the options and language mode; written by the GCC identity's macros.
+__PIC__	Relocation-model macros follow -fpic, -fpie and -fno-pic; defined beside the identity macros.
+__PIE__	Relocation-model macros follow -fpic, -fpie and -fno-pic; defined beside the identity macros.
+__PRAGMA_REDEFINE_EXTNAME	The advertised pragma/attribute semantics are not implemented.
+__SCHAR_WIDTH__	Follows the options and language mode; written by the GCC identity's macros.
+__SEG_FS	Vector/CPU intrinsics, inline assembly and address-space semantics are not implemented.
+__SEG_GS	Vector/CPU intrinsics, inline assembly and address-space semantics are not implemented.
+__SIZEOF_FLOAT80__	The __float80 type is not implemented.
+__STDC_HOSTED__	Compiler identity/version or hosted-mode contract owned separately.
+__STDC_UTF_16__	Follows the options and language mode; written by the GCC identity's macros.
+__STDC_UTF_32__	Follows the options and language mode; written by the GCC identity's macros.
+__STDC_VERSION__	Existing language-mode preprocessor builtin; not a target definition.
+__STDC__	Existing language-mode preprocessor builtin; not a target definition.
+__STRICT_ANSI__	Existing language-mode preprocessor builtin; not a target definition.
+__VERSION__	Part of the GCC identity claim, written beside the identity macros.
+__code_model_small__	Code generation, relocation and optimization policy are not implemented.
+__pic__	Relocation-model macros follow -fpic, -fpie and -fno-pic; defined beside the identity macros.
+__pie__	Relocation-model macros follow -fpic, -fpie and -fno-pic; defined beside the identity macros.

@@ -131,6 +131,12 @@ pub(crate) struct Context<'tu> {
     /// is already defined, which GCC and Clang do not read again, is left
     /// out.
     pub(crate) include_entries: Option<ArenaVec<'tu, IncludeEntry>>,
+    /// The header read before the main file and the `-include` files, as
+    /// GCC on a glibc target reads `<stdc-predef.h>` (its
+    /// `TARGET_C_PREINCLUDE`) when hosted and searching the standard
+    /// directories: it defines `__STDC_IEC_559__` and `__STDC_ISO_10646__`,
+    /// which the C library knows to be true. `None` when there is none.
+    pub(crate) preinclude: Option<&'tu str>,
     /// Whether a header that cannot be found is taken to be generated
     /// later, as GCC's `-MG` takes it: it is no error, and the dependency
     /// rules list it as written.

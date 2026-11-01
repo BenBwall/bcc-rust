@@ -148,6 +148,7 @@ pub(super) fn compile(
         context.preprocessed_input = true;
     } else {
         args.configure_preprocessing(&mut context);
+        context.preinclude = args.preinclude(&search);
     }
     context.configuration = context
         .configuration

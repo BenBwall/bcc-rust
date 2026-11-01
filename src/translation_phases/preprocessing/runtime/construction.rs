@@ -116,12 +116,15 @@ impl<'tu, 'pp> Preprocessor<'tu, 'pp> {
             });
             index
         });
+        let target = context.configuration.target();
+        let gnu = context.configuration.gnu_extensions();
+        let table = match context.configuration.compiler_identity() {
+            | crate::configuration::CompilerIdentity::Gcc => target.gcc_predefined_macros(gnu),
+            | _ => None,
+        };
         let definitions = language_features::with_identity_macros(
             context.tu_arena(),
-            context
-                .configuration
-                .target()
-                .predefined_macros(context.tu_arena(), context.configuration.gnu_extensions()),
+            table.unwrap_or_else(|| target.predefined_macros(context.tu_arena(), gnu)),
             context.configuration,
         );
         let builtin_index =

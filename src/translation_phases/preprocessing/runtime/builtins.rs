@@ -97,7 +97,6 @@ impl Expander<'_, '_, '_, '_> {
                 let spelling = if name == "__STDC_VERSION__" {
                     self.context
                         .configuration
-                        .standard()
                         .version_macro()
                         .expect("version built-in is registered only when defined")
                 } else if name == "__STDC_HOSTED__" && !self.context.configuration.hosted() {
