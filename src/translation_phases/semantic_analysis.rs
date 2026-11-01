@@ -97,6 +97,7 @@ mod type_generic;
 mod vectors;
 
 // Diagnostics and inspection
+mod compiler_wording;
 mod diagnostics;
 mod errors;
 mod inspection;

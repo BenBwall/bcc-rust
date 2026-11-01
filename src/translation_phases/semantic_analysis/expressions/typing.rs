@@ -382,6 +382,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 left.ty,
                 right,
                 e.operator_source_vectors.unwrap_or(e.source_vectors),
+                super::super::compiler_wording::ConversionSite::Assignment,
             ) {
                 return self.invalid_expression(e, SemanticErrorKind::InvalidAssignment);
             }
@@ -1009,6 +1010,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             && (arguments.len() < parameters.len()
                 || (!variadic && arguments.len() != parameters.len()));
         let mut unmodeled = self.types.unmodeled_type(result);
+        // GCC names the called function in its words.
+        let callee_name = function
+            .binding
+            .filter(|_| {
+                matches!(
+                    self.selected_designator(function.expression).kind,
+                    ExpressionType::Identifier(_)
+                )
+            })
+            .map(|binding| self.bindings[binding].name.name);
         for (index, &argument) in arguments.iter().enumerate() {
             let info = self.expression_info(argument);
             unmodeled = unmodeled.or(self.types.unmodeled_type(info.ty));
@@ -1020,7 +1031,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     self.convert(argument, parameter, ConversionKind::TransparentUnion);
                     continue;
                 }
-                if !self.assignment_conversion(parameter, info) {
+                let site = super::super::compiler_wording::ConversionSite::Argument {
+                    position: index + 1,
+                    callee:   callee_name,
+                };
+                if !self.assignment_conversion_for(parameter, info, site) {
                     failed = true;
                     self.error(
                         SemanticErrorKind::InvalidArgumentType,

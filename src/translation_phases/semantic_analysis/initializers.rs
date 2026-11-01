@@ -249,7 +249,12 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                             }
                             let errors_before_conversion = self.semantic_errors;
                             if matches!(self.types.nodes[target.index], TypeKind::Array(..))
-                                || !self.assignment_conversion_at(target, info, diagnostic_site)
+                                || !self.assignment_conversion_at(
+                                    target,
+                                    info,
+                                    diagnostic_site,
+                                    super::compiler_wording::ConversionSite::Initialization,
+                                )
                             {
                                 self.error(
                                     SemanticErrorKind::InvalidInitializer,

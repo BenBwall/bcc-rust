@@ -2358,6 +2358,21 @@ impl SemanticError {
             ""
         };
         let message = match (format, self.kind) {
+            // The conversion's words, which semantic analysis put together
+            // with the types (`Analyzer::conversion_wording`); GCC has one
+            // group for all incompatible pointers.
+            | (F::Gcc | F::Clang, SemanticErrorKind::PointerConstraint(group))
+                if self.name.is_some() =>
+            {
+                let option = if format == F::Gcc
+                    && group == crate::configuration::DiagnosticGroup::IncompatibleFunctionPointerTypes
+                {
+                    crate::configuration::DiagnosticGroup::IncompatiblePointerTypes.name()
+                } else {
+                    group.name()
+                };
+                return Some((arena.alloc_str(name), option));
+            },
             | (F::Gcc | F::Tcc, SemanticErrorKind::ImplicitFunctionDeclaration) =>
                 format_in!(arena, "implicit declaration of function '{name}'"),
             | (F::Gcc, SemanticErrorKind::ImplicitLibraryFunction(_)) if c99 =>

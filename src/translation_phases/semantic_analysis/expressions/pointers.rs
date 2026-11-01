@@ -5,7 +5,10 @@
 //! §6.8.6.4p3, p. 139; PDF p. 151; §6.7.8p11, p. 126; PDF p. 138.
 
 use super::{
-    super::WideStore,
+    super::{
+        WideStore,
+        compiler_wording::ConversionSite,
+    },
     ConversionKind,
     ExpressionInfo,
 };
@@ -40,7 +43,18 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         target: TypeId,
         source: ExpressionInfo<'tu>,
     ) -> bool {
-        self.assignment_conversion_at(target, source, source.expression.source_vectors)
+        self.assignment_conversion_for(target, source, ConversionSite::Other)
+    }
+
+    /// [`Self::assignment_conversion`] in a context GCC's and Clang's words
+    /// name.
+    pub(in crate::translation_phases::semantic_analysis) fn assignment_conversion_for(
+        &mut self,
+        target: TypeId,
+        source: ExpressionInfo<'tu>,
+        site: ConversionSite,
+    ) -> bool {
+        self.assignment_conversion_at(target, source, source.expression.source_vectors, site)
     }
 
     /// Uses the assignment operator as the diagnostic location while the
@@ -51,6 +65,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         target: TypeId,
         source: ExpressionInfo<'tu>,
         diagnostic_site: SourceVectors,
+        site: ConversionSite,
     ) -> bool {
         let source = self.resolve_function_value(source, Some(target));
         if self.assignment_compatible(target, source) {
@@ -70,7 +85,26 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         // Compatibility has already recorded lvalue conversion or decay.
         let (from, _) = self.value_conversion(source);
         if let Some(group) = self.pointer_conversion_violation(target, from) {
-            self.pointer_diagnostic(group, diagnostic_site);
+            let wording = self.conversion_wording(group, site, target, from, source);
+            // GCC points at an initializer, Clang at the declarator.
+            let diagnostic_site = if wording.is_some()
+                && site == ConversionSite::Initialization
+                && self.context.configuration.diagnostic_format()
+                    == crate::configuration::DiagnosticFormat::Gcc
+            {
+                source.expression.source_vectors
+            } else {
+                diagnostic_site
+            };
+            self.group_diagnostic(
+                group,
+                crate::translation_phases::semantic_analysis::SemanticErrorKind::PointerConstraint(
+                    group,
+                ),
+                diagnostic_site,
+                wording,
+                None,
+            );
             return true;
         }
         // Clang accepts function/void pointers silently by default and reports

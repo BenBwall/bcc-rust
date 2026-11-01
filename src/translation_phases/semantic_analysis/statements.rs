@@ -359,7 +359,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         None,
                     );
                 }
-            } else if !self.assignment_conversion(result, info) {
+            } else if !self.assignment_conversion_for(
+                result,
+                info,
+                super::compiler_wording::ConversionSite::Return,
+            ) {
                 self.error(
                     SemanticErrorKind::InvalidReturnConversion,
                     e.source_vectors,
