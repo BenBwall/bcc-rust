@@ -1109,10 +1109,6 @@ would use:
   names; `FLT16_SNAN` and GCC's other `__builtin_*f16` constant builtins.
 - `__BASE_FILE__`, which GCC, Clang and TCC define (TCC lists it in
   `-dM`), is undefined in every identity.
-- A translation unit with no declaration is an error in every mode
-  (`translation unit is empty`); TCC, GCC and Clang accept it, the last
-  two with a warning under `-pedantic`, so `tcc -x c header.h -c` of a
-  header holding only macros fails.
 - TCC's warnings for an implicit function declaration (`implicit
   declaration of function 'foo'`) and a function that may return no value
   (`function might return no value: 'f'`) have no bcc counterpart, and the

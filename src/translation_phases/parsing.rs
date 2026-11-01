@@ -210,8 +210,18 @@ impl<'tu> Parser<'_, 'tu, '_> {
         loop {
             let Some(token) = self.cursor.current() else {
                 // C99 §6.9p1: `translation-unit` needs at least one
-                // `external-declaration`.
-                if !self.has_external_declaration && !self.reported_empty_translation_unit {
+                // `external-declaration`. GCC, Clang and TCC accept an empty
+                // one (a source whose text is all conditioned out) and
+                // report it only under `-pedantic`, a warning, or
+                // `-pedantic-errors`, an error.
+                if !self.has_external_declaration
+                    && !self.reported_empty_translation_unit
+                    && crate::translation_phases::policy_severity(
+                        self.context.configuration.extension_policy(),
+                        crate::translation_phases::DiagnosticPolicy::Extension,
+                    )
+                    .is_some()
+                {
                     self.reported_empty_translation_unit = true;
                     self.report(ParserErrorType::EmptyTranslationUnit, None);
                 }

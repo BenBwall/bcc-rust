@@ -8,33 +8,40 @@ use super::{
     parser_errors,
     sourced_text,
     with_parse,
+    with_parse_configuration,
 };
-use crate::translation_phases::{
-    TranslationError,
-    parsing::{
-        declaration_syntax::{
-            DirectDeclarator,
-            EnumSpecifier,
-            Enumerator,
-            InitDeclarator,
-            StructDeclaration,
-            StructDeclarator,
-            StructOrUnion,
-            StructOrUnionSpecifier,
-            TypeQualifiers,
-            TypeSpecifiers,
-        },
-        errors::ParserErrorType,
-        syntax::{
-            BlockItem,
-            ExternalDeclaration,
-            StatementType,
-            StorageClass,
-        },
+use crate::{
+    configuration::{
+        CompilerConfiguration,
+        ExtensionPolicy,
     },
-    preprocessing::{
-        OperatorTokenType,
-        TokenType,
+    translation_phases::{
+        TranslationError,
+        parsing::{
+            declaration_syntax::{
+                DirectDeclarator,
+                EnumSpecifier,
+                Enumerator,
+                InitDeclarator,
+                StructDeclaration,
+                StructDeclarator,
+                StructOrUnion,
+                StructOrUnionSpecifier,
+                TypeQualifiers,
+                TypeSpecifiers,
+            },
+            errors::ParserErrorType,
+            syntax::{
+                BlockItem,
+                ExternalDeclaration,
+                StatementType,
+                StorageClass,
+            },
+        },
+        preprocessing::{
+            OperatorTokenType,
+            TokenType,
+        },
     },
 };
 
@@ -52,17 +59,29 @@ fn specifier_only_declaration_runs_through_the_machine() {
     });
 }
 
+/// GCC, Clang and TCC accept an empty translation unit; only
+/// `-pedantic` and `-pedantic-errors` report it, once.
 #[test]
 fn empty_translation_unit_emits_one_dedicated_diagnostic() {
     with_parse("", |parsed| {
         assert_eq!(parsed.items, []);
-        assert_eq!(
-            parser_errors(parsed).collect::<Vec<_>>(),
-            [&ParserErrorType::EmptyTranslationUnit]
-        );
+        assert_eq!(parser_errors(parsed).count(), 0);
         assert_eq!(parsed.parser.next_item(), None);
         assert!(parsed.parser.context.pop_pending_error().is_none());
     });
+    for policy in [ExtensionPolicy::Warn, ExtensionPolicy::Deny] {
+        with_parse_configuration(
+            "",
+            CompilerConfiguration::default().with_extension_policy(policy),
+            |parsed| {
+                assert_eq!(
+                    parser_errors(parsed).collect::<Vec<_>>(),
+                    [&ParserErrorType::EmptyTranslationUnit],
+                    "{policy:?}"
+                );
+            },
+        );
+    }
 }
 
 #[test]
