@@ -60,6 +60,7 @@ impl<'tu> Context<'tu> {
             file_system: FileSystem::Host,
             preprocessed_tokens: 0,
             pack_pragmas: ArenaVec::new_in(tu),
+            pragma_content: false,
             weak_pragmas: ArenaVec::new_in(tu),
             text_pragmas: ArenaVec::new_in(tu),
             storage_order_pragmas: ArenaVec::new_in(tu),

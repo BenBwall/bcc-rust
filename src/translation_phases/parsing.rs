@@ -216,6 +216,7 @@ impl<'tu> Parser<'_, 'tu, '_> {
                 // `-pedantic-errors`, an error.
                 if !self.has_external_declaration
                     && !self.reported_empty_translation_unit
+                    && !self.context.pragma_content
                     && crate::translation_phases::policy_severity(
                         self.context.configuration.extension_policy(),
                         crate::translation_phases::DiagnosticPolicy::Extension,

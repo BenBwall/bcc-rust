@@ -67,6 +67,10 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
         from: u32,
         at: Option<(u32, SourcePosition)>,
     ) -> bool {
+        if !self.context.pragma_content {
+            let rules = self.context.configuration.compiler_identity().rules();
+            self.context.pragma_content = pragma_is_content(rules, self.pragma_names());
+        }
         let line = if self.state.as_text {
             self.pragma_line()
         } else {
@@ -367,6 +371,32 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
     /// one space, in the translation-unit arena; `None` for a pragma that
     /// [`pragma_is_consumed`]. Its tokens are looked at, not read, so
     /// nothing is reported twice.
+    /// The pragma's first two tokens, when identifiers, looked at and not
+    /// read.
+    fn pragma_names(&self) -> [Option<&str>; 2] {
+        let mut names = [None; 2];
+        let mut count = 0;
+        for (kind, contents) in self.tokenizer.spellings() {
+            match kind {
+                | PreprocessorTokenType::Newline => break,
+                | PreprocessorTokenType::Whitespace => {},
+                | _ => {
+                    let Some(name) = names.get_mut(count) else {
+                        break;
+                    };
+                    *name = kind.is_identifier().then(|| {
+                        self.context
+                            .string_cache
+                            .at(contents)
+                            .trim_end_matches('\0')
+                    });
+                    count += 1;
+                },
+            }
+        }
+        names
+    }
+
     fn pragma_line(&self) -> Option<&'tu str> {
         let mut text = ArenaString::new_in(self.context.tu_arena());
         text.push_str("#pragma");
@@ -922,6 +952,45 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                 }
             }
         }
+    }
+}
+
+/// Whether the pragma whose first two tokens, when identifiers, are
+/// `names` keeps a translation unit that declares nothing from being empty,
+/// as each compiler's parser sees it: GCC's sees the pragmas its front end
+/// registers (`pack`, `weak`, `message`, `redefine_extname`,
+/// `scalar_storage_order` and `GCC diagnostic`, `visibility`,
+/// `push_options` and their relatives), Clang's the ones it turns into
+/// tokens for its parser (`pack`, `weak`, `align`, `ms_struct`, `options`,
+/// `redefine_extname`, `GCC visibility` and the `STDC` pragmas). The
+/// preprocessor consumes the rest (`once`, `GCC system_header`, an unknown
+/// pragma).
+fn pragma_is_content(rules: RuleSet, names: [Option<&str>; 2]) -> bool {
+    let gcc = rules == RuleSet::Gcc;
+    let [first, second] = names;
+    match first {
+        | Some("pack" | "weak" | "redefine_extname") => true,
+        | Some("message" | "scalar_storage_order") => gcc,
+        | Some("align" | "ms_struct" | "options") => !gcc,
+        | Some("GCC") =>
+            second == Some("visibility")
+                || (gcc
+                    && matches!(
+                        second,
+                        Some(
+                            "diagnostic"
+                                | "push_options"
+                                | "pop_options"
+                                | "reset_options"
+                                | "optimize"
+                                | "target"
+                                | "ivdep"
+                                | "unroll"
+                                | "novector"
+                        )
+                    )),
+        | Some("STDC") => !gcc || second == Some("FLOAT_CONST_DECIMAL64"),
+        | _ => false,
     }
 }
 

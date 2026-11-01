@@ -605,6 +605,27 @@ mod tests {
                 stderr(&refused)
             );
         }
+        // A pragma the compiler's parser sees is content, as in each
+        // compiler: `pack` in both, `GCC diagnostic` only in GCC's.
+        for (source, gcc, clang) in [
+            ("#pragma pack(1)\n", true, true),
+            ("#pragma GCC diagnostic push\n", true, false),
+            ("#pragma GCC system_header\n", false, false),
+        ] {
+            directory.write("pragma.c", source);
+            for (mode, content) in [("--gcc-mode", gcc), ("--clang-mode", clang)] {
+                let output = directory.bcc(
+                    mode,
+                    &["-pedantic-errors", "-c", "pragma.c", "-o", "pragma.o"],
+                );
+                assert_eq!(
+                    output.status.success(),
+                    content,
+                    "{mode} {source:?}: {}",
+                    stderr(&output)
+                );
+            }
+        }
     }
 
     /// A sign after `p` continues a preprocessing number from C99. Before
