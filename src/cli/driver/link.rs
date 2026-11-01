@@ -64,6 +64,13 @@ pub(super) fn link(args: &Cli, inputs: &[Input<'_>]) -> Result<i32, MainError> {
         return compile(args, source, Job::Generate(generation), dependencies)
             .map(|generated| generated.status);
     }
+    // One compiled input, whatever link options come with it, names its
+    // rule after the output, as GCC and Clang write it.
+    let lone = inputs
+        .iter()
+        .filter(|input| !matches!(input, Input::Link(_)))
+        .count()
+        == 1;
     let target = args.target;
     if target.is_wasm() {
         return Err(MainError::Driver(
@@ -90,14 +97,19 @@ pub(super) fn link(args: &Cli, inputs: &[Input<'_>]) -> Result<i32, MainError> {
         };
         match *input {
             | Input::Assembly(assembly) => {
-                let rules = dependencies::request_at(
-                    args,
-                    Some(assembly.path),
-                    false,
-                    DependencyNames::default(),
-                )?
-                .map(|rules| rules.clang_arguments(args, false))
-                .unwrap_or_default();
+                // A lone assembly input's rule names the output, as a lone
+                // C source's does and as GCC and Clang write it.
+                let names = if lone {
+                    DependencyNames {
+                        file:   Some(output),
+                        target: Some(output),
+                    }
+                } else {
+                    DependencyNames::default()
+                };
+                let rules = dependencies::request_at(args, Some(assembly.path), false, names)?
+                    .map(|rules| rules.clang_arguments(args, false))
+                    .unwrap_or_default();
                 status = combine(status, assemble(args, assembly, object.path(), &rules));
             },
             | _ => {
@@ -112,7 +124,7 @@ pub(super) fn link(args: &Cli, inputs: &[Input<'_>]) -> Result<i32, MainError> {
                 // With several, each names its own object and `.d` file, as
                 // Clang names them without `-o`; GCC would overwrite one
                 // `.d` file per source.
-                let names = if single {
+                let names = if lone {
                     DependencyNames {
                         file:   Some(output),
                         target: Some(output),

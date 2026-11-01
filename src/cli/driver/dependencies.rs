@@ -160,6 +160,11 @@ impl DependencyRequest {
         if args.driver.phony_dependencies {
             options.push("-MP".into());
         }
+        // `-MG`: a header that cannot be found is one a later step
+        // generates, as for a C source; Clang takes it beside `-M`/`-MM`.
+        if only && args.driver.generated_dependencies {
+            options.push("-MG".into());
+        }
         options
     }
 }
