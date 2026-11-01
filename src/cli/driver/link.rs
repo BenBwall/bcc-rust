@@ -8,6 +8,11 @@
 )]
 use std::ffi::OsString;
 use std::path::Path;
+#[expect(
+    clippy::disallowed_types,
+    reason = "The driver names one dependency file per input as an owned path."
+)]
+use std::path::PathBuf;
 
 use super::{
     super::{
@@ -31,6 +36,7 @@ use crate::{
         TemporaryObject,
         Toolchain,
     },
+    configuration::CompilerIdentity,
     util::bump::Bump,
 };
 
@@ -56,14 +62,19 @@ pub(super) fn link(args: &Cli, inputs: &[Input<'_>]) -> Result<i32, MainError> {
         && sysroot.is_none()
         && let Some(source) = inputs[0].c_source()
     {
-        let names = DependencyNames {
-            file:   Some(output),
-            target: Some(output),
-        };
+        let base = default_output_base(args, source.path());
+        let names = rule_names(args, true, output, base.as_deref());
         let dependencies = dependencies::request(args, source, false, names)?;
         return compile(args, source, Job::Generate(generation), dependencies)
             .map(|generated| generated.status);
     }
+    // One compiled input, whatever link options come with it, names its
+    // rule after the output, as GCC and Clang write it.
+    let lone = inputs
+        .iter()
+        .filter(|input| !matches!(input, Input::Link(_)))
+        .count()
+        == 1;
     let target = args.target;
     if target.is_wasm() {
         return Err(MainError::Driver(
@@ -90,14 +101,13 @@ pub(super) fn link(args: &Cli, inputs: &[Input<'_>]) -> Result<i32, MainError> {
         };
         match *input {
             | Input::Assembly(assembly) => {
-                let rules = dependencies::request_at(
-                    args,
-                    Some(assembly.path),
-                    false,
-                    DependencyNames::default(),
-                )?
-                .map(|rules| rules.clang_arguments(args, false))
-                .unwrap_or_default();
+                // A lone assembly input's rule names the output, as a lone
+                // C source's does and as GCC and Clang write it.
+                let base = default_output_base(args, assembly.path);
+                let names = rule_names(args, lone, output, base.as_deref());
+                let rules = dependencies::request_at(args, Some(assembly.path), false, names)?
+                    .map(|rules| rules.clang_arguments(args, false))
+                    .unwrap_or_default();
                 status = combine(status, assemble(args, assembly, object.path(), &rules));
             },
             | _ => {
@@ -112,14 +122,8 @@ pub(super) fn link(args: &Cli, inputs: &[Input<'_>]) -> Result<i32, MainError> {
                 // With several, each names its own object and `.d` file, as
                 // Clang names them without `-o`; GCC would overwrite one
                 // `.d` file per source.
-                let names = if single {
-                    DependencyNames {
-                        file:   Some(output),
-                        target: Some(output),
-                    }
-                } else {
-                    DependencyNames::default()
-                };
+                let base = default_output_base(args, source.path());
+                let names = rule_names(args, lone, output, base.as_deref());
                 let dependencies = dependencies::request(args, source, false, names)?;
                 let generated = compile(args, source, Job::Generate(&job), dependencies)?;
                 status = combine(status, generated.status);
@@ -171,6 +175,49 @@ pub(super) fn link(args: &Cli, inputs: &[Input<'_>]) -> Result<i32, MainError> {
             Ok(FAILURE_STATUS)
         },
     }
+}
+
+/// The names of a compiled input's dependency rules in a link: a lone
+/// input's file and target are the `-o` output's (`prog.d`, `prog:`).
+/// Without `-o`, the sources name them (`f.o:`), in GCC's `.d` file after
+/// its default output's dump base (`base`, as `a-f.d`), in Clang's after
+/// the source (`f.d`). Several inputs with `-o` name their own, as Clang
+/// names them; GCC would overwrite one `prog.d` per source.
+fn rule_names<'a>(
+    args: &Cli,
+    lone: bool,
+    output: &'a Path,
+    base: Option<&'a Path>,
+) -> DependencyNames<'a> {
+    if args.driver.default_output {
+        DependencyNames {
+            file:   base,
+            target: None,
+        }
+    } else if lone {
+        DependencyNames {
+            file:   Some(output),
+            target: Some(output),
+        }
+    } else {
+        DependencyNames::default()
+    }
+}
+
+/// GCC's dump base for `source` when it links to its default output:
+/// `a-STEM`, whose `.d` file `-MD` writes, as GCC 11 and later name it.
+/// `None` under the other identities, with `-o`, or for stdin.
+/// GCC manual, "Overall Options", `-dumpbase`.
+#[expect(
+    clippy::disallowed_types,
+    clippy::disallowed_macros,
+    reason = "The driver names one file per input as an owned path."
+)]
+fn default_output_base(args: &Cli, source: &Path) -> Option<PathBuf> {
+    let gcc = CompilerIdentity::from(args.compiler_identity) == CompilerIdentity::Gcc;
+    let name = source.file_name().filter(|_| source != Path::new("-"))?;
+    (gcc && args.driver.default_output)
+        .then(|| PathBuf::from(format!("a-{}", name.to_string_lossy())))
 }
 
 /// Assembles `assembly` into the object `object` with the bundled clang

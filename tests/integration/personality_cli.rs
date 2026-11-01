@@ -3758,6 +3758,47 @@ mod tests {
         );
     }
 
+    /// Without `-o`, a link's dependency rules name each source and its
+    /// object: GCC writes them to `a-SOURCE.d`, after its default output's
+    /// dump base, and Clang to `SOURCE.d`, link options or not; with `-o`,
+    /// a lone input's rule names the output.
+    #[test]
+    fn link_dependencies_without_an_output_name_the_sources() {
+        if !cfg!(all(target_os = "linux", target_env = "gnu")) {
+            return;
+        }
+        let directory = Directory::new();
+        directory.write("inc.h", "int x;\n");
+        directory.write("c.c", "#include \"inc.h\"\nint main(void) { return x; }\n");
+        directory.write("s.S", ".globl main\nmain:\n xor %eax, %eax\n ret\n");
+        for (mode, prefix) in [("--gcc-mode", "a-"), ("--clang-mode", "")] {
+            for (source, rule) in [("c.c", "c.o: c.c inc.h\n"), ("s.S", "s.o: s.S\n")] {
+                for link in [&[][..], &["-lm"]] {
+                    let mut args = vec!["-MMD", source];
+                    args.extend(link);
+                    let output = directory.bcc(mode, &args);
+                    succeeds(&output);
+                    let stem = source.split('.').next().unwrap();
+                    let file = directory.path(&format!("{prefix}{stem}.d"));
+                    assert_eq!(
+                        std::fs::read_to_string(&file).unwrap_or_default(),
+                        rule,
+                        "{mode} {args:?}"
+                    );
+                    std::fs::remove_file(file).unwrap();
+                    assert!(!directory.path("a.d").exists(), "{mode} {args:?}");
+                }
+                let output = directory.bcc(mode, &["-MMD", source, "-lm", "-o", "prog"]);
+                succeeds(&output);
+                let named = std::fs::read_to_string(directory.path("prog.d")).unwrap();
+                assert_eq!(
+                    named,
+                    rule.replacen(&format!("{}.o", &source[..1]), "prog", 1)
+                );
+            }
+        }
+    }
+
     /// `-run FILE ARGS...` reads the options before FILE as its own, gives
     /// the program the arguments after it, and `tcc FILES -run -- ARGS`
     /// runs FILES; `-rstdin` gives the program a file as its input.

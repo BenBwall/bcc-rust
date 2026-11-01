@@ -1009,6 +1009,32 @@ mod tests {
                 .replace("\r\n", "\n"),
             format!("deps.o: f.S forced.h {inc}\n")
         );
+        // `-MG` takes a header that cannot be found to be a generated one,
+        // as for a C source.
+        std::fs::write(
+            project.path("mg.S"),
+            "#include \"gen.h\"\n.globl g\ng:\n ret\n",
+        )
+        .unwrap();
+        let generated = project.bcc(&["-MM", "-MG", "mg.S"]);
+        succeeds(&generated);
+        assert_eq!(
+            stdout(&generated).replace("\r\n", "\n"),
+            "mg.o: mg.S gen.h\n"
+        );
+        // A lone assembly input's rule names the linked output, as GCC
+        // and Clang write it.
+        if cfg!(all(target_os = "linux", target_env = "gnu")) {
+            let mut args = vec!["-MMD", "-nostdlib", "f.S", "-o", "prog"];
+            args.extend(options);
+            let linked = project.bcc(&args);
+            assert_eq!(
+                std::fs::read_to_string(project.path("prog.d")).unwrap_or_default(),
+                format!("prog: f.S forced.h {inc}\n"),
+                "{}",
+                stderr(&linked)
+            );
+        }
         // Clang's warnings reach stderr, and `-w` and `-Werror` apply.
         std::fs::write(
             project.path("w.S"),
