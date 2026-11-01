@@ -684,15 +684,21 @@ pub fn Deck(
     let strip = NodeRef::<html::Button>::new();
     // Whether rows lie below the body's foot, and whether they would without
     // the strip: while it shows it takes its own height from the body, so
-    // measured against the shortened body it would never hide again.
+    // measured against the shortened body it would never hide again. A
+    // resize observer may call it after the deck is gone; it then does
+    // nothing.
     let measure = move |element: &web_sys::Element| {
-        let taken = if overflows.get_untracked() {
-            strip.get_untracked().map_or(0, |strip| strip.offset_height())
+        let taken = if overflows.try_get_untracked() == Some(true) {
+            strip
+                .try_get_untracked()
+                .flatten()
+                .map_or(0, |strip| strip.offset_height())
         } else {
             0
         };
-        more.set(element.scroll_top() + element.client_height() + 2 < element.scroll_height());
-        overflows.set(element.client_height() + taken + 2 < element.scroll_height());
+        _ = more
+            .try_set(element.scroll_top() + element.client_height() + 2 < element.scroll_height());
+        _ = overflows.try_set(element.client_height() + taken + 2 < element.scroll_height());
     };
     let at = move || cursor.get().unwrap_or(0);
     let rows = Memo::new(move |_| {
@@ -733,6 +739,7 @@ pub fn Deck(
         }
     });
     observe_width(body, width, full);
+    observe_rows(body, measure);
     // A step moves the tape, not the head: keep the playhead in the middle
     // stretch of the viewport. The tape glides a short way, and jumps when
     // Run is stepping, for a long way, or when motion is reduced.
@@ -1682,6 +1689,40 @@ fn Spool(side: &'static str, fill: Signal<f64>, turn: Signal<f64>) -> impl IntoV
             </svg>
         </div>
     }
+}
+
+/// Call `measure` on the deck's body whenever it or its rows change size:
+/// a fold opened or a viewport resized lays the rows out again after the
+/// effects that track them have run, so only the layout tells when the
+/// rows outgrow the body or fit it again.
+fn observe_rows(element: NodeRef<html::Div>, measure: impl Fn(&web_sys::Element) + Copy + 'static) {
+    #[cfg(feature = "hydrate")]
+    Effect::new(move |observing: Option<bool>| {
+        use wasm_bindgen::JsCast;
+        if observing == Some(true) {
+            return true;
+        }
+        let Some(node) = element.get() else {
+            return false;
+        };
+        let closure = wasm_bindgen::closure::Closure::<dyn FnMut()>::new(move || {
+            if let Some(Some(node)) = element.try_get_untracked() {
+                measure(&node);
+            }
+        });
+        if let Ok(observer) = web_sys::ResizeObserver::new(closure.as_ref().unchecked_ref()) {
+            observer.observe(&node);
+            // The lane names list every row, so they grow and shrink with
+            // them.
+            if let Some(names) = node.first_element_child() {
+                observer.observe(&names);
+            }
+        }
+        closure.forget();
+        true
+    });
+    #[cfg(not(feature = "hydrate"))]
+    let _ = (element, measure);
 }
 
 /// Keep `width` at the width of the deck's window onto the tape: its body
