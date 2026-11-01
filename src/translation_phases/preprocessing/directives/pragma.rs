@@ -19,9 +19,15 @@ use super::super::{
     },
 };
 use crate::{
+    configuration::{
+        CompilerIdentity,
+        RuleSet,
+    },
     translation_phases::{
         Context,
+        SourcePosition,
         SourceVectors,
+        TextPragma,
         interface::StrExt,
         preprocessor_tokenizer::{
             PreprocessorToken,
@@ -35,7 +41,7 @@ use crate::{
     },
 };
 
-impl Expander<'_, '_, '_, '_> {
+impl<'tu> Expander<'_, 'tu, '_, '_> {
     /// Executes a `#pragma` directive, or the pragma of a `_Pragma` operator,
     /// returning whether its new-line was consumed. Most operands are not
     /// macro-replaced; pack operands are replaced for GCC/Clang compatibility.
@@ -50,11 +56,49 @@ impl Expander<'_, '_, '_, '_> {
     /// are ignored (paragraph 1), and one that does not begin with an
     /// identifier draws a warning first. `from` is the physical
     /// invocation's byte offset, including when `_Pragma` supplies tokens
-    /// from a synthetic string (C99 §6.10.9p1, p. 161; PDF p. 173).
+    /// from a synthetic string (C99 §6.10.9p1, p. 161; PDF p. 173), and `at`
+    /// the source file being read and the reader's position in it.
+    ///
+    /// A text of phase 4 ([`Context::phase_four_text`]) writes the pragma
+    /// back where it was, spelled as written, unless the preprocessor alone
+    /// carries it out ([`pragma_is_consumed`]), as GCC and Clang do.
     pub(in crate::translation_phases::preprocessing) fn parse_pragma_directive(
         &mut self,
         from: u32,
+        at: Option<(u32, SourcePosition)>,
     ) -> bool {
+        let line = if self.state.as_text {
+            self.pragma_line()
+        } else {
+            None
+        };
+        let position = self.context.preprocessed_tokens;
+        let packs = self.context.pack_pragmas.len();
+        let consumed_newline = self.execute_pragma(from);
+        // TCC writes a pack pragma's operands as it replaced them, so that
+        // its text compiles as the source does.
+        let line = match line {
+            | Some(_)
+                if self.context.configuration.compiler_identity() == CompilerIdentity::Tcc
+                    && self.context.pack_pragmas.len() > packs =>
+                Some(self.replaced_pack_line()),
+            | line => line,
+        };
+        if let Some(text) = line
+            && let Some((file, at)) = at
+        {
+            self.context.text_pragmas.push(TextPragma {
+                position,
+                file,
+                line: at.line,
+                text,
+            });
+        }
+        consumed_newline
+    }
+
+    /// Carries out the pragma [`Self::parse_pragma_directive`] reads.
+    fn execute_pragma(&mut self, from: u32) -> bool {
         let mut consumed_newline = false;
         let mut completed_stdc = false;
         'base: loop {
@@ -311,8 +355,75 @@ impl Expander<'_, '_, '_, '_> {
         consumed_newline
     }
 
-    /// GCC/Clang pack operands are macro-replaced, unlike ordinary pragmas.
-    /// Pass their tokens and output boundary to phase 7 for interpretation.
+    /// The line of the pragma about to be read, as a text of phase 4 writes
+    /// it: `#pragma` and its tokens as spelled, each run of white space as
+    /// one space, in the translation-unit arena; `None` for a pragma that
+    /// [`pragma_is_consumed`]. Its tokens are looked at, not read, so
+    /// nothing is reported twice.
+    fn pragma_line(&self) -> Option<&'tu str> {
+        let mut text = ArenaString::new_in(self.context.tu_arena());
+        text.push_str("#pragma");
+        let mut names = [None; 2];
+        let mut count = 0;
+        let mut space = true;
+        for (kind, contents) in self.tokenizer.spellings() {
+            match kind {
+                | PreprocessorTokenType::Newline => break,
+                | PreprocessorTokenType::Whitespace => space = true,
+                | _ => {
+                    let spelling = self
+                        .context
+                        .string_cache
+                        .at(contents)
+                        .trim_end_matches('\0');
+                    if space || count == 0 {
+                        text.push(' ');
+                    }
+                    space = false;
+                    if let Some(name) = names.get_mut(count) {
+                        *name = kind.is_identifier().then_some(spelling);
+                    }
+                    count += 1;
+                    text.push_str(spelling);
+                },
+            }
+        }
+        let rules = self.context.configuration.compiler_identity().rules();
+        if pragma_is_consumed(rules, names) {
+            return None;
+        }
+        // GCC writes the space after `#pragma` even before nothing.
+        if count == 0 && rules == RuleSet::Gcc {
+            text.push(' ');
+        }
+        Some(text.into_str())
+    }
+
+    /// The last pack pragma's line with its operands as they were replaced,
+    /// as TCC's `-E` writes it: `#pragma pack(push, 2)` for `#define N 2`
+    /// and `#pragma pack(push, N)`.
+    fn replaced_pack_line(&self) -> &'tu str {
+        let mut text = ArenaString::new_in(self.context.tu_arena());
+        text.push_str("#pragma pack");
+        if let Some(pack) = self.context.pack_pragmas.last() {
+            for operand in pack.operands {
+                let spelling = self.context.string_cache.at(operand.spelling);
+                text.push_str(spelling.trim_end_matches('\0'));
+                if spelling == "," {
+                    text.push(' ');
+                }
+            }
+        }
+        text.into_str()
+    }
+
+    /// Pass a pack pragma's tokens and output boundary to phase 7 for
+    /// interpretation. Clang macro-replaces the operands, unlike ordinary
+    /// pragmas, and so do TCC and `cl` as clang-cl models it; GCC alone
+    /// does not, so with `#define N 2`, `#pragma pack(N)` is an unknown
+    /// action it ignores. A compiler's own identity decides this, not the
+    /// rule set it shares. Either way `-E` writes the operands as spelled,
+    /// so only GCC's rule compiles its own `-E` text the same.
     /// C99: §6.10.6p1 and footnote 152, p. 159; PDF p. 171 permit this choice.
     /// Clang: <https://clang.llvm.org/doxygen/ParsePragma_8cpp_source.html>.
     fn retain_pack_pragma(&mut self, source: SourceVectors) {
@@ -322,12 +433,19 @@ impl Expander<'_, '_, '_, '_> {
         };
         let arena = self.context.tu_arena();
         let mut operands = crate::util::bump::ArenaVec::new_in(arena);
-        self.expand_pragma_line(source, |_, token| {
-            operands.push(PackToken {
-                spelling:   token.contents,
-                identifier: token.kind.is_identifier(),
-            });
-        });
+        let operand = |token: PreprocessorToken| PackToken {
+            spelling:   token.contents,
+            identifier: token.kind.is_identifier(),
+        };
+        if self.context.configuration.compiler_identity() == CompilerIdentity::Gcc {
+            while let Some(token) = Self::next_ignore_whitespace(&mut self.tokenizer, self.context)
+                && token.kind != PreprocessorTokenType::Newline
+            {
+                operands.push(operand(token));
+            }
+        } else {
+            self.expand_pragma_line(source, |_, token| operands.push(operand(token)));
+        }
         let source = self.context.retain_token_source(source);
         self.context.pack_pragmas.push(PackPragma {
             position: self.context.preprocessed_tokens,
@@ -750,5 +868,31 @@ impl Expander<'_, '_, '_, '_> {
                 }
             }
         }
+    }
+}
+
+/// Whether the preprocessor alone carries out the pragma whose first two
+/// tokens, when identifiers, are `names`, so that a text of phase 4 does not
+/// write it, as each compiler's `-E` leaves it out: `once`, `push_macro`,
+/// `pop_macro` and `GCC system_header`, `poison` or `dependency` for both;
+/// `GCC warning` and `GCC error` for GCC, which reports them while
+/// preprocessing; and for Clang its own preprocessor's `clang` pragmas and
+/// MSVC's `region`, `endregion` and `mark`. Every other pragma is for later
+/// phases, or for none.
+/// C99: §6.10.6 paragraph 1, p. 159; PDF p. 171.
+fn pragma_is_consumed(rules: RuleSet, names: [Option<&str>; 2]) -> bool {
+    match names {
+        | [Some("once" | "push_macro" | "pop_macro"), _]
+        | [Some("GCC"), Some("system_header" | "poison" | "dependency")] => true,
+        | [Some("GCC"), Some("warning" | "error")] => rules == RuleSet::Gcc,
+        | [
+            Some("clang"),
+            Some(
+                "deprecated" | "poison" | "system_header" | "dependency" | "restrict_expansion"
+                | "final" | "module",
+            ),
+        ]
+        | [Some("region" | "endregion" | "mark"), _] => rules == RuleSet::Clang,
+        | _ => false,
     }
 }

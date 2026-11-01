@@ -64,15 +64,15 @@ pub(super) fn print_preprocessed<'tu>(
     let text_arena = Bump::new();
     let steps_arena = Bump::new();
     let mut steps = ArenaVec::new_in(&steps_arena);
+    // The text is phase 4's, as GCC and Clang print it: each token as it
+    // was spelled, adjacent string literals apart.
+    context.phase_four_text = true;
     let (writer, macros) = with_preprocessor(
         context,
         source_filename,
         input_string,
         search,
         |mut preprocessor, context, _pp| {
-            // The text is phase 4's, as GCC and Clang print it: each token
-            // as it was spelled, adjacent string literals apart.
-            preprocessor.read_as_text();
             let main_file = context.intern_source_file(source_filename);
             let mut writer = TextWriter::new(&text_arena, options, main_file);
             let mut pragmas = Pragmas::default();

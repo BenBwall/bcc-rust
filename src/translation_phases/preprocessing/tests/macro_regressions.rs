@@ -57,6 +57,72 @@ fn a_pasted_name_of_the_macro_being_replaced_stays_unreplaced() {
 }
 
 #[test]
+fn a_paste_with_a_placemarker_keeps_the_other_operands_paint() {
+    // C99 6.10.3.3p2-3: `##` with an empty operand yields the other operand
+    // itself, so an `F` read while F was being replaced stays painted
+    // (6.10.3.4p2) and the `(2)` after it calls nothing, as in GCC and
+    // Clang. The paste is still checked against the list holding the `##`.
+    let glue = "#define glue(a, b) a ## b\n";
+    let variadic = "#define vg(a, ...) a ## __VA_ARGS__\n#define vh(a, ...) __VA_ARGS__ ## a\n";
+    for (source, expected) in [
+        ("#define F(n) glue(F,\nF(1) )(2) )\n", "F ( 2 ) )"),
+        ("#define F(n) glue(, F\nF(1) )(2) )\n", "F ( 2 ) )"),
+        ("#define F(n) glue(F, n\nF() )(2) )\n", "F ( 2 ) )"),
+        ("#define F(n) vg(, F\nF(1) )(2) )\n", "F ( 2 ) )"),
+        ("#define F(n) vh(, F\nF(1) )(2) )\n", "F ( 2 ) )"),
+        (
+            "#define id(x) x\n#define F(n) id(glue(, F)\nF(1) ))(2) )\n",
+            "F ) ( 2 ) )",
+        ),
+        ("#define G glue(, G\nG )(1) )\n", "G ( 1 ) )"),
+        (
+            "#define g3(a,b,c) a ## b ## c\n#define F(n) g3(, , F\nF(1) )(2) )\n",
+            "F ( 2 ) )",
+        ),
+    ] {
+        assert_expansion(&format!("{glue}{variadic}{source}"), expected);
+    }
+}
+
+#[test]
+fn a_name_from_a_paste_operand_is_rescanned_with_the_pasting_list() {
+    // C99 6.10.3.3p2 and 6.10.3.4p1-2: the argument of a `##` operand is
+    // substituted as written and rescanned with the replacement list
+    // holding the `##`, whose macro is still being replaced, so neither the
+    // rest of the operand nor what a pasted name expands to may call glue
+    // again, as in GCC and Clang.
+    let source = "#define glue(a,b) a ## b\n#define CALL glue(gl, ue) (\n#define OBJ \
+                  glue\n#define K glue(C, ALL)\n";
+    for (invocation, expected) in [
+        ("glue(CA, LL) 3, 4)", "glue ( gl , ue ) ( 3 , 4 )"),
+        ("glue(CA, LL x) 3, 4)", "glue ( gl , ue ) ( x 3 , 4 )"),
+        ("glue(,CALL) 5, 6)", "glue ( gl , ue ) ( 5 , 6 )"),
+        ("glue(CALL,) 7, 8)", "glue ( gl , ue ) ( 7 , 8 )"),
+        ("K 7, 8)", "glue ( gl , ue ) ( 7 , 8 )"),
+        ("glue(x, y glue(1,2))", "xy glue ( 1 , 2 )"),
+        ("glue(O, BJ)(1,2)", "glue ( 1 , 2 )"),
+        ("glue(, OBJ)(1,2)", "glue ( 1 , 2 )"),
+    ] {
+        assert_expansion(&format!("{source}{invocation}\n"), expected);
+    }
+}
+
+#[test]
+fn a_pragma_operator_in_an_argument_takes_effect_where_the_argument_lands() {
+    // C99 6.10.3.1p1: an argument is replaced before it is substituted, but
+    // GCC and Clang carry out a `_Pragma` in it only where the replaced
+    // argument is rescanned, so `pack(1)` follows `struct a` here.
+    let source = "#define FOO(x) x\nFOO(struct a { char c; int i; }; _Pragma(\"pack(1)\") struct \
+                  b { char c; int i; };)\n";
+    with_tokens_of(source, "<test>", |tokens, context| {
+        assert_eq!(tokens.len(), 22);
+        let positions: Vec<_> = context.pack_pragmas.iter().map(|p| p.position).collect();
+        // After the 11 tokens of `struct a { char c; int i; };`.
+        assert_eq!(positions, [11]);
+    });
+}
+
+#[test]
 fn stringified_replacements_keep_only_the_invocations_spacing() {
     // C99 6.10.3p7: the white space before a replacement list is not part
     // of it, so `#` spaces a replacement as its invocation was spaced, as

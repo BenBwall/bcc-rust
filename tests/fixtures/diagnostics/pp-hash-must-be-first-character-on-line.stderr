@@ -1,9 +1,23 @@
-warning: stray `#` in program
+error: stray `#` in program
  --> pp-hash-must-be-first-character-on-line.c:1:12
   |
 1 | int value; #define X 1
-  |            ^ a directive must start a line
+  |            ^ this `#` begins no directive
   |
-  = note: C99 §6.10p2: `#` begins a directive only as the first token on a line; elsewhere it is valid only inside a function-like macro definition
+  = note: C99 §6.10p2: `#` begins a directive only as the first token on a line of the source; elsewhere it is valid only inside a function-like macro definition
 
-1 warning generated.
+error: unknown type name `define`
+ --> pp-hash-must-be-first-character-on-line.c:1:13
+  |
+1 | int value; #define X 1
+  |             ^^^^^^ not a type name in scope
+  |
+  = note: C99 §6.7.7: an identifier names a type only after a `typedef` declares it
+
+error: expected `,`, `=`, `;`, or a function body after the declarator, found integer constant `1`
+ --> pp-hash-must-be-first-character-on-line.c:1:22
+  |
+1 | int value; #define X 1
+  |                      ^ expected one of `,`, `=`, `;`, or `{`
+
+3 errors generated.

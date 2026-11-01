@@ -145,6 +145,11 @@ impl<'pp: 'x, 'x> Expander<'_, '_, 'pp, 'x> {
             | "__STDC_EMBED_FOUND__" => 1,
             | "__STDC_EMBED_EMPTY__" => 2,
             | _ => {
+                let name = self.context.string_cache.at(token.contents);
+                // Deferred in a prescan, as `_Pragma` is.
+                if name == "__pragma" && self.in_prescan() {
+                    return Some(token);
+                }
                 let from = self.invocation_location(token).index;
                 let tokens = self.query_arguments::<false>(token)?.leak();
                 let name = self.context.string_cache.at(token.contents);
@@ -154,6 +159,7 @@ impl<'pp: 'x, 'x> Expander<'_, '_, 'pp, 'x> {
                         contents:       self.context.string_cache.intern("\n"),
                         source_vectors: token.source_vectors,
                     };
+                    let at = self.reading_position();
                     let old = std::mem::replace(
                         &mut self.tokenizer,
                         TokenSource::replay(
@@ -163,7 +169,7 @@ impl<'pp: 'x, 'x> Expander<'_, '_, 'pp, 'x> {
                             SourceVector::default(),
                         ),
                     );
-                    _ = self.parse_pragma_directive(from);
+                    _ = self.parse_pragma_directive(from, at);
                     self.tokenizer = old;
                     return None;
                 }

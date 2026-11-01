@@ -26,7 +26,10 @@ use super::{
     MacroArguments,
 };
 use crate::{
-    configuration::Feature,
+    configuration::{
+        Feature,
+        RuleSet,
+    },
     translation_phases::{
         TranslationPhase,
         preprocessor_tokenizer::{
@@ -116,18 +119,20 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                     }
                     index += 1;
                 }
-                let selected = if self.variadic_argument_is_empty(&mut empty, invocation, argument)
-                {
-                    ArenaVec::new_in(self.scratch)
-                } else {
-                    self.expand_optional_replacement(
-                        invocation,
-                        arguments,
-                        argument,
-                        &tokens[start..index],
-                        &mut empty,
-                    )
-                };
+                let mut selected =
+                    if self.variadic_argument_is_empty(&mut empty, invocation, argument) {
+                        ArenaVec::new_in(self.scratch)
+                    } else {
+                        self.expand_optional_replacement(
+                            invocation,
+                            arguments,
+                            argument,
+                            &tokens[start..index],
+                            &mut empty,
+                        )
+                    };
+                let trailing =
+                    self.optional_boundary_whitespace(&mut selected, &tokens[start..index]);
                 let hash = output
                     .iter()
                     .rposition(|t: &PreprocessorToken| t.kind != T::Whitespace)
@@ -160,6 +165,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                         contents:       self.context.string_cache.intern(""),
                         source_vectors: token.source_vectors,
                     });
+                    output.extend(trailing);
                 } else {
                     let mut name = ArenaString::new_in(self.scratch);
                     _ = write!(name, "__VA_OPT__ {}", results.len());
@@ -216,6 +222,53 @@ impl<'x> Expander<'_, '_, '_, 'x> {
             TokenSource::replay(self.context, self.scratch, &[&output], location),
             arguments,
         )
+    }
+
+    /// Settles the white space at the ends of an optional replacement,
+    /// `selected`, written as `written`, which only a `#` applied to the
+    /// enclosing tokens can see, and which the compilers spell differently:
+    /// GCC drops it, so `#` of `-__VA_OPT__( x )-` spells `"-x-"`, and Clang
+    /// keeps it, the space before `)` even when the replacement is empty:
+    /// `"- x -"`, or `"- -"` without variable arguments. Returns, for an
+    /// empty replacement under Clang's rules, the white space to write in
+    /// its place.
+    /// C23: §6.10.5.1 paragraph 3, p. 179; PDF p. 192 leaves the white space
+    /// of the replacement to §6.10.3.2 paragraph 2, which counts only the
+    /// white space between the argument's tokens.
+    fn optional_boundary_whitespace(
+        &self,
+        selected: &mut ArenaVec<'x, PreprocessorToken>,
+        written: &[PreprocessorToken],
+    ) -> Option<PreprocessorToken> {
+        let blank = |token: &PreprocessorToken| {
+            matches!(
+                token.kind,
+                PreprocessorTokenType::Whitespace | PreprocessorTokenType::Newline
+            )
+        };
+        let end = selected
+            .iter()
+            .rposition(|token| !blank(token))
+            .map_or(0, |i| i + 1);
+        selected.truncate(end);
+        let start = selected
+            .iter()
+            .position(|token| !blank(token))
+            .unwrap_or(end);
+        drop(selected.drain(..start));
+        if self.context.configuration.compiler_identity().rules() == RuleSet::Gcc {
+            return None;
+        }
+        let leading = written.first().copied().filter(blank);
+        let trailing = written.last().copied().filter(blank);
+        if selected.is_empty() {
+            return trailing.or(leading);
+        }
+        if let Some(leading) = leading {
+            selected.insert(0, leading);
+        }
+        selected.extend(trailing);
+        None
     }
 
     /// Validates the optional variadic replacement at definition time.

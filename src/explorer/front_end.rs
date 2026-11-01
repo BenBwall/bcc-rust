@@ -363,6 +363,7 @@ fn phase_four(
     let tu = Bump::new();
     let source = tu.alloc_str(source);
     let mut context = new_context(&tu, configuration, options);
+    context.phase_four_text = true;
     // The preprocessor opens the source under this name, as this index.
     let main_file = context.intern_source_file(Path::new(INPUT));
     let text_arena = Bump::new();
@@ -382,7 +383,6 @@ fn phase_four(
         header_search(&tu, options),
         options.trace.then_some(&trace_arena),
         |mut preprocessor, context, _pp| {
-            preprocessor.read_as_text();
             preprocessor.record_header_names();
             let mut ordinal = 0;
             preprocessor.for_each_iterator_item_read_at(context, |context, token, at| {

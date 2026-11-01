@@ -486,9 +486,15 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                 | TokenizerFrameType::FunctionLikeMacroArgument {
                     argument,
                     released: false,
+                    operand,
                     ..
                 } => {
-                    return argument.disabled_macros.contains(&name);
+                    if argument.disabled_macros.contains(&name) {
+                        return true;
+                    }
+                    if !operand {
+                        return false;
+                    }
                 },
                 | TokenizerFrameType::ObjectLikeMacroInvocation {
                     name: active,
@@ -516,6 +522,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                 | TokenizerFrameType::FunctionLikeMacroArgument {
                     argument,
                     released: false,
+                    operand: false,
                     ..
                 } => return argument.disabled_macros,
                 | _ => (),
@@ -527,10 +534,13 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                 | TokenizerFrameType::FunctionLikeMacroArgument {
                     argument,
                     released: false,
+                    operand,
                     ..
                 } => {
                     names.extend_from_slice(argument.disabled_macros);
-                    break;
+                    if !operand {
+                        break;
+                    }
                 },
                 | TokenizerFrameType::ObjectLikeMacroInvocation {
                     name,

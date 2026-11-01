@@ -149,9 +149,15 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         mut lhs: PreprocessorToken,
         mut rhs: PreprocessorToken,
     ) -> Option<PreprocessorToken> {
-        for token in [&mut lhs, &mut rhs] {
-            if token.kind.is_identifier() {
-                token.kind = PreprocessorTokenType::Identifier;
+        // A placemarker leaves the other operand as it was, painted or not
+        // (§6.10.3.4 paragraph 2, p. 155; PDF p. 167); a new token starts
+        // unpainted.
+        let placemarker = PreprocessorTokenType::Placeholder;
+        if lhs.kind != placemarker && rhs.kind != placemarker {
+            for token in [&mut lhs, &mut rhs] {
+                if token.kind.is_identifier() {
+                    token.kind = PreprocessorTokenType::Identifier;
+                }
             }
         }
         let merged = self.merge_tokens_impl(lhs, rhs);

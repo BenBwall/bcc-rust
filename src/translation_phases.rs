@@ -57,6 +57,7 @@ pub(crate) use context::{
     Context,
     FileSystem,
     IncludeEntry,
+    TextPragma,
 };
 pub(crate) use errors::{
     ErrorSeverity,

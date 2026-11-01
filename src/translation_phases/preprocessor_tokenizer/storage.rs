@@ -18,7 +18,11 @@ use super::{
     PreprocessorTokenizerErrorType,
 };
 use crate::{
-    configuration::Feature,
+    configuration::{
+        CompilerIdentity,
+        ExtensionPolicy,
+        Feature,
+    },
     translation_phases::{
         Context,
         SourcePosition,
@@ -98,11 +102,12 @@ pub(super) struct LexedFile<'a> {
     eof: SourcePosition,
     /// Sorted by entry.
     diagnostics: &'a [(u32, LexDiagnostic)],
-    /// Whether each extension diagnostic, by its index in `diagnostics`, was
-    /// reported. Its spelling is written once, so however often phase 4
-    /// reads the token (in a macro body, an argument prescan, or after a
-    /// lookahead rewinds), the diagnostic is reported once; reading it in a
-    /// skipped group, with tokenizer diagnostics ignored, does not count.
+    /// Whether each extension diagnostic or unclosed-quote warning, by its
+    /// index in `diagnostics`, was reported. Its spelling is written once, so
+    /// however often phase 4 reads the token (in a macro body, an argument
+    /// prescan, or after a lookahead rewinds), the diagnostic is reported once;
+    /// reading it in a skipped group, with tokenizer diagnostics ignored, does
+    /// not count.
     extensions_reported: &'a [Cell<bool>],
     /// Exact character spans for Other tokens, sorted by entry. Normal token
     /// spans still use the adjacent entry boundaries above.
@@ -205,6 +210,30 @@ impl<'a> LexedFile<'a> {
                             context.create_source_vectors(start, source_file_index, length);
                         context.report_extension(feature, spelling, vectors);
                     },
+                // GCC warns of an unclosed quote even in a skipped group,
+                // where every other lexical diagnostic is ignored; Clang,
+                // TCC and clang-cl do not.
+                | LexDiagnostic::Tokenizer {
+                    error_type,
+                    start,
+                    length,
+                    ..
+                } if context.ignore_tokenizer_errors()
+                    && context.skipping_group
+                    && let Some(quote) = error_type.unclosed_quote() =>
+                    if context.configuration.compiler_identity() == CompilerIdentity::Gcc
+                        && !reported.replace(true)
+                    {
+                        let mut start = start;
+                        start.line = start.line.wrapping_add(line_delta);
+                        report_skipped_quote(context, source_file_index, start, length, quote);
+                    },
+                // A warning, unlike an error, is not folded into its
+                // repeats: report it once, as for an extension.
+                | LexDiagnostic::Tokenizer {
+                    error_type: PreprocessorTokenizerErrorType::MissingTerminatingQuote(_),
+                    ..
+                } if context.ignore_tokenizer_errors() || reported.replace(true) => {},
                 | LexDiagnostic::Tokenizer {
                     error_type,
                     start,
@@ -443,6 +472,37 @@ impl Entry {
             column: self.column,
         }
     }
+}
+
+/// Reports GCC's warning for an unclosed quote in a skipped group, an error
+/// under `-pedantic-errors`, out of line: the replay that calls it runs inside
+/// every macro call's reader, whose frames deep nesting stacks up.
+#[cold]
+#[inline(never)]
+fn report_skipped_quote(
+    context: &mut Context<'_>,
+    source_file_index: u32,
+    start: SourcePosition,
+    length: usize,
+    quote: u8,
+) {
+    let error = PreprocessorTokenizerError {
+        source_vector: SourceVector {
+            index: source_offset(start.index),
+            column: start.column,
+            line: start.line,
+            source_file_index,
+            length: source_offset(length),
+        },
+        error_type:    PreprocessorTokenizerErrorType::missing_terminating_quote(
+            quote,
+            context.configuration.extension_policy() == ExtensionPolicy::Deny,
+        ),
+        character:     None,
+    };
+    context.set_ignore_tokenizer_errors(false);
+    context.preprocessor_tokenizer_error(error);
+    context.set_ignore_tokenizer_errors(true);
 }
 
 #[cfg(test)]

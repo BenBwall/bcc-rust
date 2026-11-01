@@ -184,9 +184,11 @@ pub(crate) enum PreprocessorErrorType<'tu> {
         from: SignedIntegerLiteralType,
         to:   SignedIntegerLiteralType,
     },
-    /// A `#` that does not start a line.
+    /// A `#` that begins no directive, outside a replacement list: no
+    /// token of the language uses it. A `-E` text keeps it.
     ///
-    /// C99: §6.10 paragraph 2, p. 146; PDF p. 158.
+    /// C99: §6.10 paragraph 2, p. 146; PDF p. 158; §6.4.6 paragraph 3,
+    /// p. 64; PDF p. 76.
     HashMustBeFirstCharacterOnLine,
     /// A `#` followed by neither a directive name nor a new-line: a
     /// `non-directive`, which C99 gives no meaning.
@@ -720,10 +722,10 @@ impl PreprocessorErrorType<'_> {
                 to.spelling()
             )),
             | Self::HashMustBeFirstCharacterOnLine => new("stray `#` in program")
-                .label("a directive must start a line")
+                .label("this `#` begins no directive")
                 .note(
-                    "C99 §6.10p2: `#` begins a directive only as the first token on a line; \
-                     elsewhere it is valid only inside a function-like macro definition",
+                    "C99 §6.10p2: `#` begins a directive only as the first token on a line of the \
+                     source; elsewhere it is valid only inside a function-like macro definition",
                 ),
             | Self::HashMustBeFollowedByIdentifier => new(match spelling {
                 | Some(spelling) => format_in!(
@@ -1674,6 +1676,7 @@ impl GetSeverity for PreprocessorError<'_> {
             | PreprocessorErrorType::HashHashAtVaOptBoundary
             | PreprocessorErrorType::ErrorDirective(..)
             | PreprocessorErrorType::PragmaMessage { error: true, .. }
+            | PreprocessorErrorType::HashMustBeFirstCharacterOnLine
              => ErrorSeverity::Error,
             | PreprocessorErrorType::CommaOperatorInPreprocessorExpression(severity)
             | PreprocessorErrorType::DefinedFromFunctionLikeMacroExpansion(severity)
@@ -1699,7 +1702,6 @@ impl GetSeverity for PreprocessorError<'_> {
             | PreprocessorErrorType::ForcedSignedToUnsignedConversion { .. }
             | PreprocessorErrorType::ForcedUnsignedPromotion { .. }
             | PreprocessorErrorType::ForcedSignedPromotion { .. }
-            | PreprocessorErrorType::HashMustBeFirstCharacterOnLine
             | PreprocessorErrorType::UnknownDirective
             | PreprocessorErrorType::HashMustBeFollowedByIdentifier
             | PreprocessorErrorType::LineDirectiveIsNotASimpleDigitSequence

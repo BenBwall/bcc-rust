@@ -12,6 +12,7 @@ mod macro_regressions;
 mod observables;
 mod other_token_regressions;
 mod predefined_regressions;
+mod text_regressions;
 
 use std::path::{
     Path,

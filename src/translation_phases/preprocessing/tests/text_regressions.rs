@@ -1,0 +1,358 @@
+//! Phase 4 read for a text of its tokens, as `-E` prints it
+//! (`Context::phase_four_text`).
+
+use std::path::PathBuf;
+
+use super::language_modes::mode;
+use crate::{
+    configuration::{
+        CStandard,
+        CompilerConfiguration,
+        CompilerIdentity,
+        ExtensionPolicy,
+    },
+    translation_phases::{
+        Context,
+        ErrorSeverity,
+        GetSeverity,
+        TranslationError,
+        preprocessing::Preprocessor,
+    },
+    util::shared::SharedVec,
+};
+
+/// What phase 4 leaves of `source` for a text under `identity`: each token
+/// as spelled, with a space between; each pragma the text writes back, after
+/// how many tokens; and each diagnostic, with its severity.
+struct Text {
+    tokens:      String,
+    pragmas:     Vec<(usize, String)>,
+    diagnostics: Vec<(ErrorSeverity, String)>,
+}
+
+fn text_of(source: &str, identity: CompilerIdentity) -> Text {
+    text_in(
+        source,
+        CompilerConfiguration::default().with_compiler_identity(identity),
+    )
+}
+
+/// [`text_of`] under `configuration`.
+fn text_in(source: &str, configuration: CompilerConfiguration) -> Text {
+    let tu = crate::util::bump::Bump::new();
+    let mut context = Context::with_configuration(&tu, configuration);
+    context.phase_four_text = true;
+    let preprocess_arena = crate::util::bump::Bump::new();
+    let mut preprocessor = Preprocessor::new(
+        &preprocess_arena,
+        &mut context,
+        PathBuf::from("<test>").into_boxed_path(),
+        source,
+        SharedVec::default(),
+        SharedVec::default(),
+    );
+    let mut tokens = Vec::new();
+    preprocessor.for_each_item(&mut context, |context, token| {
+        let spelling = context.string_cache.at(token.contents);
+        tokens.push(spelling.trim_end_matches('\0').to_owned());
+    });
+    let pragmas = context
+        .text_pragmas
+        .iter()
+        .map(|pragma| (pragma.position, pragma.text.to_owned()))
+        .collect();
+    let mut diagnostics = Vec::new();
+    while let Some(error) = context.pop_pending_error() {
+        diagnostics.push((error.severity(), diagnostic_name(&error)));
+    }
+    Text {
+        tokens: tokens.join(" "),
+        pragmas,
+        diagnostics,
+    }
+}
+
+/// The kind of `error`, as its debug form names it.
+fn diagnostic_name(error: &TranslationError<'_>) -> String {
+    let debug = format!("{error:?}");
+    let kind = debug
+        .split_once("error_type: ")
+        .map_or(debug.as_str(), |(_, rest)| rest);
+    kind.split([',', ' ', '{', '}'])
+        .next()
+        .unwrap_or("")
+        .to_owned()
+}
+
+#[test]
+fn a_hash_inside_a_line_is_a_punctuator_of_the_text() {
+    // C99 §6.10p2: only a `#` that is the first token of a line begins a
+    // directive; GCC and Clang print the others, `%:` and `##` as written.
+    let text = text_of(
+        "a # b\nc %: d ## e %:%: f\nx #if 1\ny\n",
+        CompilerIdentity::Gcc,
+    );
+    assert_eq!(text.tokens, "a # b c %: d ## e %:%: f x # if 1 y");
+    assert_eq!(text.diagnostics, []);
+}
+
+#[test]
+fn a_hash_a_replacement_produces_begins_no_directive() {
+    // C99 §6.10.3.4p3: a replacement that looks like a directive is not
+    // processed as one, and an empty one before `#` is still the line's
+    // first token.
+    let text = text_of(
+        "#define H #\n#define E\nH define X 1\nX\nE # define Y 2\nY\n  # define Z 3\nZ\n",
+        CompilerIdentity::Gcc,
+    );
+    assert_eq!(text.tokens, "# define X 1 X # define Y 2 Y 3");
+    assert_eq!(text.diagnostics, []);
+}
+
+#[test]
+fn a_stray_hash_in_a_translation_unit_is_an_error() {
+    // Outside a text the punctuator has no use, as GCC's "stray '#' in
+    // program" error says, and the rest of the line is not a directive.
+    let tu = crate::util::bump::Bump::new();
+    let mut context = Context::with_configuration(&tu, CompilerConfiguration::default());
+    let preprocess_arena = crate::util::bump::Bump::new();
+    let mut preprocessor = Preprocessor::new(
+        &preprocess_arena,
+        &mut context,
+        PathBuf::from("<test>").into_boxed_path(),
+        "int value; #define X 1\nX\n",
+        SharedVec::default(),
+        SharedVec::default(),
+    );
+    let mut tokens = Vec::new();
+    preprocessor.for_each_item(&mut context, |context, token| {
+        let spelling = context.string_cache.at(token.contents);
+        tokens.push(spelling.trim_end_matches('\0').to_owned());
+    });
+    assert_eq!(tokens.join(" "), "int value ; define X 1 X");
+    let error = context
+        .pop_pending_error()
+        .expect("the stray `#` is reported");
+    assert_eq!(error.severity(), ErrorSeverity::Error);
+    assert_eq!(diagnostic_name(&error), "HashMustBeFirstCharacterOnLine");
+    assert!(context.pop_pending_error().is_none());
+}
+
+#[test]
+fn an_unclosed_quote_keeps_the_rest_of_its_line_with_a_warning() {
+    // GCC and Clang warn "missing terminating ' character" and print the
+    // line as written, without the quote bcc appended for recovery.
+    let text = text_of(
+        "don't stop\nsay \"hi\nx 'a\" y\n#define S \"abc\nS S\nit's",
+        CompilerIdentity::Gcc,
+    );
+    assert_eq!(
+        text.tokens,
+        "don 't stop say \"hi x 'a\" y \"abc \"abc it 's"
+    );
+    let warning = (ErrorSeverity::Warning, "MissingTerminatingQuote".to_owned());
+    // Once for each literal, though `S`'s is read at each invocation.
+    let missing = |quote: u8| (warning.0, format!("{}({quote})", warning.1));
+    assert_eq!(
+        text.diagnostics,
+        [
+            missing(b'\''),
+            missing(b'"'),
+            missing(b'\''),
+            missing(b'"'),
+            missing(b'\''),
+        ]
+    );
+}
+
+#[test]
+fn an_unclosed_quote_in_a_skipped_group_warns_as_gcc_does() {
+    // GCC warns of an unclosed quote even in a group it skips, as for
+    // English text in `#if 0`; Clang does not look.
+    let source = "#if 0\nit's\n#endif\nx\n";
+    let gcc = text_of(source, CompilerIdentity::Gcc);
+    assert_eq!(gcc.tokens, "x");
+    assert_eq!(
+        gcc.diagnostics,
+        [(
+            ErrorSeverity::Warning,
+            "MissingTerminatingQuote(39)".to_owned()
+        )]
+    );
+    // TCC and clang-cl do not look either, though they share GCC's rules
+    // elsewhere.
+    for identity in [
+        CompilerIdentity::Clang,
+        CompilerIdentity::Tcc,
+        CompilerIdentity::Msvc,
+    ] {
+        assert_eq!(text_of(source, identity).diagnostics, [], "{identity:?}");
+    }
+}
+
+#[test]
+fn pedantic_errors_make_an_unclosed_quote_an_error() {
+    // GCC's and Clang's `-pedantic-errors` turn the warning into an error,
+    // in a text and in a group GCC skips.
+    let strict = |identity| {
+        CompilerConfiguration::new(CStandard::C17, ExtensionPolicy::Deny)
+            .with_compiler_identity(identity)
+    };
+    for identity in [CompilerIdentity::Gcc, CompilerIdentity::Clang] {
+        let text = text_in("don't\n", strict(identity));
+        assert_eq!(text.tokens, "don 't", "{identity:?}");
+        assert_eq!(
+            text.diagnostics,
+            [(ErrorSeverity::Error, "NewlineInCharacter".to_owned())],
+            "{identity:?}"
+        );
+    }
+    let skipped = text_in("#if 0\nsay \"hi\n#endif\n", strict(CompilerIdentity::Gcc));
+    assert_eq!(
+        skipped.diagnostics,
+        [(ErrorSeverity::Error, "NewlineInString".to_owned())]
+    );
+}
+
+#[test]
+fn a_directive_rejects_an_unclosed_literal_it_reads() {
+    // GCC and Clang reject the literal where a directive needs one.
+    let text = text_of("#if 'a\n#endif\n#line 5 \"f\nx\n", CompilerIdentity::Clang);
+    assert_eq!(text.tokens, "x");
+    assert_eq!(
+        text.diagnostics,
+        [
+            (
+                ErrorSeverity::Warning,
+                "MissingTerminatingQuote(39)".to_owned()
+            ),
+            (ErrorSeverity::Error, "NewlineInCharacter".to_owned()),
+            (
+                ErrorSeverity::Warning,
+                "MissingTerminatingQuote(34)".to_owned()
+            ),
+            (ErrorSeverity::Error, "NewlineInString".to_owned()),
+        ]
+    );
+}
+
+#[test]
+fn pragmas_are_written_back_as_spelled() {
+    // GCC and Clang print a pragma that later phases or no phase carry out
+    // with its tokens as written, `pack` included, and a `_Pragma`
+    // operator's as a `#pragma` line.
+    let source = "#define N 4\na\n#pragma pack(1)\n#  pragma   pack ( N ) // c\n#pragma omp \
+                  parallel  for N\n#pragma GCC diagnostic push\n#pragma STDC FP_CONTRACT \
+                  ON\n#pragma weak w\n#pragma message(\"m\")\n#pragma foo @ 08\nb _Pragma(\"omp  \
+                  x\") c\n";
+    let expected = [
+        (1, "#pragma pack(1)"),
+        (1, "#pragma pack ( N )"),
+        (1, "#pragma omp parallel for N"),
+        (1, "#pragma GCC diagnostic push"),
+        (1, "#pragma STDC FP_CONTRACT ON"),
+        (1, "#pragma weak w"),
+        (1, "#pragma message(\"m\")"),
+        (1, "#pragma foo @ 08"),
+        (2, "#pragma omp x"),
+    ];
+    for identity in [CompilerIdentity::Gcc, CompilerIdentity::Clang] {
+        let text = text_of(source, identity);
+        assert_eq!(text.tokens, "a b c", "{identity:?}");
+        let pragmas: Vec<_> = text
+            .pragmas
+            .iter()
+            .map(|(position, line)| (*position, line.as_str()))
+            .collect();
+        assert_eq!(pragmas, expected, "{identity:?}");
+    }
+}
+
+#[test]
+fn a_pragma_operator_in_an_argument_is_written_where_the_argument_lands() {
+    // GCC and Clang defer a `_Pragma` that an argument's prescan meets to
+    // where the replaced argument is rescanned: once per use of the
+    // parameter, and a `#` of the replaced argument spells it
+    // (gcc.dg/cpp/Wunknown-pragmas-1.c).
+    let source = "#define FOO(x) x\n#define TWICE(x) x x\n#define S(x) #x\n#define XS(x) \
+                  S(x)\nFOO(int a; _Pragma(\"p1\") int b;)\nFOO(FOO(c _Pragma(\"p2\") \
+                  d))\nTWICE(e _Pragma(\"p3\") f)\nXS(g _Pragma(\"p4\") h)\n";
+    for identity in [CompilerIdentity::Gcc, CompilerIdentity::Clang] {
+        let text = text_of(source, identity);
+        assert_eq!(
+            text.tokens, r#"int a ; int b ; c d e f e f "g _Pragma(\"p4\") h""#,
+            "{identity:?}"
+        );
+        let pragmas: Vec<_> = text
+            .pragmas
+            .iter()
+            .map(|(position, line)| (*position, line.as_str()))
+            .collect();
+        assert_eq!(
+            pragmas,
+            [
+                (3, "#pragma p1"),
+                (7, "#pragma p2"),
+                (9, "#pragma p3"),
+                (11, "#pragma p3"),
+            ],
+            "{identity:?}"
+        );
+    }
+}
+
+#[test]
+fn pragmas_the_preprocessor_carries_out_are_not_written_back() {
+    // Each compiler's `-E` leaves out the pragmas its preprocessor consumes:
+    // GCC its `GCC warning`, Clang its own `clang` pragmas and MSVC's
+    // `region`; both `once`, `push_macro` and `GCC poison`. GCC writes a
+    // space after an empty `#pragma`.
+    let source = "#define X 1\n#pragma once\n#pragma push_macro(\"X\")\n#pragma \
+                  pop_macro(\"X\")\n#pragma GCC poison p\n#pragma GCC warning \"w\"\n#pragma \
+                  clang deprecated(X)\n#pragma clang diagnostic push\n#pragma region r\n#pragma\n";
+    let lines = |identity| {
+        text_of(source, identity)
+            .pragmas
+            .into_iter()
+            .map(|(_, line)| line)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        lines(CompilerIdentity::Gcc),
+        [
+            "#pragma clang deprecated(X)",
+            "#pragma clang diagnostic push",
+            "#pragma region r",
+            "#pragma ",
+        ]
+    );
+    assert_eq!(
+        lines(CompilerIdentity::Clang),
+        [
+            "#pragma GCC warning \"w\"",
+            "#pragma clang diagnostic push",
+            "#pragma",
+        ]
+    );
+}
+
+#[test]
+fn stringizing_an_optional_replacement_spaces_it_as_each_compiler_does() {
+    // C23 6.10.5.1p3 leaves the white space at the ends of a `__VA_OPT__`
+    // replacement to `#`, which GCC drops and Clang keeps, the space before
+    // `)` even for an empty replacement; an empty one adds no space either
+    // way.
+    let source = "#define S(x) #x\n#define F(a, ...) S(-__VA_OPT__( a )-)\n#define H(a, ...) S(- \
+                  __VA_OPT__( a ) -)\n#define I(a, ...) S(-__VA_OPT__( a b )-)\n#define K(a, ...) \
+                  S(-__VA_OPT__( )-)\n#define L(...) S(x __VA_OPT__() y)\nF(x, 1) F(x) H(x, 1) \
+                  H(x) I(x, 1) K(x, 1) L(1) L()\n";
+    let c23 = |identity| mode(CStandard::C23).with_compiler_identity(identity);
+    assert_eq!(
+        text_in(source, c23(CompilerIdentity::Gcc)).tokens,
+        r#""-x-" "--" "- x -" "- -" "-x b-" "--" "x y" "x y""#
+    );
+    assert_eq!(
+        text_in(source, c23(CompilerIdentity::Clang)).tokens,
+        r#""- x -" "- -" "- x -" "- -" "- x b -" "- -" "x y" "x y""#
+    );
+}

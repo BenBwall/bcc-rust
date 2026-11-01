@@ -58,17 +58,6 @@ pub(crate) struct ReadAt {
 }
 
 impl<'tu> Preprocessor<'tu, '_> {
-    /// Reads phase 4's tokens for a text of them, as `-E` prints it; call
-    /// it before reading. Adjacent string literals stay apart, which phase
-    /// 6 would concatenate, and phases 5 and 7 neither decode nor check a
-    /// token: each keeps its spelling, so a character no C token starts
-    /// with, a number that is no constant or an escape C does not define
-    /// passes through unreported, as in GCC's and Clang's `-E`.
-    /// C99: §5.1.1.2 paragraph 1 items 4-7, p. 10; PDF p. 22.
-    pub(crate) fn read_as_text(&mut self) {
-        self.resting_mut().state.as_text = true;
-    }
-
     /// Calls `visit` with each phase-6 token, as
     /// [`Preprocessor::for_each_iterator_item`] does, and with where the
     /// reader was once the token was read. A token a macro expands to is
@@ -212,7 +201,9 @@ impl Expander<'_, '_, '_, '_> {
     /// The innermost source file being read, and the reader's position in
     /// it: the live cursor when no macro frame is above the file, otherwise
     /// the cursor the file's frame saved when the macro was pushed.
-    fn reading_position(&self) -> Option<(u32, SourcePosition)> {
+    pub(in crate::translation_phases::preprocessing) fn reading_position(
+        &self,
+    ) -> Option<(u32, SourcePosition)> {
         let last = self.tokenizer_stack.len().checked_sub(1)?;
         self.tokenizer_stack
             .iter()

@@ -79,6 +79,21 @@ use crate::{
     },
 };
 
+/// A pragma a text of phase 4 writes back where it was.
+/// C99: §6.10.6 paragraph 1, p. 159; PDF p. 171.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct TextPragma<'tu> {
+    /// Its output-token ordinal ([`Context::preprocessed_tokens`] before
+    /// the next token).
+    pub(crate) position: usize,
+    /// The source file being read and the line the reader was on.
+    pub(crate) file:     u32,
+    pub(crate) line:     u32,
+    /// `#pragma` and its tokens as spelled, each run of white space as one
+    /// space.
+    pub(crate) text:     &'tu str,
+}
+
 #[expect(
     clippy::struct_excessive_bools,
     reason = "Each flag is an independent fact about the translation unit's input."
@@ -97,6 +112,16 @@ pub(crate) struct Context<'tu> {
     /// `#sccs` take effect; `#define` and `#undef` are read but, with
     /// replacement off, change nothing.
     pub(crate) preprocessed_input: bool,
+    /// Phase 4 runs for a text of its tokens, as `-E` prints it; set before
+    /// the preprocessor is made. Adjacent string literals stay apart, which
+    /// phase 6 would concatenate, and phases 5 and 7 neither decode nor
+    /// check a token: each keeps its spelling, so a character no C token
+    /// starts with, a number that is no constant or an escape C does not
+    /// define passes through unreported, and a `'` or `"` that closes on no
+    /// line keeps the rest of its line with a warning, as in GCC's and
+    /// Clang's `-E`.
+    /// C99: §5.1.1.2 paragraph 1 items 3-7, p. 10; PDF p. 22.
+    pub(crate) phase_four_text: bool,
     /// A source file held malformed UTF-8, whose bytes its text carries as
     /// [`crate::util::raw_bytes`] stand-ins; only then are they bytes.
     pub(crate) raw_source_bytes: bool,
@@ -125,6 +150,9 @@ pub(crate) struct Context<'tu> {
     /// out of the values Clang's evaluator folds, each with its output-token
     /// ordinal ([`Self::preprocessed_tokens`] before the next token).
     pub(crate) weak_pragmas: ArenaVec<'tu, (usize, StringCacheId)>,
+    /// The pragmas a text of phase 4 ([`Self::phase_four_text`]) writes back
+    /// where they were.
+    pub(crate) text_pragmas: ArenaVec<'tu, TextPragma<'tu>>,
     pub(crate) source_vectors: SourceVectorStack,
     parser_token_vectors: RegionVec<SourceVector>,
     retained_vectors: RegionVec<SourceVector>,
@@ -138,6 +166,9 @@ pub(crate) struct Context<'tu> {
     /// for the whole translation unit, so semantic diagnostics can use them.
     expansion_starts: [ExpansionSites<'tu>; 3],
     ignore_tokenizer_errors: bool,
+    /// Phase 4 is skipping a conditional group, whose lines it reads only
+    /// for conditional directives (C99 §6.10.1p6).
+    pub(crate) skipping_group: bool,
     pub(super) pending_errors: ArenaQueue<'tu, TranslationError<'tu>>,
     suppressed_errors: usize,
     /// Error-severity diagnostics already taken from `pending_errors`.

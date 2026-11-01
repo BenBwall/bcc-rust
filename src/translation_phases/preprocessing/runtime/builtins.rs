@@ -46,6 +46,10 @@ impl Expander<'_, '_, '_, '_> {
     /// Expands a registered builtin at its invocation location. A consumed
     /// pragma returns no token; the caller resumes its frame reader.
     /// C99: §6.10.8p1 and §6.10.9p1, pp. 160-161; PDF pp. 172-173.
+    ///
+    /// Out of line, so that the frame of the macro replacement that calls
+    /// it, which nested invocations stack up, does not hold its locals.
+    #[inline(never)]
     pub(in crate::translation_phases::preprocessing) fn expand_builtin(
         &mut self,
         token: PreprocessorToken,
@@ -128,6 +132,12 @@ impl Expander<'_, '_, '_, '_> {
                     source_vectors: token.source_vectors,
                 })
             },
+            // In an argument's prescan the operator stays, to be carried
+            // out where the replaced argument is rescanned among the
+            // tokens around it, as GCC and Clang do: a pragma takes
+            // effect at its place in the output (C99 §6.10.3.1p1,
+            // §6.10.3.4p1), and a `#` of the replaced argument spells it.
+            | "_Pragma" if self.in_prescan() => Some(token),
             // C99 §6.10.9p1: `_Pragma ( string-literal )` runs
             // the destringized literal, retokenized, as the
             // pp-tokens of a `#pragma`, and all four tokens
@@ -181,6 +191,7 @@ impl Expander<'_, '_, '_, '_> {
 
         let input = Self::prepare_pragma_operator_string(self.context, string_token.contents);
 
+        let at = self.reading_position();
         let tokenizer = take(&mut self.tokenizer);
         // Each operator gets its own identity:
         // diagnostics rendered later must quote this
@@ -190,7 +201,7 @@ impl Expander<'_, '_, '_, '_> {
             .add_synthetic_source_file(Path::new("<pragma string>"), input);
         self.tokenizer = TokenSource::new(self.context, self.scratch, pragma_string, input);
         self.pushed_frames += 1;
-        _ = self.parse_pragma_directive(from);
+        _ = self.parse_pragma_directive(from, at);
         if self.tokenizer.next_item(self.context).is_some() {
             let source_vectors = self.current_location();
             self.context.preprocessor_error(PreprocessorError {

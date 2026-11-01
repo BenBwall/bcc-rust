@@ -18,7 +18,10 @@ use super::{
     Lexed,
 };
 use crate::{
-    configuration::Feature,
+    configuration::{
+        ExtensionPolicy,
+        Feature,
+    },
     translation_phases::SourcePosition,
     util::byte_scan,
 };
@@ -111,6 +114,20 @@ impl Lexer<'_, '_, '_, '_> {
         loop {
             end += byte_scan::literal_run(&self.bytes[end..]);
             match self.peek(end) {
+                // A text of phase 4 keeps the rest of the line as written,
+                // as GCC and Clang print it.
+                | None | Some(b'\n') if self.context.phase_four_text => {
+                    let missing = E::missing_terminating_quote(
+                        quote,
+                        self.context.configuration.extension_policy() == ExtensionPolicy::Deny,
+                    );
+                    if self.peek(end).is_none() {
+                        self.diagnose_to_eof(missing, position);
+                    } else {
+                        self.diagnose_to(missing, position, end);
+                    }
+                    return self.spelled(start, end, kind);
+                },
                 | None => {
                     self.diagnose_to_eof(unterminated, position);
                     return self.spelled(start, end, kind);

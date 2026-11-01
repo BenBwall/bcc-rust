@@ -405,6 +405,99 @@ mod tests {
     }
 
     #[test]
+    fn preprocessing_keeps_text_that_begins_no_directive_or_token() {
+        let project = Project::new();
+        let source = "a # b %: c ## d\n#define H #\nH define X 1\nX\ndon't stop\nsay \"hi\n";
+        std::fs::write(project.path("text.c"), source).unwrap();
+        // C99 6.10p2: a `#` that does not start a line, or that a macro
+        // produced, begins no directive; an unclosed quote keeps the rest of
+        // its line with a warning. GCC and Clang print the text as written.
+        let output = project.bcc(&["-E", "-P", "text.c"]);
+        succeeds(&output);
+        assert_eq!(
+            stdout(&output),
+            "a # b %: c ## d\n# define X 1\nX\ndon't stop\nsay \"hi\n"
+        );
+        let diagnostics = stderr(&output);
+        for quote in ["'", "\""] {
+            let warning = format!("warning: missing terminating `{quote}` character");
+            assert!(diagnostics.contains(&warning), "{diagnostics}");
+        }
+        // Compiled, the stray `#` is an error and the line is no directive,
+        // and the unclosed literal is still an error.
+        std::fs::write(project.path("stray.c"), "int value; # define X 1\n").unwrap();
+        let output = project.bcc(&["-fsyntax-only", "stray.c"]);
+        assert!(!output.status.success());
+        assert!(stderr(&output).contains("error: stray `#` in program"));
+        std::fs::write(project.path("quote.c"), "char c = 'a;\n").unwrap();
+        let output = project.bcc(&["-fsyntax-only", "quote.c"]);
+        assert!(!output.status.success());
+        assert!(stderr(&output).contains("error: unterminated character constant"));
+    }
+
+    #[test]
+    fn preprocessing_writes_pragmas_back_as_spelled() {
+        let project = Project::new();
+        let source = "#define N 4\na\n#  pragma   pack ( N ) // c\n#pragma omp parallel  for \
+                      N\n#pragma GCC diagnostic push\nb _Pragma(\"message(\\\"m\\\")\") \
+                      c\n#pragma push_macro(\"N\")\nd\n";
+        std::fs::write(project.path("pragmas.c"), source).unwrap();
+        // GCC and Clang print each pragma later phases may read on its own
+        // line, with its tokens as written, and leave out those that
+        // preprocessing alone carries out.
+        // The token after a `_Pragma` operator starts a line of its own,
+        // indented to its column; the indentation is not compared.
+        let output = project.bcc(&["-E", "-P", "pragmas.c"]);
+        succeeds(&output);
+        let text = stdout(&output);
+        assert_eq!(
+            text.lines().map(str::trim_start).collect::<Vec<_>>(),
+            [
+                "a",
+                "#pragma pack ( N )",
+                "#pragma omp parallel for N",
+                "#pragma GCC diagnostic push",
+                "b",
+                "#pragma message(\"m\")",
+                "c",
+                "d",
+            ],
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn a_pragma_in_a_macro_argument_applies_where_the_argument_lands() {
+        let project = Project::new();
+        let source = "#define FOO(x) x\nFOO(struct a { char c; int i; }; _Pragma(\"pack(1)\") \
+                      struct b { char c; int i; };)\n_Static_assert(sizeof(struct a) == 8, \
+                      \"a\");\n_Static_assert(sizeof(struct b) == 5, \"b\");\n";
+        std::fs::write(project.path("arg.c"), source).unwrap();
+        // GCC and Clang carry out a `_Pragma` in a macro argument where the
+        // replaced argument lands, not when its prescan meets it, both when
+        // compiling and in -E's text, which then compiles the same.
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            succeeds(&project.bcc(&[mode, "-fsyntax-only", "arg.c"]));
+            let output = project.bcc(&[mode, "-E", "-P", "arg.c", "-o", "arg.i"]);
+            succeeds(&output);
+            let text = std::fs::read_to_string(project.path("arg.i")).unwrap();
+            assert_eq!(
+                text.lines()
+                    .map(str::trim_start)
+                    .take(3)
+                    .collect::<Vec<_>>(),
+                [
+                    "struct a { char c; int i; };",
+                    "#pragma pack(1)",
+                    "struct b { char c; int i; };",
+                ],
+                "{mode}: {text}"
+            );
+            succeeds(&project.bcc(&[mode, "-fsyntax-only", "arg.i"]));
+        }
+    }
+
+    #[test]
     fn preprocessing_writes_source_text_with_line_markers() {
         let project = Project::new();
         let output = project.bcc(&["-E", "main.c"]);
@@ -668,7 +761,7 @@ mod tests {
         let output = project.bcc(&["-E", "p.c", "-o", "p.i"]);
         succeeds(&output);
         let text = std::fs::read_to_string(project.path("p.i")).unwrap();
-        assert!(text.contains("#pragma pack ( push , 1 )\n"), "{text}");
+        assert!(text.contains("#pragma pack(push, 1)\n"), "{text}");
         assert!(text.contains("#pragma weak w\n"), "{text}");
         succeeds(&project.bcc(&["-c", "p.i", "-o", "p.o"]));
     }

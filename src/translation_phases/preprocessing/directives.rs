@@ -73,8 +73,8 @@ impl Expander<'_, '_, '_, '_> {
     /// Executes the directive that `token`, a `#`, introduces.
     ///
     /// C99: §6.10 paragraphs 1-3, pp. 145-147; PDF pp. 157-159. A `#` begins
-    /// a directive only at the start of a line; one found elsewhere is
-    /// diagnosed and, for recovery, still read as a directive. A name that is
+    /// a directive only at the start of a line, which the caller checked
+    /// ([`Expander::begins_directive`]). A name that is
     /// not a directive makes a `non-directive`, to which C99 gives no
     /// meaning; it is diagnosed and skipped, as GCC and Clang do.
     /// `# new-line` is the null directive (§6.10.7 paragraph 1, p. 160; PDF
@@ -82,12 +82,6 @@ impl Expander<'_, '_, '_, '_> {
     /// `-fpreprocessed` reads; that mode is an extension, as is TCC's
     /// script line.
     pub(super) fn parse_directive(&mut self, token: PreprocessorToken) {
-        if !self.last_was_newline {
-            self.context.preprocessor_error(PreprocessorError {
-                error_type:     PreprocessorErrorType::HashMustBeFirstCharacterOnLine,
-                source_vectors: token.source_vectors,
-            });
-        }
         // GCC's `-fpreprocessed` reads a directive only when its `#` starts
         // the line; an indented one is not a directive there.
         if self.context.preprocessed_input
@@ -229,7 +223,8 @@ impl Expander<'_, '_, '_, '_> {
                     .context
                     .first_source_vector(directive.source_vectors)
                     .index;
-                if !self.parse_pragma_directive(from) {
+                let at = self.reading_position();
+                if !self.parse_pragma_directive(from, at) {
                     self.skip_until_newline();
                 }
                 self.resume_at_line_start();

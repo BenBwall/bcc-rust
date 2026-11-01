@@ -197,6 +197,131 @@ mod tests {
         assert_eq!(cl_expand("--msvc-mode", &["/DX#5", "/DY=6"], "X Y"), "5 6");
     }
 
+    /// Each compiler's `-E` leaves out the pragmas its own preprocessor
+    /// carries out: GCC its `#pragma GCC warning`, Clang its `clang`
+    /// pragmas and MSVC's `region`; GCC writes a space after an empty
+    /// `#pragma`.
+    #[test]
+    fn preprocessing_leaves_out_the_pragmas_each_compiler_consumes() {
+        let directory = Directory::new();
+        directory.write(
+            "pragmas.c",
+            "#define X 1\na\n#pragma GCC warning \"w\"\n#pragma clang deprecated(X)\n#pragma \
+             region r\n#pragma\n#pragma once\nb\n",
+        );
+        let pragmas = |mode: &str| {
+            let output = directory.bcc(mode, &["-E", "-P", "-w", "pragmas.c"]);
+            succeeds(&output);
+            stdout(&output)
+        };
+        assert_eq!(
+            pragmas("--gcc-mode"),
+            "a\n#pragma clang deprecated(X)\n#pragma region r\n#pragma \nb\n"
+        );
+        assert_eq!(
+            pragmas("--clang-mode"),
+            "a\n#pragma GCC warning \"w\"\n#pragma\nb\n"
+        );
+    }
+
+    /// Clang macro-replaces `#pragma pack` operands and GCC does not, which
+    /// ignores `pack(N)` as an unknown action; `-E` writes them as spelled
+    /// for both, so GCC's rule compiles its own text the same.
+    #[test]
+    fn pack_operands_are_replaced_as_each_compiler_replaces_them() {
+        let directory = Directory::new();
+        let source = |size: u32| {
+            format!(
+                "#define N 2\n#pragma pack(N)\nstruct s {{ char c; int i; \
+                 }};\n_Static_assert(sizeof(struct s) == {size}, \"size\");\n"
+            )
+        };
+        directory.write("gcc.c", &source(8));
+        directory.write("clang.c", &source(6));
+        for (mode, file) in [("--gcc-mode", "gcc.c"), ("--clang-mode", "clang.c")] {
+            succeeds(&directory.bcc(mode, &["-fsyntax-only", "-w", file]));
+        }
+        let output = directory.bcc("--gcc-mode", &["-E", "gcc.c", "-o", "gcc.i"]);
+        succeeds(&output);
+        succeeds(&directory.bcc("--gcc-mode", &["-fsyntax-only", "-w", "gcc.i"]));
+        // TCC replaces the operands too, and its `-E` writes them replaced,
+        // so its text packs as the source does (tcc mob e23dabe: 6 5 5).
+        directory.write(
+            "tcc.c",
+            "#define N 2\n#define PUSH push\n#define ONE 1\n#pragma pack(N)\nstruct a { char c; \
+             int i; };\n#pragma pack()\n#pragma pack(PUSH, 1)\nstruct b { char c; int i; \
+             };\n#pragma pack(pop)\n#pragma pack(push, ONE)\nstruct c { char c; int i; \
+             };\n#pragma pack(pop)\n_Static_assert(sizeof(struct a) == 6 && sizeof(struct b) == 5 \
+             && sizeof(struct c) == 5, \"size\");\n",
+        );
+        let direct = directory.bcc("--tcc-mode", &["-c", "tcc.c", "-o", "tcc.o"]);
+        succeeds(&direct);
+        assert_eq!(stderr(&direct), "");
+        succeeds(&directory.bcc("--tcc-mode", &["-E", "tcc.c", "-o", "tcc.i"]));
+        let text = std::fs::read_to_string(directory.path("tcc.i")).unwrap();
+        assert!(text.contains("#pragma pack(2)\n"), "{text}");
+        assert!(text.contains("#pragma pack(push, 1)\n"), "{text}");
+        let round_trip = directory.bcc("--tcc-mode", &["-c", "tcc.i", "-o", "tcc-i.o"]);
+        succeeds(&round_trip);
+        assert_eq!(stderr(&round_trip), "");
+    }
+
+    /// GCC warns of an unclosed quote in a skipped group, compiling as well
+    /// as under `-E`, and `-pedantic-errors` makes it an error; Clang and
+    /// TCC do not.
+    #[test]
+    fn unclosed_quotes_in_skipped_groups_warn_as_gcc_does() {
+        let directory = Directory::new();
+        directory.write("skipped.c", "#if 0\nit's\n#endif\nint x;\n");
+        for args in [
+            &["-fsyntax-only", "skipped.c"][..],
+            &["-E", "-P", "skipped.c"],
+        ] {
+            let gcc = directory.bcc("--gcc-mode", args);
+            succeeds(&gcc);
+            assert!(
+                stderr(&gcc).contains("warning: missing terminating `'` character"),
+                "{args:?}: {}",
+                stderr(&gcc)
+            );
+            let clang = directory.bcc("--clang-mode", args);
+            succeeds(&clang);
+            assert_eq!(stderr(&clang), "", "{args:?}");
+        }
+        // TCC does not look either (tcc mob e23dabe is silent); its
+        // personality compiles with `-c` rather than `-fsyntax-only`.
+        for args in [
+            &["-c", "skipped.c", "-o", "skipped.o"][..],
+            &["-E", "-P", "skipped.c"],
+        ] {
+            let tcc = directory.bcc("--tcc-mode", args);
+            succeeds(&tcc);
+            assert_eq!(stderr(&tcc), "", "{args:?}");
+        }
+        // `-pedantic-errors` makes the warning an error, as in GCC.
+        let strict = directory.bcc("--gcc-mode", &["-pedantic-errors", "-E", "-P", "skipped.c"]);
+        assert!(!strict.status.success());
+        assert!(stderr(&strict).contains("error: "), "{}", stderr(&strict));
+    }
+
+    /// C23 leaves the white space at the ends of a `__VA_OPT__` replacement
+    /// to `#`, which GCC drops and Clang keeps.
+    #[test]
+    fn stringized_optional_replacements_space_as_each_compiler_does() {
+        let directory = Directory::new();
+        directory.write(
+            "va_opt.c",
+            "#define S(x) #x\n#define F(a, ...) S(-__VA_OPT__( a )-)\nF(x, 1) F(x)\n",
+        );
+        let strings = |mode: &str| {
+            let output = directory.bcc(mode, &["-std=c23", "-E", "-P", "va_opt.c"]);
+            succeeds(&output);
+            stdout(&output)
+        };
+        assert_eq!(strings("--gcc-mode"), "\"-x-\" \"--\"\n");
+        assert_eq!(strings("--clang-mode"), "\"- x -\" \"- -\"\n");
+    }
+
     /// A sign after `p` continues a preprocessing number from C99. Before
     /// C99, GCC reads it so only in its GNU modes and Clang only after a
     /// hexadecimal prefix, so strict C90 splits `0x1p+f` (GCC's

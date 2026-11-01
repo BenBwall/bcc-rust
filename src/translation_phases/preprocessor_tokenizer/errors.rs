@@ -69,9 +69,40 @@ pub(crate) enum PreprocessorTokenizerErrorType {
     /// A new-line cannot occur in an `s-char`.
     /// C99: §6.4.5p1, p. 62; PDF p. 74.
     NewlineInString,
+    /// A `'` or `"` with no closing quote before the line or the file ends,
+    /// in the text of phase 4 (`-E`), where the rest of the line is kept as
+    /// it was written. Phase 7 never converts it, so only a directive that
+    /// reads it as a literal rejects it; the lexer warns, as GCC and Clang
+    /// do (Clang `-Winvalid-pp-token`).
+    /// C99: a `'` or `"` that begins no token is undefined, §6.4p3, p. 49;
+    /// PDF p. 61.
+    MissingTerminatingQuote(u8),
 }
 
 impl PreprocessorTokenizerErrorType {
+    /// The diagnostic of a `'` or `"` that closes on no line where phase 7
+    /// never reads it: GCC's and Clang's warning, or, under
+    /// `-pedantic-errors`, which makes it an error in both, the error a
+    /// literal that phase 7 reads gets.
+    pub(crate) const fn missing_terminating_quote(quote: u8, error: bool) -> Self {
+        match (error, quote) {
+            | (false, _) => Self::MissingTerminatingQuote(quote),
+            | (true, b'"') => Self::NewlineInString,
+            | (true, _) => Self::NewlineInCharacter,
+        }
+    }
+
+    /// The quote of a character constant or string literal that closes on
+    /// no line, which this diagnoses.
+    pub(crate) const fn unclosed_quote(self) -> Option<u8> {
+        match self {
+            | Self::UnterminatedCharacter | Self::NewlineInCharacter => Some(b'\''),
+            | Self::UnterminatedString | Self::NewlineInString => Some(b'"'),
+            | Self::MissingTerminatingQuote(quote) => Some(quote),
+            | Self::UnknownToken | Self::UnterminatedBlockComment => None,
+        }
+    }
+
     /// Describes the error; `spelling` is the source text it points at.
     pub(crate) fn explain_in<'d>(self, arena: &'d Bump, spelling: Option<&str>) -> Explanation<'d> {
         let new = |message: &'d str| Explanation::new(arena, message);
@@ -115,6 +146,13 @@ impl PreprocessorTokenizerErrorType {
                     "close the literal on this line and start another on the next; adjacent \
                      literals are concatenated",
                 ),
+            | Self::MissingTerminatingQuote(quote) => new(if quote == b'"' {
+                "missing terminating `\"` character"
+            } else {
+                "missing terminating `'` character"
+            })
+            .label("the rest of the line is kept as written")
+            .note("C99 §6.4p3: a `'` or `\"` that begins no token is undefined"),
         }
     }
 }
@@ -125,7 +163,22 @@ impl PreprocessorTokenizerError {
             self.error_type,
             PreprocessorTokenizerErrorType::UnterminatedString
                 | PreprocessorTokenizerErrorType::NewlineInString
+                | PreprocessorTokenizerErrorType::MissingTerminatingQuote(b'"')
         ) && self.source_vector == *source
+    }
+
+    /// Reports a literal with no closing quote that a directive reads, in a
+    /// text of phase 4, where the lexer kept it as written.
+    pub(crate) fn unclosed_literal(source_vector: SourceVector, quote: u8) -> Self {
+        Self {
+            source_vector,
+            error_type: if quote == b'"' {
+                PreprocessorTokenizerErrorType::NewlineInString
+            } else {
+                PreprocessorTokenizerErrorType::NewlineInCharacter
+            },
+            character: None,
+        }
     }
 
     /// Reports a phase-3 character that survived preprocessing but cannot
@@ -168,6 +221,7 @@ impl GetSeverity for PreprocessorTokenizerError {
             | PreprocessorTokenizerErrorType::UnterminatedString
             | PreprocessorTokenizerErrorType::NewlineInCharacter
             | PreprocessorTokenizerErrorType::NewlineInString => ErrorSeverity::Error,
+            | PreprocessorTokenizerErrorType::MissingTerminatingQuote(_) => ErrorSeverity::Warning,
         }
     }
 }
