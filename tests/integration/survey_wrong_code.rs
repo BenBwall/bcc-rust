@@ -548,6 +548,30 @@ mod tests {
             return f1() != 2147483647 || f2() != 2147483647 || f3() != 0 || f4() != 0 || !f5();\n\
             }\n";
         prints_on_every_back_end("--compiler-identity=gcc", source, &["-w"], "");
+        // The implicit conversions of such constants fold too: assignment,
+        // initialization, argument, return, and a bit-field store, which
+        // GCC saturates to the field's width.
+        let implicit = b"#include <stdio.h>\n\
+            struct B { int b : 5; unsigned u : 5; } bs;\n\
+            __attribute__((noinline)) int id(int x) { return x; }\n\
+            __attribute__((noinline)) int ret(void) { return 3e9; }\n\
+            __attribute__((noinline)) unsigned char retc(void) { return 300.0; }\n\
+            int main(void) {\n\
+            int x; x = 3e9; printf(\"%d\", x);\n\
+            int y = -3e9; printf(\" %d\", y);\n\
+            printf(\" %d %d %d\", id(3e9), ret(), retc());\n\
+            unsigned u; u = -1.0; printf(\" %u\", u);\n\
+            struct B l = { 1e10, 1e10 }; printf(\" %d %u\", l.b, l.u);\n\
+            bs.b = 1e10; bs.u = -1e10; printf(\" %d %u\", bs.b, bs.u);\n\
+            printf(\" %d\\n\", bs.b = -1e10);\n\
+            return 0;\n\
+            }\n";
+        prints_on_every_back_end(
+            "--compiler-identity=gcc",
+            implicit,
+            &["-w"],
+            "2147483647 -2147483648 2147483647 2147483647 255 0 15 31 15 0 -16\n",
+        );
     }
 
     /// A trailing array member reached through a pointer may extend past

@@ -1031,8 +1031,17 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             },
             | (Operand::Truth(truth), Repr::Int { ty, .. }) =>
                 Operand::Value(self.extend(truth, false, ty)),
-            | (Operand::Value(value), Repr::Int { ty, signed, .. }) => {
+            | (Operand::Value(value), Repr::Int { ty, signed, width }) => {
                 let from = repr(types, item.ty).map_err(|kind| at(kind, source))?;
+                if let Repr::Float { ty: floating } = from
+                    && let Some(saturated) =
+                        self.saturated_conversion(value, floating, ty, u32::from(width), signed)
+                {
+                    return Ok(Item {
+                        operand: Operand::Value(saturated),
+                        ty:      to,
+                    });
+                }
                 // A narrow bit-precise destination keeps the low bits of
                 // its width, extended again (§6.3.1.3).
                 let converted = match from {

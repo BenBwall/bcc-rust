@@ -39,18 +39,20 @@
 //!   lists.
 //! - Function bodies: `work.rs` defines tasks and operands; `statements.rs`
 //!   lowers statements and declarations; `expressions.rs` operators, calls and
-//!   conversions, including the floating ones; `half.rs` the `_Float16` values
-//!   evaluated in `float`; `argument_pack.rs` the copies of a function using
-//!   GNU `__builtin_va_arg_pack ()` made for its calls; `places.rs` lvalues,
-//!   loads and stores; `alignment.rs` owns backing-place guarantees and all
-//!   memory and allocation alignment; `bit_fields.rs` bit-field reads and
-//!   writes; `bit_int.rs` the bit-precise integers calls pass in memory;
-//!   `wide_bit_int.rs` those of more than 128 bits, which live in memory and
-//!   compute in the C runtime beside it; `vectors.rs` GNU vectors, which live
-//!   in memory and compute lane by lane; `initializers.rs` walks braced
-//!   initializers; `assembly.rs` lowers GNU `asm` statements; `vla.rs`
-//!   evaluates saved array extents and runs the cleanups of the regions an exit
-//!   leaves: dynamic stack restores, and GNU cleanup calls from `cleanup.rs`.
+//!   conversions, including the floating ones; `saturation.rs` GCC's folds of
+//!   floating constants converted out of an integer's range; `half.rs` the
+//!   `_Float16` values evaluated in `float`; `argument_pack.rs` the copies of a
+//!   function using GNU `__builtin_va_arg_pack ()` made for its calls;
+//!   `places.rs` lvalues, loads and stores; `alignment.rs` owns backing-place
+//!   guarantees and all memory and allocation alignment; `bit_fields.rs`
+//!   bit-field reads and writes; `bit_int.rs` the bit-precise integers calls
+//!   pass in memory; `wide_bit_int.rs` those of more than 128 bits, which live
+//!   in memory and compute in the C runtime beside it; `vectors.rs` GNU
+//!   vectors, which live in memory and compute lane by lane; `initializers.rs`
+//!   walks braced initializers; `assembly.rs` lowers GNU `asm` statements;
+//!   `vla.rs` evaluates saved array extents and runs the cleanups of the
+//!   regions an exit leaves: dynamic stack restores, and GNU cleanup calls from
+//!   `cleanup.rs`.
 //! - Construction: `ssa.rs` holds the draft function and its SSA variables;
 //!   `emit.rs` copies a finished draft into the module; `types.rs` maps C types
 //!   to IR types; shared `crate::float_parsing::bits` turns folded floating
@@ -87,6 +89,7 @@ mod nested;
 mod places;
 #[cfg(feature = "recursive-lowering-study")]
 mod recursive;
+mod saturation;
 mod statements;
 mod vectors;
 mod vla;
@@ -594,6 +597,9 @@ struct FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
     /// Whether the conversions being applied belong to an arm of a GCC
     /// conditional neither of whose arms keeps excess precision.
     plain_arm:          bool,
+    /// The integer constants GCC's rules saturated floating constants to,
+    /// with each constant's bits and type (`saturation.rs`).
+    saturated:          ArenaVec<'s, (crate::ir::Value, u128, Type)>,
     initializer_values: ArenaVec<'s, Item>,
     /// The guaranteed alignment of each known backing address.
     alignments:         ArenaMap<'s, crate::ir::Value, crate::ir::Align>,
