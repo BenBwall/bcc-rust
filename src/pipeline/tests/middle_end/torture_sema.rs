@@ -114,6 +114,27 @@ int main(void) {
 ",
     ),
     (
+        // The magnitude of a mixed-sign 128-bit sum or difference, which
+        // LLVM 23 at -O0 got wrong as a select of `a - b` and `b - a` with
+        // an all-ones operand (GCC's builtin-arith-overflow-6 and -17).
+        "int128_overflow_magnitudes",
+        r"
+typedef unsigned __int128 U;
+typedef __int128 S;
+#define MAX ((S)(((U)1 << 127) - 1))
+__attribute__((noinline)) U f(U y) { U x = -1; U r; if (__builtin_sub_overflow(x, y, &r)) return 7; return r; }
+__attribute__((noinline)) U g(U y) { U r; if (__builtin_sub_overflow((U)-1, y, &r)) return 7; return r; }
+__attribute__((noinline)) S h(U y) { S r; int o = __builtin_sub_overflow((S)(MAX - 1), y, &r); return o ? r : 0; }
+__attribute__((noinline)) U k(U y) { U r; if (__builtin_add_overflow((S)-1, y, &r)) return 7; return r; }
+int main(void) {
+ if(f(0)!=(U)-1 || g(0)!=(U)-1 || f(5)!=(U)-6 || g(5)!=(U)-6) return 1;
+ if(h(~(U)0)!=MAX) return 2;
+ if(k(1)!=0 || k(10)!=9) return 3;
+ return 0;
+}
+",
+    ),
+    (
         "floating_builtins",
         r#"
 static int sign=__builtin_signbit(-0.0);

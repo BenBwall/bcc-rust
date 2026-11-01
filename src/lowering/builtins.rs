@@ -764,13 +764,20 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             (sign, value, carry)
         } else {
             let same = self.icmp(IntCC::Eq, an, bn);
-            let greater = self.icmp(IntCC::Uge, av, bv);
+            let less = self.icmp(IntCC::Ult, av, bv);
             let sum = self.plain(Opcode::Iadd, av, bv);
             let sum_carry = self.overflow_inst(Opcode::UaddOverflow, av, bv);
+            // |av - bv| without branches: the wrapped difference, negated
+            // through an all-ones mask when av < bv. A select between
+            // `av - bv` and `bv - av` is LLVM's unsigned absolute
+            // difference, which LLVM 23 at -O0 computes wrongly for i128
+            // when one operand is all ones (`UINT128_MAX - 0` gave 1; GCC's
+            // c-c++-common/torture/builtin-arith-overflow-6.c).
             let ab = self.plain(Opcode::Isub, av, bv);
-            let ba = self.plain(Opcode::Isub, bv, av);
-            let difference = self.choose(greater, ab, ba);
-            let difference_sign = self.choose(greater, an, bn);
+            let mask = self.extend(less, true, Type::I128);
+            let flipped = self.plain(Opcode::Xor, ab, mask);
+            let difference = self.plain(Opcode::Isub, flipped, mask);
+            let difference_sign = self.choose(less, bn, an);
             (
                 self.choose(same, an, difference_sign),
                 self.choose(same, sum, difference),
