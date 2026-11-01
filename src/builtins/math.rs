@@ -27,6 +27,27 @@ use crate::{
     target::Scalar as S,
 };
 
+/// Whether the C library function `name` is a real math function that,
+/// but for setting `errno`, reads and writes no memory and has no other
+/// effect: one whose parameters are all numbers, as Clang's
+/// `ConstIgnoringErrno` library builtins are. `lgamma` and its relatives
+/// also store the sign of the result in `signgam` (POSIX), and `nan` reads
+/// a string, so neither counts. Under `-fno-math-errno` such a call is an
+/// operation on its arguments, which the LLVM back end tells LLVM.
+/// C99: §7.12.1 paragraph 1, p. 213; PDF p. 225 (the error conditions
+/// of the math functions and `math_errhandling`).
+pub(crate) fn computes_without_errno(name: &str) -> bool {
+    !name.starts_with("lgamma")
+        && BUILTINS.iter().any(|descriptor| {
+            let parameters = descriptor.signature.parameters;
+            descriptor.library == Some(name)
+                && !parameters.is_empty()
+                && parameters
+                    .iter()
+                    .all(|parameter| matches!(parameter, T::Scalar(_)))
+        })
+}
+
 pub(super) const BUILTINS: &[BuiltinDescriptor] = &[
     descriptor(Id::LibraryAcos, "__builtin_acos", "acos", DoubleUnary),
     descriptor(Id::LibraryAcosf, "__builtin_acosf", "acosf", FloatUnary),

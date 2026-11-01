@@ -70,6 +70,13 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         dry_run: false,
         machine: Vec::new(),
         position: 0,
+        ofast: Ofast::Absent,
+        ofast_at: Vec::new(),
+        eval_method: false,
+        fp_model: None,
+        basic_complex: None,
+        overrides: Vec::new(),
+        ofast_models: Vec::new(),
         positions: Vec::new(),
         linker_words: Vec::new(),
     };
@@ -79,6 +86,68 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         if let Some(query) = state.argument(argument, &mut arguments) {
             return Ok(query);
         }
+    }
+    // Clang reads every `-Ofast` as `-ffast-math` where it stands when the
+    // last `-O` option is an `-Ofast`, and every `-ffp-model=` but
+    // `aggressive` then as its default semantics (`-fno-fast-math`), wherever
+    // it stands; otherwise an `-Ofast` is a level alone, and the models
+    // stand. `-O3` fills a slot that changes nothing.
+    if state.ofast == Ofast::Last {
+        for index in std::mem::take(&mut state.ofast_models) {
+            state.out[index] = "-fno-fast-math".into();
+            state.out[index + 1] = "-O3".into();
+        }
+    } else {
+        for index in std::mem::take(&mut state.ofast_at) {
+            state.out[index] = "-O3".into();
+        }
+    }
+    // Clang refuses an evaluation method beside the options that let the
+    // operations be rearranged, in its own words and order.
+    if state.eval_method {
+        let options: Vec<&str> = state
+            .out
+            .iter()
+            .filter_map(|option| option.to_str())
+            .collect();
+        let [reassociate, reciprocal, approximate] =
+            crate::cli::arguments::eval_method_conflicts(options);
+        for (conflict, name) in [
+            (approximate, "fapprox-func"),
+            (reassociate, "mreassociate"),
+            (reciprocal, "freciprocal"),
+        ] {
+            if conflict {
+                state.errors += 1;
+                super::frontend_error(format_args!(
+                    "option 'ffp-eval-method' cannot be used with option '{name}'"
+                ));
+            }
+        }
+    }
+    if state.ofast != Ofast::Absent {
+        state.clang_warning(
+            "deprecated-ofast",
+            format_args!(
+                "argument '-Ofast' is deprecated; use '-O3' to enable only conforming \
+                 optimizations, or consult the documentation for the same behavior"
+            ),
+        );
+    }
+    // Clang's driver reports the floating-point models a later option
+    // overrides, after `-Ofast`'s deprecation; a final `-Ofast` overrides
+    // every model but `aggressive`.
+    if state.ofast == Ofast::Last
+        && let Some(model) = state.fp_model
+        && model != "aggressive"
+    {
+        state.overrides.push((
+            "overriding-option",
+            format!("overriding '-ffp-model={model}' option with '-Ofast'"),
+        ));
+    }
+    for (group, message) in std::mem::take(&mut state.overrides) {
+        state.clang_warning(group, format_args!("{message}"));
     }
     let target = state.target.unwrap_or_else(|| host_target(personality));
     let mmx = state.machine_options(target);
@@ -108,6 +177,19 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
     // macros come before them.
     if !mmx {
         common.push("-U__MMX__".into());
+    }
+    // GCC applies a final `-Ofast`'s `-ffast-math` before every other
+    // option, so any floating-point option overrides it; Clang applies it
+    // where the `-Ofast` stands (`State::flag`). GCC's level also limits
+    // complex arithmetic's range as an option of its own, which
+    // `-fno-fast-math` leaves and only `-fno-cx-limited-range` takes back.
+    // Both drivers then link `crtfastmath.o` whatever came after.
+    if state.ofast == Ofast::Last {
+        if compiler == Compiler::Gcc {
+            common.push("-ffast-math".into());
+            common.push("-fcx-limited-range".into());
+        }
+        common.push("--link-fast-math-runtime".into());
     }
     if invocation.name.ends_with("c89") {
         common.push("-std=c89".into());
@@ -291,6 +373,10 @@ struct Input {
 }
 
 /// The translation so far.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "Independent switches of the command line being translated."
+)]
 struct State<'a> {
     invocation:      &'a Invocation,
     compiler:        Compiler,
@@ -322,6 +408,27 @@ struct State<'a> {
     machine:         Vec<String>,
     /// The position on the command line of the argument being read.
     position:        usize,
+    /// Where `-Ofast` stands among the `-O` options.
+    ofast:           Ofast,
+    /// The indices in [`State::out`] of the `-ffast-math` each Clang
+    /// `-Ofast` stands for, which hold only if the last `-O` option is an
+    /// `-Ofast`.
+    ofast_at:        Vec<usize>,
+    /// The indices in [`State::out`] of each `-ffp-model=fast`'s two
+    /// options, which become `-fno-fast-math` and `-O3` if the last `-O`
+    /// option is an `-Ofast`.
+    ofast_models:    Vec<usize>,
+    /// Clang's `-ffp-eval-method=` was given, which it refuses beside
+    /// reassociation, reciprocals and approximate functions.
+    eval_method:     bool,
+    /// The last Clang `-ffp-model=`.
+    fp_model:        Option<&'static str>,
+    /// The option that last set Clang's complex range to "basic"
+    /// (`-ffast-math`), which a later model overrides with a warning.
+    basic_complex:   Option<&'static str>,
+    /// Clang's warnings about overridden floating-point options, with
+    /// their groups, reported once the warning options are known.
+    overrides:       Vec<(&'static str, String)>,
     /// The arguments Clang may report as unused, with their positions and
     /// as Clang spells them: the stage options, `-fsyntax-only`, and the
     /// options that only the link uses (`-L/usr/lib`, `-T x.ld`, `-s`).
@@ -330,6 +437,21 @@ struct State<'a> {
     /// `-Xlinker ARG`, `-z now`), as Clang spells them, each with its index
     /// in [`State::out`], which orders them among the input files.
     linker_words:    Vec<(usize, String)>,
+}
+
+/// Where `-Ofast` stands among the `-O` options. Both compilers read a
+/// last `-Ofast` as `-O3` with `-ffast-math`: GCC's before every other
+/// option, so that any floating-point option overrides it wherever it
+/// appears, Clang's where the `-Ofast` stands. Clang reports any `-Ofast`
+/// as deprecated.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Ofast {
+    /// No `-Ofast`.
+    Absent,
+    /// An `-Ofast` that a later `-O` option overrides.
+    Earlier,
+    /// The last `-O` option is `-Ofast`.
+    Last,
 }
 
 /// An argument Clang reports as unused when the command line does not use
@@ -502,11 +624,14 @@ impl State<'_> {
                 self.link_only(text.into());
                 self.out.push("-Wl,-s".into());
             },
-            | "-Ofast" => self.unsupported(
-                text,
-                "it implies -ffast-math; bcc keeps IEEE semantics and does not define \
-                 __FAST_MATH__",
-            ),
+            | "-Ofast" => {
+                self.ofast = Ofast::Last;
+                self.out.push("-O3".into());
+                if self.compiler == Compiler::Clang {
+                    self.ofast_at.push(self.out.len());
+                    self.out.push("-ffast-math".into());
+                }
+            },
             | "-C" | "-CC" => self.invocation.warning(format_args!(
                 "'{text}' is not supported: bcc does not keep comments in preprocessed output"
             )),
@@ -770,12 +895,65 @@ impl State<'_> {
     /// error under `-Werror` or
     /// `-Werror=unused-command-line-argument`.
     fn unused(&mut self, message: std::fmt::Arguments<'_>) {
-        const GROUP: &str = "unused-command-line-argument";
+        if self
+            .warning_options
+            .iter()
+            .any(|option| option == "-Qunused-arguments")
+        {
+            return;
+        }
+        self.clang_warning("unused-command-line-argument", message);
+    }
+
+    /// Clang's `-ffp-model=MODEL`: `precise` is its default semantics,
+    /// `fast` gives up all but NaNs and infinities, and `aggressive` is
+    /// `-ffast-math`. A model after a live `-Ofast` loses to it, and `fast`
+    /// then leaves the default semantics (Clang 23 keeps only contraction
+    /// there). A model after another, or after `-ffast-math`'s "basic"
+    /// complex range, draws Clang's override warnings.
+    fn fp_model_option(&mut self, model: &'static str) {
+        if let Some(previous) = self.fp_model
+            && previous != model
+        {
+            self.overrides.push((
+                "overriding-option",
+                format!("overriding '-ffp-model={previous}' option with '-ffp-model={model}'"),
+            ));
+        }
+        if let Some(by) = self.basic_complex
+            && model != "aggressive"
+        {
+            let range = if model == "fast" { "promoted" } else { "full" };
+            self.overrides.push((
+                "overriding-complex-range",
+                format!(
+                    "'-ffp-model={model}' sets complex range to \"{range}\" overriding the \
+                     setting of \"basic\" that was implied by '{by}'"
+                ),
+            ));
+            self.basic_complex = None;
+        }
+        self.fp_model = Some(model);
+        let options: &[&str] = match model {
+            | "fast" => &["-ffast-math", "-fno-finite-math-only"],
+            | "aggressive" => &["-ffast-math"],
+            | _ => &["-fno-fast-math"],
+        };
+        if model == "fast" {
+            self.ofast_models.push(self.out.len());
+        }
+        self.out.extend(options.iter().map(Into::into));
+    }
+
+    /// Reports a warning of Clang's driver in `group`, which is on by
+    /// default: suppressed by `-w` or `-Wno-GROUP`, an error under
+    /// `-Werror` or `-Werror=GROUP`. The GCC personality reports none.
+    fn clang_warning(&mut self, group: &str, message: std::fmt::Arguments<'_>) {
+        // Clang's `-Wdeprecated` holds its `deprecated-…` groups.
+        let parent = group.starts_with("deprecated-").then_some("deprecated");
+        let names = |name: Option<&str>| name == Some(group) || (name.is_some() && name == parent);
         if self.compiler != Compiler::Clang
-            || self
-                .warning_options
-                .iter()
-                .any(|option| matches!(option.as_str(), "-w" | "-Qunused-arguments"))
+            || self.warning_options.iter().any(|option| option == "-w")
         {
             return;
         }
@@ -786,18 +964,18 @@ impl State<'_> {
         let mut error = None;
         for option in &self.warning_options {
             let option = option.as_str();
-            if option.strip_prefix("-W") == Some(GROUP) {
+            if names(option.strip_prefix("-W")) {
                 enabled = true;
-            } else if option == "-Wno-everything" || option.strip_prefix("-Wno-") == Some(GROUP) {
+            } else if option == "-Wno-everything" || names(option.strip_prefix("-Wno-")) {
                 enabled = false;
             } else if option == "-Werror" {
                 all_errors = true;
             } else if option == "-Wno-error" {
                 all_errors = false;
-            } else if option.strip_prefix("-Werror=") == Some(GROUP) {
+            } else if names(option.strip_prefix("-Werror=")) {
                 enabled = true;
                 error = Some(true);
-            } else if option.strip_prefix("-Wno-error=") == Some(GROUP) {
+            } else if names(option.strip_prefix("-Wno-error=")) {
                 error = Some(false);
             }
         }
@@ -805,10 +983,10 @@ impl State<'_> {
             return;
         }
         if error.unwrap_or(all_errors) {
-            self.error(format_args!("{message} [-Werror,-W{GROUP}]"));
+            self.error(format_args!("{message} [-Werror,-W{group}]"));
         } else {
             self.invocation
-                .warning(format_args!("{message} [-W{GROUP}]"));
+                .warning(format_args!("{message} [-W{group}]"));
         }
     }
 
@@ -959,12 +1137,54 @@ impl State<'_> {
             self.error(format_args!("unknown argument: '{text}'"));
             return;
         }
-        if PLAIN_OPTIONS.contains(&text)
-            || text.starts_with("-std=")
-            || text.starts_with("-O")
-            || text.starts_with("-Wl,")
-            || text.starts_with("-fdiagnostics-format=")
-            || implements_language_option(text)
+        // A later `-O` option takes the `-Ofast`s back, unless another
+        // `-Ofast` follows it.
+        if text.starts_with("-O") && text != "-Ofast" && self.ofast == Ofast::Last {
+            self.ofast = Ofast::Earlier;
+        }
+        // Clang's floating-point models: `precise` is its default
+        // semantics, `fast` gives up all but NaNs and infinities, and
+        // `aggressive` is `-ffast-math`. `strict` asks for rounding math,
+        // which bcc does not implement (`treatment`).
+        if self.compiler == Compiler::Clang {
+            match text {
+                | "-ffast-math" => self.basic_complex = Some("-ffast-math"),
+                | "-fno-fast-math" => self.basic_complex = None,
+                | _ => {},
+            }
+            let model = match text {
+                | "-ffp-model=precise" => Some("precise"),
+                | "-ffp-model=fast" => Some("fast"),
+                | "-ffp-model=aggressive" => Some("aggressive"),
+                | _ => None,
+            };
+            if let Some(model) = model {
+                self.fp_model_option(model);
+                return;
+            }
+            if text.starts_with("-ffp-eval-method=") {
+                self.eval_method = true;
+            }
+        }
+        // Clang's own floating-point options, which bcc implements and GCC
+        // does not know.
+        let clang_only = self.compiler == Compiler::Gcc
+            && matches!(
+                text,
+                "-fhonor-nans"
+                    | "-fno-honor-nans"
+                    | "-fhonor-infinities"
+                    | "-fno-honor-infinities"
+                    | "-fapprox-func"
+                    | "-fno-approx-func"
+            );
+        if !clang_only
+            && (PLAIN_OPTIONS.contains(&text)
+                || text.starts_with("-std=")
+                || text.starts_with("-O")
+                || text.starts_with("-Wl,")
+                || text.starts_with("-fdiagnostics-format=")
+                || implements_language_option(text))
         {
             self.out.push(text.into());
             return;

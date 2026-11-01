@@ -242,6 +242,7 @@ fn torture_sema_matches_clang_and_native_arms() {
             target,
             kind: OutputKind::Executable,
             code: crate::target::CodeOptions::default(),
+            fast_math_runtime: false,
         };
         let mut command = toolchain.command(&input, &oracle, options);
         _ = command.args(["-std=gnu11", "-Wno-constant-conversion"]);

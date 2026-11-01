@@ -42,6 +42,7 @@ pub(super) fn prepare<'ir>(
     options: &CodeGeneration,
 ) -> Result<Prepared<'ir>, Failure<'ir>> {
     let module = &diagnosed.module;
+    let fast_math_runtime = context.configuration.links_fast_math_runtime();
     if (target.is_wasm()
         || options.backend == BackEnd::Wasm
         || matches!(options.emit, Some(Emit::Wasm | Emit::Wat)))
@@ -103,8 +104,12 @@ pub(super) fn prepare<'ir>(
                 native::emit_assembly_with(module, target, code, &mut text)
                     .map_err(|e| message(arena, format_args!("error: {e}"), FAILURE_STATUS))?;
             } else {
-                llvm::emit_assembly_text(module, options.llvm_options(target, code), &mut text)
-                    .map_err(|e| message(arena, format_args!("error: {e}"), FAILURE_STATUS))?;
+                llvm::emit_assembly_text(
+                    module,
+                    options.llvm_options(target, code, fast_math_runtime),
+                    &mut text,
+                )
+                .map_err(|e| message(arena, format_args!("error: {e}"), FAILURE_STATUS))?;
             }
             Output::Text(text.into_str())
         },
@@ -142,13 +147,17 @@ pub(super) fn prepare<'ir>(
                 native::build(&text, path, target, options.output_kind(), writer)
                     .map_err(failure)?;
             } else if diagnosed.call_diagnostics.is_empty() {
-                llvm::compile_module(module, path, options.llvm_options(target, code))
-                    .map_err(failure)?;
+                llvm::compile_module(
+                    module,
+                    path,
+                    options.llvm_options(target, code, fast_math_runtime),
+                )
+                .map_err(failure)?;
             } else {
                 let built = llvm::compile_module_checked(
                     module,
                     path,
-                    options.llvm_options(target, code),
+                    options.llvm_options(target, code, fast_math_runtime),
                     diagnosed.call_diagnostics.len(),
                     |counts| {
                         let mut retained = ArenaVec::new_in(arena);

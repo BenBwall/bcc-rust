@@ -313,6 +313,12 @@ impl Invocation {
     }
 }
 
+/// Prints `error: MESSAGE` to stderr, as Clang's front end words the
+/// errors it reports about the options its driver passed on.
+fn frontend_error(message: std::fmt::Arguments<'_>) {
+    print(&format_args!("error: {message}\n").to_string(), true);
+}
+
 /// What a personality runs.
 #[derive(Default)]
 pub(super) struct Plan {

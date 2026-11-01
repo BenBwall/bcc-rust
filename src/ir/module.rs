@@ -335,6 +335,17 @@ impl<'ir> Module<'ir> {
         self.signaling_nans
     }
 
+    /// Gives up the parts of IEC 60559 semantics `flags` name, which the
+    /// LLVM back end passes on to LLVM (`-ffast-math` and its relatives).
+    pub(crate) const fn set_fast_math(&mut self, flags: crate::configuration::FastMathFlags) {
+        self.fast_math = flags;
+    }
+
+    /// The parts of IEC 60559 semantics the program gives up.
+    pub(crate) const fn fast_math(&self) -> crate::configuration::FastMathFlags {
+        self.fast_math
+    }
+
     /// Gives a global its initializer, copying the bytes and relocations
     /// into the module's arena.
     pub(crate) fn define_global(&mut self, global: GlobalId, init: GlobalInit<'_>) {
@@ -385,6 +396,7 @@ impl<'ir> Module<'ir> {
             library_builtins: LibraryBuiltins::All,
             null_pointer_is_valid: false,
             signaling_nans: false,
+            fast_math: crate::configuration::FastMathFlags::NONE,
             inline_asm: Table::new_in(arena),
         }
     }

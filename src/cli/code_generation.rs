@@ -353,6 +353,11 @@ pub(super) struct CodeGeneration {
     /// level.
     #[arg(long, requires = "generation")]
     pub(super) llvm_codegen_only: bool,
+    /// Link `crtfastmath.o` into an executable whatever the floating-point
+    /// options say, as the GCC and Clang drivers do after a final `-Ofast`;
+    /// the personalities pass it.
+    #[arg(long, hide = true)]
+    pub(super) link_fast_math_runtime: bool,
     /// Select the code generator for -o and --emit=asm: LLVM through its C
     /// API, or bcc's own x86-64 back end, which refuses what it does not
     /// support yet.
@@ -574,7 +579,12 @@ impl CodeGeneration {
     }
 
     /// LLVM IR passes and code generation for `target`.
-    pub(super) fn llvm_options(&self, target: Target, code: CodeOptions) -> LlvmOptions {
+    pub(super) fn llvm_options(
+        &self,
+        target: Target,
+        code: CodeOptions,
+        fast_math_runtime: bool,
+    ) -> LlvmOptions {
         LlvmOptions {
             opt: match self.llvm_opt.or(self.optimization).unwrap_or(LlvmOpt::None) {
                 | LlvmOpt::None => None,
@@ -589,6 +599,7 @@ impl CodeGeneration {
             target,
             kind: self.output_kind(),
             code,
+            fast_math_runtime: fast_math_runtime || self.link_fast_math_runtime,
         }
     }
 }

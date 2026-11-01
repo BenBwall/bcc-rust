@@ -479,9 +479,21 @@ impl CompilerConfiguration {
     }
 
     /// Gives up (or keeps) part of IEC 60559 semantics, as GCC's
-    /// `-fno-signed-zeros` and its relatives do. Only predefined macros
-    /// read it.
+    /// `-fno-signed-zeros` and its relatives do, and records the option as
+    /// given.
     pub(crate) const fn with_relaxed_floating_point(
+        mut self,
+        option: super::RelaxedFloatingPoint,
+        relaxed: bool,
+    ) -> Self {
+        self = self.with_implied_floating_point(option, relaxed);
+        self.given_floating_point |= option.bit();
+        self
+    }
+
+    /// Gives up (or keeps) part of IEC 60559 semantics as an option that
+    /// implies it does (`-ffast-math`), without recording it as given.
+    pub(crate) const fn with_implied_floating_point(
         mut self,
         option: super::RelaxedFloatingPoint,
         relaxed: bool,
@@ -491,12 +503,158 @@ impl CompilerConfiguration {
         } else {
             self.relaxed_floating_point &= !option.bit();
         }
-        self.given_floating_point |= option.bit();
         self
+    }
+
+    /// Gives up `errno` from the math functions unless an option decided
+    /// it, where the identity's compiler does by default: Clang on musl and
+    /// WebAssembly, whose C libraries leave `errno` alone there
+    /// (`ToolChain::IsMathErrnoDefault`). GCC sets it on every target bcc
+    /// has.
+    pub(crate) const fn with_default_math_errno(self) -> Self {
+        let clang = matches!(self.identity.rules(), super::RuleSet::Clang);
+        let quiet = matches!(
+            self.target,
+            crate::target::Target::LinuxMusl
+                | crate::target::Target::Wasm32Unknown
+                | crate::target::Target::Wasm32Wasi
+        );
+        if clang && quiet && !self.gives_floating_point(super::RelaxedFloatingPoint::NoMathErrno) {
+            self.with_implied_floating_point(super::RelaxedFloatingPoint::NoMathErrno, true)
+        } else {
+            self
+        }
+    }
+
+    /// Records `-fexcess-precision=standard` (true) or `=fast`.
+    pub(crate) const fn with_standard_excess_precision(mut self, standard: bool) -> Self {
+        self.standard_excess_precision = standard;
+        self.fast_math_saved = self.saved_also(4, standard);
+        self
+    }
+
+    /// The saved state with bit `bit` set to `value` while a `-ffast-math`
+    /// is held: an explicit option after it would stand were it cancelled.
+    const fn saved_also(self, bit: u8, value: bool) -> u8 {
+        let saved = self.fast_math_saved;
+        if saved & 1 == 0 {
+            saved
+        } else if value {
+            saved | bit
+        } else {
+            saved & !bit
+        }
+    }
+
+    /// `-ffast-math`'s side effects in GCC: signaling NaNs off and fast
+    /// excess precision, kept for a later `-fno-fast-math` to give back
+    /// ([`Self::with_fast_math_cancelled`]).
+    pub(crate) const fn with_fast_math_side_effects(mut self) -> Self {
+        // A later `-ffast-math` keeps the first one's save: the cancellation
+        // drops every one.
+        if self.fast_math_saved & 1 == 0 {
+            self.fast_math_saved = 1
+                | if self.signaling_nans { 2 } else { 0 }
+                | if self.standard_excess_precision { 4 } else { 0 };
+        }
+        self.signaling_nans = false;
+        self.standard_excess_precision = false;
+        self
+    }
+
+    /// `-fno-fast-math` after a `-ffast-math`: GCC's driver drops every
+    /// cancelled `-ffast-math`, so their side effects never happened, and
+    /// the explicit options among them stand.
+    pub(crate) const fn with_fast_math_cancelled(mut self) -> Self {
+        if self.fast_math_saved & 1 != 0 {
+            self.signaling_nans = self.fast_math_saved & 2 != 0;
+            self.standard_excess_precision = self.fast_math_saved & 4 != 0;
+        }
+        self.fast_math_saved = 0;
+        self
+    }
+
+    /// Whether `-fexcess-precision=standard` was given last.
+    pub(crate) const fn standard_excess_precision(self) -> bool {
+        self.standard_excess_precision
+    }
+
+    /// Records whether the last `-f[no-]fast-math` (`unsafe_math` false) or
+    /// `-f[no-]unsafe-math-optimizations` (`unsafe_math` true) gives the
+    /// semantics up.
+    pub(crate) const fn with_fast_math_given(mut self, unsafe_math: bool, given: bool) -> Self {
+        let bit = if unsafe_math { 2 } else { 1 };
+        if given {
+            self.fast_math_given |= bit;
+        } else {
+            self.fast_math_given &= !bit;
+        }
+        self
+    }
+
+    /// Whether the link adds `crtfastmath.o`, whose constructor makes the
+    /// processor flush subnormal results and operands to zero, as both
+    /// drivers link it for an executable: GCC's when the last
+    /// `-f[no-]fast-math` or the last `-f[no-]unsafe-math-optimizations`
+    /// (or a final `-Ofast`) gives the semantics up, Clang's when the last
+    /// of all four does.
+    pub(crate) const fn links_fast_math_runtime(self) -> bool {
+        match self.identity.rules() {
+            | super::RuleSet::Gcc => self.fast_math_given != 0,
+            | super::RuleSet::Clang =>
+                self.relaxes_floating_point(super::RelaxedFloatingPoint::UnsafeMath),
+        }
     }
 
     pub(crate) const fn relaxes_floating_point(self, option: super::RelaxedFloatingPoint) -> bool {
         self.relaxed_floating_point & option.bit() != 0
+    }
+
+    /// Whether NaNs and infinities are given up, as `-ffinite-math-only`
+    /// asks, which `__FINITE_MATH_ONLY__` reports.
+    pub(crate) const fn finite_math_only(self) -> bool {
+        self.relaxes_floating_point(super::RelaxedFloatingPoint::NoNans)
+            && self.relaxes_floating_point(super::RelaxedFloatingPoint::NoInfinities)
+    }
+
+    /// Whether traps are given up: `-fno-trapping-math`, unless
+    /// `-fsignaling-nans` keeps them, as GCC's `finish_options` does.
+    pub(crate) const fn no_trapping_math(self) -> bool {
+        self.relaxes_floating_point(super::RelaxedFloatingPoint::NoTrappingMath)
+            && !self.signaling_nans
+    }
+
+    /// Whether reassociation is permitted: `-fassociative-math`, which both
+    /// compilers drop unless signed zeros and traps are given up too.
+    pub(crate) const fn associative_math(self) -> bool {
+        self.relaxes_floating_point(super::RelaxedFloatingPoint::AssociativeMath)
+            && self.relaxes_floating_point(super::RelaxedFloatingPoint::NoSignedZeros)
+            && self.no_trapping_math()
+    }
+
+    /// The fast-math flags of every floating operation, as Clang gives
+    /// them (see [`super::FastMathFlags`]). `-fsignaling-nans` keeps the
+    /// operations exact, since the LLVM back end then emits LLVM's
+    /// constrained intrinsics.
+    pub(crate) const fn fast_math_flags(self) -> super::FastMathFlags {
+        use super::RelaxedFloatingPoint as Relaxed;
+        if self.signaling_nans {
+            return super::FastMathFlags {
+                no_math_errno: self.relaxes_floating_point(Relaxed::NoMathErrno),
+                ..super::FastMathFlags::NONE
+            };
+        }
+        super::FastMathFlags {
+            no_nans:          self.relaxes_floating_point(Relaxed::NoNans),
+            no_infinities:    self.relaxes_floating_point(Relaxed::NoInfinities),
+            no_signed_zeros:  self.relaxes_floating_point(Relaxed::NoSignedZeros),
+            reciprocal:       self.relaxes_floating_point(Relaxed::ReciprocalMath),
+            reassociate:      self.associative_math(),
+            contract:         self.relaxes_floating_point(Relaxed::UnsafeMath),
+            approximate_func: self.relaxes_floating_point(Relaxed::ApproxFunc),
+            no_trapping:      self.no_trapping_math(),
+            no_math_errno:    self.relaxes_floating_point(Relaxed::NoMathErrno),
+        }
     }
 
     /// Whether `option` was given in either form, rather than left at its
@@ -516,6 +674,7 @@ impl CompilerConfiguration {
     /// Options".
     pub(crate) const fn with_signaling_nans(mut self, enabled: bool) -> Self {
         self.signaling_nans = enabled;
+        self.fast_math_saved = self.saved_also(2, enabled);
         self
     }
 
@@ -653,6 +812,9 @@ impl CompilerConfiguration {
             default_visibility: super::DefaultVisibility::Default,
             relaxed_floating_point: 0,
             given_floating_point: 0,
+            fast_math_given: 0,
+            standard_excess_precision: false,
+            fast_math_saved: 0,
             signaling_nans: false,
             suppress_warnings: false,
             max_nesting_depth: super::DEFAULT_MAX_NESTING_DEPTH,

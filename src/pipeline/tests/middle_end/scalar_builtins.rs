@@ -366,6 +366,7 @@ fn gcc_scalar_builtins_execute_in_native_arms() {
                         target,
                         kind: OutputKind::Executable,
                         code: crate::target::CodeOptions::default(),
+                        fast_math_runtime: false,
                     },
                 )
                 .unwrap();
@@ -559,6 +560,7 @@ void *memcpy(void *p,const void *q,unsigned long n){volatile unsigned char *a=p;
                 target,
                 kind: OutputKind::Executable,
                 code: crate::target::CodeOptions::default(),
+                fast_math_runtime: false,
             };
             with_module(source, target, arm.bcc, Profile::PostAbi, |module, _| {
                 compile_module(

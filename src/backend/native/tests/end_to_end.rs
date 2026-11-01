@@ -986,6 +986,7 @@ fn run_llvm(
         target,
         kind: OutputKind::Executable,
         code: crate::target::CodeOptions::default(),
+        fast_math_runtime: false,
     };
     compile_module(module, &executable, options).map_err(|error| error.to_string())?;
     let output = run_native(&mut Command::new(&executable)).map_err(|error| error.to_string())?;

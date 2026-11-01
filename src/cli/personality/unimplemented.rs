@@ -100,22 +100,6 @@ const REFUSED: &[(&str, &str)] = &[
         "bcc gives floating constants their type in C",
     ),
     (
-        "-ffast-math",
-        "bcc keeps IEEE semantics and does not define __FAST_MATH__",
-    ),
-    (
-        "-funsafe-math-optimizations",
-        "bcc keeps IEEE semantics and does not link crtfastmath",
-    ),
-    (
-        "-ffinite-math-only",
-        "bcc keeps IEEE semantics and does not define __FINITE_MATH_ONLY__",
-    ),
-    (
-        "-fno-honor-*",
-        "bcc keeps IEEE semantics for infinities and NaNs",
-    ),
-    (
         "-frounding-math",
         "bcc assumes the default rounding mode when it folds constants",
     ),
@@ -478,16 +462,13 @@ const IGNORED: &[&str] = &[
     // Permissions bcc need not use, and the floating-point behavior bcc
     // already has: no contraction, no excess precision on x86-64, errno set
     // by the math functions, IEEE results. bcc's own command line takes
-    // `-fno-signed-zeros` and its relatives, for the macros GCC defines.
-    "-fno-finite-math-only",
+    // `-ffast-math`, `-fno-signed-zeros` and their relatives, which the
+    // personalities pass on before consulting these lists.
     "-fno-rounding-math",
-    "-f[no-]approx-func",
-    "-fhonor-*",
     "-f[no-]protect-parens",
     "-fcomplex-arithmetic=",
     "-flimited-precision=",
     "-fveclib=",
-    "-ffp-model=precise",
     "-ffp-exception-behavior=ignore",
     "-ffp-eval-method=source",
     "-fdenormal-fp-math=ieee",
@@ -1018,7 +999,6 @@ mod tests {
         for refused in [
             "-fshort-enums",
             "-fexec-charset=latin1",
-            "-ffast-math",
             "-fsplit-stack",
             "-fsanitize=address",
             "-fprofile-arcs",
@@ -1043,7 +1023,6 @@ mod tests {
             "-fno-omit-frame-pointer",
             "-fno-strict-aliasing",
             "-fstrict-aliasing",
-            "-fno-finite-math-only",
             "-fvisibility-inlines-hidden",
             "-flto=auto",
             "-ffat-lto-objects",

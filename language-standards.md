@@ -128,23 +128,78 @@ Clang macro (`__clang__` and its versions, `__llvm__`, the literal
 encodings). It also defines GCC's `__FLT_IS_IEC_60559__`,
 `__DBL_IS_IEC_60559__` and `__LDBL_IS_IEC_60559__` (`1`, as GCC 13 and
 later), and `__GCC_IEC_559` and `__GCC_IEC_559_COMPLEX` as GCC computes them
-from the options: `2`, or `0` under `-fno-signed-zeros`, `-freciprocal-math`
-or an effective `-fassociative-math` (one with `-fno-signed-zeros` and
-`-fno-trapping-math`), and the complex one also under limited or Fortran
+from the options: `2`, or `0` under `-fno-signed-zeros`, `-freciprocal-math`,
+an effective `-fassociative-math` (one with `-fno-signed-zeros` and
+`-fno-trapping-math`), `-ffinite-math-only` or `-funsafe-math-optimizations`,
+and the complex one also under limited or Fortran
 complex arithmetic: `-f[no-]cx-fortran-rules` decides that alone when given,
 so `-fcx-fortran-rules -fno-cx-limited-range` still gives `0` and
 `-fno-cx-fortran-rules -fcx-limited-range` `2`, as in GCC 15, and
 `-f[no-]cx-limited-range` decides only otherwise. Those options, `-f[no-]trapping-math` and
 `-f[no-]math-errno` also define `__NO_SIGNED_ZEROS__`,
 `__RECIPROCAL_MATH__`, `__ASSOCIATIVE_MATH__`, `__NO_TRAPPING_MATH__` and
-`__NO_MATH_ERRNO__` there, `-fsignaling-nans` defines `__SUPPORT_SNAN__`
-(`CompilerConfiguration::with_signaling_nans`), and `-fno-fast-math` and
-`-fno-unsafe-math-optimizations` restore them as in GCC
-(`CompilerConfiguration::with_relaxed_floating_point`). bcc's code keeps
-IEC 60559 semantics under all of them, which they permit; the other
-identities accept them with no effect, since the pinned Clang's only
-counterpart, `__NO_MATH_ERRNO__`, has a target-dependent default bcc's macro
-tables leave out. Because GCC 7 and later
+`__NO_MATH_ERRNO__` there, and `-fsignaling-nans` defines `__SUPPORT_SNAN__`
+(`CompilerConfiguration::with_signaling_nans`).
+
+`-ffast-math`, `-funsafe-math-optimizations` and `-ffinite-math-only` give
+up the options they imply and their `-fno-` forms restore them, the last
+option deciding, as in GCC 13 and Clang 23; `-ffast-math` and
+`-fno-fast-math` also set the complex arithmetic unless a
+`-f[no-]cx-limited-range` was given, as GCC's `set_fast_math_flags` does
+(Clang's `-fno-fast-math` would reset it even then, a difference only its
+macros-free complex lowering would show); GCC's `-ffast-math` also turns
+`-fsignaling-nans` off and makes excess precision fast, unless a later
+`-fno-fast-math` cancels it (GCC's driver drops the cancelled option). bcc's own command line also takes Clang's
+`-f[no-]honor-nans`, `-f[no-]honor-infinities` and `-f[no-]approx-func`,
+which only the Clang personality passes on, and `-fexcess-precision=standard`
+or `=fast`, which only GCC's `__FAST_MATH__` reads. The GCC and Clang
+personalities read `-Ofast`, when it is the last `-O` option, as `-O3` with
+`-ffast-math`: GCC's before every other option, so any floating-point option
+overrides it, and Clang's where the `-Ofast` stands, as each compiler does;
+both then link `crtfastmath.o` whatever followed, as their drivers do. The
+Clang personality reports `-Ofast` as deprecated (`-Wdeprecated-ofast`,
+under `-Wdeprecated`), as Clang 23 does, reads `-ffp-model=precise` as
+`-fno-fast-math`, `=fast` as `-ffast-math -fno-finite-math-only` and
+`=aggressive` as `-ffast-math` (`=strict` asks for rounding math, which bcc
+refuses); a model after a final `-Ofast` loses to it (`fast` then keeps the
+default semantics, as Clang 23 does), and Clang's `-Woverriding-option` and
+`-Woverriding-complex-range` warnings report a model that overrides another
+model, `-Ofast` or `-ffast-math`. It refuses `-ffp-eval-method=` beside reassociation, reciprocals
+or approximate functions in Clang's words. Both identities define
+`__FINITE_MATH_ONLY__` as `1` when NaNs and infinities are given up, and
+`__FAST_MATH__` when their compiler's own set is given up: GCC's
+`-funsafe-math-optimizations` itself, finite math, no signed zeros, no traps
+and no `errno`, unless `-fexcess-precision=standard` is given; Clang's every
+option `-ffast-math` implies but the complex arithmetic and contraction. The
+Clang identity defines `__NO_MATH_ERRNO__` under `-fno-math-errno`, which,
+as in Clang, is the default on musl and WebAssembly unless
+`-f[no-]math-errno` is given. `-ffp-contract=` is still ignored, so
+`-ffast-math -ffp-contract=off` keeps LLVM's `contract` flag, which bcc's
+baseline x86-64 code (no FMA) cannot show.
+
+These options have their real meaning. The LLVM back end gives every
+floating operation, comparison, `phi`, `select` and floating call the LLVM
+fast-math flags Clang gives it (`nnan`, `ninf`, `nsz`, `arcp`, `reassoc`
+with `nsz` and no traps, `contract` under `-ffast-math` and
+`-funsafe-math-optimizations`, `afn`), marks defined functions
+`no-signed-zeros-fp-math` and `no-trapping-math` as Clang does, and under
+`-fno-math-errno` declares the real math functions whose parameters are
+numbers (not `lgamma`, which sets `signgam`, nor `nan`) `memory(none)`,
+unless `-fno-builtin` or `-fno-builtin-NAME` takes the name, so LLVM may
+compute `sqrt` with an instruction or vectorize a loop of calls. An
+executable links `crtfastmath.o`, which sets the processor to flush
+subnormals to zero, when the last `-f[no-]fast-math` or the last
+`-f[no-]unsafe-math-optimizations` gives the semantics up under the GCC
+identity, or the last of all four under the Clang one, as their drivers do.
+`-fsignaling-nans` keeps the operations exact. bcc's own optimizer and
+constant folding, and the code of the native, interpreter and WebAssembly
+back ends, keep IEC 60559 semantics, which the options permit (a native
+executable the personalities link still gets `crtfastmath.o`); so does an unoptimized
+LLVM build where GCC already folds (GCC folds `isnan` to 0 under
+`-ffinite-math-only -O0`, Clang and bcc only from `-O1`). The MSVC and TCC
+identities accept the options with no macro; TCC's personality ignores
+them as TCC does, and the MSVC personality still accepts `/fp:fast` with
+IEC 60559 semantics, which it permits. Because GCC 7 and later
 name the TS 18661-3 types as keywords, glibc's headers then stop declaring
 them, so this identity turns on `-ffloatn-types` unless `-fno-floatn-types`
 is given; with that, it defines `_Float32`, `_Float64`, `_Float32x`,
@@ -1453,7 +1508,7 @@ backend work before they can be enabled.
 | `__OPTIMIZE__` | Defined by the identity macro builder when optimization is enabled. |
 | `__OPTIMIZE_SIZE__` | Defined by the identity macro builder for `-Os` and `-Oz`. |
 | `__NO_INLINE__` | Defined by the identity macro builder when optimization is disabled. |
-| `__NO_MATH_ERRNO__` | Code generation, relocation and optimization policy are not implemented. |
+| `__NO_MATH_ERRNO__` | Defined by the identity macro builder from the floating-point options and, under Clang's rules, the target's default (musl and WebAssembly). |
 | `__OBJC_BOOL_IS_BOOL` | Objective-C and CoreFoundation string intrinsics are not implemented. |
 | `__OPENCL_MEMORY_SCOPE_ALL_SVM_DEVICES` | Scoped atomic operations and memory scopes are not implemented. |
 | `__OPENCL_MEMORY_SCOPE_DEVICE` | Scoped atomic operations and memory scopes are not implemented. |

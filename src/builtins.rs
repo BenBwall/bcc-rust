@@ -54,6 +54,7 @@ pub(crate) use library::{
     extension_name,
     ordinary,
 };
+pub(crate) use math::computes_without_errno;
 pub(crate) use scalar::unimplemented;
 #[cfg(test)]
 pub(crate) use x86::MERGED as test_merged_x86;

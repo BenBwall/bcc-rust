@@ -43,6 +43,7 @@ fn llvm_emits_every_golden_module() {
         target,
         kind: OutputKind::Object,
         code: CodeOptions::default(),
+        fast_math_runtime: false,
     };
     thread::scope(|scope| {
         let runs: Vec<_> = GOLDENS
@@ -125,6 +126,7 @@ block0:
                     target,
                     kind: OutputKind::Executable,
                     code: CodeOptions::default(),
+                    fast_math_runtime: false,
                 },
             )
             .unwrap();
@@ -343,6 +345,7 @@ fn command_lines_follow_the_options() {
             target: Target::LinuxGnu,
             kind,
             code: CodeOptions::default(),
+            fast_math_runtime: false,
         };
         let command = toolchain.command(Path::new("in.o"), Path::new("out"), options);
         command
@@ -402,6 +405,7 @@ fn freestanding_commands_preserve_object_and_hosted_link_contracts() {
                 target,
                 kind,
                 code: CodeOptions::default(),
+                fast_math_runtime: false,
             };
             let hosted = toolchain.command(Path::new("in.o"), Path::new("out"), options);
             let freestanding =
@@ -538,6 +542,7 @@ fn assert_runs(name: &str, program: &str, status: i32, stdout: &str) {
                     target,
                     kind: OutputKind::Executable,
                     code: CodeOptions::default(),
+                    fast_math_runtime: false,
                 };
                 let suffix = if disable_llvm_passes { "a1" } else { "a2" };
                 let executable = directory.join(format!("{name}-{suffix}.exe"));
@@ -872,6 +877,7 @@ fn llvm_mc_diagnostics_refuse_output_even_when_emission_returns_success() {
                 target:              Target::LinuxGnu,
                 kind:                OutputKind::Object,
                 code:                CodeOptions::default(),
+                fast_math_runtime:   false,
             },
         )
         .unwrap_err();
@@ -897,6 +903,7 @@ fn llvm_mc_diagnostics_refuse_output_even_when_emission_returns_success() {
             target:              Target::LinuxGnu,
             kind:                OutputKind::Object,
             code:                CodeOptions::default(),
+            fast_math_runtime:   false,
         },
     )
     .unwrap_err();
@@ -918,6 +925,7 @@ fn llvm_mc_diagnostics_refuse_output_even_when_emission_returns_success() {
             target:              Target::LinuxGnu,
             kind:                OutputKind::Object,
             code:                CodeOptions::default(),
+            fast_math_runtime:   false,
         },
     )
     .unwrap();

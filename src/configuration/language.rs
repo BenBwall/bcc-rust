@@ -146,14 +146,22 @@ pub(crate) enum DefaultVisibility {
     Protected,
 }
 
-/// A GCC option that gives up part of IEC 60559 semantics. Each permits
-/// transformations that bcc does not make, so the program bcc builds is the
-/// same with or without it, but GCC reports it in predefined macros
-/// (`__GCC_IEC_559`, `__NO_SIGNED_ZEROS__` and the rest), which bcc's GCC
-/// identity follows.
-/// C99: Annex F, §F.1 paragraph 1, p. 444; PDF p. 456; Annex G, §G.1
-/// paragraph 1, p. 467; PDF p. 479. GNU extension: GCC manual, "Optimize
-/// Options"; `cpp_iec_559_value` in GCC's `c-family/c-cppbuiltin.cc`.
+/// An option that gives up part of IEC 60559 semantics, as GCC's and
+/// Clang's `-ffast-math` family does. The LLVM back end gives each
+/// floating operation the matching fast-math flags
+/// ([`FastMathFlags`](crate::configuration::FastMathFlags)), so LLVM's
+/// optimizers transform the program as Clang's would; bcc's own optimizer,
+/// constant folding and its native, interpreter and WebAssembly back ends
+/// keep IEC 60559 semantics, which every option permits. The GCC identity
+/// also reports them in predefined macros (`__GCC_IEC_559`,
+/// `__NO_SIGNED_ZEROS__` and the rest), and both identities define
+/// `__FAST_MATH__` and `__FINITE_MATH_ONLY__` as their compiler does.
+/// C99: Annex F, §F.1 paragraph 1, p. 444; PDF p. 456 (an implementation
+/// that defines `__STDC_IEC_559__` conforms to Annex F, which these options
+/// give up); Annex G, §G.1 paragraph 1, p. 467; PDF p. 479. GNU extension:
+/// GCC manual, "Optimize Options"; `cpp_iec_559_value` in GCC's
+/// `c-family/c-cppbuiltin.cc`; Clang's "Controlling Floating-point
+/// Behavior".
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RelaxedFloatingPoint {
     /// `-fno-signed-zeros`.
@@ -162,7 +170,8 @@ pub(crate) enum RelaxedFloatingPoint {
     ReciprocalMath,
     /// `-fno-trapping-math`.
     NoTrappingMath,
-    /// `-fno-math-errno`.
+    /// `-fno-math-errno`: the math functions need not set `errno`, so
+    /// they read and write no memory.
     NoMathErrno,
     /// `-fassociative-math`, which GCC drops unless signed zeros and traps
     /// are given up too.
@@ -174,28 +183,92 @@ pub(crate) enum RelaxedFloatingPoint {
     /// `-fcx-fortran-rules`: Fortran's complex division, also without
     /// Annex G's treatment of infinities.
     CxFortranRules,
+    /// Clang's `-fno-honor-nans`, half of `-ffinite-math-only`: no operand
+    /// or result is a NaN.
+    NoNans,
+    /// Clang's `-fno-honor-infinities`, the other half: no operand or
+    /// result is an infinity.
+    NoInfinities,
+    /// Clang's `-fapprox-func`, which `-funsafe-math-optimizations` implies
+    /// in both compilers: a math function may be approximated.
+    ApproxFunc,
+    /// GCC's `-funsafe-math-optimizations` itself, which GCC's
+    /// `__FAST_MATH__` asks for besides the options it implies.
+    UnsafeMath,
 }
 
 impl RelaxedFloatingPoint {
-    /// What `-fno-fast-math` restores: all but the complex arithmetic.
-    pub(crate) const FAST_MATH: [Self; 5] = [
+    /// What `-ffast-math` gives up and `-fno-fast-math` restores: all but
+    /// the complex arithmetic, which they change only when no
+    /// `-f[no-]cx-limited-range` was given, as GCC's `set_fast_math_flags`
+    /// does.
+    pub(crate) const FAST_MATH: [Self; 9] = [
         Self::NoSignedZeros,
         Self::ReciprocalMath,
         Self::NoTrappingMath,
         Self::NoMathErrno,
         Self::AssociativeMath,
+        Self::NoNans,
+        Self::NoInfinities,
+        Self::ApproxFunc,
+        Self::UnsafeMath,
     ];
-    /// What `-fno-unsafe-math-optimizations` restores.
-    pub(crate) const UNSAFE_MATH: [Self; 4] = [
+    /// What `-ffinite-math-only` gives up and its `-fno-` form restores.
+    pub(crate) const FINITE_MATH: [Self; 2] = [Self::NoNans, Self::NoInfinities];
+    /// What `-funsafe-math-optimizations` gives up and its `-fno-` form
+    /// restores.
+    pub(crate) const UNSAFE_MATH: [Self; 6] = [
         Self::NoSignedZeros,
         Self::ReciprocalMath,
         Self::NoTrappingMath,
         Self::AssociativeMath,
+        Self::ApproxFunc,
+        Self::UnsafeMath,
     ];
 
-    pub(crate) const fn bit(self) -> u8 {
-        1 << self as u8
+    pub(crate) const fn bit(self) -> u16 {
+        1 << self as u16
     }
+}
+
+/// The LLVM fast-math flags the relaxed options in effect give each
+/// floating operation, as Clang sets them: `nnan`, `ninf`, `nsz`, `arcp`,
+/// `reassoc` (with `contract`, which Clang's `-ffast-math` and
+/// `-funsafe-math-optimizations` imply through `-ffp-contract=fast`) and
+/// `afn`. Empty unless an option relaxes them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "One independent flag per LLVM fast-math flag or attribute, as LLVM names them."
+)]
+pub(crate) struct FastMathFlags {
+    pub(crate) no_nans:          bool,
+    pub(crate) no_infinities:    bool,
+    pub(crate) no_signed_zeros:  bool,
+    pub(crate) reciprocal:       bool,
+    pub(crate) reassociate:      bool,
+    pub(crate) contract:         bool,
+    pub(crate) approximate_func: bool,
+    /// `-fno-trapping-math`, which LLVM reads as a function attribute.
+    pub(crate) no_trapping:      bool,
+    /// `-fno-math-errno`: calls of the math functions read and write no
+    /// memory, which lets LLVM treat them as operations.
+    pub(crate) no_math_errno:    bool,
+}
+
+impl FastMathFlags {
+    /// IEC 60559 semantics in full.
+    pub(crate) const NONE: Self = Self {
+        no_nans:          false,
+        no_infinities:    false,
+        no_signed_zeros:  false,
+        reciprocal:       false,
+        reassociate:      false,
+        contract:         false,
+        approximate_func: false,
+        no_trapping:      false,
+        no_math_errno:    false,
+    };
 }
 
 /// Which standard library functions the compiler may treat as builtins:

@@ -127,6 +127,14 @@ impl<'a, 'id, 'm> Emitter<'a, 'id, 'm, '_> {
             api.set_name(value, &named(param, self.arena));
             values[param.index()] = Some(value);
         }
+        // What the program gives up of IEC 60559 semantics, which every
+        // floating operation carries, as in Clang; none where operations
+        // keep their exceptions.
+        let fast_math = if self.strict {
+            llvm_sys::LLVMFastMathNone
+        } else {
+            api::fast_math_bits(self.module.fast_math())
+        };
         for block in body.blocks() {
             if block == entry || !edges.reachable[block.index()] {
                 continue;
@@ -134,6 +142,9 @@ impl<'a, 'id, 'm> Emitter<'a, 'id, 'm, '_> {
             api.position(blocks[block.index()].ok_or(std::fmt::Error)?);
             for &param in body.block_params(block) {
                 let value = api.phi(api.ty(body.value_type(param)));
+                if fast_math != llvm_sys::LLVMFastMathNone {
+                    api.fast_math(value, fast_math);
+                }
                 api.set_name(value, &named(param, self.arena));
                 values[param.index()] = Some(value);
             }
@@ -156,6 +167,11 @@ impl<'a, 'id, 'm> Emitter<'a, 'id, 'm, '_> {
             api.position(blocks[block.index()].ok_or(std::fmt::Error)?);
             for &inst in body.block_insts(block) {
                 let value = builder.inst(inst)?;
+                if fast_math != llvm_sys::LLVMFastMathNone
+                    && let Some(value) = value
+                {
+                    api.fast_math(value, fast_math);
+                }
                 if let (Some(result), Some(value)) = (body.inst_result(inst), value) {
                     // LLVM may constant-fold builder operations. Constants and
                     // addresses have no SSA name; naming

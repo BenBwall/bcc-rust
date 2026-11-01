@@ -155,7 +155,12 @@ pub(super) fn link(args: &Cli, inputs: &[Input<'_>]) -> Result<i32, MainError> {
             .path()
             .as_os_str(),
     });
-    let options = generation.llvm_options(target, args.configuration().code_options());
+    let configuration = args.configuration();
+    let options = generation.llvm_options(
+        target,
+        configuration.code_options(),
+        configuration.links_fast_math_runtime(),
+    );
     let linked = Toolchain::bundled(target).and_then(|toolchain| {
         toolchain.with_sysroot(sysroot).link_inputs(
             ordered,

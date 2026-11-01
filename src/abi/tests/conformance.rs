@@ -745,6 +745,7 @@ fn assert_object_conforms(
             target,
             kind: OutputKind::Executable,
             code: crate::target::CodeOptions::default(),
+            fast_math_runtime: false,
         };
         compile(&object, options);
         let mut command = match runner {

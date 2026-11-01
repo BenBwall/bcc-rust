@@ -169,6 +169,7 @@ fn torture_runtime_calls_match_native_arms() {
                             target,
                             kind: OutputKind::Executable,
                             code: crate::target::CodeOptions::default(),
+                            fast_math_runtime: false,
                         },
                     )
                     .unwrap();
@@ -223,6 +224,7 @@ fn alternate_integer_formats_match_native_arms() {
                     target,
                     kind: OutputKind::Executable,
                     code: crate::target::CodeOptions::default(),
+                    fast_math_runtime: false,
                 },
             )
             .expect("compile the formatted output regression");
@@ -278,6 +280,7 @@ fn implicit_library_calls_match_interpreter_and_native_arms() {
                                     target,
                                     kind: OutputKind::Executable,
                                     code: crate::target::CodeOptions::default(),
+                                    fast_math_runtime: false,
                                 },
                             )
                             .unwrap();

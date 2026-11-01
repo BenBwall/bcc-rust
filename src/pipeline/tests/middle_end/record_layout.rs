@@ -69,6 +69,7 @@ fn fuzzed_record_layouts_match_the_platform_compilers_natively() {
                 target,
                 kind: OutputKind::Executable,
                 code: crate::target::CodeOptions::default(),
+                fast_math_runtime: false,
             },
         )
         .unwrap();
@@ -137,6 +138,7 @@ fn zero_width_bit_fields_end_the_microsoft_unit_at_run_time() {
                         target,
                         kind: OutputKind::Executable,
                         code: crate::target::CodeOptions::default(),
+                        fast_math_runtime: false,
                     },
                 )
                 .unwrap();

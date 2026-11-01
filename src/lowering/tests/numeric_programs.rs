@@ -517,6 +517,7 @@ pub(super) fn run_through_llvm(
             target,
             kind: OutputKind::Executable,
             code: crate::target::CodeOptions::default(),
+            fast_math_runtime: false,
         };
         compile_module(&module, &executable, options)
             .unwrap_or_else(|error| panic!("{}: {error}", program.name));
