@@ -529,25 +529,42 @@ impl CompilerConfiguration {
     /// Records `-fexcess-precision=standard` (true) or `=fast`.
     pub(crate) const fn with_standard_excess_precision(mut self, standard: bool) -> Self {
         self.standard_excess_precision = standard;
-        self.fast_math_saved = 0;
+        self.fast_math_saved = self.saved_also(4, standard);
         self
+    }
+
+    /// The saved state with bit `bit` set to `value` while a `-ffast-math`
+    /// is held: an explicit option after it would stand were it cancelled.
+    const fn saved_also(self, bit: u8, value: bool) -> u8 {
+        let saved = self.fast_math_saved;
+        if saved & 1 == 0 {
+            saved
+        } else if value {
+            saved | bit
+        } else {
+            saved & !bit
+        }
     }
 
     /// `-ffast-math`'s side effects in GCC: signaling NaNs off and fast
     /// excess precision, kept for a later `-fno-fast-math` to give back
     /// ([`Self::with_fast_math_cancelled`]).
     pub(crate) const fn with_fast_math_side_effects(mut self) -> Self {
-        self.fast_math_saved = 1
-            | if self.signaling_nans { 2 } else { 0 }
-            | if self.standard_excess_precision { 4 } else { 0 };
+        // A later `-ffast-math` keeps the first one's save: the cancellation
+        // drops every one.
+        if self.fast_math_saved & 1 == 0 {
+            self.fast_math_saved = 1
+                | if self.signaling_nans { 2 } else { 0 }
+                | if self.standard_excess_precision { 4 } else { 0 };
+        }
         self.signaling_nans = false;
         self.standard_excess_precision = false;
         self
     }
 
-    /// `-fno-fast-math` after a `-ffast-math` whose side effects no
-    /// explicit option has replaced: GCC's driver drops the cancelled
-    /// `-ffast-math`, so they never happened.
+    /// `-fno-fast-math` after a `-ffast-math`: GCC's driver drops every
+    /// cancelled `-ffast-math`, so their side effects never happened, and
+    /// the explicit options among them stand.
     pub(crate) const fn with_fast_math_cancelled(mut self) -> Self {
         if self.fast_math_saved & 1 != 0 {
             self.signaling_nans = self.fast_math_saved & 2 != 0;
@@ -657,7 +674,7 @@ impl CompilerConfiguration {
     /// Options".
     pub(crate) const fn with_signaling_nans(mut self, enabled: bool) -> Self {
         self.signaling_nans = enabled;
-        self.fast_math_saved = 0;
+        self.fast_math_saved = self.saved_also(2, enabled);
         self
     }
 

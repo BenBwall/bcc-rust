@@ -76,6 +76,7 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         fp_model: None,
         basic_complex: None,
         overrides: Vec::new(),
+        ofast_models: Vec::new(),
         positions: Vec::new(),
         linker_words: Vec::new(),
     };
@@ -84,6 +85,16 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         state.position += 1;
         if let Some(query) = state.argument(argument, &mut arguments) {
             return Ok(query);
+        }
+    }
+    // A final `-Ofast` overrides a `-ffp-model=fast` after it, which then
+    // keeps Clang's default semantics.
+    if state.ofast == Ofast::Last {
+        for (n, index) in std::mem::take(&mut state.ofast_models)
+            .into_iter()
+            .enumerate()
+        {
+            state.out[index] = if n == 0 { "-fno-fast-math" } else { "-O3" }.into();
         }
     }
     // Clang refuses an evaluation method beside the options that let the
@@ -394,6 +405,11 @@ struct State<'a> {
     /// The index in [`State::out`] of the `-ffast-math` Clang's last
     /// `-Ofast` stands for.
     ofast_at:        usize,
+    /// The indices in [`State::out`] of a `-ffp-model=fast` that a final
+    /// `-Ofast` before it overrides, unless a later `-O` option takes the
+    /// `-Ofast` back; if it stays last they become `-fno-fast-math`, Clang's
+    /// default semantics, and `-O3`, a level in the `-Ofast`'s slot.
+    ofast_models:    Vec<usize>,
     /// Clang's `-ffp-eval-method=` was given, which it refuses beside
     /// reassociation, reciprocals and approximate functions.
     eval_method:     bool,
@@ -911,10 +927,14 @@ impl State<'_> {
         }
         self.fp_model = Some(model);
         let options: &[&str] = match model {
-            | "fast" if self.ofast != Ofast::Last => &["-ffast-math", "-fno-finite-math-only"],
+            | "fast" => &["-ffast-math", "-fno-finite-math-only"],
             | "aggressive" => &["-ffast-math"],
             | _ => &["-fno-fast-math"],
         };
+        if model == "fast" && self.ofast == Ofast::Last {
+            self.ofast_models
+                .extend(self.out.len()..self.out.len() + options.len());
+        }
         self.out.extend(options.iter().map(Into::into));
     }
 
@@ -1116,6 +1136,7 @@ impl State<'_> {
             // `-Ofast`'s place; a level in its slot changes nothing.
             if self.compiler == Compiler::Clang {
                 self.out[self.ofast_at] = "-O3".into();
+                self.ofast_models.clear();
             }
         }
         // Clang's floating-point models: `precise` is its default

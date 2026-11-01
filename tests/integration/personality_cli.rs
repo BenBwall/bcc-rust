@@ -1049,7 +1049,7 @@ mod tests {
 
     /// GCC's options that give up part of IEC 60559 semantics, alone and
     /// in the combinations whose order or interplay decides the macros.
-    const FLOATING_POINT_OPTIONS: [&[&str]; 50] = [
+    const FLOATING_POINT_OPTIONS: [&[&str]; 53] = [
         &[],
         &["-fsignaling-nans"],
         &["-fsignaling-nans", "-fno-signaling-nans"],
@@ -1131,6 +1131,26 @@ mod tests {
         &["-ffast-math", "-fexcess-precision=standard"],
         &["-fexcess-precision=standard", "-ffast-math"],
         &["-fsignaling-nans", "-ffast-math", "-fno-fast-math"],
+        // The options between a cancelled `-ffast-math` and its negation
+        // stand, and every `-ffast-math` before it is cancelled.
+        &[
+            "-fsignaling-nans",
+            "-ffast-math",
+            "-fexcess-precision=standard",
+            "-fno-fast-math",
+        ],
+        &[
+            "-fsignaling-nans",
+            "-ffast-math",
+            "-ffast-math",
+            "-fno-fast-math",
+        ],
+        &[
+            "-ffast-math",
+            "-fsignaling-nans",
+            "-ffast-math",
+            "-fno-fast-math",
+        ],
         &["-ffast-math", "-fno-unsafe-math-optimizations"],
         &["-fcx-limited-range", "-ffast-math", "-fno-fast-math"],
         &["-fno-finite-math-only", "-Ofast"],
@@ -2002,6 +2022,14 @@ mod tests {
             // A model after a live `-Ofast` loses to it, and `fast` then
             // keeps Clang's default semantics.
             (&["-Ofast", "-ffp-model=fast"], false, false, false),
+            // A later `-O` takes the `-Ofast` back, and the model stands.
+            (&["-Ofast", "-ffp-model=fast", "-O2"], false, false, true),
+            (
+                &["-Ofast", "-ffp-model=fast", "-fmath-errno", "-O2"],
+                false,
+                false,
+                false,
+            ),
             (&["-ffp-model=fast", "-Ofast"], true, true, true),
             (
                 &[

@@ -130,7 +130,8 @@ pub(crate) struct CompilerConfiguration {
     /// What the last `-ffast-math` turned off, kept so that a later
     /// `-fno-fast-math` gives it back: GCC's driver drops a `-ffast-math`
     /// its negation cancels. Bit 0: a save is held; bit 1: signaling NaNs;
-    /// bit 2: standard excess precision.
+    /// bit 2: standard excess precision, each as it would stand without
+    /// the `-ffast-math`, so as explicit options after it set it.
     fast_math_saved: u8,
     /// Signaling NaNs are to be kept apart from quiet ones
     /// (`-fsignaling-nans`).
