@@ -117,10 +117,6 @@ pub(super) struct PreprocessorState<'pp> {
     /// Directives end at their first new-line (C99 §6.10p2).
     pub(super) in_directive:        bool,
     pub(super) retain_placeholders: bool,
-    /// How many argument prescans are open (§6.10.3.1 paragraph 1). A
-    /// pragma operator met in one is left in the argument's replacement,
-    /// to be carried out where the argument is rescanned in place.
-    pub(super) prescans:            usize,
     /// Produce phase 4's tokens for a text of them, unconverted
     /// ([`Context::phase_four_text`](crate::translation_phases::Context::phase_four_text)).
     pub(super) as_text:             bool,

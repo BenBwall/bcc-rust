@@ -223,22 +223,9 @@ impl<'a> LexedFile<'a> {
                     if context.configuration.compiler_identity().rules() == RuleSet::Gcc
                         && !reported.replace(true)
                     {
-                        let error = PreprocessorTokenizerError {
-                            source_vector: SourceVector {
-                                index: source_offset(start.index),
-                                column: start.column,
-                                line: start.line.wrapping_add(line_delta),
-                                source_file_index,
-                                length: source_offset(length),
-                            },
-                            error_type:    PreprocessorTokenizerErrorType::MissingTerminatingQuote(
-                                quote,
-                            ),
-                            character:     None,
-                        };
-                        context.set_ignore_tokenizer_errors(false);
-                        context.preprocessor_tokenizer_error(error);
-                        context.set_ignore_tokenizer_errors(true);
+                        let mut start = start;
+                        start.line = start.line.wrapping_add(line_delta);
+                        report_skipped_quote(context, source_file_index, start, length, quote);
                     },
                 // A warning, unlike an error, is not folded into its
                 // repeats: report it once, as for an extension.
@@ -514,4 +501,32 @@ mod entry_layout_tests {
         assert_eq!(copy.start(2).line, INLINE_LINE_MAX);
         assert_eq!(copy.start(4).line, INLINE_LINE_MAX + 1);
     }
+}
+
+/// Reports GCC's warning for an unclosed quote in a skipped group, out of
+/// line: the replay that calls it runs inside every macro call's reader,
+/// whose frames deep nesting stacks up.
+#[cold]
+#[inline(never)]
+fn report_skipped_quote(
+    context: &mut Context<'_>,
+    source_file_index: u32,
+    start: SourcePosition,
+    length: usize,
+    quote: u8,
+) {
+    let error = PreprocessorTokenizerError {
+        source_vector: SourceVector {
+            index: source_offset(start.index),
+            column: start.column,
+            line: start.line,
+            source_file_index,
+            length: source_offset(length),
+        },
+        error_type:    PreprocessorTokenizerErrorType::MissingTerminatingQuote(quote),
+        character:     None,
+    };
+    context.set_ignore_tokenizer_errors(false);
+    context.preprocessor_tokenizer_error(error);
+    context.set_ignore_tokenizer_errors(true);
 }

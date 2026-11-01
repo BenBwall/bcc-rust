@@ -147,7 +147,7 @@ impl<'pp: 'x, 'x> Expander<'_, '_, 'pp, 'x> {
             | _ => {
                 let name = self.context.string_cache.at(token.contents);
                 // Deferred in a prescan, as `_Pragma` is.
-                if name == "__pragma" && self.state.prescans != 0 {
+                if name == "__pragma" && self.in_prescan() {
                     return Some(token);
                 }
                 let from = self.invocation_location(token).index;

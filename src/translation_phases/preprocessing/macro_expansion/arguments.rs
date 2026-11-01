@@ -61,13 +61,27 @@ impl<'x> Expander<'_, '_, '_, 'x> {
             return false;
         };
         // Prescan is isolated from the replacement list. Rescanning the result
-        // then uses the callee's disabled-name set, not the caller's.
-        let tokenizer = self.expanded_argument(token, argument);
+        // then uses the callee's disabled-name set, not the caller's. This
+        // frame, which nested arguments stack up, holds neither the replay
+        // nor the frame that reads it.
+        self.prescan_argument(token, argument);
+        self.rescan_argument(argument);
+        true
+    }
+
+    /// Reads the replay of `argument`'s prescan, which
+    /// [`Self::prescan_argument`] kept, in place of its parameter.
+    #[inline(never)]
+    fn rescan_argument(&mut self, argument: &'x FunctionLikeMacroArgument<'x>) {
+        let tokenizer = argument
+            .expanded
+            .get()
+            .expect("the argument was prescanned")
+            .clone();
         self.push_tokenizer_frame(TokenizerFrame {
             frame_type: TokenizerFrameType::Rescan { argument: true },
             tokenizer,
         });
-        true
     }
 
     pub(in crate::translation_phases::preprocessing) fn get_arguments(
@@ -125,41 +139,57 @@ impl<'x> Expander<'_, '_, '_, 'x> {
 
     /// Share prescan results with speculative invocation lookahead too:
     /// repeating replacement would also repeat its diagnostics and
-    /// `_Pragma` effects. Inlined, as one frame fewer for each argument
-    /// prescan that nests leaves room for deeper nesting.
+    /// `_Pragma` effects.
     ///
     /// C99: §6.10.3.1 paragraph 1, p. 153; PDF p. 165: the argument is
     /// replaced as if it formed the rest of the file, with no other tokens
     /// available.
-    #[inline(always)]
     pub(super) fn expanded_argument(
         &mut self,
         token: PreprocessorToken,
         argument: &'x FunctionLikeMacroArgument<'x>,
     ) -> TokenSource<'x> {
-        if let Some(tokenizer) = argument.expanded.get() {
-            return tokenizer.clone();
-        }
-        let tokens = self.read_argument(argument, true);
-        self.keep_expansion(token, argument, &tokens)
+        self.prescan_argument(token, argument);
+        argument
+            .expanded
+            .get()
+            .expect("the argument was prescanned")
+            .clone()
     }
 
-    /// Keeps `tokens`, the prescan of `argument`, for each use of its
-    /// parameter, here `token`, and returns a replay of them. Out of line,
-    /// so that the frames of the prescans that nest do not hold the replay.
-    #[inline(never)]
-    fn keep_expansion(
+    /// Prescans `argument` for its parameter, here `token`, unless that was
+    /// done: [`Self::expanded_argument`] without the replay. Inlined, as
+    /// one frame fewer for each argument prescan that nests leaves room for
+    /// deeper nesting.
+    #[inline(always)]
+    fn prescan_argument(
         &mut self,
         token: PreprocessorToken,
         argument: &'x FunctionLikeMacroArgument<'x>,
+    ) {
+        if argument.expanded.get().is_some() {
+            return;
+        }
+        // Only the parameter's place outlives the prescan, so the frames of
+        // the prescans that nest do not hold the whole token.
+        let source_vectors = token.source_vectors;
+        let tokens = self.read_argument(argument, true);
+        self.keep_expansion(source_vectors, argument, &tokens);
+    }
+
+    /// Keeps `tokens`, the prescan of `argument`, as a replay for each use
+    /// of its parameter, here the one at `source_vectors`. Out of line, so
+    /// that the frames of the prescans that nest do not hold the replay.
+    #[inline(never)]
+    fn keep_expansion(
+        &mut self,
+        source_vectors: SourceVectors,
+        argument: &'x FunctionLikeMacroArgument<'x>,
         tokens: &[PreprocessorToken],
-    ) -> TokenSource<'x> {
-        let location = self
-            .context
-            .first_source_vector_or_default(token.source_vectors);
+    ) {
+        let location = self.context.first_source_vector_or_default(source_vectors);
         let tokenizer = TokenSource::replay(self.context, self.scratch, &[tokens], location);
-        drop(argument.expanded.set(tokenizer.clone()));
-        tokenizer
+        drop(argument.expanded.set(tokenizer));
     }
 
     fn raw_macro_argument_frame(&mut self, token: PreprocessorToken) -> Option<TokenizerFrame<'x>> {
@@ -276,11 +306,9 @@ impl<'x> Expander<'_, '_, '_, 'x> {
             self.verbatim_fence
         };
         let mut tokens = ArenaVec::new_in(self.scratch);
-        self.state.prescans += usize::from(expand);
         while let Some(token) = self.next_preprocessor_token::<false>() {
             tokens.push(token);
         }
-        self.state.prescans -= usize::from(expand);
         self.operand_fence = fence;
         self.expansion_fence = expansion_fence;
         self.verbatim_fence = verbatim_fence;
@@ -305,6 +333,24 @@ impl<'x> Expander<'_, '_, '_, 'x> {
             .unwrap_or(end);
         drop(tokens.drain(..start));
         tokens
+    }
+
+    /// Whether an argument's prescan is reading (§6.10.3.1 paragraph 1),
+    /// in which a pragma operator is left in the argument's replacement,
+    /// to be carried out where the argument is rescanned in place. Its
+    /// argument's frame is the one [`Self::read_argument`] fenced.
+    pub(in crate::translation_phases::preprocessing) fn in_prescan(&self) -> bool {
+        self.operand_fence == 0
+            && self
+                .expansion_fence
+                .checked_sub(1)
+                .and_then(|index| self.tokenizer_stack.get(index))
+                .is_some_and(|frame| {
+                    matches!(
+                        frame.frame_type,
+                        TokenizerFrameType::FunctionLikeMacroArgument { .. }
+                    )
+                })
     }
 
     /// Pushes a frame that reads `argument` as written. Out of line, so that

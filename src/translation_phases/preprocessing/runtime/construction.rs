@@ -142,7 +142,6 @@ impl<'tu, 'pp> Preprocessor<'tu, 'pp> {
                     conditional_queries: false,
                     in_directive: false,
                     retain_placeholders: false,
-                    prescans: 0,
                     as_text: context.phase_four_text,
                     arena: pp,
                     once_set: ArenaSet::with_hasher_in(FxBuildHasher, pp),

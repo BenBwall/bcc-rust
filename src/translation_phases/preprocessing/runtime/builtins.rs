@@ -46,6 +46,10 @@ impl Expander<'_, '_, '_, '_> {
     /// Expands a registered builtin at its invocation location. A consumed
     /// pragma returns no token; the caller resumes its frame reader.
     /// C99: §6.10.8p1 and §6.10.9p1, pp. 160-161; PDF pp. 172-173.
+    ///
+    /// Out of line, so that the frame of the macro replacement that calls
+    /// it, which nested invocations stack up, does not hold its locals.
+    #[inline(never)]
     pub(in crate::translation_phases::preprocessing) fn expand_builtin(
         &mut self,
         token: PreprocessorToken,
@@ -133,7 +137,7 @@ impl Expander<'_, '_, '_, '_> {
             // tokens around it, as GCC and Clang do: a pragma takes
             // effect at its place in the output (C99 §6.10.3.1p1,
             // §6.10.3.4p1), and a `#` of the replaced argument spells it.
-            | "_Pragma" if self.state.prescans != 0 => Some(token),
+            | "_Pragma" if self.in_prescan() => Some(token),
             // C99 §6.10.9p1: `_Pragma ( string-literal )` runs
             // the destringized literal, retokenized, as the
             // pp-tokens of a `#pragma`, and all four tokens
