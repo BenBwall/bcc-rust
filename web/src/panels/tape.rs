@@ -1006,17 +1006,16 @@ fn tape_svg(
                             let from = objects.get(&object).map(|&(y, _)| y).or_else(|| folded.get(&object).copied())?;
                             Some((x(at) + step / 2.0, from, to))
                         })
-                        .filter(|&(x0, from, _)| (from - to).abs() >= 1.0 || x1 - x0 > 1.0)
+                        // A value that stays in its own lane (total = total
+                        // + next) needs no slant: the lane carries it.
+                        .filter(|&(_, from, _)| (from - to).abs() >= 1.0)
                         .collect();
                     // The label sits on the longest slant, once the store
                     // has happened and there is room for it.
                     let longest = slants.iter().copied().max_by(|a, b| (x1 - a.0).total_cmp(&(x1 - b.0)))?;
-                    // A value stored back into its own lane (i = i + 1)
-                    // needs no label: the lane says it.
-                    let across = slants.iter().any(|&(_, from, to)| (from - to).abs() >= 1.0);
                     let label = flow
                         .label
-                        .filter(|_| across && flow.to.1 <= cursor && step >= 8.0 && x1 - longest.0 >= 28.0)
+                        .filter(|_| flow.to.1 <= cursor && step >= 8.0 && x1 - longest.0 >= 28.0)
                         .and_then(|range| source_text(source, range))
                         .map(|text| format!("{text} → {name}"));
                     let drawn = slants.into_iter().map(|(x0, from, to)| {
