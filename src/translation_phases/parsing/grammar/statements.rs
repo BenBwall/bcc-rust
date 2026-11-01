@@ -883,6 +883,7 @@ impl<'tu> Parser<'_, 'tu, '_> {
                 "for declaration",
                 token.expect("declaration starts here"),
             );
+            self.scopes.keep_innermost_block();
             let declaration = self.parse_block_declaration(DeclarationContext::ForInitializer)?;
             self.context
                 .merge_into(&mut s.source, declaration.source_vectors);

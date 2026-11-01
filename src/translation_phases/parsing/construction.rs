@@ -106,6 +106,10 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
         // Reserved resource-header type is present even without <stdarg.h>.
         // C99: implementation extension supporting §7.15p3, p. 249; PDF p. 261.
         let mut scopes = ScopeStack::new_in(arena);
+        // C99: Foreword paragraph 5, p. xii; PDF p. 10 ("new block scopes
+        // for selection and iteration statements").
+        scopes.statement_blocks =
+            context.configuration.standard() > crate::configuration::CStandard::C89;
         scopes.publish(
             context.string_cache.intern("__builtin_va_list"),
             super::scope::NameClass::Typedef,

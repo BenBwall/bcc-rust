@@ -14,6 +14,9 @@
 //! - `va_arg` evaluates the size expressions of its type name
 //!   (gcc.dg/vla-14.c), and under GCC's rules an `alloca` block outlives the
 //!   VLA scope it was made in (gcc.dg/vla-24.c).
+//! - Under C90 a selection or iteration statement forms no block, so a tag or
+//!   enumeration constant declared in its controlling expression stays visible
+//!   after it (gcc.dg/c90-scope-1.c).
 
 #[cfg(test)]
 #[expect(
@@ -448,6 +451,67 @@ mod tests {
             }\n\
             int main(void) { return !kept(48); }\n";
         prints_on_every_back_end("--compiler-identity=gcc", source, &["-std=gnu99"], "");
+    }
+
+    /// C90 has no blocks for selection and iteration statements: a tag or
+    /// enumeration constant, which may hide a typedef name, declared in a
+    /// controlling expression belongs to the enclosing block, as in GCC and
+    /// Clang. A compound substatement is still a block of its own.
+    #[test]
+    fn c90_selection_and_iteration_statements_form_no_blocks() {
+        let source = b"struct foo { char a; };\n\
+            typedef int T;\n\
+            int sfoo(void) {\n\
+            if (sizeof (struct foo { int a; double b; }))\n\
+            (void) 0;\n\
+            return sizeof (struct foo);\n\
+            }\n\
+            int counted(void) {\n\
+            int n = 0;\n\
+            while (sizeof (enum { E = 3 }) && n < E)\n\
+            n++;\n\
+            return E + n;\n\
+            }\n\
+            int shadowed(void) {\n\
+            if (sizeof (enum { T = 2 }))\n\
+            ;\n\
+            return T;\n\
+            }\n\
+            int compound(void) {\n\
+            if (1) {\n\
+            struct foo { int w[4]; };\n\
+            }\n\
+            return sizeof (struct foo);\n\
+            }\n\
+            int main(void) {\n\
+            return sfoo() != 16 || counted() != 6 || shadowed() != 2 || compound() != 1;\n\
+            }\n";
+        for identity in IDENTITIES {
+            for standard in ["-std=c90", "-std=gnu89"] {
+                prints_on_every_back_end(identity, source, &[standard, "-pedantic-errors"], "");
+            }
+        }
+        let c99 = b"struct foo { char a; };\n\
+            int main(void) {\n\
+            if (sizeof (struct foo { int a; double b; }))\n\
+            (void) 0;\n\
+            for (int i = 0; i < (int)sizeof (struct foo { int w[4]; }); i++)\n\
+            ;\n\
+            return sizeof (struct foo) != 1;\n\
+            }\n";
+        for identity in IDENTITIES {
+            prints_on_every_back_end(identity, c99, &["-std=c99"], "");
+        }
+        // A `for` declaration, a C99 feature accepted under gnu89, keeps its
+        // block.
+        let declaration = b"typedef int T;\n\
+            int main(void) {\n\
+            for (int T = 0; T < 1; T++)\n\
+            ;\n\
+            T x = 0;\n\
+            return x;\n\
+            }\n";
+        prints_on_every_back_end(IDENTITIES[0], declaration, &["-std=gnu89", "-w"], "");
     }
 
     /// `source` exits 0 and prints `expected` interpreted (unoptimized and

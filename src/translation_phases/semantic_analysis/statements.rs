@@ -104,8 +104,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             },
             | StatementWork::Substatement(statement) => {
                 let outside = self.control.current;
-                self.enter(ScopeKind::Block);
-                self.work.push(Work::PopScope);
+                // A compound substatement's block is this one.
+                let compound = matches!(
+                    statement.kind,
+                    crate::translation_phases::parsing::syntax::StatementType::Compound { .. }
+                );
+                if self.enter_statement_block(compound) {
+                    self.work.push(Work::PopScope);
+                }
                 if let Some(outside) = outside {
                     self.work
                         .push(Work::StatementWork(StatementWork::NormalExit(
