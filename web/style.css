@@ -1407,6 +1407,8 @@
     width: max-content; max-width: calc(100vw - 24px); height: 13px; margin-bottom: calc(var(--lane, 40px) - 13px);
     gap: 4px; padding: 0 6px 0 7px; line-height: 13px; overflow: visible;
     background: var(--screen);
+    /* A tap on a name is not a tap on the tape under it. */
+    pointer-events: auto;
   }
   .deck.is-compact .deck-label.is-axis { visibility: hidden; height: var(--axis, 32px); margin-bottom: 0; }
   .deck.is-compact .deck-label.is-group { border-top: 0; }

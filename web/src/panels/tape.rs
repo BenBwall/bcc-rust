@@ -681,6 +681,19 @@ pub fn Deck(
     // and whether any lie outside it.
     let more = RwSignal::new(false);
     let overflows = RwSignal::new(false);
+    let strip = NodeRef::<html::Button>::new();
+    // Whether rows lie below the body's foot, and whether they would without
+    // the strip: while it shows it takes its own height from the body, so
+    // measured against the shortened body it would never hide again.
+    let measure = move |element: &web_sys::Element| {
+        let taken = if overflows.get_untracked() {
+            strip.get_untracked().map_or(0, |strip| strip.offset_height())
+        } else {
+            0
+        };
+        more.set(element.scroll_top() + element.client_height() + 2 < element.scroll_height());
+        overflows.set(element.client_height() + taken + 2 < element.scroll_height());
+    };
     let at = move || cursor.get().unwrap_or(0);
     let rows = Memo::new(move |_| {
         let cursor = at();
@@ -760,8 +773,7 @@ pub fn Deck(
     Effect::new(move || {
         rows.track();
         if let Some(element) = body.get() {
-            more.set(element.scroll_top() + element.client_height() + 2 < element.scroll_height());
-            overflows.set(element.client_height() + 2 < element.scroll_height());
+            measure(&element);
         }
     });
     Effect::new(move || {
@@ -820,8 +832,7 @@ pub fn Deck(
                 on:scroll=move |_| {
                     if let Some(element) = body.get_untracked() {
                         scroll.set(f64::from(element.scroll_left()));
-                        more.set(element.scroll_top() + element.client_height() + 2 < element.scroll_height());
-                        overflows.set(element.client_height() + 2 < element.scroll_height());
+                        measure(&element);
                     }
                 }
             >
@@ -970,6 +981,7 @@ pub fn Deck(
             <button
                 type="button"
                 class="deck-more"
+                node_ref=strip
                 hidden=move || !overflows.get()
                 on:click=move |_| {
                     if let Some(element) = body.get_untracked() {
