@@ -153,6 +153,10 @@ pub(crate) struct Context<'tu> {
     /// The pragmas a text of phase 4 ([`Self::phase_four_text`]) writes back
     /// where they were.
     pub(crate) text_pragmas: ArenaVec<'tu, TextPragma<'tu>>,
+    /// GCC's `#pragma scalar_storage_order` directives, in order, under the
+    /// GCC identity only.
+    pub(crate) storage_order_pragmas:
+        ArenaVec<'tu, super::pragma_storage_order::StorageOrderPragma>,
     pub(crate) source_vectors: SourceVectorStack,
     parser_token_vectors: RegionVec<SourceVector>,
     retained_vectors: RegionVec<SourceVector>,

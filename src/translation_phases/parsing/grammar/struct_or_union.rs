@@ -168,6 +168,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
         {
             self.parse_record_attributes(record)?;
         }
+        record.body_end_position = self.cursor.consumed;
         Some(())
     }
 
@@ -523,6 +524,7 @@ impl<'tu, 'p> Parser<'_, 'tu, 'p> {
         let source_vectors = self.context.merge_vector_list(&record.source_vectors);
         self.alloc_syntax(StructOrUnionSpecifier {
             pack_position: record.pack_position,
+            body_end_position: record.body_end_position,
             attributes: record.attributes,
             struct_or_union: record.kind.unwrap_or(StructOrUnion::Struct),
             identifier: record.identifier,
@@ -563,6 +565,7 @@ struct Record<'tu, 'p> {
     /// Whether `{` was consumed, distinguishing a reference from a definition.
     body_started: bool,
     pack_position: usize,
+    body_end_position: usize,
     /// Whether member synchronization just ran after a reported malformed
     /// struct-declarator terminator, so stopping before `}` or a following
     /// declaration finishes the member without a second diagnostic.
@@ -595,6 +598,7 @@ impl<'tu, 'p> Record<'tu, 'p> {
             member_declarator: None,
             body_started: false,
             pack_position: 0,
+            body_end_position: 0,
             resuming_after_member_recovery: false,
             width_recovered: false,
             source_vectors: ArenaVec::new_in(parser.arena),

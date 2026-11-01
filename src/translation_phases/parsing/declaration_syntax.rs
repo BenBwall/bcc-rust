@@ -354,6 +354,10 @@ pub(crate) struct StructOrUnionSpecifier<'tu> {
     /// Output-token ordinal at the opening brace; pragma interpretation is
     /// sema's. C99: §6.10.6p1, p. 159; PDF p. 171.
     pub(crate) pack_position:           usize,
+    /// Output-token ordinal after the body and the attributes that follow
+    /// it, where GCC's `#pragma scalar_storage_order` state applies to the
+    /// definition; zero without a body.
+    pub(crate) body_end_position:       usize,
     pub(crate) attributes:              Option<&'tu super::modern::SpecifierExtension<'tu>>,
     pub(crate) struct_or_union:         StructOrUnion,
     pub(crate) identifier:              Option<Identifier>,

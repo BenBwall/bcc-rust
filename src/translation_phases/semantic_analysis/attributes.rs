@@ -25,6 +25,8 @@
 //! - `jumps.rs` forbids jumps into cleanup scopes and indirect jumps across
 //!   them;
 //! - `layout.rs` retains packing, alignment and scalar machine modes;
+//! - `storage_order.rs` applies GCC's `scalar_storage_order` under its
+//!   identity;
 //! - `transparent.rs` makes qualifying unions transparent.
 //! - `mangling.rs` gives overloads their stable semantic Itanium identities;
 //! - `abi_names.rs` assigns emitted names at first reachable use;
@@ -51,6 +53,7 @@ mod mangling;
 mod msvc_mangling;
 mod overloads;
 mod predicates;
+mod storage_order;
 mod transparent;
 mod written;
 mod written_types;
@@ -76,7 +79,6 @@ use super::{
     },
 };
 use crate::{
-    configuration::RuleSet,
     target::Target,
     translation_phases::{
         SourceVectors,
@@ -111,6 +113,12 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 attribute.name,
                 self.context.configuration.target(),
             ) else {
+                // GCC's identity knows `scalar_storage_order`, which
+                // Clang's catalog lacks (`storage_order.rs`).
+                if self.is_storage_order(specifier.syntax, attribute) {
+                    self.check_storage_order(attribute);
+                    continue;
+                }
                 let spelling = match attribute.namespace {
                     | Some(namespace) => crate::diagnostics::format_in!(
                         self.scratch,
@@ -124,16 +132,6 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 // GNU spellings included, as unsupported in that spelling.
                 let kind = if specifier.syntax == AttributeSyntax::Msvc {
                     SemanticErrorKind::UnsupportedDeclspec
-                } else if attribute.namespace.is_none()
-                    && matches!(
-                        attribute.name,
-                        "scalar_storage_order" | "__scalar_storage_order__"
-                    )
-                    && self.context.configuration.compiler_identity().rules() == RuleSet::Gcc
-                {
-                    // GCC honours it, and bcc does not implement it; Clang
-                    // ignores it, which the warning below models.
-                    SemanticErrorKind::UnsupportedScalarStorageOrder
                 } else {
                     SemanticErrorKind::UnknownAttribute
                 };

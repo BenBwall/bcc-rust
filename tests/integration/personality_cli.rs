@@ -322,31 +322,149 @@ mod tests {
         assert_eq!(strings("--clang-mode"), "\"- x -\" \"- -\"\n");
     }
 
-    /// GCC stores the scalars of a `scalar_storage_order` type in the given
-    /// byte order, which bcc does not implement, so the GCC identity refuses
-    /// it rather than store the other order; Clang ignores it with a warning.
+    /// GCC stores the scalars of a structure or union in the byte order its
+    /// `scalar_storage_order` attribute, or the `#pragma
+    /// scalar_storage_order` in effect where its definition ends, names.
+    /// Every bcc target is little-endian, so the GCC identity accepts that
+    /// order and refuses a big-endian record rather than store it the other
+    /// way; it warns where GCC ignores the attribute and gives GCC's
+    /// argument errors. TCC and Clang ignore the attribute and the pragma.
     #[test]
     fn scalar_storage_order_is_refused_where_gcc_honours_it() {
+        const BIG: &str = "__attribute__((scalar_storage_order(\"big-endian\")))";
+        let gcc = |source: &str| {
+            let directory = Directory::new();
+            directory.write("sso.c", source);
+            directory.bcc("--gcc-mode", &["-fsyntax-only", "sso.c"])
+        };
+        let refused = [
+            format!("struct {BIG} S {{ int x; }} s;\n"),
+            format!("union {BIG} U {{ int x; }} u;\n"),
+            format!("struct S {{ int x; }} {BIG} s;\n"),
+            format!("typedef struct {BIG} {{ int x; }} T;\n"),
+            format!("struct S {{ int x; }};\ntypedef struct S T {BIG};\n"),
+            format!("int f(void) {{ return sizeof(struct {BIG} {{ int x; }}); }}\n"),
+            "struct [[gnu::scalar_storage_order(\"big-endian\")]] S { int x; } s;\n".to_owned(),
+            "#pragma scalar_storage_order big-endian\nstruct S { int x; } s;\n#pragma \
+             scalar_storage_order default\n"
+                .to_owned(),
+            // GCC reads the pragma state where the definition ends.
+            "struct S { int y;\n#pragma scalar_storage_order big-endian\nint x; } s;\n#pragma \
+             scalar_storage_order default\n"
+                .to_owned(),
+            "_Pragma(\"scalar_storage_order big-endian\") struct S { int x; } s;\n".to_owned(),
+        ];
+        for source in &refused {
+            let output = gcc(source);
+            assert_eq!(output.status.code(), Some(1), "{source}{}", stderr(&output));
+            let text = stderr(&output);
+            assert!(
+                text.contains("error: big-endian scalar storage order is not supported")
+                    && !text.contains(": `scalar_storage_order`"),
+                "{source}{text}"
+            );
+        }
+        let accepted = [
+            "struct __attribute__((scalar_storage_order(\"little-endian\"))) S { int x; } s;\n",
+            "#pragma scalar_storage_order little-endian\nstruct S { int x; } s;\n",
+            "#pragma scalar_storage_order big-endian\n#pragma scalar_storage_order \
+             default\nstruct S { int x; } s;\n",
+            // The attribute overrides the pragma.
+            "#pragma scalar_storage_order big-endian\nstruct S { int x; } \
+             __attribute__((scalar_storage_order(\"little-endian\"))) s;\n",
+            // A tag that is only named takes no order, silently.
+            "struct S { int x; };\nstruct __attribute__((scalar_storage_order(\"big-endian\"))) S \
+             s;\n",
+        ];
+        for source in accepted {
+            let output = gcc(source);
+            succeeds(&output);
+            assert_eq!(stderr(&output), "", "{source}");
+        }
+        let ignored = [
+            format!("int {BIG} v;\n"),
+            format!("typedef int {BIG} I;\n"),
+            format!("struct S {{ int x {BIG}; }} s;\n"),
+            format!("enum {BIG} E {{ A }} e;\n"),
+            format!("void f(int {BIG} a);\n"),
+        ];
+        for source in &ignored {
+            let output = gcc(source);
+            succeeds(&output);
+            assert!(
+                stderr(&output).contains("warning: attribute ignored: `scalar_storage_order`"),
+                "{source}{}",
+                stderr(&output)
+            );
+        }
+        for (argument, message) in [
+            (
+                "(\"middle\")",
+                "argument must be one of \"big-endian\" or \"little-endian\"",
+            ),
+            (
+                "(1)",
+                "argument must be one of \"big-endian\" or \"little-endian\"",
+            ),
+            (
+                "",
+                "wrong number of arguments specified for `scalar_storage_order`",
+            ),
+            ("(\"big-endian\", 1)", "wrong number of arguments specified"),
+        ] {
+            let output = gcc(&format!(
+                "struct __attribute__((scalar_storage_order{argument})) S {{ int x; }} s;\n"
+            ));
+            assert_eq!(output.status.code(), Some(1), "{argument}");
+            assert!(stderr(&output).contains(message), "{}", stderr(&output));
+        }
+        for (operand, message) in [
+            (
+                "middle",
+                "expected `big-endian`, `little-endian`, or `default`",
+            ),
+            (
+                "\"big-endian\"",
+                "missing `big-endian`, `little-endian`, or `default`",
+            ),
+        ] {
+            let output = gcc(&format!(
+                "#pragma scalar_storage_order {operand}\nstruct S {{ int x; }} s;\n"
+            ));
+            succeeds(&output);
+            assert!(stderr(&output).contains(message), "{}", stderr(&output));
+        }
+
+        // `-E` writes the pragma back, so its text is refused as well.
         let directory = Directory::new();
         directory.write(
-            "sso.c",
-            "struct __attribute__((scalar_storage_order(\"big-endian\"))) S { int x; };\nstruct S \
-             s;\n",
+            "pragma.c",
+            "#pragma scalar_storage_order big-endian\nstruct S { int x; } s;\n",
         );
-        let gcc = directory.bcc("--gcc-mode", &["-fsyntax-only", "sso.c"]);
-        assert_eq!(gcc.status.code(), Some(1), "{}", stderr(&gcc));
+        succeeds(&directory.bcc("--gcc-mode", &["-E", "pragma.c", "-o", "pragma.i"]));
+        let text = std::fs::read_to_string(directory.path("pragma.i")).unwrap();
         assert!(
-            stderr(&gcc).contains("`scalar_storage_order` is not supported"),
-            "{}",
-            stderr(&gcc)
+            text.contains("#pragma scalar_storage_order big-endian\n"),
+            "{text}"
         );
-        let clang = directory.bcc("--clang-mode", &["-fsyntax-only", "sso.c"]);
-        succeeds(&clang);
-        assert!(
-            stderr(&clang).contains("unknown attribute"),
-            "{}",
-            stderr(&clang)
-        );
+        let round_trip = directory.bcc("--gcc-mode", &["-fsyntax-only", "pragma.i"]);
+        assert_eq!(round_trip.status.code(), Some(1), "{}", stderr(&round_trip));
+
+        // TCC compiles both in the native order; Clang ignores the
+        // attribute with a warning and the pragma silently.
+        directory.write("attribute.c", &refused[0]);
+        for mode in ["--tcc-mode", "--clang-mode"] {
+            let output = directory.bcc(mode, &["-c", "-o", "attribute.o", "attribute.c"]);
+            succeeds(&output);
+            assert!(
+                stderr(&output).contains("unknown attribute ignored: `scalar_storage_order`"),
+                "{mode}: {}",
+                stderr(&output)
+            );
+            let output = directory.bcc(mode, &["-c", "-o", "pragma.o", "pragma.c"]);
+            succeeds(&output);
+            assert_eq!(stderr(&output), "", "{mode}");
+        }
     }
 
     /// A sign after `p` continues a preprocessing number from C99. Before

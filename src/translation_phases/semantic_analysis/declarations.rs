@@ -228,6 +228,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         .checked_sub(1)
                         .map_or(0, |index| self.pack_alignments[index].1);
                     self.types.tags[tag].max_member_alignment.set(pack);
+                    self.record_storage_order(
+                        s.attributes,
+                        s.body_end_position.max(s.pack_position),
+                    );
                     // The union qualifies only once its members are known.
                     if let Some(source) = self.transparent_union_request(s.attributes)
                         && kind == TagKind::Union
@@ -262,6 +266,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     let attributes = self.layout_attribute_chain(s.attributes);
                     self.types.tags[tag].packed.set(attributes.packed);
                     self.types.tags[tag].alignment.set(attributes.alignment);
+                    self.enum_storage_order(s.attributes);
                 }
                 self.inapplicable_transparent_union(TagKind::Enum, s.attributes);
                 if define && let Some(list) = s.enumeration_list {
@@ -789,6 +794,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
         if typedef && let Some(source) = self.typedef_transparent_union(spec, declarator) {
             self.make_transparent_union(ty, source);
+        }
+        if typedef {
+            self.typedef_storage_order(spec.extensions, declarator, ty);
         }
         let kind = if typedef {
             BindingKind::Typedef

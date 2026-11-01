@@ -1170,7 +1170,13 @@ targets. Malformed directives warn and preserve state; unknown pragmas retain
 the existing ignore policy. `#pragma weak name` (and `name = target`) does not
 make `name` weak in emitted code, but semantic analysis keeps the name, so the
 values Clang's evaluator would not fold for a weak entity stay unfolded where
-the dead-code model reads them (`semantic-analysis.md`). Packing is implementation-defined pragma behavior
+the dead-code model reads them (`semantic-analysis.md`). Under the GCC
+identity, `#pragma scalar_storage_order big-endian` (GCC reads only `big`),
+`little-endian` and `default` are retained in the same way: a structure or
+union definition that ends while `big-endian` is in effect, without its own
+`scalar_storage_order` attribute, is an error, as for the attribute, so
+`big-endian` followed by `default` before any definition still compiles.
+Another operand is ignored with GCC's `-Wpragmas` warning. Packing is implementation-defined pragma behavior
 under C99 §6.10.6p1, not a GNU/MSVC language-mode gate. Semantic analysis owns
 the cap, bit-field placement and explicit-alignment interaction; see
 [the retained layout contract](semantic-analysis.md#storage-natural-and-member-place-alignment),
@@ -1981,10 +1987,21 @@ availability queries remain zero. Unknown names warn as Clang's `-Wunknown-attri
 `clang::` is unknown, as in Clang. GCC attributes Clang lacks that bcc
 accepts (`noipa`, `access`, `optimize` and others in the table) keep their
 GNU and `gnu::` spellings, while `__has_attribute` answers Clang's 0 for
-them. GCC's `scalar_storage_order` is an error under GCC's rules, which
-honour it: bcc stores scalars in the target's byte order, so ignoring it
-would silently give the other order. Under Clang's rules it is an unknown
-attribute, as Clang ignores it. Unknown-attribute and dropped-attribute warnings follow
+them. Under the GCC identity only, GCC's `scalar_storage_order` (GNU and
+`gnu::` spellings) follows GCC: a missing or invalid argument is GCC's error;
+`"little-endian"` is the native order of every bcc target and is accepted;
+`"big-endian"` on a structure or union definition, or on a typedef of a
+structure or union type, is an error, since ignoring it would store the
+scalars in the other order. On an object, function, parameter, member,
+enumeration definition or a typedef of another type it is ignored with a
+warning, and on a tag that is only named or declared silently, as in GCC.
+Two cases are conservative errors where GCC is lenient: a definition naming
+both orders, whose last one GCC applies, and `[[gnu::scalar_storage_order]]`
+after a body, which GCC ignores; in a type name, such as a cast's, it is
+ignored without GCC's warning. `#pragma scalar_storage_order` is described
+with the other pragmas. The other identities keep the unknown-attribute
+warning: Clang and clang-cl ignore the attribute, and TCC compiles it in the
+native order without a diagnostic. Unknown-attribute and dropped-attribute warnings follow
 `-Wno-unknown-attributes` and `-Wno-ignored-attributes`, respectively, and
 the matching `-Werror=` options. Warnings are withheld inside system headers,
 so library headers stay quiet.
@@ -2084,7 +2101,8 @@ Implemented meanings, with Clang's applicability diagnostics:
 | Dropped with a warning | `common` (bcc emits ordinary definitions), `target`, `target_clones` (the default version runs), `weak_import` (still weak where the dead-code model folds), `copy` |
 | Supported | `dllimport` and `dllexport`: Clang's diagnostics, `__imp_name` references, export directives, and inline-body retention with COMDAT linkage |
 | Accepted, nothing to honor | hints, diagnostics and optimization promises: `access`, `alloc_align`, `alloc_size`, `artificial`, `assume`, `assume_aligned`, `cold`, `const`, `counted_by`, `deprecated`, `designated_init`, `fallthrough`, `flag_enum`, `flatten`, `format`, `format_arg`, `hot`, `leaf`, `malloc`, `maybe_unused`, `may_alias` (no type-based alias analysis), `musttail`, `no_*` instrumentation and sanitizer controls, `noclone`, `nocommon`, `nonstring`, `noreturn` (its only effect is on which code counts as emitted; see `semantic-analysis.md`), `nothrow`, `optimize`, `pure`, `retain`, `returns_nonnull`, `sentinel`, `simd`, `tls_model`, `unused`, `warn_unused_result`, the thread-safety capability attributes, and the C23 standard attributes; see the catalog for the full list |
-| Unknown (warning, as in bundled Clang) | every other name, including GCC-only `noinit`, `symver`, `persistent` and `scalar_storage_order` (ignored in either byte order, as bundled Clang does), MSVC `restrict`, `uuid`, `allocate` and `align` through MinGW's `__declspec` macro, a name in the other vendor scope, and target-specific names on other targets |
+| GCC identity only | `scalar_storage_order`: little-endian accepted, big-endian refused on records, ignored with a warning elsewhere (see above); unknown under the other identities |
+| Unknown (warning, as in bundled Clang) | every other name, including GCC-only `noinit`, `symver` and `persistent`, MSVC `restrict`, `uuid`, `allocate` and `align` through MinGW's `__declspec` macro, a name in the other vendor scope, and target-specific names on other targets |
 
 GNU `error` and `warning` require one unevaluated string argument and apply
 only to functions. The first declaration supplies the contract; unannotated

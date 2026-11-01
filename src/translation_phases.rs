@@ -23,8 +23,8 @@
 //!   `semantic_analysis.rs` and its directory resolve types and enforce
 //!   semantic constraints.
 //! - Shared storage: `context.rs`, `context/`, `provenance.rs`;
-//!   `pragma_pack.rs` retains directive operands and order across the batch
-//!   boundary.
+//!   `pragma_pack.rs` and `pragma_storage_order.rs` retain directive operands
+//!   and order across the batch boundary.
 //! - Shared interfaces and diagnostics: `interface.rs`, `errors.rs`,
 //!   `extension.rs`.
 //!
@@ -46,6 +46,7 @@ pub(crate) mod semantic_analysis;
 // Shared state and provenance
 mod context;
 pub(crate) mod pragma_pack;
+pub(crate) mod pragma_storage_order;
 mod provenance;
 
 // Interfaces and diagnostics
