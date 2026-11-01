@@ -366,11 +366,6 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
         consumed_newline
     }
 
-    /// The line of the pragma about to be read, as a text of phase 4 writes
-    /// it: `#pragma` and its tokens as spelled, each run of white space as
-    /// one space, in the translation-unit arena; `None` for a pragma that
-    /// [`pragma_is_consumed`]. Its tokens are looked at, not read, so
-    /// nothing is reported twice.
     /// The pragma's first two tokens, when identifiers, looked at and not
     /// read.
     fn pragma_names(&self) -> [Option<&str>; 2] {
@@ -397,6 +392,11 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
         names
     }
 
+    /// The line of the pragma about to be read, as a text of phase 4 writes
+    /// it: `#pragma` and its tokens as spelled, each run of white space as
+    /// one space, in the translation-unit arena; `None` for a pragma that
+    /// [`pragma_is_consumed`]. Its tokens are looked at, not read, so
+    /// nothing is reported twice.
     fn pragma_line(&self) -> Option<&'tu str> {
         let mut text = ArenaString::new_in(self.context.tu_arena());
         text.push_str("#pragma");
@@ -962,7 +962,8 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
 /// `scalar_storage_order` and `GCC diagnostic`, `visibility`,
 /// `push_options` and their relatives), Clang's the ones it turns into
 /// tokens for its parser (`pack`, `weak`, `align`, `ms_struct`, `options`,
-/// `redefine_extname`, `GCC visibility` and the `STDC` pragmas). The
+/// `float_control`, `unused`, `redefine_extname`, `GCC visibility`,
+/// `clang fp`, `clang attribute` and its four `STDC` pragmas). The
 /// preprocessor consumes the rest (`once`, `GCC system_header`, an unknown
 /// pragma).
 fn pragma_is_content(rules: RuleSet, names: [Option<&str>; 2]) -> bool {
@@ -971,7 +972,8 @@ fn pragma_is_content(rules: RuleSet, names: [Option<&str>; 2]) -> bool {
     match first {
         | Some("pack" | "weak" | "redefine_extname") => true,
         | Some("message" | "scalar_storage_order") => gcc,
-        | Some("align" | "ms_struct" | "options") => !gcc,
+        | Some("align" | "ms_struct" | "options" | "float_control" | "unused") => !gcc,
+        | Some("clang") => !gcc && matches!(second, Some("fp" | "attribute")),
         | Some("GCC") =>
             second == Some("visibility")
                 || (gcc
@@ -989,7 +991,11 @@ fn pragma_is_content(rules: RuleSet, names: [Option<&str>; 2]) -> bool {
                                 | "novector"
                         )
                     )),
-        | Some("STDC") => !gcc || second == Some("FLOAT_CONST_DECIMAL64"),
+        | Some("STDC") if gcc => second == Some("FLOAT_CONST_DECIMAL64"),
+        | Some("STDC") => matches!(
+            second,
+            Some("FP_CONTRACT" | "FENV_ACCESS" | "FENV_ROUND" | "CX_LIMITED_RANGE")
+        ),
         | _ => false,
     }
 }

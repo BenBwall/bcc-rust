@@ -611,6 +611,9 @@ mod tests {
             ("#pragma pack(1)\n", true, true),
             ("#pragma GCC diagnostic push\n", true, false),
             ("#pragma GCC system_header\n", false, false),
+            ("#pragma STDC FP_CONTRACT ON\n", false, true),
+            ("#pragma STDC FOO\n", false, false),
+            ("#pragma clang fp contract(fast)\n", false, true),
         ] {
             directory.write("pragma.c", source);
             for (mode, content) in [("--gcc-mode", gcc), ("--clang-mode", clang)] {
