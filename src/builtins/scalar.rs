@@ -2302,9 +2302,10 @@ const fn descriptor(
             SyntaxForm::OrdinaryCall,
         ),
     };
-    // Clang 23 has no `__builtin_iseqsig`.
+    // Clang 23 has no `__builtin_iseqsig` and no `finite` family.
     let feature = match id {
-        | Id::Iseqsig => Some(crate::configuration::Feature::GccOnlyBuiltins),
+        | Id::Iseqsig | Id::Finite | Id::Finitef | Id::Finitel =>
+            Some(crate::configuration::Feature::GccOnlyBuiltins),
         | _ => feature,
     };
     BuiltinDescriptor {
