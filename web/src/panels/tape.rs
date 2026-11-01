@@ -52,8 +52,16 @@ const FIT_MAX: f64 = 48.0;
 /// it fits, however long, turned fully left), and the widest.
 const ZOOM_MIN: f64 = 1.0;
 const ZOOM_MAX: f64 = 64.0;
-/// Steps of blank tape drawn after the last recorded one.
-const LEADER: usize = 6;
+/// Room the tape keeps right of the playhead for the end of the run: the
+/// blank tape and "NOT YET RUN" after the last recorded step.
+const ROOM: f64 = 130.0;
+/// Below this width the deck is compact (a phone): the tape takes the
+/// whole width, each lane's name rides on its lane, and the end of the run
+/// keeps less room.
+const COMPACT_BELOW: f64 = 560.0;
+const ROOM_COMPACT: f64 = 44.0;
+/// How long the tape takes to glide to a new scale, in milliseconds.
+const GLIDE_MS: f64 = 260.0;
 
 /// `count` as a drawing coordinate. Counts here (steps, lanes, characters)
 /// stay far below 2^32.
@@ -569,16 +577,22 @@ fn rows(reel: &Reel, cursor: usize, opened: &[String]) -> Vec<Row> {
     rows
 }
 
-/// How many steps the fitted scale makes room for: the run's length and
-/// room for the end of the tape, rounded up to a bucket a quarter larger
-/// than the last (12, 16, 20, 25, 31, …), so a short run fills most of the
-/// tape and the scale changes only now and then as the run grows.
+/// How many steps the fitted scale makes room for: the run's length
+/// rounded up to a power of two from 16, so a short run fits with room to
+/// spare and a run stepped by hand rescales only twice or so before the
+/// scale reaches its narrowest step and the tape scrolls instead.
 fn fit_slots(count: usize) -> usize {
-    let mut slots = 12;
-    while slots < count + 3 {
-        slots += (slots / 4).max(4);
-    }
-    slots
+    count.max(16).next_power_of_two()
+}
+
+/// The width of a step for `count` recorded steps on `tape` pixels (the
+/// window less the room kept for the end of the run), at `zoom` times the
+/// fitted scale.
+fn fitted_step(count: usize, tape: f64, zoom: f64) -> f64 {
+    let fit = (tape / px(fit_slots(count))).floor().clamp(FIT_MIN, FIT_MAX);
+    // Turned fully left, ZOOM fits the whole recorded run, however long.
+    let whole = ((tape - 10.0) / px(count.max(1))).max(0.05);
+    (fit * zoom).clamp(whole.min(ZOOM_MIN), ZOOM_MAX)
 }
 
 /// The source of `range`, on one line, for a slant's label; `None` for a
@@ -655,41 +669,67 @@ pub fn Deck(
     let body = NodeRef::<html::Div>::new();
     let tape = NodeRef::<html::Div>::new();
     let width = RwSignal::new(760.0_f64);
+    // The deck body's whole width, names and tape: below COMPACT_BELOW the
+    // names ride on the lanes.
+    let full = RwSignal::new(900.0_f64);
+    let compact = Memo::new(move |_| full.get() < COMPACT_BELOW);
+    let room = move || if compact.get() { ROOM_COMPACT } else { ROOM };
     let scroll = RwSignal::new(0.0_f64);
-    // Whether rows lie below the deck's window, for the hint at its foot.
+    // Whether rows lie below the deck's window, for the key at its foot,
+    // and whether any lie outside it.
     let more = RwSignal::new(false);
+    let overflows = RwSignal::new(false);
     let at = move || cursor.get().unwrap_or(0);
     let rows = Memo::new(move |_| {
         let cursor = at();
         reel.with(|reel| opened.with(|opened| rows(reel, cursor, opened)))
     });
-    let step_width = Memo::new(move |_| {
+    // The scale the run fits at, with room for the end of the tape, so a
+    // short run fits the window without scrolling.
+    let fitted = Memo::new(move |_| {
         let count = reel.with(|reel| reel.steps.len());
-        let fit = (width.get() / px(fit_slots(count)))
-            .floor()
-            .clamp(FIT_MIN, FIT_MAX);
-        // Turned fully left, ZOOM fits the whole recorded run, however
-        // long, with room for the end of the tape.
-        let whole = ((width.get() - 140.0) / px(count.max(1))).max(0.05);
-        (fit * zoom.get()).clamp(whole.min(ZOOM_MIN), ZOOM_MAX)
+        fitted_step(count, width.get() - room(), zoom.get())
     });
-    observe_width(body, width);
+    // The scale drawn: it glides to a new fitted scale as the run outgrows
+    // the old one or ZOOM turns, and jumps on a resize, while Run steps,
+    // and when motion is reduced.
+    let step_width = RwSignal::new(fitted.get_untracked());
+    let glides = StoredValue::new((0_u32, width.get_untracked()));
+    Effect::new(move || {
+        let to = fitted.get();
+        let view = width.get();
+        let from = step_width.get_untracked();
+        let (generation, last_view) = glides.get_value();
+        glides.set_value((generation + 1, view));
+        if (from - to).abs() < 0.5
+            || view != last_view
+            || running.get_untracked()
+            || reduced_motion()
+        {
+            step_width.set(to);
+        } else {
+            glide(step_width, glides, generation + 1, (from, to), js_sys::Date::now());
+        }
+    });
+    observe_width(body, width, full);
     // A step moves the tape, not the head: keep the playhead in the middle
     // stretch of the viewport. The tape glides a short way, and jumps when
     // Run is stepping, for a long way, or when motion is reduced.
     Effect::new(move || {
         let x = (px(at()) + 0.5) * step_width.get();
-        let running = running.get();
+        // While the scale glides the tape follows it frame by frame.
+        let running = running.get() || step_width.get_untracked() != fitted.get_untracked();
         let Some(element) = body.get() else {
             return;
         };
         let view = width.get_untracked();
+        let room = room();
         let left = f64::from(element.scroll_left());
-        // The head keeps 130 px to its right (room for "NOT YET RUN" at the
-        // end of the run): past that the tape moves just enough, so a
-        // short run that fits never scrolls.
-        let target = if x > left + view - 130.0 {
-            Some(x + 130.0 - view)
+        // The head keeps the room for the end of the run to its right: past
+        // that the tape moves just enough, so a short run that fits never
+        // scrolls.
+        let target = if x > left + view - room {
+            Some(x + room - view)
         } else if x < left + view * 0.15 {
             Some((x - view * 0.3).max(0.0))
         } else {
@@ -712,6 +752,7 @@ pub fn Deck(
         rows.track();
         if let Some(element) = body.get() {
             more.set(element.scroll_top() + element.client_height() + 2 < element.scroll_height());
+            overflows.set(element.client_height() + 2 < element.scroll_height());
         }
     });
     Effect::new(move || {
@@ -756,7 +797,7 @@ pub fn Deck(
         px(at()) / px(count)
     };
     view! {
-        <figure class="deck" aria-labelledby="deck-caption">
+        <figure class="deck" class:is-compact=move || compact.get() aria-labelledby="deck-caption">
             <figcaption class="deck-caption" id="deck-caption">
                 <b>"Figure 1"</b>" — Every object of the run, recorded on tape. Drag the tape, or use "<kbd>"←"</kbd>" "<kbd>"→"</kbd>"."
             </figcaption>
@@ -771,6 +812,7 @@ pub fn Deck(
                     if let Some(element) = body.get_untracked() {
                         scroll.set(f64::from(element.scroll_left()));
                         more.set(element.scroll_top() + element.client_height() + 2 < element.scroll_height());
+                        overflows.set(element.client_height() + 2 < element.scroll_height());
                     }
                 }
             >
@@ -878,18 +920,27 @@ pub fn Deck(
                     }
                 }
             >
-                {move || ruler_svg(reel, step_width.get(), at(), width.get())}
-                {move || tape_svg(reel, rows, step_width.get(), at(), width.get())}
-                // The slants' labels, placed in the tape's visible window.
-                // The layer is one pixel drawn with visible overflow, so it
-                // never widens what the deck can scroll.
+                {move || ruler_svg(reel, step_width.get(), at(), (width.get(), room()))}
+                {move || tape_svg(reel, rows, step_width.get(), at(), (width.get(), compact.get()))}
+                // The slants' labels, placed in the tape's visible window,
+                // and on a compact tape the values, kept in it. The layer
+                // is one pixel drawn with visible overflow, so it never
+                // widens what the deck can scroll.
                 {move || {
                     let step = step_width.get();
-                    let (cursor, left, view) = (at(), scroll.get(), width.get());
+                    let (cursor, left, view, compact) = (at(), scroll.get(), width.get(), compact.get());
                     reel.with(|reel| rows.with(|rows| source.with(|source| {
-                        let layer = place_labels(reel, rows, source, step, cursor, (left, left + view));
+                        let window = (left, left + view);
+                        let avoid = if compact { tags(reel, rows, left) } else { Vec::new() };
+                        let layer = place_labels(reel, rows, source, step, cursor, window, &avoid);
+                        let values = if compact { pinned_values(reel, rows, step, cursor, window) } else { Vec::new() };
                         view! {
                             <svg class="tape-labels" aria-hidden="true" width="1" height="1">
+                                {values.into_iter().map(|value| view! {
+                                    <g class=value.class data-access=value.access>
+                                        <text x=value.left y=value.y>{value.text}</text>
+                                    </g>
+                                }).collect_view()}
                                 {layer.into_iter().map(|label| view! {
                                     <text class="tape-flow-label" x=label.left y=label.middle + 3.5>{label.text}</text>
                                 }).collect_view()}
@@ -899,24 +950,50 @@ pub fn Deck(
                 }}
             </div>
             </div>
+            // At the deck's foot, under the rows rather than over them,
+            // while the rows run past the deck's height.
             <button
                 type="button"
                 class="deck-more"
-                hidden=move || !more.get()
+                hidden=move || !overflows.get()
                 on:click=move |_| {
                     if let Some(element) = body.get_untracked() {
                         let options = web_sys::ScrollToOptions::new();
-                        options.set_top(f64::from(element.scroll_height()));
+                        options.set_top(if more.get_untracked() { f64::from(element.scroll_height()) } else { 0.0 });
                         element.scroll_to_with_scroll_to_options(&options);
                     }
                 }
             >
-                "▾ More rows below"
+                {move || if more.get() { "▾ More rows below" } else { "▴ Back to the top rows" }}
             </button>
             </div>
             <Spool side="right" fill=Signal::derive(move || 1.0 - played()) turn=Signal::derive(move || px(at()) * 37.0) />
         </figure>
     }
+}
+
+/// Height of a lane's name riding on a compact tape, at the top of its row.
+const TAG: f64 = 13.0;
+
+/// Where the names ride on a compact tape whose window starts at `left`:
+/// a box at the top of each row, as wide as its text (Space Mono at 10 px)
+/// and the swatch or fold key before it.
+fn tags(reel: &Reel, rows: &[Row], left: f64) -> Vec<(f64, f64, f64, f64)> {
+    rows.iter()
+        .enumerate()
+        .map(|(place, row)| {
+            let chars = match *row {
+                | Row::Lane { group, lane } => {
+                    let lane = &reel.groups[group].lanes[lane];
+                    lane.label().chars().count() + lane.ty.chars().count() + 1
+                },
+                | Row::Group { at, .. } => reel.groups[at].name.chars().count() + 12,
+                | Row::Ladder { ref groups } => reel.groups[groups[0]].name.chars().count() + 14,
+            };
+            let top = AXIS + px(place) * LANE;
+            (left, top, left + px(chars) * LABEL_CHAR + 26.0, top + TAG)
+        })
+        .collect()
 }
 
 /// A slant's label as placed: its text, the left edge and middle of its
@@ -948,6 +1025,7 @@ fn place_labels(
     step: f64,
     cursor: usize,
     window: (f64, f64),
+    avoid: &[(f64, f64, f64, f64)],
 ) -> Vec<Placed> {
     if step < 6.0 {
         return Vec::new();
@@ -1008,6 +1086,9 @@ fn place_labels(
                 && left + width <= window.1 - 2.0
                 && !slants.iter().any(|slant| crosses(slant, rect))
                 && !placed.iter().any(|other| overlaps(other, &label))
+                && !avoid.iter().any(|&(left, top, right, bottom)| {
+                    rect.0 < right && left < rect.2 && rect.1 < bottom && top < rect.3
+                })
         });
         if let Some((left, middle)) = found {
             placed.push(Placed {
@@ -1037,6 +1118,29 @@ fn reduced_motion() -> bool {
                 .flatten()
         })
         .is_some_and(|query| query.matches())
+}
+
+/// Move `scale` from one step width to another over GLIDE_MS, easing out,
+/// one animation frame at a time, until a newer glide (`generation`) takes
+/// over or the deck is gone.
+fn glide(
+    scale: RwSignal<f64>,
+    glides: StoredValue<(u32, f64)>,
+    generation: u32,
+    (from, to): (f64, f64),
+    start: f64,
+) {
+    request_animation_frame(move || {
+        if glides.try_get_value().map(|(current, _)| current) != Some(generation) {
+            return;
+        }
+        let done = ((js_sys::Date::now() - start) / GLIDE_MS).clamp(0.0, 1.0);
+        let eased = 1.0 - (1.0 - done).powi(3);
+        _ = scale.try_set(from + (to - from) * eased);
+        if done < 1.0 {
+            glide(scale, glides, generation, (from, to), start);
+        }
+    });
 }
 
 /// Where each row's drawing sits: the y of each group's call bars (a rung
@@ -1100,13 +1204,14 @@ fn tape_svg(
     rows: Memo<Vec<Row>>,
     step: f64,
     cursor: usize,
-    view: f64,
+    (view, compact): (f64, bool),
 ) -> AnyView {
     reel.with(|reel| {
         rows.with(|rows| {
             let count = reel.steps.len();
             let x = move |index: usize| px(index) * step;
-            let width = tape_width(count, step, view);
+            let room = if compact { ROOM_COMPACT } else { ROOM };
+            let width = tape_width(count, step, view, room);
             let height = AXIS + px(rows.len()) * LANE + 8.0;
             let Layout {
                 calls: call_rows,
@@ -1134,13 +1239,16 @@ fn tape_svg(
                                 parts.push(view! { <line class=format!("{class} {}", ahead(start)) x1=x(start) y1=y x2=x(*from) y2=y /> }.into_any());
                             }
                             parts.push(view! { <line class=format!("{class} is-waiting {}", ahead(*from)) x1=x(*from) y1=y x2=x(*to) y2=y /> }.into_any());
-                            // Repeated along the wait, so one is in view.
+                            // Repeated along the wait, so one is in view;
+                            // under the rule on a compact tape, where the
+                            // group's name rides above it.
                             let text = format!("waiting for {on}");
+                            let baseline = if compact { y + 13.0 } else { y - 5.0 };
                             let text_width = px(text.chars().count()) * 6.0 + 12.0;
                             let mut at = x(*from) + 6.0;
                             while !rung && at + text_width <= x(*to) {
                                 parts.push(view! {
-                                    <text class=format!("tape-waiting {}", ahead(*from)) x=at y=y - 5.0>{text.clone()}</text>
+                                    <text class=format!("tape-waiting {}", ahead(*from)) x=at y=baseline>{text.clone()}</text>
                                 }.into_any());
                                 at += (text_width + 80.0).max(360.0);
                             }
@@ -1178,7 +1286,7 @@ fn tape_svg(
                         .iter()
                         .map(|segment| {
                             let here = segment.from <= cursor && cursor < segment.to;
-                            bus(segment, y, step, cursor, here.then(|| used(segment.object)).flatten())
+                            bus(segment, y, step, cursor, here.then(|| used(segment.object)).flatten(), !compact)
                         })
                         .collect_view();
                     let ends = lane.ends.iter().map(|&end| view! {
@@ -1214,7 +1322,12 @@ fn tape_svg(
                     {lanes}
                     {flows}
                     <rect class="tape-blank" x=x(count) y=AXIS - 2.0 width=(width - x(count)).max(0.0) height=height />
-                    {reel.open.then(|| view! { <text class="tape-unrun" x=x(count) + 10.0 y=AXIS + 16.0>"NOT YET RUN"</text> })}
+                    // A compact tape writes it down the narrow blank.
+                    {reel.open.then(|| if compact {
+                        view! { <text class="tape-unrun" transform=format!("translate({:.1} {:.1}) rotate(90)", x(count) + 14.0, AXIS + 10.0)>"NOT YET RUN"</text> }.into_any()
+                    } else {
+                        view! { <text class="tape-unrun" x=x(count) + 10.0 y=AXIS + 16.0>"NOT YET RUN"</text> }.into_any()
+                    })}
                     {(count > 0).then(|| view! { <line class="tape-head" x1=head y1=AXIS - 4.0 x2=head y2=height /> })}
                 </svg>
             }
@@ -1223,12 +1336,10 @@ fn tape_svg(
     })
 }
 
-/// How wide the tape is drawn: the run, room after its last step for "NOT
-/// YET RUN" and the flag, and at least the window.
-fn tape_width(count: usize, step: f64, view: f64) -> f64 {
-    (px(count) * step + 130.0)
-        .max(px(count + LEADER) * step)
-        .max(view)
+/// How wide the tape is drawn: the run, `room` after its last step for
+/// "NOT YET RUN" and the flag, and at least the window.
+fn tape_width(count: usize, step: f64, view: f64, room: f64) -> f64 {
+    (px(count) * step + room).max(view)
 }
 
 /// Steps between numbered ticks: the first round interval that leaves room
@@ -1243,11 +1354,11 @@ fn tick_interval(step: f64) -> usize {
 /// The ruler: step numbers, the clock lane (one pulse per step, taller at
 /// a sequence point) and the playhead's flag. It sits at the top of the
 /// deck while the lanes scroll under it.
-fn ruler_svg(reel: Memo<Reel>, step: f64, cursor: usize, view: f64) -> AnyView {
+fn ruler_svg(reel: Memo<Reel>, step: f64, cursor: usize, (view, room): (f64, f64)) -> AnyView {
     reel.with(|reel| {
         let count = reel.steps.len();
         let x = move |index: usize| px(index) * step;
-        let width = tape_width(count, step, view);
+        let width = tape_width(count, step, view, room);
         let head = x(cursor) + step / 2.0;
         let number = reel.steps.get(cursor).map_or(0, |step| step.0).to_string();
         let flag = px(number.len()) * 7.0 + 10.0;
@@ -1386,8 +1497,16 @@ fn crosses(slant: &Slant, (left, top, right, bottom): (f64, f64, f64, f64)) -> b
 /// written inside (cut short where it does not fit, and repeated along a
 /// long segment, so one is always in view). `used` is what the step at the
 /// playhead did to it, if it is the segment there: a store lights it, a
-/// read outlines it in the flow's blue, a designation dashes it.
-fn bus(segment: &Segment, y: f64, step: f64, cursor: usize, used: Option<String>) -> AnyView {
+/// read outlines it in the flow's blue, a designation dashes it. A compact
+/// tape writes values apart (`pinned_values`), where they stay in view.
+fn bus(
+    segment: &Segment,
+    y: f64,
+    step: f64,
+    cursor: usize,
+    used: Option<String>,
+    written: bool,
+) -> AnyView {
     let (x0, x1) = (px(segment.from) * step + 1.5, px(segment.to) * step - 1.5);
     let slope = (5.0_f64).min((x1 - x0) / 2.0);
     let points = format!(
@@ -1401,20 +1520,10 @@ fn bus(segment: &Segment, y: f64, step: f64, cursor: usize, used: Option<String>
         x0 + slope,
         y + BUS
     );
-    let here = segment.from <= cursor && cursor < segment.to;
-    let mut class = String::from("tape-bus");
-    if segment.value.is_none() {
-        class.push_str(" is-indeterminate");
-    }
-    if here {
-        class.push_str(" is-now");
-    }
-    if segment.from > cursor {
-        class.push_str(" is-ahead");
-    }
+    let class = bus_class(segment, cursor);
     let room = ((x1 - x0 - 2.0 * slope - 8.0).min(320.0) / CHAR).floor();
     let text = segment.value.clone().unwrap_or_else(|| "?".to_owned());
-    let text = if room >= 3.0 {
+    let text = if room >= 3.0 && written {
         shorten(&text, chars_in(room))
     } else {
         String::new()
@@ -1433,6 +1542,88 @@ fn bus(segment: &Segment, y: f64, step: f64, cursor: usize, used: Option<String>
         </g>
     }
     .into_any()
+}
+
+/// A bus segment's classes: indeterminate, under the playhead, ahead of it.
+fn bus_class(segment: &Segment, cursor: usize) -> String {
+    let mut class = String::from("tape-bus");
+    if segment.value.is_none() {
+        class.push_str(" is-indeterminate");
+    }
+    if segment.from <= cursor && cursor < segment.to {
+        class.push_str(" is-now");
+    }
+    if segment.from > cursor {
+        class.push_str(" is-ahead");
+    }
+    class
+}
+
+/// A value written on a compact tape: its segment's classes and access,
+/// where it starts, its baseline and its text.
+#[derive(Clone, Debug, PartialEq)]
+struct Pinned {
+    class:  String,
+    access: Option<String>,
+    left:   f64,
+    y:      f64,
+    text:   String,
+}
+
+/// The values of a compact tape, one per segment in the visible `window`,
+/// each at the start of its segment or, where that has scrolled out of the
+/// window, at the window's left edge: a phone's narrow window shows the
+/// value of every lane it crosses.
+fn pinned_values(
+    reel: &Reel,
+    rows: &[Row],
+    step: f64,
+    cursor: usize,
+    window: (f64, f64),
+) -> Vec<Pinned> {
+    let Layout { objects, .. } = layout(reel, rows);
+    let mut pinned = Vec::new();
+    for row in rows {
+        let &Row::Lane { group, lane } = row else {
+            continue;
+        };
+        let lane = &reel.groups[group].lanes[lane];
+        let Some(&(y, _)) = lane.objects.first().and_then(|object| objects.get(object)) else {
+            continue;
+        };
+        for segment in &lane.segments {
+            let (x0, x1) = (px(segment.from) * step + 1.5, px(segment.to) * step - 1.5);
+            if x1 <= window.0 || x0 >= window.1 {
+                continue;
+            }
+            let slope = (5.0_f64).min((x1 - x0) / 2.0);
+            let left = (x0 + slope + 4.0).max(window.0 + 6.0);
+            let right = (x1 - slope - 2.0).min(window.1 - 4.0);
+            let room = ((right - left).min(320.0) / CHAR).floor();
+            let value = segment.value.clone().unwrap_or_else(|| "?".to_owned());
+            if room < 3.0 && room < px(value.chars().count()) {
+                continue;
+            }
+            let here = segment.from <= cursor && cursor < segment.to;
+            pinned.push(Pinned {
+                class: bus_class(segment, cursor),
+                access: here
+                    .then(|| {
+                        reel.access.get(cursor).and_then(|access| {
+                            access
+                                .iter()
+                                .find(|(id, _)| *id == segment.object)
+                                .map(|(_, kind)| kind.clone())
+                        })
+                    })
+                    .flatten(),
+                left,
+                y: y + 4.5,
+                text: shorten(&value, chars_in(room)),
+            });
+        }
+    }
+    pinned
 }
 
 /// A whole number of characters, from a measured `room`.
@@ -1467,8 +1658,9 @@ fn Spool(side: &'static str, fill: Signal<f64>, turn: Signal<f64>) -> impl IntoV
 }
 
 /// Keep `width` at the width of the deck's window onto the tape: its body
-/// less the lane names pinned at its left.
-fn observe_width(element: NodeRef<html::Div>, width: RwSignal<f64>) {
+/// less the lane names pinned at its left; and `full` at the body's whole
+/// width.
+fn observe_width(element: NodeRef<html::Div>, width: RwSignal<f64>, full: RwSignal<f64>) {
     #[cfg(feature = "hydrate")]
     Effect::new(move |observing: Option<bool>| {
         use wasm_bindgen::JsCast;
@@ -1484,22 +1676,29 @@ fn observe_width(element: NodeRef<html::Div>, width: RwSignal<f64>) {
                 .map_or(0.0, |names| names.get_bounding_client_rect().width());
             f64::from(node.client_width()) - names
         };
+        full.set(f64::from(node.client_width()));
         width.set(measure(&node));
         // A change of view unmounts the deck, and the observer reports its
         // removal after the signals are gone; it then does nothing.
         let closure = wasm_bindgen::closure::Closure::<dyn FnMut()>::new(move || {
             if let Some(Some(node)) = element.try_get_untracked() {
+                _ = full.try_set(f64::from(node.client_width()));
                 _ = width.try_set(measure(&node));
             }
         });
         if let Ok(observer) = web_sys::ResizeObserver::new(closure.as_ref().unchecked_ref()) {
             observer.observe(&node);
+            // The names change width on their own where the deck turns
+            // compact.
+            if let Some(names) = node.first_element_child() {
+                observer.observe(&names);
+            }
         }
         closure.forget();
         true
     });
     #[cfg(not(feature = "hydrate"))]
-    let _ = (element, width);
+    let _ = (element, width, full);
 }
 
 #[cfg(all(test, feature = "worker"))]
@@ -1687,7 +1886,7 @@ mod tests {
         for cursor in 0..history.len() {
             let rows = rows(&reel, cursor, &[]);
             let step = 20.0;
-            let placed = place_labels(&reel, &rows, source, step, cursor, (0.0, 1.0e9));
+            let placed = place_labels(&reel, &rows, source, step, cursor, (0.0, 1.0e9), &[]);
             let Layout {
                 objects, folded, ..
             } = layout(&reel, &rows);
@@ -1796,13 +1995,13 @@ mod tests {
         let last = history.len() - 1;
         let rows = rows(&reel, last, &[]);
         let source = demos::find("path").unwrap().source;
-        let all = place_labels(&reel, &rows, source, 20.0, last, (0.0, 1.0e9));
+        let all = place_labels(&reel, &rows, source, 20.0, last, (0.0, 1.0e9), &[]);
         assert_ne!(all.len(), 0);
         // A window that has scrolled past every arrowhead shows no label,
         // rather than one pinned to its edge.
         let past = px(history.len()) * 20.0 + 50.0;
         assert_eq!(
-            place_labels(&reel, &rows, source, 20.0, last, (past, past + 400.0)).len(),
+            place_labels(&reel, &rows, source, 20.0, last, (past, past + 400.0), &[]).len(),
             0
         );
     }
@@ -1830,8 +2029,65 @@ mod tests {
         assert_eq!(shorten("2147483647", 10), "2147483647");
         assert_eq!(shorten("→a_rather_long_name", 8), "→a_rath…");
         assert_eq!(fit_slots(10), 16);
-        assert_eq!(fit_slots(22), 25);
-        assert_eq!(fit_slots(40), 47);
+        assert_eq!(fit_slots(16), 16);
+        assert_eq!(fit_slots(22), 32);
+        assert_eq!(fit_slots(40), 64);
+    }
+
+    #[test]
+    fn a_short_run_fits_its_window_and_the_scale_changes_seldom() {
+        for view in [360.0, 390.0, 670.0, 1070.0] {
+            let room = if view < COMPACT_BELOW { ROOM_COMPACT } else { ROOM };
+            let mut scales = Vec::new();
+            for count in 1..=64 {
+                let step = fitted_step(count, view - room, 1.0);
+                // A run that fits at the narrowest fitted step never scrolls.
+                if step > FIT_MIN {
+                    assert!(
+                        tape_width(count, step, view, room) <= view,
+                        "{count} steps scroll in {view} px"
+                    );
+                }
+                if scales.last() != Some(&step) {
+                    scales.push(step);
+                }
+            }
+            assert!(scales.len() <= 3, "{view} px: {scales:?}");
+        }
+    }
+
+    #[test]
+    fn a_compact_tape_keeps_each_value_in_its_window() {
+        let history = run("path");
+        let reel = Reel::record(&history);
+        let source = demos::find("path").expect("a lesson").source;
+        for cursor in 0..history.len() {
+            let rows = rows(&reel, cursor, &[]);
+            for left in [0.0, 37.0, 120.0, 260.0] {
+                let window = (left, left + 300.0);
+                for value in pinned_values(&reel, &rows, 18.0, cursor, window) {
+                    let right = value.left + px(value.text.chars().count()) * CHAR;
+                    assert!(
+                        value.left >= window.0 + 6.0 && right <= window.1,
+                        "{value:?} outside {window:?}"
+                    );
+                }
+                let avoid = tags(&reel, &rows, left);
+                for label in place_labels(&reel, &rows, source, 18.0, cursor, window, &avoid) {
+                    assert!(
+                        avoid.iter().all(|&(l, t, r, b)| label.right < l
+                            || r < label.left
+                            || label.middle + LABEL_HALF < t
+                            || b < label.middle - LABEL_HALF),
+                        "{label:?} over a lane's name"
+                    );
+                }
+            }
+        }
+        // The lane under the window's left edge still says what it holds.
+        let rows = rows(&reel, history.len() - 1, &[]);
+        let values = pinned_values(&reel, &rows, 18.0, history.len() - 1, (200.0, 500.0));
+        assert!(values.iter().any(|value| value.left == 206.0), "{values:?}");
     }
 
     #[test]
