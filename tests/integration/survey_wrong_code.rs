@@ -572,6 +572,29 @@ mod tests {
             &["-w"],
             "2147483647 -2147483648 2147483647 2147483647 255 0 15 31 15 0 -16\n",
         );
+        // Only a store whose operand is the floating constant saturates to
+        // the field: an integer converted from one earlier, or by a cast,
+        // keeps its low bits, and a constant in the declared type's range
+        // still saturates to the field's.
+        let fields = b"#include <stdio.h>\n\
+            struct B { int s : 5; unsigned u : 5; };\n\
+            int main(void) {\n\
+            struct B a = { 100.0, 100.0 };\n\
+            struct B b; b.s = 100.0; b.u = 100.0;\n\
+            struct B c; c.s = (int)1e10; c.u = (unsigned)1e10;\n\
+            struct B d; d.s = (int)100.0; d.u = (unsigned)100.0;\n\
+            struct B e; int x = 1e10; unsigned y = 1e10; e.s = x; e.u = y;\n\
+            struct B f; f.s = 7.9; f.u = -0.5;\n\
+            printf(\"%d %u / %d %u / %d %u / %d %u / %d %u / %d %u\\n\", a.s, a.u, b.s, b.u, c.s,\n\
+            c.u, d.s, d.u, e.s, e.u, f.s, f.u);\n\
+            return 0;\n\
+            }\n";
+        prints_on_every_back_end(
+            "--compiler-identity=gcc",
+            fields,
+            &["-w"],
+            "15 31 / 15 31 / -1 31 / 4 4 / -1 31 / 7 0\n",
+        );
     }
 
     /// A trailing array member reached through a pointer may extend past

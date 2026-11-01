@@ -846,6 +846,9 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             .find(|(arm, _)| *arm == address)
             .map(|&(_, excess)| excess);
         self.plain_arm = arm == Some(false);
+        // A floating constant's conversion is known to a store only when
+        // the store's operand is converted from it (`saturation.rs`).
+        self.floating_conversion = None;
         for conversion in self.conversions(expression).iter().skip(skip).take(take) {
             if self.unit.sema.types.unanalyzed(conversion.ty) {
                 return Err(self.opaque_builtin(expression).unwrap_or_else(|| {
@@ -1033,10 +1036,17 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 Operand::Value(self.extend(truth, false, ty)),
             | (Operand::Value(value), Repr::Int { ty, signed, width }) => {
                 let from = repr(types, item.ty).map_err(|kind| at(kind, source))?;
-                if let Repr::Float { ty: floating } = from
+                let constant = match from {
+                    | Repr::Float { ty: floating } => self
+                        .gcc_floating_constant(value)
+                        .map(|bits| (bits, floating)),
+                    | _ => None,
+                };
+                if let Some((bits, floating)) = constant
                     && let Some(saturated) =
-                        self.saturated_conversion(value, floating, ty, u32::from(width), signed)
+                        self.saturated_constant(bits, floating, ty, u32::from(width), signed)
                 {
+                    self.note_floating_conversion(saturated, bits, floating);
                     return Ok(Item {
                         operand: Operand::Value(saturated),
                         ty:      to,
@@ -1067,7 +1077,11 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     },
                     | _ => self.extend(value, from.signed(), ty),
                 };
-                Operand::Value(self.normalize(converted, target))
+                let converted = self.normalize(converted, target);
+                if let Some((bits, floating)) = constant {
+                    self.note_floating_conversion(converted, bits, floating);
+                }
+                Operand::Value(converted)
             },
             // A 16-bit type takes the truth value through `float`.
             | (Operand::Truth(truth), Repr::Float { ty }) if ty.half_format().is_some() => {

@@ -1071,7 +1071,7 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
             runtime_constants: ArenaVec::new_in(scratch),
             conditional_arms: ArenaVec::new_in(scratch),
             plain_arm: false,
-            saturated: ArenaVec::new_in(scratch),
+            floating_conversion: None,
             initializer_values: ArenaVec::new_in(scratch),
             alignments: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, scratch),
             locals: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, scratch),

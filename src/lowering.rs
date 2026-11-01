@@ -572,70 +572,71 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
 
 /// The state of lowering one function body.
 struct FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
-    unit:               &'u mut Unit<'a, 'tu, 'ir>,
-    record:             &'tu FunctionRecord<'tu>,
+    unit:                &'u mut Unit<'a, 'tu, 'ir>,
+    record:              &'tu FunctionRecord<'tu>,
     /// The function's name, for naming its static locals.
-    name:               &'a str,
-    draft:              Draft<'s>,
-    scratch:            &'s Bump,
+    name:                &'a str,
+    draft:               Draft<'s>,
+    scratch:             &'s Bump,
     #[cfg(feature = "recursive-lowering-study")]
-    recursion:          recursive::State,
-    tasks:              ArenaVec<'s, Task<'tu>>,
-    operands:           ArenaVec<'s, Item>,
-    complex_values:     ArenaVec<'s, [crate::ir::Value; 2]>,
+    recursion:           recursive::State,
+    tasks:               ArenaVec<'s, Task<'tu>>,
+    operands:            ArenaVec<'s, Item>,
+    complex_values:      ArenaVec<'s, [crate::ir::Value; 2]>,
     /// The `f32` values GCC carries for a plain half converted to the
     /// other half type, which a cast leaves unrounded (`half.rs`).
-    widened:            ArenaVec<'s, crate::ir::Value>,
+    widened:             ArenaVec<'s, crate::ir::Value>,
     /// The constants among them, which GCC rounds as `?:` arms.
-    widened_constants:  ArenaVec<'s, crate::ir::Value>,
+    widened_constants:   ArenaVec<'s, crate::ir::Value>,
     /// Folded half constants GCC does not fold as it parses, which it
     /// converts as run-time values.
-    runtime_constants:  ArenaVec<'s, crate::ir::Value>,
+    runtime_constants:   ArenaVec<'s, crate::ir::Value>,
     /// The arms of GCC's conditionals, by address, and whether either arm
     /// of each is evaluated with excess precision (`half.rs`).
-    conditional_arms:   ArenaVec<'s, (usize, bool)>,
+    conditional_arms:    ArenaVec<'s, (usize, bool)>,
     /// Whether the conversions being applied belong to an arm of a GCC
     /// conditional neither of whose arms keeps excess precision.
-    plain_arm:          bool,
-    /// The integer constants GCC's rules saturated floating constants to,
-    /// with each constant's bits and type (`saturation.rs`).
-    saturated:          ArenaVec<'s, (crate::ir::Value, u128, Type)>,
-    initializer_values: ArenaVec<'s, Item>,
+    plain_arm:           bool,
+    /// The latest conversion of a floating constant to an integer under
+    /// GCC's rules, with the constant's bits and type, until the next
+    /// conversions or store (`saturation.rs`).
+    floating_conversion: Option<(crate::ir::Value, u128, Type)>,
+    initializer_values:  ArenaVec<'s, Item>,
     /// The guaranteed alignment of each known backing address.
-    alignments:         ArenaMap<'s, crate::ir::Value, crate::ir::Align>,
+    alignments:          ArenaMap<'s, crate::ir::Value, crate::ir::Align>,
     /// The storage of each automatic object, by binding.
-    locals:             ArenaMap<'s, usize, Local>,
-    incoming_sizes:     ArenaMap<'s, usize, crate::ir::Value>,
+    locals:              ArenaMap<'s, usize, Local>,
+    incoming_sizes:      ArenaMap<'s, usize, crate::ir::Value>,
     /// The block of each label, created at its first `goto` or definition.
-    labels:             ArenaMap<'s, LabelId, Block>,
-    targets:            ArenaMap<'s, StatementId, JumpTargets>,
+    labels:              ArenaMap<'s, LabelId, Block>,
+    targets:             ArenaMap<'s, StatementId, JumpTargets>,
     /// The case blocks of the open switches, sealed when each ends.
-    switch_blocks:      ArenaVec<'s, Block>,
+    switch_blocks:       ArenaVec<'s, Block>,
     /// Where each open switch's blocks start in `switch_blocks`.
-    switch_starts:      ArenaVec<'s, usize>,
+    switch_starts:       ArenaVec<'s, usize>,
     /// The stack slots of wide `_BitInt` results, and the address of the
     /// live value each holds (`wide_bit_int.rs`).
-    wide_temporaries:   ArenaVec<'s, wide_bit_int::Temporary>,
+    wide_temporaries:    ArenaVec<'s, wide_bit_int::Temporary>,
     /// While positive, a consumed wide result keeps its slot: the code
     /// being lowered runs more than once (an atomic update's retry loop).
-    wide_holds:         u32,
+    wide_holds:          u32,
     /// The unqualified result type that `return` converts to.
-    result:             TypeId,
-    bounds:             ArenaMap<'s, usize, ssa::Var>,
-    vla_tokens:         ArenaMap<'s, RegionId, ssa::Var>,
+    result:              TypeId,
+    bounds:              ArenaMap<'s, usize, ssa::Var>,
+    vla_tokens:          ArenaMap<'s, RegionId, ssa::Var>,
     /// The block computed gotos branch through, once one exists.
-    indirect:           Option<Block>,
+    indirect:            Option<Block>,
     /// In a copy made for a call (`argument_pack.rs`), the anonymous
     /// arguments it received.
-    pack:               Option<&'s [Item]>,
+    pack:                Option<&'s [Item]>,
     /// A nested function's static chain: its definer's record
     /// (`nested.rs`).
-    chain_in:           Option<crate::ir::Value>,
+    chain_in:            Option<crate::ir::Value>,
     /// This function's own chain record, if it defines nested functions.
-    chain_record:       Option<crate::ir::Value>,
+    chain_record:        Option<crate::ir::Value>,
     /// The trampoline slot of each nested function whose address this
     /// function takes.
-    trampolines:        ArenaMap<'s, FuncId, crate::ir::StackSlot>,
+    trampolines:         ArenaMap<'s, FuncId, crate::ir::StackSlot>,
 }
 
 /// Traversal controls kept outside the AST and retained IR.

@@ -16,46 +16,58 @@ use crate::ir::{
 };
 
 impl FunctionLowerer<'_, '_, '_, '_, '_> {
+    /// The bits of `value` when it is a floating constant whose conversion
+    /// to an integer GCC folds, under GCC's rules.
+    pub(super) fn gcc_floating_constant(&self, value: Value) -> Option<u128> {
+        (self.unit.context.configuration.float_conversion_rules()
+            == crate::configuration::RuleSet::Gcc)
+            .then(|| self.draft.float_constant(value))
+            .flatten()
+    }
+
     /// The integer of type `ty`, `width` bits wide and of signedness
-    /// `signed`, that GCC folds the floating constant `value` of type `from`
-    /// to when it is out of the integer's range, or `None` when it is in
-    /// range, not a constant, or Clang's rules apply. The result is
-    /// remembered with the constant, so that a bit-field store saturates
-    /// it again to the field's width ([`Self::saturated_for_field`]).
-    pub(super) fn saturated_conversion(
+    /// `signed`, that GCC folds the floating constant with bits `bits` of
+    /// type `from` to when it is out of the integer's range; `None` in
+    /// range, where the conversion is exact.
+    pub(super) fn saturated_constant(
         &mut self,
-        value: Value,
+        bits: u128,
         from: Type,
         ty: Type,
         width: u32,
         signed: bool,
     ) -> Option<Value> {
-        if self.unit.context.configuration.float_conversion_rules()
-            != crate::configuration::RuleSet::Gcc
-        {
-            return None;
-        }
-        let bits = self.draft.float_constant(value)?;
         let saturated = saturate(bits, from, width, signed)?;
-        let result = self.iconst(ty, saturated);
-        self.saturated.push((result, bits, from));
-        Some(result)
+        Some(self.iconst(ty, saturated))
     }
 
-    /// The value a store of `value` into a bit-field `width` bits wide and
-    /// of signedness `signed` takes, of type `ty`, when `value` is a
-    /// floating constant saturated to the field's declared type: GCC
-    /// saturates it to the field's width instead.
-    pub(super) fn saturated_for_field(
+    /// Records that `result` is the conversion of the floating constant
+    /// with bits `bits` of type `from`, for the store that takes the
+    /// converted operand ([`Self::field_constant`]). The record lasts until
+    /// the next conversions are applied or the next store.
+    pub(super) fn note_floating_conversion(&mut self, result: Value, bits: u128, from: Type) {
+        self.floating_conversion = Some((result, bits, from));
+    }
+
+    /// The value of type `ty` a store of `value` into a bit-field `width`
+    /// bits wide and of signedness `signed` takes when `value` is the
+    /// conversion of a floating constant the store's own operand had, and
+    /// the constant is out of the field's range: GCC saturates it to the
+    /// field's width (`bs.b = 100.0` stores 15 in an `int b : 5`), where an
+    /// integer, even one converted from a constant earlier, keeps its low
+    /// bits.
+    pub(super) fn field_constant(
         &mut self,
         value: Value,
         ty: Type,
         width: u32,
         signed: bool,
     ) -> Option<Value> {
-        let &(_, bits, from) = self.saturated.iter().find(|entry| entry.0 == value)?;
-        let saturated = saturate(bits, from, width, signed)?;
-        Some(self.iconst(ty, saturated))
+        let (result, bits, from) = self.floating_conversion.take()?;
+        if result != value {
+            return None;
+        }
+        self.saturated_constant(bits, from, ty, width, signed)
     }
 }
 
