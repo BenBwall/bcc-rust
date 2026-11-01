@@ -168,6 +168,7 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
             }
         }
         if links && state.outputs.is_empty() && !state.inputs.is_empty() {
+            bcc.push("--default-output".into());
             bcc.push("-o".into());
             bcc.push(
                 if matches!(target, Target::WindowsGnu | Target::WindowsMsvc) {

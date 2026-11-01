@@ -98,6 +98,11 @@ pub(in crate::cli) struct DriverOptions {
     /// ...`), as the driver personalities do for the compiler they mimic.
     #[arg(long, hide = true, value_name = "NAME")]
     pub(in crate::cli) driver_name:            Option<String>,
+    /// The `-o` output is the `a.out` a driver personality chose because
+    /// the command named none, so the dependency files name the sources,
+    /// not the output, as GCC and Clang name them then.
+    #[arg(long, hide = true)]
+    pub(in crate::cli) default_output:         bool,
 }
 
 /// Which dependencies a make rule lists.
