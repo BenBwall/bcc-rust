@@ -1112,6 +1112,48 @@ mod tests {
         }
     }
 
+    /// `-H` leaves out the `-include` files and the headers they include,
+    /// as GCC and Clang do, while `/showIncludes` lists the `/FI` ones, as
+    /// clang-cl does.
+    #[test]
+    fn header_trees_leave_out_forced_includes() {
+        let directory = Directory::new();
+        directory.write("forced.h", "#include \"sub.h\"\n");
+        directory.write("sub.h", "int s;\n");
+        directory.write("main.h", "int mh;\n");
+        directory.write("m.c", "#include \"main.h\"\nint m;\n");
+        let tree = |output: &Output| -> Vec<String> {
+            stderr(output)
+                .lines()
+                .filter(|line| line.starts_with(". ") || line.starts_with("Note: including"))
+                .map(str::to_owned)
+                .collect()
+        };
+        for (mode, expected) in [("--gcc-mode", ". main.h"), ("--clang-mode", ". ./main.h")] {
+            let output = directory.bcc(
+                mode,
+                &["-H", "-fsyntax-only", "-include", "forced.h", "m.c"],
+            );
+            succeeds(&output);
+            assert_eq!(tree(&output), [expected], "{mode}: {}", stderr(&output));
+        }
+        let output = directory.bcc(
+            "--clang-cl-mode",
+            &["/nologo", "/Zs", "/showIncludes", "/FIforced.h", "m.c"],
+        );
+        succeeds(&output);
+        assert_eq!(
+            tree(&output),
+            [
+                "Note: including file: ./forced.h",
+                "Note: including file:  ./sub.h",
+                "Note: including file: ./main.h"
+            ],
+            "{}",
+            stderr(&output)
+        );
+    }
+
     /// `-H` leaves out GCC's default header and every header it includes,
     /// as GCC does, and lists the main file's headers after it.
     #[test]
