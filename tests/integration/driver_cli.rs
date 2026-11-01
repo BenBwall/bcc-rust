@@ -908,8 +908,12 @@ mod tests {
         let mut args = vec!["-c", "-MMD", "f.S", "-o", "deps.o"];
         args.extend(options);
         succeeds(&project.bcc(&args));
+        // The bundled clang writes the file in text mode, with CRLF line
+        // ends on Windows, as Clang does there.
         assert_eq!(
-            std::fs::read_to_string(project.path("deps.d")).unwrap(),
+            std::fs::read_to_string(project.path("deps.d"))
+                .unwrap()
+                .replace("\r\n", "\n"),
             format!("deps.o: f.S forced.h {inc}\n")
         );
         // Clang's warnings reach stderr, and `-w` and `-Werror` apply.
