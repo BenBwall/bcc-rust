@@ -36,12 +36,13 @@ use crate::{
     },
 };
 
-/// Height of one lane, in pixels.
-const LANE: f64 = 34.0;
+/// Height of one lane, in pixels: a bus segment and a gap for a slant's
+/// label.
+const LANE: f64 = 40.0;
 /// Height of the step axis and clock lane above the lanes.
 const AXIS: f64 = 32.0;
 /// Half the height of a bus segment.
-const BUS: f64 = 11.0;
+const BUS: f64 = 10.0;
 /// Width of one character of a segment's value (Space Mono at 13 px).
 const CHAR: f64 = 8.0;
 /// The narrowest and widest step a fitted tape gives each step.
@@ -568,11 +569,11 @@ fn rows(reel: &Reel, cursor: usize, opened: &[String]) -> Vec<Row> {
     rows
 }
 
-/// How many steps the fitted scale makes room for: the run's length and a
-/// little more, rounded up to four steps, so a short run fills the tape
-/// while the scale changes only every few steps of a Run.
+/// How many steps the fitted scale makes room for: the run's length and
+/// room for the end of the tape, rounded up to two steps, so a short run
+/// fills the tape while the scale changes only every other step of a Run.
 fn fit_slots(count: usize) -> usize {
-    (count + 6).div_ceil(4).max(3) * 4
+    (count + 3).div_ceil(2).max(6) * 2
 }
 
 /// The source of `range`, on one line, for a slant's label; `None` for a
@@ -882,8 +883,9 @@ struct Placed {
 
 /// Width of one character of a label (Space Mono at 10 px).
 const LABEL_CHAR: f64 = 6.2;
-/// Half the height of a label's box.
-const LABEL_HALF: f64 = 5.0;
+/// Half the height of a label's box as drawn (10 px type, its line box
+/// 14 px).
+const LABEL_HALF: f64 = 7.0;
 
 /// The slants' labels: each in the gap between its target lane and the
 /// lane its value came from the side of, ending just before the
@@ -1013,7 +1015,7 @@ fn layout<'a>(reel: &'a Reel, rows: &[Row]) -> Layout<'a> {
             | Row::Ladder { groups } => {
                 let rungs = px(groups.len().max(2) - 1);
                 for (rung, &at) in groups.iter().enumerate() {
-                    let y = top + 6.0 + px(rung) * (LANE - 12.0) / rungs;
+                    let y = top + 10.0 + px(rung) * (LANE - 20.0) / rungs;
                     calls.push((at, y, true));
                     fold(at, y);
                 }
@@ -1603,8 +1605,8 @@ mod tests {
         assert_eq!(shorten("{3,1,4,1,5,9,2,6}", 10), "{3,1,4,…}");
         assert_eq!(shorten("2147483647", 10), "2147483647");
         assert_eq!(shorten("→a_rather_long_name", 8), "→a_rath…");
-        assert_eq!(fit_slots(10), 16);
-        assert_eq!(fit_slots(22), 28);
+        assert_eq!(fit_slots(10), 14);
+        assert_eq!(fit_slots(22), 26);
     }
 
     #[test]

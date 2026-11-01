@@ -1145,6 +1145,13 @@
     .encoders { gap: 8px; }
     .knob { width: 46px; }
   }
+  /* Below 1400 px the reels slim down, so the tape keeps its width. */
+  @media (max-width: 1400px) {
+    .deck { grid-template-columns: 72px minmax(0, 1fr) 72px; }
+    .spool svg { width: 60px; height: 60px; }
+    .deck-body { grid-template-columns: 152px minmax(0, 1fr); }
+    .hanger { --deck-offset: 224px; }
+  }
   /* The channel keys drop their CH where the strip is narrow. */
   @media (max-width: 1500px) {
     .stage-index::before { content: ""; }
