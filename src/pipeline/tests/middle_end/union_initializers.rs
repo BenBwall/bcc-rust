@@ -64,6 +64,7 @@ fn changing_union_members_matches_native_execution() {
                 target,
                 kind: OutputKind::Executable,
                 code: crate::target::CodeOptions::default(),
+                fast_math_runtime: false,
             },
         )
         .unwrap();

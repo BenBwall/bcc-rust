@@ -110,7 +110,9 @@ override their respective defaults. Numeric levels accept leading zeros;
 `-O4` and larger levels use O3 with Clang-compatible warning text.
 `__OPTIMIZE__` is 1 when either optimizer is enabled, `__OPTIMIZE_SIZE__`
 is 1 for size optimization, and `__NO_INLINE__` is 1 when optimization is
-disabled. `-Ofast` and fast-math policy remain unsupported.
+disabled. `-ffast-math` and its relatives give LLVM Clang's fast-math flags, and
+the GCC and Clang personalities read `-Ofast` as `-O3 -ffast-math`
+(see `language-standards.md`).
 
 `--llvm-opt=none|O0|O1|O2|O3` selects the LLVM IR pipeline and code-generation level and `--llvm-codegen-only`
 runs no LLVM IR passes, so `--opt=bcc --llvm-opt=O2

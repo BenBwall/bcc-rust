@@ -44,6 +44,7 @@ fn function_names_match_native_clang_in_every_arm() {
                 target,
                 kind: OutputKind::Executable,
                 code: crate::target::CodeOptions::default(),
+                fast_math_runtime: false,
             },
         );
         _ = command.arg("-std=gnu99");
@@ -67,6 +68,7 @@ fn function_names_match_native_clang_in_every_arm() {
                     target,
                     kind: OutputKind::Executable,
                     code: crate::target::CodeOptions::default(),
+                    fast_math_runtime: false,
                 },
             )
             .unwrap();

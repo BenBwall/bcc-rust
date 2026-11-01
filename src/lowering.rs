@@ -261,6 +261,8 @@ fn lower_unit<'tu, 'ir>(
         .set_null_pointer_is_valid(context.code_assumptions.null_pointer_is_valid);
     unit.module
         .set_signaling_nans(context.configuration.signaling_nans());
+    unit.module
+        .set_fast_math(context.configuration.fast_math_flags());
     let plain_inline = options.plain_inline && unit.lower_plain_inline_bodies();
     let functions = unit.declare_items(syntax, &mut errors);
     let functions = nested::definition_order(&unit, &functions, arena);

@@ -70,6 +70,7 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         dry_run: false,
         machine: Vec::new(),
         position: 0,
+        ofast: Ofast::Absent,
         positions: Vec::new(),
         linker_words: Vec::new(),
     };
@@ -79,6 +80,15 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         if let Some(query) = state.argument(argument, &mut arguments) {
             return Ok(query);
         }
+    }
+    if state.ofast != Ofast::Absent {
+        state.clang_warning(
+            "deprecated-ofast",
+            format_args!(
+                "argument '-Ofast' is deprecated; use '-O3' to enable only conforming \
+                 optimizations, or consult the documentation for the same behavior"
+            ),
+        );
     }
     let target = state.target.unwrap_or_else(|| host_target(personality));
     let mmx = state.machine_options(target);
@@ -108,6 +118,9 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
     // macros come before them.
     if !mmx {
         common.push("-U__MMX__".into());
+    }
+    if state.ofast == Ofast::Last {
+        common.push("-ffast-math".into());
     }
     if invocation.name.ends_with("c89") {
         common.push("-std=c89".into());
@@ -322,6 +335,8 @@ struct State<'a> {
     machine:         Vec<String>,
     /// The position on the command line of the argument being read.
     position:        usize,
+    /// Where `-Ofast` stands among the `-O` options.
+    ofast:           Ofast,
     /// The arguments Clang may report as unused, with their positions and
     /// as Clang spells them: the stage options, `-fsyntax-only`, and the
     /// options that only the link uses (`-L/usr/lib`, `-T x.ld`, `-s`).
@@ -330,6 +345,20 @@ struct State<'a> {
     /// `-Xlinker ARG`, `-z now`), as Clang spells them, each with its index
     /// in [`State::out`], which orders them among the input files.
     linker_words:    Vec<(usize, String)>,
+}
+
+/// Where `-Ofast` stands among the `-O` options. Both compilers read a
+/// last `-Ofast` as `-O3` with `-ffast-math` before every other option, so
+/// that any floating-point option overrides it wherever it appears; Clang
+/// reports any `-Ofast` as deprecated.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Ofast {
+    /// No `-Ofast`.
+    Absent,
+    /// An `-Ofast` that a later `-O` option overrides.
+    Earlier,
+    /// The last `-O` option is `-Ofast`.
+    Last,
 }
 
 /// An argument Clang reports as unused when the command line does not use
@@ -502,11 +531,10 @@ impl State<'_> {
                 self.link_only(text.into());
                 self.out.push("-Wl,-s".into());
             },
-            | "-Ofast" => self.unsupported(
-                text,
-                "it implies -ffast-math; bcc keeps IEEE semantics and does not define \
-                 __FAST_MATH__",
-            ),
+            | "-Ofast" => {
+                self.ofast = Ofast::Last;
+                self.out.push("-O3".into());
+            },
             | "-C" | "-CC" => self.invocation.warning(format_args!(
                 "'{text}' is not supported: bcc does not keep comments in preprocessed output"
             )),
@@ -770,12 +798,22 @@ impl State<'_> {
     /// error under `-Werror` or
     /// `-Werror=unused-command-line-argument`.
     fn unused(&mut self, message: std::fmt::Arguments<'_>) {
-        const GROUP: &str = "unused-command-line-argument";
+        if self
+            .warning_options
+            .iter()
+            .any(|option| option == "-Qunused-arguments")
+        {
+            return;
+        }
+        self.clang_warning("unused-command-line-argument", message);
+    }
+
+    /// Reports a warning of Clang's driver in `group`, which is on by
+    /// default: suppressed by `-w` or `-Wno-GROUP`, an error under
+    /// `-Werror` or `-Werror=GROUP`. The GCC personality reports none.
+    fn clang_warning(&mut self, group: &str, message: std::fmt::Arguments<'_>) {
         if self.compiler != Compiler::Clang
-            || self
-                .warning_options
-                .iter()
-                .any(|option| matches!(option.as_str(), "-w" | "-Qunused-arguments"))
+            || self.warning_options.iter().any(|option| option == "-w")
         {
             return;
         }
@@ -786,18 +824,18 @@ impl State<'_> {
         let mut error = None;
         for option in &self.warning_options {
             let option = option.as_str();
-            if option.strip_prefix("-W") == Some(GROUP) {
+            if option.strip_prefix("-W") == Some(group) {
                 enabled = true;
-            } else if option == "-Wno-everything" || option.strip_prefix("-Wno-") == Some(GROUP) {
+            } else if option == "-Wno-everything" || option.strip_prefix("-Wno-") == Some(group) {
                 enabled = false;
             } else if option == "-Werror" {
                 all_errors = true;
             } else if option == "-Wno-error" {
                 all_errors = false;
-            } else if option.strip_prefix("-Werror=") == Some(GROUP) {
+            } else if option.strip_prefix("-Werror=") == Some(group) {
                 enabled = true;
                 error = Some(true);
-            } else if option.strip_prefix("-Wno-error=") == Some(GROUP) {
+            } else if option.strip_prefix("-Wno-error=") == Some(group) {
                 error = Some(false);
             }
         }
@@ -805,10 +843,10 @@ impl State<'_> {
             return;
         }
         if error.unwrap_or(all_errors) {
-            self.error(format_args!("{message} [-Werror,-W{GROUP}]"));
+            self.error(format_args!("{message} [-Werror,-W{group}]"));
         } else {
             self.invocation
-                .warning(format_args!("{message} [-W{GROUP}]"));
+                .warning(format_args!("{message} [-W{group}]"));
         }
     }
 
@@ -959,12 +997,28 @@ impl State<'_> {
             self.error(format_args!("unknown argument: '{text}'"));
             return;
         }
-        if PLAIN_OPTIONS.contains(&text)
-            || text.starts_with("-std=")
-            || text.starts_with("-O")
-            || text.starts_with("-Wl,")
-            || text.starts_with("-fdiagnostics-format=")
-            || implements_language_option(text)
+        if text.starts_with("-O") && self.ofast == Ofast::Last {
+            self.ofast = Ofast::Earlier;
+        }
+        // Clang's own floating-point options, which bcc implements and GCC
+        // does not know.
+        let clang_only = self.compiler == Compiler::Gcc
+            && matches!(
+                text,
+                "-fhonor-nans"
+                    | "-fno-honor-nans"
+                    | "-fhonor-infinities"
+                    | "-fno-honor-infinities"
+                    | "-fapprox-func"
+                    | "-fno-approx-func"
+            );
+        if !clang_only
+            && (PLAIN_OPTIONS.contains(&text)
+                || text.starts_with("-std=")
+                || text.starts_with("-O")
+                || text.starts_with("-Wl,")
+                || text.starts_with("-fdiagnostics-format=")
+                || implements_language_option(text))
         {
             self.out.push(text.into());
             return;

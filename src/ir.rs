@@ -204,6 +204,10 @@ pub(crate) struct Module<'ir> {
     /// Signaling NaNs are kept apart from quiet ones (`-fsignaling-nans`),
     /// so a back end keeps floating operations with their exceptions.
     signaling_nans:        bool,
+    /// The parts of IEC 60559 semantics the program gives up
+    /// (`-ffast-math` and its relatives), which the LLVM back end gives
+    /// LLVM as fast-math flags; the other back ends keep the semantics.
+    fast_math:             crate::configuration::FastMathFlags,
     /// The descriptors of the functions' `asm` instructions.
     inline_asm:            Table<'ir, AsmId, InlineAsm<'ir>>,
 }

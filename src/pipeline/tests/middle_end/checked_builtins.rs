@@ -225,6 +225,7 @@ fn checked_builtins_match_clang_with_the_host_c_library() {
             target,
             kind: OutputKind::Executable,
             code: crate::target::CodeOptions::default(),
+            fast_math_runtime: false,
         };
         let mut endings = Vec::new();
         for opt in [OptLevel::O0, OptLevel::O2] {
@@ -378,6 +379,7 @@ fn checked_builtins_accept_glibc_headers_and_match_clang() {
         target,
         kind: OutputKind::Executable,
         code: crate::target::CodeOptions::default(),
+        fast_math_runtime: false,
     };
     let mut executables = Vec::new();
     for opt in [OptLevel::O0, OptLevel::O2] {

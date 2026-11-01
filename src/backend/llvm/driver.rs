@@ -153,6 +153,11 @@ fn streamed_path<'a>(
     std::ffi::CStr::from_bytes_with_nul(bytes).ok()
 }
 
+/// What makes clang's driver link `crtfastmath.o` into an executable
+/// (where the GCC installation has one, and not with `-shared`): its
+/// `-ffast-math`, which at link time changes nothing else.
+const FAST_MATH_RUNTIME: &str = "-ffast-math";
+
 /// The linker option that gives an executable the executable stack its
 /// GNU nested functions' trampolines run on, as GCC's objects get one.
 pub(crate) const EXECUTABLE_STACK: &str = "-Wl,-z,execstack";
@@ -321,6 +326,10 @@ pub(crate) struct LlvmOptions {
     pub(crate) kind:                OutputKind,
     /// The relocation and thread-local storage models.
     pub(crate) code:                CodeOptions,
+    /// An executable links `crtfastmath.o`, as `-ffast-math` makes the
+    /// compilers' drivers link it (see
+    /// `CompilerConfiguration::links_fast_math_runtime`).
+    pub(crate) fast_math_runtime:   bool,
 }
 
 /// An LLVM optimization level.
@@ -520,6 +529,9 @@ impl Toolchain {
             .args(inputs)
             .arg("-o")
             .arg(out_path);
+        if options.fast_math_runtime {
+            _ = command.arg(FAST_MATH_RUNTIME);
+        }
         // C99 §7.12 real math is provided by a separate library on Linux.
         if matches!(options.target, Target::LinuxGnu | Target::LinuxMusl) {
             _ = command.arg("-lm");
@@ -643,6 +655,9 @@ impl Toolchain {
         // C99 §7.12 real math is provided by a separate library on Linux.
         // The CLI links the hosted C runtime, including its math functions.
         if options.kind != OutputKind::Object {
+            if options.fast_math_runtime && hosted {
+                _ = command.arg(FAST_MATH_RUNTIME);
+            }
             if !hosted {
                 _ = command.arg("-nostdlib");
             } else if matches!(options.target, Target::LinuxGnu | Target::LinuxMusl) {

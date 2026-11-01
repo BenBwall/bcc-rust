@@ -65,6 +65,7 @@ fn assert_native_conforms(target: Target, module: &Module<'_>, c: &str) {
             disable_llvm_passes: false,
             target,
             kind: OutputKind::Executable,
+            fast_math_runtime: false,
         };
         let mut command = match runner {
             | Runner::Native => toolchain.command(&object, &executable, options),

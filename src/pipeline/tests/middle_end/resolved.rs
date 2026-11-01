@@ -63,6 +63,7 @@ fn m3_resolved_expressions_match_native_arms_and_clang() {
                         target,
                         kind: OutputKind::Executable,
                         code: crate::target::CodeOptions::default(),
+                        fast_math_runtime: false,
                     },
                 )
                 .unwrap();
@@ -83,6 +84,7 @@ fn m3_resolved_expressions_match_native_arms_and_clang() {
                         target,
                         kind: OutputKind::Executable,
                         code: crate::target::CodeOptions::default(),
+                        fast_math_runtime: false,
                     },
                 )
                 .output()

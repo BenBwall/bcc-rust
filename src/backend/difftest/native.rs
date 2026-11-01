@@ -120,6 +120,7 @@ fn check_arm(
         target,
         kind: OutputKind::Executable,
         code: crate::target::CodeOptions::default(),
+        fast_math_runtime: false,
     };
     compile_module(&module, &executable, options)
         .map_err(|error| format!("seed {:#x} {arm:?}: {error}\n{text}\n{llvm}", case.seed))?;

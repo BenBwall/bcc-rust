@@ -104,6 +104,7 @@ fn flexible_array_initializers_match_native_execution() {
                     target,
                     kind: OutputKind::Executable,
                     code: crate::target::CodeOptions::default(),
+                    fast_math_runtime: false,
                 },
             )
             .unwrap();

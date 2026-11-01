@@ -86,7 +86,9 @@ pub(super) fn declare<'id, 'a, 'm>(
         if function.body.is_some() {
             library_builtins(api, value, module.library_builtins(), arena);
             null_pointer_validity(api, value, module);
-            strict_floating_point(api, value, strict);
+            floating_point(api, value, module, strict);
+        } else {
+            math_without_errno(api, value, module, function.name);
         }
         sections(api, value, function.attributes);
         functions.push(value);
@@ -101,7 +103,7 @@ pub(super) fn declare<'id, 'a, 'm>(
             // declared without one, so it takes the builtin controls here.
             library_builtins(api, value, module.library_builtins(), arena);
             null_pointer_validity(api, value, module);
-            strict_floating_point(api, value, strict);
+            floating_point(api, value, module, strict);
             if let Some(keyword) = function.inlining.keyword() {
                 api.attribute(value, FUNCTION_INDEX, keyword, 0, None, false);
             }
@@ -344,10 +346,52 @@ fn null_pointer_validity<'id>(api: &Session<'id>, function: Val<'id>, module: &M
 /// Marks a function whose floating operations keep their exceptions, as
 /// Clang marks every function under `-ffp-exception-behavior=strict`; its
 /// floating operations are LLVM's constrained intrinsics, and its calls
-/// are marked too (`function.rs`).
-fn strict_floating_point<'id>(api: &Session<'id>, function: Val<'id>, strict: bool) {
+/// are marked too (`function.rs`). Otherwise marks what the program gives
+/// up of IEC 60559 semantics, as Clang marks each function it defines:
+/// `no-signed-zeros-fp-math` under `-fno-signed-zeros` and
+/// `no-trapping-math` under `-fno-trapping-math`, which LLVM's code
+/// generator reads; the operations carry the rest as fast-math flags.
+fn floating_point<'id>(api: &Session<'id>, function: Val<'id>, module: &Module<'_>, strict: bool) {
     if strict {
         api.attribute(function, FUNCTION_INDEX, "strictfp", 0, None, false);
+        return;
+    }
+    let flags = module.fast_math();
+    if flags.no_signed_zeros {
+        api.string_attribute(function, "no-signed-zeros-fp-math", "true");
+    }
+    if flags.no_trapping {
+        api.string_attribute(function, "no-trapping-math", "true");
+    }
+}
+
+/// Marks a declared math function that computes without effects but for
+/// `errno` as reading and writing no memory under `-fno-math-errno`, as
+/// Clang does (it calls the ones LLVM has intrinsics for through them), so
+/// LLVM may treat a call as an operation: compute `sqrt` with an
+/// instruction, hoist, vectorize or remove it. Not where the program
+/// takes the function's name for its own (`-fno-builtin`, a freestanding
+/// program).
+fn math_without_errno<'id>(
+    api: &Session<'id>,
+    function: Val<'id>,
+    module: &Module<'_>,
+    name: &str,
+) {
+    if !module.fast_math().no_math_errno || !crate::builtins::computes_without_errno(name) {
+        return;
+    }
+    let builtin = match module.library_builtins() {
+        | LibraryBuiltins::All => true,
+        | LibraryBuiltins::None => false,
+        | LibraryBuiltins::Except(names) => !names.contains(&name),
+    };
+    if builtin {
+        for keyword in ["nounwind", "willreturn"] {
+            api.attribute(function, FUNCTION_INDEX, keyword, 0, None, false);
+        }
+        // `memory(none)`: LLVM encodes no effect on any location as 0.
+        api.attribute(function, FUNCTION_INDEX, "memory", 0, None, false);
     }
 }
 

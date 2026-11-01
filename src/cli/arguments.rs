@@ -570,11 +570,11 @@ enum LanguageFlag {
     RelaxedFloatingPoint(RelaxedFloatingPoint, bool),
     /// `-fsignaling-nans` (true) or `-fno-signaling-nans`.
     SignalingNans(bool),
-    /// `-fno-fast-math` (true) or `-fno-unsafe-math-optimizations`, which
-    /// restore the options they imply.
-    StrictFloatingPoint {
-        fast_math: bool,
-    },
+    /// `-ffast-math`, `-funsafe-math-optimizations` or
+    /// `-ffinite-math-only` (true), or their `-fno-` forms, which give up
+    /// or restore the options they imply, in order with the others, as in
+    /// GCC 13 and Clang.
+    FloatingPointGroup(FloatingPointGroup, bool),
     /// `-trigraphs` or `-ftrigraphs` (true), or `-fno-trigraphs`.
     Trigraphs(bool),
     /// `-fdollars-in-identifiers` (true) or `-fno-dollars-in-identifiers`.
@@ -597,6 +597,49 @@ enum LanguageFlag {
     /// `-f[no-]wrapv-pointer`, `-f[no-]delete-null-pointer-checks` or
     /// `-f[no-]common`, which [`Cli::code_assumptions`] reads in order.
     Code,
+}
+
+/// An option that gives up or restores several [`RelaxedFloatingPoint`]
+/// options at once.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum FloatingPointGroup {
+    /// `-f[no-]fast-math`.
+    Fast,
+    /// `-f[no-]unsafe-math-optimizations`.
+    Unsafe,
+    /// `-f[no-]finite-math-only`.
+    Finite,
+}
+
+impl FloatingPointGroup {
+    /// Gives up (`relaxed`) or restores the group's options. `-ffast-math`
+    /// and its `-fno-` form also set the complex arithmetic, unless a
+    /// `-f[no-]cx-limited-range` was given, as GCC's `set_fast_math_flags`
+    /// does (Clang's `-fno-fast-math` would restore it even then).
+    fn apply(self, configuration: CompilerConfiguration, relaxed: bool) -> CompilerConfiguration {
+        let options: &[RelaxedFloatingPoint] = match self {
+            | Self::Fast => &RelaxedFloatingPoint::FAST_MATH,
+            | Self::Unsafe => &RelaxedFloatingPoint::UNSAFE_MATH,
+            | Self::Finite => &RelaxedFloatingPoint::FINITE_MATH,
+        };
+        let configuration = options
+            .iter()
+            .fold(configuration, |configuration, &option| {
+                configuration.with_implied_floating_point(option, relaxed)
+            });
+        let configuration = match self {
+            | Self::Fast => configuration.with_fast_math_given(false, relaxed),
+            | Self::Unsafe => configuration.with_fast_math_given(true, relaxed),
+            | Self::Finite => configuration,
+        };
+        if self == Self::Fast
+            && !configuration.gives_floating_point(RelaxedFloatingPoint::CxLimitedRange)
+        {
+            configuration.with_implied_floating_point(RelaxedFloatingPoint::CxLimitedRange, relaxed)
+        } else {
+            configuration
+        }
+    }
 }
 
 impl LanguageFlag {
@@ -654,9 +697,36 @@ impl LanguageFlag {
                 )),
             | "-fsignaling-nans" => return Some(Self::SignalingNans(true)),
             | "-fno-signaling-nans" => return Some(Self::SignalingNans(false)),
-            | "-fno-fast-math" => return Some(Self::StrictFloatingPoint { fast_math: true }),
-            | "-fno-unsafe-math-optimizations" =>
-                return Some(Self::StrictFloatingPoint { fast_math: false }),
+            | "-fno-honor-nans" | "-fhonor-nans" =>
+                return Some(Self::RelaxedFloatingPoint(
+                    RelaxedFloatingPoint::NoNans,
+                    text == "-fno-honor-nans",
+                )),
+            | "-fno-honor-infinities" | "-fhonor-infinities" =>
+                return Some(Self::RelaxedFloatingPoint(
+                    RelaxedFloatingPoint::NoInfinities,
+                    text == "-fno-honor-infinities",
+                )),
+            | "-fapprox-func" | "-fno-approx-func" =>
+                return Some(Self::RelaxedFloatingPoint(
+                    RelaxedFloatingPoint::ApproxFunc,
+                    text == "-fapprox-func",
+                )),
+            | "-ffast-math" | "-fno-fast-math" =>
+                return Some(Self::FloatingPointGroup(
+                    FloatingPointGroup::Fast,
+                    text == "-ffast-math",
+                )),
+            | "-funsafe-math-optimizations" | "-fno-unsafe-math-optimizations" =>
+                return Some(Self::FloatingPointGroup(
+                    FloatingPointGroup::Unsafe,
+                    text == "-funsafe-math-optimizations",
+                )),
+            | "-ffinite-math-only" | "-fno-finite-math-only" =>
+                return Some(Self::FloatingPointGroup(
+                    FloatingPointGroup::Finite,
+                    text == "-ffinite-math-only",
+                )),
             | "-fno-floatn-types" => return Some(Self::InterchangeFloatTypes(false)),
             | "-trigraphs" | "-ftrigraphs" => return Some(Self::Trigraphs(true)),
             | "-fno-trigraphs" => return Some(Self::Trigraphs(false)),
@@ -755,18 +825,7 @@ impl LanguageFlag {
             | Self::RelaxedFloatingPoint(option, relaxed) =>
                 configuration.with_relaxed_floating_point(option, relaxed),
             | Self::SignalingNans(enabled) => configuration.with_signaling_nans(enabled),
-            | Self::StrictFloatingPoint { fast_math } => {
-                let options: &[RelaxedFloatingPoint] = if fast_math {
-                    &RelaxedFloatingPoint::FAST_MATH
-                } else {
-                    &RelaxedFloatingPoint::UNSAFE_MATH
-                };
-                options
-                    .iter()
-                    .fold(configuration, |configuration, &option| {
-                        configuration.with_relaxed_floating_point(option, false)
-                    })
-            },
+            | Self::FloatingPointGroup(group, relaxed) => group.apply(configuration, relaxed),
             | Self::Trigraphs(enabled) => configuration.with_trigraphs(enabled),
             | Self::DollarIdentifiers(enabled) => configuration.with_dollar_identifiers(enabled),
             | Self::Wrapv(enabled) => configuration.with_wrapv(enabled),

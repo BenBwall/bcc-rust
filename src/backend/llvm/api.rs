@@ -1374,6 +1374,26 @@ impl<'id> Session<'id> {
         Val(raw, PhantomData)
     }
 
+    /// Gives `value` the fast-math flags `flags`, LLVM's
+    /// `LLVMFastMathFlags` bits, if it is an instruction that takes them: a
+    /// floating operation, comparison, `select`, `phi` or call with a
+    /// floating type. LLVM may have folded the builder's operation into a
+    /// constant, which takes none.
+    pub(super) fn fast_math(&self, value: Val<'id>, flags: llvm_sys::LLVMFastMathFlags) {
+        // SAFETY: The type system ties the value to this live session.
+        let instruction = !unsafe { llvm_sys::core::LLVMIsAInstruction(value.0) }.is_null();
+        // SAFETY: As above; the query reads only the value's kind and type.
+        if !instruction || unsafe { llvm_sys::core::LLVMCanValueUseFastMathFlags(value.0) } == 0 {
+            return;
+        }
+        // SAFETY: The value is an instruction that takes fast-math flags.
+        let existing = unsafe { llvm_sys::core::LLVMGetFastMathFlags(value.0) };
+        // SAFETY: As above.
+        unsafe {
+            llvm_sys::core::LLVMSetFastMathFlags(value.0, existing | flags);
+        }
+    }
+
     pub(super) fn flags(&self, value: Val<'id>, flags: InstFlags) {
         if flags.contains(InstFlags::NUW) {
             // SAFETY: The type system ties the value to this live session.
@@ -2168,4 +2188,34 @@ impl Session<'_> {
             TlsModel::GlobalDynamic
         }
     }
+}
+
+/// LLVM's fast-math flag bits for what the program gives up of IEC 60559
+/// semantics, as Clang sets them on each floating operation.
+pub(super) const fn fast_math_bits(
+    flags: crate::configuration::FastMathFlags,
+) -> llvm_sys::LLVMFastMathFlags {
+    let mut bits = llvm_sys::LLVMFastMathNone;
+    if flags.reassociate {
+        bits |= llvm_sys::LLVMFastMathAllowReassoc;
+    }
+    if flags.no_nans {
+        bits |= llvm_sys::LLVMFastMathNoNaNs;
+    }
+    if flags.no_infinities {
+        bits |= llvm_sys::LLVMFastMathNoInfs;
+    }
+    if flags.no_signed_zeros {
+        bits |= llvm_sys::LLVMFastMathNoSignedZeros;
+    }
+    if flags.reciprocal {
+        bits |= llvm_sys::LLVMFastMathAllowReciprocal;
+    }
+    if flags.contract {
+        bits |= llvm_sys::LLVMFastMathAllowContract;
+    }
+    if flags.approximate_func {
+        bits |= llvm_sys::LLVMFastMathApproxFunc;
+    }
+    bits
 }

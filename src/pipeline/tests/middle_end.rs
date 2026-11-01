@@ -310,6 +310,7 @@ fn aggregate_reinitialization_matches_native_arms_and_clang() {
                         target,
                         kind: OutputKind::Executable,
                         code: crate::target::CodeOptions::default(),
+                        fast_math_runtime: false,
                     },
                 )
                 .unwrap();
@@ -330,6 +331,7 @@ fn aggregate_reinitialization_matches_native_arms_and_clang() {
                         target,
                         kind: OutputKind::Executable,
                         code: crate::target::CodeOptions::default(),
+                        fast_math_runtime: false,
                     },
                 )
                 .output()
@@ -574,6 +576,7 @@ fn llvm_arms_match_the_interpreter() {
                             target,
                             kind: OutputKind::Executable,
                             code: crate::target::CodeOptions::default(),
+                            fast_math_runtime: false,
                         };
                         let expected = with_module(
                             source,

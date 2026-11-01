@@ -134,6 +134,7 @@ fn math_builtins_execute_in_llvm_and_native_arms() {
                     disable_llvm_passes: arm.disable_llvm_passes,
                     kind: OutputKind::Object,
                     code: crate::target::CodeOptions::default(),
+                    fast_math_runtime: false,
                 };
                 with_module(source, target, arm.bcc, Profile::PostAbi, |module, _| {
                     if native {

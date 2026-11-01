@@ -77,6 +77,7 @@ fn braced_strings_match_clang_and_native_execution() {
                 disable_llvm_passes: false,
                 kind: OutputKind::Executable,
                 code: crate::target::CodeOptions::default(),
+                fast_math_runtime: false,
             };
             let clang = directory.join(format!("clang-{index}-{opt:?}.exe"));
             let output = toolchain.command(&input, &clang, options).output().unwrap();
@@ -160,6 +161,7 @@ fn braced_strings_initialize_the_first_element_of_pointer_arrays() {
             disable_llvm_passes: false,
             kind: OutputKind::Executable,
             code: crate::target::CodeOptions::default(),
+            fast_math_runtime: false,
         };
         let clang = directory.join(format!("clang-{opt:?}.exe"));
         let output = toolchain.command(&input, &clang, options).output().unwrap();

@@ -182,7 +182,7 @@ to the options TCC itself implements; see [TCC](#tcc).
   outside MSVC, `cl /Gv`), instruction sets bcc's code needs (`-mno-sse`,
   `-mgeneral-regs-only`; `cl /arch:AVX2`, which also changes macros),
   language rules bcc does not follow (`-fsemantic-interposition`,
-  `-ffast-math`, `-frounding-math`, `cl /fp:strict`, `/volatile:ms`),
+  `-frounding-math`, `cl /fp:strict`, `/volatile:ms`),
   run-time support bcc's code lacks (`-fsplit-stack`: bcc's functions run on
   one contiguous stack, which a program that relies on split stacks, such
   as GCC's `split-2.c` test recursing 10 MB deep on a thread, would
@@ -230,10 +230,13 @@ definition winning),
 GCC's warning), the options that give up part of IEC 60559 semantics
 (`-fno-signed-zeros`, `-freciprocal-math`, `-f[no-]trapping-math`,
 `-f[no-]math-errno`, `-fassociative-math`, `-fcx-limited-range`,
-`-fcx-fortran-rules`, their opposites, and `-fno-fast-math` and
-`-fno-unsafe-math-optimizations`, which restore them): bcc's code keeps
-IEC 60559 semantics, which they permit, and the GCC identity's macros
-report them as GCC's do (`__GCC_IEC_559` 0, `__NO_SIGNED_ZEROS__`, ...),
+`-fcx-fortran-rules`, their opposites, and `-ffast-math`,
+`-funsafe-math-optimizations`, `-ffinite-math-only` and their `-fno-`
+forms, which give up or restore the options they imply, with `-Ofast` read
+as `-O3 -ffast-math`): the LLVM back end gives LLVM Clang's fast-math flags
+and an executable links `crtfastmath.o` as the drivers do, and the
+identities' macros report them as GCC's and Clang's do (`__GCC_IEC_559` 0,
+`__NO_SIGNED_ZEROS__`, `__FAST_MATH__`, ...; see `language-standards.md`),
 `-fsignaling-nans` (an arithmetic operation or conversion on a signaling
 NaN, a constant one included, is kept and raises `FE_INVALID` at run
 time, as in GCC: lowering does not use the value semantic analysis folded

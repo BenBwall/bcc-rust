@@ -51,6 +51,7 @@ pub(crate) use language::{
     CompilerIdentity,
     DefaultVisibility,
     ExtensionPolicy,
+    FastMathFlags,
     LanguageMode,
     LibraryBuiltins,
     MsvcFeature,
@@ -114,9 +115,14 @@ pub(crate) struct CompilerConfiguration {
     /// The visibility of definitions that name none (`-fvisibility=`).
     default_visibility: DefaultVisibility,
     /// One bit per [`RelaxedFloatingPoint`] option in effect.
-    relaxed_floating_point: u8,
+    relaxed_floating_point: u16,
     /// One bit per [`RelaxedFloatingPoint`] option given in either form.
-    given_floating_point: u8,
+    given_floating_point: u16,
+    /// The last of `-ffast-math` and `-fno-fast-math` (bit 0) or of
+    /// `-funsafe-math-optimizations` and its `-fno-` form (bit 1) gives the
+    /// semantics up; GCC's driver, which drops an option a later negation
+    /// cancels, links `crtfastmath.o` if either does.
+    fast_math_given: u8,
     /// Signaling NaNs are to be kept apart from quiet ones
     /// (`-fsignaling-nans`).
     signaling_nans: bool,

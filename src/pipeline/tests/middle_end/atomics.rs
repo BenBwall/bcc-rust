@@ -282,6 +282,7 @@ fn atomic_issue_62_reproducer_matches_reference_output() {
                         target,
                         kind: OutputKind::Executable,
                         code: crate::target::CodeOptions::default(),
+                        fast_math_runtime: false,
                     },
                 )
                 .expect("compile issue 62 reproducer");
@@ -320,6 +321,7 @@ fn atomic_programs_execute_in_all_llvm_arms() {
                         target,
                         kind: OutputKind::Executable,
                         code: crate::target::CodeOptions::default(),
+                        fast_math_runtime: false,
                     },
                 )
                 .expect("compile atomics");
@@ -362,6 +364,7 @@ int main(void) { pthread_t threads[4]; for(int i=0;i<4;i++) if(pthread_create(&t
                         target,
                         kind: OutputKind::Object,
                         code: crate::target::CodeOptions::default(),
+                        fast_math_runtime: false,
                     },
                 )
                 .unwrap();
@@ -434,6 +437,7 @@ int main(void) {
                     target,
                     kind: OutputKind::Executable,
                     code: crate::target::CodeOptions::default(),
+                    fast_math_runtime: false,
                 },
             )
             .unwrap();

@@ -1086,6 +1086,9 @@ pub(super) fn with_identity_macros<'a>(
         write_gcc_floating_point_macros(configuration, &mut out);
         write_gcc_environment_macros(configuration, &mut out);
     }
+    if matches!(identity, CompilerIdentity::Gcc | CompilerIdentity::Clang) {
+        write_fast_math_macros(configuration, identity, &mut out);
+    }
     // The relocation model `-fpic` and its family select, as Clang spells
     // it (GCC manual, "Code Gen Options").
     let relocation = configuration
@@ -1136,39 +1139,34 @@ pub(super) fn with_identity_macros<'a>(
 /// `cpp_iec_559_value`, `cpp_iec_559_complex_value` and `c_cpp_builtins` in
 /// GCC's `c-family/c-cppbuiltin.cc` give it for x86-64: `__GCC_IEC_559` is 2
 /// (IEC 60559 arithmetic) unless an option gives up signed zeros, exact
-/// division or the order of operations, and `__GCC_IEC_559_COMPLEX` is 2
-/// unless that is 0 or complex arithmetic takes the limited range or
-/// Fortran's rules: `-f[no-]cx-fortran-rules` decides that when given (in
-/// GCC 15, `-fcx-fortran-rules -fno-cx-limited-range` still limits it), and
-/// `-f[no-]cx-limited-range` only otherwise. Each
-/// option also defines its own macro. `-fassociative-math` counts only with
-/// `-fno-signed-zeros` and `-fno-trapping-math`, as GCC drops it otherwise.
-/// `-fsignaling-nans` defines `__SUPPORT_SNAN__`, as `c_cpp_builtins` does,
-/// and keeps trapping math on, so it drops `-fno-trapping-math`.
-/// bcc's code keeps IEC 60559 semantics under all of these, which they
-/// permit. The options GCC also counts that change what a program means
-/// (`-ffinite-math-only`, `-fsingle-precision-constant`, `-ffast-math`) are
-/// refused by the GCC personality.
+/// division, the order of operations, NaNs or infinities, or is
+/// `-funsafe-math-optimizations`, and `__GCC_IEC_559_COMPLEX` is 2 unless
+/// that is 0 or complex arithmetic takes the limited range or Fortran's
+/// rules: `-f[no-]cx-fortran-rules` decides that when given (in GCC 15,
+/// `-fcx-fortran-rules -fno-cx-limited-range` still limits it), and
+/// `-f[no-]cx-limited-range` only otherwise. Each option also defines its
+/// own macro. `-fassociative-math` counts only with `-fno-signed-zeros` and
+/// `-fno-trapping-math`, as GCC drops it otherwise. `-fsignaling-nans`
+/// defines `__SUPPORT_SNAN__`, as `c_cpp_builtins` does, and keeps trapping
+/// math on, so it drops `-fno-trapping-math`. `__FINITE_MATH_ONLY__` and
+/// `__FAST_MATH__` follow [`write_fast_math_macros`].
 /// C99: Annex F, §F.1 paragraph 1, p. 444; PDF p. 456; Annex G, §G.1
 /// paragraph 1, p. 467; PDF p. 479; extension to §6.10.8 paragraph 4,
 /// p. 161; PDF p. 173.
 fn write_gcc_floating_point_macros(configuration: CompilerConfiguration, out: &mut impl Write) {
     use crate::configuration::RelaxedFloatingPoint as Relaxed;
-    // `-fsignaling-nans` keeps trapping math, whatever `-fno-trapping-math`
-    // asks, as GCC's `finish_options` does.
-    let relaxed = |option| {
-        configuration.relaxes_floating_point(option)
-            && !(option == Relaxed::NoTrappingMath && configuration.signaling_nans())
+    let relaxed = |option| configuration.relaxes_floating_point(option);
+    let associative = configuration.associative_math();
+    let iec_559 = if associative
+        || relaxed(Relaxed::ReciprocalMath)
+        || relaxed(Relaxed::NoSignedZeros)
+        || relaxed(Relaxed::UnsafeMath)
+        || configuration.finite_math_only()
+    {
+        0
+    } else {
+        2
     };
-    let associative = relaxed(Relaxed::AssociativeMath)
-        && relaxed(Relaxed::NoSignedZeros)
-        && relaxed(Relaxed::NoTrappingMath);
-    let iec_559 =
-        if associative || relaxed(Relaxed::ReciprocalMath) || relaxed(Relaxed::NoSignedZeros) {
-            0
-        } else {
-            2
-        };
     // `-f[no-]cx-fortran-rules`, when given, decides the complex
     // arithmetic alone; `-fcx-limited-range` only otherwise.
     let limited_complex = if configuration.gives_floating_point(Relaxed::CxFortranRules) {
@@ -1185,13 +1183,63 @@ fn write_gcc_floating_point_macros(configuration: CompilerConfiguration, out: &m
         (associative, "__ASSOCIATIVE_MATH__"),
         (relaxed(Relaxed::NoMathErrno), "__NO_MATH_ERRNO__"),
         (relaxed(Relaxed::NoSignedZeros), "__NO_SIGNED_ZEROS__"),
-        (relaxed(Relaxed::NoTrappingMath), "__NO_TRAPPING_MATH__"),
+        (configuration.no_trapping_math(), "__NO_TRAPPING_MATH__"),
         (relaxed(Relaxed::ReciprocalMath), "__RECIPROCAL_MATH__"),
         (configuration.signaling_nans(), "__SUPPORT_SNAN__"),
     ] {
         if defined {
             _ = writeln!(out, "#define {name} 1");
         }
+    }
+}
+
+/// `__FINITE_MATH_ONLY__`, 1 when NaNs and infinities are given up
+/// (`-ffinite-math-only`, or Clang's `-fno-honor-nans` with
+/// `-fno-honor-infinities`) and otherwise the 0 of the target's macros,
+/// and `__FAST_MATH__`, which each compiler defines when its own set of
+/// options is given up, whichever options gave them up. GCC's
+/// `fast_math_flags_set_p` asks for `-funsafe-math-optimizations` itself,
+/// finite math, no signed zeros, no traps (which `-fsignaling-nans` keeps)
+/// and no `errno`; it also asks for `-fexcess-precision=fast`, which bcc's
+/// GCC identity always has, since bcc evaluates each floating type in its
+/// own format. Clang's driver asks for each option `-ffast-math` implies
+/// but the complex arithmetic and contraction, and ignores
+/// `-fsignaling-nans`. Clang also defines `__NO_MATH_ERRNO__` under
+/// `-fno-math-errno`.
+/// C99: extension to §6.10.8 paragraph 4, p. 161; PDF p. 173. GNU
+/// extension: GCC's `c-family/c-cppbuiltin.cc` and `opts.cc`; Clang's
+/// `InitPreprocessor.cpp` and `Driver/ToolChains/Clang.cpp`.
+fn write_fast_math_macros(
+    configuration: CompilerConfiguration,
+    identity: CompilerIdentity,
+    out: &mut impl Write,
+) {
+    use crate::configuration::RelaxedFloatingPoint as Relaxed;
+    let relaxed = |option| configuration.relaxes_floating_point(option);
+    let finite = configuration.finite_math_only();
+    let fast = if identity == CompilerIdentity::Gcc {
+        finite
+            && relaxed(Relaxed::UnsafeMath)
+            && relaxed(Relaxed::NoSignedZeros)
+            && relaxed(Relaxed::NoMathErrno)
+            && configuration.no_trapping_math()
+    } else {
+        finite
+            && relaxed(Relaxed::NoMathErrno)
+            && relaxed(Relaxed::AssociativeMath)
+            && relaxed(Relaxed::ReciprocalMath)
+            && relaxed(Relaxed::NoSignedZeros)
+            && relaxed(Relaxed::ApproxFunc)
+            && relaxed(Relaxed::NoTrappingMath)
+    };
+    if finite {
+        _ = out.write_str("#undef __FINITE_MATH_ONLY__\n#define __FINITE_MATH_ONLY__ 1\n");
+    }
+    if fast {
+        _ = out.write_str("#define __FAST_MATH__ 1\n");
+    }
+    if identity == CompilerIdentity::Clang && relaxed(Relaxed::NoMathErrno) {
+        _ = out.write_str("#define __NO_MATH_ERRNO__ 1\n");
     }
 }
 

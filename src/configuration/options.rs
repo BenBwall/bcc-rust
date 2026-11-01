@@ -479,9 +479,21 @@ impl CompilerConfiguration {
     }
 
     /// Gives up (or keeps) part of IEC 60559 semantics, as GCC's
-    /// `-fno-signed-zeros` and its relatives do. Only predefined macros
-    /// read it.
+    /// `-fno-signed-zeros` and its relatives do, and records the option as
+    /// given.
     pub(crate) const fn with_relaxed_floating_point(
+        mut self,
+        option: super::RelaxedFloatingPoint,
+        relaxed: bool,
+    ) -> Self {
+        self = self.with_implied_floating_point(option, relaxed);
+        self.given_floating_point |= option.bit();
+        self
+    }
+
+    /// Gives up (or keeps) part of IEC 60559 semantics as an option that
+    /// implies it does (`-ffast-math`), without recording it as given.
+    pub(crate) const fn with_implied_floating_point(
         mut self,
         option: super::RelaxedFloatingPoint,
         relaxed: bool,
@@ -491,12 +503,85 @@ impl CompilerConfiguration {
         } else {
             self.relaxed_floating_point &= !option.bit();
         }
-        self.given_floating_point |= option.bit();
         self
+    }
+
+    /// Records whether the last `-f[no-]fast-math` (`unsafe_math` false) or
+    /// `-f[no-]unsafe-math-optimizations` (`unsafe_math` true) gives the
+    /// semantics up.
+    pub(crate) const fn with_fast_math_given(mut self, unsafe_math: bool, given: bool) -> Self {
+        let bit = if unsafe_math { 2 } else { 1 };
+        if given {
+            self.fast_math_given |= bit;
+        } else {
+            self.fast_math_given &= !bit;
+        }
+        self
+    }
+
+    /// Whether the link adds `crtfastmath.o`, whose constructor makes the
+    /// processor flush subnormal results and operands to zero, as both
+    /// drivers link it for an executable: GCC's when the last
+    /// `-f[no-]fast-math` or the last `-f[no-]unsafe-math-optimizations`
+    /// (or a final `-Ofast`) gives the semantics up, Clang's when the last
+    /// of all four does.
+    pub(crate) const fn links_fast_math_runtime(self) -> bool {
+        match self.identity.rules() {
+            | super::RuleSet::Gcc => self.fast_math_given != 0,
+            | super::RuleSet::Clang =>
+                self.relaxes_floating_point(super::RelaxedFloatingPoint::UnsafeMath),
+        }
     }
 
     pub(crate) const fn relaxes_floating_point(self, option: super::RelaxedFloatingPoint) -> bool {
         self.relaxed_floating_point & option.bit() != 0
+    }
+
+    /// Whether NaNs and infinities are given up, as `-ffinite-math-only`
+    /// asks, which `__FINITE_MATH_ONLY__` reports.
+    pub(crate) const fn finite_math_only(self) -> bool {
+        self.relaxes_floating_point(super::RelaxedFloatingPoint::NoNans)
+            && self.relaxes_floating_point(super::RelaxedFloatingPoint::NoInfinities)
+    }
+
+    /// Whether traps are given up: `-fno-trapping-math`, unless
+    /// `-fsignaling-nans` keeps them, as GCC's `finish_options` does.
+    pub(crate) const fn no_trapping_math(self) -> bool {
+        self.relaxes_floating_point(super::RelaxedFloatingPoint::NoTrappingMath)
+            && !self.signaling_nans
+    }
+
+    /// Whether reassociation is permitted: `-fassociative-math`, which both
+    /// compilers drop unless signed zeros and traps are given up too.
+    pub(crate) const fn associative_math(self) -> bool {
+        self.relaxes_floating_point(super::RelaxedFloatingPoint::AssociativeMath)
+            && self.relaxes_floating_point(super::RelaxedFloatingPoint::NoSignedZeros)
+            && self.no_trapping_math()
+    }
+
+    /// The fast-math flags of every floating operation, as Clang gives
+    /// them (see [`super::FastMathFlags`]). `-fsignaling-nans` keeps the
+    /// operations exact, since the LLVM back end then emits LLVM's
+    /// constrained intrinsics.
+    pub(crate) const fn fast_math_flags(self) -> super::FastMathFlags {
+        use super::RelaxedFloatingPoint as Relaxed;
+        if self.signaling_nans {
+            return super::FastMathFlags {
+                no_math_errno: self.relaxes_floating_point(Relaxed::NoMathErrno),
+                ..super::FastMathFlags::NONE
+            };
+        }
+        super::FastMathFlags {
+            no_nans:          self.relaxes_floating_point(Relaxed::NoNans),
+            no_infinities:    self.relaxes_floating_point(Relaxed::NoInfinities),
+            no_signed_zeros:  self.relaxes_floating_point(Relaxed::NoSignedZeros),
+            reciprocal:       self.relaxes_floating_point(Relaxed::ReciprocalMath),
+            reassociate:      self.associative_math(),
+            contract:         self.relaxes_floating_point(Relaxed::UnsafeMath),
+            approximate_func: self.relaxes_floating_point(Relaxed::ApproxFunc),
+            no_trapping:      self.no_trapping_math(),
+            no_math_errno:    self.relaxes_floating_point(Relaxed::NoMathErrno),
+        }
     }
 
     /// Whether `option` was given in either form, rather than left at its
@@ -653,6 +738,7 @@ impl CompilerConfiguration {
             default_visibility: super::DefaultVisibility::Default,
             relaxed_floating_point: 0,
             given_floating_point: 0,
+            fast_math_given: 0,
             signaling_nans: false,
             suppress_warnings: false,
             max_nesting_depth: super::DEFAULT_MAX_NESTING_DEPTH,

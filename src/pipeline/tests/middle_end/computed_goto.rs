@@ -326,6 +326,7 @@ fn computed_goto_native_arms_match_clang() {
                             disable_llvm_passes: false,
                             kind: OutputKind::Executable,
                             code: crate::target::CodeOptions::default(),
+                            fast_math_runtime: false,
                         };
                         let output = toolchain.command(&input, &clang, options).output().unwrap();
                         assert!(
@@ -343,6 +344,7 @@ fn computed_goto_native_arms_match_clang() {
                             target,
                             kind: OutputKind::Executable,
                             code: crate::target::CodeOptions::default(),
+                            fast_math_runtime: false,
                         };
                         let interpreted =
                             with_module(source, target, arm.bcc, Profile::PostAbi, |module, _| {

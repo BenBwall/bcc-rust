@@ -925,6 +925,7 @@ fn options(arm: &Arm, target: Target, kind: OutputKind) -> LlvmOptions {
         target,
         kind,
         code: CodeOptions::default(),
+        fast_math_runtime: false,
     }
 }
 
@@ -974,6 +975,7 @@ fn clang_runs(
                         target,
                         kind: OutputKind::Executable,
                         code: CodeOptions::default(),
+                        fast_math_runtime: false,
                     },
                 )
                 .output()

@@ -960,6 +960,8 @@ mod tests {
                         "__NO_TRAPPING_MATH__",
                         "__RECIPROCAL_MATH__",
                         "__SUPPORT_SNAN__",
+                        "__FAST_MATH__",
+                        "__FINITE_MATH_ONLY__",
                     ]
                     .iter()
                     .any(|prefix| name.starts_with(prefix))
@@ -1047,7 +1049,7 @@ mod tests {
 
     /// GCC's options that give up part of IEC 60559 semantics, alone and
     /// in the combinations whose order or interplay decides the macros.
-    const FLOATING_POINT_OPTIONS: [&[&str]; 29] = [
+    const FLOATING_POINT_OPTIONS: [&[&str]; 46] = [
         &[],
         &["-fsignaling-nans"],
         &["-fsignaling-nans", "-fno-signaling-nans"],
@@ -1111,6 +1113,37 @@ mod tests {
             "-fno-signed-zeros",
             "-fno-trapping-math",
             "-fsigned-zeros",
+        ],
+        // `-ffast-math`, `-Ofast` and the options they imply, which the
+        // last option given decides, but for the complex arithmetic, which
+        // an explicit `-f[no-]cx-limited-range` keeps.
+        &["-ffast-math"],
+        &["-Ofast"],
+        &["-ffinite-math-only"],
+        &["-funsafe-math-optimizations"],
+        &["-ffast-math", "-fno-finite-math-only"],
+        &["-fno-finite-math-only", "-ffast-math"],
+        &["-ffast-math", "-fmath-errno"],
+        &["-ffast-math", "-fno-fast-math"],
+        &["-ffast-math", "-fsigned-zeros"],
+        &["-ffast-math", "-fsignaling-nans"],
+        &["-ffast-math", "-fno-unsafe-math-optimizations"],
+        &["-fcx-limited-range", "-ffast-math", "-fno-fast-math"],
+        &["-fno-finite-math-only", "-Ofast"],
+        &["-Ofast", "-O2"],
+        &["-fsigned-zeros", "-funsafe-math-optimizations"],
+        &[
+            "-funsafe-math-optimizations",
+            "-ffinite-math-only",
+            "-fno-math-errno",
+        ],
+        &[
+            "-fassociative-math",
+            "-freciprocal-math",
+            "-fno-signed-zeros",
+            "-fno-trapping-math",
+            "-ffinite-math-only",
+            "-fno-math-errno",
         ],
     ];
 
@@ -1195,8 +1228,9 @@ mod tests {
                 );
             }
         }
-        // Clang defines none of these but `__NO_MATH_ERRNO__`, which bcc's
-        // Clang identity leaves out with Clang's target-dependent default.
+        // Clang defines none of these (its `__NO_MATH_ERRNO__` follows
+        // `-fno-math-errno`, as
+        // `clang_mode_fast_math_macros_follow_the_options` checks).
         let clang = macros_with("--clang-mode", &["-fno-signed-zeros", "-fsignaling-nans"]);
         assert_eq!(defines(&clang, "__GCC_IEC_559"), None);
         assert_eq!(defines(&clang, "__NO_SIGNED_ZEROS__"), None);
@@ -1765,11 +1799,6 @@ mod tests {
                 "gcc: error: '-mno-sse' is not supported",
             ),
             (
-                "--gcc-mode",
-                "-Ofast",
-                "gcc: error: '-Ofast' is not supported",
-            ),
-            (
                 "--clang-mode",
                 "-fshort-enums",
                 "clang: error: '-fshort-enums' is not supported",
@@ -1925,6 +1954,263 @@ mod tests {
                 "0x1.04p+0 0x1.8p+1 0x1.04p+1\n",
                 "{options:?}"
             );
+        }
+    }
+
+    /// The Clang identity defines `__FAST_MATH__`, `__FINITE_MATH_ONLY__`
+    /// and `__NO_MATH_ERRNO__` as the pinned Clang 23 does, whichever
+    /// options gave the semantics up, and its `-Ofast` is `-O3
+    /// -ffast-math`, deprecated.
+    #[test]
+    fn clang_mode_fast_math_macros_follow_the_options() {
+        for (options, fast, finite, errno) in [
+            (&[][..], false, false, false),
+            (&["-ffast-math"], true, true, true),
+            (&["-Ofast"], true, true, true),
+            (&["-O2", "-Ofast", "-fno-fast-math"], false, false, false),
+            (&["-ffinite-math-only"], false, true, false),
+            (&["-funsafe-math-optimizations"], false, false, false),
+            (
+                &["-ffast-math", "-fno-finite-math-only"],
+                false,
+                false,
+                true,
+            ),
+            (&["-ffast-math", "-fmath-errno"], false, true, false),
+            (&["-ffast-math", "-fno-fast-math"], false, false, false),
+            (&["-ffast-math", "-fno-approx-func"], false, true, true),
+            (&["-ffast-math", "-fsignaling-nans"], true, true, true),
+            (&["-fno-honor-nans"], false, false, false),
+            (
+                &["-fno-honor-nans", "-fno-honor-infinities"],
+                false,
+                true,
+                false,
+            ),
+            (&["-fno-math-errno"], false, false, true),
+            (
+                &[
+                    "-fno-signed-zeros",
+                    "-fno-trapping-math",
+                    "-fassociative-math",
+                    "-freciprocal-math",
+                    "-fno-math-errno",
+                    "-ffinite-math-only",
+                    "-fapprox-func",
+                ],
+                true,
+                true,
+                true,
+            ),
+        ] {
+            let listing = macros_with("--clang-mode", options);
+            assert_eq!(
+                defines(&listing, "__FAST_MATH__").as_deref(),
+                fast.then_some("1"),
+                "{options:?}"
+            );
+            assert_eq!(
+                defines(&listing, "__FINITE_MATH_ONLY__").as_deref(),
+                Some(if finite { "1" } else { "0" }),
+                "{options:?}"
+            );
+            assert_eq!(
+                defines(&listing, "__NO_MATH_ERRNO__").as_deref(),
+                errno.then_some("1"),
+                "{options:?}"
+            );
+        }
+        let directory = Directory::new();
+        directory.write("x.c", "int x;\n");
+        let deprecated = "clang: warning: argument '-Ofast' is deprecated; use '-O3' to enable \
+                          only conforming optimizations, or consult the documentation for the \
+                          same behavior [-Wdeprecated-ofast]\n";
+        for (options, expected) in [
+            (&["-Ofast"][..], deprecated.to_owned()),
+            (&["-Ofast", "-Ofast"], deprecated.to_owned()),
+            (&["-Ofast", "-w"], String::new()),
+            (&["-Ofast", "-Wno-deprecated-ofast"], String::new()),
+            (&["-Ofast", "-Qunused-arguments"], deprecated.to_owned()),
+        ] {
+            let mut args = vec!["-c", "x.c"];
+            args.extend(options);
+            let output = directory.bcc("--clang-mode", &args);
+            succeeds(&output);
+            assert_eq!(stderr(&output), expected, "{options:?}");
+        }
+        let error = directory.bcc("--clang-mode", &["-c", "x.c", "-Ofast", "-Werror"]);
+        assert!(!error.status.success());
+        assert!(
+            stderr(&error).contains("clang: error: argument '-Ofast' is deprecated"),
+            "{}",
+            stderr(&error)
+        );
+        // GCC knows neither Clang's `-fno-honor-*` nor `-fapprox-func`.
+        for option in ["-fno-honor-nans", "-fapprox-func"] {
+            let output = directory.bcc("--gcc-mode", &["-c", "x.c", option]);
+            assert!(!output.status.success(), "{option}");
+            assert!(
+                stderr(&output).contains(&format!(
+                    "gcc: error: unrecognized command-line option '{option}'"
+                )),
+                "{}",
+                stderr(&output)
+            );
+        }
+    }
+
+    /// `-ffast-math` and the options it implies give LLVM the fast-math
+    /// flags Clang gives it: on each floating operation, and as the
+    /// function attributes LLVM's code generator reads. Under
+    /// `-fno-math-errno` the math functions read and write no memory, but
+    /// where the program names them for its own (`-fno-builtin`).
+    #[test]
+    fn fast_math_gives_llvm_the_flags_clang_does() {
+        let directory = Directory::new();
+        directory.write(
+            "f.c",
+            "double sqrt(double);\ndouble f(double a, double b) { return a * b + a; }\ndouble \
+             g(double x) { return sqrt(x); }\n",
+        );
+        let llvm = |options: &[&str]| {
+            let mut args = vec!["--emit=llvm", "-O0"];
+            args.extend(options);
+            args.push("f.c");
+            let output = directory.bcc("", &args);
+            succeeds(&output);
+            stdout(&output)
+        };
+        // The attribute group of `sqrt`'s declaration.
+        let sqrt_attributes = |text: &str| -> String {
+            let group = text
+                .lines()
+                .find(|line| line.starts_with("declare double @sqrt("))
+                .and_then(|line| line.rsplit_once(" #"))
+                .map(|(_, group)| group.trim().to_owned());
+            group
+                .and_then(|group| {
+                    text.lines()
+                        .find(|line| line.starts_with(&format!("attributes #{group} = ")))
+                        .map(str::to_owned)
+                })
+                .unwrap_or_default()
+        };
+        for (options, multiply, add) in [
+            (&[][..], "fmul double", "fadd double"),
+            (&["-ffast-math"], "fmul fast double", "fadd fast double"),
+            (
+                &["-ffinite-math-only"],
+                "fmul nnan ninf double",
+                "fadd nnan ninf double",
+            ),
+            (
+                &["-funsafe-math-optimizations"],
+                "fmul reassoc nsz arcp contract afn double",
+                "fadd reassoc nsz arcp contract afn double",
+            ),
+            // Reassociation needs signed zeros and traps given up too.
+            (&["-fassociative-math"], "fmul double", "fadd double"),
+            (
+                &[
+                    "-fassociative-math",
+                    "-fno-signed-zeros",
+                    "-fno-trapping-math",
+                ],
+                "fmul reassoc nsz double",
+                "fadd reassoc nsz double",
+            ),
+            (
+                &["-freciprocal-math"],
+                "fmul arcp double",
+                "fadd arcp double",
+            ),
+            (
+                &["-ffast-math", "-fno-fast-math"],
+                "fmul double",
+                "fadd double",
+            ),
+            // Signaling NaNs keep every operation, with its exceptions.
+            (
+                &["-ffast-math", "-fsignaling-nans"],
+                "llvm.experimental.constrained.fmul",
+                "llvm.experimental.constrained.fadd",
+            ),
+        ] {
+            let text = llvm(options);
+            assert!(text.contains(multiply), "{options:?}\n{text}");
+            assert!(text.contains(add), "{options:?}\n{text}");
+        }
+        let fast = llvm(&["-ffast-math"]);
+        assert!(
+            fast.contains("\"no-signed-zeros-fp-math\"=\"true\"")
+                && fast.contains("\"no-trapping-math\"=\"true\""),
+            "{fast}"
+        );
+        assert!(sqrt_attributes(&fast).contains("memory(none)"), "{fast}");
+        let plain = llvm(&[]);
+        assert!(!plain.contains("no-signed-zeros-fp-math"), "{plain}");
+        assert!(!sqrt_attributes(&plain).contains("memory(none)"), "{plain}");
+        let errno = llvm(&["-fno-math-errno"]);
+        assert!(sqrt_attributes(&errno).contains("memory(none)"), "{errno}");
+        for own in [
+            &["-fno-math-errno", "-fno-builtin"][..],
+            &["-fno-math-errno", "-fno-builtin-sqrt"],
+        ] {
+            let text = llvm(own);
+            assert!(
+                !sqrt_attributes(&text).contains("memory(none)"),
+                "{own:?}\n{text}"
+            );
+        }
+    }
+
+    /// A program built with `-ffast-math` computes as GCC's and Clang's
+    /// builds of it do: NaNs are assumed away, so `isnan` of a NaN is
+    /// false once optimized, and the executable links `crtfastmath.o`,
+    /// which flushes subnormal results to zero. Both drivers link it when
+    /// the last `-f[no-]fast-math` or `-f[no-]unsafe-math-optimizations`
+    /// gives the semantics up. bcc's own back end keeps IEC 60559
+    /// semantics in its code, which still links `crtfastmath.o`.
+    #[test]
+    fn fast_math_programs_compute_as_gcc_and_clang_build_them() {
+        if !cfg!(all(
+            target_os = "linux",
+            target_env = "gnu",
+            target_arch = "x86_64"
+        )) {
+            return;
+        }
+        let directory = Directory::new();
+        directory.write(
+            "r.c",
+            "#include <math.h>\nvolatile double zero = 0.0, smallest = \
+             2.2250738585072014e-308;\nint main(void) {\n  double n = zero / zero;\n  double half \
+             = smallest / 2;\n  return (isnan(n) ? 1 : 0) + (half == 0 ? 2 : 0);\n}\n",
+        );
+        // The status is 1 for a NaN `isnan` finds, plus 2 for a subnormal
+        // flushed to zero, as each compiler's own build exits.
+        for (mode, options, status) in [
+            ("--gcc-mode", &["-O2"][..], 1),
+            ("--gcc-mode", &["-O2", "-ffast-math"], 2),
+            ("--gcc-mode", &["-Ofast"], 2),
+            ("--gcc-mode", &["-O2", "-ffinite-math-only"], 0),
+            ("--gcc-mode", &["-O2", "-ffast-math", "-fno-fast-math"], 1),
+            ("--gcc-mode", &["-O2", "-funsafe-math-optimizations"], 3),
+            ("--clang-mode", &["-O2", "-ffast-math"], 2),
+            ("--clang-mode", &["-Ofast"], 2),
+            ("--clang-mode", &["-O2", "-ffast-math", "-fno-fast-math"], 1),
+            ("--clang-mode", &["-O2", "-funsafe-math-optimizations"], 3),
+            (
+                "--gcc-mode",
+                &["-O2", "-ffast-math", "-Xbcc", "--backend=native"],
+                3,
+            ),
+        ] {
+            let mut args = vec!["r.c", "-lm", "-o", "r"];
+            args.extend(options);
+            succeeds(&directory.bcc(mode, &args));
+            let run = Command::new(directory.path("r")).output().unwrap();
+            assert_eq!(run.status.code(), Some(status), "{mode} {options:?}");
         }
     }
 

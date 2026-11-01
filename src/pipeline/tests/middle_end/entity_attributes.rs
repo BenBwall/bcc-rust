@@ -246,6 +246,7 @@ fn entity_attributes_match_native_arms_and_clang() {
                         target,
                         kind: OutputKind::Executable,
                         code: crate::target::CodeOptions::default(),
+                        fast_math_runtime: false,
                     },
                 )
                 .unwrap();
@@ -271,6 +272,7 @@ fn entity_attributes_match_native_arms_and_clang() {
                         target,
                         kind: OutputKind::Executable,
                         code: crate::target::CodeOptions::default(),
+                        fast_math_runtime: false,
                     },
                 )
                 .output()
@@ -335,6 +337,7 @@ fn weak_and_alias_link_with_clang_units_on_both_targets() {
                 target,
                 kind: OutputKind::Executable,
                 code: crate::target::CodeOptions::default(),
+                fast_math_runtime: false,
             };
             with_module(BCC_UNIT, target, arm.bcc, Profile::PostAbi, |module, _| {
                 compile_module(
@@ -392,6 +395,7 @@ fn weak_and_alias_link_with_clang_units_on_both_targets() {
                         target:              Target::LinuxGnu,
                         kind:                OutputKind::Object,
                         code:                crate::target::CodeOptions::default(),
+                        fast_math_runtime:   false,
                     },
                 )
                 .unwrap();
@@ -469,6 +473,7 @@ fn single_unit_programs_run_on_system_v_under_wsl() {
                             target:              Target::LinuxGnu,
                             kind:                OutputKind::Object,
                             code:                crate::target::CodeOptions::default(),
+                            fast_math_runtime:   false,
                         },
                     )
                     .unwrap();

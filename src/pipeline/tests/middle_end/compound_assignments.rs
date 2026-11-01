@@ -54,6 +54,7 @@ fn compound_updates_follow_rhs_calls_in_native_arms() {
                         target,
                         kind: OutputKind::Executable,
                         code: crate::target::CodeOptions::default(),
+                        fast_math_runtime: false,
                     },
                 )
                 .expect("compile the compound update regression");

@@ -73,6 +73,7 @@ fn compare_native(source: &str) {
             target,
             kind: OutputKind::Executable,
             code: crate::target::CodeOptions::default(),
+            fast_math_runtime: false,
         };
         let clang = directory.join(format!("clang-{opt:?}.exe"));
         let mut command = toolchain.command(&input, &clang, options);

@@ -233,6 +233,7 @@ fn vla_native_arms_match_clang() {
                 disable_llvm_passes: false,
                 kind: OutputKind::Executable,
                 code: crate::target::CodeOptions::default(),
+                fast_math_runtime: false,
             };
             let clang = directory.join(format!("clang-{index}-{opt:?}.exe"));
             let output = toolchain

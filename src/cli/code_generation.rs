@@ -574,7 +574,12 @@ impl CodeGeneration {
     }
 
     /// LLVM IR passes and code generation for `target`.
-    pub(super) fn llvm_options(&self, target: Target, code: CodeOptions) -> LlvmOptions {
+    pub(super) fn llvm_options(
+        &self,
+        target: Target,
+        code: CodeOptions,
+        fast_math_runtime: bool,
+    ) -> LlvmOptions {
         LlvmOptions {
             opt: match self.llvm_opt.or(self.optimization).unwrap_or(LlvmOpt::None) {
                 | LlvmOpt::None => None,
@@ -589,6 +594,7 @@ impl CodeGeneration {
             target,
             kind: self.output_kind(),
             code,
+            fast_math_runtime,
         }
     }
 }
