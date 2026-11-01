@@ -523,6 +523,10 @@ mod tests {
                 "e.c:1: error: incompatible redefinition of 'T'\n",
             ),
             (
+                "int T; typedef int T;",
+                "e.c:1: error: incompatible redefinition of 'T'\n",
+            ),
+            (
                 "int f(void); float f(void);",
                 "e.c:1: error: incompatible types for redefinition of 'f'\n",
             ),
