@@ -244,10 +244,31 @@ mod tests {
         let output = directory.bcc("--gcc-mode", &["-E", "gcc.c", "-o", "gcc.i"]);
         succeeds(&output);
         succeeds(&directory.bcc("--gcc-mode", &["-fsyntax-only", "-w", "gcc.i"]));
+        // TCC replaces the operands too, and its `-E` writes them replaced,
+        // so its text packs as the source does (tcc mob e23dabe: 6 5 5).
+        directory.write(
+            "tcc.c",
+            "#define N 2\n#define PUSH push\n#define ONE 1\n#pragma pack(N)\nstruct a { char c; \
+             int i; };\n#pragma pack()\n#pragma pack(PUSH, 1)\nstruct b { char c; int i; \
+             };\n#pragma pack(pop)\n#pragma pack(push, ONE)\nstruct c { char c; int i; \
+             };\n#pragma pack(pop)\n_Static_assert(sizeof(struct a) == 6 && sizeof(struct b) == 5 \
+             && sizeof(struct c) == 5, \"size\");\n",
+        );
+        let direct = directory.bcc("--tcc-mode", &["-c", "tcc.c", "-o", "tcc.o"]);
+        succeeds(&direct);
+        assert_eq!(stderr(&direct), "");
+        succeeds(&directory.bcc("--tcc-mode", &["-E", "tcc.c", "-o", "tcc.i"]));
+        let text = std::fs::read_to_string(directory.path("tcc.i")).unwrap();
+        assert!(text.contains("#pragma pack(2)\n"), "{text}");
+        assert!(text.contains("#pragma pack(push, 1)\n"), "{text}");
+        let round_trip = directory.bcc("--tcc-mode", &["-c", "tcc.i", "-o", "tcc-i.o"]);
+        succeeds(&round_trip);
+        assert_eq!(stderr(&round_trip), "");
     }
 
     /// GCC warns of an unclosed quote in a skipped group, compiling as well
-    /// as under `-E`; Clang does not.
+    /// as under `-E`, and `-pedantic-errors` makes it an error; Clang and
+    /// TCC do not.
     #[test]
     fn unclosed_quotes_in_skipped_groups_warn_as_gcc_does() {
         let directory = Directory::new();
@@ -267,6 +288,20 @@ mod tests {
             succeeds(&clang);
             assert_eq!(stderr(&clang), "", "{args:?}");
         }
+        // TCC does not look either (tcc mob e23dabe is silent); its
+        // personality compiles with `-c` rather than `-fsyntax-only`.
+        for args in [
+            &["-c", "skipped.c", "-o", "skipped.o"][..],
+            &["-E", "-P", "skipped.c"],
+        ] {
+            let tcc = directory.bcc("--tcc-mode", args);
+            succeeds(&tcc);
+            assert_eq!(stderr(&tcc), "", "{args:?}");
+        }
+        // `-pedantic-errors` makes the warning an error, as in GCC.
+        let strict = directory.bcc("--gcc-mode", &["-pedantic-errors", "-E", "-P", "skipped.c"]);
+        assert!(!strict.status.success());
+        assert!(stderr(&strict).contains("error: "), "{}", stderr(&strict));
     }
 
     /// C23 leaves the white space at the ends of a `__VA_OPT__` replacement

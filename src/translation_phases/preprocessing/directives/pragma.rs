@@ -19,7 +19,10 @@ use super::super::{
     },
 };
 use crate::{
-    configuration::RuleSet,
+    configuration::{
+        CompilerIdentity,
+        RuleSet,
+    },
     translation_phases::{
         Context,
         SourcePosition,
@@ -70,7 +73,17 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
             None
         };
         let position = self.context.preprocessed_tokens;
+        let packs = self.context.pack_pragmas.len();
         let consumed_newline = self.execute_pragma(from);
+        // TCC writes a pack pragma's operands as it replaced them, so that
+        // its text compiles as the source does.
+        let line = match line {
+            | Some(_)
+                if self.context.configuration.compiler_identity() == CompilerIdentity::Tcc
+                    && self.context.pack_pragmas.len() > packs =>
+                Some(self.replaced_pack_line()),
+            | line => line,
+        };
         if let Some(text) = line
             && let Some((file, at)) = at
         {
@@ -386,12 +399,31 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
         Some(text.into_str())
     }
 
+    /// The last pack pragma's line with its operands as they were replaced,
+    /// as TCC's `-E` writes it: `#pragma pack(push, 2)` for `#define N 2`
+    /// and `#pragma pack(push, N)`.
+    fn replaced_pack_line(&self) -> &'tu str {
+        let mut text = ArenaString::new_in(self.context.tu_arena());
+        text.push_str("#pragma pack");
+        if let Some(pack) = self.context.pack_pragmas.last() {
+            for operand in pack.operands {
+                let spelling = self.context.string_cache.at(operand.spelling);
+                text.push_str(spelling.trim_end_matches('\0'));
+                if spelling == "," {
+                    text.push(' ');
+                }
+            }
+        }
+        text.into_str()
+    }
+
     /// Pass a pack pragma's tokens and output boundary to phase 7 for
     /// interpretation. Clang macro-replaces the operands, unlike ordinary
-    /// pragmas, and so does `cl` as clang-cl models it; GCC does not, so
-    /// with `#define N 2`, `#pragma pack(N)` is an unknown action it
-    /// ignores. Either way `-E` writes the operands as spelled, so only
-    /// GCC's rule compiles its own `-E` text the same.
+    /// pragmas, and so do TCC and `cl` as clang-cl models it; GCC alone
+    /// does not, so with `#define N 2`, `#pragma pack(N)` is an unknown
+    /// action it ignores. A compiler's own identity decides this, not the
+    /// rule set it shares. Either way `-E` writes the operands as spelled,
+    /// so only GCC's rule compiles its own `-E` text the same.
     /// C99: §6.10.6p1 and footnote 152, p. 159; PDF p. 171 permit this choice.
     /// Clang: <https://clang.llvm.org/doxygen/ParsePragma_8cpp_source.html>.
     fn retain_pack_pragma(&mut self, source: SourceVectors) {
@@ -405,13 +437,7 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
             spelling:   token.contents,
             identifier: token.kind.is_identifier(),
         };
-        if self
-            .context
-            .configuration
-            .compiler_identity()
-            .ms_compatible_rules()
-            == RuleSet::Gcc
-        {
+        if self.context.configuration.compiler_identity() == CompilerIdentity::Gcc {
             while let Some(token) = Self::next_ignore_whitespace(&mut self.tokenizer, self.context)
                 && token.kind != PreprocessorTokenType::Newline
             {

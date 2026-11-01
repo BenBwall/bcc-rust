@@ -19,8 +19,9 @@ use super::{
 };
 use crate::{
     configuration::{
+        CompilerIdentity,
+        ExtensionPolicy,
         Feature,
-        RuleSet,
     },
     translation_phases::{
         Context,
@@ -210,8 +211,8 @@ impl<'a> LexedFile<'a> {
                         context.report_extension(feature, spelling, vectors);
                     },
                 // GCC warns of an unclosed quote even in a skipped group,
-                // where every other lexical diagnostic is ignored; Clang
-                // does not.
+                // where every other lexical diagnostic is ignored; Clang,
+                // TCC and clang-cl do not.
                 | LexDiagnostic::Tokenizer {
                     error_type,
                     start,
@@ -220,7 +221,7 @@ impl<'a> LexedFile<'a> {
                 } if context.ignore_tokenizer_errors()
                     && context.skipping_group
                     && let Some(quote) = error_type.unclosed_quote() =>
-                    if context.configuration.compiler_identity().rules() == RuleSet::Gcc
+                    if context.configuration.compiler_identity() == CompilerIdentity::Gcc
                         && !reported.replace(true)
                     {
                         let mut start = start;
@@ -473,9 +474,9 @@ impl Entry {
     }
 }
 
-/// Reports GCC's warning for an unclosed quote in a skipped group, out of
-/// line: the replay that calls it runs inside every macro call's reader,
-/// whose frames deep nesting stacks up.
+/// Reports GCC's warning for an unclosed quote in a skipped group, an error
+/// under `-pedantic-errors`, out of line: the replay that calls it runs inside
+/// every macro call's reader, whose frames deep nesting stacks up.
 #[cold]
 #[inline(never)]
 fn report_skipped_quote(
@@ -493,7 +494,10 @@ fn report_skipped_quote(
             source_file_index,
             length: source_offset(length),
         },
-        error_type:    PreprocessorTokenizerErrorType::MissingTerminatingQuote(quote),
+        error_type:    PreprocessorTokenizerErrorType::missing_terminating_quote(
+            quote,
+            context.configuration.extension_policy() == ExtensionPolicy::Deny,
+        ),
         character:     None,
     };
     context.set_ignore_tokenizer_errors(false);

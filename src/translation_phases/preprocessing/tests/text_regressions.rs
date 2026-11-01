@@ -9,6 +9,7 @@ use crate::{
         CStandard,
         CompilerConfiguration,
         CompilerIdentity,
+        ExtensionPolicy,
     },
     translation_phases::{
         Context,
@@ -178,7 +179,39 @@ fn an_unclosed_quote_in_a_skipped_group_warns_as_gcc_does() {
             "MissingTerminatingQuote(39)".to_owned()
         )]
     );
-    assert_eq!(text_of(source, CompilerIdentity::Clang).diagnostics, []);
+    // TCC and clang-cl do not look either, though they share GCC's rules
+    // elsewhere.
+    for identity in [
+        CompilerIdentity::Clang,
+        CompilerIdentity::Tcc,
+        CompilerIdentity::Msvc,
+    ] {
+        assert_eq!(text_of(source, identity).diagnostics, [], "{identity:?}");
+    }
+}
+
+#[test]
+fn pedantic_errors_make_an_unclosed_quote_an_error() {
+    // GCC's and Clang's `-pedantic-errors` turn the warning into an error,
+    // in a text and in a group GCC skips.
+    let strict = |identity| {
+        CompilerConfiguration::new(CStandard::C17, ExtensionPolicy::Deny)
+            .with_compiler_identity(identity)
+    };
+    for identity in [CompilerIdentity::Gcc, CompilerIdentity::Clang] {
+        let text = text_in("don't\n", strict(identity));
+        assert_eq!(text.tokens, "don 't", "{identity:?}");
+        assert_eq!(
+            text.diagnostics,
+            [(ErrorSeverity::Error, "NewlineInCharacter".to_owned())],
+            "{identity:?}"
+        );
+    }
+    let skipped = text_in("#if 0\nsay \"hi\n#endif\n", strict(CompilerIdentity::Gcc));
+    assert_eq!(
+        skipped.diagnostics,
+        [(ErrorSeverity::Error, "NewlineInString".to_owned())]
+    );
 }
 
 #[test]

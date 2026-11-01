@@ -80,6 +80,18 @@ pub(crate) enum PreprocessorTokenizerErrorType {
 }
 
 impl PreprocessorTokenizerErrorType {
+    /// The diagnostic of a `'` or `"` that closes on no line where phase 7
+    /// never reads it: GCC's and Clang's warning, or, under
+    /// `-pedantic-errors`, which makes it an error in both, the error a
+    /// literal that phase 7 reads gets.
+    pub(crate) const fn missing_terminating_quote(quote: u8, error: bool) -> Self {
+        match (error, quote) {
+            | (false, _) => Self::MissingTerminatingQuote(quote),
+            | (true, b'"') => Self::NewlineInString,
+            | (true, _) => Self::NewlineInCharacter,
+        }
+    }
+
     /// The quote of a character constant or string literal that closes on
     /// no line, which this diagnoses.
     pub(crate) const fn unclosed_quote(self) -> Option<u8> {
