@@ -63,18 +63,11 @@ pub(super) fn link(args: &Cli, inputs: &[Input<'_>]) -> Result<i32, MainError> {
         && let Some(source) = inputs[0].c_source()
     {
         let base = default_output_base(args, source.path());
-        let names = rule_names(args, true, output, base.as_deref());
+        let names = rule_names(args, output, base.as_deref());
         let dependencies = dependencies::request(args, source, false, names)?;
         return compile(args, source, Job::Generate(generation), dependencies)
             .map(|generated| generated.status);
     }
-    // One compiled input, whatever link options come with it, names its
-    // rule after the output, as GCC and Clang write it.
-    let lone = inputs
-        .iter()
-        .filter(|input| !matches!(input, Input::Link(_)))
-        .count()
-        == 1;
     let target = args.target;
     if target.is_wasm() {
         return Err(MainError::Driver(
@@ -104,7 +97,7 @@ pub(super) fn link(args: &Cli, inputs: &[Input<'_>]) -> Result<i32, MainError> {
                 // A lone assembly input's rule names the output, as a lone
                 // C source's does and as GCC and Clang write it.
                 let base = default_output_base(args, assembly.path);
-                let names = rule_names(args, lone, output, base.as_deref());
+                let names = rule_names(args, output, base.as_deref());
                 let rules = dependencies::request_at(args, Some(assembly.path), false, names)?
                     .map(|rules| rules.clang_arguments(args, false))
                     .unwrap_or_default();
@@ -118,12 +111,8 @@ pub(super) fn link(args: &Cli, inputs: &[Input<'_>]) -> Result<i32, MainError> {
                 job.pie = false;
                 job.no_pie = false;
                 job.output_path = Some(object.path().into());
-                // One source's rule names the output, as GCC writes it.
-                // With several, each names its own object and `.d` file, as
-                // Clang names them without `-o`; GCC would overwrite one
-                // `.d` file per source.
                 let base = default_output_base(args, source.path());
-                let names = rule_names(args, lone, output, base.as_deref());
+                let names = rule_names(args, output, base.as_deref());
                 let dependencies = dependencies::request(args, source, false, names)?;
                 let generated = compile(args, source, Job::Generate(&job), dependencies)?;
                 status = combine(status, generated.status);
@@ -182,30 +171,23 @@ pub(super) fn link(args: &Cli, inputs: &[Input<'_>]) -> Result<i32, MainError> {
     }
 }
 
-/// The names of a compiled input's dependency rules in a link: a lone
-/// input's file and target are the `-o` output's (`prog.d`, `prog:`).
+/// The names of a compiled input's dependency rules in a link: each
+/// input's file and target are the `-o` output's (`prog.d`, `prog:`), so
+/// with several the last one's rule stands, as GCC and Clang write them.
 /// Without `-o`, the sources name them (`f.o:`), in GCC's `.d` file after
 /// its default output's dump base (`base`, as `a-f.d`), in Clang's after
-/// the source (`f.d`). Several inputs with `-o` name their own, as Clang
-/// names them; GCC would overwrite one `prog.d` per source.
-fn rule_names<'a>(
-    args: &Cli,
-    lone: bool,
-    output: &'a Path,
-    base: Option<&'a Path>,
-) -> DependencyNames<'a> {
+/// the source (`f.d`).
+fn rule_names<'a>(args: &Cli, output: &'a Path, base: Option<&'a Path>) -> DependencyNames<'a> {
     if args.driver.default_output {
         DependencyNames {
             file:   base,
             target: None,
         }
-    } else if lone {
+    } else {
         DependencyNames {
             file:   Some(output),
             target: Some(output),
         }
-    } else {
-        DependencyNames::default()
     }
 }
 
