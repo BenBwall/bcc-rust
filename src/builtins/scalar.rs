@@ -2096,6 +2096,51 @@ pub(super) const BUILTINS: &[BuiltinDescriptor] = &[
         &[],
         0,
     ),
+    // GNU: GCC's `finite` family, `isfinite` of one fixed type, which
+    // glibc's `<math.h>` may call (GCC manual, "Other Builtins").
+    descriptor(
+        Id::Finite,
+        "__builtin_finite",
+        B::Float(FloatOperation::Isfinite, Some(S::Double)),
+        Signature {
+            result:     T::Scalar(S::Int),
+            parameters: &[T::Scalar(S::Double)],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[A::value(C::Parameter(T::Scalar(S::Double)))],
+        1,
+    ),
+    // GNU: GCC's `finite` family, `isfinite` of one fixed type, which
+    // glibc's `<math.h>` may call (GCC manual, "Other Builtins").
+    descriptor(
+        Id::Finitef,
+        "__builtin_finitef",
+        B::Float(FloatOperation::Isfinite, Some(S::Float)),
+        Signature {
+            result:     T::Scalar(S::Int),
+            parameters: &[T::Scalar(S::Float)],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[A::value(C::Parameter(T::Scalar(S::Float)))],
+        1,
+    ),
+    // GNU: GCC's `finite` family, `isfinite` of one fixed type, which
+    // glibc's `<math.h>` may call (GCC manual, "Other Builtins").
+    descriptor(
+        Id::Finitel,
+        "__builtin_finitel",
+        B::Float(FloatOperation::Isfinite, Some(S::LongDouble)),
+        Signature {
+            result:     T::Scalar(S::Int),
+            parameters: &[T::Scalar(S::LongDouble)],
+            prototype:  true,
+            variadic:   false,
+        },
+        &[A::value(C::Parameter(T::Scalar(S::LongDouble)))],
+        1,
+    ),
 ];
 
 /// A builtin only GCC has, which Clang 23 rejects as an unknown builtin.

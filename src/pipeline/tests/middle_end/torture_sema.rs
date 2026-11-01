@@ -131,6 +131,7 @@ int main(void) {
  if(!__builtin_isinf(infinity) || !__builtin_isinf(-infinity) || !__builtin_isinff((float)infinity) || !__builtin_isinfl((long double)infinity)) return 3;
  if(__builtin_copysign(1.0,next())!= -1.0 || calls!=1 || !__builtin_signbit(__builtin_copysign(nan,negative))) return 4;
  if(!__builtin_signbitl(__builtin_copysignl(0.0L,l)) || __builtin_copysignf(2.0f,f)!=-2.0f) return 5;
+ if(!__builtin_finite(1.0) || __builtin_finite(infinity) || __builtin_finitef((float)nan) || !__builtin_finitel(l)) return 6;
  return 0;
 }
 "#,
@@ -210,10 +211,14 @@ fn torture_sema_matches_clang_and_native_arms() {
         } else {
             source.to_owned()
         };
-        // Clang exposes type-generic isinf, but not GCC's f/l aliases.
+        // Clang exposes type-generic isinf and isfinite, but not GCC's f/l
+        // aliases or its `finite` family.
         let oracle_source = oracle_source
             .replace("__builtin_isinff(", "__builtin_isinf(")
-            .replace("__builtin_isinfl(", "__builtin_isinf(");
+            .replace("__builtin_isinfl(", "__builtin_isinf(")
+            .replace("__builtin_finitef(", "__builtin_isfinite(")
+            .replace("__builtin_finitel(", "__builtin_isfinite(")
+            .replace("__builtin_finite(", "__builtin_isfinite(");
         std::fs::write(&input, oracle_source).unwrap();
         let options = LlvmOptions {
             opt: Some(OptLevel::O0),
