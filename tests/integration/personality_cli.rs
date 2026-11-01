@@ -735,7 +735,8 @@ mod tests {
         };
         // GCC spells `__SCHAR_MAX__` in hex.
         let signed = |mode: &str| {
-            let max = if mode == "--gcc-mode" { "0x7f" } else { "127" };
+            // GCC's own listing exists for the Linux targets only.
+            let max = if mode == "--gcc-mode" && cfg!(target_os = "linux") { "0x7f" } else { "127" };
             format!("(- {max} - 1) (char)-1 < 0 __CHAR_UNSIGNED__ _CHAR_UNSIGNED")
         };
         let unsigned = "0 (char)-1 < 0 1 _CHAR_UNSIGNED";
