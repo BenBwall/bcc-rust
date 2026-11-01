@@ -3,9 +3,9 @@ warning: macro `ATOMIC_VAR_INIT` has been marked as deprecated
    |
  2 | atomic_int deprecated = ATOMIC_VAR_INIT(1);
    |                         ^^^^^^^^^^^^^^^ deprecated macro
-  ::: <built-in>/stdatomic.h:62:41
+  ::: <built-in>/stdatomic.h:81:41
    |
-62 | #pragma clang deprecated(ATOMIC_VAR_INIT)
+81 | #pragma clang deprecated(ATOMIC_VAR_INIT)
    |                                         - macro marked deprecated here
 
 warning: macro `ATOMIC_VAR_INIT` has been marked as deprecated
@@ -15,9 +15,9 @@ warning: macro `ATOMIC_VAR_INIT` has been marked as deprecated
    |              --------------- expanded from macro `W`
  4 | atomic_int wrapped = W(2);
    |                      ^ deprecated macro
-  ::: <built-in>/stdatomic.h:62:41
+  ::: <built-in>/stdatomic.h:81:41
    |
-62 | #pragma clang deprecated(ATOMIC_VAR_INIT)
+81 | #pragma clang deprecated(ATOMIC_VAR_INIT)
    |                                         - macro marked deprecated here
 
 warning: macro `ATOMIC_VAR_INIT` has been marked as deprecated
@@ -25,9 +25,9 @@ warning: macro `ATOMIC_VAR_INIT` has been marked as deprecated
    |
  6 | atomic_int redefined = ATOMIC_VAR_INIT(3);
    |                        ^^^^^^^^^^^^^^^ deprecated macro
-  ::: <built-in>/stdatomic.h:62:41
+  ::: <built-in>/stdatomic.h:81:41
    |
-62 | #pragma clang deprecated(ATOMIC_VAR_INIT)
+81 | #pragma clang deprecated(ATOMIC_VAR_INIT)
    |                                         - macro marked deprecated here
 
 warning: macro `ATOMIC_VAR_INIT` has been marked as deprecated
@@ -35,9 +35,9 @@ warning: macro `ATOMIC_VAR_INIT` has been marked as deprecated
    |
  7 | #ifdef ATOMIC_VAR_INIT
    |        ^^^^^^^^^^^^^^^ deprecated macro
-  ::: <built-in>/stdatomic.h:62:41
+  ::: <built-in>/stdatomic.h:81:41
    |
-62 | #pragma clang deprecated(ATOMIC_VAR_INIT)
+81 | #pragma clang deprecated(ATOMIC_VAR_INIT)
    |                                         - macro marked deprecated here
 
 warning: macro `ATOMIC_VAR_INIT` has been marked as deprecated
@@ -45,9 +45,9 @@ warning: macro `ATOMIC_VAR_INIT` has been marked as deprecated
    |
  9 | #ifndef ATOMIC_VAR_INIT
    |         ^^^^^^^^^^^^^^^ deprecated macro
-  ::: <built-in>/stdatomic.h:62:41
+  ::: <built-in>/stdatomic.h:81:41
    |
-62 | #pragma clang deprecated(ATOMIC_VAR_INIT)
+81 | #pragma clang deprecated(ATOMIC_VAR_INIT)
    |                                         - macro marked deprecated here
 
 warning: macro `ATOMIC_VAR_INIT` has been marked as deprecated
@@ -55,9 +55,9 @@ warning: macro `ATOMIC_VAR_INIT` has been marked as deprecated
    |
 11 | #if defined(ATOMIC_VAR_INIT)
    |             ^^^^^^^^^^^^^^^ deprecated macro
-  ::: <built-in>/stdatomic.h:62:41
+  ::: <built-in>/stdatomic.h:81:41
    |
-62 | #pragma clang deprecated(ATOMIC_VAR_INIT)
+81 | #pragma clang deprecated(ATOMIC_VAR_INIT)
    |                                         - macro marked deprecated here
 
 warning: macro `ATOMIC_VAR_INIT` has been marked as deprecated
@@ -65,9 +65,9 @@ warning: macro `ATOMIC_VAR_INIT` has been marked as deprecated
    |
 13 | #if defined ATOMIC_VAR_INIT
    |             ^^^^^^^^^^^^^^^ deprecated macro
-  ::: <built-in>/stdatomic.h:62:41
+  ::: <built-in>/stdatomic.h:81:41
    |
-62 | #pragma clang deprecated(ATOMIC_VAR_INIT)
+81 | #pragma clang deprecated(ATOMIC_VAR_INIT)
    |                                         - macro marked deprecated here
 
 warning: macro `OLD` has been marked as deprecated: use NEW
@@ -87,9 +87,9 @@ warning: macro `__CLANG_ATOMIC_INT_LOCK_FREE` has been marked as deprecated
    |                                                      - macro marked deprecated here
 23 | int lock_free = ATOMIC_INT_LOCK_FREE;
    |                 ^^^^^^^^^^^^^^^^^^^^ deprecated macro
-  ::: <built-in>/stdatomic.h:45:37
+  ::: <built-in>/stdatomic.h:49:37
    |
-45 | #define ATOMIC_INT_LOCK_FREE        __CLANG_ATOMIC_INT_LOCK_FREE
+49 | #define ATOMIC_INT_LOCK_FREE        __CLANG_ATOMIC_INT_LOCK_FREE
    |                                     ---------------------------- expanded from macro `ATOMIC_INT_LOCK_FREE`
 
 warning: macro `OLD` has been marked as deprecated: operator
