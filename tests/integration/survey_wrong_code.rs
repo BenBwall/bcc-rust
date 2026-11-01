@@ -22,6 +22,10 @@
 //!   (gcc.c-torture/execute/20031003-1.c).
 //! - A trailing array reached through a pointer has no subobject size of its
 //!   own for `__builtin_object_size` mode 1 (`gcc.dg/pr101836_5.c`).
+//! - The conversions between floating types and `_BitInt` wider than 128 bits
+//!   round as the rounding mode asks, raise "invalid" and saturate out of
+//!   range, and raise "inexact" for a discarded fraction (gcc.dg/bitint-28.c,
+//!   bitint-29.c, bitint-31.c).
 
 #[cfg(test)]
 #[expect(
@@ -566,6 +570,68 @@ mod tests {
         }
     }
 
+    /// Conversions between floating types and a `_BitInt` wider than 128
+    /// bits follow Annex F as GCC's libgcc does: the rounding mode decides
+    /// the direction for a negative value too, a value out of range or a
+    /// NaN raises "invalid" and gives the nearest bound (the maximum for a
+    /// NaN), and a discarded fraction raises "inexact". The operands are
+    /// volatile, as no `FENV_ACCESS` keeps LLVM from reusing a conversion
+    /// across `fesetround`. Built only: the interpreter has no
+    /// floating-point environment.
+    #[test]
+    fn wide_bit_int_floating_conversions_follow_the_floating_environment() {
+        let source = b"#include <fenv.h>\n\
+            #include <stdio.h>\n\
+            __attribute__((noinline)) _BitInt(135) from_d(double d) { return d; }\n\
+            __attribute__((noinline)) unsigned _BitInt(135) from_du(double d) { return d; }\n\
+            __attribute__((noinline)) _BitInt(135) from_l(long double d) { return d; }\n\
+            __attribute__((noinline)) float to_f(_BitInt(192) b) { return b; }\n\
+            __attribute__((noinline)) double to_d(_BitInt(192) b) { return b; }\n\
+            static volatile _BitInt(192) negative = -10141203895131470501001744613377wb,\n\
+            positive = 10141203895131470501001744613377wb,\n\
+            wide = -(((_BitInt(192))0x20000000000001 << 80) | 1);\n\
+            static int flags(void) {\n\
+            int raised = (fetestexcept(FE_INVALID) ? 1 : 0) | (fetestexcept(FE_INEXACT) ? 2 : 0);\n\
+            feclearexcept(FE_ALL_EXCEPT);\n\
+            return raised;\n\
+            }\n\
+            int main(void) {\n\
+            const _BitInt(135) max = 21778071482940061661655974875633165533183wb;\n\
+            feclearexcept(FE_ALL_EXCEPT);\n\
+            printf(\"%d\", from_d(__builtin_inf()) == max); printf(\" %d\", flags());\n\
+            printf(\" %d\", from_d(-__builtin_inf()) == -max - 1); printf(\" %d\", flags());\n\
+            printf(\" %d\", from_d(__builtin_nan(\"\")) == max); printf(\" %d\", flags());\n\
+            printf(\" %d\", from_d(0x1p140) == max); printf(\" %d\", flags());\n\
+            printf(\" %d\", from_d(-0x1p134) == -max - 1); printf(\" %d\", flags());\n\
+            printf(\" %d\", from_l(-0x1p134L) == -max - 1); printf(\" %d\", flags());\n\
+            printf(\" %d\", from_du(-1.0) == 0); printf(\" %d\", flags());\n\
+            printf(\" %d\", from_du(-0.5) == 0); printf(\" %d\", flags());\n\
+            printf(\" %d\", from_d(-2.5) == -2); printf(\" %d\", flags());\n\
+            printf(\" %d\", from_d(0x1p100) == (_BitInt(135))1 << 100); printf(\" %d\\n\", flags());\n\
+            static const int modes[] = {FE_TONEAREST, FE_DOWNWARD, FE_UPWARD, FE_TOWARDZERO};\n\
+            for (int i = 0; i < 4; i++) {\n\
+            fesetround(modes[i]);\n\
+            float n = to_f(negative);\n\
+            double m = to_d(wide);\n\
+            float p = to_f(positive);\n\
+            fesetround(FE_TONEAREST);\n\
+            printf(\"%a %a %a\\n\", n, m, p);\n\
+            }\n\
+            return 0;\n\
+            }\n";
+        let expected = [
+            "1 1 1 1 1 1 1 1 1 0 1 0 1 1 1 2 1 2 1 0\n",
+            "-0x1.fffffep+102 -0x1.0000000000001p+133 0x1.fffffep+102\n",
+            "-0x1.fffffep+102 -0x1.0000000000001p+133 0x1.fffffcp+102\n",
+            "-0x1.fffffcp+102 -0x1p+133 0x1.fffffep+102\n",
+            "-0x1.fffffcp+102 -0x1p+133 0x1.fffffcp+102\n",
+        ]
+        .concat();
+        for identity in IDENTITIES {
+            builds_on_every_back_end(identity, source, &["-std=c23", "-lm"], &expected);
+        }
+    }
+
     /// `source` exits 0 and prints `expected` interpreted (unoptimized and
     /// with bcc's optimizer) and built by LLVM at `-O0` and `-O2` and by
     /// the native back end. Only on an x86-64 GNU/Linux host: bcc's default
@@ -595,6 +661,40 @@ mod tests {
             );
             assert_eq!(text(&output.stdout), expected, "{identity} {mode:?}");
         }
+        for mode in [&["-O0"][..], &["-O2"], &["--backend=native"]] {
+            let executable = temporary("program.exe");
+            let built = bcc(&[
+                &[identity, path, "-o", executable.to_str().unwrap()][..],
+                flags,
+                mode,
+            ]
+            .concat());
+            assert!(
+                built.status.success(),
+                "{identity} {mode:?}: {}",
+                text(&built.stderr)
+            );
+            let run = run_native(&mut Command::new(&executable)).unwrap();
+            assert_eq!(run.status.code(), Some(0), "{identity} {mode:?}");
+            assert_eq!(text(&run.stdout), expected, "{identity} {mode:?}");
+            std::fs::remove_file(executable).unwrap();
+        }
+        std::fs::remove_file(input).unwrap();
+    }
+
+    /// [`prints_on_every_back_end`] for the compiled back ends alone.
+    fn builds_on_every_back_end(identity: &str, source: &[u8], flags: &[&str], expected: &str) {
+        if !cfg!(all(
+            target_os = "linux",
+            target_arch = "x86_64",
+            target_env = "gnu"
+        )) {
+            eprintln!("skipping: the programs run on an x86-64 GNU/Linux host only");
+            return;
+        }
+        let input = temporary("program.c");
+        std::fs::write(&input, source).unwrap();
+        let path = input.to_str().unwrap();
         for mode in [&["-O0"][..], &["-O2"], &["--backend=native"]] {
             let executable = temporary("program.exe");
             let built = bcc(&[
