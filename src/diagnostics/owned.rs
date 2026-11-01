@@ -42,11 +42,12 @@ pub(crate) struct OwnedExplanation {
 )]
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct OwnedDiagnostic {
-    pub(crate) severity: ErrorSeverity,
-    pub(crate) message:  String,
-    labels:              Vec<(OwnedLabelSource, Option<String>, bool)>,
-    notes:               Vec<String>,
-    help:                Vec<String>,
+    pub(crate) severity:      ErrorSeverity,
+    pub(crate) message:       String,
+    pub(crate) option_suffix: bool,
+    labels:                   Vec<(OwnedLabelSource, Option<String>, bool)>,
+    notes:                    Vec<String>,
+    help:                     Vec<String>,
 }
 
 #[cfg(test)]
@@ -68,9 +69,10 @@ impl Diagnostic<'_> {
     )]
     pub(crate) fn to_owned_diagnostic(&self) -> OwnedDiagnostic {
         OwnedDiagnostic {
-            severity: self.severity,
-            message:  self.message.to_owned(),
-            labels:   self
+            severity:      self.severity,
+            message:       self.message.to_owned(),
+            option_suffix: self.option_suffix,
+            labels:        self
                 .labels
                 .iter()
                 .map(|label| {
@@ -82,8 +84,8 @@ impl Diagnostic<'_> {
                     (source, label.message.map(str::to_owned), label.primary)
                 })
                 .collect(),
-            notes:    self.notes.iter().map(|&note| note.to_owned()).collect(),
-            help:     self.help.iter().map(|&help| help.to_owned()).collect(),
+            notes:         self.notes.iter().map(|&note| note.to_owned()).collect(),
+            help:          self.help.iter().map(|&help| help.to_owned()).collect(),
         }
     }
 }
@@ -112,6 +114,7 @@ impl OwnedDiagnostic {
         Diagnostic {
             severity: self.severity,
             message: &self.message,
+            option_suffix: self.option_suffix,
             labels,
             notes,
             help,

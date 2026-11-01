@@ -188,7 +188,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             op,
             U::PreIncrement | U::PreDecrement | U::PostIncrement | U::PostDecrement
         ) {
-            if operand.category != ValueCategory::ModifiableLvalue {
+            if operand.category != ValueCategory::ModifiableLvalue
+                && !self.tcc_writes_read_only(e, &operand)
+            {
                 return self.invalid_expression(e, SemanticErrorKind::ExpectedModifiableLvalue);
             }
             self.note_parameter_write(operand.binding);
@@ -350,7 +352,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | _ => None,
         };
         if op == B::Assignment || compound.is_some() {
-            if left.category != ValueCategory::ModifiableLvalue {
+            if left.category != ValueCategory::ModifiableLvalue
+                && !self.tcc_writes_read_only(e, &left)
+            {
                 return self.invalid_expression(e, SemanticErrorKind::ExpectedModifiableLvalue);
             }
             self.note_parameter_write(left.binding);
@@ -1742,6 +1746,37 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         } else {
             ValueCategory::Lvalue
         }
+    }
+
+    /// Whether the TCC identity writes through `target`, an lvalue C does
+    /// not let the operator `e` modify, as TCC does rather than refusing
+    /// it: TCC stores to any complete object that is not an array, with
+    /// its warning "assignment of read-only location" when the object's
+    /// type is const-qualified and silently when only a member is (a
+    /// structure with a const member assigned whole). An array, a
+    /// function or an incomplete object stays an error.
+    fn tcc_writes_read_only(
+        &mut self,
+        e: &'tu Expression<'tu>,
+        target: &ExpressionInfo<'tu>,
+    ) -> bool {
+        if self.context.configuration.compiler_identity()
+            != crate::configuration::CompilerIdentity::Tcc
+            || target.category != ValueCategory::Lvalue
+            || !self.complete_object(target.ty)
+            || matches!(self.types.nodes[target.ty.index], TypeKind::Array(..))
+        {
+            return false;
+        }
+        if target.ty.qualifiers.contains(TypeQualifiers::CONST) {
+            self.error(
+                SemanticErrorKind::ReadOnlyLocation,
+                e.operator_source_vectors.unwrap_or(e.source_vectors),
+                None,
+                None,
+            );
+        }
+        true
     }
 
     /// Checks recursive const membership when classifying modifiable lvalues.

@@ -225,7 +225,7 @@ fn repeated_typedefs_are_a_c11_extension_before_c11() {
                     CompilerConfiguration::new(standard, ExtensionPolicy::Allow)
                         .with_gnu_extensions(gnu)
                 ),
-                [SemanticErrorKind::DuplicateDeclaration],
+                [SemanticErrorKind::TypedefRedeclaration],
                 "{standard:?} {gnu}"
             );
             assert_eq!(
@@ -245,7 +245,7 @@ fn repeated_typedefs_are_a_c11_extension_before_c11() {
             "void f(int n) { typedef int a[n]; typedef int a[n]; }",
             gnu17()
         ),
-        [SemanticErrorKind::DuplicateDeclaration]
+        [SemanticErrorKind::TypedefRedeclaration]
     );
 }
 
@@ -552,8 +552,8 @@ fn msvc_sized_integers_are_the_standard_integer_types() {
             msvc.with_target(crate::target::Target::WindowsMsvc)
         ),
         [
-            SemanticErrorKind::DuplicateDeclaration,
-            SemanticErrorKind::DuplicateDeclaration,
+            SemanticErrorKind::TypedefRedeclaration,
+            SemanticErrorKind::TypedefRedeclaration,
             SemanticErrorKind::InvalidArrayBound,
         ]
     );

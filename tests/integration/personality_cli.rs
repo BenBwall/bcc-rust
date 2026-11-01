@@ -510,11 +510,54 @@ mod tests {
                 "int main(void){ int a[2]; a = 0; return 0; }",
                 "e.c:1: error: lvalue expected\n",
             ),
+            (
+                "int g(void){ 1 = 2; return 0; }",
+                "e.c:1: error: lvalue expected\n",
+            ),
+            (
+                "int main(void){ for (;;) {} continue; }",
+                "e.c:1: error: cannot continue\n",
+            ),
+            (
+                "typedef int T; typedef float T;",
+                "e.c:1: error: incompatible redefinition of 'T'\n",
+            ),
+            (
+                "int f(void); float f(void);",
+                "e.c:1: error: incompatible types for redefinition of 'f'\n",
+            ),
+            (
+                "int x = 1; int x = 2;",
+                "e.c:1: error: redefinition of 'x'\n",
+            ),
+            // A user's text keeps what only looks like an option.
+            (
+                "#warning see [-Wfoo]\nint x;",
+                "e.c:1: warning: #warning see [-Wfoo]\n",
+            ),
         ] {
             directory.write("e.c", &format!("{source}\n"));
             let output = directory.bcc("--tcc-mode", &["-c", "e.c"]);
             assert_eq!(stderr(&output), expected, "{source}");
         }
+        // TCC writes through a const-qualified lvalue with a warning, and
+        // assigns a structure with a const member silently.
+        directory.write(
+            "ro.c",
+            "#include <stdio.h>\nstruct S { const int m; int n; } s1 = {1, 2}, s2 = {3, 4};\nint \
+             main(void) {\n  const int c = 1;\n  int *q = (int *)&c;\n  c = 5;\n  s1 = s2;\n  \
+             printf(\"%d %d %d\\n\", *q, s1.m, s1.n);\n  return 0;\n}\n",
+        );
+        let output = directory.bcc("--tcc-mode", &["ro.c", "-o", "ro"]);
+        assert_eq!(
+            stderr(&output),
+            "ro.c:6: warning: assignment of read-only location\n"
+        );
+        let run = Command::new(directory.path("ro")).output().unwrap();
+        assert_eq!(stdout(&run), "5 3 4\n");
+        // Other identities keep C's constraint.
+        let gcc = directory.bcc("--gcc-mode", &["-c", "ro.c"]);
+        assert!(!gcc.status.success());
     }
 
     /// A sign after `p` continues a preprocessing number from C99. Before

@@ -70,12 +70,11 @@ impl Renderer {
             };
         }
         // TCC names no warning options, so a message drops the `[-W…]`
-        // suffix GCC and Clang add.
+        // suffix bcc appended as GCC and Clang print it, and only that.
         let message = match format {
-            | DiagnosticFormat::Tcc => diagnostic
+            | DiagnosticFormat::Tcc if diagnostic.option_suffix => diagnostic
                 .message
                 .rfind(" [-W")
-                .filter(|_| diagnostic.message.ends_with(']'))
                 .map_or(diagnostic.message, |at| &diagnostic.message[..at]),
             | _ => diagnostic.message,
         };

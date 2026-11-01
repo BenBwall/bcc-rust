@@ -261,6 +261,10 @@ pub(crate) enum SemanticErrorKind {
     InvalidUnaryOperand,
     /// C99: §6.5.16p2, p. 91; PDF p. 103.
     ExpectedModifiableLvalue,
+    /// TCC's warning for a write through a const-qualified lvalue, which
+    /// it carries out (the TCC identity only). Extension to C99 §6.5.16p2,
+    /// p. 91; PDF p. 103.
+    ReadOnlyLocation,
     /// C99: §6.5.2.1p1, p. 70; PDF p. 82.
     InvalidSubscript,
     /// C99: §6.5.5p2, p. 82; PDF p. 94.
@@ -394,6 +398,10 @@ pub(crate) enum SemanticErrorKind {
     IntrinsicDefinition,
     /// C99: §6.7p3, p. 97; PDF p. 109.
     DuplicateDeclaration,
+    /// [`Self::DuplicateDeclaration`] of a typedef name as another typedef
+    /// of a different type, which TCC words apart. C99: §6.7p3, p. 97;
+    /// PDF p. 109.
+    TypedefRedeclaration,
     /// C99: §6.2.2p4-7, pp. 30-31; PDF pp. 42-43.
     ConflictingLinkage,
     /// C99: §6.7.2.3p2, p. 106; PDF p. 118.
@@ -885,6 +893,7 @@ impl SemanticErrorKind {
             | Self::InvalidUnaryOperand | Self::InvalidAdditiveOperands =>
                 "operand type is not allowed here",
             | Self::ExpectedModifiableLvalue => "not a modifiable lvalue",
+            | Self::ReadOnlyLocation => "writes a read-only object",
             | Self::InvalidSubscript => "invalid subscript operands",
             | Self::InvalidArithmeticOperands => "operands are not arithmetic",
             | Self::InvalidIntegerOperands => "operands are not integers",
@@ -935,7 +944,7 @@ impl SemanticErrorKind {
             | Self::IncompatibleDeclaration | Self::IncompatibleIntrinsicDeclaration =>
                 "conflicting type",
             | Self::IntrinsicDefinition => "defines a compiler intrinsic",
-            | Self::DuplicateDeclaration => "declared again here",
+            | Self::DuplicateDeclaration | Self::TypedefRedeclaration => "declared again here",
             | Self::ConflictingLinkage => "linkage conflicts with the previous declaration",
             | Self::TagKindMismatch => "different tag kind",
             | Self::TagRedefinition | Self::DuplicateDefinition => "defined again here",
@@ -1660,6 +1669,11 @@ impl SemanticErrorKind {
                 "operator requires a modifiable lvalue",
                 "C99 §6.5.16p2: assignment and increment operators require a modifiable lvalue",
             ),
+            | Self::ReadOnlyLocation => (
+                "assignment of read-only location",
+                "C99 §6.5.16p2: assignment and increment operators require a modifiable lvalue; \
+                 TCC writes the object anyway",
+            ),
             | Self::InvalidSubscript => (
                 "subscript requires an integer and a pointer to complete object type",
                 "C99 §6.5.2.1p1: one operand is integer and the other points to a complete object \
@@ -1932,7 +1946,7 @@ impl SemanticErrorKind {
                 "the compiler implements this Microsoft intrinsic, so a program declares it but \
                  does not define it",
             ),
-            | Self::DuplicateDeclaration => (
+            | Self::DuplicateDeclaration | Self::TypedefRedeclaration => (
                 "identifier with no linkage is declared more than once",
                 "C99 §6.7p3: a no-linkage identifier has at most one declaration in the same scope",
             ),
@@ -2246,6 +2260,12 @@ impl SemanticError {
                 format_in!(arena, "'{name}' undeclared"),
             | (SemanticErrorKind::DuplicateDeclaration, Some(name)) =>
                 format_in!(arena, "redeclaration of '{name}'"),
+            | (SemanticErrorKind::TypedefRedeclaration, Some(name)) =>
+                format_in!(arena, "incompatible redefinition of '{name}'"),
+            | (SemanticErrorKind::IncompatibleDeclaration, Some(name)) =>
+                format_in!(arena, "incompatible types for redefinition of '{name}'"),
+            | (SemanticErrorKind::DuplicateDefinition, Some(name)) =>
+                format_in!(arena, "redefinition of '{name}'"),
             | (SemanticErrorKind::UndefinedLabel, Some(name)) =>
                 format_in!(arena, "label '{name}' used but not defined"),
             | (SemanticErrorKind::BreakOutsideLoopOrSwitch, _) => "cannot break",
@@ -2321,7 +2341,9 @@ impl ToDiagnostic for SemanticError {
         } else {
             message
         };
+        let mut suffixed = false;
         let message = if self.kind == SemanticErrorKind::PredefinedOutsideFunction {
+            suffixed = true;
             format_in!(
                 arena,
                 "{message} [-Wpredefined-identifier-outside-function]"
@@ -2335,12 +2357,22 @@ impl ToDiagnostic for SemanticError {
         };
         let message =
             if let Some(group) = group.and_then(crate::configuration::DiagnosticGroup::name) {
+                suffixed = true;
                 format_in!(arena, "{message} [-W{group}]")
             } else {
                 message
             };
-        let message = self.tcc_message(context, arena).unwrap_or(message);
-        let mut diagnostic = Explanation::new(arena, message)
+        let (message, suffixed) = match self.tcc_message(context, arena) {
+            | Some(tcc) => (tcc, false),
+            | None => (message, suffixed),
+        };
+        let explanation = Explanation::new(arena, message);
+        let explanation = if suffixed {
+            explanation.option_suffix()
+        } else {
+            explanation
+        };
+        let mut diagnostic = explanation
             .label(self.kind.label())
             .note(note)
             .at(self.severity(), source);
@@ -2404,6 +2436,7 @@ impl GetSeverity for SemanticError {
                 | SemanticErrorKind::PragmaPackShow(_)
                 | SemanticErrorKind::PragmaPackIgnored
                 | SemanticErrorKind::EmptyCaseRange
+                | SemanticErrorKind::ReadOnlyLocation
                 | SemanticErrorKind::MissingReturnValueWarning
                 | SemanticErrorKind::PredefinedOutsideFunction
                 | SemanticErrorKind::InvalidAtomicOrder

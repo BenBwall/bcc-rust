@@ -23,11 +23,14 @@ use crate::{
 /// it was built in.
 #[derive(Debug)]
 pub(crate) struct Diagnostic<'d> {
-    pub(crate) severity: ErrorSeverity,
-    pub(crate) message:  &'d str,
-    pub(super) labels:   ArenaVec<'d, Label<'d>>,
-    pub(super) notes:    ArenaVec<'d, &'d str>,
-    pub(super) help:     ArenaVec<'d, &'d str>,
+    pub(crate) severity:      ErrorSeverity,
+    pub(crate) message:       &'d str,
+    /// The message ends with the ` [-WNAME]` of the warning option that
+    /// controls it, which bcc appended (see [`Explanation::option_suffix`]).
+    pub(crate) option_suffix: bool,
+    pub(super) labels:        ArenaVec<'d, Label<'d>>,
+    pub(super) notes:         ArenaVec<'d, &'d str>,
+    pub(super) help:          ArenaVec<'d, &'d str>,
 }
 
 impl<'d> Diagnostic<'d> {
@@ -101,9 +104,19 @@ pub(crate) struct Explanation<'d> {
     pub(crate) label:   Option<&'d str>,
     pub(crate) notes:   ArenaVec<'d, &'d str>,
     pub(crate) help:    ArenaVec<'d, &'d str>,
+    option_suffix:      bool,
 }
 
 impl<'d> Explanation<'d> {
+    /// Marks the message as ending with the ` [-WNAME]` bcc appended for
+    /// the warning option that controls it, as GCC and Clang print it,
+    /// which the TCC format leaves out: TCC names no options. User text
+    /// that merely ends that way (`#warning see [-Wfoo]`) keeps it.
+    pub(crate) fn option_suffix(mut self) -> Self {
+        self.option_suffix = true;
+        self
+    }
+
     pub(crate) fn label(mut self, label: &'d str) -> Self {
         self.label = Some(label);
         self
@@ -124,6 +137,7 @@ impl<'d> Explanation<'d> {
         Diagnostic {
             severity,
             message: self.message,
+            option_suffix: self.option_suffix,
             labels: ArenaVec::new_in(self.arena),
             notes: self.notes,
             help: self.help,
@@ -138,6 +152,7 @@ impl<'d> Explanation<'d> {
             label: None,
             notes: ArenaVec::new_in(arena),
             help: ArenaVec::new_in(arena),
+            option_suffix: false,
         }
     }
 

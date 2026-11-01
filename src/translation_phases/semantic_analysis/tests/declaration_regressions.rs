@@ -342,7 +342,7 @@ fn repeated_typedefs_reject_variably_modified_types() {
                     assert!(matches!(
                         errors[0],
                         TranslationError::Semantic(SemanticError {
-                            kind: SemanticErrorKind::DuplicateDeclaration,
+                            kind: SemanticErrorKind::TypedefRedeclaration,
                             ..
                         })
                     ));
