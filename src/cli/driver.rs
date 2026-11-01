@@ -177,12 +177,26 @@ pub(super) fn run(args: &Cli, matches: &ArgMatches) -> Result<i32, MainError> {
         },
         | Stage::Preprocess =>
             for input in &inputs {
-                // A dependency job reads assembly no more than before.
+                // The bundled clang preprocesses assembly, and writes its
+                // rules: alone for a dependency job, otherwise beside the
+                // text for `-MD`.
                 if let Input::Assembly(assembly) = *input
                     && assembly.preprocessed()
-                    && args.driver.dependencies.is_none()
                 {
-                    status = combine(status, preprocess_assembly(args, assembly, output));
+                    let only = args.driver.dependencies.is_some();
+                    let names = if only {
+                        DependencyNames::default()
+                    } else {
+                        DependencyNames {
+                            file:   output,
+                            target: None,
+                        }
+                    };
+                    let rules = dependencies::request_at(args, Some(assembly.path), only, names)?
+                        .map(|rules| rules.clang_arguments(args, only))
+                        .unwrap_or_default();
+                    let text = if only { None } else { output };
+                    status = combine(status, preprocess_assembly(args, assembly, text, &rules));
                     continue;
                 }
                 match input.c_source() {
@@ -223,7 +237,15 @@ pub(super) fn run(args: &Cli, matches: &ArgMatches) -> Result<i32, MainError> {
                     | Input::Assembly(assembly) =>
                         if stage == Stage::Compile {
                             let object = output_or_stem(output, assembly.path, extension)?;
-                            status = combine(status, assemble(args, assembly, &object));
+                            let names = DependencyNames {
+                                file:   Some(&object),
+                                target: Some(&object),
+                            };
+                            let rules =
+                                dependencies::request_at(args, Some(assembly.path), false, names)?
+                                    .map(|rules| rules.clang_arguments(args, false))
+                                    .unwrap_or_default();
+                            status = combine(status, assemble(args, assembly, &object, &rules));
                         },
                     | Input::C(source) => {
                         let path = output_or_stem(output, source.path(), extension)?;

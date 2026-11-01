@@ -976,13 +976,39 @@ mod tests {
         let sx = project.bcc(&args);
         succeeds(&sx);
         assert!(stdout(&sx).contains("movl $7"), "{}", stdout(&sx));
-        // A dependency job does not print the assembly's text. It writes no
-        // rule for it either, where GCC writes `f.o: f.S inc.h`.
+        // A dependency job writes the assembly's rule, as GCC does, and
+        // `-MD` writes it beside the object, for the same targets as a C
+        // source's.
         let mut args = vec!["-MM", "f.S"];
         args.extend(options);
         let rules = project.bcc(&args);
         succeeds(&rules);
-        assert!(!stdout(&rules).contains("movl"), "{}", stdout(&rules));
+        // Rules name a header as it was found, with the host's separator.
+        let inc = if cfg!(windows) {
+            r"inc\inc.h"
+        } else {
+            "inc/inc.h"
+        };
+        assert_eq!(stdout(&rules), format!("f.o: f.S forced.h {inc}\n"));
+        let mut args = vec!["-MM", "-MT", "tgt", "-MP", "f.S"];
+        args.extend(options);
+        let phony = project.bcc(&args);
+        succeeds(&phony);
+        assert_eq!(
+            stdout(&phony),
+            format!("tgt: f.S forced.h {inc}\nforced.h:\n{inc}:\n")
+        );
+        let mut args = vec!["-c", "-MMD", "f.S", "-o", "deps.o"];
+        args.extend(options);
+        succeeds(&project.bcc(&args));
+        // The bundled clang writes the file in text mode, with CRLF line
+        // ends on Windows, as Clang does there.
+        assert_eq!(
+            std::fs::read_to_string(project.path("deps.d"))
+                .unwrap()
+                .replace("\r\n", "\n"),
+            format!("deps.o: f.S forced.h {inc}\n")
+        );
         // Clang's warnings reach stderr, and `-w` and `-Werror` apply.
         std::fs::write(
             project.path("w.S"),
@@ -1036,6 +1062,11 @@ mod tests {
             assembled.stdout,
             std::fs::read(project.path("s.o")).unwrap()
         );
+        // An input that is a file named `-` is not the output `-`.
+        std::fs::write(project.path("-"), "int g(void) { return 1; }\n").unwrap();
+        let named = project.bcc(&["-x", "c", "-c", "./-", "-o", "-"]);
+        succeeds(&named);
+        assert_ne!(named.stdout.len(), 0);
         // A failed job leaves alone a file that happens to be named `-`.
         std::fs::write(project.path("-"), "precious\n").unwrap();
         std::fs::write(project.path("bad.c"), "int f( {\n").unwrap();

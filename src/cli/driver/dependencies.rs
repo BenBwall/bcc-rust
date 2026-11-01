@@ -81,6 +81,19 @@ pub(super) fn request(
     only: bool,
     names: DependencyNames<'_>,
 ) -> Result<Option<DependencyRequest>, MainError> {
+    let path = (!matches!(source, Source::Text(_))).then(|| source.path());
+    request_at(args, path, only, names)
+}
+
+/// [`request`] for the input file `path`, or for text from stdin (`None`):
+/// also for an assembly input, whose rules the bundled clang writes from
+/// [`DependencyRequest::clang_arguments`].
+pub(super) fn request_at(
+    args: &Cli,
+    path: Option<&Path>,
+    only: bool,
+    names: DependencyNames<'_>,
+) -> Result<Option<DependencyRequest>, MainError> {
     let driver = &args.driver;
     let files = if only {
         driver.dependencies
@@ -90,18 +103,18 @@ pub(super) fn request(
     let Some(files) = files else {
         return Ok(None);
     };
-    let default_target = match named(names.target) {
-        | Some(target) => target.into(),
-        | None if matches!(source, Source::Text(_)) => "input.o".into(),
-        | None => output_or_stem(None, source.path(), "o")?,
+    let default_target = match (named(names.target), path) {
+        | (Some(target), _) => target.into(),
+        | (None, None) => "input.o".into(),
+        | (None, Some(path)) => output_or_stem(None, path, "o")?,
     };
     let destination = match (&driver.dependency_file, only) {
         | (Some(file), _) => named(Some(file.as_path())).map(Into::into),
         | (None, true) => named(args.code_generation.output_path.as_deref()).map(Into::into),
-        | (None, false) => Some(match named(names.file) {
-            | Some(file) => file.with_extension("d"),
-            | None if matches!(source, Source::Text(_)) => "input.d".into(),
-            | None => output_or_stem(None, source.path(), "d")?,
+        | (None, false) => Some(match (named(names.file), path) {
+            | (Some(file), _) => file.with_extension("d"),
+            | (None, None) => "input.d".into(),
+            | (None, Some(path)) => output_or_stem(None, path, "d")?,
         }),
     };
     Ok(Some(DependencyRequest {
@@ -109,6 +122,46 @@ pub(super) fn request(
         destination,
         default_target,
     }))
+}
+
+impl DependencyRequest {
+    /// The clang options that write these rules for an input the bundled
+    /// clang reads: `-M`/`-MM` for a dependency job (`only`), `-MD`/`-MMD`
+    /// beside its output, to the same file and for the same targets as a C
+    /// source's rules; the default target is quoted with `-MQ`, as GCC
+    /// quotes it. Clang writes them in GCC's form.
+    #[expect(
+        clippy::disallowed_types,
+        reason = "Startup builds the clang command line beside clap's arguments."
+    )]
+    pub(super) fn clang_arguments(&self, args: &Cli, only: bool) -> Vec<std::ffi::OsString> {
+        let mut options: Vec<std::ffi::OsString> = Vec::new();
+        options.push(
+            match (only, self.files) {
+                | (true, DependencyFiles::All) => "-M",
+                | (true, DependencyFiles::User) => "-MM",
+                | (false, DependencyFiles::All) => "-MD",
+                | (false, DependencyFiles::User) => "-MMD",
+            }
+            .into(),
+        );
+        if let Some(file) = &self.destination {
+            options.push("-MF".into());
+            options.push(file.into());
+        }
+        if args.driver.dependency_target.is_empty() {
+            options.push("-MQ".into());
+            options.push(self.default_target.as_os_str().into());
+        }
+        for target in &args.driver.dependency_target {
+            options.push("-MT".into());
+            options.push(target.into());
+        }
+        if args.driver.phony_dependencies {
+            options.push("-MP".into());
+        }
+        options
+    }
 }
 
 /// `path`, unless it is `-`, which names stdout rather than a file.
