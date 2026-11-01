@@ -644,8 +644,10 @@ pub fn Deck(
         };
         let view = f64::from(element.client_width());
         let left = f64::from(element.scroll_left());
-        if x < left + view * 0.15 || x > left + view * 0.7 {
-            let target = (x - view * 0.6).max(0.0);
+        // On a narrow tape the head keeps 120 px to its right, room for
+        // "NOT YET RUN" at the end of the run.
+        if x < left + view * 0.15 || x > left + (view * 0.7).min(view - 120.0) {
+            let target = (x - (view * 0.6).min(view - 140.0)).max(0.0);
             let glide = !running && (target - left).abs() < view && !reduced_motion();
             let options = web_sys::ScrollToOptions::new();
             options.set_left(target.round());
