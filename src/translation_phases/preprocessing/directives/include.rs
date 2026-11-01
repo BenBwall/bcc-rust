@@ -241,18 +241,24 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
     ) {
         let guarded = include_guard(header, self.context)
             .is_some_and(|guard| self.state.macro_definitions.contains_key(&guard));
-        // GCC's `-H` leaves out its default header (`Context::preinclude`),
-        // the only `<...>` name the command line includes, and the headers
-        // it includes, which nest deeper until the next listed include.
-        if angled && Some(includer) == self.state.command_line_file {
+        // The headers the command line includes, the default header
+        // (`Context::preinclude`) and the `-include` files, are forced, and
+        // so are the headers they include, which nest deeper until the next
+        // include of the main file: GCC's and Clang's `-H` leave them out,
+        // while `/showIncludes` lists them, as clang-cl does `/FI`'s.
+        let forced = if Some(includer) == self.state.command_line_file {
             self.state.unlisted_depth = Some(depth);
-            return;
-        }
-        match self.state.unlisted_depth {
-            | Some(unlisted) if depth > unlisted => return,
-            | Some(_) => self.state.unlisted_depth = None,
-            | None => {},
-        }
+            true
+        } else {
+            match self.state.unlisted_depth {
+                | Some(unlisted) if depth > unlisted => true,
+                | Some(_) => {
+                    self.state.unlisted_depth = None;
+                    false
+                },
+                | None => false,
+            }
+        };
         if guarded {
             return;
         }
@@ -277,7 +283,12 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
                     .rev()
                     .find(|entry| entry.file == includer)
                     .is_some_and(|entry| entry.here));
-        entries.push(IncludeEntry { file, depth, here });
+        entries.push(IncludeEntry {
+            file,
+            depth,
+            here,
+            forced,
+        });
     }
 
     /// Records a header that cannot be found as one to be generated, under
