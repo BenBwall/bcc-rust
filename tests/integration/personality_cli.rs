@@ -467,6 +467,102 @@ mod tests {
         }
     }
 
+    /// TCC names no warning options, so its diagnostics carry no `[-W…]`
+    /// suffix, as GCC's and Clang's do.
+    #[test]
+    fn tcc_diagnostics_name_no_warning_options() {
+        let directory = Directory::new();
+        directory.write(
+            "warn.c",
+            "int main(void) { long b = 1; char *p = b; return 0; }\n",
+        );
+        let tcc = directory.bcc("--tcc-mode", &["-c", "warn.c"]);
+        succeeds(&tcc);
+        assert!(
+            stderr(&tcc).starts_with("warn.c:1: warning: "),
+            "{}",
+            stderr(&tcc)
+        );
+        assert!(!stderr(&tcc).contains("[-W"), "{}", stderr(&tcc));
+        let gcc = directory.bcc("--gcc-mode", &["-c", "warn.c"]);
+        assert!(stderr(&gcc).contains("[-W"), "{}", stderr(&gcc));
+        // The diagnostics TCC's users meet most read in TCC's words (TCC mob
+        // e23dabe), each stopping the compilation at the first error.
+        for (source, expected) in [
+            (
+                "int main(void){ return x; }",
+                "e.c:1: error: 'x' undeclared\n",
+            ),
+            (
+                "int main(void){ int *p; char *q = p; return 0; }",
+                "e.c:1: warning: assignment from incompatible pointer type\n",
+            ),
+            (
+                "int main(void){ int a; int a; return 0; }",
+                "e.c:1: error: redeclaration of 'a'\n",
+            ),
+            ("int main(void){ break; }", "e.c:1: error: cannot break\n"),
+            (
+                "int main(void){ goto L; }",
+                "e.c:1: error: label 'L' used but not defined\n",
+            ),
+            (
+                "int main(void){ int a[2]; a = 0; return 0; }",
+                "e.c:1: error: lvalue expected\n",
+            ),
+            (
+                "int g(void){ 1 = 2; return 0; }",
+                "e.c:1: error: lvalue expected\n",
+            ),
+            (
+                "int main(void){ for (;;) {} continue; }",
+                "e.c:1: error: cannot continue\n",
+            ),
+            (
+                "typedef int T; typedef float T;",
+                "e.c:1: error: incompatible redefinition of 'T'\n",
+            ),
+            (
+                "int f(void); float f(void);",
+                "e.c:1: error: incompatible types for redefinition of 'f'\n",
+            ),
+            (
+                "int x = 1; int x = 2;",
+                "e.c:1: error: redefinition of 'x'\n",
+            ),
+            // A user's text keeps what only looks like an option.
+            (
+                "#warning see [-Wfoo]\nint x;",
+                "e.c:1: warning: #warning see [-Wfoo]\n",
+            ),
+        ] {
+            directory.write("e.c", &format!("{source}\n"));
+            let output = directory.bcc("--tcc-mode", &["-c", "e.c"]);
+            assert_eq!(stderr(&output), expected, "{source}");
+        }
+        // TCC writes through a const-qualified lvalue with a warning, and
+        // assigns a structure with a const member silently.
+        directory.write(
+            "ro.c",
+            "int printf(const char *, ...);\nstruct S { const int m; int n; } s1 = {1, 2}, s2 = \
+             {3, 4};\nint main(void) {\n  const int c = 1;\n  int *q = (int *)&c;\n  c = 5;\n  s1 \
+             = s2;\n  printf(\"%d %d %d\\n\", *q, s1.m, s1.n);\n  return 0;\n}\n",
+        );
+        let output = directory.bcc("--tcc-mode", &["-c", "ro.c"]);
+        assert_eq!(
+            stderr(&output),
+            "ro.c:6: warning: assignment of read-only location\n"
+        );
+        if cfg!(all(target_os = "linux", target_env = "gnu")) {
+            succeeds(&directory.bcc("--tcc-mode", &["-w", "ro.c", "-o", "ro"]));
+            let run = Command::new(directory.path("ro")).output().unwrap();
+            assert_eq!(stdout(&run), "5 3 4\n");
+        }
+        // Other identities keep C's constraint.
+        let gcc = directory.bcc("--gcc-mode", &["-c", "ro.c"]);
+        assert!(!gcc.status.success());
+    }
+
     /// A sign after `p` continues a preprocessing number from C99. Before
     /// C99, GCC reads it so only in its GNU modes and Clang only after a
     /// hexadecimal prefix, so strict C90 splits `0x1p+f` (GCC's
@@ -3494,10 +3590,7 @@ mod tests {
         // A failing input stops the others, and says so once.
         let output = directory.bcc("--tcc-mode", &["-c", "bad.c", "b.c", "-MD"]);
         assert_eq!(output.status.code(), Some(1));
-        assert_eq!(
-            stderr(&output),
-            "bad.c:1: error: identifier has no visible declaration: `y`\n"
-        );
+        assert_eq!(stderr(&output), "bad.c:1: error: 'y' undeclared\n");
         let output = directory.bcc("--tcc-mode", &["-c", "a.c", "-lm"]);
         assert_eq!(output.status.code(), Some(1));
         assert_eq!(
@@ -3693,15 +3786,14 @@ mod tests {
         succeeds(&output);
         assert_eq!(
             stderr(&output),
-            "ptr.c:1: warning: incompatible integer and pointer conversion \
-             [-Wint-conversion]\nptr.c:1: warning: incompatible pointer types in conversion \
-             [-Wincompatible-pointer-types]\n"
+            "ptr.c:1: warning: incompatible integer and pointer conversion\nptr.c:1: warning: \
+             assignment from incompatible pointer type\n"
         );
         let output = directory.bcc("--tcc-mode", &["-Werror", "-c", "ptr.c"]);
         assert_eq!(output.status.code(), Some(1));
         assert_eq!(
             stderr(&output),
-            "ptr.c:1: error: incompatible integer and pointer conversion [-Wint-conversion]\n"
+            "ptr.c:1: error: incompatible integer and pointer conversion\n"
         );
         // `$` follows `-f[no-]dollars-in-identifiers`, in every personality.
         directory.write("dollar.c", "int a$b = 3;\n");

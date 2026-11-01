@@ -1107,6 +1107,7 @@ impl PreprocessorErrorType<'_> {
                 "unknown escape sequence `\\{}` [-Wunknown-escape-sequence]",
                 character.escape_debug()
             ))
+            .option_suffix()
             .label("contains an escape C99 does not define")
             .note(ESCAPE_LIST_NOTE)
             .help(format_in!(
@@ -1315,6 +1316,7 @@ impl PreprocessorErrorType<'_> {
                 arena,
                 "unknown `STDC` pragma `{argument}` [-Wunknown-pragmas]"
             ))
+            .option_suffix()
             .label("not a standard pragma")
             .note(
                 "C99 §6.10.6: the standard pragmas are `FP_CONTRACT`, `FENV_ACCESS`, and \
@@ -1384,16 +1386,23 @@ impl PreprocessorErrorType<'_> {
             | Self::IllegalCharacterEncoding {
                 character,
                 prefixed,
-            } => new(format_in!(
-                arena,
-                "illegal character encoding in {} literal{}",
-                if *character { "character" } else { "string" },
+            } => ({
+                let explanation = new(format_in!(
+                    arena,
+                    "illegal character encoding in {} literal{}",
+                    if *character { "character" } else { "string" },
+                    if *prefixed {
+                        ""
+                    } else {
+                        " [-Winvalid-source-encoding]"
+                    }
+                ));
                 if *prefixed {
-                    ""
+                    explanation
                 } else {
-                    " [-Winvalid-source-encoding]"
+                    explanation.option_suffix()
                 }
-            ))
+            })
             .label("holds bytes that are not UTF-8")
             .note(if *prefixed {
                 "a prefixed literal must spell characters"

@@ -1058,8 +1058,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         );
                     }
                 } else if !declared_nested {
+                    let both_typedefs = kind == BindingKind::Typedef && old.kind == kind;
                     self.error(
-                        SemanticErrorKind::DuplicateDeclaration,
+                        if both_typedefs {
+                            SemanticErrorKind::TypedefRedeclaration
+                        } else {
+                            SemanticErrorKind::DuplicateDeclaration
+                        },
                         name.source_vectors,
                         Some(name.name),
                         Some(old.name.source_vectors),
