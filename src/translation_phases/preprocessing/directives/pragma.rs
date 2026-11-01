@@ -126,6 +126,13 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                             consumed_newline = true;
                             break 'base;
                         },
+                        | "scalar_storage_order"
+                            if self.context.configuration.compiler_identity()
+                                == CompilerIdentity::Gcc =>
+                        {
+                            consumed_newline = self.pragma_storage_order(token);
+                            break 'base;
+                        },
                         | "once" => {
                             if !self.current_is_header() {
                                 self.context.preprocessor_error(PreprocessorError {
@@ -452,6 +459,53 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
             operands: operands.leak(),
             source,
         });
+    }
+
+    /// GCC's `#pragma scalar_storage_order`, kept for semantic analysis
+    /// with its output-token ordinal. As in GCC, the operand is not
+    /// macro-replaced and only its first identifier counts: `big` and
+    /// `little`, written as `big-endian` and `little-endian`, or `default`.
+    /// Anything else is ignored with GCC's warning. Returns whether the
+    /// new-line was consumed. C99: §6.10.6p1, p. 159; PDF p. 171.
+    /// GCC: <https://gcc.gnu.org/onlinedocs/gcc/Scalar-Storage-Order-Pragmas.html>.
+    fn pragma_storage_order(&mut self, pragma: PreprocessorToken) -> bool {
+        use crate::translation_phases::pragma_storage_order::{
+            StorageOrder,
+            StorageOrderPragma,
+        };
+        let Some(operand) = Self::next_ignore_whitespace(&mut self.tokenizer, self.context) else {
+            return false;
+        };
+        let order = if operand.kind.is_identifier() {
+            match self.context.string_cache.at(operand.contents) {
+                | "default" => Ok(StorageOrder::Default),
+                | "big" => Ok(StorageOrder::BigEndian),
+                | "little" => Ok(StorageOrder::LittleEndian),
+                | _ => Err(false),
+            }
+        } else {
+            Err(true)
+        };
+        match order {
+            | Ok(order) => {
+                let source = self.context.retain_token_source(pragma.source_vectors);
+                self.context.storage_order_pragmas.push(StorageOrderPragma {
+                    position: self.context.preprocessed_tokens,
+                    order,
+                    source,
+                });
+            },
+            | Err(missing) => self.context.preprocessor_error(PreprocessorError {
+                error_type:     PreprocessorErrorType::StorageOrderPragmaOperand { missing },
+                source_vectors: pragma.source_vectors,
+            }),
+        }
+        if operand.kind != PreprocessorTokenType::Newline {
+            let line_state = (self.last_was_newline, self.current_is_newline);
+            self.skip_until_newline();
+            (self.last_was_newline, self.current_is_newline) = line_state;
+        }
+        true
     }
 
     /// `#pragma GCC warning` and `#pragma GCC error` report their operand,

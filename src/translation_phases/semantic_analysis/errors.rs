@@ -566,6 +566,19 @@ pub(crate) enum SemanticErrorKind {
     /// Variable Attributes", aligned.
     /// <https://gcc.gnu.org/onlinedocs/gcc/Common-Variable-Attributes.html>
     ExcessiveAlignment,
+    /// A record that GCC's identity defines in big-endian scalar storage
+    /// order, by `scalar_storage_order` or `#pragma scalar_storage_order`,
+    /// which bcc does not implement: every bcc target is little-endian, and
+    /// ignoring the order would store the record's scalars in the other
+    /// byte order than GCC's. GNU extension: GCC manual, "Common Type
+    /// Attributes", `scalar_storage_order`.
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Common-Type-Attributes.html>
+    UnsupportedScalarStorageOrder,
+    /// GCC's `scalar_storage_order` without exactly one argument.
+    StorageOrderArgumentCount,
+    /// GCC's `scalar_storage_order` with an argument other than the string
+    /// `"big-endian"` or `"little-endian"`.
+    StorageOrderArgument,
     InvalidModeAttribute,
     /// A `transparent_union` attribute ignored, as Clang warns: it names no
     /// union definition, or the union has no member, a floating or vector
@@ -793,6 +806,9 @@ impl SemanticErrorKind {
             | Self::InvalidAlignmentAttribute => "alignment must be a power-of-two constant",
             | Self::InvalidStandardAlignment => "invalid alignment specifier",
             | Self::ExcessiveAlignment => "requested alignment exceeds maximum 268435456",
+            | Self::UnsupportedScalarStorageOrder => "big-endian storage order is not supported",
+            | Self::StorageOrderArgumentCount => "expected one argument",
+            | Self::StorageOrderArgument => "expected \"big-endian\" or \"little-endian\"",
             | Self::InvalidModeAttribute => "invalid scalar machine mode",
             | Self::IgnoredTransparentUnion => "this union cannot be made transparent",
             | Self::TransparentUnionNotUnion => "not a union type",
@@ -1331,6 +1347,21 @@ impl SemanticErrorKind {
             | Self::InvalidStandardAlignment => (
                 "invalid alignment specifier",
                 "C11 §6.7.5p2-6: alignment requires an eligible object declaration and must be zero or a valid alignment that does not weaken its natural alignment",
+            ),
+            | Self::UnsupportedScalarStorageOrder => (
+                "big-endian scalar storage order is not supported: bcc stores scalars in the \
+                 target's little-endian order, which would differ from GCC's",
+                "GCC scalar_storage_order: the scalar members of a structure or union defined with \
+                 it, or under `#pragma scalar_storage_order`, are stored in the given byte order",
+            ),
+            | Self::StorageOrderArgumentCount => (
+                "wrong number of arguments specified for `scalar_storage_order` attribute",
+                "GCC scalar_storage_order takes one argument, \"big-endian\" or \"little-endian\"",
+            ),
+            | Self::StorageOrderArgument => (
+                "attribute `scalar_storage_order` argument must be one of \"big-endian\" or \
+                 \"little-endian\"",
+                "GCC scalar_storage_order takes one argument, \"big-endian\" or \"little-endian\"",
             ),
             | Self::ExcessiveAlignment => (
                 "requested alignment exceeds maximum 268435456",

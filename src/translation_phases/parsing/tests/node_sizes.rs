@@ -111,7 +111,7 @@ fn syntax_nodes_keep_their_sizes() {
         ParameterDeclaration<'_> => 72,
         StructDeclaration<'_> => 56,
         StructDeclarator<'_> => 48,
-        StructOrUnionSpecifier<'_> => 48,
+        StructOrUnionSpecifier<'_> => 56,
         EnumSpecifier<'_> => 48,
         Enumerator<'_> => 40,
         DeclarationSpecifiers<'_> => 40,

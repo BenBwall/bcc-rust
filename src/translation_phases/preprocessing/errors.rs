@@ -525,6 +525,14 @@ pub(crate) enum PreprocessorErrorType<'tu> {
     /// implementation-defined pragma, C99 §6.10.6 paragraph 1, p. 159; PDF
     /// p. 171.
     SystemHeaderPragmaInMainFile,
+    /// GCC's `#pragma scalar_storage_order` without `big-endian`,
+    /// `little-endian` or `default` (`missing` when no identifier follows),
+    /// which GCC ignores with a `-Wpragmas` warning. C99: implementation-
+    /// defined pragma behavior, §6.10.6p1, p. 159; PDF p. 171. GCC manual,
+    /// "Scalar Storage Order Pragmas".
+    StorageOrderPragmaOperand {
+        missing: bool,
+    },
     /// `#include_next` or `__has_include_next`, named by the payload, in the
     /// primary source file, where there is no entry to continue after; the
     /// lookup searches as `#include` would, as GCC's and Clang's do. The
@@ -1346,6 +1354,14 @@ impl PreprocessorErrorType<'_> {
             | Self::SystemHeaderPragmaInMainFile =>
                 new("`#pragma GCC system_header` ignored in main file")
                     .label("only a header can be a system header"),
+            | Self::StorageOrderPragmaOperand { missing } => new(if *missing {
+                "missing `big-endian`, `little-endian`, or `default` after `#pragma \
+                 scalar_storage_order` [-Wpragmas]"
+            } else {
+                "expected `big-endian`, `little-endian`, or `default` after `#pragma \
+                 scalar_storage_order` [-Wpragmas]"
+            })
+            .label("pragma ignored"),
             | Self::IncludeNextInPrimarySource(spelling) =>
                 new(format_in!(arena, "`{spelling}` in the primary source file"))
                     .label("searches from the start of the include path")
@@ -1720,6 +1736,7 @@ impl GetSeverity for PreprocessorError<'_> {
             | PreprocessorErrorType::PragmaMessage { error: false, .. }
             | PreprocessorErrorType::PragmaOnceInNonHeader
             | PreprocessorErrorType::SystemHeaderPragmaInMainFile
+            | PreprocessorErrorType::StorageOrderPragmaOperand { .. }
             | PreprocessorErrorType::IncludeNextInPrimarySource(..)
             | PreprocessorErrorType::IncludeNextWithoutSearchEntry(..) => ErrorSeverity::Warning,
         }

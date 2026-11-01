@@ -102,6 +102,16 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
     ) {
         let linked = self.attribute_entity(subject);
         for attribute in self.written_attributes(specifier) {
+            // GCC ignores `scalar_storage_order` with a warning on anything
+            // declared but a typedef, which `storage_order.rs` checks.
+            if self.is_storage_order(specifier.syntax, attribute) {
+                if !matches!(subject, Subject::Typedef)
+                    && self.storage_order_argument(attribute).is_ok()
+                {
+                    self.ignored(attribute);
+                }
+                continue;
+            }
             let Some(rule) = rule(
                 specifier.syntax,
                 attribute.namespace,
