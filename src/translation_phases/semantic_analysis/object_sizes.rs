@@ -60,6 +60,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         arguments: &[&'tu Expression<'tu>],
         cleanup: Option<usize>,
     ) -> ObjectSize<'tu> {
+        let mut mode = mode;
         let mut node = expression;
         let mut lvalue = false;
         // Whether the current array lvalue was reached by decay, so that its
@@ -216,6 +217,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     base_expression,
                     member,
                 } => {
+                    // A trailing array reached through a pointer may run
+                    // past its declared bound, as a flexible array member
+                    // does, so GCC and Clang (`-fstrict-flex-arrays=0`,
+                    // their default) bound it from above by the complete
+                    // object only; mode 3's lower bound stays its size.
+                    if mode == 1 && self.trailing_array_through_pointer(node) {
+                        mode = 0;
+                    }
                     if mode & 1 != 0 {
                         if runtime_offset {
                             // A root-object remainder could cross this member's
@@ -338,6 +347,64 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 }
 
 impl<'tu> Analyzer<'_, 'tu, '_> {
+    /// Whether the member access `member` designates an array that is the
+    /// last member of its structure, of a structure that is itself last in
+    /// its enclosing ones up to an object reached through a pointer, whose
+    /// extent is therefore unknown. GNU extension: GCC manual,
+    /// `-fstrict-flex-arrays`; C99: §6.7.2.1 paragraph 16, p. 103; PDF
+    /// p. 115 (the flexible array member it stands for).
+    fn trailing_array_through_pointer(&self, member: &'tu Expression<'tu>) -> bool {
+        if !matches!(
+            self.types.nodes[self.expression_info(member).ty.index],
+            TypeKind::Array(..)
+        ) {
+            return false;
+        }
+        let mut node = member;
+        loop {
+            let (base_expression, name, indirect) = match node.kind {
+                | ExpressionType::DirectMember {
+                    base_expression,
+                    member,
+                } => (base_expression, member.name, false),
+                | ExpressionType::IndirectMember {
+                    base_expression,
+                    member,
+                } => (base_expression, member.name, true),
+                | _ => return false,
+            };
+            let base = self.expression_info(base_expression);
+            let record = if indirect {
+                self.pointer_target(base.ty)
+            } else {
+                Some(base.ty)
+            };
+            let Some(TypeKind::Tag(id)) = record.map(|record| self.types.nodes[record.index])
+            else {
+                return false;
+            };
+            let Some(&index) = self.member_indices.get(&(id, name)) else {
+                return false;
+            };
+            let fields = self.types.tags[id].fields.get();
+            // A union's members all end it.
+            if self.types.tags[id].kind != super::TagKind::Union && index + 1 != fields.len() {
+                return false;
+            }
+            if indirect {
+                return true;
+            }
+            node = self.selected_designator(base_expression);
+            if let ExpressionType::Unary {
+                operator: UnaryOperator::Indirection,
+                ..
+            } = node.kind
+            {
+                return true;
+            }
+        }
+    }
+
     /// The pointer parameter `expression` is computed from by pointer
     /// arithmetic and casts alone, if it is: what the caller passed for it
     /// then still designates the closest surrounding subobject

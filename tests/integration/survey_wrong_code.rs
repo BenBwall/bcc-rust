@@ -20,6 +20,8 @@
 //! - Under GCC's rules a floating constant converted out of an integer's range
 //!   folds to the bound GCC saturates it to
 //!   (gcc.c-torture/execute/20031003-1.c).
+//! - A trailing array reached through a pointer has no subobject size of its
+//!   own for `__builtin_object_size` mode 1 (`gcc.dg/pr101836_5.c`).
 
 #[cfg(test)]
 #[expect(
@@ -532,6 +534,36 @@ mod tests {
             return f1() != 2147483647 || f2() != 2147483647 || f3() != 0 || f4() != 0 || !f5();\n\
             }\n";
         prints_on_every_back_end("--compiler-identity=gcc", source, &["-w"], "");
+    }
+
+    /// A trailing array member reached through a pointer may extend past
+    /// its bound, as a flexible array member does, so GCC and Clang answer
+    /// `__builtin_object_size` mode 1 for it from the complete object
+    /// (unknown here); mode 3 keeps its declared size, and so does an array
+    /// that is no trailing one or that of a declared object.
+    #[test]
+    fn trailing_arrays_through_pointers_have_no_subobject_bound() {
+        let source = b"#include <stdio.h>\n\
+            struct a { int x; int c[4]; };\n\
+            struct b { int c[4]; int x; };\n\
+            struct n { int y; struct a in; };\n\
+            union u { int c[2]; char d; };\n\
+            __attribute__((noinline)) void f(struct a *p, struct b *q, struct n *r, union u *v) {\n\
+            struct a s;\n\
+            printf(\"%zd %zd %zd %zd %zd %zd %zd %zd\\n\", __builtin_object_size(p->c, 1),\n\
+            __builtin_object_size(p->c, 3), __builtin_object_size((*p).c, 1),\n\
+            __builtin_object_size(q->c, 1), __builtin_object_size(r->in.c, 1),\n\
+            __builtin_object_size(v->c, 1), __builtin_object_size(s.c, 1),\n\
+            __builtin_object_size(&p->c[1], 1));\n\
+            }\n\
+            int main(void) {\n\
+            static char buf[64];\n\
+            f((void *)buf, (void *)buf, (void *)buf, (void *)buf);\n\
+            return 0;\n\
+            }\n";
+        for identity in IDENTITIES {
+            prints_on_every_back_end(identity, source, &[], "-1 16 -1 16 -1 -1 16 -1\n");
+        }
     }
 
     /// `source` exits 0 and prints `expected` interpreted (unoptimized and
