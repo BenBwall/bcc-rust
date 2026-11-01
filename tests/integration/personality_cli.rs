@@ -544,17 +544,20 @@ mod tests {
         // assigns a structure with a const member silently.
         directory.write(
             "ro.c",
-            "#include <stdio.h>\nstruct S { const int m; int n; } s1 = {1, 2}, s2 = {3, 4};\nint \
-             main(void) {\n  const int c = 1;\n  int *q = (int *)&c;\n  c = 5;\n  s1 = s2;\n  \
-             printf(\"%d %d %d\\n\", *q, s1.m, s1.n);\n  return 0;\n}\n",
+            "int printf(const char *, ...);\nstruct S { const int m; int n; } s1 = {1, 2}, s2 = \
+             {3, 4};\nint main(void) {\n  const int c = 1;\n  int *q = (int *)&c;\n  c = 5;\n  s1 \
+             = s2;\n  printf(\"%d %d %d\\n\", *q, s1.m, s1.n);\n  return 0;\n}\n",
         );
-        let output = directory.bcc("--tcc-mode", &["ro.c", "-o", "ro"]);
+        let output = directory.bcc("--tcc-mode", &["-c", "ro.c"]);
         assert_eq!(
             stderr(&output),
             "ro.c:6: warning: assignment of read-only location\n"
         );
-        let run = Command::new(directory.path("ro")).output().unwrap();
-        assert_eq!(stdout(&run), "5 3 4\n");
+        if cfg!(all(target_os = "linux", target_env = "gnu")) {
+            succeeds(&directory.bcc("--tcc-mode", &["-w", "ro.c", "-o", "ro"]));
+            let run = Command::new(directory.path("ro")).output().unwrap();
+            assert_eq!(stdout(&run), "5 3 4\n");
+        }
         // Other identities keep C's constraint.
         let gcc = directory.bcc("--gcc-mode", &["-c", "ro.c"]);
         assert!(!gcc.status.success());
