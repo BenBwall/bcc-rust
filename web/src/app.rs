@@ -431,6 +431,8 @@ impl State {
         self.editor_text.set(text.clone());
         self.filename.set(name);
         self.clear_history();
+        // A new program starts at the scale that fits it.
+        self.zoom.set(1.0);
         self.failed.set(false);
         self.error.set(None);
         self.compile_now();

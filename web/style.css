@@ -509,23 +509,37 @@
   .deck-caption kbd { --key: var(--screen-2); --key-edge: #4a4a45; --key-ink: var(--screen-ink); box-shadow: none; border-width: 1px; }
   .spool { display: flex; align-items: center; justify-content: center; }
   .spool svg { width: 80px; height: 80px; }
-  /* The labels and the tape, scrolling down together where a run has more
-     rows than the deck's height, so the note stays on the first screen. */
+  /* The deck's window: the lane names and the tape scroll together in
+     both directions, like a spreadsheet, the names pinned at its left and
+     the ruler at its top. It grows with the run up to what the window
+     leaves above the cells and the note, then scrolls; past either end the
+     page scrolls on. */
+  .deck-window { position: relative; min-width: 0; }
   .deck-body {
-    display: grid; grid-template-columns: 168px minmax(0, 1fr); align-items: start;
-    max-height: clamp(236px, calc(100svh - var(--sticky-bottom) - 330px), 560px);
-    overflow-y: auto; overscroll-behavior: contain;
-    scrollbar-width: thin; scrollbar-color: #3a3a36 transparent;
+    display: grid; grid-template-columns: 168px max-content; align-items: start;
+    min-height: 236px;
+    max-height: clamp(236px, calc(100svh - var(--sticky-bottom) - 250px), 640px);
+    overflow: auto;
+    scrollbar-width: thin; scrollbar-color: #8a8a82 #1a1a18;
   }
+  .deck-body::-webkit-scrollbar { width: 10px; height: 10px; background: #1a1a18; }
+  .deck-body::-webkit-scrollbar-thumb { background: #8a8a82; }
+  .deck-more {
+    position: absolute; left: 50%; bottom: 14px; z-index: 5; transform: translateX(-50%);
+    padding: 3px 10px; border: 1px solid var(--screen-dim); background: var(--screen-2); color: var(--screen-ink);
+    font: 700 10.5px var(--font-mono); letter-spacing: .08em; text-transform: uppercase; cursor: pointer;
+    box-shadow: 0 -18px 18px -6px var(--screen);
+  }
+  .deck-more:hover { border-color: var(--accent); color: var(--accent); }
   .spool svg { stroke: none; }
   .spool-turn { transform-origin: 0 0; transform-box: view-box; transition: transform .35s cubic-bezier(.3, .7, .3, 1); }
   .spool-pack { fill: #2a2a27; transition: r .35s var(--ease); }
   .spool-rim { fill: none; stroke: var(--screen-dim); stroke-width: 2; }
   .spool-spoke, .spool-hub { fill: var(--screen-dim); }
   .spool-axle { fill: var(--screen); }
-  .deck-labels { border-right: 1px solid var(--screen-faint); font-size: 12px; color: var(--screen-dim); padding-top: 10px; padding-bottom: 10px; }
+  .deck-labels { position: sticky; left: 0; z-index: 3; align-self: stretch; border-right: 1px solid var(--screen-faint); background: var(--screen); font-size: 12px; color: var(--screen-dim); }
   .deck-label { height: var(--lane, 34px); display: flex; align-items: center; gap: 6px; padding: 0 8px; white-space: nowrap; overflow: hidden; }
-  .deck-label.is-axis { height: var(--axis, 32px); letter-spacing: .14em; text-transform: uppercase; font-size: 9.5px; color: #8a8a82; }
+  .deck-label.is-axis { position: sticky; top: 0; z-index: 4; background: var(--screen); height: var(--axis, 32px); letter-spacing: .14em; text-transform: uppercase; font-size: 9.5px; color: #8a8a82; }
   .deck-label.is-group { border-top: 1px solid var(--screen-faint); }
   .deck-label.is-group button { display: flex; align-items: baseline; gap: 6px; min-width: 0; max-width: 100%; padding: 0; border: 0; background: none; color: var(--screen-ink); font-weight: 700; cursor: pointer; }
   .deck-label.is-group:not(.is-live) button { color: var(--screen-dim); font-weight: 400; }
@@ -540,15 +554,15 @@
   .deck-depth { flex: none; color: #8a8a82; font-size: 10px; font-weight: 400; letter-spacing: .04em; }
   .deck-call { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
   .deck-label.is-group button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-  .tape {
-    position: relative; overflow-x: auto; overflow-y: hidden; padding: 10px 0;
-    min-height: 236px; cursor: ew-resize; touch-action: pan-y;
-    scrollbar-width: thin; scrollbar-color: #3a3a36 transparent;
-  }
+  .tape { position: relative; cursor: ew-resize; touch-action: pan-x pan-y; }
+  /* The ruler stays at the deck's top as the lanes scroll under it. */
+  .tape-ruler { position: sticky; top: 0; z-index: 2; display: block; margin-bottom: -32px; stroke: none; font-family: var(--font-mono); }
+  .tape-ruler-ground { fill: var(--screen); }
+  .tape-ruler text { stroke: none; }
   .tape:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
   .tape-svg { display: block; stroke: none; fill: none; font-family: var(--font-mono); }
   /* The slants' labels, over the tape, moved with its scroll. */
-  .tape-labels { position: absolute; left: 0; top: 10px; pointer-events: none; font-family: var(--font-mono); overflow: visible; }
+  .tape-labels { position: absolute; left: 0; top: 0; pointer-events: none; font-family: var(--font-mono); overflow: visible; }
   .tape-svg text { stroke: none; }
   .tape-now { fill: #1c1c1a; }
   .tape-grid { stroke: var(--screen-rule); stroke-width: 1; }
@@ -1149,7 +1163,7 @@
   @media (max-width: 1400px) {
     .deck { grid-template-columns: 72px minmax(0, 1fr) 72px; }
     .spool svg { width: 60px; height: 60px; }
-    .deck-body { grid-template-columns: 152px minmax(0, 1fr); }
+    .deck-body { grid-template-columns: 152px max-content; }
     .hanger { --deck-offset: 224px; }
   }
   /* The channel keys drop their CH where the strip is narrow. */
@@ -1267,10 +1281,16 @@
     main { padding-bottom: 72px; }
     .site-footer { margin-bottom: 64px; }
     .deck { grid-template-columns: minmax(0, 1fr); }
-    .deck-body { grid-template-columns: 136px minmax(0, 1fr); }
+    .deck-body { grid-template-columns: 136px max-content; min-height: 0; }
     .spool { display: none; }
-    .hanger { --deck-offset: 136px; }
-    .tape { min-height: 0; }
+    /* The note first, then the tape and the cells it describes, then the
+       expression and the datasheet, so the note is on the first screen. */
+    .machine-view { display: flex; flex-direction: column; }
+    .notes-row { display: contents; }
+    .note.narration { order: -2; }
+    .deck { order: -1; border-top: 3px solid var(--accent); }
+    .machine-side { order: 1; border-top: 1px solid var(--seam); }
+    .hanger { display: none; }
     .deck-type { display: none; }
     .head-row { padding: 10px 12px 12px; }
     .note.narration { padding: 14px 14px 18px; }
@@ -1295,15 +1315,6 @@
     .toolbar .start-at-main { margin-left: 0; margin-right: auto; }
     .step-counter strong { font-size: 22px; }
     .step-counter-label { display: none; }
-    /* The note first, then the tape and the cells it describes, then the
-       expression and the datasheet. */
-    .machine-view { display: flex; flex-direction: column; }
-    .notes-row { display: contents; }
-    .note.narration { order: -2; }
-    .deck { order: -1; }
-    .machine-side { order: 1; border-top: 1px solid var(--seam); }
-    .deck { border-top: 3px solid var(--accent); }
-    .hanger { display: none; }
     .hero h1 { font-size: 40px; }
     .section-heading h2 { font-size: 28px; }
     .pane-header { min-height: 36px; padding: 6px 12px; }

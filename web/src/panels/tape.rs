@@ -570,10 +570,15 @@ fn rows(reel: &Reel, cursor: usize, opened: &[String]) -> Vec<Row> {
 }
 
 /// How many steps the fitted scale makes room for: the run's length and
-/// room for the end of the tape, rounded up to two steps, so a short run
-/// fills the tape while the scale changes only every other step of a Run.
+/// room for the end of the tape, rounded up to a bucket a quarter larger
+/// than the last (12, 16, 20, 25, 31, …), so a short run fills most of the
+/// tape and the scale changes only now and then as the run grows.
 fn fit_slots(count: usize) -> usize {
-    (count + 3).div_ceil(2).max(6) * 2
+    let mut slots = 12;
+    while slots < count + 3 {
+        slots += (slots / 4).max(4);
+    }
+    slots
 }
 
 /// The source of `range`, on one line, for a slant's label; `None` for a
@@ -645,9 +650,14 @@ pub fn Deck(
     on_jump: Callback<usize>,
 ) -> impl IntoView {
     let opened = RwSignal::new(Vec::<String>::new());
+    // The deck's body scrolls both ways, like a spreadsheet: the lane names
+    // stay at its left and the ruler at its top.
+    let body = NodeRef::<html::Div>::new();
     let tape = NodeRef::<html::Div>::new();
     let width = RwSignal::new(760.0_f64);
     let scroll = RwSignal::new(0.0_f64);
+    // Whether rows lie below the deck's window, for the hint at its foot.
+    let more = RwSignal::new(false);
     let at = move || cursor.get().unwrap_or(0);
     let rows = Memo::new(move |_| {
         let cursor = at();
@@ -663,22 +673,29 @@ pub fn Deck(
         let whole = ((width.get() - 140.0) / px(count.max(1))).max(0.05);
         (fit * zoom.get()).clamp(whole.min(ZOOM_MIN), ZOOM_MAX)
     });
-    observe_width(tape, width);
+    observe_width(body, width);
     // A step moves the tape, not the head: keep the playhead in the middle
     // stretch of the viewport. The tape glides a short way, and jumps when
     // Run is stepping, for a long way, or when motion is reduced.
     Effect::new(move || {
         let x = (px(at()) + 0.5) * step_width.get();
         let running = running.get();
-        let Some(element) = tape.get() else {
+        let Some(element) = body.get() else {
             return;
         };
-        let view = f64::from(element.client_width());
+        let view = width.get_untracked();
         let left = f64::from(element.scroll_left());
-        // On a narrow tape the head keeps 120 px to its right, room for
-        // "NOT YET RUN" at the end of the run.
-        if x < left + view * 0.15 || x > left + (view * 0.7).min(view - 120.0) {
-            let target = (x - (view * 0.6).min(view - 140.0)).max(0.0);
+        // The head keeps 130 px to its right (room for "NOT YET RUN" at the
+        // end of the run): past that the tape moves just enough, so a
+        // short run that fits never scrolls.
+        let target = if x > left + view - 130.0 {
+            Some(x + 130.0 - view)
+        } else if x < left + view * 0.15 {
+            Some((x - view * 0.3).max(0.0))
+        } else {
+            None
+        };
+        if let Some(target) = target {
             let glide = !running && (target - left).abs() < view && !reduced_motion();
             let options = web_sys::ScrollToOptions::new();
             options.set_left(target.round());
@@ -690,6 +707,13 @@ pub fn Deck(
             element.scroll_to_with_scroll_to_options(&options);
         }
     });
+    // New rows (a call, an opened fold) may run past the deck's foot.
+    Effect::new(move || {
+        rows.track();
+        if let Some(element) = body.get() {
+            more.set(element.scroll_top() + element.client_height() + 2 < element.scroll_height());
+        }
+    });
     Effect::new(move || {
         let x = (px(at()) + 0.5) * step_width.get() - scroll.get();
         let shown = history.with(|history| !history.is_empty()) && x >= 0.0 && x <= width.get();
@@ -697,9 +721,10 @@ pub fn Deck(
     });
     let dragging = StoredValue::new(false);
     let index_at = move |client_x: i32| -> Option<usize> {
+        // The tape moves with the deck's scroll, so its own box places the
+        // pointer.
         let element = tape.get_untracked()?;
-        let left = element.get_bounding_client_rect().left();
-        let x = f64::from(client_x) - left + f64::from(element.scroll_left());
+        let x = f64::from(client_x) - element.get_bounding_client_rect().left();
         let count = history.with_untracked(Vec::len);
         (count > 0).then(|| step_at(x, step_width.get_untracked()).min(count - 1))
     };
@@ -736,9 +761,19 @@ pub fn Deck(
                 <b>"Figure 1"</b>" — Every object of the run, recorded on tape. Drag the tape, or use "<kbd>"←"</kbd>" "<kbd>"→"</kbd>"."
             </figcaption>
             <Spool side="left" fill=Signal::derive(played) turn=Signal::derive(move || px(at()) * 37.0) />
-            // The labels and the tape scroll down together where a run has
-            // more rows than the deck's height.
-            <div class="deck-body">
+            // The labels and the tape scroll together where a run has more
+            // rows than the deck's height; past either end the page scrolls.
+            <div class="deck-window">
+            <div
+                class="deck-body"
+                node_ref=body
+                on:scroll=move |_| {
+                    if let Some(element) = body.get_untracked() {
+                        scroll.set(f64::from(element.scroll_left()));
+                        more.set(element.scroll_top() + element.client_height() + 2 < element.scroll_height());
+                    }
+                }
+            >
             // The lane names repeat what Table 1 lists for screen readers;
             // the fold keys are real buttons.
             <div class="deck-labels" style:--lane=format!("{LANE}px") style:--axis=format!("{AXIS}px")>
@@ -808,11 +843,6 @@ pub fn Deck(
                 aria-valuemax=move || history.with(|history| history.len().saturating_sub(1)).to_string()
                 aria-valuenow=move || at().to_string()
                 aria-valuetext=label
-                on:scroll=move |_| {
-                    if let Some(element) = tape.get_untracked() {
-                        scroll.set(f64::from(element.scroll_left()));
-                    }
-                }
                 on:pointerdown=move |event| {
                     if event.button() != 0 {
                         return;
@@ -848,10 +878,11 @@ pub fn Deck(
                     }
                 }
             >
+                {move || ruler_svg(reel, step_width.get(), at(), width.get())}
                 {move || tape_svg(reel, rows, step_width.get(), at(), width.get())}
                 // The slants' labels, placed in the tape's visible window.
                 // The layer is one pixel drawn with visible overflow, so it
-                // never widens what the tape can scroll.
+                // never widens what the deck can scroll.
                 {move || {
                     let step = step_width.get();
                     let (cursor, left, view) = (at(), scroll.get(), width.get());
@@ -867,6 +898,21 @@ pub fn Deck(
                     })))
                 }}
             </div>
+            </div>
+            <button
+                type="button"
+                class="deck-more"
+                hidden=move || !more.get()
+                on:click=move |_| {
+                    if let Some(element) = body.get_untracked() {
+                        let options = web_sys::ScrollToOptions::new();
+                        options.set_top(f64::from(element.scroll_height()));
+                        element.scroll_to_with_scroll_to_options(&options);
+                    }
+                }
+            >
+                "▾ More rows below"
+            </button>
             </div>
             <Spool side="right" fill=Signal::derive(move || 1.0 - played()) turn=Signal::derive(move || px(at()) * 37.0) />
         </figure>
@@ -889,11 +935,12 @@ const LABEL_CHAR: f64 = 6.2;
 /// 14 px).
 const LABEL_HALF: f64 = 7.0;
 
-/// The slants' labels: each in the gap between its target lane and the
-/// lane its value came from the side of, ending just before the
-/// arrowhead, moved into the visible `window` of the tape, and dropped
-/// where it would cover another label. A gap holds no bus segment, so a
-/// label never reads as a lane's value.
+/// The slants' labels, newest first: each in the gap between its target
+/// lane and a neighbour (the side its value came from first), as close
+/// before its arrowhead as it can sit clear of every bus, every slant and
+/// every label already placed. A label shows only where it fits wholly
+/// inside the tape's visible `window` near its arrowhead, so it never
+/// slides along the tape or strays from its slant.
 fn place_labels(
     reel: &Reel,
     rows: &[Row],
@@ -908,67 +955,76 @@ fn place_labels(
     let Layout {
         objects, folded, ..
     } = layout(reel, rows);
+    let slants = slants(reel, &objects, &folded, step);
     let bottom = AXIS + px(rows.len()) * LANE;
     let mut placed: Vec<Placed> = Vec::new();
-    for flow in reel.flows.iter().filter(|flow| flow.to.1 <= cursor) {
+    for (index, flow) in reel.flows.iter().enumerate().rev() {
+        if flow.to.1 > cursor {
+            continue;
+        }
         let Some(&(to, _)) = objects.get(&flow.to.0) else {
             continue;
         };
-        let from: Vec<f64> = flow
-            .from
-            .iter()
-            .filter_map(|&(object, _)| {
-                objects
-                    .get(&object)
-                    .map(|&(y, _)| y)
-                    .or_else(|| folded.get(&object).copied())
-            })
-            .filter(|from| (from - to).abs() >= 1.0)
-            .collect();
-        let (Some(&first), Some(range)) = (from.first(), flow.label) else {
+        let Some(first) = slants.iter().find(|slant| slant.flow == index) else {
             continue;
         };
-        let Some(text) = source_text(source, range) else {
+        let x1 = first.x1;
+        if x1 < window.0 || x1 > window.1 {
+            continue;
+        }
+        let Some(text) = flow.label.and_then(|range| source_text(source, range)) else {
             continue;
         };
         let text = format!("{text} → {}", reel.label_of(flow.to.0).unwrap_or_default());
         let width = px(text.chars().count()) * LABEL_CHAR;
-        // The gap on the side the value came from, or the other one at the
-        // tape's top or bottom.
         let above = to - LANE / 2.0;
         let below = to + LANE / 2.0;
-        let middle = if (first < to && above > AXIS + 1.0) || below > bottom - 1.0 {
-            above
-        } else {
-            below
-        };
-        let x1 = px(flow.to.1) * step;
-        let mut right = x1 - 3.0;
-        right = right.min(window.1 - 4.0);
-        let mut left = right - width;
-        if left < window.0 + 4.0 {
-            left = window.0 + 4.0;
-            right = left + width;
+        let mut gaps = vec![above, below];
+        if first.from > to {
+            gaps.reverse();
         }
-        if right > window.1 - 4.0 {
-            continue;
+        gaps.retain(|&gap| gap > AXIS + 1.0 && gap < bottom + 1.0);
+        // Before the arrowhead first, then further back, then after it.
+        let offsets = (0..8)
+            .map(|k| x1 - 4.0 - width - px(k) * 14.0)
+            .chain((0..4).map(|k| x1 + 8.0 + px(k) * 14.0));
+        let candidates = gaps
+            .iter()
+            .flat_map(|&middle| offsets.clone().map(move |left| (left, middle)));
+        let found = candidates.into_iter().find(|&(left, middle)| {
+            let label = Placed {
+                text: String::new(),
+                left,
+                right: left + width,
+                middle,
+            };
+            let rect = (
+                left - 2.0,
+                middle - LABEL_HALF,
+                left + width + 2.0,
+                middle + LABEL_HALF,
+            );
+            left >= window.0 + 2.0
+                && left + width <= window.1 - 2.0
+                && !slants.iter().any(|slant| crosses(slant, rect))
+                && !placed.iter().any(|other| overlaps(other, &label))
+        });
+        if let Some((left, middle)) = found {
+            placed.push(Placed {
+                text,
+                left,
+                right: left + width,
+                middle,
+            });
         }
-        let label = Placed {
-            text,
-            left,
-            right,
-            middle,
-        };
-        if placed.iter().any(|other| overlaps(other, &label)) {
-            continue;
-        }
-        placed.push(label);
     }
     placed
 }
 
 fn overlaps(a: &Placed, b: &Placed) -> bool {
-    a.left < b.right && b.left < a.right && (a.middle - b.middle).abs() < 2.0 * LABEL_HALF
+    a.left < b.right + 6.0
+        && b.left < a.right + 6.0
+        && (a.middle - b.middle).abs() < 2.0 * LABEL_HALF
 }
 
 /// Whether the reader asked for reduced motion.
@@ -1050,8 +1106,7 @@ fn tape_svg(
         rows.with(|rows| {
             let count = reel.steps.len();
             let x = move |index: usize| px(index) * step;
-            // Room after the last step for "NOT YET RUN" and the flag.
-            let width = (x(count) + 130.0).max(px(count + LEADER) * step).max(view);
+            let width = tape_width(count, step, view);
             let height = AXIS + px(rows.len()) * LANE + 8.0;
             let Layout {
                 calls: call_rows,
@@ -1060,37 +1115,13 @@ fn tape_svg(
             } = layout(reel, rows);
             let ahead = move |index: usize| if index > cursor { "is-ahead" } else { "" };
             let head = x(cursor) + step / 2.0;
-            let number = reel.steps.get(cursor).map_or(0, |step| step.0).to_string();
-            let flag = px(number.len()) * 7.0 + 10.0;
-            // Axis: a tick and a number at the first round interval that
-            // leaves room for the number, and none under the flag.
-            let every = [1, 2, 5, 10, 20, 50, 100, 200, 500, 1000]
-                .into_iter()
-                .find(|&every| px(every) * step >= 44.0)
-                .unwrap_or(2000);
+            // The grid; the ruler above it is drawn apart (`ruler_svg`), so it
+            // stays on screen as the deck scrolls down.
+            let every = tick_interval(step);
             let ticks = (0..count)
                 .filter(|index| index % every == 0)
-                .map(|index| {
-                    let clear = (x(index) + 3.0 - head).abs() > flag / 2.0 + 22.0;
-                    view! {
-                        <line class="tape-grid" x1=x(index) y1=AXIS - 4.0 x2=x(index) y2=height />
-                        {clear.then(|| view! { <text class="tape-number" x=x(index) + 3.0 y="11">{reel.steps[index].0}</text> })}
-                    }
-                })
+                .map(|index| view! { <line class="tape-grid" x1=x(index) y1=AXIS - 4.0 x2=x(index) y2=height /> })
                 .collect_view();
-            // The clock lane: one pulse per step, taller at a sequence point
-            // (a flat line where steps are too narrow to tell apart).
-            let mut clock = format!("M0 {}", AXIS - 6.0);
-            for (index, &(_, sequence)) in reel.steps.iter().enumerate().filter(|_| step >= 3.0) {
-                let high = if sequence { AXIS - 19.0 } else { AXIS - 13.0 };
-                let (left, right) = (x(index) + 1.0, x(index) + step * 0.55);
-                _ = write!(
-                    clock,
-                    " L{left:.1} {low} L{left:.1} {high} L{right:.1} {high} L{right:.1} {low}",
-                    low = AXIS - 6.0
-                );
-            }
-            _ = write!(clock, " L{:.1} {}", x(count), AXIS - 6.0);
             let calls = call_rows
                 .iter()
                 .flat_map(|&(at, y, rung)| {
@@ -1156,38 +1187,15 @@ fn tape_svg(
                     view! { <g class=palette::class(&lane.name)>{segments}{ends}</g> }
                 })
                 .collect_view();
-            let flows = reel
-                .flows
-                .iter()
-                .filter_map(|flow| {
-                    let &(to, _) = objects.get(&flow.to.0)?;
-                    let x1 = x(flow.to.1) + 2.0;
-                    let slants: Vec<(f64, f64, f64)> = flow
-                        .from
-                        .iter()
-                        .filter_map(|&(object, at)| {
-                            let from = objects.get(&object).map(|&(y, _)| y).or_else(|| folded.get(&object).copied())?;
-                            Some((x(at) + step / 2.0, from, to))
-                        })
-                        // A value that stays in its own lane (total = total
-                        // + next) needs no slant: the lane carries it.
-                        .filter(|&(_, from, _)| (from - to).abs() >= 1.0)
-                        .collect();
-                    if slants.is_empty() {
-                        return None;
-                    }
-                    let drawn = slants.into_iter().map(|(x0, from, to)| {
-                        let down = if to > from { 1.0 } else if to < from { -1.0 } else { 0.0 };
-                        view! {
-                            <line x1=x0 y1=from + down * 8.0 x2=x1 y2=to - down * 8.0 marker-end="url(#tape-arrow)" />
-                            <circle cx=x0 cy=from r="2.4" />
-                        }
-                    }).collect_view();
-                    Some(view! {
-                        <g class=format!("tape-flow {}", ahead(flow.to.1))>
-                            {drawn}
+            let flows = slants(reel, &objects, &folded, step)
+                .into_iter()
+                .map(|slant| {
+                    view! {
+                        <g class=format!("tape-flow {}", ahead(slant.step))>
+                            <line x1=slant.x0 y1=slant.y0 x2=slant.x1 y2=slant.y1 marker-end="url(#tape-arrow)" />
+                            <circle cx=slant.x0 cy=slant.from r="2.4" />
                         </g>
-                    })
+                    }
                 })
                 .collect_view();
             view! {
@@ -1202,22 +1210,176 @@ fn tape_svg(
                     </defs>
                     <rect class="tape-now" x=x(cursor) y=AXIS - 2.0 width=step height=height />
                     {ticks}
-                    <path class="tape-clock" d=clock />
                     {calls}
                     {lanes}
                     {flows}
                     <rect class="tape-blank" x=x(count) y=AXIS - 2.0 width=(width - x(count)).max(0.0) height=height />
                     {reel.open.then(|| view! { <text class="tape-unrun" x=x(count) + 10.0 y=AXIS + 16.0>"NOT YET RUN"</text> })}
-                    {(count > 0).then(|| view! {
-                        <line class="tape-head" x1=head y1="14" x2=head y2=height />
-                        <rect class="tape-flag" x=head - flag / 2.0 y="0" width=flag height="15" />
-                        <text class="tape-flag-number" x=head y="11" text-anchor="middle">{number.clone()}</text>
-                    })}
+                    {(count > 0).then(|| view! { <line class="tape-head" x1=head y1=AXIS - 4.0 x2=head y2=height /> })}
                 </svg>
             }
             .into_any()
         })
     })
+}
+
+/// How wide the tape is drawn: the run, room after its last step for "NOT
+/// YET RUN" and the flag, and at least the window.
+fn tape_width(count: usize, step: f64, view: f64) -> f64 {
+    (px(count) * step + 130.0)
+        .max(px(count + LEADER) * step)
+        .max(view)
+}
+
+/// Steps between numbered ticks: the first round interval that leaves room
+/// for a number.
+fn tick_interval(step: f64) -> usize {
+    [1, 2, 5, 10, 20, 50, 100, 200, 500, 1000]
+        .into_iter()
+        .find(|&every| px(every) * step >= 44.0)
+        .unwrap_or(2000)
+}
+
+/// The ruler: step numbers, the clock lane (one pulse per step, taller at
+/// a sequence point) and the playhead's flag. It sits at the top of the
+/// deck while the lanes scroll under it.
+fn ruler_svg(reel: Memo<Reel>, step: f64, cursor: usize, view: f64) -> AnyView {
+    reel.with(|reel| {
+        let count = reel.steps.len();
+        let x = move |index: usize| px(index) * step;
+        let width = tape_width(count, step, view);
+        let head = x(cursor) + step / 2.0;
+        let number = reel.steps.get(cursor).map_or(0, |step| step.0).to_string();
+        let flag = px(number.len()) * 7.0 + 10.0;
+        let every = tick_interval(step);
+        let ticks = (0..count)
+            .filter(|index| index % every == 0)
+            .map(|index| {
+                // No number under the flag.
+                let clear = (x(index) + 3.0 - head).abs() > flag / 2.0 + 22.0;
+                view! {
+                    <line class="tape-grid" x1=x(index) y1=AXIS - 4.0 x2=x(index) y2=AXIS />
+                    {clear.then(|| view! { <text class="tape-number" x=x(index) + 3.0 y="11">{reel.steps[index].0}</text> })}
+                }
+            })
+            .collect_view();
+        let mut clock = format!("M0 {}", AXIS - 6.0);
+        for (index, &(_, sequence)) in reel.steps.iter().enumerate().filter(|_| step >= 3.0) {
+            let high = if sequence { AXIS - 19.0 } else { AXIS - 13.0 };
+            let (left, right) = (x(index) + 1.0, x(index) + step * 0.55);
+            _ = write!(
+                clock,
+                " L{left:.1} {low} L{left:.1} {high} L{right:.1} {high} L{right:.1} {low}",
+                low = AXIS - 6.0
+            );
+        }
+        _ = write!(clock, " L{:.1} {}", x(count), AXIS - 6.0);
+        view! {
+            <svg class="tape-ruler" width=width height=AXIS viewBox=format!("0 0 {width} {AXIS}") aria-hidden="true">
+                <rect class="tape-ruler-ground" width=width height=AXIS />
+                {ticks}
+                <path class="tape-clock" d=clock />
+                {(count > 0).then(|| view! {
+                    <line class="tape-head" x1=head y1="14" x2=head y2=AXIS />
+                    <rect class="tape-flag" x=head - flag / 2.0 y="0" width=flag height="15" />
+                    <text class="tape-flag-number" x=head y="11" text-anchor="middle">{number}</text>
+                })}
+            </svg>
+        }
+        .into_any()
+    })
+}
+
+/// One slant as drawn: from a value read to the store that took it, in
+/// tape coordinates, with the step of the store.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Slant {
+    flow: usize,
+    step: usize,
+    from: f64,
+    x0:   f64,
+    y0:   f64,
+    x1:   f64,
+    y1:   f64,
+}
+
+/// Steps narrower than this draw no slants: a thousand steps at a pixel
+/// each would be a fence of arrows.
+const SLANT_MIN_STEP: f64 = 4.0;
+
+/// Every slant of the reel whose ends are on screen (a lane, or the row of
+/// a folded call), except a value that stays in its own lane, which the
+/// lane carries.
+fn slants(
+    reel: &Reel,
+    objects: &HashMap<usize, (f64, &str)>,
+    folded: &HashMap<usize, f64>,
+    step: f64,
+) -> Vec<Slant> {
+    if step < SLANT_MIN_STEP {
+        return Vec::new();
+    }
+    let mut slants = Vec::new();
+    for (index, flow) in reel.flows.iter().enumerate() {
+        let Some(&(to, _)) = objects.get(&flow.to.0) else {
+            continue;
+        };
+        let x1 = px(flow.to.1) * step + 2.0;
+        for &(object, at) in &flow.from {
+            let Some(from) = objects
+                .get(&object)
+                .map(|&(y, _)| y)
+                .or_else(|| folded.get(&object).copied())
+            else {
+                continue;
+            };
+            if (from - to).abs() < 1.0 {
+                continue;
+            }
+            let down = if to > from { 1.0 } else { -1.0 };
+            slants.push(Slant {
+                flow: index,
+                step: flow.to.1,
+                from,
+                x0: px(at) * step + step / 2.0,
+                y0: from + down * 8.0,
+                x1,
+                y1: to - down * 8.0,
+            });
+        }
+    }
+    slants
+}
+
+/// Whether the segment of `slant` (and its arrowhead, a few pixels past
+/// its end) meets the box `(left, top, right, bottom)`.
+fn crosses(slant: &Slant, (left, top, right, bottom): (f64, f64, f64, f64)) -> bool {
+    // Liang–Barsky clipping of the segment against the box.
+    let (dx, dy) = (slant.x1 - slant.x0, slant.y1 - slant.y0);
+    let length = dx.hypot(dy).max(1.0);
+    let (dx, dy) = (dx * (length + 6.0) / length, dy * (length + 6.0) / length);
+    let mut low = 0.0_f64;
+    let mut high = 1.0_f64;
+    for (p, q) in [
+        (-dx, slant.x0 - left),
+        (dx, right - slant.x0),
+        (-dy, slant.y0 - top),
+        (dy, bottom - slant.y0),
+    ] {
+        if p == 0.0 {
+            if q < 0.0 {
+                return false;
+            }
+        } else {
+            let t = q / p;
+            if p < 0.0 {
+                low = low.max(t);
+            } else {
+                high = high.min(t);
+            }
+        }
+    }
+    low <= high
 }
 
 /// One bus segment: a hexagon between two transitions, with its value
@@ -1304,7 +1466,8 @@ fn Spool(side: &'static str, fill: Signal<f64>, turn: Signal<f64>) -> impl IntoV
     }
 }
 
-/// Keep `width` at the element's width as the window resizes.
+/// Keep `width` at the width of the deck's window onto the tape: its body
+/// less the lane names pinned at its left.
 fn observe_width(element: NodeRef<html::Div>, width: RwSignal<f64>) {
     #[cfg(feature = "hydrate")]
     Effect::new(move |observing: Option<bool>| {
@@ -1315,12 +1478,18 @@ fn observe_width(element: NodeRef<html::Div>, width: RwSignal<f64>) {
         let Some(node) = element.get() else {
             return false;
         };
-        width.set(f64::from(node.client_width()));
+        let measure = |node: &web_sys::HtmlDivElement| {
+            let names = node
+                .first_element_child()
+                .map_or(0.0, |names| names.get_bounding_client_rect().width());
+            f64::from(node.client_width()) - names
+        };
+        width.set(measure(&node));
         // A change of view unmounts the deck, and the observer reports its
         // removal after the signals are gone; it then does nothing.
         let closure = wasm_bindgen::closure::Closure::<dyn FnMut()>::new(move || {
             if let Some(Some(node)) = element.try_get_untracked() {
-                _ = width.try_set(f64::from(node.client_width()));
+                _ = width.try_set(measure(&node));
             }
         });
         if let Ok(observer) = web_sys::ResizeObserver::new(closure.as_ref().unchecked_ref()) {
@@ -1519,6 +1688,24 @@ mod tests {
             let rows = rows(&reel, cursor, &[]);
             let step = 20.0;
             let placed = place_labels(&reel, &rows, source, step, cursor, (0.0, 1.0e9));
+            let Layout {
+                objects, folded, ..
+            } = layout(&reel, &rows);
+            for slant in slants(&reel, &objects, &folded, step) {
+                for label in &placed {
+                    let rect = (
+                        label.left,
+                        label.middle - LABEL_HALF,
+                        label.right,
+                        label.middle + LABEL_HALF,
+                    );
+                    assert!(
+                        !crosses(&slant, rect),
+                        "step {cursor}: a slant crosses \"{}\"",
+                        label.text
+                    );
+                }
+            }
             for (place, row) in rows.iter().enumerate() {
                 let &Row::Lane { group, lane } = row else {
                     continue;
@@ -1545,7 +1732,7 @@ mod tests {
     }
 
     #[test]
-    fn slant_labels_sit_in_the_gaps_between_lanes() {
+    fn slant_labels_sit_in_the_gaps_between_lanes_clear_of_slants() {
         let mut checked = 0;
         for key in ["path", "recursion", "tour", "pointers"] {
             checked += labels_clear_the_buses(&run(key), demos::find(key).unwrap().source);
@@ -1603,12 +1790,48 @@ mod tests {
     }
 
     #[test]
+    fn a_label_shows_only_beside_its_visible_arrowhead() {
+        let history = run("path");
+        let reel = Reel::record(&history);
+        let last = history.len() - 1;
+        let rows = rows(&reel, last, &[]);
+        let source = demos::find("path").unwrap().source;
+        let all = place_labels(&reel, &rows, source, 20.0, last, (0.0, 1.0e9));
+        assert_ne!(all.len(), 0);
+        // A window that has scrolled past every arrowhead shows no label,
+        // rather than one pinned to its edge.
+        let past = px(history.len()) * 20.0 + 50.0;
+        assert_eq!(
+            place_labels(&reel, &rows, source, 20.0, last, (past, past + 400.0)).len(),
+            0
+        );
+    }
+
+    #[test]
+    fn crossing_is_segment_against_box() {
+        let slant = Slant {
+            flow: 0,
+            step: 0,
+            from: 0.0,
+            x0:   0.0,
+            y0:   0.0,
+            x1:   100.0,
+            y1:   100.0,
+        };
+        assert!(crosses(&slant, (40.0, 40.0, 60.0, 60.0)));
+        assert!(!crosses(&slant, (60.0, 0.0, 100.0, 30.0)));
+        // The arrowhead reaches a few pixels past the end.
+        assert!(crosses(&slant, (102.0, 102.0, 110.0, 110.0)));
+    }
+
+    #[test]
     fn long_values_are_cut_short_whole_elements_first() {
         assert_eq!(shorten("{3,1,4,1,5,9,2,6}", 10), "{3,1,4,…}");
         assert_eq!(shorten("2147483647", 10), "2147483647");
         assert_eq!(shorten("→a_rather_long_name", 8), "→a_rath…");
-        assert_eq!(fit_slots(10), 14);
-        assert_eq!(fit_slots(22), 26);
+        assert_eq!(fit_slots(10), 16);
+        assert_eq!(fit_slots(22), 25);
+        assert_eq!(fit_slots(40), 47);
     }
 
     #[test]
