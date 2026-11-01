@@ -465,10 +465,12 @@ mod tests {
         prints_on_every_back_end("--compiler-identity=gcc", source, &["-std=gnu99"], "");
     }
 
-    /// C90 has no blocks for selection and iteration statements: a tag or
-    /// enumeration constant, which may hide a typedef name, declared in a
-    /// controlling expression belongs to the enclosing block, as in GCC and
-    /// Clang. A compound substatement is still a block of its own.
+    /// C90, and C95 with it, has no blocks for selection and iteration
+    /// statements: a tag or enumeration constant, which may hide a typedef
+    /// name, declared in a controlling expression belongs to the enclosing
+    /// block, as in GCC and Clang, under every spelling of those modes, and
+    /// so does a `for` declaration. A compound substatement is still a
+    /// block of its own.
     #[test]
     fn c90_selection_and_iteration_statements_form_no_blocks() {
         let source = b"struct foo { char a; };\n\
@@ -499,7 +501,14 @@ mod tests {
             return sfoo() != 16 || counted() != 6 || shadowed() != 2 || compound() != 1;\n\
             }\n";
         for identity in IDENTITIES {
-            for standard in ["-std=c90", "-std=gnu89"] {
+            for standard in [
+                "-std=c89",
+                "-std=c90",
+                "-std=iso9899:1990",
+                "-std=iso9899:199409",
+                "-std=gnu89",
+                "-std=gnu90",
+            ] {
                 prints_on_every_back_end(identity, source, &[standard, "-pedantic-errors"], "");
             }
         }
@@ -514,14 +523,12 @@ mod tests {
         for identity in IDENTITIES {
             prints_on_every_back_end(identity, c99, &["-std=c99"], "");
         }
-        // A `for` declaration, a C99 feature accepted under gnu89, keeps its
-        // block.
-        let declaration = b"typedef int T;\n\
-            int main(void) {\n\
-            for (int T = 0; T < 1; T++)\n\
+        // A `for` declaration, a C99 feature Clang accepts under gnu89 (GCC
+        // rejects it), belongs to the enclosing block too.
+        let declaration = b"int main(void) {\n\
+            for (int i = 0; i < 3; i++)\n\
             ;\n\
-            T x = 0;\n\
-            return x;\n\
+            return i - 3;\n\
             }\n";
         prints_on_every_back_end(IDENTITIES[0], declaration, &["-std=gnu89", "-w"], "");
     }

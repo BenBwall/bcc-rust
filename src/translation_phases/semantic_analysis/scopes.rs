@@ -47,16 +47,18 @@ impl Analyzer<'_, '_, '_> {
     /// Enters the block a selection or iteration statement forms, or one
     /// of its substatements, and says whether it did. C90 has no such
     /// blocks: a tag or enumeration constant declared in a controlling
-    /// expression, or in a substatement that is no compound statement,
-    /// belongs to the enclosing block, as GCC and Clang scope it under
-    /// `-std=c90` and `-std=gnu89`. A `for` declaration, a C99 feature C90
-    /// mode accepts as an extension, keeps its block.
+    /// expression, or in a substatement that is no compound statement, and
+    /// a `for` declaration, a C99 feature C90 mode accepts as an extension,
+    /// belong to the enclosing block, as GCC and Clang scope them under
+    /// `-std=c90`, `-std=iso9899:199409` (C95, which keeps C90's scopes)
+    /// and `-std=gnu89` (GCC rejects the `for` declaration). A `compound`
+    /// substatement is a block of its own, the one this enters.
     /// C99: §6.8.4 paragraph 3, p. 133; PDF p. 145; §6.8.5 paragraph 5,
     /// p. 135; PDF p. 147; Foreword paragraph 5, p. xii; PDF p. 10
     /// (the change from C90).
-    pub(super) fn enter_statement_block(&mut self, declares: bool) -> bool {
-        let entered = declares
-            || self.context.configuration.standard() > crate::configuration::CStandard::C89;
+    pub(super) fn enter_statement_block(&mut self, compound: bool) -> bool {
+        let entered = compound
+            || self.context.configuration.standard() >= crate::configuration::CStandard::C99;
         if entered {
             self.enter(ScopeKind::Block);
         }

@@ -506,8 +506,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 }
             },
             | S::For(f) => {
-                let declares = matches!(f.initializer, Some(ForInitializer::Declaration(_)));
-                if self.enter_statement_block(declares) {
+                if self.enter_statement_block(false) {
                     self.work.push(Work::PopScope);
                 }
                 if let Some(outside) = outside {

@@ -66,8 +66,8 @@ pub(super) struct ScopeStack<'p> {
     /// Bindings referenced by `retained_prototypes`.
     retained_names:              ArenaVec<'p, (StringCacheId, NameClass)>,
     /// Whether selection and iteration statements form blocks of their
-    /// own, as since C99; in C90 their bindings belong to the enclosing
-    /// block.
+    /// own, as since C99; in C90 and C95 their bindings belong to the
+    /// enclosing block.
     pub(super) statement_blocks: bool,
     #[cfg(test)]
     pub(super) trace:            ScopeTrace,
@@ -129,16 +129,6 @@ impl ScopeStack<'_> {
             kind,
             start: self.bindings.len(),
         });
-    }
-
-    /// Makes the innermost scope a block of its own, as a `for` declaration
-    /// that C90 mode accepts as an extension needs.
-    pub(super) fn keep_innermost_block(&mut self) {
-        if !self.statement_blocks
-            && let Some(scope) = self.nested_scopes.last_mut()
-        {
-            scope.kind = ScopeKind::Block;
-        }
     }
 
     /// Restores exactly the depth recorded by the owning production.

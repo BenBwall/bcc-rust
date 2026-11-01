@@ -109,7 +109,7 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
         // C99: Foreword paragraph 5, p. xii; PDF p. 10 ("new block scopes
         // for selection and iteration statements").
         scopes.statement_blocks =
-            context.configuration.standard() > crate::configuration::CStandard::C89;
+            context.configuration.standard() >= crate::configuration::CStandard::C99;
         scopes.publish(
             context.string_cache.intern("__builtin_va_list"),
             super::scope::NameClass::Typedef,
