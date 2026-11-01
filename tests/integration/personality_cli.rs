@@ -1049,7 +1049,7 @@ mod tests {
 
     /// GCC's options that give up part of IEC 60559 semantics, alone and
     /// in the combinations whose order or interplay decides the macros.
-    const FLOATING_POINT_OPTIONS: [&[&str]; 53] = [
+    const FLOATING_POINT_OPTIONS: [&[&str]; 57] = [
         &[],
         &["-fsignaling-nans"],
         &["-fsignaling-nans", "-fno-signaling-nans"],
@@ -1155,6 +1155,11 @@ mod tests {
         &["-fcx-limited-range", "-ffast-math", "-fno-fast-math"],
         &["-fno-finite-math-only", "-Ofast"],
         &["-Ofast", "-O2"],
+        // GCC's `-Ofast` limits complex arithmetic as a level of its own.
+        &["-Ofast", "-fno-fast-math"],
+        &["-Ofast", "-fno-fast-math", "-fno-cx-limited-range"],
+        &["-Ofast", "-funsafe-math-optimizations", "-fno-fast-math"],
+        &["-Ofast", "-ffast-math", "-fno-fast-math"],
         &["-fsigned-zeros", "-funsafe-math-optimizations"],
         &[
             "-funsafe-math-optimizations",
@@ -2016,12 +2021,34 @@ mod tests {
             (&["-fno-finite-math-only", "-Ofast"], true, true, true),
             (&["-fno-fast-math", "-Ofast"], true, true, true),
             (&["-Ofast", "-O2"], false, false, false),
+            // Every `-Ofast` holds if the last `-O` option is one.
+            (&["-Ofast", "-Ofast", "-O2"], false, false, false),
+            (&["-Ofast", "-O2", "-Ofast"], true, true, true),
             (&["-ffast-math", "-ffp-model=precise"], false, false, false),
             (&["-ffp-model=fast"], false, false, true),
             (&["-ffp-model=aggressive"], true, true, true),
             // A model after a live `-Ofast` loses to it, and `fast` then
             // keeps Clang's default semantics.
             (&["-Ofast", "-ffp-model=fast"], false, false, false),
+            // Each model then keeps the default semantics.
+            (
+                &[
+                    "-Ofast",
+                    "-ffp-model=fast",
+                    "-ffast-math",
+                    "-ffp-model=fast",
+                ],
+                false,
+                false,
+                false,
+            ),
+            (
+                &["-Ofast", "-ffast-math", "-ffp-model=fast"],
+                false,
+                false,
+                false,
+            ),
+            (&["-ffp-model=fast", "-Ofast", "-O2"], false, false, true),
             // A later `-O` takes the `-Ofast` back, and the model stands.
             (&["-Ofast", "-ffp-model=fast", "-O2"], false, false, true),
             (

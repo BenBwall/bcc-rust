@@ -71,7 +71,7 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         machine: Vec::new(),
         position: 0,
         ofast: Ofast::Absent,
-        ofast_at: 0,
+        ofast_at: Vec::new(),
         eval_method: false,
         fp_model: None,
         basic_complex: None,
@@ -87,14 +87,19 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
             return Ok(query);
         }
     }
-    // A final `-Ofast` overrides a `-ffp-model=fast` after it, which then
-    // keeps Clang's default semantics.
+    // Clang reads every `-Ofast` as `-ffast-math` where it stands when the
+    // last `-O` option is an `-Ofast`, and every `-ffp-model=` but
+    // `aggressive` then as its default semantics (`-fno-fast-math`), wherever
+    // it stands; otherwise an `-Ofast` is a level alone, and the models
+    // stand. `-O3` fills a slot that changes nothing.
     if state.ofast == Ofast::Last {
-        for (n, index) in std::mem::take(&mut state.ofast_models)
-            .into_iter()
-            .enumerate()
-        {
-            state.out[index] = if n == 0 { "-fno-fast-math" } else { "-O3" }.into();
+        for index in std::mem::take(&mut state.ofast_models) {
+            state.out[index] = "-fno-fast-math".into();
+            state.out[index + 1] = "-O3".into();
+        }
+    } else {
+        for index in std::mem::take(&mut state.ofast_at) {
+            state.out[index] = "-O3".into();
         }
     }
     // Clang refuses an evaluation method beside the options that let the
@@ -175,11 +180,14 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
     }
     // GCC applies a final `-Ofast`'s `-ffast-math` before every other
     // option, so any floating-point option overrides it; Clang applies it
-    // where the `-Ofast` stands (`State::flag`). Both drivers then link
-    // `crtfastmath.o` whatever came after.
+    // where the `-Ofast` stands (`State::flag`). GCC's level also limits
+    // complex arithmetic's range as an option of its own, which
+    // `-fno-fast-math` leaves and only `-fno-cx-limited-range` takes back.
+    // Both drivers then link `crtfastmath.o` whatever came after.
     if state.ofast == Ofast::Last {
         if compiler == Compiler::Gcc {
             common.push("-ffast-math".into());
+            common.push("-fcx-limited-range".into());
         }
         common.push("--link-fast-math-runtime".into());
     }
@@ -402,13 +410,13 @@ struct State<'a> {
     position:        usize,
     /// Where `-Ofast` stands among the `-O` options.
     ofast:           Ofast,
-    /// The index in [`State::out`] of the `-ffast-math` Clang's last
-    /// `-Ofast` stands for.
-    ofast_at:        usize,
-    /// The indices in [`State::out`] of a `-ffp-model=fast` that a final
-    /// `-Ofast` before it overrides, unless a later `-O` option takes the
-    /// `-Ofast` back; if it stays last they become `-fno-fast-math`, Clang's
-    /// default semantics, and `-O3`, a level in the `-Ofast`'s slot.
+    /// The indices in [`State::out`] of the `-ffast-math` each Clang
+    /// `-Ofast` stands for, which hold only if the last `-O` option is an
+    /// `-Ofast`.
+    ofast_at:        Vec<usize>,
+    /// The indices in [`State::out`] of each `-ffp-model=fast`'s two
+    /// options, which become `-fno-fast-math` and `-O3` if the last `-O`
+    /// option is an `-Ofast`.
     ofast_models:    Vec<usize>,
     /// Clang's `-ffp-eval-method=` was given, which it refuses beside
     /// reassociation, reciprocals and approximate functions.
@@ -620,7 +628,7 @@ impl State<'_> {
                 self.ofast = Ofast::Last;
                 self.out.push("-O3".into());
                 if self.compiler == Compiler::Clang {
-                    self.ofast_at = self.out.len();
+                    self.ofast_at.push(self.out.len());
                     self.out.push("-ffast-math".into());
                 }
             },
@@ -931,9 +939,8 @@ impl State<'_> {
             | "aggressive" => &["-ffast-math"],
             | _ => &["-fno-fast-math"],
         };
-        if model == "fast" && self.ofast == Ofast::Last {
-            self.ofast_models
-                .extend(self.out.len()..self.out.len() + options.len());
+        if model == "fast" {
+            self.ofast_models.push(self.out.len());
         }
         self.out.extend(options.iter().map(Into::into));
     }
@@ -1130,14 +1137,10 @@ impl State<'_> {
             self.error(format_args!("unknown argument: '{text}'"));
             return;
         }
-        if text.starts_with("-O") && self.ofast == Ofast::Last {
+        // A later `-O` option takes the `-Ofast`s back, unless another
+        // `-Ofast` follows it.
+        if text.starts_with("-O") && text != "-Ofast" && self.ofast == Ofast::Last {
             self.ofast = Ofast::Earlier;
-            // A later `-O` option takes back Clang's `-ffast-math` at the
-            // `-Ofast`'s place; a level in its slot changes nothing.
-            if self.compiler == Compiler::Clang {
-                self.out[self.ofast_at] = "-O3".into();
-                self.ofast_models.clear();
-            }
         }
         // Clang's floating-point models: `precise` is its default
         // semantics, `fast` gives up all but NaNs and infinities, and
