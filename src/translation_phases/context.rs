@@ -219,9 +219,11 @@ pub(crate) struct Context<'tu> {
 /// begins with `./`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct IncludeEntry {
-    pub(crate) file:  u32,
-    pub(crate) depth: u32,
-    pub(crate) here:  bool,
+    pub(crate) file:   u32,
+    pub(crate) depth:  u32,
+    pub(crate) here:   bool,
+    /// Reached from a command-line include, which `-H` leaves out.
+    pub(crate) forced: bool,
 }
 
 /// Bytes `start..end` of physical file `physical` that a line marker with
