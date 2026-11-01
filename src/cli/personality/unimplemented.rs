@@ -513,7 +513,6 @@ const IGNORED: &[&str] = &[
     "-fno-pack-derived",
     // Acceptance: the options change only which programs are accepted,
     // and a program bcc refuses is reported, not miscompiled.
-    "-fpermissive",
     "-fallow-parameterless-variadic-functions",
     "-f[no-]cond-mismatch",
     "-f[no-]lax-vector-conversions*",

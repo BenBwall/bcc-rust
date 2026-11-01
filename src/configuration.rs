@@ -141,6 +141,9 @@ pub(crate) struct CompilerConfiguration {
     /// none.
     default_pack: u32,
     suppress_warnings: bool,
+    /// `-fpermissive`: GCC's permerrors are warnings
+    /// ([`CompilerConfiguration::permerror_default`]).
+    permissive: bool,
     warnings_as_errors: bool,
     /// The compiler the identity macros claim.
     identity: CompilerIdentity,

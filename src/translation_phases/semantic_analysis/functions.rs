@@ -1337,26 +1337,19 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 if let Some(slot) = parameter_bindings.last_mut() {
                     *slot = Some(self.bindings.len() - 1);
                 }
-                if !self
-                    .context
-                    .configuration
-                    .is_native(crate::configuration::Feature::ImplicitInt)
-                    && !self.context.configuration.gnu_extensions()
-                {
-                    self.extension_error(
-                        crate::configuration::Feature::ImplicitInt,
-                        crate::translation_phases::DiagnosticPolicy::Error,
-                        SemanticErrorKind::InvalidDefinitionParameterList,
-                        name.source_vectors,
-                        Some(name.name),
-                    );
-                } else {
-                    self.context.report_extension(
-                        crate::configuration::Feature::ImplicitInt,
-                        "implicit int parameter",
-                        name.source_vectors,
-                    );
-                }
+                // GCC points at the function's name, Clang at the
+                // parameter.
+                let site = match current.syntax.declarator.identifier() {
+                    | Some(function)
+                        if self.context.configuration.diagnostic_format()
+                            == crate::configuration::DiagnosticFormat::Gcc =>
+                        Identifier {
+                            source_vectors: function.source_vectors,
+                            ..name
+                        },
+                    | _ => name,
+                };
+                self.implicit_int(SemanticErrorKind::ImplicitIntParameter, site);
                 int
             };
             let promoted = match self.types.nodes[declared.index] {

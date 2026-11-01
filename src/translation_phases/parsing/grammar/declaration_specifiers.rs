@@ -776,7 +776,8 @@ impl<'tu> SpecifierList<'tu> {
                     self.specifiers.type_specifiers =
                         TypeSpecifiers::Extended(parser.alloc_syntax(ExtendedType::Inferred));
                 } else {
-                    parser.extension(Feature::ImplicitInt, "implicit int", token);
+                    // Semantic analysis reports implicit int under
+                    // `-Wimplicit-int`.
                     self.specifiers.type_specifiers = TypeSpecifiers::Int;
                     self.specifiers.implicit_int = true;
                 }

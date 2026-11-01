@@ -83,7 +83,16 @@ impl TranslationError<'_> {
                 | _ => None,
             },
             | Self::Semantic(error) => match error.kind {
-                | semantic_analysis::SemanticErrorKind::PointerConstraint(group) => Some(group),
+                | semantic_analysis::SemanticErrorKind::PointerConstraint(_)
+                | semantic_analysis::SemanticErrorKind::ImplicitFunctionDeclaration
+                | semantic_analysis::SemanticErrorKind::ImplicitLibraryFunction(_)
+                | semantic_analysis::SemanticErrorKind::ImplicitInt
+                | semantic_analysis::SemanticErrorKind::ImplicitIntReturn
+                | semantic_analysis::SemanticErrorKind::ImplicitIntParameter
+                | semantic_analysis::SemanticErrorKind::ReturnMismatch
+                | semantic_analysis::SemanticErrorKind::VoidReturnMismatch
+                | semantic_analysis::SemanticErrorKind::DeclarationMissingParameterType =>
+                    error.kind.group(),
                 | semantic_analysis::SemanticErrorKind::CallAttributeWarning =>
                     Some(G::AttributeWarning),
                 | semantic_analysis::SemanticErrorKind::PredefinedOutsideFunction =>

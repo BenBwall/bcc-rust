@@ -39,7 +39,6 @@ use super::{
     },
 };
 use crate::{
-    configuration::CStandard,
     translation_phases::{
         SourceVectors,
         parsing::{
@@ -298,6 +297,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
+    /// A `return` that disagrees with the result type is reported under
+    /// `-Wreturn-mismatch`, whose severity follows the identity and the
+    /// revision; the function goes on returning as if it agreed.
     /// C99: §6.8.6.4p1,p3, p. 139; PDF p. 151.
     fn return_done(&mut self, slot: Option<ExpressionSlot<'tu>>, source: SourceVectors) {
         let Some(function) = self.functions.current else {
@@ -311,15 +313,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             self.types.nodes[result.index],
             TypeKind::Scalar(Scalar::Void)
         );
+        let name = function.syntax.declarator.identifier().map(|name| name.name);
         if slot.is_none() && !void {
-            let kind = if self.context.configuration.standard() < CStandard::C99
-                || self.context.configuration.gnu_extensions()
-            {
-                SemanticErrorKind::MissingReturnValueWarning
-            } else {
-                SemanticErrorKind::MissingReturnValue
-            };
-            self.error(kind, source, None, None);
+            self.group_diagnostic(
+                crate::configuration::DiagnosticGroup::ReturnMismatch,
+                SemanticErrorKind::ReturnMismatch,
+                source,
+                name,
+                None,
+            );
         } else if let Some(slot) = slot {
             let Some(e) = slot_expression(slot) else {
                 return;
@@ -341,7 +343,21 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         source,
                     );
                 } else if !self.types.unanalyzed(info.ty) {
-                    self.error(SemanticErrorKind::VoidReturnValue, source, None, None);
+                    // GCC points at the value, Clang and TCC at `return`.
+                    let site = if self.context.configuration.diagnostic_format()
+                        == crate::configuration::DiagnosticFormat::Gcc
+                    {
+                        e.source_vectors
+                    } else {
+                        source
+                    };
+                    self.group_diagnostic(
+                        crate::configuration::DiagnosticGroup::VoidReturnMismatch,
+                        SemanticErrorKind::VoidReturnMismatch,
+                        site,
+                        name,
+                        None,
+                    );
                 }
             } else if !self.assignment_conversion(result, info) {
                 self.error(

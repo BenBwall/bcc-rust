@@ -21,7 +21,7 @@ impl Analyzer<'_, '_, '_> {
     pub(in crate::translation_phases::semantic_analysis) fn implicit_library_type(
         &mut self,
         name: Identifier,
-    ) -> Option<TypeId> {
+    ) -> Option<(TypeId, crate::util::string_cache::StringCacheId)> {
         // Freestanding ordinary names retain C89 implicit int. Reserved
         // __builtin_ aliases keep their explicit GCC contract in either mode.
         // C99: §5.1.2.1p1, p. 11; PDF p. 23.
@@ -62,25 +62,7 @@ impl Analyzer<'_, '_, '_> {
         }
         spelling.push(')');
         let spelling = self.context.string_cache.intern(spelling.as_str());
-        if !self.context.withholds(
-            crate::translation_phases::ErrorSeverity::Warning,
-            false,
-            name.source_vectors,
-        ) {
-            self.context.append_pending_errors([
-                crate::translation_phases::TranslationError::Semantic(
-                    super::super::SemanticError {
-                        extension_severity: None,
-                        kind:
-                            super::super::SemanticErrorKind::ImplicitLibraryFunction(spelling),
-                        source_vectors:     name.source_vectors,
-                        name:               Some(name.name),
-                        previous:           None,
-                    },
-                ),
-            ]);
-        }
-        Some(ty)
+        Some((ty, spelling))
     }
 
     fn library_type_spelling(&self, pattern: crate::builtins::SignatureType) -> &'static str {

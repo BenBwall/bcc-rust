@@ -638,6 +638,9 @@ enum LanguageFlag {
     PackAll(bool),
     /// `-fvisibility=default|hidden|protected|internal`.
     Visibility(crate::configuration::DefaultVisibility),
+    /// `-fpermissive` (true) or `-fno-permissive`: GCC's C type-safety
+    /// errors become warnings.
+    Permissive(bool),
     /// `-fbuiltin`, `-fno-builtin` or `-fno-builtin-NAME`, which
     /// [`Cli::library_builtins`] reads in order.
     Builtins,
@@ -806,6 +809,8 @@ impl LanguageFlag {
             | "-fcommon"
             | "-fno-common" => return Some(Self::Code),
             | "-fbuiltin" | "-fno-builtin" => return Some(Self::Builtins),
+            | "-fpermissive" => return Some(Self::Permissive(true)),
+            | "-fno-permissive" => return Some(Self::Permissive(false)),
             | "-fpack-struct" => return Some(Self::PackAll(true)),
             | "-fno-pack-struct" => return Some(Self::PackAll(false)),
             | _ => {},
@@ -868,9 +873,21 @@ impl LanguageFlag {
             | Self::Relocation
             | Self::Code
             | Self::Builtins => configuration,
-            | Self::AllWarnings(enabled) => configuration.with_warning_option(
+            // GCC's and Clang's `-Wall` hold `-Wimplicit`, and GCC's
+            // `-Wreturn-mismatch` too; they matter only in C89, where those
+            // groups are otherwise off.
+            | Self::AllWarnings(true) => [
                 DiagnosticGroup::UnusedFunction,
-                WarningOption::Enable(enabled),
+                DiagnosticGroup::Implicit,
+                DiagnosticGroup::ReturnMismatch,
+            ]
+            .into_iter()
+            .fold(configuration, |configuration, group| {
+                configuration.with_warning_option(group, WarningOption::Enable(true))
+            }),
+            | Self::AllWarnings(false) => configuration.with_warning_option(
+                DiagnosticGroup::UnusedFunction,
+                WarningOption::Enable(false),
             ),
             | Self::WarningsAsErrors(enabled) => configuration.with_warnings_as_errors(enabled),
             | Self::WarningGroup(group, option) => configuration.with_warning_option(group, option),
@@ -899,6 +916,7 @@ impl LanguageFlag {
                 .with_pack_structures(false)
                 .with_default_pack(0),
             | Self::Visibility(visibility) => configuration.with_default_visibility(visibility),
+            | Self::Permissive(enabled) => configuration.with_permissive(enabled),
         }
     }
 }

@@ -62,6 +62,14 @@ impl CompilerConfiguration {
             | DiagnosticGroup::PointerToEnumCast | DiagnosticGroup::VoidPointerToIntCast =>
                 &[DiagnosticGroup::VoidPointerToEnumCast],
             | DiagnosticGroup::IntToPointerCast => &[DiagnosticGroup::IntToVoidPointerCast],
+            | DiagnosticGroup::Implicit => &[
+                DiagnosticGroup::ImplicitFunctionDeclaration,
+                DiagnosticGroup::ImplicitLibraryFunction,
+                DiagnosticGroup::ImplicitInt,
+            ],
+            | DiagnosticGroup::ImplicitFunctionDeclaration =>
+                &[DiagnosticGroup::ImplicitLibraryFunction],
+            | DiagnosticGroup::ReturnMismatch => &[DiagnosticGroup::VoidReturnMismatch],
             | _ => &[],
         };
         for &child in children {
@@ -134,17 +142,25 @@ impl CompilerConfiguration {
         {
             option = self.warning_options[DiagnosticGroup::Conversion as usize];
         }
-        if !option.enabled.unwrap_or(
-            group.enabled_by_default()
-                || (group.default() == GroupDefault::Extension
-                    && self.extension_policy != ExtensionPolicy::Allow),
-        ) {
+        let permerror =
+            (group.default() == GroupDefault::Permerror).then(|| self.permerror_default(group));
+        let enabled = match permerror {
+            | Some(default) => default.is_some(),
+            | None =>
+                group.enabled_by_default()
+                    || (group.default() == GroupDefault::Extension
+                        && self.extension_policy != ExtensionPolicy::Allow),
+        };
+        if !option.enabled.unwrap_or(enabled) {
             return None;
         }
         let default = if option.reenabled_warning {
             ErrorSeverity::Warning
         } else {
-            group.default_severity()
+            match permerror {
+                | Some(default) => default.unwrap_or(ErrorSeverity::Warning),
+                | None => group.default_severity(),
+            }
         };
         // Clang 23's `-w` also silences its default-error
         // `-Wargument-outside-range`, though not `-Wint-conversion` or
@@ -168,6 +184,55 @@ impl CompilerConfiguration {
             None
         } else {
             Some(severity)
+        }
+    }
+
+    /// The severity of a [`GroupDefault::Permerror`] group before any
+    /// option names it, `None` where it reports nothing: the C type-safety
+    /// rules GCC 14 made errors ("permerrors") in C99 and later, which
+    /// `-fpermissive` makes warnings again and which stay warnings, or stay
+    /// silent, in C89 and GNU89 ("Porting to GCC 14"); Clang 16 and later
+    /// make them errors too, a type mismatch and `return` in every mode
+    /// (Clang 23, `DiagnosticSemaKinds.td`). TCC and `cl` warn about an
+    /// implicit declaration and a `return` mismatch and say nothing about
+    /// implicit int; the pointer groups keep Clang's errors under MSVC, and
+    /// the TCC driver makes them warnings. `-w` leaves an error.
+    /// C99: Foreword paragraph 5, pp. xii-xiii; PDF pp. 10-11 ("remove
+    /// implicit int", "remove implicit function declaration", "return
+    /// without expression not permitted in function that returns a value
+    /// (and vice versa)"); §6.8.6.4p1, p. 139; PDF p. 151; §6.5.16.1p1,
+    /// p. 92; PDF p. 104.
+    fn permerror_default(self, group: DiagnosticGroup) -> Option<ErrorSeverity> {
+        use DiagnosticGroup as G;
+        use ErrorSeverity::{
+            Error,
+            Warning,
+        };
+        use super::CompilerIdentity as I;
+        let c99 = self.standard >= super::CStandard::C99;
+        match self.identity {
+            | I::Tcc | I::Msvc => match group {
+                | G::ImplicitFunctionDeclaration
+                | G::ImplicitLibraryFunction
+                | G::ReturnMismatch
+                | G::VoidReturnMismatch => Some(Warning),
+                | G::ImplicitInt => None,
+                | G::DeclarationMissingParameterType if self.identity == I::Tcc => None,
+                | _ => Some(Error),
+            },
+            | I::Clang | I::ClangCl => match group {
+                | G::ImplicitFunctionDeclaration | G::ImplicitInt => c99.then_some(Error),
+                // Clang warns about an implicit library function in C89.
+                | G::ImplicitLibraryFunction => Some(if c99 { Error } else { Warning }),
+                | _ => Some(Error),
+            },
+            | I::Gcc if c99 => Some(if self.permissive { Warning } else { Error }),
+            | I::Gcc => match group {
+                | G::ImplicitFunctionDeclaration | G::ImplicitInt | G::ReturnMismatch => None,
+                // GCC's own "incompatible implicit declaration of built-in
+                // function" warning stands in for a library function.
+                | _ => Some(Warning),
+            },
         }
     }
 }
@@ -217,7 +282,7 @@ macro_rules! diagnostic_groups {
 // -Werror/-pedantic-errors.
 diagnostic_groups! {
     CompareDistinctPointerTypes => Some("compare-distinct-pointer-types"), Warning, true;
-    IncompatiblePointerTypes => Some("incompatible-pointer-types"), Error, true;
+    IncompatiblePointerTypes => Some("incompatible-pointer-types"), Permerror, true;
     PointerSign => Some("pointer-sign"), Warning, true;
     NonLiteralNullConversion => Some("non-literal-null-conversion"), Warning, false;
     PointerCompare => Some("pointer-compare"), Warning, false;
@@ -242,8 +307,28 @@ diagnostic_groups! {
     Nonnull => Some("nonnull"), Warning, false;
     PredefinedOutsideFunction => Some("predefined-identifier-outside-function"), Warning, false;
     PointerQualifiers => Some("incompatible-pointer-types-discards-qualifiers"), Warning, true;
-    IncompatibleFunctionPointerTypes => Some("incompatible-function-pointer-types"), Error, true;
-    IntConversion => Some("int-conversion"), Error, true;
+    /// GCC's `-Wincompatible-pointer-types` holds it.
+    IncompatibleFunctionPointerTypes => Some("incompatible-function-pointer-types"), Permerror, true;
+    IntConversion => Some("int-conversion"), Permerror, true;
+    /// A call to an undeclared function, which declares it `int ()`.
+    ImplicitFunctionDeclaration => Some("implicit-function-declaration"), Permerror, false;
+    /// A call to an undeclared library function, which declares it with
+    /// its library type; Clang reports it in C89 too.
+    ImplicitLibraryFunction => Some("implicit-function-declaration"), Permerror, false;
+    /// A declaration without a type specifier, or an old-style parameter
+    /// without a declaration, which defaults to `int`.
+    ImplicitInt => Some("implicit-int"), Permerror, false;
+    /// GCC's and Clang's `-Wimplicit`, the parent of the implicit
+    /// declaration and implicit int groups; it reports nothing itself.
+    Implicit => Some("implicit"), Ignored, false;
+    /// `return;` in a function returning a value.
+    ReturnMismatch => Some("return-mismatch"), Permerror, false;
+    /// `return` with a value in a function returning `void`, which GCC
+    /// reports in C89 too.
+    VoidReturnMismatch => Some("return-mismatch"), Permerror, true;
+    /// GCC: an identifier list in a function declarator that is no
+    /// definition (`void f(x);`). Clang refuses it outright.
+    DeclarationMissingParameterType => Some("declaration-missing-parameter-type"), Permerror, false;
     /// Clang: an x86 builtin's immediate constant outside its range. A
     /// non-constant one, and GCC's out-of-range one, is an error.
     ArgumentOutsideRange => Some("argument-outside-range"), Error, false;
@@ -321,6 +406,9 @@ diagnostic_groups! {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum GroupDefault {
     Error,
+    /// Depends on the identity, the C revision and `-fpermissive`
+    /// ([`CompilerConfiguration::permerror_default`]).
+    Permerror,
     Warning,
     Ignored,
     Extension,
@@ -348,7 +436,7 @@ impl DiagnosticGroup {
 
     pub(crate) const fn default_severity(self) -> ErrorSeverity {
         match self.default() {
-            | GroupDefault::Error => ErrorSeverity::Error,
+            | GroupDefault::Error | GroupDefault::Permerror => ErrorSeverity::Error,
             | GroupDefault::Warning | GroupDefault::Ignored | GroupDefault::Extension =>
                 ErrorSeverity::Warning,
         }
@@ -356,7 +444,10 @@ impl DiagnosticGroup {
 
     /// Whether the group reports anything before an option enables it.
     pub(crate) fn enabled_by_default(self) -> bool {
-        matches!(self.default(), GroupDefault::Error | GroupDefault::Warning)
+        matches!(
+            self.default(),
+            GroupDefault::Error | GroupDefault::Permerror | GroupDefault::Warning
+        )
     }
 }
 

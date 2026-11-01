@@ -2653,8 +2653,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         self.types.composite(left, right).is_some()
     }
 
-    /// C89 implicit function declarations are retained in GNU modes.
-    /// Strict C99 and later require a declaration. Known library names use
+    /// C89 implicit function declarations are retained, under
+    /// `-Wimplicit-function-declaration`, whose severity follows the
+    /// identity and the revision (an error in C99 and later for GCC 14 and
+    /// Clang). Clang no longer declares one in C23, where the identifier is
+    /// undeclared; GCC, TCC and `cl` still do. Known library names use
     /// their real prototypes, as Clang does, rather than C89 implicit int.
     /// C99: §6.5.2.2 paragraphs 6 and 9, pp. 71-72; PDF pp. 83-84;
     /// §7.1.4 paragraph 2, p. 167; PDF p. 179.
@@ -2724,21 +2727,23 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
         if let ExpressionType::Identifier(name) = e.kind
             && self.lookup(Namespace::Ordinary, name.name).is_none()
-            && (self
-                .context
-                .configuration
-                .is_native(crate::configuration::Feature::ImplicitFunctionDeclaration)
-                || self.context.configuration.gnu_extensions())
+            && (self.context.configuration.standard() < CStandard::C23
+                || self.context.configuration.compiler_identity().rules()
+                    == crate::configuration::RuleSet::Gcc)
         {
-            let ty = self.implicit_library_type(name).unwrap_or_else(|| {
-                let result = self.types.scalar(Scalar::Int);
-                self.types.intern(TypeKind::Function {
-                    result,
-                    parameters: &[],
-                    prototype: false,
-                    variadic: false,
-                })
-            });
+            let library = self.implicit_library_type(name);
+            let ty = library.map_or_else(
+                || {
+                    let result = self.types.scalar(Scalar::Int);
+                    self.types.intern(TypeKind::Function {
+                        result,
+                        parameters: &[],
+                        prototype: false,
+                        variadic: false,
+                    })
+                },
+                |(ty, _)| ty,
+            );
             self.bind(
                 name,
                 ty,
@@ -2749,11 +2754,17 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             );
             self.bindings.last_mut().expect("implicit binding").origin =
                 super::super::BindingOrigin::ImplicitOrdinary;
-            self.context.report_extension(
-                crate::configuration::Feature::ImplicitFunctionDeclaration,
-                "implicit function declaration",
-                name.source_vectors,
-            );
+            let (group, kind) = match library {
+                | Some((_, spelling)) => (
+                    crate::configuration::DiagnosticGroup::ImplicitLibraryFunction,
+                    SemanticErrorKind::ImplicitLibraryFunction(spelling),
+                ),
+                | None => (
+                    crate::configuration::DiagnosticGroup::ImplicitFunctionDeclaration,
+                    SemanticErrorKind::ImplicitFunctionDeclaration,
+                ),
+            };
+            self.group_diagnostic(group, kind, name.source_vectors, Some(name.name), None);
         }
     }
 

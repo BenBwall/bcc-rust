@@ -673,7 +673,8 @@ impl Parser<'_> {
                 self.state.warn_unsupported = enabled;
                 return;
             },
-            | "" | "all" | "write-strings" | "implicit-function-declaration" => return,
+            | "" | "all" | "write-strings" => return,
+            | "implicit-function-declaration" => "implicit-function-declaration",
             | "discarded-qualifiers" => "incompatible-pointer-types-discards-qualifiers",
             | _ => {
                 self.unsupported(text);
