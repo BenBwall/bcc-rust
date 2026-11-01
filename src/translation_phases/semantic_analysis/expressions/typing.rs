@@ -2770,13 +2770,26 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     /// GCC builtins use reserved identifiers declared by the implementation;
     /// an undeclared builtin retains an unmodeled result rather than implicit
-    /// int.
+    /// int. TCC knows only its own few: any other `__builtin_` name outside
+    /// a system header is an ordinary identifier there, which a call
+    /// declares implicitly and a program may define.
     /// C99: §7.1.3 paragraph 1, p. 166; PDF p. 178.
     pub(in crate::translation_phases::semantic_analysis) fn builtin_name(
         &self,
         name: Identifier,
     ) -> bool {
-        crate::builtins::lookup(self.context.string_cache.at(name.name)).is_some_and(|descriptor| {
+        let spelling = self.context.string_cache.at(name.name);
+        if self.context.configuration.compiler_identity()
+            == crate::configuration::CompilerIdentity::Tcc
+            && spelling.starts_with("__builtin_")
+            && !tcc_builtin(spelling, self.context.configuration.target())
+            && !self
+                .context
+                .in_system_header(self.context.first_source_vector(name.source_vectors))
+        {
+            return false;
+        }
+        crate::builtins::lookup(spelling).is_some_and(|descriptor| {
             match descriptor.availability.naming {
                 | crate::builtins::NamingPolicy::GnuOrdinary =>
                     self.context.configuration.gnu_extensions(),
@@ -2911,4 +2924,45 @@ pub(in crate::translation_phases::semantic_analysis) struct ExpressionIndex<'tu>
     pub(in crate::translation_phases::semantic_analysis) expressions: ArenaMap<'tu, usize, usize>,
     pub(in crate::translation_phases::semantic_analysis) conversions: &'tu [Conversion<'tu>],
     pub(in crate::translation_phases::semantic_analysis) conversion_starts: &'tu [usize],
+}
+
+/// Whether TCC (TinyCC mob) knows `spelling` as a builtin: the operators
+/// its parser implements (`tcctok.h`), the macros and the prototypes its
+/// `tccdefs.h` predefines (the library aliases, bound to the library names,
+/// only off Windows), and the bit-counting family its runtime provides.
+fn tcc_builtin(spelling: &str, target: crate::target::Target) -> bool {
+    const OPERATORS: &[&str] = &[
+        "expect",
+        "constant_p",
+        "frame_address",
+        "return_address",
+        "unreachable",
+        "va_start",
+        "va_arg",
+        "va_copy",
+        "va_end",
+        "offsetof",
+        "extract_return_addr",
+        "types_compatible_p",
+        "choose_expr",
+    ];
+    const LIBRARY: &[&str] = &[
+        "memcpy", "memmove", "memset", "memcmp", "strlen", "strcpy", "strncpy", "strcmp", "strncmp",
+        "strcat", "strncat", "strchr", "strrchr", "strdup", "malloc", "realloc", "calloc",
+        "memalign", "free", "alloca", "abort",
+    ];
+    const BITS: &[&str] = &["ffs", "clz", "ctz", "clrsb", "popcount", "parity"];
+    let Some(name) = spelling.strip_prefix("__builtin_") else {
+        return false;
+    };
+    let windows = matches!(
+        target,
+        crate::target::Target::WindowsGnu | crate::target::Target::WindowsMsvc
+    );
+    OPERATORS.contains(&name)
+        || (!windows && LIBRARY.contains(&name))
+        || BITS.iter().any(|&bits| {
+            name.strip_prefix(bits)
+                .is_some_and(|suffix| matches!(suffix, "" | "l" | "ll"))
+        })
 }

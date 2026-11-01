@@ -567,6 +567,60 @@ mod tests {
         assert!(!gcc.status.success());
     }
 
+    /// TCC knows only its own few `__builtin_` names (TCC mob `tcctok.h`
+    /// and `tccdefs.h`): a call to any other is an implicit declaration of
+    /// an ordinary function, which the program may define. Its builtins
+    /// keep their meaning.
+    #[test]
+    fn tcc_unknown_builtins_are_ordinary_functions() {
+        let directory = Directory::new();
+        for (source, name) in [
+            (
+                "int main(void){return __builtin_finite(1.0)!=7;}\nint __builtin_finite(double \
+                 x){return 7;}\n",
+                "__builtin_finite",
+            ),
+            (
+                "int main(void){return __builtin_frob(2);}\nint __builtin_frob(int x){return \
+                 x-2;}\n",
+                "__builtin_frob",
+            ),
+        ] {
+            directory.write("b.c", source);
+            let output = directory.bcc("--tcc-mode", &["-c", "b.c", "-o", "b.o"]);
+            succeeds(&output);
+            assert_eq!(
+                stderr(&output),
+                format!("b.c:1: warning: implicit declaration of function '{name}'\n")
+            );
+            if cfg!(all(target_os = "linux", target_env = "gnu")) {
+                succeeds(&directory.bcc("--tcc-mode", &["-w", "b.c", "-o", "b"]));
+                let run = Command::new(directory.path("b")).output().unwrap();
+                assert_eq!(run.status.code(), Some(0), "{source}");
+            }
+        }
+        directory.write(
+            "known.c",
+            "#include <stdarg.h>\nstruct S { int a, b; };\nstatic int first(int n, ...) { \
+             va_list ap; va_start(ap, n); int r = va_arg(ap, int); va_end(ap); return r; \
+             }\nint main(void) { char *p = __builtin_alloca(4); p[0] = 0; return \
+             __builtin_expect(first(1, 0), 0) + !__builtin_constant_p(3) + \
+             (__builtin_frame_address(0) == 0) + __builtin_popcount(0) + \
+             (int)__builtin_offsetof(struct S, a) + p[0]; }\n",
+        );
+        let output = directory.bcc("--tcc-mode", &["-c", "known.c", "-o", "known.o"]);
+        succeeds(&output);
+        assert_eq!(stderr(&output), "");
+        // Other identities keep the GCC builtin.
+        directory.write(
+            "gcc.c",
+            "int main(void){return !__builtin_finite(1.0);}\n",
+        );
+        let output = directory.bcc("--gcc-mode", &["-c", "gcc.c", "-o", "gcc.o"]);
+        succeeds(&output);
+        assert_eq!(stderr(&output), "");
+    }
+
     /// An empty translation unit, such as a source whose text is all
     /// conditioned out, compiles in every personality, as in GCC, Clang
     /// and TCC; `-pedantic` reports it in each compiler's words, and
