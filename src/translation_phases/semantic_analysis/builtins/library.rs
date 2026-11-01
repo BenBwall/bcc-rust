@@ -11,6 +11,7 @@ use crate::translation_phases::semantic_analysis::{
     Analyzer,
     Scalar,
     TypeId,
+    TypeKind,
 };
 
 impl Analyzer<'_, '_, '_> {
@@ -42,7 +43,10 @@ impl Analyzer<'_, '_, '_> {
                 return None,
             | _ => {},
         }
-        let descriptor = crate::builtins::ordinary(spelling)?;
+        let Some(descriptor) = crate::builtins::ordinary(spelling) else {
+            let sized = sized_atomic(spelling)?;
+            return self.sized_atomic_type(sized);
+        };
         let signature = descriptor.signature;
         let variadic = signature.variadic;
         let ty = self.descriptor_type(descriptor);
@@ -83,6 +87,42 @@ impl Analyzer<'_, '_, '_> {
         Some(ty)
     }
 
+    /// The type GCC gives the size-specific forms of its atomic builtins,
+    /// `__atomic_store_16` and the like ([`sized_atomic`]), which are
+    /// libatomic's entry points. Calls take it as an ordinary declaration
+    /// of the library routine, which bcc calls, where GCC expands the
+    /// narrower ones inline. Only GCC knows them; elsewhere a call is an
+    /// implicit declaration. GNU extension: GCC manual, "`__atomic`
+    /// Builtins"; libatomic's ABI.
+    fn sized_atomic_type(&mut self, (shape, unit): (AtomicShape, Scalar)) -> Option<TypeId> {
+        if !self
+            .context
+            .configuration
+            .accepts(crate::configuration::Feature::GccOnlyBuiltins)
+        {
+            return None;
+        }
+        let unit = self.types.scalar(unit);
+        let order = self.types.scalar(Scalar::Int);
+        let void = self.types.scalar(Scalar::Void);
+        let pointer = self.types.intern(TypeKind::Pointer(void));
+        let truth = self.types.scalar(Scalar::Bool);
+        let (result, parameters): (TypeId, &[TypeId]) = match shape {
+            | AtomicShape::Load => (unit, &[pointer, order]),
+            | AtomicShape::Store => (void, &[pointer, unit, order]),
+            | AtomicShape::Exchange => (unit, &[pointer, unit, order]),
+            | AtomicShape::CompareExchange =>
+                (truth, &[pointer, pointer, unit, truth, order, order]),
+        };
+        let parameters = self.types.tu.alloc_slice_copy(parameters);
+        Some(self.types.intern(TypeKind::Function {
+            result,
+            parameters,
+            prototype: true,
+            variadic: false,
+        }))
+    }
+
     fn library_type_spelling(&self, pattern: crate::builtins::SignatureType) -> &'static str {
         use crate::builtins::SignatureType as T;
         match pattern {
@@ -99,4 +139,41 @@ impl Analyzer<'_, '_, '_> {
                 unreachable!("ordinary library prototypes use C library types"),
         }
     }
+}
+
+/// The parameters and result of a size-specific atomic routine.
+#[derive(Clone, Copy)]
+enum AtomicShape {
+    /// `I (void *, int)`.
+    Load,
+    /// `void (void *, I, int)`.
+    Store,
+    /// `I (void *, I, int)`: an exchange or a read-modify-write.
+    Exchange,
+    /// `bool (void *, void *, I, bool, int, int)`.
+    CompareExchange,
+}
+
+/// The shape of the libatomic routine `spelling` names, and its `I`: the
+/// unsigned integer of the size in bytes the name ends with.
+fn sized_atomic(spelling: &str) -> Option<(AtomicShape, Scalar)> {
+    let (operation, size) = spelling.strip_prefix("__atomic_")?.rsplit_once('_')?;
+    let unit = match size {
+        | "1" => Scalar::UnsignedChar,
+        | "2" => Scalar::UnsignedShort,
+        | "4" => Scalar::UnsignedInt,
+        | "8" => Scalar::UnsignedLongLong,
+        | "16" => Scalar::UnsignedInt128,
+        | _ => return None,
+    };
+    let shape = match operation {
+        | "load" => AtomicShape::Load,
+        | "store" => AtomicShape::Store,
+        | "compare_exchange" => AtomicShape::CompareExchange,
+        | "exchange" | "fetch_add" | "fetch_sub" | "fetch_and" | "fetch_or" | "fetch_xor"
+        | "fetch_nand" | "add_fetch" | "sub_fetch" | "and_fetch" | "or_fetch" | "xor_fetch"
+        | "nand_fetch" => AtomicShape::Exchange,
+        | _ => return None,
+    };
+    Some((shape, unit))
 }

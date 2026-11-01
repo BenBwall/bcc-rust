@@ -22,6 +22,9 @@
 //!   (gcc.c-torture/execute/20031003-1.c).
 //! - A trailing array reached through a pointer has no subobject size of its
 //!   own for `__builtin_object_size` mode 1 (`gcc.dg/pr101836_5.c`).
+//! - Under GCC's rules the size-specific atomic routines such as
+//!   `__atomic_store_16` have libatomic's prototypes, so their operands keep
+//!   their width (gcc.dg/atomic-store-6.c).
 //! - The conversions between floating types and `_BitInt` wider than 128 bits
 //!   round as the rounding mode asks, raise "invalid" and saturate out of
 //!   range, and raise "inexact" for a discarded fraction (gcc.dg/bitint-28.c,
@@ -680,6 +683,31 @@ mod tests {
             std::fs::remove_file(executable).unwrap();
         }
         std::fs::remove_file(input).unwrap();
+    }
+
+    /// GCC declares the size-specific atomic routines, libatomic's entry
+    /// points, with their operand types, so a 16-byte store passes all 128
+    /// bits rather than an implicitly declared `int`. Built only: the
+    /// interpreter has no libatomic.
+    #[test]
+    fn sized_atomic_routines_have_gccs_prototypes() {
+        let source = b"__int128 i;\n\
+            unsigned long long l;\n\
+            short s;\n\
+            int main(void) {\n\
+            __atomic_store_16(&i, -1, 0);\n\
+            if (i != -1) return 1;\n\
+            if (__atomic_load_16(&i, 5) != (unsigned __int128)-1) return 2;\n\
+            __atomic_store_8(&l, 0x123456789abcdefULL, 5);\n\
+            if (__atomic_fetch_add_8(&l, 1, 5) != 0x123456789abcdefULL || l != 0x123456789abcdf0ULL)\n\
+            return 3;\n\
+            short e = 0;\n\
+            if (!__atomic_compare_exchange_2(&s, &e, 7, 0, 5, 5) || s != 7) return 4;\n\
+            if (__atomic_compare_exchange_2(&s, &e, 9, 0, 5, 5) || e != 7) return 5;\n\
+            if (__atomic_exchange_16(&i, 5, 5) != (unsigned __int128)-1 || i != 5) return 6;\n\
+            return 0;\n\
+            }\n";
+        builds_on_every_back_end("--compiler-identity=gcc", source, &["-latomic"], "");
     }
 
     /// [`prints_on_every_back_end`] for the compiled back ends alone.
