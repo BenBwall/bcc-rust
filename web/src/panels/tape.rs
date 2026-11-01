@@ -825,19 +825,37 @@ fn reduced_motion() -> bool {
 struct Layout<'a> {
     calls:   Vec<(usize, f64, bool)>,
     objects: HashMap<usize, (f64, &'a str)>,
+    /// Objects of folded groups, at their group's row: a slant from one
+    /// starts at the call that held it.
+    folded:  HashMap<usize, f64>,
 }
 
 fn layout<'a>(reel: &'a Reel, rows: &[Row]) -> Layout<'a> {
     let mut calls = Vec::new();
     let mut objects = HashMap::new();
+    let mut folded = HashMap::new();
+    let mut fold = |at: usize, y: f64| {
+        for lane in &reel.groups[at].lanes {
+            for &object in &lane.objects {
+                folded.insert(object, y);
+            }
+        }
+    };
     for (place, row) in rows.iter().enumerate() {
         let top = AXIS + px(place) * LANE;
         match row {
-            | &Row::Group { at, .. } => calls.push((at, top + LANE / 2.0, false)),
+            | &Row::Group { at, folded, .. } => {
+                calls.push((at, top + LANE / 2.0, false));
+                if folded {
+                    fold(at, top + LANE / 2.0);
+                }
+            },
             | Row::Ladder { groups } => {
                 let rungs = px(groups.len().max(2) - 1);
                 for (rung, &at) in groups.iter().enumerate() {
-                    calls.push((at, top + 6.0 + px(rung) * (LANE - 12.0) / rungs, true));
+                    let y = top + 6.0 + px(rung) * (LANE - 12.0) / rungs;
+                    calls.push((at, y, true));
+                    fold(at, y);
                 }
             },
             | &Row::Lane { group, lane } => {
@@ -848,7 +866,11 @@ fn layout<'a>(reel: &'a Reel, rows: &[Row]) -> Layout<'a> {
             },
         }
     }
-    Layout { calls, objects }
+    Layout {
+        calls,
+        objects,
+        folded,
+    }
 }
 
 /// The tape itself, as one SVG.
@@ -868,7 +890,11 @@ fn tape_svg(
             // Room after the last step for "NOT YET RUN" and the flag.
             let width = (x(count) + 130.0).max(px(count + LEADER) * step).max(view);
             let height = AXIS + px(rows.len()) * LANE + 8.0;
-            let Layout { calls: call_rows, objects } = layout(reel, rows);
+            let Layout {
+                calls: call_rows,
+                objects,
+                folded,
+            } = layout(reel, rows);
             let ahead = move |index: usize| if index > cursor { "is-ahead" } else { "" };
             let head = x(cursor) + step / 2.0;
             let number = reel.steps.get(cursor).map_or(0, |step| step.0).to_string();
@@ -976,15 +1002,21 @@ fn tape_svg(
                     let slants: Vec<(f64, f64, f64)> = flow
                         .from
                         .iter()
-                        .filter_map(|&(object, at)| Some((x(at) + step / 2.0, objects.get(&object)?.0, to)))
+                        .filter_map(|&(object, at)| {
+                            let from = objects.get(&object).map(|&(y, _)| y).or_else(|| folded.get(&object).copied())?;
+                            Some((x(at) + step / 2.0, from, to))
+                        })
                         .filter(|&(x0, from, _)| (from - to).abs() >= 1.0 || x1 - x0 > 1.0)
                         .collect();
                     // The label sits on the longest slant, once the store
                     // has happened and there is room for it.
                     let longest = slants.iter().copied().max_by(|a, b| (x1 - a.0).total_cmp(&(x1 - b.0)))?;
+                    // A value stored back into its own lane (i = i + 1)
+                    // needs no label: the lane says it.
+                    let across = slants.iter().any(|&(_, from, to)| (from - to).abs() >= 1.0);
                     let label = flow
                         .label
-                        .filter(|_| flow.to.1 <= cursor && step >= 8.0 && x1 - longest.0 >= 28.0)
+                        .filter(|_| across && flow.to.1 <= cursor && step >= 8.0 && x1 - longest.0 >= 28.0)
                         .and_then(|range| source_text(source, range))
                         .map(|text| format!("{text} → {name}"));
                     let drawn = slants.into_iter().map(|(x0, from, to)| {
@@ -998,7 +1030,13 @@ fn tape_svg(
                     Some(view! {
                         <g class=format!("tape-flow {}", ahead(flow.to.1))>
                             {drawn}
-                            {label.map(|label| view! { <text class="tape-flow-label" x=mid_x - 5.0 y=mid_y + 3.5 text-anchor="end">{label}</text> })}
+                            {label.map(|label| {
+                                // Left of the slant, unless that runs off
+                                // the tape's start.
+                                let room = px(label.chars().count()) * 6.8;
+                                let (at, anchor) = if mid_x - 5.0 - room > 0.0 { (mid_x - 5.0, "end") } else { (mid_x + 5.0, "start") };
+                                view! { <text class="tape-flow-label" x=at y=mid_y + 3.5 text-anchor=anchor>{label}</text> }
+                            })}
                         </g>
                     })
                 })

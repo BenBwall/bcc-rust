@@ -785,7 +785,7 @@
   .stage-text { display: flex; flex-direction: column; gap: 2px; line-height: 1.2; }
   .stage-phase { display: none; }
   .stage-button[aria-selected="true"] .stage-phase { color: color-mix(in srgb, var(--device) 70%, var(--ink)); }
-  .stage-name { font-size: 11px; font-weight: 700; line-height: 1.2; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .stage-name { font-size: 11px; font-weight: 700; line-height: 1.15; }
   .stage-text { min-width: 0; }
   .stage-button.is-stopped { opacity: .55; border-style: dashed; box-shadow: none; }
   .stage-button.is-stopped .stage-index { background: var(--danger); color: var(--device); }
@@ -1133,6 +1133,11 @@
     .encoders { gap: 8px; }
     .knob { width: 46px; }
   }
+  /* The channel keys drop their CH where the strip is narrow. */
+  @media (max-width: 1500px) {
+    .stage-index::before { content: ""; }
+    .stage-index { min-width: 22px; }
+  }
   /* Laptops: the listing narrows; the side column of the notes drops under
      the note where the machine column is narrow. */
   @media (max-width: 1180px) {
@@ -1282,6 +1287,12 @@
     .hero h1 { font-size: 40px; }
     .section-heading h2 { font-size: 28px; }
     .pane-header { min-height: 36px; padding: 6px 12px; }
+    /* The channel keys: one row that scrolls, so the output follows. */
+    .stage-strip { flex-direction: row; gap: 6px; overflow-x: auto; padding: 8px 12px 10px; scroll-snap-type: x proximity; }
+    .stage-row, .stage-row:first-child { display: flex; gap: 6px; margin: 0; }
+    .stage-group-label { display: none; }
+    .stage-item { flex: none; scroll-snap-align: start; }
+    .stage-button { width: auto; white-space: nowrap; }
     .source-legend { gap: 2px 12px; padding: 8px 12px; font-size: 10px; }
     .source-pane > .code-editor {
       --editor-height: min(calc(var(--source-lines) * 22px + 30px), max(154px, calc(100svh - var(--toolbar-height) - 560px)));

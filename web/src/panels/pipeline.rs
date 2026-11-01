@@ -350,8 +350,27 @@ fn StageStrip(stage: RwSignal<Stage>, compilation: Memo<Option<Compilation>>) ->
             .map(item)
             .collect_view()
     };
+    // Where the keys scroll in one row (a phone), the selected one comes
+    // into view.
+    let strip = NodeRef::<leptos::html::Div>::new();
+    Effect::new(move || {
+        stage.track();
+        let Some(strip) = strip.get() else {
+            return;
+        };
+        if strip.scroll_width() <= strip.client_width() {
+            return;
+        }
+        if let Some(key) = strip.query_selector("[aria-selected=\"true\"]").ok().flatten() {
+            let offset = key.get_bounding_client_rect().left() - strip.get_bounding_client_rect().left();
+            let left = f64::from(strip.scroll_left()) + offset - 12.0;
+            let options = web_sys::ScrollToOptions::new();
+            options.set_left(left.max(0.0));
+            strip.scroll_to_with_scroll_to_options(&options);
+        }
+    });
     view! {
-        <div class="stage-strip" role="tablist" aria-label="Compiler stages">
+        <div class="stage-strip" role="tablist" aria-label="Compiler stages" node_ref=strip>
             <div class="stage-row" role="presentation">
                 <span class="stage-group-label" data-phase="Front end" aria-hidden="true">"Front end"</span>
                 {row(0..6)}
