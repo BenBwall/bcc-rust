@@ -862,6 +862,14 @@ Allow/Warn/Deny without discarding the AST. Non-reserved `asm` and `typeof` are
 keywords only in GNU modes, except that `typeof` is native from C23; before C23
 it reports a GNU origin. C2y case ranges keep their ISO origin.
 
+A translation unit with no external declaration, which C99 §6.9p1 does not
+allow, compiles in every mode, as in GCC, Clang and TCC (a source whose text
+is all conditioned out is common). `-pedantic` reports it as a warning and
+`-pedantic-errors` as an error, in GCC's words ("ISO C forbids an empty
+translation unit [-Wpedantic]") or, under Clang's rules, Clang's ("ISO C
+requires a translation unit to contain at least one declaration
+[-Wempty-translation-unit]").
+
 `__int128` and `unsigned __int128` now have real semantic integer types on
 all four x86-64 targets: 16-byte size/alignment and rank above `long long`.
 Reserved builtin typedef names `__int128_t` and `__uint128_t` are present

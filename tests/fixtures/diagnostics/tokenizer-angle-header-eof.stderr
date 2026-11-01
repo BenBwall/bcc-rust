@@ -23,12 +23,4 @@ error: cannot find header `abc`
             <built-in>
   = help: add the directory containing it with `--isystem <dir>`
 
-error: translation unit is empty
- --> tokenizer-angle-header-eof.c:1:14
-  |
-1 | #include <abc
-  |              ^ expected a declaration or function definition
-  |
-  = note: C99 §6.9: a translation unit contains at least one external declaration
-
-4 errors generated.
+3 errors generated.

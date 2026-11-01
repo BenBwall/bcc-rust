@@ -150,6 +150,10 @@ pub(crate) struct Context<'tu> {
     /// out of the values Clang's evaluator folds, each with its output-token
     /// ordinal ([`Self::preprocessed_tokens`] before the next token).
     pub(crate) weak_pragmas: ArenaVec<'tu, (usize, StringCacheId)>,
+    /// A pragma the identity's compiler hands to its parser was read,
+    /// which keeps a translation unit that declares nothing from being
+    /// empty.
+    pub(crate) pragma_content: bool,
     /// The pragmas a text of phase 4 ([`Self::phase_four_text`]) writes back
     /// where they were.
     pub(crate) text_pragmas: ArenaVec<'tu, TextPragma<'tu>>,

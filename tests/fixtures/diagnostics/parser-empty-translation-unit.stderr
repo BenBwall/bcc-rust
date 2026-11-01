@@ -1,4 +1,4 @@
-error: translation unit is empty
+error: ISO C requires a translation unit to contain at least one declaration [-Wempty-translation-unit]
  --> parser-empty-translation-unit.c:2:1
   |
 2 | 

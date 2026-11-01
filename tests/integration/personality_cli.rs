@@ -563,6 +563,74 @@ mod tests {
         assert!(!gcc.status.success());
     }
 
+    /// An empty translation unit, such as a source whose text is all
+    /// conditioned out, compiles in every personality, as in GCC, Clang
+    /// and TCC; `-pedantic` reports it in each compiler's words, and
+    /// `-pedantic-errors` refuses it.
+    #[test]
+    fn empty_translation_units_compile_as_each_compiler_does() {
+        let directory = Directory::new();
+        directory.write("empty.c", "#ifdef NEVER\nint x;\n#endif\n");
+        for mode in ["--gcc-mode", "--clang-mode", "--tcc-mode"] {
+            let output = directory.bcc(mode, &["-c", "empty.c", "-o", "empty.o"]);
+            succeeds(&output);
+            assert_eq!(stderr(&output), "", "{mode}");
+        }
+        for (mode, message) in [
+            (
+                "--gcc-mode",
+                "ISO C forbids an empty translation unit [-Wpedantic]",
+            ),
+            (
+                "--clang-mode",
+                "ISO C requires a translation unit to contain at least one declaration \
+                 [-Wempty-translation-unit]",
+            ),
+        ] {
+            let warned = directory.bcc(mode, &["-pedantic", "-c", "empty.c", "-o", "empty.o"]);
+            succeeds(&warned);
+            assert!(
+                stderr(&warned).contains(&format!("warning: {message}")),
+                "{mode}: {}",
+                stderr(&warned)
+            );
+            let refused = directory.bcc(
+                mode,
+                &["-pedantic-errors", "-c", "empty.c", "-o", "empty.o"],
+            );
+            assert!(!refused.status.success(), "{mode}");
+            assert!(
+                stderr(&refused).contains("error: "),
+                "{mode}: {}",
+                stderr(&refused)
+            );
+        }
+        // A pragma the compiler's parser sees is content, as in each
+        // compiler: `pack` in both, `GCC diagnostic` only in GCC's.
+        for (source, gcc, clang) in [
+            ("#pragma pack(1)\n", true, true),
+            ("#pragma GCC diagnostic push\n", true, false),
+            ("#pragma GCC system_header\n", false, false),
+            ("#pragma STDC FP_CONTRACT ON\n", false, true),
+            ("#pragma STDC FOO\n", false, false),
+            ("#pragma clang fp contract(fast)\n", false, true),
+        ] {
+            directory.write("pragma.c", source);
+            for (mode, content) in [("--gcc-mode", gcc), ("--clang-mode", clang)] {
+                let output = directory.bcc(
+                    mode,
+                    &["-pedantic-errors", "-c", "pragma.c", "-o", "pragma.o"],
+                );
+                assert_eq!(
+                    output.status.success(),
+                    content,
+                    "{mode} {source:?}: {}",
+                    stderr(&output)
+                );
+            }
+        }
+    }
+
     /// A sign after `p` continues a preprocessing number from C99. Before
     /// C99, GCC reads it so only in its GNU modes and Clang only after a
     /// hexadecimal prefix, so strict C90 splits `0x1p+f` (GCC's

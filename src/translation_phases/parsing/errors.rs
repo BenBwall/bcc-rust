@@ -86,7 +86,10 @@ impl<'tu> Parser<'_, 'tu, '_> {
         {
             return;
         }
-        if error_type.severity() == ErrorSeverity::Error && !error_type.leaves_syntax_intact() {
+        if error_type.severity() == ErrorSeverity::Error
+            && !error_type.leaves_syntax_intact()
+            && !matches!(error_type, ParserErrorType::EmptyTranslationUnit)
+        {
             self.hard_error_count += 1;
         }
         let found_spelling = token.map(|token| -> &str {
@@ -129,6 +132,12 @@ impl<'tu> Parser<'_, 'tu, '_> {
                 crate::translation_phases::policy_severity(
                     self.context.configuration.extension_policy(),
                     crate::translation_phases::DiagnosticPolicy::Warning,
+                )
+                .unwrap_or(ErrorSeverity::Warning)
+            } else if matches!(error_type, ParserErrorType::EmptyTranslationUnit) {
+                crate::translation_phases::policy_severity(
+                    self.context.configuration.extension_policy(),
+                    crate::translation_phases::DiagnosticPolicy::Extension,
                 )
                 .unwrap_or(ErrorSeverity::Warning)
             } else {
@@ -1584,6 +1593,17 @@ impl ToDiagnostic for ParserError<'_> {
         arena: &'d Bump,
     ) -> Diagnostic<'d> {
         let mut explanation = self.error_type.explain_in(arena, self.found_spelling);
+        // The pedantic diagnostic in each compiler's words.
+        if matches!(self.error_type, ParserErrorType::EmptyTranslationUnit) {
+            explanation.message = if context.configuration.compiler_identity().rules()
+                == crate::configuration::RuleSet::Clang
+            {
+                "ISO C requires a translation unit to contain at least one declaration \
+                 [-Wempty-translation-unit]"
+            } else {
+                "ISO C forbids an empty translation unit [-Wpedantic]"
+            };
+        }
         if self.insertion_point.is_some() {
             if self.error_type.expects_terminating_semicolon() {
                 // The likely fix is known, so lead with it.
