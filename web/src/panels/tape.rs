@@ -850,13 +850,15 @@ pub fn Deck(
             >
                 {move || tape_svg(reel, rows, step_width.get(), at(), width.get())}
                 // The slants' labels, placed in the tape's visible window.
+                // The layer is one pixel drawn with visible overflow, so it
+                // never widens what the tape can scroll.
                 {move || {
                     let step = step_width.get();
                     let (cursor, left, view) = (at(), scroll.get(), width.get());
                     reel.with(|reel| rows.with(|rows| source.with(|source| {
                         let layer = place_labels(reel, rows, source, step, cursor, (left, left + view));
                         view! {
-                            <svg class="tape-labels" aria-hidden="true" width=left + view height=AXIS + px(rows.len()) * LANE + 8.0>
+                            <svg class="tape-labels" aria-hidden="true" width="1" height="1">
                                 {layer.into_iter().map(|label| view! {
                                     <text class="tape-flow-label" x=label.left y=label.middle + 3.5>{label.text}</text>
                                 }).collect_view()}
