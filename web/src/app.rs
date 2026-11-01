@@ -43,11 +43,15 @@ use crate::{
     glossary::Glossary,
     palette,
     panels::{
+        Cells,
+        Datasheet,
+        Deck,
+        Knob,
         LiveCompile,
-        Memory,
         Narration,
         PipelineView,
-        TreeView,
+        Reel,
+        Schematic,
         WasmListing,
         WasmView,
         source_marks,
@@ -149,15 +153,7 @@ pub fn App() -> impl IntoView {
                                 </Show>
                             }
                         >
-                            <Narration snapshot=state.current recent=state.recent on_jump=Callback::new(move |index| state.jump(index)) placeholder=state.placeholder running=state.running.into() />
-                            // The machine's state comes right after the step, so
-                            // it stays near the narration at laptop heights;
-                            // where the column is wide, the expression tree
-                            // sits beside it.
-                            <div class="machine-state">
-                                <Memory snapshot=state.current />
-                                <TreeView snapshot=state.current />
-                            </div>
+                            <MachineView state />
                         </Show>
                     </div>
                 </div>
@@ -181,6 +177,8 @@ const MAX_SOURCE_BYTES: u32 = 32 * 1024;
 const REPOSITORY_URL: &str = "https://github.com/BenBwall/bcc-rust";
 const README_URL: &str = "https://github.com/BenBwall/bcc-rust/blob/main/web/README.md";
 const RUN_YIELD_MS: u32 = 140;
+/// The SPEED knob's detents: Run's pause between steps, in milliseconds.
+const RUN_DELAYS: [u32; 9] = [20, 40, 70, 100, 140, 200, 300, 450, 700];
 /// Steps a held key may queue while the engine answers.
 const MAX_QUEUED_STEPS: u32 = 4;
 const THEME_KEY: &str = "bcc-theme";
@@ -269,6 +267,13 @@ pub(crate) struct State {
     wasm:            wasm::WasmState,
     /// bcc's recent compilations of the editor's text for that view.
     wasm_checks:     RwSignal<wasm::Checks>,
+    /// The tape's scale, as a factor of the scale that fits the run to the
+    /// screen.
+    zoom:            RwSignal<f64>,
+    /// How long Run pauses between steps, in milliseconds.
+    run_delay:       RwSignal<u32>,
+    /// Where the playhead is across the tape's viewport, while it is in view.
+    head:            RwSignal<Option<f64>>,
 }
 
 impl State {
@@ -367,6 +372,9 @@ impl State {
             }),
             wasm: wasm::WasmState::new(),
             wasm_checks,
+            zoom: RwSignal::new(1.0),
+            run_delay: RwSignal::new(RUN_YIELD_MS),
+            head: RwSignal::new(None),
         }
     }
 
@@ -423,6 +431,8 @@ impl State {
         self.editor_text.set(text.clone());
         self.filename.set(name);
         self.clear_history();
+        // A new program starts at the scale that fits it.
+        self.zoom.set(1.0);
         self.failed.set(false);
         self.error.set(None);
         self.compile_now();
@@ -524,7 +534,7 @@ impl State {
                 if reached {
                     break;
                 }
-                TimeoutFuture::new(RUN_YIELD_MS).await;
+                TimeoutFuture::new(self.run_delay.get_untracked()).await;
             }
             match result {
                 | Err(error) => self.show_error(&error),
@@ -612,7 +622,9 @@ impl State {
     /// gives way to the lesson that follows one program through every
     /// stage; the learner's own program, opened or edited, stays.
     fn follow_path(self) {
-        let lesson = self.editor_text.with_untracked(|text| demos::matching(text).is_some());
+        let lesson = self
+            .editor_text
+            .with_untracked(|text| demos::matching(text).is_some());
         match DEMOS.iter().find(|demo| !demo.path.is_empty()) {
             | Some(demo) if lesson => {
                 self.mode.set(Mode::Pipeline);
@@ -980,6 +992,10 @@ impl State {
                     state.event.title.replace('`', ""),
                     state.event.explanation.replace('`', "")
                 );
+                if let Some(tape) = tape_summary(state) {
+                    text.push(' ');
+                    text.push_str(&tape);
+                }
                 if let Some(diagnostic) = &state.diagnostic {
                     text.push(' ');
                     text.push_str(&diagnostic.message);
@@ -1032,6 +1048,7 @@ impl State {
     /// The source editor's decorations: execution marks, run target, object
     /// colours, and in the pipeline view the stage's own marks and the line
     /// links (with the exact range of a hovered preprocessing token).
+    #[expect(clippy::too_many_lines, reason = "One block per layer of marks.")]
     fn source_layers(self) -> Vec<Layer> {
         if self.mode.get() == Mode::Wasm {
             let (execution, links) = if self.wasm.stale(&self.editor_text.get()) {
@@ -1066,9 +1083,15 @@ impl State {
                     &format!("{class} cat-{}", snapshot.event.category),
                     3,
                 );
-                if fault {
-                    mark.inline_class = Some("exec-fault-text".into());
-                }
+                // On the lit box the code is dark, whatever its token colour.
+                mark.inline_class = Some(
+                    if fault {
+                        "exec-fault-text"
+                    } else {
+                        "exec-current-text"
+                    }
+                    .into(),
+                );
                 execution.push(mark);
                 execution.push(Decoration::line(
                     range.start.line,
@@ -1465,36 +1488,30 @@ fn Header(state: State) -> impl IntoView {
     view! {
         <header class="site-header">
             <a class="brand" href="#top" aria-label="bcc home">
-                <span class="brand-mark" aria-hidden="true">
-                    <svg viewBox="0 0 32 32" width="30" height="30">
-                        <rect x="1" y="1" width="30" height="30" rx="8" class="brand-tile" />
-                        <path d="M9 10l6 6-6 6" class="brand-chevron" />
-                        <path d="M17 22h7" class="brand-cursor" />
-                    </svg>
-                </span>
                 <span class="wordmark">"bcc"</span>
-                <span class="brand-divider" aria-hidden="true"></span>
                 <span class="brand-subtitle">"How C runs"</span>
             </a>
             <nav class="site-nav" aria-label="Sections">
                 <a href="#lessons">"Lessons"</a>
                 <a href="#workbench">"Workbench"</a>
                 <a href="#about">"How it works"</a>
+                <a href="#glossary">"Glossary"</a>
             </nav>
             <div class="header-actions">
+                // A two-position switch: daylight, or the device under low
+                // light.
                 <button
                     type="button"
-                    class="icon-button theme-toggle"
-                    aria-label="Toggle light and dark theme"
+                    class="theme-toggle"
+                    aria-label="Dark theme"
+                    aria-pressed=move || (state.theme.get() == "dark").to_string()
                     title="Toggle light and dark theme"
                     on:click=move |_| state.toggle_theme()
                 >
-                    <svg class="icon-sun" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><circle cx="12" cy="12" r="4.2" /><path d="M12 2.5v2.2M12 19.3v2.2M4.6 4.6l1.6 1.6M17.8 17.8l1.6 1.6M2.5 12h2.2M19.3 12h2.2M4.6 19.4l1.6-1.6M17.8 6.2l1.6-1.6" /></svg>
-                    <svg class="icon-moon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z" /></svg>
+                    <span class="theme-position is-light" aria-hidden="true">"Light"</span>
+                    <span class="theme-position is-dark" aria-hidden="true">"Dark"</span>
                 </button>
-                <a class="icon-button" href=REPOSITORY_URL aria-label="bcc on GitHub" title="bcc on GitHub">
-                    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path class="fill" d="M12 2a10 10 0 0 0-3.2 19.5c.5.1.7-.2.7-.5v-1.7c-2.8.6-3.4-1.3-3.4-1.3-.4-1.2-1.1-1.5-1.1-1.5-.9-.6.1-.6.1-.6 1 .1 1.6 1 1.6 1 .9 1.6 2.4 1.1 3 .9.1-.7.4-1.1.6-1.4-2.2-.3-4.6-1.1-4.6-5 0-1.1.4-2 1-2.7-.1-.3-.4-1.3.1-2.7 0 0 .8-.3 2.8 1a9.6 9.6 0 0 1 5 0c1.9-1.3 2.8-1 2.8-1 .5 1.4.2 2.4.1 2.7.6.7 1 1.6 1 2.7 0 3.9-2.4 4.7-4.6 5 .4.3.7.9.7 1.9V21c0 .3.2.6.7.5A10 10 0 0 0 12 2z" /></svg>
-                </a>
+                <a class="header-link" href=REPOSITORY_URL>"GitHub"<span class="sr-only">": bcc’s source"</span></a>
             </div>
         </header>
     }
@@ -1505,13 +1522,13 @@ fn Hero(state: State) -> impl IntoView {
     view! {
         <section class="hero" id="top">
             <div class="hero-text">
-                <p class="eyebrow">"An interactive introduction to compilers and the C abstract machine"</p>
+                <p class="eyebrow">"bcc · an interactive introduction to compilers and the C abstract machine"</p>
                 <h1>"What really happens when C runs?"</h1>
                 <p class="lede">
                     "The C standard doesn’t describe your CPU. It describes an "<em>"abstract machine"</em>
                     ": objects with lifetimes, values that are read and stored, and rules for exactly when each \
-                     effect happens. Step through real programs one evaluation at a time, then watch bcc, a C \
-                     compiler written in Rust, translate the same code into IR, assembly and machine code."
+                     effect happens. Step through real programs one evaluation at a time, recorded like a tape, then \
+                     watch bcc, a C compiler written in Rust, translate the same code into IR, assembly and machine code."
                 </p>
                 // Each step is a link to where it happens; the second, which
                 // starts the first lesson, is where a first visit begins.
@@ -1521,7 +1538,7 @@ fn Hero(state: State) -> impl IntoView {
                     </li>
                     <li>
                         <a class="is-primary" href="#workbench" on:click=move |_| state.open_view(Mode::Machine, None)>
-                            <span class="hero-step-number">"2"</span>"Step through it with "<kbd>"→"</kbd>
+                            <span class="hero-step-number">"2"</span>"Step through it"<kbd class="hero-key" aria-hidden="true">"→"</kbd>
                         </a>
                     </li>
                     <li>
@@ -1539,63 +1556,85 @@ fn Hero(state: State) -> impl IntoView {
     }
 }
 
-/// How to read the page: one C program, two ways of giving it meaning. The
-/// abstract machine runs it as the standard defines it; the compiler
-/// translates it, stage by stage, into code a processor runs. Each part
-/// opens the view that shows it.
+/// How to read the page, drawn as a train graph (Marey's time-distance
+/// diagram): the stations are the forms a program takes, top to bottom, and
+/// one statement travels across them. The abstract machine runs it where it
+/// stands, as the C standard defines it; the compiler carries it down,
+/// station by station, to the bytes a processor runs. Each station opens
+/// the view that shows it.
 #[component]
 fn ReadingMap(state: State) -> impl IntoView {
-    let stage = move |stage: Stage, name: &'static str, gloss: &'static str| {
-        view! {
-            <li>
-                <a class="map-stage" href="#workbench" on:click=move |_| state.open_view(Mode::Pipeline, Some(stage))>
-                    <span class="map-stage-name">{name}</span>
-                    <span class="map-stage-gloss">{gloss}</span>
-                </a>
-            </li>
-        }
-    };
+    // Each station: its row, name, what the statement looks like there, and
+    // the stage that shows it.
+    const STATIONS: [(&str, &str, Stage); 6] = [
+        ("Tokens", "total = total + next ;", Stage::Tokens),
+        ("Syntax tree", "=(total, +(total, next))", Stage::SyntaxTree),
+        ("Types", "int = int + int", Stage::SemanticTypes),
+        ("IR", "load · add · store", Stage::Ir),
+        ("Assembly", "addl %ecx, %eax", Stage::Asm),
+        ("Machine code", "01 c8", Stage::MachineCode),
+    ];
+    let row = |index: usize| 74.0 + crate::panels::px(index) * 34.0;
+    let stop = |index: usize| 150.0 + crate::panels::px(index) * 52.0;
+    // The compiler's train: a dwell at each station, then down to the next.
+    let mut track = format!("M118 {:.0}", row(0) - 34.0);
+    for index in 0..STATIONS.len() {
+        _ = std::fmt::Write::write_fmt(
+            &mut track,
+            format_args!(" L{:.0} {:.0} h18", stop(index), row(index)),
+        );
+    }
     view! {
-        <aside class="reading-map" aria-labelledby="map-title">
-            <h2 id="map-title">"How to read this page"</h2>
-            <div class="map-source">
-                <span class="map-file">"lesson.c"</span>
-                <code>"total = total + next;"</code>
+        <figure class="reading-map" aria-labelledby="map-title">
+            <figcaption class="map-caption" id="map-title">
+                <b>"Figure 0"</b>" — How to read this page: one statement, two journeys"
+            </figcaption>
+            <div class="map-screen">
+                <div class="map-screen-inner">
+                <svg class="map-graph" viewBox="0 0 560 300" role="presentation" aria-hidden="true">
+                    <line class="map-station" x1="112" y1="24" x2="548" y2="24" />
+                    <line class="map-station" x1="112" y1="40" x2="548" y2="40" />
+                    {(0..STATIONS.len()).map(|index| view! {
+                        <line class="map-station" x1="112" y1=row(index) x2="548" y2=row(index) />
+                    }).collect_view()}
+                    // The abstract machine runs the statement where it stands.
+                    <path class="map-run" d="M118 40 H548" />
+                    {[(150.0, "read total"), (250.0, "read next"), (346.0, "add"), (420.0, "store total")].into_iter().map(|(x, what)| view! {
+                        <line class="map-tick" x1=x y1="34" x2=x y2="46" />
+                        <text class="map-event" x=x + 4.0 y="33">{what}</text>
+                    }).collect_view()}
+                    <path class="map-train" d=track />
+                    {STATIONS.iter().enumerate().map(|(index, (_, form, _))| view! {
+                        <circle class="map-stop" cx=stop(index) cy=row(index) r="3" />
+                        <text class="map-form" x=stop(index) + 24.0 y=row(index) + 4.0>{*form}</text>
+                    }).collect_view()}
+                    <text class="map-source" x="118" y="19">"lesson.c: total = total + next;"</text>
+                </svg>
+                <ol class="map-labels">
+                    <li class="is-source"><span>"C source"</span></li>
+                    <li class="is-machine">
+                        <a href="#workbench" on:click=move |_| state.open_view(Mode::Machine, None)>"Abstract machine"</a>
+                    </li>
+                    {STATIONS.iter().enumerate().map(|(index, (name, _, stage))| {
+                        let stage = *stage;
+                        view! {
+                            <li style:--row=index.to_string()>
+                                <a href="#workbench" on:click=move |_| state.open_view(Mode::Pipeline, Some(stage))>{*name}</a>
+                            </li>
+                        }
+                    }).collect_view()}
+                </ol>
+                </div>
             </div>
-            <div class="map-lanes">
-                <section class="map-lane is-machine" aria-labelledby="map-machine">
-                    <p class="map-kicker">"What it means"</p>
-                    <h3 id="map-machine"><span aria-hidden="true">"◈ "</span>"Abstract machine"</h3>
-                    <ul class="map-ideas">
-                        <li><strong>"Objects"</strong>" are places in memory: "<code>"total"</code>", "<code>"next"</code></li>
-                        <li><strong>"Each step"</strong>" reads, computes or stores one value"</li>
-                        <li><strong>"Rules"</strong>" of C99 say why, and when effects finish"</li>
-                    </ul>
-                    <a class="map-open" href="#workbench" on:click=move |_| state.open_view(Mode::Machine, None)>
-                        "Step through it"<span aria-hidden="true">" →"</span>
-                    </a>
-                </section>
-                <section class="map-lane is-pipeline" aria-labelledby="map-pipeline">
-                    <p class="map-kicker">"How it is translated"</p>
-                    <h3 id="map-pipeline"><span aria-hidden="true">"⇢ "</span>"Compiler pipeline"</h3>
-                    <ol class="map-stages">
-                        {stage(Stage::Tokens, "Tokens", "words and symbols")}
-                        {stage(Stage::SyntaxTree, "Syntax tree", "the grammar’s structure")}
-                        {stage(Stage::Ir, "IR", "simple operations on values")}
-                        {stage(Stage::Asm, "Assembly", "x86-64 instructions")}
-                        {stage(Stage::MachineCode, "Machine code", "the bytes a CPU runs")}
-                    </ol>
-                </section>
-            </div>
-            <p class="map-wasm">
-                <a href="#workbench" on:click=move |_| state.open_view(Mode::Wasm, None)>
-                    <span aria-hidden="true">"▤ "</span>"WebAssembly"
-                </a>
-                " runs bcc’s output for real, one instruction at a time. Terms like "
+            <p class="map-legend">
+                <span class="map-key is-run">"Orange: "</span>"the abstract machine gives the statement its meaning, one evaluation at a time. "
+                <span class="map-key is-train">"White: "</span>"the compiler carries it down to machine code. "
+                <a href="#workbench" on:click=move |_| state.open_view(Mode::Wasm, None)>"WebAssembly"</a>
+                " runs bcc’s output for real. Terms like "
                 <a href="#term-lvalue">"lvalue"</a>" and "<a href="#term-sequence-point">"sequence point"</a>
                 " are in the "<a href="#glossary">"glossary"</a>"."
             </p>
-        </aside>
+        </figure>
     }
 }
 
@@ -1609,7 +1648,7 @@ fn Lessons(state: State) -> impl IntoView {
     view! {
         <section class="lessons" id="lessons" aria-labelledby="lessons-title">
             <div class="section-heading">
-                <h2 id="lessons-title">"Lessons"</h2>
+                <h2 id="lessons-title"><span class="section-number">"Table 1"</span>"Lessons"</h2>
                 <p>"Each lesson is a small, complete C program. Edit any of them, or open your own .c file."</p>
             </div>
             <ol class="lesson-list">
@@ -1631,9 +1670,7 @@ fn Lessons(state: State) -> impl IntoView {
                                     <span class="lesson-number">{format!("{:02}", index + 1)}</span>
                                     <span class="lesson-title">{demo.title}</span>
                                     <span class="lesson-summary">{demo.summary}</span>
-                                    <span class="lesson-topics">
-                                        {demo.topics.iter().map(|topic| view! { <span class="topic">{*topic}</span> }).collect_view()}
-                                    </span>
+                                    <span class="lesson-topics">{demo.topics.join(" / ")}</span>
                                 </button>
                             </li>
                         }
@@ -1744,10 +1781,13 @@ fn Toolbar(state: State) -> impl IntoView {
     view! {
         <div class="toolbar" node_ref=toolbar>
             <div class="mode-tabs" role="tablist" aria-label="View">
-                {tab(Mode::Machine, "Abstract machine", "Machine", "◈")}
-                {tab(Mode::Pipeline, "Compiler pipeline", "Pipeline", "⇢")}
-                {tab(Mode::Wasm, "WebAssembly", "WebAssembly", "▤")}
+                {tab(Mode::Machine, "Abstract machine", "Machine", "1")}
+                {tab(Mode::Pipeline, "Compiler pipeline", "Compiler", "2")}
+                {tab(Mode::Wasm, "WebAssembly", "Wasm", "3")}
             </div>
+            <Show when=move || state.mode.get() == Mode::Machine>
+                <Encoders state />
+            </Show>
             <div class="transport" role="group" aria-label="Execution controls" hidden=move || state.mode.get() != Mode::Machine>
                 <button
                     type="button"
@@ -1808,7 +1848,11 @@ fn Toolbar(state: State) -> impl IntoView {
             </div>
             <div class="run-status" hidden=move || state.mode.get() != Mode::Machine>
                 <span class="status-pill" data-status=status_kind>{status}</span>
-                <span class="step-counter">"Step "<strong>{move || state.current.with(|s| s.as_ref().map_or_else(|| "–".into(), |s| s.step.to_string()))}</strong></span>
+                <span class="step-counter">
+                    <span class="step-counter-label">"Step "</span>
+                    <strong>{move || state.current.with(|s| s.as_ref().map_or_else(|| "–".into(), |s| s.step.to_string()))}</strong>
+                    <span class="step-counter-total">{move || state.history.with(|history| history.last().map(|last| format!(" / {}", last.step)).unwrap_or_default())}</span>
+                </span>
             </div>
             <wasm::WasmTransport state hidden=Signal::derive(move || state.mode.get() != Mode::Wasm) />
             <wasm::StartAtMain state hidden=Signal::derive(move || state.mode.get() != Mode::Wasm) />
@@ -2019,12 +2063,12 @@ fn About() -> impl IntoView {
     view! {
         <section class="about" id="about" aria-labelledby="about-title">
             <div class="section-heading">
-                <h2 id="about-title">"How it works"</h2>
+                <h2 id="about-title"><span class="section-number">"Specifications"</span>"How it works"</h2>
                 <p>"Different ways of giving a C program meaning, side by side."</p>
             </div>
             <div class="about-grid">
                 <article>
-                    <h3>"The abstract machine"</h3>
+                    <h3><span class="spec-number">"§1"</span>"The abstract machine"</h3>
                     <p>
                         "The C standard defines a program by what an idealized machine does with it. There are no registers \
                          here, only objects: regions of storage with a type, a lifetime and a value. Evaluating an \
@@ -2038,7 +2082,7 @@ fn About() -> impl IntoView {
                     </p>
                 </article>
                 <article>
-                    <h3>"The compiler"</h3>
+                    <h3><span class="spec-number">"§2"</span>"The compiler"</h3>
                     <p>
                         "A real compiler doesn’t run your program; it translates it. bcc splices lines, cuts them into \
                          tokens, runs the preprocessor, builds a syntax tree, checks types, lowers everything to an SSA \
@@ -2056,7 +2100,7 @@ fn About() -> impl IntoView {
                     </p>
                 </article>
                 <article>
-                    <h3>"Limits of this model"</h3>
+                    <h3><span class="spec-number">"§3"</span>"Limits of this model"</h3>
                     <p>
                         "The engine runs a bounded subset of C: int and char locals, int pointers, fixed int arrays, \
                          functions, if, while and for. No preprocessor (the preprocessor lesson opens in the compiler \
@@ -2073,6 +2117,139 @@ fn About() -> impl IntoView {
                 </article>
             </div>
         </section>
+    }
+}
+
+/// What the step did on the tape, for screen readers: the objects it
+/// created, wrote, read or ended, and their values.
+fn tape_summary(state: &Snapshot) -> Option<String> {
+    let parts: Vec<String> = state
+        .event
+        .access
+        .iter()
+        .filter_map(|access| {
+            let object = state
+                .objects
+                .iter()
+                .find(|object| object.id == access.object)?;
+            let value = crate::panels::value_text(&object.value, &state.objects)
+                .unwrap_or_else(|| "indeterminate".to_owned());
+            Some(match access.kind.as_str() {
+                | "create" => format!("track {} begins, {value}", object.name),
+                | "write" => format!("track {} now {value}", object.name),
+                | "read" => format!("track {} read, {value}", object.name),
+                | "end" => format!("track {} ends", object.name),
+                | _ => return None,
+            })
+        })
+        .collect();
+    (!parts.is_empty()).then(|| format!("Tape: {}.", parts.join("; ")))
+}
+
+/// The abstract machine view: the tape, the cells under its playhead, and
+/// below them the note on the step beside the expression and the objects.
+/// The playhead's line drops through the cells into the note.
+#[component]
+fn MachineView(state: State) -> impl IntoView {
+    let reel = Memo::new(move |_| state.history.with(|history| Reel::record(history)));
+    view! {
+        <div class="machine-view" style:--head-x=move || state.head.get().map_or_else(String::new, |x| format!("{x:.1}px"))>
+            <Deck
+                history=state.history
+                cursor=state.cursor
+                reel
+                source=state.source.into()
+                zoom=state.zoom
+                running=state.running.into()
+                head=state.head
+                on_jump=Callback::new(move |index| state.jump(index))
+            />
+            <div class="head-row">
+                <span class="hanger" aria-hidden="true" hidden=move || state.head.with(Option::is_none)></span>
+                <Cells snapshot=state.current />
+            </div>
+            <div class="notes-row">
+                <Narration snapshot=state.current recent=state.recent on_jump=Callback::new(move |index| state.jump(index)) placeholder=state.placeholder running=state.running.into() />
+                <div class="machine-side">
+                    <Schematic snapshot=state.current />
+                    <Datasheet snapshot=state.current history=state.history reel />
+                </div>
+            </div>
+        </div>
+    }
+}
+
+/// The machine's encoders: STEP scrubs through the recorded steps, SPEED
+/// sets Run's pace, ZOOM the tape's scale.
+#[component]
+fn Encoders(state: State) -> impl IntoView {
+    let recorded = move || state.history.with(Vec::len);
+    let step_position = Signal::derive(move || {
+        let count = recorded().max(2) - 1;
+        crate::panels::px(state.cursor.get().unwrap_or(0)) / crate::panels::px(count)
+    });
+    let speed_index = move || {
+        let delay = state.run_delay.get();
+        RUN_DELAYS
+            .iter()
+            .position(|&known| known >= delay)
+            .unwrap_or(RUN_DELAYS.len() - 1)
+    };
+    // ZOOM turns a quarter larger or smaller per detent, from a sixty-fourth
+    // of the fitted scale (where the whole run fits, however long) to four
+    // times it.
+    let zoom_position = Signal::derive(move || (state.zoom.get().log2() + 6.0) / 8.0);
+    view! {
+        <div class="encoders" role="group" aria-label="Tape controls">
+            <Knob
+                label="Step"
+                name="Step through the recorded run"
+                colour="blue"
+                position=step_position
+                reading=Signal::derive(move || state.current.with(|snapshot| snapshot.as_ref().map_or_else(|| "–".to_owned(), |snapshot| snapshot.step.to_string())))
+                disabled=Signal::derive(move || state.locked_tracked() || state.edited.get())
+                on_turn=Callback::new(move |detents: i32| {
+                    let count = state.history.with_untracked(Vec::len);
+                    if let Some(cursor) = state.cursor.get_untracked().filter(|_| count > 0) {
+                        let target = if detents < 0 {
+                            cursor.saturating_sub(detents.unsigned_abs() as usize)
+                        } else {
+                            (cursor + detents.unsigned_abs() as usize).min(count - 1)
+                        };
+                        state.jump(target);
+                    }
+                })
+            />
+            <Knob
+                label="Speed"
+                name="Run speed"
+                colour="ochre"
+                position=Signal::derive(move || 1.0 - crate::panels::px(speed_index()) / crate::panels::px(RUN_DELAYS.len() - 1))
+                reading=Signal::derive(move || format!("{} ms", state.run_delay.get()))
+                on_turn=Callback::new(move |detents: i32| {
+                    // A detent right is faster: a shorter pause.
+                    let index = if detents > 0 {
+                        speed_index().saturating_sub(1)
+                    } else {
+                        (speed_index() + 1).min(RUN_DELAYS.len() - 1)
+                    };
+                    state.run_delay.set(RUN_DELAYS[index]);
+                })
+            />
+            <Knob
+                label="Zoom"
+                name="Tape zoom"
+                colour="grey"
+                position=zoom_position
+                reading=Signal::derive(move || {
+                    let zoom = state.zoom.get();
+                    if (zoom - 1.0).abs() < 0.01 { "fit".to_owned() } else { format!("×{zoom:.2}") }
+                })
+                on_turn=Callback::new(move |detents: i32| {
+                    state.zoom.update(|zoom| *zoom = (*zoom * 1.25_f64.powi(detents)).clamp(1.0 / 64.0, 4.0));
+                })
+            />
+        </div>
     }
 }
 

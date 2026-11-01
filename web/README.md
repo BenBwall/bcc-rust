@@ -13,13 +13,19 @@ them. Visitors pick a lesson (a small C program) and see it three ways:
   The first time a run needs an idea (a sequence point, the integer
   promotions, pass by value), a "Why it matters" note says what it means
   for real programs; the standard's terms in the text show their definition
-  on hover or focus and are collected in a glossary. A row of chips draws
+  on hover or focus and are collected in a glossary. A wired line draws
   each step's value flow (`values[1]` read → `4`; the int `200` converted
   to the char `-56`, stored into `narrow`). The exact source range is
-  highlighted, the current full expression is drawn as a tree whose values
-  fill in as it is evaluated, and memory is drawn as call frames holding
-  objects, with pointers as arrows and the element just read or written
-  marked.
+  highlighted. The run so far is recorded as a multitrack tape (Figure 1):
+  every object is a lane over the steps, its values written in hexagonal
+  bus segments as in a timing diagram, cross-hatched while indeterminate;
+  each call is a rule over its objects' lanes, dashed while it waits on a
+  call of its own; and what a store or a call took its value from is a
+  slanted line between lanes, as in Marey's train graph. A playhead marks
+  the step shown, the cells under it hold the objects at that step by call,
+  the step's numbered note hangs off it, the current full expression is
+  wired up as a schematic whose wires fill with values (Figure 2), and a
+  datasheet lists the objects (Table 1).
 - **Compiler pipeline.** What bcc itself produces for the same program, from
   the first translation phases to machine code: the logical lines after
   line splicing (phases 1-2), the preprocessing tokens (phase 3), the
@@ -53,25 +59,41 @@ them. Visitors pick a lesson (a small C program) and see it three ways:
   data, the bytes just read or written) show the machine's state, and a
   narration explains each instruction for programmers new to WebAssembly.
 
-The page opens with a map of how to read it: one C program, given meaning
-by the abstract machine and translated by the compiler stage by stage, each
-part a link to the view that shows it.
+The page opens with a map of how to read it, drawn as a train graph: one C
+statement, given meaning by the abstract machine and carried by the compiler
+down through its forms to machine code, each station a link to the view
+that shows it.
 
-Below the narration come the memory diagram and the expression tree. Where
-the insight column is at least 580 px wide they share a row, memory taking
-three fifths: windows of about 1200 px and up (beside the source) and 650 to
-820 px (one column, the full width). Between those, and on phones, memory
-comes first and the tree below it.
+The site is drawn as one instrument, after a hardware sequencer's front
+panel (a grey device, black screens, coloured encoders, hard-edged keys,
+monospace engraving) and the datasheet a run is recorded on (rules, figure
+and table captions). Code is always on a black screen. Vermilion means
+"now" (the playhead, the step that ran, the key that steps), blue means
+data flow. Space Mono sets the device and Newsreader italic the notes'
+leading sentences. Every variable keeps one colour, shown as a swatch beside
+its name on the tape, in the cells and in the datasheet, and as an underline
+in the source.
 
-Every variable keeps one colour across the source, the expression tree, the
-value flow and the memory diagram. The page has light and dark themes and works down to phone
-width. At almost every size the line that runs and the narration of what it
-did are on screen together: down to 821 px the source stays beside the
-narration (a sticky column, sized to fit under the toolbar); narrower, the page
-is one column with the source sized so the narration follows it on the same
-screen, and only the toolbar stays at the top. Windows 600 px tall or less (a
-phone held sideways, a zoomed laptop) let the header scroll away and drop the
-source's legends.
+The machine view stacks the tape, the cells under its playhead, and the note
+beside the schematic and the datasheet; where the insight column is under
+760 px the schematic and the datasheet go below the note. The tape fits the
+recorded run to the screen; the ZOOM encoder scales it from a quarter to four
+times that, and a longer run scrolls, the tape moving under a playhead that
+stays in the middle of the screen. Calls are grouped by function and depth
+on the call stack, so a loop's repeated calls share one set of lanes; a group
+with no call at the playhead folds to one row of call bars, and its label
+opens it.
+
+The page has light and dark themes (the device in daylight and under low
+light; its screens stay black in both) and works down to phone width. At
+almost every size the line that runs and the note on what it did are on
+screen together: down to 821 px the source stays beside the machine (a sticky
+column, sized to fit under the control strip); narrower, the device becomes a
+stack of modules with the source sized so the note follows it on the same
+screen, then the tape and the cells, and the transport keys docked at the
+bottom of the window. Windows 600 px tall or less (a phone held sideways, a
+zoomed laptop) let the header scroll away and drop the source's legends and
+the encoders.
 
 The site is written in Rust with [Leptos](https://leptos.dev) and built by
 [Trunk](https://trunkrs.dev) into a static site in `web/dist/`. The page's
@@ -119,8 +141,8 @@ from the output. `web/` is its own Cargo workspace (`bcc-web`, with its own
 Trunk compiles the first three to Wasm, runs wasm-bindgen and wasm-opt
 (downloading the versions matching `Cargo.lock` on first use), hashes the
 page's asset names, and copies `editor/dist/` (the Monaco bundle) to `editor/`
-and `editor/fonts/` (Inter and JetBrains Mono, both SIL OFL, named with their
-package version) to `fonts/`. Its `post_build` hook then runs `prerender` on
+and `editor/fonts/` (Space Mono regular and bold and Newsreader italic, all
+SIL OFL, named with their package version) to `fonts/`. Its `post_build` hook then runs `prerender` on
 the staged output. It renders the page's fixed initial state (the first
 lesson, no engine connected) into `index.html`; moves each Worker's script and
 Wasm into `engine-<hash>/` and `compiler-<hash>/`, and the editor bundle into
@@ -161,7 +183,7 @@ Cloudflare Pages and Netlify; GitHub Pages ignores it. Serve the text files and
 the Wasm modules compressed: gzip shrinks the first load from 2.1 MB to about
 840 KB. Upload the hashed files before `index.html`.
 
-What a first visit fetches: the page, its stylesheet, the two web fonts, the
+What a first visit fetches: the page, its stylesheet, the three web fonts, the
 page's Wasm (the largest part, 540 KB gzip) and the abstract machine's Worker
 (180 KB gzip). The Monaco bundle follows once the engine is ready, the
 compiler's Worker (1.4 MB gzip) when a program is first compiled (an edit,
@@ -177,15 +199,21 @@ first read-only listing, whose folding arrows use it.
   stops it; **Reset** (`Shift+R`) reloads the program. Shortcuts are ignored
   while typing in the editor. Click a line number to set a run target, then
   **Run to line**.
+- The tape is a slider: drag it (or its playhead) to any recorded step;
+  with the focus on it, the arrow keys step as everywhere, `Home` and `End`
+  go to the first and last recorded step, and `Page Up`/`Page Down` move ten
+  steps. The encoders are sliders too, turned by the arrow keys, the mouse
+  wheel or a vertical drag: STEP scrubs through the recorded steps, SPEED
+  sets Run's pause between steps (20 to 700 ms), ZOOM scales the tape.
 - `Tab` moves the keyboard focus through the page, editors included, rather
   than indenting (Monaco's `tabFocusMode`). In the source editor, `Alt+M`
   (`⌥M` on a Mac) switches `Tab` to indenting and back; a note in the
   editor's corner says which while the keyboard has the focus there.
   Monaco's own toggle (`Ctrl+M`) cannot undo the option, and Firefox takes
   `Ctrl+M` to mute the tab.
-- The narration card names the rule each step applied, colour coded by kind
-  (evaluate, convert, memory, lifetime, control flow, call, stopped), and
-  marks sequence points. It is layered: a one-sentence summary (the engine's
+- The note names the rule each step applied and its kind (evaluate,
+  convert, memory, lifetime, control flow, call, stopped), and marks
+  sequence points. It is layered: a one-sentence summary (the engine's
   `Event::summary`) and the cited C99 paragraphs as links come first; **How C
   defines this step** opens the full explanation, what each paragraph says,
   and links to the glossary entries of the step's terms, and stays open from
@@ -193,7 +221,7 @@ first read-only listing, whose folding arrows use it.
   with the object (read it, store into it, give it its initial value, take
   its address, update it), binary operators and calls say that the operand
   order is the machine's choice (C99 §6.5p3), and undefined behavior is
-  titled by its cause. Object names in the text take their memory-diagram
+  titled by its cause. Object names in the text are marked in their
   colour. Earlier steps are listed below it and can be revisited.
 - In the source, a solid box marks what the last step evaluated and a dashed
   underline what runs next; undefined behavior is marked in red. The compiler
@@ -211,7 +239,11 @@ first read-only listing, whose folding arrows use it.
   they link from its first and last lines only, not from every line in it.
 - Back replays retained snapshots (up to 2,000); the engine stays at the newest
   state, and stepping forward replays history before asking it for more.
-- An announcement region narrates each step for screen readers.
+- An announcement region narrates each step for screen readers, ending with
+  what it did on the tape ("Tape: track n read, 4."). The tape's slider
+  names the step at the playhead, the cells and the schematic carry text
+  equivalents, and with reduced motion the reels stand still and the tape
+  jumps rather than glides.
 
 Programs stay in the page's memory and are not uploaded or persisted. Source
 files are limited to 32 KiB. An abstract machine call that takes over 10
@@ -469,8 +501,10 @@ lessons, so a stale module fails CI, which has no wasm32 clang.
 `index.html` is Trunk's shell and `style.css` the design (tokens for both
 themes, layout, components, and the classes the editor decorations use). In
 `src/`, `lib.rs` maps the modules. `app.rs` owns the page state, controls,
-keyboard shortcuts and layout. `panels/` renders the narration, expression
-tree, memory diagram and pipeline view, with the front-end stages' cards and
+keyboard shortcuts and layout. `panels/` renders the note (`narration.rs`),
+the tape (`tape.rs`, which also records the run's lanes), the cells under its
+playhead, the expression schematic, the objects' datasheet, the encoders
+(`knob.rs`) and the pipeline view, with the front-end stages' cards and
 source marks in `panels/front_end.rs`. `editor.rs` mounts Monaco, and
 `highlight.rs` colours the prerendered fallback. `app/wasm.rs` holds the
 WebAssembly view's page state and controls, `panels/wasm.rs` (with
