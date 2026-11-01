@@ -71,6 +71,8 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         machine: Vec::new(),
         position: 0,
         ofast: Ofast::Absent,
+        ofast_at: 0,
+        eval_method: false,
         positions: Vec::new(),
         linker_words: Vec::new(),
     };
@@ -79,6 +81,28 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         state.position += 1;
         if let Some(query) = state.argument(argument, &mut arguments) {
             return Ok(query);
+        }
+    }
+    // Clang refuses an evaluation method beside the options that let the
+    // operations be rearranged, in its own words and order.
+    if state.eval_method {
+        let options: Vec<&str> = state
+            .out
+            .iter()
+            .filter_map(|option| option.to_str())
+            .collect();
+        let [reassociate, reciprocal, approximate] =
+            crate::cli::arguments::eval_method_conflicts(options);
+        for (conflict, name) in [
+            (approximate, "fapprox-func"),
+            (reassociate, "mreassociate"),
+            (reciprocal, "freciprocal"),
+        ] {
+            if conflict {
+                state.error(format_args!(
+                    "option 'ffp-eval-method' cannot be used with option '{name}'"
+                ));
+            }
         }
     }
     if state.ofast != Ofast::Absent {
@@ -119,8 +143,15 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
     if !mmx {
         common.push("-U__MMX__".into());
     }
+    // GCC applies a final `-Ofast`'s `-ffast-math` before every other
+    // option, so any floating-point option overrides it; Clang applies it
+    // where the `-Ofast` stands (`State::flag`). Both drivers then link
+    // `crtfastmath.o` whatever came after.
     if state.ofast == Ofast::Last {
-        common.push("-ffast-math".into());
+        if compiler == Compiler::Gcc {
+            common.push("-ffast-math".into());
+        }
+        common.push("--link-fast-math-runtime".into());
     }
     if invocation.name.ends_with("c89") {
         common.push("-std=c89".into());
@@ -304,6 +335,10 @@ struct Input {
 }
 
 /// The translation so far.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "Independent switches of the command line being translated."
+)]
 struct State<'a> {
     invocation:      &'a Invocation,
     compiler:        Compiler,
@@ -337,6 +372,12 @@ struct State<'a> {
     position:        usize,
     /// Where `-Ofast` stands among the `-O` options.
     ofast:           Ofast,
+    /// The index in [`State::out`] of the `-ffast-math` Clang's last
+    /// `-Ofast` stands for.
+    ofast_at:        usize,
+    /// Clang's `-ffp-eval-method=` was given, which it refuses beside
+    /// reassociation, reciprocals and approximate functions.
+    eval_method:     bool,
     /// The arguments Clang may report as unused, with their positions and
     /// as Clang spells them: the stage options, `-fsyntax-only`, and the
     /// options that only the link uses (`-L/usr/lib`, `-T x.ld`, `-s`).
@@ -348,9 +389,10 @@ struct State<'a> {
 }
 
 /// Where `-Ofast` stands among the `-O` options. Both compilers read a
-/// last `-Ofast` as `-O3` with `-ffast-math` before every other option, so
-/// that any floating-point option overrides it wherever it appears; Clang
-/// reports any `-Ofast` as deprecated.
+/// last `-Ofast` as `-O3` with `-ffast-math`: GCC's before every other
+/// option, so that any floating-point option overrides it wherever it
+/// appears, Clang's where the `-Ofast` stands. Clang reports any `-Ofast`
+/// as deprecated.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Ofast {
     /// No `-Ofast`.
@@ -534,6 +576,10 @@ impl State<'_> {
             | "-Ofast" => {
                 self.ofast = Ofast::Last;
                 self.out.push("-O3".into());
+                if self.compiler == Compiler::Clang {
+                    self.ofast_at = self.out.len();
+                    self.out.push("-ffast-math".into());
+                }
             },
             | "-C" | "-CC" => self.invocation.warning(format_args!(
                 "'{text}' is not supported: bcc does not keep comments in preprocessed output"
@@ -812,6 +858,9 @@ impl State<'_> {
     /// default: suppressed by `-w` or `-Wno-GROUP`, an error under
     /// `-Werror` or `-Werror=GROUP`. The GCC personality reports none.
     fn clang_warning(&mut self, group: &str, message: std::fmt::Arguments<'_>) {
+        // Clang's `-Wdeprecated` holds its `deprecated-…` groups.
+        let parent = group.starts_with("deprecated-").then_some("deprecated");
+        let names = |name: Option<&str>| name == Some(group) || (name.is_some() && name == parent);
         if self.compiler != Compiler::Clang
             || self.warning_options.iter().any(|option| option == "-w")
         {
@@ -824,18 +873,18 @@ impl State<'_> {
         let mut error = None;
         for option in &self.warning_options {
             let option = option.as_str();
-            if option.strip_prefix("-W") == Some(group) {
+            if names(option.strip_prefix("-W")) {
                 enabled = true;
-            } else if option == "-Wno-everything" || option.strip_prefix("-Wno-") == Some(group) {
+            } else if option == "-Wno-everything" || names(option.strip_prefix("-Wno-")) {
                 enabled = false;
             } else if option == "-Werror" {
                 all_errors = true;
             } else if option == "-Wno-error" {
                 all_errors = false;
-            } else if option.strip_prefix("-Werror=") == Some(group) {
+            } else if names(option.strip_prefix("-Werror=")) {
                 enabled = true;
                 error = Some(true);
-            } else if option.strip_prefix("-Wno-error=") == Some(group) {
+            } else if names(option.strip_prefix("-Wno-error=")) {
                 error = Some(false);
             }
         }
@@ -999,6 +1048,30 @@ impl State<'_> {
         }
         if text.starts_with("-O") && self.ofast == Ofast::Last {
             self.ofast = Ofast::Earlier;
+            // A later `-O` option takes back Clang's `-ffast-math` at the
+            // `-Ofast`'s place; a level in its slot changes nothing.
+            if self.compiler == Compiler::Clang {
+                self.out[self.ofast_at] = "-O3".into();
+            }
+        }
+        // Clang's floating-point models: `precise` is its default
+        // semantics, `fast` gives up all but NaNs and infinities, and
+        // `aggressive` is `-ffast-math`. `strict` asks for rounding math,
+        // which bcc does not implement (`treatment`).
+        if self.compiler == Compiler::Clang {
+            let model: &[&str] = match text {
+                | "-ffp-model=precise" => &["-fno-fast-math"],
+                | "-ffp-model=fast" => &["-ffast-math", "-fno-finite-math-only"],
+                | "-ffp-model=aggressive" => &["-ffast-math"],
+                | _ => &[],
+            };
+            if !model.is_empty() {
+                self.out.extend(model.iter().map(Into::into));
+                return;
+            }
+            if text.starts_with("-ffp-eval-method=") {
+                self.eval_method = true;
+            }
         }
         // Clang's own floating-point options, which bcc implements and GCC
         // does not know.

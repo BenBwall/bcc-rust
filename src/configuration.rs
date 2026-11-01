@@ -123,6 +123,10 @@ pub(crate) struct CompilerConfiguration {
     /// semantics up; GCC's driver, which drops an option a later negation
     /// cancels, links `crtfastmath.o` if either does.
     fast_math_given: u8,
+    /// `-fexcess-precision=standard` was given last, which keeps GCC from
+    /// defining `__FAST_MATH__`; bcc evaluates in each type's own format
+    /// either way.
+    standard_excess_precision: bool,
     /// Signaling NaNs are to be kept apart from quiet ones
     /// (`-fsignaling-nans`).
     signaling_nans: bool,

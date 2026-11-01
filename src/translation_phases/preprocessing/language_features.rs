@@ -1200,10 +1200,10 @@ fn write_gcc_floating_point_macros(configuration: CompilerConfiguration, out: &m
 /// options is given up, whichever options gave them up. GCC's
 /// `fast_math_flags_set_p` asks for `-funsafe-math-optimizations` itself,
 /// finite math, no signed zeros, no traps (which `-fsignaling-nans` keeps)
-/// and no `errno`; it also asks for `-fexcess-precision=fast`, which bcc's
-/// GCC identity always has, since bcc evaluates each floating type in its
-/// own format. Clang's driver asks for each option `-ffast-math` implies
-/// but the complex arithmetic and contraction, and ignores
+/// and no `errno`; it also asks that `-fexcess-precision=standard` not be
+/// given, though on x86-64 both settings evaluate each floating type in its
+/// own format, as bcc does. Clang's driver asks for each option `-ffast-math`
+/// implies but the complex arithmetic and contraction, and ignores
 /// `-fsignaling-nans`. Clang also defines `__NO_MATH_ERRNO__` under
 /// `-fno-math-errno`.
 /// C99: extension to §6.10.8 paragraph 4, p. 161; PDF p. 173. GNU
@@ -1223,6 +1223,7 @@ fn write_fast_math_macros(
             && relaxed(Relaxed::NoSignedZeros)
             && relaxed(Relaxed::NoMathErrno)
             && configuration.no_trapping_math()
+            && !configuration.standard_excess_precision()
     } else {
         finite
             && relaxed(Relaxed::NoMathErrno)

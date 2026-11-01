@@ -147,19 +147,31 @@ option deciding, as in GCC 13 and Clang 23; `-ffast-math` and
 `-fno-fast-math` also set the complex arithmetic unless a
 `-f[no-]cx-limited-range` was given, as GCC's `set_fast_math_flags` does
 (Clang's `-fno-fast-math` would reset it even then, a difference only its
-macros-free complex lowering would show). bcc's own command line also takes
-Clang's `-f[no-]honor-nans`, `-f[no-]honor-infinities` and
-`-f[no-]approx-func`, which only the Clang personality passes on. The GCC
-and Clang personalities read `-Ofast`, when it is the last `-O` option, as
-`-O3` with `-ffast-math` before every other option, so any floating-point
-option overrides it, as both compilers do; the Clang personality reports
-it as deprecated (`-Wdeprecated-ofast`), as Clang 23 does. Both identities
-define `__FINITE_MATH_ONLY__` as `1` when NaNs and infinities are given up,
-and `__FAST_MATH__` when their compiler's own set is given up: GCC's
+macros-free complex lowering would show); GCC's `-ffast-math` also turns
+`-fsignaling-nans` off. bcc's own command line also takes Clang's
+`-f[no-]honor-nans`, `-f[no-]honor-infinities` and `-f[no-]approx-func`,
+which only the Clang personality passes on, and `-fexcess-precision=standard`
+or `=fast`, which only GCC's `__FAST_MATH__` reads. The GCC and Clang
+personalities read `-Ofast`, when it is the last `-O` option, as `-O3` with
+`-ffast-math`: GCC's before every other option, so any floating-point option
+overrides it, and Clang's where the `-Ofast` stands, as each compiler does;
+both then link `crtfastmath.o` whatever followed, as their drivers do. The
+Clang personality reports `-Ofast` as deprecated (`-Wdeprecated-ofast`,
+under `-Wdeprecated`), as Clang 23 does, reads `-ffp-model=precise` as
+`-fno-fast-math`, `=fast` as `-ffast-math -fno-finite-math-only` and
+`=aggressive` as `-ffast-math` (`=strict` asks for rounding math, which bcc
+refuses), and refuses `-ffp-eval-method=` beside reassociation, reciprocals
+or approximate functions in Clang's words. Both identities define
+`__FINITE_MATH_ONLY__` as `1` when NaNs and infinities are given up, and
+`__FAST_MATH__` when their compiler's own set is given up: GCC's
 `-funsafe-math-optimizations` itself, finite math, no signed zeros, no traps
-and no `errno`; Clang's every option `-ffast-math` implies but the complex
-arithmetic and contraction. The Clang identity defines `__NO_MATH_ERRNO__`
-under `-fno-math-errno`.
+and no `errno`, unless `-fexcess-precision=standard` is given; Clang's every
+option `-ffast-math` implies but the complex arithmetic and contraction. The
+Clang identity defines `__NO_MATH_ERRNO__` under `-fno-math-errno`, which,
+as in Clang, is the default on musl and WebAssembly unless
+`-f[no-]math-errno` is given. `-ffp-contract=` is still ignored, so
+`-ffast-math -ffp-contract=off` keeps LLVM's `contract` flag, which bcc's
+baseline x86-64 code (no FMA) cannot show.
 
 These options have their real meaning. The LLVM back end gives every
 floating operation, comparison, `phi`, `select` and floating call the LLVM
@@ -1492,7 +1504,7 @@ backend work before they can be enabled.
 | `__OPTIMIZE__` | Defined by the identity macro builder when optimization is enabled. |
 | `__OPTIMIZE_SIZE__` | Defined by the identity macro builder for `-Os` and `-Oz`. |
 | `__NO_INLINE__` | Defined by the identity macro builder when optimization is disabled. |
-| `__NO_MATH_ERRNO__` | Code generation, relocation and optimization policy are not implemented. |
+| `__NO_MATH_ERRNO__` | Defined by the identity macro builder from the floating-point options and, under Clang's rules, the target's default (musl and WebAssembly). |
 | `__OBJC_BOOL_IS_BOOL` | Objective-C and CoreFoundation string intrinsics are not implemented. |
 | `__OPENCL_MEMORY_SCOPE_ALL_SVM_DEVICES` | Scoped atomic operations and memory scopes are not implemented. |
 | `__OPENCL_MEMORY_SCOPE_DEVICE` | Scoped atomic operations and memory scopes are not implemented. |

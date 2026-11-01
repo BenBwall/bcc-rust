@@ -506,6 +506,37 @@ impl CompilerConfiguration {
         self
     }
 
+    /// Gives up `errno` from the math functions unless an option decided
+    /// it, where the identity's compiler does by default: Clang on musl and
+    /// WebAssembly, whose C libraries leave `errno` alone there
+    /// (`ToolChain::IsMathErrnoDefault`). GCC sets it on every target bcc
+    /// has.
+    pub(crate) const fn with_default_math_errno(self) -> Self {
+        let clang = matches!(self.identity.rules(), super::RuleSet::Clang);
+        let quiet = matches!(
+            self.target,
+            crate::target::Target::LinuxMusl
+                | crate::target::Target::Wasm32Unknown
+                | crate::target::Target::Wasm32Wasi
+        );
+        if clang && quiet && !self.gives_floating_point(super::RelaxedFloatingPoint::NoMathErrno) {
+            self.with_implied_floating_point(super::RelaxedFloatingPoint::NoMathErrno, true)
+        } else {
+            self
+        }
+    }
+
+    /// Records `-fexcess-precision=standard` (true) or `=fast`.
+    pub(crate) const fn with_standard_excess_precision(mut self, standard: bool) -> Self {
+        self.standard_excess_precision = standard;
+        self
+    }
+
+    /// Whether `-fexcess-precision=standard` was given last.
+    pub(crate) const fn standard_excess_precision(self) -> bool {
+        self.standard_excess_precision
+    }
+
     /// Records whether the last `-f[no-]fast-math` (`unsafe_math` false) or
     /// `-f[no-]unsafe-math-optimizations` (`unsafe_math` true) gives the
     /// semantics up.
@@ -739,6 +770,7 @@ impl CompilerConfiguration {
             relaxed_floating_point: 0,
             given_floating_point: 0,
             fast_math_given: 0,
+            standard_excess_precision: false,
             signaling_nans: false,
             suppress_warnings: false,
             max_nesting_depth: super::DEFAULT_MAX_NESTING_DEPTH,

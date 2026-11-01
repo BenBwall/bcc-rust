@@ -1049,7 +1049,7 @@ mod tests {
 
     /// GCC's options that give up part of IEC 60559 semantics, alone and
     /// in the combinations whose order or interplay decides the macros.
-    const FLOATING_POINT_OPTIONS: [&[&str]; 46] = [
+    const FLOATING_POINT_OPTIONS: [&[&str]; 48] = [
         &[],
         &["-fsignaling-nans"],
         &["-fsignaling-nans", "-fno-signaling-nans"],
@@ -1127,6 +1127,8 @@ mod tests {
         &["-ffast-math", "-fno-fast-math"],
         &["-ffast-math", "-fsigned-zeros"],
         &["-ffast-math", "-fsignaling-nans"],
+        &["-fsignaling-nans", "-ffast-math"],
+        &["-ffast-math", "-fexcess-precision=standard"],
         &["-ffast-math", "-fno-unsafe-math-optimizations"],
         &["-fcx-limited-range", "-ffast-math", "-fno-fast-math"],
         &["-fno-finite-math-only", "-Ofast"],
@@ -1988,6 +1990,13 @@ mod tests {
                 false,
             ),
             (&["-fno-math-errno"], false, false, true),
+            // Clang applies `-Ofast` where it stands, if no `-O` follows.
+            (&["-fno-finite-math-only", "-Ofast"], true, true, true),
+            (&["-fno-fast-math", "-Ofast"], true, true, true),
+            (&["-Ofast", "-O2"], false, false, false),
+            (&["-ffast-math", "-ffp-model=precise"], false, false, false),
+            (&["-ffp-model=fast"], false, false, true),
+            (&["-ffp-model=aggressive"], true, true, true),
             (
                 &[
                     "-fno-signed-zeros",
@@ -2045,6 +2054,39 @@ mod tests {
             "{}",
             stderr(&error)
         );
+        let quiet = directory.bcc("--clang-mode", &["-c", "x.c", "-Ofast", "-Wno-deprecated"]);
+        succeeds(&quiet);
+        assert_eq!(stderr(&quiet), "");
+        // Clang refuses an evaluation method beside rearranged operations.
+        let eval = directory.bcc(
+            "--clang-mode",
+            &["-c", "x.c", "-ffast-math", "-ffp-eval-method=source"],
+        );
+        assert!(!eval.status.success());
+        for name in ["fapprox-func", "mreassociate", "freciprocal"] {
+            assert!(
+                stderr(&eval).contains(&format!(
+                    "option 'ffp-eval-method' cannot be used with option '{name}'"
+                )),
+                "{}",
+                stderr(&eval)
+            );
+        }
+        succeeds(&directory.bcc("--clang-mode", &["-c", "x.c", "-ffp-eval-method=source"]));
+        // Clang's musl and WebAssembly targets leave `errno` alone by
+        // default.
+        for (options, errno) in [
+            (&["--target=x86_64-linux-musl"][..], true),
+            (&["--target=x86_64-linux-musl", "-fmath-errno"], false),
+            (&["--target=x86_64-linux-gnu"], false),
+        ] {
+            let listing = macros_with("--clang-mode", options);
+            assert_eq!(
+                defines(&listing, "__NO_MATH_ERRNO__").is_some(),
+                errno,
+                "{options:?}"
+            );
+        }
         // GCC knows neither Clang's `-fno-honor-*` nor `-fapprox-func`.
         for option in ["-fno-honor-nans", "-fapprox-func"] {
             let output = directory.bcc("--gcc-mode", &["-c", "x.c", option]);
@@ -2200,6 +2242,21 @@ mod tests {
             ("--clang-mode", &["-Ofast"], 2),
             ("--clang-mode", &["-O2", "-ffast-math", "-fno-fast-math"], 1),
             ("--clang-mode", &["-O2", "-funsafe-math-optimizations"], 3),
+            // Both drivers link `crtfastmath.o` after a final `-Ofast`,
+            // whatever follows it.
+            ("--gcc-mode", &["-Ofast", "-fno-fast-math"], 3),
+            ("--clang-mode", &["-Ofast", "-fno-fast-math"], 3),
+            ("--gcc-mode", &["-O2", "-fno-finite-math-only", "-Ofast"], 3),
+            (
+                "--clang-mode",
+                &["-O2", "-fno-finite-math-only", "-Ofast"],
+                2,
+            ),
+            (
+                "--clang-mode",
+                &["-O2", "-ffast-math", "-ffp-model=precise"],
+                1,
+            ),
             (
                 "--gcc-mode",
                 &["-O2", "-ffast-math", "-Xbcc", "--backend=native"],

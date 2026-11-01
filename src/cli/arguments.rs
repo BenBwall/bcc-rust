@@ -345,6 +345,7 @@ impl Cli {
             .with_source_date_epoch(self.source_date_epoch.and_then(|epoch| epoch.0))
             .with_suppress_warnings(self.suppress_warnings)
             .with_compiler_identity(self.compiler_identity.into())
+            .with_default_math_errno()
             .with_diagnostic_format(self.diagnostic_format.into())
             .with_max_nesting_depth(self.max_nesting_depth)
     }
@@ -480,6 +481,23 @@ pub(super) fn implements_language_option(text: &str) -> bool {
             .is_some_and(|flag| !matches!(flag, LanguageFlag::UnknownWarning))
 }
 
+/// Which of reassociation, reciprocals and approximate functions the
+/// floating-point options among `options` leave given up, in that order:
+/// the options Clang refuses beside `-ffp-eval-method=`.
+pub(super) fn eval_method_conflicts<'a>(options: impl IntoIterator<Item = &'a str>) -> [bool; 3] {
+    let configuration = options
+        .into_iter()
+        .filter_map(LanguageFlag::parse)
+        .fold(CompilerConfiguration::default(), |configuration, flag| {
+            flag.apply(configuration)
+        });
+    [
+        configuration.associative_math(),
+        configuration.relaxes_floating_point(RelaxedFloatingPoint::ReciprocalMath),
+        configuration.relaxes_floating_point(RelaxedFloatingPoint::ApproxFunc),
+    ]
+}
+
 /// `--compiler-identity`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, clap::ValueEnum)]
 pub(super) enum Identity {
@@ -575,6 +593,8 @@ enum LanguageFlag {
     /// or restore the options they imply, in order with the others, as in
     /// GCC 13 and Clang.
     FloatingPointGroup(FloatingPointGroup, bool),
+    /// `-fexcess-precision=standard` (true) or `=fast`.
+    ExcessPrecisionStandard(bool),
     /// `-trigraphs` or `-ftrigraphs` (true), or `-fno-trigraphs`.
     Trigraphs(bool),
     /// `-fdollars-in-identifiers` (true) or `-fno-dollars-in-identifiers`.
@@ -627,6 +647,13 @@ impl FloatingPointGroup {
             .fold(configuration, |configuration, &option| {
                 configuration.with_implied_floating_point(option, relaxed)
             });
+        // GCC's `-ffast-math` also turns `-fsignaling-nans` off
+        // (`set_fast_math_flags`); Clang ignores `-fsignaling-nans`.
+        let configuration = if self == Self::Fast && relaxed {
+            configuration.with_signaling_nans(false)
+        } else {
+            configuration
+        };
         let configuration = match self {
             | Self::Fast => configuration.with_fast_math_given(false, relaxed),
             | Self::Unsafe => configuration.with_fast_math_given(true, relaxed),
@@ -711,6 +738,10 @@ impl LanguageFlag {
                 return Some(Self::RelaxedFloatingPoint(
                     RelaxedFloatingPoint::ApproxFunc,
                     text == "-fapprox-func",
+                )),
+            | "-fexcess-precision=standard" | "-fexcess-precision=fast" =>
+                return Some(Self::ExcessPrecisionStandard(
+                    text == "-fexcess-precision=standard",
                 )),
             | "-ffast-math" | "-fno-fast-math" =>
                 return Some(Self::FloatingPointGroup(
@@ -826,6 +857,8 @@ impl LanguageFlag {
                 configuration.with_relaxed_floating_point(option, relaxed),
             | Self::SignalingNans(enabled) => configuration.with_signaling_nans(enabled),
             | Self::FloatingPointGroup(group, relaxed) => group.apply(configuration, relaxed),
+            | Self::ExcessPrecisionStandard(standard) =>
+                configuration.with_standard_excess_precision(standard),
             | Self::Trigraphs(enabled) => configuration.with_trigraphs(enabled),
             | Self::DollarIdentifiers(enabled) => configuration.with_dollar_identifiers(enabled),
             | Self::Wrapv(enabled) => configuration.with_wrapv(enabled),

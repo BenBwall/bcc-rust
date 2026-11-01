@@ -469,7 +469,6 @@ const IGNORED: &[&str] = &[
     "-fcomplex-arithmetic=",
     "-flimited-precision=",
     "-fveclib=",
-    "-ffp-model=precise",
     "-ffp-exception-behavior=ignore",
     "-ffp-eval-method=source",
     "-fdenormal-fp-math=ieee",
