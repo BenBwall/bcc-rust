@@ -34,7 +34,7 @@ def exclusion(name):
         return "Floating classification intrinsics are not implemented."
     if name in {"__BITINT_MAXWIDTH__"}:
         return "The widest _BitInt follows the compiler identity; defined beside the identity macros."
-    if name in {"__FXSR__", "__GCC_ASM_FLAG_OUTPUTS__", "__GCC_CONSTRUCTIVE_SIZE", "__GCC_DESTRUCTIVE_SIZE", "__SEG_FS", "__SEG_GS", "__seg_fs", "__seg_gs"}:
+    if name in {"__FXSR__", "__GCC_CONSTRUCTIVE_SIZE", "__GCC_DESTRUCTIVE_SIZE", "__SEG_FS", "__SEG_GS", "__seg_fs", "__seg_gs"}:
         return "Vector/CPU intrinsics, inline assembly and address-space semantics are not implemented."
     if name in {"__PIC__", "__pic__", "__PIE__", "__pie__"}:
         return "Relocation-model macros follow -fpic, -fpie and -fno-pic; defined beside the identity macros."
