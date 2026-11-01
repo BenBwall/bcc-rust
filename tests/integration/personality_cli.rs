@@ -631,6 +631,48 @@ mod tests {
         }
     }
 
+    /// GCC's `__builtin_finite` family is `isfinite` of one fixed type;
+    /// Clang has none of it.
+    #[test]
+    fn finite_builtins_follow_gcc() {
+        let directory = Directory::new();
+        directory.write(
+            "f.c",
+            "volatile double inf = __builtin_inf(), qnan = __builtin_nan(\"\");\nvolatile long \
+             double tiny = 1e-4940L;\nint main(void) {\nreturn __builtin_finite(1.0) && \
+             !__builtin_finite(inf) && !__builtin_finitef((float)qnan) && __builtin_finitel(tiny) \
+             && __builtin_finitef(1e300) == 0 ? 0 : 1;\n}\n",
+        );
+        directory.write("h.c", "int x = __has_builtin(__builtin_finite);\n");
+        let gcc = directory.bcc("--gcc-mode", &["-E", "-P", "h.c"]);
+        assert!(
+            stdout(&gcc).replace(' ', "").contains("intx=1;"),
+            "{}",
+            stdout(&gcc)
+        );
+        let clang = directory.bcc("--clang-mode", &["-E", "-P", "h.c"]);
+        assert!(
+            stdout(&clang).replace(' ', "").contains("intx=0;"),
+            "{}",
+            stdout(&clang)
+        );
+        let refused = directory.bcc("--clang-mode", &["-fsyntax-only", "f.c"]);
+        assert!(!refused.status.success(), "{}", stderr(&refused));
+        if cfg!(all(target_os = "linux", target_env = "gnu")) {
+            for options in [
+                &["-O0"][..],
+                &["-O2"],
+                &["-O2", "-Xbcc", "--backend=native"],
+            ] {
+                let mut args = vec!["f.c", "-o", "f"];
+                args.extend(options);
+                succeeds(&directory.bcc("--gcc-mode", &args));
+                let run = Command::new(directory.path("f")).output().unwrap();
+                assert_eq!(run.status.code(), Some(0), "{options:?}");
+            }
+        }
+    }
+
     /// A sign after `p` continues a preprocessing number from C99. Before
     /// C99, GCC reads it so only in its GNU modes and Clang only after a
     /// hexadecimal prefix, so strict C90 splits `0x1p+f` (GCC's

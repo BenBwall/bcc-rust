@@ -918,6 +918,9 @@ pub(crate) enum BuiltinId {
     Nansq = 899,
     Nansf16 = 900,
     Nansf16b = 901,
+    Finite = 902,
+    Finitef = 903,
+    Finitel = 904,
 }
 
 impl BuiltinId {
@@ -1055,6 +1058,9 @@ impl BuiltinId {
             | Self::Annotation => &scalar::BUILTINS[128],
             | Self::VaArgPack => &scalar::BUILTINS[129],
             | Self::VaArgPackLen => &scalar::BUILTINS[130],
+            | Self::Finite => &scalar::BUILTINS[131],
+            | Self::Finitef => &scalar::BUILTINS[132],
+            | Self::Finitel => &scalar::BUILTINS[133],
             | Self::LibraryAbort => &library::BUILTINS[0],
             | Self::LibraryAbs => &library::BUILTINS[1],
             | Self::LibraryAlignedAlloc => &library::BUILTINS[2],
@@ -2044,6 +2050,9 @@ const NAMES: &[(&str, BuiltinId)] = &[
     ("__builtin_ffsg", BuiltinId::Ffsg),
     ("__builtin_ffsl", BuiltinId::Ffsl),
     ("__builtin_ffsll", BuiltinId::Ffsll),
+    ("__builtin_finite", BuiltinId::Finite),
+    ("__builtin_finitef", BuiltinId::Finitef),
+    ("__builtin_finitel", BuiltinId::Finitel),
     ("__builtin_floor", BuiltinId::LibraryFloor),
     ("__builtin_floorf", BuiltinId::LibraryFloorf),
     ("__builtin_floorl", BuiltinId::LibraryFloorl),
