@@ -229,7 +229,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
-    fn gcc_identity(&self) -> bool {
+    /// Whether the GCC identity itself is in effect, for rules GCC alone
+    /// follows (the TCC and MSVC identities share GCC's rule set).
+    pub(in crate::translation_phases::semantic_analysis) fn gcc_identity(&self) -> bool {
         self.context.configuration.compiler_identity() == CompilerIdentity::Gcc
     }
 }

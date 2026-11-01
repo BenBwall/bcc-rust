@@ -551,6 +551,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     let (ty, _) = self.value_conversion(tail);
                     info = Self::expression_result(e, ty);
                     info.unfolded_binary128 = tail.unfolded_binary128;
+                    // GCC keeps a bit-field tail's own type: `({ s.u40; }) +
+                    // 1`.
+                    info.promotion_width = tail.promotion_width.filter(|_| self.gcc_identity());
                 } else {
                     info = Self::expression_result(e, self.types.scalar(Scalar::Void));
                 }

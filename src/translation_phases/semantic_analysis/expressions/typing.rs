@@ -205,7 +205,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 self.report_void_arithmetic(e, target);
             }
             let mut result = Self::expression_result(e, ty);
-            if matches!(op, U::PreIncrement | U::PreDecrement) {
+            // GCC also gives the old value a postfix operator yields the
+            // bit-field's own type, where Clang gives it the declared type.
+            if matches!(op, U::PreIncrement | U::PreDecrement)
+                || self.context.configuration.compiler_identity()
+                    == crate::configuration::CompilerIdentity::Gcc
+            {
                 result.promotion_width = operand.promotion_width;
             }
             return result;
@@ -2124,6 +2129,23 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 self.types.tags[id].compatible.get()
             };
             return self.types.scalar(promoted);
+        }
+        // GCC gives a bit-field wider than int but narrower than its declared
+        // type a type of its own width, which converts as `_BitInt(N)` does:
+        // `u40 + 1` wraps at 40 bits, and `u40 + 1ull` is 64-bit. Clang,
+        // TCC and MSVC promote it to the declared type, so this follows the
+        // GCC identity itself, not GCC's rule set.
+        // C99: §6.7.2.1p4, p. 101; PDF p. 113 (implementation-defined
+        // bit-field types). C23: §6.3.1.8p1 (bit-precise conversions).
+        if let Some(width) = info.promotion_width.map(|width| u32::from(width.get()))
+            && width > 32
+            && self.context.configuration.compiler_identity()
+                == crate::configuration::CompilerIdentity::Gcc
+            && let Some((bits, signed)) = self.integer_type(ty)
+            && width < bits
+            && !matches!(self.types.nodes[ty.index], TypeKind::BitInt { .. })
+        {
+            return self.types.intern(TypeKind::BitInt { width, signed });
         }
         // Clang's implementation-defined extended bit-field promotions.
         // C99: §6.3.1.1p2, p. 42; PDF p. 54; §6.7.2.1p4, p. 101; PDF p. 113.
