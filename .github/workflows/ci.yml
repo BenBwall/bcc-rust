@@ -38,6 +38,8 @@ jobs:
       - name: Install nightly rustfmt
         run: rustup toolchain install nightly --profile minimal --component rustfmt
       - run: cargo +nightly fmt --check
+      - name: Builtin index matches its shards
+        run: python3 scripts/generate_builtin_index.py --check
 
   # The explorer's pure-Rust compiler for the website: no LLVM, C toolchain
   # or build script work, so this job needs only rustup's wasm32 target.
