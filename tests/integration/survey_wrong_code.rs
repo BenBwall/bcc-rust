@@ -552,31 +552,57 @@ mod tests {
 
     /// A trailing array member reached through a pointer may extend past
     /// its bound, as a flexible array member does, so GCC and Clang answer
-    /// `__builtin_object_size` mode 1 for it from the complete object
-    /// (unknown here); mode 3 keeps its declared size, and so does an array
-    /// that is no trailing one or that of a declared object.
+    /// `__builtin_object_size` mode 1 for it from the complete object:
+    /// unknown through a parameter, the remaining size once the object is
+    /// known (a local, an allocation), so that mode 1 never exceeds mode 0
+    /// and a fortified copy into it does not trap. Mode 3 keeps its declared
+    /// size, as in Clang (GCC 13 answers 0); so do an array that is no
+    /// trailing one, an element of a trailing array other than its last,
+    /// and the array of a declared object.
     #[test]
     fn trailing_arrays_through_pointers_have_no_subobject_bound() {
         let source = b"#include <stdio.h>\n\
+            #include <stdlib.h>\n\
             struct a { int x; int c[4]; };\n\
             struct b { int c[4]; int x; };\n\
             struct n { int y; struct a in; };\n\
             union u { int c[2]; char d; };\n\
-            __attribute__((noinline)) void f(struct a *p, struct b *q, struct n *r, union u *v) {\n\
+            struct f { int n; char c[4]; };\n\
+            struct e { int n; struct f a[2]; };\n\
+            __attribute__((noinline)) void f(struct a *p, struct b *q, struct n *r, union u *v,\n\
+            struct e *w) {\n\
             struct a s;\n\
             printf(\"%zd %zd %zd %zd %zd %zd %zd %zd\\n\", __builtin_object_size(p->c, 1),\n\
             __builtin_object_size(p->c, 3), __builtin_object_size((*p).c, 1),\n\
             __builtin_object_size(q->c, 1), __builtin_object_size(r->in.c, 1),\n\
             __builtin_object_size(v->c, 1), __builtin_object_size(s.c, 1),\n\
             __builtin_object_size(&p->c[1], 1));\n\
+            printf(\"%zd %zd %zd\\n\", __builtin_object_size(p[0].c, 1),\n\
+            __builtin_object_size(w->a[1].c, 1), __builtin_object_size(w->a[0].c, 1));\n\
+            }\n\
+            __attribute__((noinline)) void fill(struct f *p, const char *s, size_t n) {\n\
+            __builtin___memcpy_chk(p[0].c, s, n, __builtin_object_size(p[0].c, 1));\n\
             }\n\
             int main(void) {\n\
             static char buf[64];\n\
-            f((void *)buf, (void *)buf, (void *)buf, (void *)buf);\n\
+            f((void *)buf, (void *)buf, (void *)buf, (void *)buf, (void *)buf);\n\
+            struct f local, *lp = &local;\n\
+            struct f *hp = malloc(sizeof (struct f) + 10);\n\
+            printf(\"%zd %zd %zd %zd\\n\", __builtin_object_size(lp->c, 1),\n\
+            __builtin_object_size(lp->c, 0), __builtin_object_size(hp->c, 1),\n\
+            __builtin_object_size(hp->c + 2, 1));\n\
+            struct f *big = malloc(sizeof *big + 16);\n\
+            fill(big, \"0123456789\", 10);\n\
+            printf(\"%.10s\\n\", big->c);\n\
             return 0;\n\
             }\n";
         for identity in IDENTITIES {
-            prints_on_every_back_end(identity, source, &[], "-1 16 -1 16 -1 -1 16 -1\n");
+            prints_on_every_back_end(
+                identity,
+                source,
+                &["-O2"],
+                "-1 16 -1 16 -1 -1 16 -1\n-1 -1 4\n4 4 14 12\n0123456789\n",
+            );
         }
     }
 

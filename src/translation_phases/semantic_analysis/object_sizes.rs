@@ -60,7 +60,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         arguments: &[&'tu Expression<'tu>],
         cleanup: Option<usize>,
     ) -> ObjectSize<'tu> {
-        let mut mode = mode;
+        let mode = self.effective_object_size_mode(expression, mode);
         let mut node = expression;
         let mut lvalue = false;
         // Whether the current array lvalue was reached by decay, so that its
@@ -217,14 +217,6 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     base_expression,
                     member,
                 } => {
-                    // A trailing array reached through a pointer may run
-                    // past its declared bound, as a flexible array member
-                    // does, so GCC and Clang (`-fstrict-flex-arrays=0`,
-                    // their default) bound it from above by the complete
-                    // object only; mode 3's lower bound stays its size.
-                    if mode == 1 && self.trailing_array_through_pointer(node) {
-                        mode = 0;
-                    }
                     if mode & 1 != 0 {
                         if runtime_offset {
                             // A root-object remainder could cross this member's
@@ -347,6 +339,62 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 }
 
 impl<'tu> Analyzer<'_, 'tu, '_> {
+    /// The mode a `__builtin_object_size` query of `pointer` in `mode`
+    /// answers in: mode 0 for mode 1 of a pointer into a trailing array
+    /// reached through a pointer, which may run past its declared bound as
+    /// a flexible array member does. GCC and Clang
+    /// (`-fstrict-flex-arrays=0`, their default) bound such an array from
+    /// above by the complete object only, which is unknown or known later,
+    /// once the pointer's object is (a local, an allocation), so that mode
+    /// 1 never exceeds mode 0. Mode 3 keeps the declared size, as in Clang;
+    /// GCC 13 answers it 0. GNU extension: GCC manual, "Object Size
+    /// Checking", `-fstrict-flex-arrays`.
+    pub(super) fn effective_object_size_mode(&self, pointer: &'tu Expression<'tu>, mode: u8) -> u8 {
+        if mode != 1 {
+            return mode;
+        }
+        // The innermost subobject the pointer designates, as the walk of
+        // `object_size_substitution` meets it.
+        let mut node = pointer;
+        loop {
+            node = self.selected_designator(node);
+            match node.kind {
+                | ExpressionType::Cast {
+                    operand_expression, ..
+                }
+                | ExpressionType::Unary {
+                    operator: UnaryOperator::AddressOf,
+                    operand_expression,
+                } => node = operand_expression,
+                | ExpressionType::Binary {
+                    operator:
+                        BinaryOperator::Addition
+                        | BinaryOperator::Subtraction
+                        | BinaryOperator::Subscript,
+                    left_expression,
+                    right_expression,
+                } => {
+                    let left = self.expression_info(left_expression);
+                    node = if matches!(
+                        self.types.nodes[left.ty.index],
+                        TypeKind::Pointer(_) | TypeKind::Array(..)
+                    ) {
+                        left_expression
+                    } else {
+                        right_expression
+                    };
+                },
+                | ExpressionType::DirectMember { .. } | ExpressionType::IndirectMember { .. } =>
+                    return if self.trailing_array_through_pointer(node) {
+                        0
+                    } else {
+                        mode
+                    },
+                | _ => return mode,
+            }
+        }
+    }
+
     /// Whether the member access `member` designates an array that is the
     /// last member of its structure, of a structure that is itself last in
     /// its enclosing ones up to an object reached through a pointer, whose
@@ -395,12 +443,48 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 return true;
             }
             node = self.selected_designator(base_expression);
-            if let ExpressionType::Unary {
-                operator: UnaryOperator::Indirection,
-                ..
-            } = node.kind
-            {
-                return true;
+            match node.kind {
+                | ExpressionType::Unary {
+                    operator: UnaryOperator::Indirection,
+                    ..
+                } => return true,
+                // `p[i].c` is reached through the pointer `p`; `a[i].c`
+                // ends its object when the array `a` is trailing in turn.
+                | ExpressionType::Binary {
+                    operator: BinaryOperator::Subscript,
+                    left_expression,
+                    right_expression,
+                } => {
+                    let left = self.expression_info(left_expression);
+                    let (array, index) = if matches!(
+                        self.types.nodes[left.ty.index],
+                        TypeKind::Pointer(_) | TypeKind::Array(..)
+                    ) {
+                        (left_expression, right_expression)
+                    } else {
+                        (right_expression, left_expression)
+                    };
+                    let ty = self.expression_info(array).ty;
+                    // Only the last element of the array ends it, as Clang
+                    // reads it; an index unknown here may be the last.
+                    match self.types.nodes[ty.index] {
+                        | TypeKind::Pointer(_) => return true,
+                        | TypeKind::Array(_, super::ArrayBound::Constant(length)) => {
+                            let index = self.expression_info(index);
+                            if let Some(index) = index
+                                .integer
+                                .filter(|_| index.ice)
+                                .and_then(Integer::to_i128)
+                                && index + 1 != i128::from(length)
+                            {
+                                return false;
+                            }
+                        },
+                        | _ => {},
+                    }
+                    node = self.selected_designator(array);
+                },
+                | _ => {},
             }
         }
     }
