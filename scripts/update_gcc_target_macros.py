@@ -36,6 +36,9 @@ INTERCHANGE_PREFIXES = ("__FLT16_", "__BFLT16_", "__FLT32_", "__FLT64_", "__FLT3
 
 
 def exclusion(name):
+    # bcc lowers `=@ccCOND` flag outputs of x86 inline assembly.
+    if name == "__GCC_ASM_FLAG_OUTPUTS__":
+        return None
     if name.startswith(INTERCHANGE_PREFIXES) or name == "__FLT_EVAL_METHOD_TS_18661_3__":
         return "Interchange floating characteristics follow the types the identity provides (target/interchange_floats.rs)."
     if name in {"__GCC_IEC_559", "__GCC_IEC_559_COMPLEX", "__FLT_EVAL_METHOD__", "__SCHAR_WIDTH__", "__LONG_LONG_WIDTH__", "__STDC_UTF_16__", "__STDC_UTF_32__", "__NO_INLINE__"}:

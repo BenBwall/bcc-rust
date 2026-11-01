@@ -141,7 +141,6 @@ __FLT_EVAL_METHOD_TS_18661_3__	Interchange floating characteristics follow the t
 __FLT_EVAL_METHOD__	Follows the options and language mode; written by the GCC identity's macros.
 __FLT_IS_IEC_60559__	Part of the GCC identity claim, written beside the identity macros.
 __FXSR__	Vector/CPU intrinsics, inline assembly and address-space semantics are not implemented.
-__GCC_ASM_FLAG_OUTPUTS__	Vector/CPU intrinsics, inline assembly and address-space semantics are not implemented.
 __GCC_CONSTRUCTIVE_SIZE	Vector/CPU intrinsics, inline assembly and address-space semantics are not implemented.
 __GCC_DESTRUCTIVE_SIZE	Vector/CPU intrinsics, inline assembly and address-space semantics are not implemented.
 __GCC_HAVE_DWARF2_CFI_ASM	DWARF CFI assembly and unwind code generation are not implemented.

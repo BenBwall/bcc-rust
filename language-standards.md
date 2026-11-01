@@ -1553,9 +1553,12 @@ glibc's GCC makes `int_fast16_t` and `int_fast32_t` `long`
 `__INT64_C_SUFFIX__` and the other constant suffixes, `__LLONG_WIDTH__`,
 `__BOOL_WIDTH__`, `__UINTMAX_WIDTH__`, `__UINTPTR_WIDTH__`, `__POINTER_WIDTH__`,
 `__LITTLE_ENDIAN__`, `__NO_MATH_INLINES`, `__FLOAT128__`, `__WINT_UNSIGNED__`).
-It defines `__FLOAT_WORD_ORDER__` and `__MMX_WITH_SSE__`, which Clang does not.
+It defines `__FLOAT_WORD_ORDER__` and `__MMX_WITH_SSE__`, which Clang does not,
+and `__GCC_ASM_FLAG_OUTPUTS__`, since bcc lowers `=@ccCOND` flag outputs (the
+Clang tables still leave it out).
 The MinGW-w64 and WebAssembly targets have no GCC listing: the GCC identity
-reads Clang's there without Clang's own families. In C23 the identity adds
+reads Clang's there without Clang's own families, spelling Clang's
+`__CLANG_ATOMIC_*` as GCC's `__GCC_ATOMIC_*`, which Clang's MSVC target lacks. In C23 the identity adds
 GCC's `__CHAR8_TYPE__` and keeps only GCC's spelling of the `char8_t`
 lock-free macro. bcc's `<stdatomic.h>` reads `__GCC_ATOMIC_*` where there is
 no `__CLANG_ATOMIC_*`.
@@ -1587,7 +1590,7 @@ frozen listing too.
 | `__DBL_IS_IEC_60559__`, `__FLT_IS_IEC_60559__`, `__LDBL_IS_IEC_60559__`, `__VERSION__` | Part of the GCC identity claim, written beside the identity macros. |
 | `__DEC128_*`, `__DEC32_*`, `__DEC64_*`, `__DECIMAL_BID_FORMAT__`, `__DEC_EVAL_METHOD__` | Decimal floating types are not implemented. |
 | `__FLT_EVAL_METHOD__`, `__GCC_IEC_559`, `__GCC_IEC_559_COMPLEX`, `__LONG_LONG_WIDTH__`, `__NO_INLINE__`, `__SCHAR_WIDTH__`, `__STDC_UTF_16__`, `__STDC_UTF_32__` | Follows the options and language mode; written by the GCC identity's macros. |
-| `__FXSR__`, `__GCC_ASM_FLAG_OUTPUTS__`, `__GCC_CONSTRUCTIVE_SIZE`, `__GCC_DESTRUCTIVE_SIZE`, `__SEG_FS`, `__SEG_GS` | Vector/CPU intrinsics, inline assembly and address-space semantics are not implemented. |
+| `__FXSR__`, `__GCC_CONSTRUCTIVE_SIZE`, `__GCC_DESTRUCTIVE_SIZE`, `__SEG_FS`, `__SEG_GS` | Vector/CPU intrinsics, inline assembly and address-space semantics are not implemented. |
 | `__GCC_HAVE_DWARF2_CFI_ASM` | DWARF CFI assembly and unwind code generation are not implemented. |
 | `__GNUC_EXECUTION_CHARSET_NAME`, `__GNUC_MINOR__`, `__GNUC_PATCHLEVEL__`, `__GNUC_STDC_INLINE__`, `__GNUC_WIDE_EXECUTION_CHARSET_NAME`, `__GNUC__`, `__STDC_HOSTED__` | Compiler identity/version or hosted-mode contract owned separately. |
 | `__GXX_ABI_VERSION` | C++ ABI and type-info semantics are not implemented. |

@@ -1068,6 +1068,68 @@ mod tests {
         }
     }
 
+    /// Where the GCC identity reads Clang's target macros, Clang's lock-free
+    /// macros take GCC's spelling, which `<stdatomic.h>` then reads, even
+    /// on the MSVC target, whose Clang macros have no GCC spelling.
+    #[test]
+    fn gcc_mode_spells_clangs_atomic_macros_as_gccs() {
+        let directory = Directory::new();
+        directory.write(
+            "a.c",
+            "#include <stdatomic.h>\n_Static_assert(ATOMIC_INT_LOCK_FREE == 2, \
+             \"atomic\");\n_Static_assert(ATOMIC_CHAR8_T_LOCK_FREE == 2, \"char8\");\n",
+        );
+        for target in [
+            "x86_64-pc-windows-msvc",
+            "x86_64-w64-windows-gnu",
+            "wasm32-wasip1",
+            "x86_64-unknown-linux-gnu",
+        ] {
+            let target = format!("--target={target}");
+            let output = directory.bcc(
+                "--gcc-mode",
+                &[
+                    &target,
+                    "-std=c23",
+                    "-ffreestanding",
+                    "-fsyntax-only",
+                    "a.c",
+                ],
+            );
+            succeeds(&output);
+            let listing = macros_with("--gcc-mode", &[&target, "-std=c23"]);
+            assert_eq!(
+                defines(&listing, "__GCC_ATOMIC_INT_LOCK_FREE").as_deref(),
+                Some("2"),
+                "{target}"
+            );
+            assert!(!listing.contains("__CLANG_ATOMIC"), "{target}");
+        }
+    }
+
+    /// `-H` leaves out GCC's default header and every header it includes,
+    /// as GCC does, and lists the main file's headers after it.
+    #[test]
+    fn gcc_mode_header_tree_leaves_out_the_default_header() {
+        if !cfg!(all(target_os = "linux", target_env = "gnu")) {
+            return;
+        }
+        let directory = Directory::new();
+        std::fs::create_dir(directory.path("inc")).unwrap();
+        directory.write("inc/stdc-predef.h", "#include \"sub.h\"\n");
+        directory.write("inc/sub.h", "int sub;\n");
+        directory.write("own.h", "#include \"inc/sub.h\"\n");
+        directory.write("m.c", "#include \"own.h\"\nint m;\n");
+        let output = directory.bcc("--gcc-mode", &["-H", "-fsyntax-only", "-Iinc", "m.c"]);
+        succeeds(&output);
+        let tree: Vec<String> = stderr(&output)
+            .lines()
+            .filter(|line| line.starts_with('.'))
+            .map(str::to_owned)
+            .collect();
+        assert_eq!(tree, [". own.h", ".. inc/sub.h"], "{}", stderr(&output));
+    }
+
     /// The GCC identity defines GCC's evaluation method, its spellings of
     /// the `signed char` and `long long` widths, and from C11 the UTF
     /// literal macros, as the host GCC does where there is one.

@@ -994,7 +994,9 @@ pub(super) fn with_identity_macros<'a>(
     // The frozen Clang tables describe `_Float16` as Clang does; GCC spells
     // its constants to 36 digits, and MSVC and TCC have no such type.
     // GCC defines none of Clang's own macros, which the Clang tables the
-    // GCC identity falls back to (`Target::gcc_predefined_macros`) hold.
+    // GCC identity falls back to (`Target::gcc_predefined_macros`) hold; it
+    // spells the lock-free macros `__GCC_ATOMIC_*`, which Clang's MSVC
+    // target lacks, so the Clang spelling is renamed rather than dropped.
     if configuration.half_precision_types() && identity != CompilerIdentity::Gcc {
         out.push_str(definitions);
     } else {
@@ -1003,7 +1005,12 @@ pub(super) fn with_identity_macros<'a>(
                 .strip_prefix("#define ")
                 .and_then(|definition| definition.split([' ', '(', '\n']).next())
                 .unwrap_or("");
-            if !name.starts_with("__FLT16_")
+            if identity == CompilerIdentity::Gcc
+                && let Some(atomic) = line.strip_prefix("#define __CLANG_ATOMIC_")
+            {
+                out.push_str("#define __GCC_ATOMIC_");
+                out.push_str(atomic);
+            } else if !name.starts_with("__FLT16_")
                 && (identity != CompilerIdentity::Gcc || !clang_only_macro(name))
             {
                 out.push_str(line);
@@ -1070,8 +1077,12 @@ pub(super) fn with_identity_macros<'a>(
             // C23: §7.30 paragraph 2, p. 408; PDF p. 421.
             out.push_str("#define __CHAR8_TYPE__ unsigned char\n");
             for line in atomics.split_inclusive('\n') {
-                if !line.starts_with("#define __CLANG_") {
-                    out.push_str(line);
+                match line.strip_prefix("#define __CLANG_ATOMIC_") {
+                    | Some(atomic) => {
+                        out.push_str("#define __GCC_ATOMIC_");
+                        out.push_str(atomic);
+                    },
+                    | None => out.push_str(line),
                 }
             }
         } else {
