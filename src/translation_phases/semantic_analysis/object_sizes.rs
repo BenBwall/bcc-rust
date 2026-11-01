@@ -396,9 +396,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     /// Whether the member access `member` designates an array that is the
-    /// last member of its structure, of a structure that is itself last in
-    /// its enclosing ones up to an object reached through a pointer, whose
-    /// extent is therefore unknown. GNU extension: GCC manual,
+    /// last member of its structure, or any member of a union, of an object
+    /// reached through a pointer, whose extent is therefore unknown. Under
+    /// Clang's rules the structure may itself be the last member of an
+    /// enclosing one, or the last element of each dimension of a trailing
+    /// array of structures; under GCC's only a union's member may enclose
+    /// it (`flexible_array_rules`). GNU extension: GCC manual,
     /// `-fstrict-flex-arrays`; C99: §6.7.2.1 paragraph 16, p. 103; PDF
     /// p. 115 (the flexible array member it stands for).
     fn trailing_array_through_pointer(&self, member: &'tu Expression<'tu>) -> bool {
@@ -408,6 +411,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         ) {
             return false;
         }
+        let gcc =
+            self.context.configuration.flexible_array_rules() == crate::configuration::RuleSet::Gcc;
         let mut node = member;
         loop {
             let (base_expression, name, indirect) = match node.kind {
@@ -436,55 +441,65 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             };
             let fields = self.types.tags[id].fields.get();
             // A union's members all end it.
-            if self.types.tags[id].kind != super::TagKind::Union && index + 1 != fields.len() {
+            let union = self.types.tags[id].kind == super::TagKind::Union;
+            if !union && index + 1 != fields.len() {
                 return false;
             }
             if indirect {
                 return true;
             }
             node = self.selected_designator(base_expression);
-            match node.kind {
-                | ExpressionType::Unary {
-                    operator: UnaryOperator::Indirection,
-                    ..
-                } => return true,
-                // `p[i].c` is reached through the pointer `p`; `a[i].c`
-                // ends its object when the array `a` is trailing in turn.
-                | ExpressionType::Binary {
-                    operator: BinaryOperator::Subscript,
-                    left_expression,
-                    right_expression,
-                } => {
-                    let left = self.expression_info(left_expression);
-                    let (array, index) = if matches!(
-                        self.types.nodes[left.ty.index],
-                        TypeKind::Pointer(_) | TypeKind::Array(..)
-                    ) {
-                        (left_expression, right_expression)
-                    } else {
-                        (right_expression, left_expression)
-                    };
-                    let ty = self.expression_info(array).ty;
-                    // Only the last element of the array ends it, as Clang
-                    // reads it; an index unknown here may be the last.
-                    match self.types.nodes[ty.index] {
-                        | TypeKind::Pointer(_) => return true,
-                        | TypeKind::Array(_, super::ArrayBound::Constant(length)) => {
-                            let index = self.expression_info(index);
-                            if let Some(index) = index
-                                .integer
-                                .filter(|_| index.ice)
-                                .and_then(Integer::to_i128)
-                                && index + 1 != i128::from(length)
-                            {
-                                return false;
-                            }
-                        },
-                        | _ => {},
-                    }
-                    node = self.selected_designator(array);
-                },
-                | _ => {},
+            // Through the subscripts of an array of structures, the
+            // innermost first.
+            while let ExpressionType::Binary {
+                operator: BinaryOperator::Subscript,
+                left_expression,
+                right_expression,
+            } = node.kind
+            {
+                let left = self.expression_info(left_expression);
+                let (array, index) = if matches!(
+                    self.types.nodes[left.ty.index],
+                    TypeKind::Pointer(_) | TypeKind::Array(..)
+                ) {
+                    (left_expression, right_expression)
+                } else {
+                    (right_expression, left_expression)
+                };
+                let ty = self.expression_info(array).ty;
+                match self.types.nodes[ty.index] {
+                    // `p[i].c` is reached through the pointer `p`.
+                    | TypeKind::Pointer(_) => return true,
+                    // GCC takes no element of an array of structures to
+                    // end its object; Clang the last of each dimension of
+                    // a trailing one, which an index unknown here may be.
+                    | _ if gcc => return false,
+                    | TypeKind::Array(_, super::ArrayBound::Constant(length)) => {
+                        let index = self.expression_info(index);
+                        if let Some(index) = index
+                            .integer
+                            .filter(|_| index.ice)
+                            .and_then(Integer::to_i128)
+                            && index + 1 != i128::from(length)
+                        {
+                            return false;
+                        }
+                    },
+                    | _ => {},
+                }
+                node = self.selected_designator(array);
+            }
+            if let ExpressionType::Unary {
+                operator: UnaryOperator::Indirection,
+                ..
+            } = node.kind
+            {
+                return true;
+            }
+            // An enclosing member access: GCC goes on only from a union's
+            // member, Clang from any trailing one.
+            if gcc && !union {
+                return false;
             }
         }
     }

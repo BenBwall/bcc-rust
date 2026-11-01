@@ -361,6 +361,19 @@ impl CompilerConfiguration {
         self.identity.rules()
     }
 
+    /// GCC's rules (TCC's and MSVC's too) or Clang's (clang-cl's too) for
+    /// which trailing arrays reached through a pointer
+    /// `__builtin_object_size` takes as possibly flexible, bounding them by
+    /// the complete object only: under both, the last member of a
+    /// structure or any member of a union; under Clang's also through an
+    /// enclosing trailing member and through the last element of each
+    /// dimension of a trailing array of structures, which GCC 13's
+    /// `-O2` object-size pass bounds by the array. GNU extension: GCC
+    /// manual, `-fstrict-flex-arrays`.
+    pub(crate) const fn flexible_array_rules(self) -> super::RuleSet {
+        self.identity.rules()
+    }
+
     /// GCC's rules (TCC's and MSVC's too) or Clang's (clang-cl's too) for a
     /// floating constant converted out of an integer's range: GCC's
     /// bit-field saturation, `-Woverflow` in static initializers and
