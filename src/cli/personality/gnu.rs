@@ -79,6 +79,9 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         ofast_models: Vec::new(),
         positions: Vec::new(),
         linker_words: Vec::new(),
+        queries: Vec::new(),
+        unrecognized: Vec::new(),
+        bad_standard: None,
     };
     let mut arguments = invocation.arguments.iter().map(OsString::as_os_str);
     while let Some(argument) = arguments.next() {
@@ -86,6 +89,27 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         if let Some(query) = state.argument(argument, &mut arguments) {
             return Ok(query);
         }
+    }
+    // GCC reports the options it does not recognize once it has read the
+    // whole command line, after its other complaints.
+    for option in std::mem::take(&mut state.unrecognized) {
+        state.error(format_args!("unrecognized command-line option '{option}'"));
+    }
+    // Either compiler answers the query that ranks first in its own order,
+    // the last of equals, wherever it stands, and leaves the inputs alone.
+    // Clang's status counts its driver's errors; GCC's counts none.
+    if let Some(query) = state
+        .queries
+        .iter()
+        .rev()
+        .min_by_key(|query| query.rank(compiler))
+    {
+        let text = state.answer(query);
+        if compiler == Compiler::Clang && state.errors != 0 {
+            super::print(&text, false);
+            return Err(MainError::Reported(1));
+        }
+        return Ok(Plan::print(text));
     }
     // Clang reads every `-Ofast` as `-ffast-math` where it stands when the
     // last `-O` option is an `-Ofast`, and every `-ffp-model=` but
@@ -153,6 +177,24 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
     let mmx = state.machine_options(target);
     state.check_inputs();
     let jobs = state.jobs();
+    // Clang's compiler validates the last `-std=` for each C source, so a
+    // driver error that stops the compilation, or `-###`, hides it.
+    if let Some(option) = &state.bad_standard
+        && state.errors == 0
+        && !state.dry_run
+    {
+        let value = &option["-std=".len()..];
+        let message = format!(
+            "error: invalid value '{value}' in '{option}'\n{}\n",
+            crate::cli::arguments::STANDARD_NOTES.trim_end()
+        );
+        for input in &state.inputs {
+            if !input.dropped && input.kind == InputKind::C {
+                state.errors += 1;
+                super::print(&message, true);
+            }
+        }
+    }
     if state.errors != 0 {
         return Err(MainError::Reported(1));
     }
@@ -437,6 +479,79 @@ struct State<'a> {
     /// `-Xlinker ARG`, `-z now`), as Clang spells them, each with its index
     /// in [`State::out`], which orders them among the input files.
     linker_words:    Vec<(usize, String)>,
+    /// The queries asked, in order, answered once the whole command line
+    /// has been read.
+    queries:         Vec<Query>,
+    /// The options GCC does not recognize, which it reports once it has
+    /// read the whole command line, and not at all if a `-dump` query ends
+    /// it first.
+    unrecognized:    Vec<String>,
+    /// Clang's last `-std=`, when its value is unknown: its compiler, not
+    /// its driver, refuses it, so an earlier one and a query go unreported.
+    bad_standard:    Option<String>,
+}
+
+/// A driver query: an option that prints something about the compiler
+/// instead of compiling.
+#[derive(Clone, PartialEq, Eq)]
+enum Query {
+    /// `-dumpmachine`.
+    DumpMachine,
+    /// `-dumpversion`.
+    DumpVersion,
+    /// GCC's `-dumpfullversion`.
+    DumpFullVersion,
+    /// `--help`.
+    Help,
+    /// `--version`.
+    Version,
+    /// `-print-search-dirs`.
+    SearchDirectories,
+    /// `-print-file-name=NAME`.
+    FileName(String),
+    /// `-print-libgcc-file-name`, which is GCC's `-print-file-name=libgcc.a`.
+    LibgccFileName,
+    /// `-print-prog-name=NAME`.
+    ProgramName(String),
+    /// Clang's `-print-target-triple` and `-print-effective-triple`.
+    Triple,
+    /// GCC's `-print-multiarch`.
+    Multiarch,
+    /// GCC's `-print-sysroot`.
+    Sysroot,
+}
+
+impl Query {
+    /// The query's rank among a command line's queries in `compiler`'s
+    /// order, the first answering: GCC's `maybe_print_and_exit` and
+    /// Clang's `Driver::HandleImmediateArgs`. GCC's `-dump` options answer
+    /// where they stand, before it reads on.
+    const fn rank(&self, compiler: Compiler) -> u8 {
+        match compiler {
+            | Compiler::Gcc => match self {
+                | Self::SearchDirectories => 0,
+                | Self::FileName(_) | Self::LibgccFileName => 1,
+                | Self::ProgramName(_) => 2,
+                | Self::Multiarch => 3,
+                | Self::Sysroot => 4,
+                | Self::Help => 5,
+                | Self::Version => 6,
+                | _ => 7,
+            },
+            | Compiler::Clang => match self {
+                | Self::DumpMachine => 0,
+                | Self::DumpVersion => 1,
+                | Self::Help => 2,
+                | Self::Version => 3,
+                | Self::SearchDirectories => 4,
+                | Self::FileName(_) => 5,
+                | Self::ProgramName(_) => 6,
+                | Self::LibgccFileName => 7,
+                | Self::Triple => 8,
+                | _ => 9,
+            },
+        }
+    }
 }
 
 /// Where `-Ofast` stands among the `-O` options. Both compilers read a
@@ -463,6 +578,8 @@ enum Unused {
     SyntaxOnly,
     /// An option only the link uses.
     Link(String),
+    /// An option Clang ignores, unused by every command line.
+    Argument(&'static str),
 }
 
 /// Options bcc reads in GCC's spelling, which take their operand as the next
@@ -554,62 +671,51 @@ impl State<'_> {
             self.input(argument);
             return None;
         }
-        let personality = self.invocation.personality;
-        let target = || self.target.unwrap_or_else(|| host_target(personality));
+        let clang = self.compiler == Compiler::Clang;
         // `-print-file-name=NAME`: the library or start file the link would
-        // use, found by the bundled clang in the target's directories, or
-        // NAME itself, as GCC and Clang print a file they do not find.
+        // use. `-print-prog-name=NAME`: the bundled tool bcc would run.
         if let Some(name) = text.strip_prefix("-print-file-name=") {
-            return Some(Plan::print(format!(
-                "{}\n",
-                self.library_file(name, target())
-            )));
+            self.queries.push(Query::FileName(name.into()));
+            return None;
         }
-        // `-print-prog-name=NAME`: the bundled tool bcc would run.
         if let Some(name) = text.strip_prefix("-print-prog-name=") {
-            return Some(Plan::print(format!("{}\n", version::program_name(name))));
+            self.queries.push(Query::ProgramName(name.into()));
+            return None;
+        }
+        let query = match text {
+            | "-dumpmachine" => Some(Query::DumpMachine),
+            | "-dumpversion" => Some(Query::DumpVersion),
+            | "-dumpfullversion" if !clang => Some(Query::DumpFullVersion),
+            | "--help" | "-help" => Some(Query::Help),
+            | "--version" => Some(Query::Version),
+            | "-print-search-dirs" => Some(Query::SearchDirectories),
+            | "-print-libgcc-file-name" => Some(Query::LibgccFileName),
+            | "-print-target-triple" | "-print-effective-triple" if clang => Some(Query::Triple),
+            | "-print-multiarch" if !clang => Some(Query::Multiarch),
+            | "-print-sysroot" if !clang => Some(Query::Sysroot),
+            | _ => None,
+        };
+        if let Some(query) = query {
+            // GCC answers a `-dump` option at once and reads no further.
+            if !clang
+                && matches!(
+                    query,
+                    Query::DumpMachine | Query::DumpVersion | Query::DumpFullVersion
+                )
+            {
+                return Some(Plan::print(self.answer(&query)));
+            }
+            self.queries.push(query);
+            return None;
         }
         match text {
-            | "--version" =>
-                return Some(Plan::print(version::banner(
-                    personality,
-                    &self.invocation.name,
-                    target(),
-                ))),
-            | "-dumpversion" =>
-                return Some(Plan::print(format!(
-                    "{}\n",
-                    version::dump_version(personality)
-                ))),
-            | "-dumpfullversion" =>
-                return Some(Plan::print(format!("{}\n", version::GCC_VERSION))),
-            | "-dumpmachine" | "-print-target-triple" | "-print-effective-triple" => {
-                let machine = if personality == Personality::Gcc {
-                    version::gcc_machine(target())
-                } else {
-                    target().triple()
-                };
-                return Some(Plan::print(format!("{machine}\n")));
-            },
-            | "-print-multiarch" =>
-                return Some(Plan::print(format!("{}\n", version::gcc_machine(target())))),
-            | "-print-search-dirs" =>
-                return Some(Plan::print(format!(
-                    "install: {}\nprograms: ={}\nlibraries: =/usr/local/lib:/usr/lib/{}:/usr/lib\n",
-                    version::program_name("bcc"),
-                    version::program_name("ld"),
-                    version::gcc_machine(target())
-                ))),
-            | "-print-libgcc-file-name" => return Some(Plan::print("libgcc.a\n".into())),
-            | "-print-sysroot" =>
-                return Some(Plan::print(format!(
-                    "{}\n",
-                    self.sysroot
-                        .as_deref()
-                        .map_or_else(|| "".into(), OsStr::to_string_lossy)
-                ))),
-            | "--help" | "-help" =>
-                return Some(Plan::print(help(personality, &self.invocation.name))),
+            // Clang knows GCC's query and refuses it; it does not know
+            // `-print-sysroot` at all.
+            | "-print-multiarch" => self.error(format_args!("unsupported option '{text}'")),
+            // Clang ignores GCC's full version, unused.
+            | "-dumpfullversion" => self
+                .positions
+                .push((self.position, Unused::Argument("-dumpfullversion"))),
             | "-v" => self.verbose = true,
             | "-###" => self.dry_run = true,
             | "-c" | "-S" | "-E" | "-M" | "-MM" => {
@@ -856,6 +962,7 @@ impl State<'_> {
                 | Unused::Stage(stage) if stages_unused => Some((*stage).to_owned()),
                 | Unused::SyntaxOnly if syntax_only => Some("-fsyntax-only".to_owned()),
                 | Unused::Link(option) if !links => Some(option.clone()),
+                | Unused::Argument(option) => Some((*option).to_owned()),
                 | _ => None,
             })
             .collect();
@@ -1191,28 +1298,21 @@ impl State<'_> {
                     | "-fapprox-func"
                     | "-fno-approx-func"
             );
-        // An unknown `-std=` is GCC's unrecognized option and Clang's invalid
-        // value, each with status 1 rather than clap's usage error.
-        if let Some(value) = text.strip_prefix("-std=")
-            && crate::configuration::LanguageMode::parse(value).is_none()
-        {
-            match self.compiler {
-                | Compiler::Gcc =>
-                    self.error(format_args!("unrecognized command-line option '{text}'")),
-                // Clang's compiler, not its driver, reports it, so the
-                // message has no `clang:` prefix.
-                | Compiler::Clang => {
-                    self.errors += 1;
-                    super::print(
-                        &format!(
-                            "error: invalid value '{value}' in '{text}'\n{}\n",
-                            crate::cli::arguments::STANDARD_NOTES.trim_end()
-                        ),
-                        true,
-                    );
-                },
+        // GCC does not recognize an unknown `-std=`, whichever follows it.
+        // Clang's compiler reads only the last `-std=` and refuses an
+        // unknown value there, so bcc keeps it until the compilation runs
+        // (`plan`); a known one replaces it.
+        if let Some(value) = text.strip_prefix("-std=") {
+            let known = crate::configuration::LanguageMode::parse(value).is_some();
+            if self.compiler == Compiler::Clang {
+                self.bad_standard = (!known).then(|| text.to_owned());
             }
-            return;
+            if !known {
+                if self.compiler == Compiler::Gcc {
+                    self.unrecognized.push(text.into());
+                }
+                return;
+            }
         }
         if !clang_only
             && (PLAIN_OPTIONS.contains(&text)
@@ -1245,12 +1345,15 @@ impl State<'_> {
         if let Some(options) = text.strip_prefix("-Wp,") {
             // Preprocessor options, comma-separated; `-MD` and `-MMD` take
             // their file here, as GCC passes them to its preprocessor.
+            // A query there is the preprocessor's, not the driver's.
+            let queries = self.queries.len();
             let mut pieces = options.split(',').map(OsStr::new);
             while let Some(piece) = pieces.next() {
                 if let Some(plan) = self.argument(piece, &mut pieces) {
                     drop(plan);
                 }
             }
+            self.queries.truncate(queries);
             return;
         }
         // GCC's loop distribution into library calls, which LLVM's loop
@@ -1297,8 +1400,7 @@ impl State<'_> {
             return;
         }
         match self.compiler {
-            | Compiler::Gcc =>
-                self.error(format_args!("unrecognized command-line option '{text}'")),
+            | Compiler::Gcc => self.unrecognized.push(text.into()),
             | Compiler::Clang => self.error(format_args!("unknown argument: '{text}'")),
         }
     }
@@ -1338,6 +1440,42 @@ impl State<'_> {
     /// bcc cannot follow.
     fn unsupported(&mut self, option: &str, why: &str) {
         self.error(format_args!("'{option}' is not supported: {why}"));
+    }
+
+    /// The text that answers `query` for the whole command line, under
+    /// its `--target` and `--sysroot`.
+    fn answer(&self, query: &Query) -> String {
+        let personality = self.invocation.personality;
+        let target = self.target.unwrap_or_else(|| host_target(personality));
+        match query {
+            | Query::DumpMachine | Query::Triple =>
+                if personality == Personality::Gcc {
+                    format!("{}\n", version::gcc_machine(target))
+                } else {
+                    format!("{}\n", target.triple())
+                },
+            | Query::DumpVersion => format!("{}\n", version::dump_version(personality)),
+            | Query::DumpFullVersion => format!("{}\n", version::GCC_VERSION),
+            | Query::Help => help(personality, &self.invocation.name),
+            | Query::Version => version::banner(personality, &self.invocation.name, target),
+            | Query::SearchDirectories => format!(
+                "install: {}\nprograms: ={}\nlibraries: =/usr/local/lib:/usr/lib/{}:/usr/lib\n",
+                version::program_name("bcc"),
+                version::program_name("ld"),
+                version::gcc_machine(target)
+            ),
+            // GCC and Clang print a file they do not find as named.
+            | Query::FileName(name) => format!("{}\n", self.library_file(name, target)),
+            | Query::LibgccFileName => "libgcc.a\n".into(),
+            | Query::ProgramName(name) => format!("{}\n", version::program_name(name)),
+            | Query::Multiarch => format!("{}\n", version::gcc_machine(target)),
+            // GCC prints nothing when no root is selected.
+            | Query::Sysroot => self
+                .sysroot
+                .as_deref()
+                .map(|sysroot| format!("{}\n", sysroot.to_string_lossy()))
+                .unwrap_or_default(),
+        }
     }
 
     /// The path the bundled clang finds for the library or start file
