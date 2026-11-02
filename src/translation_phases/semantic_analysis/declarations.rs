@@ -997,18 +997,33 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let visible = self.lookup(Namespace::Ordinary, name.name);
         // The built-in typedef names are declared at file scope: an object
         // or function there by the same name redeclares one as a different
-        // kind of symbol, as GCC and Clang report it.
+        // kind of symbol, as GCC and Clang report it. Clang also refuses an
+        // enumeration constant of the name and a typedef of another type,
+        // which GCC accepts.
         if self.scope == 0
-            && kind != BindingKind::Typedef
             && visible.is_none()
-            && self.builtin_typedef(name.name).is_some()
+            && let Some(scalar) = self.builtin_typedef(name.name)
         {
-            self.error(
-                SemanticErrorKind::IncompatibleDeclaration,
-                name.source_vectors,
-                Some(name.name),
-                None,
-            );
+            let clang = self.context.configuration.compiler_identity().rules()
+                == crate::configuration::RuleSet::Clang;
+            let conflict = match kind {
+                | BindingKind::Object | BindingKind::Function => true,
+                | BindingKind::Enumerator => clang,
+                | BindingKind::Typedef => clang && ty != self.types.scalar(scalar),
+                | BindingKind::Parameter => false,
+            };
+            if conflict {
+                self.error(
+                    if kind == BindingKind::Typedef {
+                        SemanticErrorKind::TypedefRedeclaration
+                    } else {
+                        SemanticErrorKind::IncompatibleDeclaration
+                    },
+                    name.source_vectors,
+                    Some(name.name),
+                    None,
+                );
+            }
         }
         if self.bind_overload(
             name,

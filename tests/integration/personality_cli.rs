@@ -501,10 +501,23 @@ mod tests {
         succeeds(&output);
         let run = Command::new(directory.path("shadow")).output().unwrap();
         assert_eq!(run.status.code(), Some(4));
-        for source in ["int __float80;\n", "int __int128_t;\n"] {
+        // (source, GCC accepts, Clang accepts), as GCC 14 and Clang 23 do.
+        for (source, gcc, clang) in [
+            ("int __float80;\n", false, true),
+            ("int __int128_t;\n", false, false),
+            ("int __int128_t(void);\n", false, false),
+            ("enum E { __float80 = 3 };\n", true, true),
+            ("enum E { __int128_t = 3 };\n", true, false),
+            ("typedef double __int128_t;\n", true, false),
+            ("typedef int __uint128_t;\n", true, false),
+            ("typedef __int128 __int128_t;\n", true, true),
+            ("void f(void) { enum { __int128_t }; }\n", true, true),
+        ] {
             directory.write("redeclared.c", source);
-            let output = directory.bcc("--gcc-mode", &["-fsyntax-only", "redeclared.c"]);
-            assert!(!output.status.success(), "{source}");
+            for (mode, accepted) in [("--gcc-mode", gcc), ("--clang-mode", clang)] {
+                let output = directory.bcc(mode, &["-std=c17", "-fsyntax-only", "redeclared.c"]);
+                assert_eq!(output.status.success(), accepted, "{mode} {source}");
+            }
         }
     }
 
