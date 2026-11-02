@@ -60,6 +60,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         arguments: &[&'tu Expression<'tu>],
         cleanup: Option<usize>,
     ) -> ObjectSize<'tu> {
+        let mode = self.effective_object_size_mode(expression, mode);
         let mut node = expression;
         let mut lvalue = false;
         // Whether the current array lvalue was reached by decay, so that its
@@ -338,6 +339,171 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 }
 
 impl<'tu> Analyzer<'_, 'tu, '_> {
+    /// The mode a `__builtin_object_size` query of `pointer` in `mode`
+    /// answers in: mode 0 for mode 1 of a pointer into a trailing array
+    /// reached through a pointer, which may run past its declared bound as
+    /// a flexible array member does. GCC and Clang
+    /// (`-fstrict-flex-arrays=0`, their default) bound such an array from
+    /// above by the complete object only, which is unknown or known later,
+    /// once the pointer's object is (a local, an allocation), so that mode
+    /// 1 never exceeds mode 0. Mode 3 keeps the declared size, as in Clang;
+    /// GCC 13 answers it 0. GNU extension: GCC manual, "Object Size
+    /// Checking", `-fstrict-flex-arrays`.
+    pub(super) fn effective_object_size_mode(&self, pointer: &'tu Expression<'tu>, mode: u8) -> u8 {
+        if mode != 1 {
+            return mode;
+        }
+        // The innermost subobject the pointer designates, as the walk of
+        // `object_size_substitution` meets it.
+        let mut node = pointer;
+        loop {
+            node = self.selected_designator(node);
+            match node.kind {
+                | ExpressionType::Cast {
+                    operand_expression, ..
+                }
+                | ExpressionType::Unary {
+                    operator: UnaryOperator::AddressOf,
+                    operand_expression,
+                } => node = operand_expression,
+                | ExpressionType::Binary {
+                    operator:
+                        BinaryOperator::Addition
+                        | BinaryOperator::Subtraction
+                        | BinaryOperator::Subscript,
+                    left_expression,
+                    right_expression,
+                } => {
+                    let left = self.expression_info(left_expression);
+                    node = if matches!(
+                        self.types.nodes[left.ty.index],
+                        TypeKind::Pointer(_) | TypeKind::Array(..)
+                    ) {
+                        left_expression
+                    } else {
+                        right_expression
+                    };
+                },
+                | ExpressionType::DirectMember { .. } | ExpressionType::IndirectMember { .. } =>
+                    return if self.trailing_array_through_pointer(node) {
+                        0
+                    } else {
+                        mode
+                    },
+                | _ => return mode,
+            }
+        }
+    }
+
+    /// Whether the member access `member` designates an array that is the
+    /// last member of its structure, or any member of a union, of an object
+    /// reached through a pointer, whose extent is therefore unknown. Under
+    /// Clang's rules the structure may itself be the last member of an
+    /// enclosing one, or the last element of each dimension of a trailing
+    /// array of structures; under GCC's only a union's member may enclose
+    /// it (`flexible_array_rules`). GNU extension: GCC manual,
+    /// `-fstrict-flex-arrays`; C99: §6.7.2.1 paragraph 16, p. 103; PDF
+    /// p. 115 (the flexible array member it stands for).
+    fn trailing_array_through_pointer(&self, member: &'tu Expression<'tu>) -> bool {
+        if !matches!(
+            self.types.nodes[self.expression_info(member).ty.index],
+            TypeKind::Array(..)
+        ) {
+            return false;
+        }
+        let gcc =
+            self.context.configuration.flexible_array_rules() == crate::configuration::RuleSet::Gcc;
+        let mut node = member;
+        loop {
+            let (base_expression, name, indirect) = match node.kind {
+                | ExpressionType::DirectMember {
+                    base_expression,
+                    member,
+                } => (base_expression, member.name, false),
+                | ExpressionType::IndirectMember {
+                    base_expression,
+                    member,
+                } => (base_expression, member.name, true),
+                | _ => return false,
+            };
+            let base = self.expression_info(base_expression);
+            let record = if indirect {
+                self.pointer_target(base.ty)
+            } else {
+                Some(base.ty)
+            };
+            let Some(TypeKind::Tag(id)) = record.map(|record| self.types.nodes[record.index])
+            else {
+                return false;
+            };
+            let Some(&index) = self.member_indices.get(&(id, name)) else {
+                return false;
+            };
+            let fields = self.types.tags[id].fields.get();
+            // A union's members all end it.
+            let union = self.types.tags[id].kind == super::TagKind::Union;
+            if !union && index + 1 != fields.len() {
+                return false;
+            }
+            if indirect {
+                return true;
+            }
+            node = self.selected_designator(base_expression);
+            // Through the subscripts of an array of structures, the
+            // innermost first.
+            while let ExpressionType::Binary {
+                operator: BinaryOperator::Subscript,
+                left_expression,
+                right_expression,
+            } = node.kind
+            {
+                let left = self.expression_info(left_expression);
+                let (array, index) = if matches!(
+                    self.types.nodes[left.ty.index],
+                    TypeKind::Pointer(_) | TypeKind::Array(..)
+                ) {
+                    (left_expression, right_expression)
+                } else {
+                    (right_expression, left_expression)
+                };
+                let ty = self.expression_info(array).ty;
+                match self.types.nodes[ty.index] {
+                    // `p[i].c` is reached through the pointer `p`.
+                    | TypeKind::Pointer(_) => return true,
+                    // GCC takes no element of an array of structures to
+                    // end its object; Clang the last of each dimension of
+                    // a trailing one, which an index unknown here may be.
+                    | _ if gcc => return false,
+                    | TypeKind::Array(_, super::ArrayBound::Constant(length)) => {
+                        let index = self.expression_info(index);
+                        if let Some(index) = index
+                            .integer
+                            .filter(|_| index.ice)
+                            .and_then(Integer::to_i128)
+                            && index + 1 != i128::from(length)
+                        {
+                            return false;
+                        }
+                    },
+                    | _ => {},
+                }
+                node = self.selected_designator(array);
+            }
+            if let ExpressionType::Unary {
+                operator: UnaryOperator::Indirection,
+                ..
+            } = node.kind
+            {
+                return true;
+            }
+            // An enclosing member access: GCC goes on only from a union's
+            // member, Clang from any trailing one.
+            if gcc && !union {
+                return false;
+            }
+        }
+    }
+
     /// The pointer parameter `expression` is computed from by pointer
     /// arithmetic and casts alone, if it is: what the caller passed for it
     /// then still designates the closest surrounding subobject

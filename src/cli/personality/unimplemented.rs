@@ -92,6 +92,10 @@ const REFUSED: &[(&str, &str)] = &[
     ),
     ("-fshort-wchar", "wchar_t has the target's width in bcc"),
     (
+        "-fno-inline-atomics",
+        "bcc expands the atomic builtins inline instead of calling the __atomic_* routines",
+    ),
+    (
         "-funsigned-bitfields",
         "plain int bit-fields are signed in bcc",
     ),
@@ -998,6 +1002,7 @@ mod tests {
         let linux = |option| treatment(option, Target::LinuxGnu);
         for refused in [
             "-fshort-enums",
+            "-fno-inline-atomics",
             "-fexec-charset=latin1",
             "-fsplit-stack",
             "-fsanitize=address",
