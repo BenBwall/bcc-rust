@@ -2,7 +2,8 @@
 //! `-MD`, `-MMD`), as GCC writes them: the target, a colon, the source and
 //! each header it read, wrapped with backslash-newlines, and with `-MP` an
 //! empty rule for each header. Under TCC's identity they take TCC's form
-//! (`gen_makedeps` in `tcctools.c`): every file on a line of its own.
+//! (`gen_makedeps` in `tcctools.c`): every file on a line of its own, and
+//! a link's one rule names every file its inputs read.
 //!
 //! The rules describe the source files a translation unit was read from,
 //! C99: §5.1.1.1 paragraph 1, p. 9; PDF p. 21; source file inclusion,
@@ -14,6 +15,7 @@
 )]
 use std::path::PathBuf;
 use std::{
+    cell::RefCell,
     fmt::Write as _,
     io::{
         self,
@@ -56,6 +58,13 @@ pub(super) struct DependencyRequest {
     destination:    Option<PathBuf>,
     /// The target without `-MT` or `-MQ`.
     default_target: PathBuf,
+    /// For a TCC link, the escaped files every input read so far, one per
+    /// line, which [`DependencyRequest::finish`] writes as one rule.
+    #[expect(
+        clippy::disallowed_types,
+        reason = "The driver gathers one link's file names across its jobs."
+    )]
+    gathered:       Option<RefCell<String>>,
 }
 
 /// The outputs a job's rules are named after, as GCC derives them from
@@ -121,7 +130,33 @@ pub(super) fn request_at(
         files,
         destination,
         default_target,
+        gathered: None,
     }))
+}
+
+/// A TCC link's one rule: like [`request_at`] with the output's names, but
+/// every input adds the files it read, and [`DependencyRequest::finish`]
+/// writes the rule once the link succeeded, as `tcc` writes `prog.d` with
+/// `prog: b.c inc.h a.c` for `tcc -MD b.c a.c -o prog`.
+/// TCC: `gen_makedeps` in `tcctools.c`, called after `tcc_output_file`.
+#[expect(
+    clippy::disallowed_types,
+    reason = "The driver gathers one link's file names across its jobs."
+)]
+pub(super) fn request_link(
+    args: &Cli,
+    output: &Path,
+) -> Result<Option<DependencyRequest>, MainError> {
+    let names = DependencyNames {
+        file:   Some(output),
+        target: Some(output),
+    };
+    Ok(
+        request_at(args, None, false, names)?.map(|request| DependencyRequest {
+            gathered: Some(RefCell::new(String::new())),
+            ..request
+        }),
+    )
 }
 
 impl DependencyRequest {
@@ -166,6 +201,33 @@ impl DependencyRequest {
             options.push("-MG".into());
         }
         options
+    }
+
+    /// Adds an input the bundled clang reads, an assembly file, to a TCC
+    /// link's files; TCC lists it as it lists a C source.
+    pub(super) fn gather_input(&self, path: &Path) {
+        if let Some(gathered) = &self.gathered {
+            let arena = Bump::new();
+            let mut gathered = gathered.borrow_mut();
+            gathered.push_str(escape(&arena, &path.to_string_lossy()));
+            gathered.push('\n');
+        }
+    }
+
+    /// Writes a TCC link's one rule, from the files its inputs read.
+    pub(super) fn finish(&self, args: &Cli) -> Result<(), MainError> {
+        let Some(gathered) = &self.gathered else {
+            return Ok(());
+        };
+        let arena = Bump::new();
+        let gathered = gathered.borrow();
+        let text = tcc_rules(
+            &arena,
+            args,
+            &self.default_target.to_string_lossy(),
+            gathered.lines(),
+        );
+        emit(self, &text)
     }
 }
 
@@ -217,31 +279,16 @@ pub(super) fn write(
     let headers = files
         .iter()
         .map(|(_, path)| escape(&arena, &path.to_string_lossy()));
+    if let Some(gathered) = &request.gathered {
+        let mut gathered = gathered.borrow_mut();
+        for header in headers {
+            gathered.push_str(header);
+            gathered.push('\n');
+        }
+        return Ok(());
+    }
     if context.configuration.compiler_identity() == CompilerIdentity::Tcc {
-        // `target: \`, then `  file \` per file, the last without the
-        // backslash; `-MP` adds `file:` for each file after the source.
-        text.clear();
-        let mut targets = args.driver.dependency_target.iter();
-        match targets.next() {
-            | Some(first) => {
-                text.push_str(first);
-                for target in targets {
-                    text.push(' ');
-                    text.push_str(target);
-                }
-            },
-            | None => text.push_str(&default),
-        }
-        text.push(':');
-        let mut phony = ArenaString::new_in(&arena);
-        for (index, header) in headers.enumerate() {
-            _ = write!(text, " \\\n  {header}");
-            if index != 0 && args.driver.phony_dependencies {
-                _ = writeln!(phony, "{header}:");
-            }
-        }
-        text.push('\n');
-        text.push_str(&phony);
+        let text = tcc_rules(&arena, args, &default, headers);
         return emit(request, &text);
     }
     let mut first = true;
@@ -256,6 +303,40 @@ pub(super) fn write(
     text.push('\n');
     text.push_str(&phony);
     emit(request, &text)
+}
+
+/// TCC's form of a rule: `target: \`, then `  file \` per file, the last
+/// without the backslash; `-MP` adds `file:` for each file after the first,
+/// which for a link includes the later inputs, as `tcc` writes them.
+fn tcc_rules<'a, 'h>(
+    arena: &'a Bump,
+    args: &Cli,
+    default: &str,
+    headers: impl Iterator<Item = &'h str>,
+) -> ArenaString<'a> {
+    let mut text = ArenaString::new_in(arena);
+    let mut targets = args.driver.dependency_target.iter();
+    match targets.next() {
+        | Some(first) => {
+            text.push_str(first);
+            for target in targets {
+                text.push(' ');
+                text.push_str(target);
+            }
+        },
+        | None => text.push_str(default),
+    }
+    text.push(':');
+    let mut phony = ArenaString::new_in(arena);
+    for (index, header) in headers.enumerate() {
+        _ = write!(text, " \\\n  {header}");
+        if index != 0 && args.driver.phony_dependencies {
+            _ = writeln!(phony, "{header}:");
+        }
+    }
+    text.push('\n');
+    text.push_str(&phony);
+    text
 }
 
 /// Writes the rules `text` where `request` sends them.

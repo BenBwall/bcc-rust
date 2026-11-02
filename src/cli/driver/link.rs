@@ -65,9 +65,21 @@ pub(super) fn link(args: &Cli, inputs: &[Input<'_>]) -> Result<i32, MainError> {
         let base = default_output_base(args, source.path());
         let names = rule_names(args, output, base.as_deref());
         let dependencies = dependencies::request(args, source, false, names)?;
-        return compile(args, source, Job::Generate(generation), dependencies)
-            .map(|generated| generated.status);
+        return compile(
+            args,
+            source,
+            Job::Generate(generation),
+            dependencies.as_ref(),
+        )
+        .map(|generated| generated.status);
     }
+    // TCC writes one rule for the whole link, after it succeeded.
+    let tcc = CompilerIdentity::from(args.compiler_identity) == CompilerIdentity::Tcc;
+    let combined = if tcc {
+        dependencies::request_link(args, output)?
+    } else {
+        None
+    };
     let target = args.target;
     if target.is_wasm() {
         return Err(MainError::Driver(
@@ -96,9 +108,16 @@ pub(super) fn link(args: &Cli, inputs: &[Input<'_>]) -> Result<i32, MainError> {
             | Input::Assembly(assembly) => {
                 // A lone assembly input's rule names the output, as a lone
                 // C source's does and as GCC and Clang write it.
-                let base = default_output_base(args, assembly.path);
-                let names = rule_names(args, output, base.as_deref());
-                let rules = dependencies::request_at(args, Some(assembly.path), false, names)?
+                // A TCC link lists the assembly file in its one rule.
+                let request = if let Some(combined) = &combined {
+                    combined.gather_input(assembly.path);
+                    None
+                } else {
+                    let base = default_output_base(args, assembly.path);
+                    let names = rule_names(args, output, base.as_deref());
+                    dependencies::request_at(args, Some(assembly.path), false, names)?
+                };
+                let rules = request
                     .map(|rules| rules.clang_arguments(args, false))
                     .unwrap_or_default();
                 status = combine(status, assemble(args, assembly, object.path(), &rules));
@@ -113,7 +132,12 @@ pub(super) fn link(args: &Cli, inputs: &[Input<'_>]) -> Result<i32, MainError> {
                 job.output_path = Some(object.path().into());
                 let base = default_output_base(args, source.path());
                 let names = rule_names(args, output, base.as_deref());
-                let dependencies = dependencies::request(args, source, false, names)?;
+                let own = if combined.is_some() {
+                    None
+                } else {
+                    dependencies::request(args, source, false, names)?
+                };
+                let dependencies = combined.as_ref().or(own.as_ref());
                 let generated = compile(args, source, Job::Generate(&job), dependencies)?;
                 status = combine(status, generated.status);
                 atomic_runtime |= generated.atomic_runtime;
@@ -159,7 +183,12 @@ pub(super) fn link(args: &Cli, inputs: &[Input<'_>]) -> Result<i32, MainError> {
         )
     });
     match linked {
-        | Ok(()) => Ok(0),
+        | Ok(()) => {
+            if let Some(combined) = &combined {
+                combined.finish(args)?;
+            }
+            Ok(0)
+        },
         | Err(error) => {
             super::report(
                 args,
