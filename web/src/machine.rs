@@ -115,8 +115,8 @@ fn rejected(diagnostic: &abstract_machine::Diagnostic, source: &str) -> Snapshot
             kind:           "fault".to_owned(),
             category:       "fault".to_owned(),
             title:          "This program is outside the supported subset".to_owned(),
-            summary:        "The abstract machine runs only a small subset of C, and this program \
-                             uses something outside it."
+            summary:        "The abstract machine runs only a small subset of C, and this \
+                             program uses something outside it."
                 .to_owned(),
             explanation:    format!(
                 "The abstract machine could not compile it: {}. The compiler pipeline view may \

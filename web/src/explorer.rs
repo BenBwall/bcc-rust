@@ -846,11 +846,7 @@ mod tests {
             .pp_ranges
             .iter()
             .filter(|range| range.line == 8 && (16..=31).contains(&range.column))
-            .filter(|range| {
-                !line[range.column - 1..range.end_column - 1]
-                    .trim()
-                    .is_empty()
-            })
+            .filter(|range| !line[range.column - 1..range.end_column - 1].trim().is_empty())
             .count();
         assert_eq!(call, 6, "{:?}", compilation.pp_ranges);
         let phase4 = &compilation.preprocessing;
@@ -874,10 +870,7 @@ mod tests {
             assert!(types.contains(expected), "{expected}: {types}");
         }
         let ir = text(compilation.ir.as_ref());
-        assert!(
-            ir.contains("iadd.i32 nsw v0, v1") && ir.contains("call @square(v2)"),
-            "{ir}"
-        );
+        assert!(ir.contains("iadd.i32 nsw v0, v1") && ir.contains("call @square(v2)"), "{ir}");
         assert!(!ir.contains("stack_slot"), "{ir}");
         let body = |ir: &str| ir[ir.find("function @square").expect("square")..].to_owned();
         assert_eq!(body(&text(compilation.ir_abi.as_ref())), body(&ir));
@@ -891,25 +884,16 @@ mod tests {
         // Each listing line is the offset, the bytes, then the instruction.
         let bytes_of = |mnemonic: &str| {
             code.lines()
-                .find(|line| {
-                    line.split_whitespace()
-                        .any(|word| word.starts_with(mnemonic))
-                })
+                .find(|line| line.split_whitespace().any(|word| word.starts_with(mnemonic)))
                 .map(|line| {
                     line.split_whitespace()
                         .skip(1)
-                        .take_while(|word| {
-                            word.len() == 2 && word.chars().all(|c| c.is_ascii_hexdigit())
-                        })
+                        .take_while(|word| word.len() == 2 && word.chars().all(|c| c.is_ascii_hexdigit()))
                         .collect::<Vec<_>>()
                 })
         };
         assert_eq!(bytes_of("ret"), Some(vec!["c3"]), "{code}");
-        assert_eq!(
-            bytes_of("call"),
-            Some(vec!["e8", "00", "00", "00", "00"]),
-            "{code}"
-        );
+        assert_eq!(bytes_of("call"), Some(vec!["e8", "00", "00", "00", "00"]), "{code}");
     }
 
     #[test]
