@@ -303,6 +303,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             parameter_aliases: &[],
             assembly: false,
             va_arg_pack: false,
+            builtin_setjmp: false,
         });
         self.functions.current = Some(FunctionContext {
             id,

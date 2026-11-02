@@ -224,6 +224,10 @@ impl Duration {
 /// have a record; lowering refuses their unit through the error gate.
 /// C99: §6.9.1 paragraphs 2-10, pp. 141-142; PDF pp. 153-154.
 #[derive(Debug, Clone, Copy)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "Each flag is an independent fact about the body that lowering reads on its own."
+)]
 pub(crate) struct FunctionRecord<'tu> {
     pub(crate) control:           super::FunctionControl,
     pub(crate) parameter_facts:   &'tu [super::ParameterFacts<'tu>],
@@ -254,6 +258,10 @@ pub(crate) struct FunctionRecord<'tu> {
     /// so lowering expands a copy of it at each direct call instead of
     /// lowering it once. GNU extension: GCC manual, "Constructing Calls".
     pub(crate) va_arg_pack:       bool,
+    /// The body calls `__builtin_setjmp`. GCC keeps every local current
+    /// across its second return, so under GCC's identity lowering keeps
+    /// them in memory. GNU extension: GCC manual, "Nonlocal Gotos".
+    pub(crate) builtin_setjmp:    bool,
 }
 
 /// A lexical scope and its enclosing scope.

@@ -433,6 +433,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             // Lowering substitutes the pack in a copy of this function per
             // call, so it must know which bodies evaluate it.
             | CommonBuiltin::ArgumentPack(_) => self.argument_pack_use(),
+            // Lowering keeps the function's locals in memory under GCC's
+            // identity, which a resumed `__builtin_setjmp` reads.
+            | CommonBuiltin::Setjmp =>
+                if let Some(function) = self.functions.current {
+                    self.function_records[function.id].builtin_setjmp = true;
+                },
             // GCC folds a part of a constant, as in a static initializer;
             // Clang does not.
             | CommonBuiltin::ComplexPart(part) => {
@@ -472,7 +478,6 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | CommonBuiltin::ExtractReturnAddress
             | CommonBuiltin::Unreachable
             | CommonBuiltin::Trap
-            | CommonBuiltin::Setjmp
             | CommonBuiltin::Longjmp
             | CommonBuiltin::Varargs(_)
             | CommonBuiltin::Library
