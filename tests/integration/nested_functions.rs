@@ -44,6 +44,21 @@ mod tests {
         prints_on_every_back_end(&fixture("nested_functions.c"), EXPECTED);
     }
 
+    const GOTOS: &str =
+        "unwind 42 x y\n42\n37 25\n105 100\n21 22 23\n65 1005\n4\n4008 -1000\n9999\n";
+
+    /// Non-local gotos print what GCC prints: no cleanup runs, objects keep
+    /// the values the nested function left, and the stack is as it was at
+    /// the call.
+    #[test]
+    fn nested_gotos_match_gcc_on_every_back_end() {
+        if !linux_host() {
+            eprintln!("skipping: the fixture runs on an x86-64 GNU/Linux host");
+            return;
+        }
+        prints_on_every_back_end(&fixture("nested_gotos.c"), GOTOS);
+    }
+
     const STATEMENT_EXPRESSIONS: &str = concat!(
         "statement:2\n",
         "value:3\n",
@@ -291,17 +306,24 @@ mod tests {
         std::fs::remove_file(apply).unwrap();
     }
 
-    /// A `goto` out of a nested function, and a use of a variably modified
-    /// object of the function around it, are refused rather than
-    /// miscompiled.
+    /// A use of a variably modified object of the function around a
+    /// nested function is refused rather than miscompiled, and so is a
+    /// `goto` out of one on the targets whose `longjmp` cannot make it.
     #[test]
     fn unimplemented_forms_are_refused() {
+        let jump = "int main(void) { __label__ out; void f(void) { goto out; } f(); return 1; \
+                    out: return 0; }\n";
+        for target in ["--target=x86_64-w64-windows-gnu", "--target=wasm32-wasip1"] {
+            let output = check(&[GCC, target, "--emit=ir"], jump);
+            assert!(!output.status.success(), "{target}");
+            let stderr = text(&output.stderr);
+            assert!(
+                stderr
+                    .contains("a jump out of a nested function on Windows and WebAssembly targets"),
+                "{target}: {stderr}"
+            );
+        }
         for (source, reason) in [
-            (
-                "int main(void) { __label__ out; void f(void) { goto out; } f(); return 1; out: \
-                 return 0; }\n",
-                "a jump out of a nested function",
-            ),
             (
                 "int main(void) { int n = 2; int a[n]; int f(void) { return a[1]; } return f(); \
                  }\n",
