@@ -1809,8 +1809,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if constexpr
             && let Some(prior) = prior
             && self.bindings[prior].scope == self.scope
-            && self.context.configuration.compiler_identity().rules()
-                == crate::configuration::RuleSet::Gcc
+            && self.context.configuration.compiler_identity().rules() == RuleSet::Gcc
         {
             self.error(
                 SemanticErrorKind::InvalidConstexpr(super::errors::ConstexprFault::Redeclared),
