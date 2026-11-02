@@ -10,7 +10,9 @@
 #else
 #define NEGATIVE 0
 #endif
-#define WRONG(x) (__builtin_signbit(__imag__ conj(x)) ? !NEGATIVE : NEGATIVE)
+/* The sign of a zero, through 1/x, which every identity has (TCC has no
+ * __builtin_signbit). */
+#define WRONG(x) (1 / (double)(__imag__ conj(x)) < 0 ? !NEGATIVE : NEGATIVE)
 int main(void) {
   volatile float f = 1;
   volatile double d = 1;

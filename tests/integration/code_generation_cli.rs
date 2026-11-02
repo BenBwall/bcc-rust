@@ -2334,10 +2334,14 @@ printf(\"%f %f %F\\n\",1e100,-0.0,1.0/0.0); return 0; }",
             }
         }
         let source = "int main(void) { exit(0); }";
-        assert!(text(&bcc(source, &["--interpret"]).stderr).contains("warning:"));
-        let output = bcc(source, &["--interpret", "-w"]);
+        assert!(
+            text(&bcc(source, &["--interpret", "-std=gnu89"]).stderr).contains("warning:")
+        );
+        let output = bcc(source, &["--interpret", "-std=gnu89", "-w"]);
         assert!(output.status.success());
         assert!(output.stderr.is_empty(), "{}", text(&output.stderr));
+        // C99 makes the implicit declaration an error, which `-w` keeps.
+        assert!(text(&bcc(source, &["--interpret", "-w"]).stderr).contains("error:"));
         let output = bcc("int main(void) { return missing; }", &["--interpret", "-w"]);
         assert!(!output.status.success());
         assert!(text(&output.stderr).contains("error:"));

@@ -2427,6 +2427,8 @@ impl SemanticError {
             | (F::Tcc, SemanticErrorKind::VoidReturnMismatch) => "void function returns a value",
             | (F::Gcc, SemanticErrorKind::DeclarationMissingParameterType) =>
                 "parameter names (without types) in function declaration",
+            | (F::Clang, SemanticErrorKind::TypeSpecifierRequired) =>
+                return Some(("a type specifier is required for all declarations", None)),
             | _ => return None,
         };
         Some((message, if format == F::Tcc { None } else { group }))

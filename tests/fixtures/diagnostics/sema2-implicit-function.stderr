@@ -1,7 +1,9 @@
-warning: 'implicit function declaration' is a C89 feature removed in C99 [-Wpedantic]
+error: implicit declaration of function: `undeclared` [-Wimplicit-function-declaration]
  --> sema2-implicit-function.c:1:22
   |
 1 | int f(void) { return undeclared(1); }
-  |                      ^^^^^^^^^^
+  |                      ^^^^^^^^^^ undeclared function called here
+  |
+  = note: C99 §6.5.1p2: an identifier is a primary expression only if it is declared; C89 §3.3.2.2 declared an undeclared called identifier as `extern int f();`
 
-1 warning generated.
+1 error generated.

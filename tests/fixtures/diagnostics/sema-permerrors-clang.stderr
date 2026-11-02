@@ -1,0 +1,113 @@
+sema-permerrors-clang.c:2:8: error: type specifier missing, defaults to 'int'; ISO C99 and later do not support implicit int [-Wimplicit-int]
+  |
+2 | static x = 1;
+  |        ^ no type specifier
+  |
+  = note: C99 §6.7.2p2: each declaration gives at least one type specifier; C89 defaulted to `int`
+
+sema-permerrors-clang.c:3:1: error: type specifier missing, defaults to 'int'; ISO C99 and later do not support implicit int [-Wimplicit-int]
+  |
+3 | g(void) { return x; }
+  | ^ no type specifier
+  |
+  = note: C99 §6.7.2p2: each declaration gives at least one type specifier; C89 defaulted to `int`
+
+sema-permerrors-clang.c:4:16: error: type specifier missing, defaults to 'int'; ISO C99 and later do not support implicit int [-Wimplicit-int]
+  |
+4 | int h(register q) { return q; }
+  |                ^ no type specifier
+  |
+  = note: C99 §6.7.2p2: each declaration gives at least one type specifier; C89 defaulted to `int`
+
+sema-permerrors-clang.c:5:12: error: parameter 'b' was not declared, defaults to 'int'; ISO C99 and later do not support implicit int [-Wimplicit-int]
+  |
+5 | int old(a, b) int a; { return a + b; }
+  |            ^ undeclared parameter
+  |
+  = note: C99 §6.9.1p6: every identifier in the identifier list shall be declared; C89 defaulted to `int`
+
+sema-permerrors-clang.c:6:13: error: a parameter list without types is only allowed in a function definition
+  |
+6 | void listed(n);
+  |             ^ parameter names without types
+  |
+  = note: C99 §6.7.5.3p3: an identifier list in a function declarator that is not part of a definition shall be empty
+
+sema-permerrors-clang.c:7:21: error: non-void function 'nothing' should return a value [-Wreturn-mismatch]
+  |
+7 | int nothing(void) { return; }
+  |                     ^^^^^^^ no return value
+  |
+  = note: C99 §6.8.6.4p1: a return statement without an expression shall only appear in a function returning void; C89 permitted it
+
+sema-permerrors-clang.c:8:20: error: void function 'value' should not return a value [-Wreturn-mismatch]
+  |
+8 | void value(void) { return 1; }
+  |                    ^^^^^^^^^ value returned from a void function
+  |
+  = note: C99 §6.8.6.4p1: a return statement with an expression shall not appear in a function returning void
+
+sema-permerrors-clang.c:11:7: error: incompatible pointer to integer conversion initializing 'int' with an expression of type 'int *'; dereference with * [-Wint-conversion]
+   |
+11 |   int j = p;
+   |       ^ pointer constraint violation
+   |
+   = note: C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
+
+sema-permerrors-clang.c:12:8: error: incompatible integer to pointer conversion initializing 'int *' with an expression of type 'int'; take the address with & [-Wint-conversion]
+   |
+12 |   int *k = i;
+   |        ^ pointer constraint violation
+   |
+   = note: C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
+
+sema-permerrors-clang.c:13:5: error: incompatible integer to pointer conversion assigning to 'int *' from 'int'; take the address with & [-Wint-conversion]
+   |
+13 |   p = i;
+   |     ^ pointer constraint violation
+   |
+   = note: C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
+
+sema-permerrors-clang.c:14:6: error: incompatible pointer types assigning to 'long *' from 'int *' [-Wincompatible-pointer-types]
+   |
+14 |   lp = p;
+   |      ^ pointer constraint violation
+   |
+   = note: C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
+
+sema-permerrors-clang.c:15:6: error: incompatible function pointer types assigning to 'int (*)(double)' from 'int (int)' [-Wincompatible-function-pointer-types]
+   |
+15 |   fp = h;
+   |      ^ pointer constraint violation
+   |
+   = note: C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
+
+sema-permerrors-clang.c:16:9: error: incompatible integer to pointer conversion passing 'int' to parameter of type 'int *'; take the address with & [-Wint-conversion]
+   |
+16 |   takep(i);
+   |         ^ pointer constraint violation
+   |
+   = note: C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
+
+sema-permerrors-clang.c:17:3: error: call to undeclared function 'undeclared'; ISO C99 and later do not support implicit function declarations [-Wimplicit-function-declaration]
+   |
+17 |   undeclared(j, k);
+   |   ^^^^^^^^^^ undeclared function called here
+   |
+   = note: C99 §6.5.1p2: an identifier is a primary expression only if it is declared; C89 §3.3.2.2 declared an undeclared called identifier as `extern int f();`
+
+sema-permerrors-clang.c:18:3: error: call to undeclared library function 'printf' with type 'int (const char *, ...)'; ISO C99 and later do not support implicit function declarations [-Wimplicit-function-declaration]
+   |
+18 |   printf("%d", j);
+   |   ^^^^^^ library prototype used here
+   |
+   = note: C99 §6.5.2.2p6,p9: calls require compatible function types; §7.1.4p2 permits declaring library functions without their headers
+
+sema-permerrors-clang.c:19:10: error: incompatible integer to pointer conversion returning 'int' from a function with result type 'int *'; take the address with & [-Wint-conversion]
+   |
+19 |   return i;
+   |          ^ pointer constraint violation
+   |
+   = note: C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
+
+16 errors generated.

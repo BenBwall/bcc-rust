@@ -6,12 +6,12 @@ error: invalid function definition parameter list: `b`
   |
   = note: C99 §6.9.1p5-6: prototype definitions have no declaration list; identifier-list declarations name only listed parameters, with no initializers
 
-error: invalid function definition parameter list: `a`
+error: parameter was not declared, defaults to `int`: `a` [-Wimplicit-int]
  --> sema3-parameter-list.c:1:7
   |
 1 | int f(a) int b; { return 0; }
-  |       ^ invalid parameter list for a definition
+  |       ^ undeclared parameter
   |
-  = note: C99 §6.9.1p5-6: prototype definitions have no declaration list; identifier-list declarations name only listed parameters, with no initializers
+  = note: C99 §6.9.1p6: every identifier in the identifier list shall be declared; C89 defaulted to `int`
 
 2 errors generated.

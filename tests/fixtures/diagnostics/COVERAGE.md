@@ -636,7 +636,8 @@ and renders this same golden corpus with the default semantic CLI path.
 The `sema2-*` fixtures preserve a following declaration and render the structured
 source range and standard note. They use C99 except the C11 assertion and the
 GNU99 pedantic implicit-function fixture. Every new semantic kind is covered
-below; implicit functions use the existing shared extension diagnostic.
+below; implicit functions are reported under `-Wimplicit-function-declaration`
+([C type-safety permerrors](#c-type-safety-permerrors)).
 
 | Symbolic kind | Golden | Constraint |
 | --- | --- | --- |
@@ -676,7 +677,7 @@ below; implicit functions use the existing shared extension diagnostic.
 | `FloatOverflow`, `PedanticOverflow`, `LiteralConversion`, `NonConstantInitializer` | [GCC](sema-float-integer-gcc.c), [Clang](sema-float-integer-clang.c) | Floating constants converted out of an integer type's range: GCC's `-Woverflow` in static initializers only, with its bit-field width and pedantic report for casts and arithmetic too; Clang's `-Wliteral-conversion` for literals anywhere, inexact values included, and its rejection of an overflowing static bit-field. |
 | `Extension(ImaginaryConstants)`, `InvalidDecimalFloatLiteral` | [GCC](sema-imaginary-interchange-gcc.c), [Clang](sema-imaginary-interchange-clang.c) | Imaginary interchange constants in both suffix orders: `f16` under both identities, GCC's `fN` and `fNx` forms, and the `bf16` form bcc cannot type. |
 | `PointerConstraint(IntToPointerCast, PointerToIntCast, ...)` | [GCC](sema-pointer-int-cast-gcc.c), [Clang](sema-pointer-int-cast-clang.c), [options](sema-pointer-int-cast-options.c), [GCC system header](sema-pointer-int-cast-system-gcc.c), [Clang system header](sema-pointer-int-cast-system-clang.c) | Casts between a pointer and an integer of another width: GCC's two groups for any other width of a plain integer and a non-constant operand, Clang's narrower-only groups with their `void *` and enumeration children, the parent options that re-enable or promote a child, and GCC's silence for a cast spelled in a system header's macro, which Clang reports at the expansion. |
-| `Extension(ImplicitFunctionDeclaration)` | [implicit function](sema2-implicit-function.c) | Removed C89 function declaration policy in GNU99 pedantic mode. |
+| `ImplicitFunctionDeclaration` | [implicit function](sema2-implicit-function.c) | Removed C89 function declaration, an error in GNU99 under the default Clang identity. |
 
 Positive and negative rules are checked in
 `semantic_analysis/tests/expressions.rs`: categories, promotions, null pointers,
@@ -717,9 +718,8 @@ pinned by the `.args` sidecars.
 | `UnusedStaticFunction` | [static-unused](sema3-static-unused.c) |
 | `InlineInternalReference` | [inline-reference](sema3-inline-reference.c) |
 | `InlineStaticObject` | [inline-object](sema3-inline-object.c) |
-| `VoidReturnValue` | [void-return](sema3-void-return.c) |
-| `MissingReturnValue` | [missing-value](sema3-missing-value.c) |
-| `MissingReturnValueWarning` | [missing-value-warning](sema3-missing-value-warning.c) |
+| `VoidReturnMismatch` | [void-return](sema3-void-return.c) |
+| `ReturnMismatch` | [missing-value](sema3-missing-value.c), [as a warning](sema3-missing-value-warning.c) (`-Wno-error=return-mismatch`) |
 | `InvalidReturnConversion` | [return-conversion](sema3-return-conversion.c) |
 | `InvalidForDeclaration` | [for-declaration](sema3-for-declaration.c) |
 | `DuplicateLabel` | [label-duplicate](sema3-label-duplicate.c) |
@@ -918,7 +918,8 @@ which suppresses the promoted warning under `#pragma GCC system_header`.
 
 ### Implicit library declarations
 
-`sema-implicit-library.c` renders `ImplicitLibraryFunction` warnings for
+`sema-implicit-library.c` renders `ImplicitLibraryFunction` warnings in GNU89
+(errors from C99, under `-Wimplicit-function-declaration`) for
 `memcpy`, `strcmp`, `printf`, `strlen`, `abort` and `exit`, including the
 function name, complete target-specific type and C99 call/library note.
 The semantic tests cover repeated calls, all extension policies, C89/GNU17,
@@ -969,3 +970,22 @@ semantic tests check each ISO and GNU revision and extension policy. The text of
 `__PRETTY_FUNCTION__` is checked against the bundled Clang by the
 `semantic/predefined-function-names.c` end-to-end program and by
 `semantic_analysis/tests/predefined_identifiers.rs`.
+
+## C type-safety permerrors
+
+The `sema-permerrors-*` fixtures run one source through each identity and
+format: GCC 14 in GNU17 ([gcc](sema-permerrors-gcc.c)), with `-fpermissive`
+([permissive](sema-permerrors-permissive.c)) and in GNU89
+([gnu89](sema-permerrors-gnu89.c)); Clang 23 in GNU17
+([clang](sema-permerrors-clang.c)) and C23
+([c23-clang](sema-permerrors-c23-clang.c)); and bcc's own words under the
+default identity ([bcc](sema-permerrors-bcc.c)). They cover
+`ImplicitFunctionDeclaration`, `ImplicitLibraryFunction`, `ImplicitInt`,
+`ImplicitIntReturn`, `ImplicitIntParameter`, `ReturnMismatch`,
+`VoidReturnMismatch`, `DeclarationMissingParameterType`,
+`IdentifierListDeclaration`, `TypeSpecifierRequired` and the worded
+`-Wint-conversion` and incompatible-pointer diagnostics. Against GCC 14.2's
+`cc1` and Clang 23.1.1 every line matches but three: GCC's extra
+`-Wbuiltin-declaration-mismatch` warning for `printf` in GNU17, Clang's
+`-Wdeprecated-non-prototype` warning for the old-style definition, and
+Clang's C23 `use of undeclared identifier`, where bcc keeps its own words.

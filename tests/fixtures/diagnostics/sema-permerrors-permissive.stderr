@@ -1,0 +1,112 @@
+sema-permerrors-permissive.c:2:8: warning: type defaults to 'int' in declaration of 'x' [-Wimplicit-int]
+  |
+2 | static x = 1;
+  |        ^ no type specifier
+  |
+  = note: C99 §6.7.2p2: each declaration gives at least one type specifier; C89 defaulted to `int`
+
+sema-permerrors-permissive.c:3:1: warning: return type defaults to 'int' [-Wimplicit-int]
+  |
+3 | g(void) { return x; }
+  | ^ no type specifier
+  |
+  = note: C99 §6.7.2p2: each declaration gives at least one type specifier; C89 defaulted to `int`
+
+sema-permerrors-permissive.c:4:16: warning: type defaults to 'int' in declaration of 'q' [-Wimplicit-int]
+  |
+4 | int h(register q) { return q; }
+  |                ^ no type specifier
+  |
+  = note: C99 §6.7.2p2: each declaration gives at least one type specifier; C89 defaulted to `int`
+
+sema-permerrors-permissive.c:5:5: warning: type of 'b' defaults to 'int' [-Wimplicit-int]
+  |
+5 | int old(a, b) int a; { return a + b; }
+  |     ^^^ undeclared parameter
+  |
+  = note: C99 §6.9.1p6: every identifier in the identifier list shall be declared; C89 defaulted to `int`
+
+sema-permerrors-permissive.c:6:1: warning: parameter names (without types) in function declaration [-Wdeclaration-missing-parameter-type]
+  |
+6 | void listed(n);
+  | ^^^^^^^^^^^^^^^ parameter names without types
+  |
+  = note: C99 §6.7.5.3p3: an identifier list in a function declarator that is not part of a definition shall be empty
+
+sema-permerrors-permissive.c:7:21: warning: 'return' with no value, in function returning non-void [-Wreturn-mismatch]
+  |
+7 | int nothing(void) { return; }
+  |                     ^^^^^^^ no return value
+  |
+  = note: C99 §6.8.6.4p1: a return statement without an expression shall only appear in a function returning void; C89 permitted it
+
+sema-permerrors-permissive.c:8:27: warning: 'return' with a value, in function returning void [-Wreturn-mismatch]
+  |
+8 | void value(void) { return 1; }
+  |                           ^ value returned from a void function
+  |
+  = note: C99 §6.8.6.4p1: a return statement with an expression shall not appear in a function returning void
+
+sema-permerrors-permissive.c:11:11: warning: initialization of 'int' from 'int *' makes integer from pointer without a cast [-Wint-conversion]
+   |
+11 |   int j = p;
+   |           ^ pointer constraint violation
+   |
+   = note: C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
+
+sema-permerrors-permissive.c:12:12: warning: initialization of 'int *' from 'int' makes pointer from integer without a cast [-Wint-conversion]
+   |
+12 |   int *k = i;
+   |            ^ pointer constraint violation
+   |
+   = note: C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
+
+sema-permerrors-permissive.c:13:5: warning: assignment to 'int *' from 'int' makes pointer from integer without a cast [-Wint-conversion]
+   |
+13 |   p = i;
+   |     ^ pointer constraint violation
+   |
+   = note: C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
+
+sema-permerrors-permissive.c:14:6: warning: assignment to 'long int *' from incompatible pointer type 'int *' [-Wincompatible-pointer-types]
+   |
+14 |   lp = p;
+   |      ^ pointer constraint violation
+   |
+   = note: C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
+
+sema-permerrors-permissive.c:15:6: warning: assignment to 'int (*)(double)' from incompatible pointer type 'int (*)(int)' [-Wincompatible-pointer-types]
+   |
+15 |   fp = h;
+   |      ^ pointer constraint violation
+   |
+   = note: C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
+
+sema-permerrors-permissive.c:16:9: warning: passing argument 1 of 'takep' makes pointer from integer without a cast [-Wint-conversion]
+   |
+16 |   takep(i);
+   |         ^ pointer constraint violation
+   |
+   = note: C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
+
+sema-permerrors-permissive.c:17:3: warning: implicit declaration of function 'undeclared' [-Wimplicit-function-declaration]
+   |
+17 |   undeclared(j, k);
+   |   ^^^^^^^^^^ undeclared function called here
+   |
+   = note: C99 §6.5.1p2: an identifier is a primary expression only if it is declared; C89 §3.3.2.2 declared an undeclared called identifier as `extern int f();`
+
+sema-permerrors-permissive.c:18:3: warning: implicit declaration of function 'printf' [-Wimplicit-function-declaration]
+   |
+18 |   printf("%d", j);
+   |   ^^^^^^ library prototype used here
+   |
+   = note: C99 §6.5.2.2p6,p9: calls require compatible function types; §7.1.4p2 permits declaring library functions without their headers
+
+sema-permerrors-permissive.c:19:10: warning: returning 'int' from a function with return type 'int *' makes pointer from integer without a cast [-Wint-conversion]
+   |
+19 |   return i;
+   |          ^ pointer constraint violation
+   |
+   = note: C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
+

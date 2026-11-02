@@ -1,9 +1,9 @@
-error: invalid function definition parameter list: `b`
+error: parameter was not declared, defaults to `int`: `b` [-Wimplicit-int]
  --> sema3-knr-implicit.c:1:9
   |
 1 | int f(a,b) int a; {return b;}
-  |         ^ invalid parameter list for a definition
+  |         ^ undeclared parameter
   |
-  = note: C99 §6.9.1p5-6: prototype definitions have no declaration list; identifier-list declarations name only listed parameters, with no initializers
+  = note: C99 §6.9.1p6: every identifier in the identifier list shall be declared; C89 defaulted to `int`
 
 1 error generated.

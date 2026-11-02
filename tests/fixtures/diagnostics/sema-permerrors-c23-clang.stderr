@@ -1,0 +1,15 @@
+sema-permerrors-c23-clang.c:2:8: error: a type specifier is required for all declarations
+  |
+2 | static x = 1;
+  |        ^ no type specifier
+  |
+  = note: C23 §6.7.3.1p2: each declaration gives at least one type specifier unless its type is inferred
+
+sema-permerrors-c23-clang.c:3:22: error: identifier has no visible declaration: `undeclared`
+  |
+3 | int f(void) { return undeclared(x); }
+  |                      ^^^^^^^^^^ not declared
+  |
+  = note: C99 §6.5.1p2: an identifier expression designates a declared object, function or enumeration constant
+
+2 errors generated.

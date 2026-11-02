@@ -1,0 +1,70 @@
+sema-permerrors-gnu89.c:6:1: warning: parameter names (without types) in function declaration [-Wdeclaration-missing-parameter-type]
+  |
+6 | void listed(n);
+  | ^^^^^^^^^^^^^^^ parameter names without types
+  |
+  = note: C99 §6.7.5.3p3: an identifier list in a function declarator that is not part of a definition shall be empty
+
+sema-permerrors-gnu89.c:8:27: warning: 'return' with a value, in function returning void [-Wreturn-mismatch]
+  |
+8 | void value(void) { return 1; }
+  |                           ^ value returned from a void function
+  |
+  = note: C99 §6.8.6.4p1: a return statement with an expression shall not appear in a function returning void
+
+sema-permerrors-gnu89.c:11:11: warning: initialization of 'int' from 'int *' makes integer from pointer without a cast [-Wint-conversion]
+   |
+11 |   int j = p;
+   |           ^ pointer constraint violation
+   |
+   = note: C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
+
+sema-permerrors-gnu89.c:12:12: warning: initialization of 'int *' from 'int' makes pointer from integer without a cast [-Wint-conversion]
+   |
+12 |   int *k = i;
+   |            ^ pointer constraint violation
+   |
+   = note: C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
+
+sema-permerrors-gnu89.c:13:5: warning: assignment to 'int *' from 'int' makes pointer from integer without a cast [-Wint-conversion]
+   |
+13 |   p = i;
+   |     ^ pointer constraint violation
+   |
+   = note: C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
+
+sema-permerrors-gnu89.c:14:6: warning: assignment to 'long int *' from incompatible pointer type 'int *' [-Wincompatible-pointer-types]
+   |
+14 |   lp = p;
+   |      ^ pointer constraint violation
+   |
+   = note: C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
+
+sema-permerrors-gnu89.c:15:6: warning: assignment to 'int (*)(double)' from incompatible pointer type 'int (*)(int)' [-Wincompatible-pointer-types]
+   |
+15 |   fp = h;
+   |      ^ pointer constraint violation
+   |
+   = note: C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
+
+sema-permerrors-gnu89.c:16:9: warning: passing argument 1 of 'takep' makes pointer from integer without a cast [-Wint-conversion]
+   |
+16 |   takep(i);
+   |         ^ pointer constraint violation
+   |
+   = note: C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
+
+sema-permerrors-gnu89.c:18:3: warning: incompatible implicit declaration of built-in function 'printf' [-Wbuiltin-declaration-mismatch]
+   |
+18 |   printf("%d", j);
+   |   ^^^^^^ library prototype used here
+   |
+   = note: C99 §6.5.2.2p6,p9: calls require compatible function types; §7.1.4p2 permits declaring library functions without their headers
+
+sema-permerrors-gnu89.c:19:10: warning: returning 'int' from a function with return type 'int *' makes pointer from integer without a cast [-Wint-conversion]
+   |
+19 |   return i;
+   |          ^ pointer constraint violation
+   |
+   = note: C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
+

@@ -1,4 +1,4 @@
-error: void function returns an expression
+error: void function returns an expression [-Wreturn-mismatch]
  --> sema3-void-return.c:1:15
   |
 1 | void f(void) {return 1;}
