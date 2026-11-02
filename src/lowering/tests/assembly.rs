@@ -67,6 +67,20 @@ fn memory_operands_pass_addresses_and_clobbers_carry_over() {
     );
 }
 
+/// A whole array is a memory output by its address, and so is an
+/// incomplete one (`extern int a[];`), which GCC and Clang also take.
+#[test]
+fn arrays_lower_as_memory_outputs() {
+    for source in [
+        "int a[3]; void f(void) { __asm__(\"movl $1, %0\" : \"=m\"(a)); }",
+        "extern int a[]; void f(void) { __asm__(\"movl $1, %0\" : \"+m\"(a)); }",
+    ] {
+        let lines = lines_with(source, "asm");
+        assert_eq!(lines.len(), 1, "{source}: {lines:?}");
+        assert!(lines[0].contains("out \"m\""), "{source}: {lines:?}");
+    }
+}
+
 /// A float in a general register, and an integer in an SSE register, keep
 /// their bits.
 #[test]
