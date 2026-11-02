@@ -306,7 +306,32 @@ impl<'tu, 's> TypeInterner<'tu, 's> {
             },
             ..ty
         };
-        self.layout(ty).map(|layout| layout.align)
+        self.layout(ty)
+            .map(|layout| layout.align)
+            .or_else(|| variable_alignment(&self.nodes, &self.tags, ty))
+    }
+
+    /// The greatest power of two the size of `ty`, of variable size, is
+    /// known to be a multiple of: an array's is its constant element size's,
+    /// and a record's its own alignment, to which GCC rounds its size. The
+    /// alignment `aligned` or `_Alignas` gives a member or typedef does not
+    /// round the size (GCC's `stor-layout.cc`), so the end of such a member
+    /// is aligned only so far.
+    /// GNU extension: GCC manual, "Variable Length".
+    /// C99: §6.5.3.4p2-3, p. 80; PDF p. 92 (an array's size).
+    pub(crate) fn size_multiple(&self, ty: TypeId) -> u64 {
+        let constant = |size: u64| 1_u64.checked_shl(size.trailing_zeros()).unwrap_or(u64::MAX);
+        match self.nodes[ty.index] {
+            | TypeKind::Array(element, _) => self.layout(element).map_or_else(
+                || self.size_multiple(element),
+                |layout| constant(layout.size),
+            ),
+            | TypeKind::Tag(id) => self.tags[id]
+                .variable
+                .get()
+                .map_or(1, |record| record.align),
+            | _ => self.layout(ty).map_or(1, |layout| constant(layout.size)),
+        }
     }
 
     /// Remove top-level qualification, including qualification carried by
@@ -324,6 +349,26 @@ impl<'tu, 's> TypeInterner<'tu, 's> {
             ty = self
                 .intern(TypeKind::Array(ty, bound))
                 .with_alignment(alignment);
+        }
+        ty
+    }
+
+    /// Adds `const` to an object type, to an array's elements for an array,
+    /// as a `constexpr` object's type receives it.
+    /// C23 (N3220): §6.7.2 paragraph 16, p. 100; PDF p. 113; §6.7.4.1
+    /// paragraph 10, p. 121; PDF p. 134.
+    pub(crate) fn const_object(&mut self, mut ty: TypeId) -> TypeId {
+        let mut bounds = ArenaVec::new_in(self.scratch);
+        while let TypeKind::Array(element, bound) = self.nodes[ty.index] {
+            bounds.push((bound, ty.alignment, ty.qualifiers));
+            ty = element;
+        }
+        ty = ty.qualified(TypeQualifiers::CONST);
+        while let Some((bound, alignment, qualifiers)) = bounds.pop() {
+            ty = self
+                .intern(TypeKind::Array(ty, bound))
+                .with_alignment(alignment)
+                .qualified(qualifiers);
         }
         ty
     }
@@ -497,7 +542,6 @@ pub(crate) enum UnmodeledType {
     /// A `_BitInt(N)` whose width could not be checked, because it reads
     /// an unanalyzed construct; a checked width gives [`TypeKind::BitInt`].
     BitInt,
-    Constexpr,
     Decimal32,
     Decimal64,
     Decimal128,
@@ -517,12 +561,12 @@ impl UnmodeledType {
     pub(crate) const fn description(self) -> &'static str {
         match self {
             | Self::BitInt => "_BitInt types of an unanalyzed width",
-            | Self::Constexpr => "constexpr objects",
             | Self::Decimal32 => "_Decimal32 types",
             | Self::Decimal64 => "_Decimal64 types",
             | Self::Decimal128 => "_Decimal128 types",
             | Self::Inferred => "inferred declaration types",
-            | Self::VariableMembers => "structures with variably modified members",
+            | Self::VariableMembers =>
+                "structures with variably modified members in Microsoft record layout",
             | Self::InferredBitField => "types inferred from bit-fields",
             | Self::FixedEnum => "fixed-underlying enum types",
             | Self::PointerModifier => "MSVC pointer modifiers",
@@ -587,6 +631,14 @@ pub(crate) enum TypeKind<'tu> {
 /// Durable type graph, retained after semantic working storage is released.
 #[derive(Debug)]
 pub(crate) struct Types<'tu> {
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Lowering reads variably modified types through their size formulas; tests \
+                      pin the classification."
+        )
+    )]
     variably_modified: &'tu [bool],
     pub(crate) nodes:  &'tu [TypeKind<'tu>],
     pub(crate) tags:   &'tu [&'tu Tag<'tu>],
@@ -603,6 +655,12 @@ pub(crate) struct Tag<'tu> {
     /// The member namespace in declaration order, set at completion.
     pub(crate) fields:               Cell<&'tu [Field<'tu>]>,
     pub(crate) layout:               Cell<Option<Layout>>,
+    /// GNU: the run-time layout of a record with a member of variable size,
+    /// which has no constant [`Layout`].
+    pub(crate) variable:             Cell<Option<&'tu VariableRecord<'tu>>>,
+    /// GNU: the record has a variably modified member, which GCC accepts in
+    /// block and prototype scope; set as the member is declared.
+    pub(crate) variable_members:     Cell<bool>,
     pub(crate) complete:             Cell<bool>,
     pub(crate) tainted:              Cell<bool>,
     /// Specific unsupported type responsible for taint, when known.
@@ -631,6 +689,66 @@ pub(crate) struct Tag<'tu> {
     /// a containing record. Set at completion; 0 elsewhere.
     /// C11: §6.7.5 paragraph 6, p. 127; PDF p. 145; MSVC extension.
     pub(crate) required_alignment:   Cell<u32>,
+}
+
+/// GNU extension: the layout of a structure or union with a member of
+/// variable size, which GCC computes when the definition is reached
+/// (`variable_size` in GCC's `stor-layout.cc`). A structure is a run of
+/// segments: the first starts at offset 0, and each later one at a base
+/// computed at run time from an earlier one ([`Segment`]). A member's
+/// offset is its segment's base plus its constant [`Member::offset`], and
+/// the record's size is the last segment's base plus [`Self::end`], rounded
+/// up to [`Self::align`]. A union's members all start at 0, and its size is
+/// the greatest of `end` and the sizes of its members of variable size,
+/// rounded up. The size formulas of both are built in `facts/sizes.rs`.
+/// <https://gcc.gnu.org/onlinedocs/gcc/Variable-Length.html>
+/// C99: §6.7.2.1 paragraphs 12-15, p. 103; PDF p. 115 (member placement,
+/// implementation-defined padding).
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct VariableRecord<'tu> {
+    pub(crate) align:           u64,
+    /// The segments after the first, by index minus one.
+    pub(crate) segments:        &'tu [Segment],
+    /// The segment of each member, by member index.
+    pub(crate) member_segments: &'tu [u32],
+    /// The constant bytes of the last segment (of a structure), or of the
+    /// members of constant size (of a union).
+    pub(crate) end:             u64,
+}
+
+impl VariableRecord<'_> {
+    /// The alignment the base of segment `segment` is known to have.
+    pub(crate) fn known_alignment(&self, segment: u32) -> u64 {
+        match segment.checked_sub(1) {
+            | None => self.align,
+            | Some(index) => self.segments[index as usize].known,
+        }
+    }
+}
+
+/// A segment after the first of a [`VariableRecord`] structure, or one
+/// member of variable size of a union.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Segment {
+    pub(crate) base:  SegmentBase,
+    /// The alignment the base is known to have.
+    pub(crate) known: u64,
+}
+
+/// How a segment's base follows from an earlier one's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SegmentBase {
+    /// `previous`'s base plus `before` bytes, rounded up to `align` at run
+    /// time; `align` is 1 when the sum is known to be aligned.
+    Aligned {
+        previous: u32,
+        before:   u64,
+        align:    u64,
+    },
+    /// The end of the member of variable size `ty` that segment `previous`
+    /// starts with: its base plus the member's size. In a union, a member of
+    /// variable size, which starts at 0.
+    After { previous: u32, ty: TypeId },
 }
 
 /// A record member including ABI byte/bit offset and source bit-field width.
@@ -886,6 +1004,20 @@ impl<'tu> FieldPath<'tu> {
     }
 }
 
+/// The alignment of a record of variable size, GNU's, which has no
+/// [`Layout`]: its own, or the typedef's or declaration's override.
+fn variable_alignment(nodes: &[TypeKind<'_>], tags: &[&Tag<'_>], ty: TypeId) -> Option<u64> {
+    let TypeKind::Tag(id) = nodes[ty.index] else {
+        return None;
+    };
+    let record = tags[id].variable.get()?;
+    Some(if ty.alignment == 0 {
+        record.align
+    } else {
+        u64::from(ty.alignment)
+    })
+}
+
 /// Follow type derivations to the specific missing semantic capability.
 /// C99: §6.2.5p20, pp. 35-36; PDF pp. 47-48 (derived types).
 fn unmodeled_type(
@@ -909,6 +1041,14 @@ fn unmodeled_type(
 impl<'tu> Types<'tu> {
     /// Retained classification from type interning, including pointers to VLAs.
     /// C99: §6.7.5p3, pp. 114-115; PDF pp. 126-127.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Lowering reads variably modified types through their size formulas; tests \
+                      pin the classification."
+        )
+    )]
     pub(crate) fn variably_modified(&self, ty: TypeId) -> bool {
         self.variably_modified[ty.index]
     }
@@ -955,13 +1095,25 @@ impl<'tu> Types<'tu> {
                 alignment = ty.alignment;
             }
         }
-        self.layout(ty).map(|layout| {
-            if alignment == 0 {
-                layout.align
-            } else {
-                u64::from(alignment)
-            }
-        })
+        self.layout(ty)
+            .map(|layout| layout.align)
+            .or_else(|| variable_alignment(self.nodes, self.tags, ty))
+            .map(|natural| {
+                if alignment == 0 {
+                    natural
+                } else {
+                    u64::from(alignment)
+                }
+            })
+    }
+
+    /// The run-time layout of the record `ty` names, if it has a member of
+    /// variable size (GNU).
+    pub(crate) fn variable_record(&self, ty: TypeId) -> Option<&'tu VariableRecord<'tu>> {
+        match self.nodes[ty.index] {
+            | TypeKind::Tag(id) => self.tags[id].variable.get(),
+            | _ => None,
+        }
     }
 
     /// Canonical alignment before typedef/declaration storage overrides.

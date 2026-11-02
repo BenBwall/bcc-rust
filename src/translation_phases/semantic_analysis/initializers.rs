@@ -158,14 +158,21 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
 
     /// Whether an object of type `ty` has a size known only at run time: a
     /// variable length array, an array of them, or GCC's record with a
-    /// variably modified member.
+    /// member of variable size.
     /// C99: §6.7.5.2 paragraph 4, p. 116; PDF p. 128.
     pub(super) fn variable_size(&self, mut ty: TypeId) -> bool {
         loop {
             match self.types.nodes[ty.index] {
                 | TypeKind::Array(_, ArrayBound::Variable(_) | ArrayBound::Star) => return true,
                 | TypeKind::Array(element, _) => ty = element,
-                | TypeKind::Tag(_) => return self.variably_modified(ty),
+                // A record with only pointers to arrays of variable length
+                // has a constant size; one Microsoft layout leaves unmodeled
+                // counts as variable.
+                | TypeKind::Tag(id) => {
+                    let tag = self.types.tags[id];
+                    return tag.variable.get().is_some()
+                        || (tag.tainted.get() && self.variably_modified(ty));
+                },
                 | _ => return false,
             }
         }
@@ -744,6 +751,15 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         e: &'tu Expression<'tu>,
         bits: Option<BitRange>,
     ) {
+        // C23 §6.6p9: a named constant is a constant expression, a
+        // structure or union one included; one of pointer type is null.
+        if self.constant_place(e).is_some()
+            && (!self.scalar_type(target)
+                || (self.pointer_target(target).is_some()
+                    && info.integer.is_some_and(Integer::is_zero)))
+        {
+            return;
+        }
         let bit_width = bits.map(|bits| bits.width);
         let bit_field = bits.is_some();
         let overflow = self.static_float_conversion(target, info, e, bit_width)
@@ -927,7 +943,10 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         e: &'tu Expression<'tu>,
         literal: &'tu Expression<'tu>,
     ) {
-        if !self.context.configuration.folds_compound_literals() {
+        // C23 §6.6p9: a `constexpr` literal is a compound literal constant.
+        if !self.context.configuration.folds_compound_literals()
+            && self.constant_place(literal).is_none()
+        {
             self.context.report_extension(
                 crate::configuration::Feature::ConstantCompoundLiteral,
                 "compound literal as a constant initializer",

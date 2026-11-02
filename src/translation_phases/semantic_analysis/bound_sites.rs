@@ -103,6 +103,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         spec: TypeSpecifiers<'tu>,
     ) -> &'tu [usize] {
         let new = self.bound_actions(ty, start);
+        let new = self.with_member_bounds(new, start);
         let inherited = self.spec_bounds(spec);
         if inherited.is_empty() {
             return new;
@@ -113,6 +114,41 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         self.types
             .tu
             .alloc_slice_fill_iter(inherited.iter().chain(new).copied())
+    }
+
+    /// A runtime bound for `expression`, noting one written in a record's
+    /// member list, which the declaration or type name that defines the
+    /// record evaluates (GNU; [`Self::with_member_bounds`]).
+    /// C99: §6.7.5.2p5, p. 117; PDF p. 129.
+    pub(super) fn variable_bound(&mut self, expression: &'tu Expression<'tu>) -> ArrayBound {
+        let bound = self.types.variable_bound(expression);
+        self.bound_scopes.push(self.scope);
+        if !self.defining.is_empty()
+            && let ArrayBound::Variable(index) = bound
+        {
+            self.member_bounds.push(index);
+        }
+        bound
+    }
+
+    /// `bounds` and, after them, the bounds written since `start` in the
+    /// member lists of records: GCC lays such a record out, evaluating its
+    /// members' sizes, where its definition is reached.
+    /// GNU extension: GCC manual, "Variable Length".
+    pub(super) fn with_member_bounds(&self, bounds: &'tu [usize], start: usize) -> &'tu [usize] {
+        let first = self.member_bounds.partition_point(|&bound| bound < start);
+        let members = &self.member_bounds[first..];
+        if members.is_empty() {
+            return bounds;
+        }
+        self.types.tu.alloc_slice_fill_iter(
+            bounds.iter().copied().chain(
+                members
+                    .iter()
+                    .copied()
+                    .filter(|bound| !bounds.contains(bound)),
+            ),
+        )
     }
 
     pub(super) fn spec_bounds(&self, spec: TypeSpecifiers<'tu>) -> &'tu [usize] {

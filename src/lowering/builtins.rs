@@ -47,14 +47,23 @@ use crate::{
         Value,
     },
     translation_phases::{
-        parsing::syntax::Expression,
+        parsing::{
+            OffsetMember,
+            SyntaxOperand,
+            syntax::{
+                Expression,
+                ExpressionType,
+            },
+        },
         semantic_analysis::{
             BuiltinCallFacts,
             BuiltinOperand,
             Integer,
             TypeId,
+            TypeKind,
         },
     },
+    util::bump::ArenaVec,
 };
 
 impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
@@ -97,6 +106,88 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         ))
     }
 
+    /// An `offsetof` whose value is known only at run time: GNU's, with an
+    /// array index that is not a constant, a member after one of variable
+    /// size, or an element of variable size. Each member adds its segment's
+    /// base and its offset there, and each index its product with the
+    /// element's size, whose indices were evaluated in order.
+    /// GNU extension: GCC manual, "Offsetof". C99: §7.17 paragraph 3,
+    /// p. 254; PDF p. 266.
+    fn finish_offsetof(
+        &mut self,
+        e: &'tu Expression<'tu>,
+        instance: &'tu BuiltinCallFacts<'tu>,
+    ) -> Result<(), LoweringError> {
+        let source = e.source_vectors;
+        let missing = |what| LoweringError::missing(what, source);
+        let ExpressionType::Builtin(builtin) = e.kind else {
+            return Err(missing("an offsetof is not a builtin expression"));
+        };
+        let Some(&SyntaxOperand::Type(name)) = builtin.operands.first() else {
+            return Err(missing("an offsetof has no type operand"));
+        };
+        let mut ty = self
+            .unit
+            .sema
+            .type_name_fact(name)
+            .ok_or_else(|| missing("an offsetof type is not retained"))?
+            .resolved;
+        let count = builtin
+            .members
+            .iter()
+            .filter(|member| matches!(member, OffsetMember::Index(_)))
+            .count();
+        let start = self.operands.len() - count;
+        let mut indices = ArenaVec::with_capacity_in(count, self.scratch);
+        indices.extend_from_slice(&self.operands[start..]);
+        self.operands.truncate(start);
+        let mut indices = indices.into_iter();
+        let mut offset = self.iconst(Type::I64, 0);
+        for member in &builtin.members {
+            match *member {
+                | OffsetMember::Field(name) => {
+                    let types = &self.unit.sema.types;
+                    let TypeKind::Tag(id) = types.kind(ty) else {
+                        return Err(missing("an offsetof member is not in a record"));
+                    };
+                    let field = types.tags[id]
+                        .fields
+                        .get()
+                        .iter()
+                        .find(|field| field.name.name == name.name)
+                        .copied()
+                        .ok_or_else(|| missing("an offsetof member is not retained"))?;
+                    if let Some(base) = self.segment_offset(id, field.path.index, source)? {
+                        offset = self.binary_inst(Opcode::Iadd, InstFlags::empty(), offset, base);
+                    }
+                    let constant = self.iconst(Type::I64, i128::from(field.offset));
+                    offset = self.binary_inst(Opcode::Iadd, InstFlags::empty(), offset, constant);
+                    ty = field.ty;
+                },
+                | OffsetMember::Index(_) => {
+                    let TypeKind::Array(element, _) = self.unit.sema.types.kind(ty) else {
+                        return Err(missing("an offsetof index is not of an array"));
+                    };
+                    let item = indices
+                        .next()
+                        .ok_or_else(|| missing("an offsetof index is not evaluated"))?;
+                    let item = self.settle(item);
+                    let signed = self.repr(item.ty, source)?.signed();
+                    let index = self.value(item, source)?;
+                    let index = self.extend(index, signed, Type::I64);
+                    let size = self.runtime_size(element, source)?;
+                    let product = self.binary_inst(Opcode::Imul, InstFlags::empty(), index, size);
+                    offset = self.binary_inst(Opcode::Iadd, InstFlags::empty(), offset, product);
+                    ty = element;
+                },
+            }
+        }
+        let result = self.value_type(instance.result_type, source)?;
+        let offset = self.extend(offset, false, result);
+        self.push_item(Operand::Value(offset), instance.result_type);
+        Ok(())
+    }
+
     /// The IR takes the address of `va_list` storage on both target families.
     /// Its pointer representation on Win64 is therefore not read as a value.
     /// C99: §7.15.1, pp. 249-251; PDF pp. 261-263.
@@ -117,6 +208,13 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         let first = self.va_list_address(first, &instance.operands[0], source)?;
         let ty = instance.result_type;
         let operand = if operation == VaOperation::Arg {
+            // GNU: a record of variable size travels by invisible
+            // reference; the argument is the address of the caller's copy.
+            if types::variable_size(&self.unit.sema.types, ty) {
+                let address = self.convert(Opcode::VaArg, Type::Ptr, first);
+                self.push_item(Operand::Aggregate(address), ty);
+                return Ok(());
+            }
             if types::repr(&self.unit.sema.types, ty)
                 .is_ok_and(|r| matches!(r, types::Repr::Aggregate | types::Repr::Complex { .. }))
                 || types::limb_argument(&self.unit.sema.types, ty)
@@ -294,11 +392,21 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 e.source_vectors,
             ));
         }
+        // A run-time `offsetof` evaluates its array indices in order.
         if instance.operation == CommonBuiltin::Offsetof {
-            return Err(LoweringError::unsupported(
-                super::Construct::Builtin,
-                e.source_vectors,
-            ));
+            let ExpressionType::Builtin(builtin) = e.kind else {
+                return Err(LoweringError::missing(
+                    "an offsetof is not a builtin expression",
+                    e.source_vectors,
+                ));
+            };
+            self.tasks.push(Task::FinishBuiltin(e, instance));
+            for member in builtin.members.iter().rev() {
+                if let OffsetMember::Index(index) = *member {
+                    self.tasks.push(Task::Evaluate(index));
+                }
+            }
+            return Ok(());
         }
         if !(descriptor.arity.0..=descriptor.arity.1).contains(&instance.operands.len()) {
             return Err(LoweringError::missing(
@@ -341,6 +449,9 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         let builtin = instance.operation;
         if matches!(builtin, CommonBuiltin::Varargs(_)) {
             return self.finish_varargs(e, instance);
+        }
+        if builtin == CommonBuiltin::Offsetof {
+            return self.finish_offsetof(e, instance);
         }
         let count = instance
             .operands
@@ -914,10 +1025,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             | ObjectSize::Dynamic { ty, offset, .. } => (self.runtime_size(ty, source)?, offset),
             | ObjectSize::Remainder { base, ty } => {
                 let info = *self.info(base)?;
-                let item = if matches!(
-                    base.kind,
-                    crate::translation_phases::parsing::syntax::ExpressionType::StringLiteral(_)
-                ) {
+                let item = if matches!(base.kind, ExpressionType::StringLiteral(_)) {
                     let global = self.unit.string(base)?;
                     let address = self.inst(InstData::GlobalAddr { global }, Type::Ptr);
                     Item {

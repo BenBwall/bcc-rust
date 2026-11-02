@@ -65,6 +65,7 @@ mod target_resource_headers;
 mod target_selection;
 mod thread_local_linkage_cli;
 mod torture_regressions;
+mod variable_records;
 mod vector_types;
 mod windows_dll_flow;
 mod windows_dll_interop;
