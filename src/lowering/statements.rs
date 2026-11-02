@@ -425,15 +425,13 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 self.tasks.push(Task::Return(statement));
                 self.tasks.push(Task::Evaluate(expression(slot, source)?));
             },
+            // GNU: a nested function may jump to a label of a function
+            // around it, which unwinds to that frame.
+            | S::Goto(_) if let Some(label) = self.nonlocal_label(statement) =>
+                self.nonlocal_goto(label, source)?,
             | S::Break | S::Continue | S::Goto(_) => {
                 let target = self.cleanup_jump(statement)?;
                 let block = match target {
-                    // GNU: a nested function may jump to a label of the
-                    // function around it, which unwinds to that frame.
-                    | ControlTarget::Label(label)
-                        if self.unit.sema.control.labels[label.0].function
-                            != self.record.control.id =>
-                        return Err(LoweringError::unsupported(Construct::NonLocalGoto, source)),
                     | ControlTarget::Label(label) => self.label_block(label),
                     | ControlTarget::LoopBreak(id) | ControlTarget::SwitchBreak(id) => self
                         .targets
@@ -512,9 +510,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             | S::Declaration(declaration) => self.tasks.push(Task::Declaration(declaration)),
             | S::Attributed(attributed) => self.tasks.push(labeled_child(attributed.statement)),
             // GNU local labels only scope label names, which semantic
-            // analysis already resolved to label identities. Lowering
-            // refuses jumps to them from a nested function, so every use
-            // here is an ordinary jump.
+            // analysis already resolved to label identities.
             // GNU extension: GCC "Local Labels".
             | S::Null | S::LocalLabels(_) => {},
             | S::CaseRange(range) => {
@@ -878,6 +874,19 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         Ok(crate::ir::BlockLabel::new(index as usize))
     }
 
+    /// The label of a function around this one that the `goto`
+    /// `statement` jumps to, if it leaves this function.
+    fn nonlocal_label(&self, statement: &Statement<'_>) -> Option<LabelId> {
+        let control = &self.unit.sema.control;
+        let jump = control.statement(statement)?.jump?;
+        match control.jumps[jump.0].target {
+            | ControlTarget::Label(label)
+                if control.labels[label.0].function != self.record.control.id =>
+                Some(label),
+            | _ => None,
+        }
+    }
+
     /// Jumps to `target`; what follows is unreachable until a label.
     fn jump_away(&mut self, target: Block) {
         let edge = self.draft.edge(target, &[]);
@@ -1089,6 +1098,7 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
             chain_in: None,
             chain_record: None,
             trampolines: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, scratch),
+            receiver: None,
         };
         if let Some(index) = signature.chain_param() {
             lowerer.chain_in = lowerer
@@ -1301,6 +1311,7 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
         }
         self.draft
             .terminate_and_continue_dead(Terminator::Return(value));
+        self.dispatch_receiver();
         for index in 0..self.draft.blocks.len() {
             self.draft.seal(Block::new(index));
         }

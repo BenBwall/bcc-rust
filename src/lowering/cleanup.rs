@@ -71,6 +71,7 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
             args.push(chain);
         }
         let args = self.scratch.alloc_slice_copy(&args);
+        self.save_receiver(source)?;
         _ = self.draft.push(Op::Call(func, args), signature.result);
         Ok(())
     }

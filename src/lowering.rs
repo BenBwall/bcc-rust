@@ -633,6 +633,19 @@ struct FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
     /// The trampoline slot of each nested function whose address this
     /// function takes.
     trampolines:        ArenaMap<'s, FuncId, crate::ir::StackSlot>,
+    /// This function's non-local goto receiver, if a nested function jumps
+    /// to one of its labels.
+    receiver:           Option<Receiver>,
+}
+
+/// Where a nested function's jump to a label of a function around it
+/// arrives (`nested.rs`).
+#[derive(Clone, Copy)]
+struct Receiver {
+    /// The label index, then the `jmp_buf` saved before each call.
+    buffer:   crate::ir::Value,
+    /// The block that continues at the label the index names.
+    dispatch: Block,
 }
 
 /// Traversal controls kept outside the AST and retained IR.

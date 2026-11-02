@@ -2150,8 +2150,8 @@ function, whose `indirect_br` lists all address-taken labels, so `n` gotos
 and `m` labels make `n + m` edges rather than `n * m`. A computed goto is a
 jump with an empty transition: like Clang, it releases no VLA storage it
 leaves before the function returns. GNU local labels lower as ordinary
-labels (only nested functions could jump to them from elsewhere, which
-lowering refuses). `void *` arithmetic steps by one byte with byte alignment.
+labels; a nested function's jump to one is a non-local goto ("GNU nested
+functions"). `void *` arithmetic steps by one byte with byte alignment.
 
 **Evidence.** The conformance reproducer `computed_goto_table.c` interprets
 and runs natively in every arm. Of the 18 GCC 15.2.0 execute sources that use
@@ -2761,17 +2761,46 @@ archive member needs `-Wl,-z,execstack`, which `ld.bfd` would add with a
 warning; and the driver's `-z execstack` follows the user's linker options,
 so it overrides a user's `-Wl,-z,noexecstack`, which GCC lets win.
 
-Not yet supported, and refused: a `goto` out of a nested function to a label
-of a function around it (`__label__`), the address of such a label, a use
-of a variably modified object of an enclosing function, and a nested
-function whose own type is variably modified (its bounds are its definer's,
-which GCC evaluates at the definition), which its definer refuses at the
-definition too.
+A `goto` from a nested function to a `__label__` of a function around it
+is GCC's non-local goto. The first nested function that jumps to a label of
+a function gives that function a receiver, a 216-byte object its record
+points to: the index of the label to resume at, then a `jmp_buf`. The
+function calls the C library's `_setjmp` on the receiver just before each
+call it makes (and each cleanup call) and, when that returns again, goes to
+a dispatch block that switches on the index to the label; the jump stores
+the label's index and calls `longjmp`. As with GCC's abnormal edge from
+each call to the receiver, the function resumes with every value as it was
+at the call, its objects in memory as the nested function left them, and
+its stack position, so `alloca` storage and variable length arrays live at
+the call stay; no cleanup runs, in the nested function or the definer, as
+GCC runs none without `-fexceptions`. A nested function that jumps out is
+`noinline`: expanded into its caller, its writes would reach the label as
+values the `longjmp` skips, which no edge shows. `_setjmp` is a
+`returns_twice` call; LLVM's `llvm.eh.sjlj.setjmp`, which
+`__builtin_setjmp` uses, would let x86-64 condition flags computed before
+it live across its second return, which miscompiled
+`gcc.c-torture/execute/nestfunc-5.c` at `-O2`. The jump is refused on
+Windows targets, whose `longjmp` unwinds through structured exception
+handling, and on WebAssembly, which cannot restore another function's
+frame. The interpreter refuses a jump out of a `qsort` comparison
+(`nestfunc-6.c`), as it refuses any `longjmp` out of one.
+
+Not yet supported, and refused: the address of a label of a function
+around a nested function, a use of a variably modified object of an
+enclosing function, and a nested function whose own type is variably
+modified (its bounds are its definer's, which GCC evaluates at the
+definition), which its definer refuses at the definition too.
 
 **Evidence.** Of the 44 GCC 15.2 survey tests that stopped at nested
 functions, 29 pass on LLVM at `-O0` and `-O2` and on the native back end;
 the rest need non-local gotos (9), variably modified types or captures (4)
-or label addresses across functions (2).
+or label addresses across functions (2). The 9 GCC 13 survey tests that
+stopped at non-local gotos (`920428-2.c`, `920501-7.c`, `comp-goto-2.c`,
+`nestfunc-5.c`, `nestfunc-6.c`, `pr24135.c`, `non-local-goto-1.c`,
+`non-local-goto-2.c`, `pr85397-1.c`) pass on LLVM at `-O0` and `-O2` and on
+the native back end, and all but `nestfunc-6.c` in the interpreter, with
+and without bcc's optimizer; `nested_gotos.c` prints what GCC 13 prints at
+`-O0` and `-O2` on every arm.
 
 ## GNU records with members of variable size (2026-11-02)
 
