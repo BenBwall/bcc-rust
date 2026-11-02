@@ -141,6 +141,9 @@ impl CompilerConfiguration {
         self.derive_features()
     }
 
+    /// Sets the extension policy outright; the command line goes through
+    /// [`Self::with_pedantic`] and its siblings instead.
+    #[cfg(test)]
     pub(crate) const fn with_extension_policy(mut self, policy: ExtensionPolicy) -> Self {
         self.extension_policy = policy;
         self

@@ -343,13 +343,13 @@ impl Cli {
         // option, so `-Wno-pedantic` and `-Wno-error=pedantic` outrank them
         // wherever they appear; GCC reads all of them in order.
         let clang = configuration.compiler_identity().rules() == RuleSet::Clang;
-        let first =
-            |option: &&String| clang && matches!(option.as_str(), "-pedantic" | "-pedantic-errors");
-        self.language_option
-            .iter()
-            .filter(first)
-            .chain(self.language_option.iter().filter(|option| !first(option)))
-            .filter_map(|option| LanguageFlag::parse(option))
+        let first = |option: &str| clang && matches!(option, "-pedantic" | "-pedantic-errors");
+        let options = self.language_option.iter().map(std::ops::Deref::deref);
+        options
+            .clone()
+            .filter(|option| first(option))
+            .chain(options.filter(|option| !first(option)))
+            .filter_map(LanguageFlag::parse)
             .fold(configuration, |configuration, flag| {
                 flag.apply(configuration)
             })
