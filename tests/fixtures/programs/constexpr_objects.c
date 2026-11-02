@@ -37,6 +37,14 @@ static const int *pk = &K;
 static const int *addr_k(void) { return &K; }
 
 static_assert(s.a == 7);
+static_assert(s.u == 5 && s2.u == 5);
+
+/* Bit-field members are named constants with their width's value. */
+struct F { unsigned x : 3; int y : 3; bool b : 1; };
+constexpr struct F f = { 6, -3, 1 };
+enum { FX = f.x, FY = f.y };
+static int fa[f.x + f.y];
+static int fs = f.x * 10 + f.b;
 static_assert(sizeof array == K * sizeof(int));
 
 static int get(int i) { return arr[i]; }
@@ -67,6 +75,7 @@ int main(void) {
            copy.c);
     printf("%zu %d %d %d\n", sizeof(struct Bits), *pk, *addr_k(), pk == addr_k());
     printf("%zu\n", _Alignof(aligned));
+    printf("%d %d %zu %d %u %d %d\n", FX, FY, sizeof fa / sizeof fa[0], fs, f.x, f.y, f.b);
 #ifndef __clang__
     enum { E = (constexpr struct S){ 9, 1.0, "", 0, 0 }.a };
     const int *literal = &(constexpr int){ 12 };

@@ -150,6 +150,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                             super::ConstantPlace {
                                 initializer,
                                 offset: 0,
+                                bit_field: None,
                             },
                         );
                     }

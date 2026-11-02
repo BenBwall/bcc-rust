@@ -3364,8 +3364,9 @@ type without changing value, a signaling NaN keeping its type; no member,
 recursively, is atomic, volatile or restrict-qualified, and the type is not
 variably modified. A `constexpr` compound literal is checked the same way.
 
-Its name, a `.` member of it (through copies of whole structures and only
-for a union's initialized member) and a `constexpr` compound literal are
+Its name, a `.` member of it (through copies of whole structures, only for
+a union's initialized member, and for a bit-field with the value of its
+width) and a `constexpr` compound literal are
 named constants (§6.6p7, p13-15): they designate a subobject of the named
 constant's initializer, whose plan gives a scalar one its value. An integer
 one is an integer constant expression operand, so `constexpr int n = 4;
@@ -3387,6 +3388,7 @@ differ where the compilers do:
 | integer object initialized by `(int)(double)1.0` | error (not an integer constant expression) | accepted (an integer constant) |
 | a narrow string's elements | read as `char`, so `-funsigned-char` matters | read as `signed char` whatever `char` is |
 | a complex initializer that rounds | error | accepted |
+| a bit-field initializer its width cannot hold | error | accepted, the member reading the truncated value |
 | more than one declarator, the name in its own initializer, a same-scope redeclaration, a tag declared in the declaration or initializer (C23 §6.7.1p12, implementation-defined) | error | accepted |
 
 Under both identities `constexpr` beside `extern` or `typedef`, a repeated
@@ -3399,6 +3401,8 @@ Deviations:
 - Clang 23 folds an element of a `constexpr` array read with a constant
   index (`arr[1]`) with `-Wgnu-folding-constant`; bcc reads no element, as
   GCC does, and reports a non-constant expression under both identities.
+- Clang 23 warns when a bit-field takes a value its width truncates
+  (`-Wbitfield-constant-conversion`); bcc does not.
 - Clang 23 reports `static const int v; constexpr const int v = 1;` as a
   non-static declaration following a static one, although it gives the
   object internal linkage; bcc accepts it under the Clang identity.
