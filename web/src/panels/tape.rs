@@ -1373,8 +1373,14 @@ fn tape_svg(
 /// How wide the tape is drawn: the run, `room` after its last step for
 /// "NOT YET RUN" and the flag, and at least the window.
 fn tape_width(count: usize, step: f64, view: f64, room: f64) -> f64 {
-    (px(count) * step + room).max(view)
+    let width = px(count) * step + room;
+    // A run that misses the window by a sliver gives up that much of the
+    // blank room after it rather than scroll a few pixels.
+    if width - view <= SLIVER { view } else { width }
 }
+
+/// The most of the room after the run a tape gives up to fit its window.
+const SLIVER: f64 = 16.0;
 
 /// Steps between numbered ticks: the first round interval that leaves room
 /// for a number.
@@ -2126,6 +2132,15 @@ mod tests {
             }
             assert!(scales.len() <= 3, "{view} px: {scales:?}");
         }
+    }
+
+    #[test]
+    fn a_sliver_of_overflow_takes_the_room_instead_of_a_scrollbar() {
+        // 50 steps of 14 px and 130 px of room: 830 px.
+        assert_eq!(tape_width(50, 14.0, 827.0, ROOM), 827.0);
+        assert_eq!(tape_width(50, 14.0, 814.0, ROOM), 814.0);
+        assert_eq!(tape_width(50, 14.0, 813.0, ROOM), 830.0);
+        assert_eq!(tape_width(5, 14.0, 900.0, ROOM), 900.0);
     }
 
     #[test]
