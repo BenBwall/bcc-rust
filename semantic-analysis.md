@@ -770,9 +770,9 @@ enforces the missing-name constraint when that parser policy is silent, includin
 typedef spellings that the parser cannot resolve. `[*]` is excluded from definition
 parameters while nested function prototypes retain prototype scope. Definitions
 check storage classes, complete return object types and declaration-list
-consistency. Missing K&R declarations bind `int` before the body: native in C89/C95,
-a constraint diagnostic in strict C99 and later, and shared implicit-int extension
-policy in GNU modes. This prevents accidental lookup of a same-named global.
+consistency. Missing K&R declarations bind `int` before the body, reported under
+`-Wimplicit-int` with the identity's severity (silent in C89, an error from C99 for
+GCC 14 and Clang). This prevents accidental lookup of a same-named global.
 
 `__func__` is a function-entry binding for a static const character array,
 including before its first use (§6.4.2.2p1, printed p. 52, PDF p. 64). Its
