@@ -1026,17 +1026,9 @@ impl State {
                     },
                     | _ => {},
                 }
-                // TCC writes one rule for the whole link; bcc writes one
-                // per source, so it is named after the output only when
-                // there is one source.
-                if sources().count() == 1 {
-                    self.dependency_options(&mut step, &output);
-                } else if let Some(all) = self.dependencies {
-                    step.push(if all { "-MD" } else { "-MMD" }.into());
-                    if self.phony {
-                        step.push("-MP".into());
-                    }
-                }
+                // TCC writes one rule for the whole link, which the driver
+                // gathers from every input under TCC's identity.
+                self.dependency_options(&mut step, &output);
                 step.extend(words(self.inputs.iter()));
                 step.push(concat("--output=", &output));
                 plan.steps.push(Step::Bcc(step));

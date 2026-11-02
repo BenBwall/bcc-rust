@@ -2488,6 +2488,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             .filter(|_| !open_external)
             .or(packed_callee)
             .and_then(|binding| Some((binding, self.unit.pack_function(binding)?)));
+        self.save_receiver(source)?;
         let value = match (direct, callee_value) {
             | _ if let Some((binding, record)) = packed => {
                 let types = self

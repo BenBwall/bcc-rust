@@ -82,11 +82,9 @@ pub(in crate::translation_phases::semantic_analysis) enum Rule {
     Ignored,
     /// Dropping its meaning could change behavior: lowering refuses it.
     Unsupported(UnsupportedAttribute),
-    /// `ms_struct` or `gcc_struct`: accepted when it names the target's
-    /// own record layout.
-    RecordLayout {
-        microsoft: bool,
-    },
+    /// `ms_struct` or `gcc_struct`: the record's own bit-field layout,
+    /// which record completion takes over the target's.
+    RecordLayout,
 }
 
 /// Calling-convention attributes. `Default` names the C convention x86-64
@@ -243,8 +241,7 @@ fn gnu(name: &str) -> Option<Rule> {
         | "no_caller_saved_registers"
         | "no_callee_saved_registers"
         | "interrupt" => Rule::Convention(Convention::Other),
-        | "ms_struct" => Rule::RecordLayout { microsoft: true },
-        | "gcc_struct" => Rule::RecordLayout { microsoft: false },
+        | "ms_struct" | "gcc_struct" => Rule::RecordLayout,
         | "ifunc" => Rule::Unsupported(U::Ifunc),
         | "weakref" => Rule::Unsupported(U::Weakref),
         | "naked" => Rule::Unsupported(U::Naked),

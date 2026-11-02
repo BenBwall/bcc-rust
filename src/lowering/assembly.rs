@@ -74,6 +74,7 @@ use crate::{
             AsmRegisterClass,
             AsmRole,
             ControlTarget,
+            TypeKind,
         },
     },
     util::bump::{
@@ -513,8 +514,17 @@ impl<'tu, 's> FunctionLowerer<'_, '_, 'tu, '_, 's> {
                     source,
                 )),
         };
-        let layout =
-            types::layout(&self.unit.sema.types, place.ty).map_err(|kind| LoweringError {
+        // An incomplete array, as `extern int a[];`, names memory from its
+        // address on; the operand covers the one element the program may
+        // assume, as GCC and Clang take it.
+        // C99: §6.2.5p22, p. 36; PDF p. 48 (an array of unknown size).
+        let types = &self.unit.sema.types;
+        let layout = types::layout(types, place.ty)
+            .or_else(|kind| match types.kind(place.ty) {
+                | TypeKind::Array(element, _) => types::layout(types, element),
+                | _ => Err(kind),
+            })
+            .map_err(|kind| LoweringError {
                 kind,
                 source: Some(source),
             })?;

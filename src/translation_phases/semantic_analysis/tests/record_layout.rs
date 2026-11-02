@@ -6,7 +6,10 @@
 
 use super::*;
 use crate::{
-    configuration::CompilerConfiguration,
+    configuration::{
+        CompilerConfiguration,
+        CompilerIdentity,
+    },
     target::Target,
 };
 
@@ -14,12 +17,24 @@ use crate::{
 type Expected = (u64, u64, &'static [(&'static str, u64)]);
 
 fn check(target: Target, source: &str, records: &[(&str, Expected)]) {
+    check_as(CompilerIdentity::Clang, target, source, records);
+}
+
+/// [`check`] under `identity`'s rules.
+fn check_as(
+    identity: CompilerIdentity,
+    target: Target,
+    source: &str,
+    records: &[(&str, Expected)],
+) {
     with_configuration(
         source,
-        CompilerConfiguration::default().with_target(target),
+        CompilerConfiguration::default()
+            .with_target(target)
+            .with_compiler_identity(identity),
         |context, s| {
             let errors = context.take_pending_errors();
-            assert!(errors.is_empty(), "{target:?}: {errors:?}");
+            assert!(errors.is_empty(), "{identity:?} {target:?}: {errors:?}");
             for &(name, (size, align, fields)) in records {
                 let tag = s
                     .types
@@ -30,7 +45,7 @@ fn check(target: Target, source: &str, records: &[(&str, Expected)]) {
                 assert_eq!(
                     tag.layout.get(),
                     Some(Layout { size, align }),
-                    "{target:?} {name}"
+                    "{identity:?} {target:?} {name}"
                 );
                 for &(field, bit) in fields {
                     let found = tag
@@ -42,7 +57,7 @@ fn check(target: Target, source: &str, records: &[(&str, Expected)]) {
                     assert_eq!(
                         found.offset * 8 + u64::from(found.bit_offset),
                         bit,
-                        "{target:?} {name}.{field}"
+                        "{identity:?} {target:?} {name}.{field}"
                     );
                 }
             }
@@ -125,12 +140,18 @@ fn msvc_unions_reserve_a_closing_zero_width_type() {
         source,
         &[("U1", (2, 1, &[])), ("U2", (4, 1, &[]))],
     );
-    // MinGW GCC and Clang ignore zero-width union members (U2's alignment:
-    // GCC 2, Clang 1, bcc Clang's).
+    // MinGW GCC and Clang ignore zero-width union members; GCC aligns the
+    // union for its bit-field `a`, Clang does not.
     check(
         Target::WindowsGnu,
         source,
         &[("U1", (1, 1, &[])), ("U2", (2, 1, &[]))],
+    );
+    check_as(
+        CompilerIdentity::Gcc,
+        Target::WindowsGnu,
+        source,
+        &[("U1", (1, 1, &[])), ("U2", (2, 2, &[]))],
     );
 }
 
@@ -186,4 +207,164 @@ fn system_v_aligned_bit_fields_follow_gcc_and_clang() {
             ("L4", (4, 4, &[("b", 8)])),
         ],
     );
+}
+
+/// `ms_struct` unions on a System V target. GCC 14 aligns the union for its
+/// nonzero bit-fields, named or not, and packing shrinks one to its bits;
+/// Clang 23 ignores a union bit-field's alignment and packing.
+#[test]
+fn ms_struct_unions_follow_the_identity() {
+    let source = "union __attribute__((ms_struct)) U { unsigned char a : 4; unsigned int b : 4; \
+                  char c; };
+                  union __attribute__((ms_struct)) A { char c; int : 3; };
+                  union __attribute__((ms_struct, packed)) C { char c; int b : 12; };
+                  #pragma pack(push, 2)
+                  union __attribute__((ms_struct)) D { char c; long long b : 12; };
+                  #pragma pack(pop)
+                  union __attribute__((ms_struct)) G { char c; int : 0; };";
+    check_as(
+        CompilerIdentity::Gcc,
+        Target::LinuxGnu,
+        source,
+        &[
+            ("U", (4, 4, &[("c", 0)])),
+            ("A", (4, 4, &[])),
+            ("C", (2, 1, &[])),
+            ("D", (2, 2, &[])),
+            ("G", (1, 1, &[])),
+        ],
+    );
+    check_as(
+        CompilerIdentity::Clang,
+        Target::LinuxGnu,
+        source,
+        &[
+            ("U", (4, 1, &[("c", 0)])),
+            ("A", (4, 1, &[])),
+            ("C", (4, 1, &[])),
+            ("D", (8, 1, &[])),
+            ("G", (1, 1, &[])),
+        ],
+    );
+}
+
+/// `ms_struct` or `gcc_struct` on a declaration before the definition: GCC
+/// 14 reads only the definition's, and takes the first of two there;
+/// Clang 23 keeps an earlier declaration's, even a reference's, and
+/// `gcc_struct` on any declaration wins.
+#[test]
+fn record_layout_requests_on_earlier_declarations_follow_the_identity() {
+    let source = "struct __attribute__((ms_struct)) F;
+                  struct F { unsigned char a : 4; unsigned int b : 4; char c; };
+                  struct __attribute__((ms_struct)) R *p;
+                  struct R { unsigned char a : 4; unsigned int b : 4; char c; };
+                  struct __attribute__((gcc_struct)) H;
+                  struct __attribute__((ms_struct)) H { unsigned char a : 4; unsigned int b : 4; \
+                  char c; };";
+    check_as(
+        CompilerIdentity::Gcc,
+        Target::LinuxGnu,
+        &format!(
+            "{source}\nstruct __attribute__((ms_struct, gcc_struct)) M {{ unsigned char a : 4; \
+             unsigned int b : 4; char c; }};"
+        ),
+        &[
+            ("F", (4, 4, &[("c", 8)])),
+            ("R", (4, 4, &[("c", 8)])),
+            ("H", (12, 4, &[("c", 64)])),
+            ("M", (12, 4, &[("c", 64)])),
+        ],
+    );
+    check_as(
+        CompilerIdentity::Clang,
+        Target::LinuxGnu,
+        source,
+        &[
+            ("F", (12, 4, &[("c", 64)])),
+            ("R", (12, 4, &[("c", 64)])),
+            ("H", (4, 4, &[("c", 8)])),
+        ],
+    );
+}
+
+/// A zero-width bit-field ending an `ms_struct` unit in a packed record or
+/// under `#pragma pack` on a System V target: GCC 14 caps its boundary
+/// with the pack and drops it in a packed record; Clang 23 aligns the next
+/// field and the record to the declared type's size regardless. A
+/// zero-width field that ends no unit counts only with an explicit
+/// alignment, which GCC caps with the pack and keeps out of the record's.
+#[test]
+fn packed_ms_struct_zero_width_fields_follow_the_identity() {
+    let source = "struct __attribute__((ms_struct, packed)) ZP { unsigned char a : 3; int : 0; \
+                  char b; };
+                  #pragma pack(push, 1)
+                  struct __attribute__((ms_struct)) ZK { unsigned char a : 3; int : 0; char b; };
+                  struct __attribute__((ms_struct)) ZT { unsigned char a : 3; int : 0; };
+                  #pragma pack(2)
+                  struct __attribute__((ms_struct)) ZA { char x; int : 0 \
+                  __attribute__((aligned(8))); char b; };
+                  #pragma pack(pop)
+                  struct __attribute__((ms_struct)) ZN { char x; int : 0 \
+                  __attribute__((aligned(8))); char b; };";
+    check_as(
+        CompilerIdentity::Gcc,
+        Target::LinuxGnu,
+        source,
+        &[
+            ("ZP", (4, 4, &[("b", 8)])),
+            ("ZK", (2, 1, &[("b", 8)])),
+            ("ZT", (1, 1, &[])),
+            ("ZA", (3, 1, &[("b", 16)])),
+            ("ZN", (9, 1, &[("b", 64)])),
+        ],
+    );
+    check_as(
+        CompilerIdentity::Clang,
+        Target::LinuxGnu,
+        source,
+        &[
+            ("ZP", (8, 4, &[("b", 32)])),
+            ("ZK", (8, 4, &[("b", 32)])),
+            ("ZT", (4, 4, &[])),
+            ("ZA", (16, 8, &[("b", 64)])),
+            ("ZN", (16, 8, &[("b", 64)])),
+        ],
+    );
+}
+
+/// Clang 23 has no System V record layout for the Microsoft ABI: under its
+/// rules a `gcc_struct` record on an MSVC target, by its definition or an
+/// earlier declaration, is an error. On MinGW and Linux it is laid out.
+#[test]
+fn gcc_struct_on_msvc_targets_is_an_error_under_clang() {
+    let source = "struct __attribute__((gcc_struct)) S { unsigned char a : 4; unsigned int b : 4; \
+                  char c; };
+                  struct __attribute__((gcc_struct)) F;
+                  struct F { int x; };
+                  struct __attribute__((ms_struct)) M { int x; };";
+    for (identity, target, expected) in [
+        (CompilerIdentity::Clang, Target::WindowsMsvc, 2),
+        (CompilerIdentity::ClangCl, Target::WindowsMsvc, 2),
+        (CompilerIdentity::Clang, Target::WindowsGnu, 0),
+        (CompilerIdentity::Gcc, Target::WindowsGnu, 0),
+        (CompilerIdentity::Clang, Target::LinuxGnu, 0),
+    ] {
+        with_configuration(
+            source,
+            CompilerConfiguration::default()
+                .with_target(target)
+                .with_compiler_identity(identity),
+            |context, _| {
+                let errors = context.take_pending_errors();
+                let layout = errors
+                    .iter()
+                    .filter(|error| {
+                        matches!(error, TranslationError::Semantic(error)
+                            if error.kind == SemanticErrorKind::ItaniumLayoutOnMicrosoftAbi)
+                    })
+                    .count();
+                assert_eq!(layout, expected, "{identity:?} {target:?}: {errors:?}");
+            },
+        );
+    }
 }

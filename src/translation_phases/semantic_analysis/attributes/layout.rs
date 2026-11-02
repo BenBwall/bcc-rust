@@ -294,6 +294,39 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         result
     }
 
+    /// The bit-field layout a record's specifier asks for: Microsoft's for
+    /// `ms_struct` (true), System V's for `gcc_struct` (false), given the
+    /// `earlier` request. GCC takes the first one a declaration gives and
+    /// ignores the other with a warning; Clang rejects both on one
+    /// declaration, and `gcc_struct` on any declaration of the record wins.
+    /// GNU extension: GCC manual, "x86 Type Attributes", `ms_struct`.
+    /// <https://gcc.gnu.org/onlinedocs/gcc/x86-Type-Attributes.html>
+    pub(in crate::translation_phases::semantic_analysis) fn record_layout_request(
+        &self,
+        mut chain: Option<&'tu SpecifierExtension<'tu>>,
+        earlier: Option<bool>,
+    ) -> Option<bool> {
+        let rules = self.context.configuration.compiler_identity().rules();
+        let mut result = earlier;
+        while let Some(item) = chain {
+            if let SpecifierExtensionKind::Attributes(a) = item.kind {
+                for (_, name) in super::known_names(a, self.context) {
+                    let microsoft = match name {
+                        | "ms_struct" => true,
+                        | "gcc_struct" => false,
+                        | _ => continue,
+                    };
+                    result = match rules {
+                        | RuleSet::Gcc => result.or(Some(microsoft)),
+                        | RuleSet::Clang => Some(result.unwrap_or(true) && microsoft),
+                    };
+                }
+            }
+            chain = item.next;
+        }
+        result
+    }
+
     /// GCC mode selects an integer representation, preserving signedness, or
     /// a real or complex floating representation. Vector modes
     /// belong to the vector subsystem.
