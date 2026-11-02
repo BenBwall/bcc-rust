@@ -1022,8 +1022,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             && visible.is_none()
             && let Some(scalar) = self.builtin_typedef(name.name)
         {
-            let clang = self.context.configuration.compiler_identity().rules()
-                == crate::configuration::RuleSet::Clang;
+            let clang = self.context.configuration.compiler_identity().rules() == RuleSet::Clang;
             let conflict = match kind {
                 | BindingKind::Object | BindingKind::Function => true,
                 | BindingKind::Enumerator => clang,
