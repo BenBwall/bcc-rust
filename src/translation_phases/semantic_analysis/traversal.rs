@@ -399,8 +399,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 then_statement,
                 else_statement,
             } => {
-                self.enter(ScopeKind::Block);
-                self.work.push(Work::PopScope);
+                if self.enter_statement_block(false) {
+                    self.work.push(Work::PopScope);
+                }
                 if let Some(outside) = outside {
                     self.work
                         .push(Work::StatementWork(W::NormalExit(s, outside)));
@@ -438,8 +439,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 condition_expression,
                 body_statement,
             } => {
-                self.enter(ScopeKind::Block);
-                self.work.push(Work::PopScope);
+                if self.enter_statement_block(false) {
+                    self.work.push(Work::PopScope);
+                }
                 if let Some(outside) = outside {
                     self.work
                         .push(Work::StatementWork(W::NormalExit(s, outside)));
@@ -480,8 +482,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 condition_expression,
                 body_statement,
             } => {
-                self.enter(ScopeKind::Block);
-                self.work.push(Work::PopScope);
+                if self.enter_statement_block(false) {
+                    self.work.push(Work::PopScope);
+                }
                 if let Some(outside) = outside {
                     self.work
                         .push(Work::StatementWork(W::NormalExit(s, outside)));
@@ -503,8 +506,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 }
             },
             | S::For(f) => {
-                self.enter(ScopeKind::Block);
-                self.work.push(Work::PopScope);
+                if self.enter_statement_block(false) {
+                    self.work.push(Work::PopScope);
+                }
                 if let Some(outside) = outside {
                     self.work
                         .push(Work::StatementWork(W::NormalExit(s, outside)));

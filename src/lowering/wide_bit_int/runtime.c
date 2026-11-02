@@ -8,8 +8,11 @@
    stored unextended computes correctly. Destinations never overlap
    operands. Each routine takes the width N and whether the type is
    signed. Division by zero, a quotient that overflows and an out-of-range
-   shift count or floating value are undefined (C23 6.5.5p6, 6.5.7p4,
-   6.3.1.4p1), and do whatever falls out of the code. */
+   shift count are undefined (C23 6.5.5p6, 6.5.7p4), and do whatever falls
+   out of the code. The floating conversions follow Annex F as GCC's libgcc
+   does: the current rounding direction, "inexact" for a discarded
+   fraction, and for a floating value out of range (C23 6.3.1.4p1, F.4)
+   "invalid" and the nearest bound of the type, its maximum for a NaN. */
 
 typedef unsigned long long limb;
 typedef unsigned __int128 wide;
@@ -371,19 +374,62 @@ BCC_ROUTINE void __bcc_bitint_rem(limb *d, const limb *a, const limb *b, unsigne
     __bcc_bitint_divmod(0, d, a, b, bits, is_signed);
 }
 
-/* The value mantissa * 2^exponent, truncated toward zero and negated if
-   `negative`, as a _BitInt(bits) (C23 6.3.1.4p1). */
-static void __bcc_bitint_from_parts(limb *d, unsigned bits, int is_signed, int negative,
-                                    wide mantissa, int exponent) {
+/* Raises the floating-point exception "invalid" or, for 0, "inexact"
+   (C23 F.4): an operation that raises it, on operands the optimizer cannot
+   see, whose result is kept. */
+static void __bcc_bitint_raise(int invalid) {
+    volatile double zero = 0.0, one = 1.0, tiny = 0x1p-60;
+    volatile double result = invalid ? zero / zero : one + tiny;
+    (void)result;
+}
+
+/* The bound of _BitInt(bits) on the side of `negative`: its minimum, or its
+   maximum, also taken for a NaN. */
+static void __bcc_bitint_bound(limb *d, unsigned bits, int is_signed, int negative) {
     unsigned n = LIMBS(bits);
+    limb fill = negative ? 0 : ~0ull;
     for (unsigned i = 0; i < n; i++)
-        d[i] = 0;
+        d[i] = fill;
+    if (is_signed) {
+        limb sign = 1ull << ((bits - 1) % 64);
+        d[(bits - 1) / 64] = negative ? sign : d[(bits - 1) / 64] & (sign - 1);
+    }
+    __bcc_bitint_extend(d, bits, is_signed);
+}
+
+/* The value mantissa * 2^exponent, truncated toward zero and negated if
+   `negative`, as a _BitInt(bits) (C23 6.3.1.4p1); `special` is 1 for an
+   infinity and 2 for a NaN. */
+static void __bcc_bitint_from_parts(limb *d, unsigned bits, int is_signed, int negative,
+                                    wide mantissa, int exponent, int special) {
+    unsigned n = LIMBS(bits);
+    int fraction = 0;
     if (exponent < 0) {
-        mantissa = -exponent >= 128 ? 0 : mantissa >> -exponent;
+        wide kept = -exponent >= 128 ? 0 : mantissa >> -exponent;
+        fraction = special == 0 && kept << (-exponent >= 128 ? 0 : -exponent) != mantissa;
+        mantissa = kept;
         exponent = 0;
     }
+    limb high = (limb)(mantissa >> 64);
+    unsigned length = mantissa == 0 ? 0
+                      : (high ? 128 - (unsigned)__builtin_clzll(high)
+                              : 64 - (unsigned)__builtin_clzll((limb)mantissa))
+                            + (unsigned)exponent;
+    /* The signed minimum's magnitude is the one power of two of length
+       `bits` in range. */
+    int minimum = is_signed && negative && length == bits && (mantissa & (mantissa - 1)) == 0;
+    if (special || (!is_signed && negative && mantissa != 0) ||
+        (length > (is_signed ? bits - 1 : bits) && !minimum)) {
+        __bcc_bitint_bound(d, bits, is_signed, special != 2 && negative);
+        __bcc_bitint_raise(1);
+        return;
+    }
+    if (fraction)
+        __bcc_bitint_raise(0);
+    for (unsigned i = 0; i < n; i++)
+        d[i] = 0;
     unsigned whole = (unsigned)exponent / 64, part = (unsigned)exponent % 64;
-    limb low = (limb)mantissa, high = (limb)(mantissa >> 64);
+    limb low = (limb)mantissa;
     limb parts[3] = {low << part, part ? high << part | low >> (64 - part) : high,
                      part ? high >> (64 - part) : 0};
     for (unsigned i = 0; i < 3; i++)
@@ -409,8 +455,9 @@ BCC_ROUTINE void __bcc_bitint_from_f64(limb *d, unsigned bits, int is_signed, do
     wide mantissa = u.bits & ((1ull << 52) - 1);
     if (exponent)
         mantissa |= 1ull << 52;
+    int special = exponent == 0x7ff ? 1 + (mantissa != 1ull << 52) : 0;
     __bcc_bitint_from_parts(d, bits, is_signed, (int)(u.bits >> 63), mantissa,
-                            (exponent ? exponent : 1) - 1075);
+                            (exponent ? exponent : 1) - 1075, special);
 }
 
 BCC_ROUTINE void __bcc_bitint_from_f32(limb *d, unsigned bits, int is_signed, float value) {
@@ -436,8 +483,9 @@ BCC_ROUTINE void __bcc_bitint_from_f80(limb *d, unsigned bits, int is_signed, lo
     } u;
     u.value = value;
     int exponent = u.parts.exponent & 0x7fff;
+    int special = exponent == 0x7fff ? 1 + (u.parts.mantissa << 1 != 0) : 0;
     __bcc_bitint_from_parts(d, bits, is_signed, u.parts.exponent >> 15, u.parts.mantissa,
-                            (exponent ? exponent : 1) - 16383 - 63);
+                            (exponent ? exponent : 1) - 16383 - 63, special);
 }
 #endif
 
@@ -452,10 +500,11 @@ BCC_ROUTINE void __bcc_bitint_from_f128(limb *d, unsigned bits, int is_signed, _
     u.value = value;
     int exponent = (int)(u.parts.high >> 48 & 0x7fff);
     wide mantissa = (wide)(u.parts.high & ((1ull << 48) - 1)) << 64 | u.parts.low;
+    int special = exponent == 0x7fff ? 1 + (mantissa != 0) : 0;
     if (exponent)
         mantissa |= (wide)1 << 112;
     __bcc_bitint_from_parts(d, bits, is_signed, (int)(u.parts.high >> 63), mantissa,
-                            (exponent ? exponent : 1) - 16383 - 112);
+                            (exponent ? exponent : 1) - 16383 - 112, special);
 }
 #endif
 
@@ -484,14 +533,20 @@ static wide __bcc_bitint_top(const limb *m, unsigned used, unsigned *scale) {
         int negative = __bcc_bitint_negative(a, bits, is_signed);                    \
         limb m[LIMBS(bits)];                                                         \
         unsigned scale;                                                              \
-        wide top = __bcc_bitint_top(m, __bcc_bitint_absolute(m, a, bits, is_signed, \
+        wide top = __bcc_bitint_top(m, __bcc_bitint_absolute(m, a, bits, is_signed,  \
                                                              negative),              \
                                     &scale);                                         \
-        T result = (T)top;                                                           \
+        /* Rounded with its sign, as the rounding direction asks (C23                \
+           6.3.1.4p2, F.4); 127 bits with the sticky bit round as m. */              \
+        if (top >> 127) {                                                            \
+            top = top >> 1 | (top & 1);                                              \
+            scale++;                                                                 \
+        }                                                                            \
+        T result = negative ? (T)(-(__int128)top) : (T)top;                          \
         for (; scale >= 32; scale -= 32)                                             \
             result *= (T)4294967296.0f;                                              \
         result *= (T)(1ull << scale);                                                \
-        return negative ? -result : result;                                          \
+        return result;                                                               \
     }
 
 BCC_BITINT_TO_FLOAT(__bcc_bitint_to_f32, float)

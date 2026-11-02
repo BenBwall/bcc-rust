@@ -616,6 +616,12 @@ pub(crate) enum SemanticErrorKind {
     /// Attributes", `scalar_storage_order`.
     /// <https://gcc.gnu.org/onlinedocs/gcc/Common-Type-Attributes.html>
     UnsupportedScalarStorageOrder,
+    /// A `gcc_struct` record on an MSVC target under Clang's rules: Clang
+    /// 23 has no System V record layout for the Microsoft ABI and rejects
+    /// the record when its layout is needed; bcc rejects its definition.
+    /// GNU extension: GCC manual, "x86 Type Attributes", `gcc_struct`.
+    /// <https://gcc.gnu.org/onlinedocs/gcc/x86-Type-Attributes.html>
+    ItaniumLayoutOnMicrosoftAbi,
     /// GCC's `scalar_storage_order` without exactly one argument.
     StorageOrderArgumentCount,
     /// GCC's `scalar_storage_order` with an argument other than the string
@@ -849,6 +855,7 @@ impl SemanticErrorKind {
             | Self::InvalidStandardAlignment => "invalid alignment specifier",
             | Self::ExcessiveAlignment => "requested alignment exceeds maximum 268435456",
             | Self::UnsupportedScalarStorageOrder => "big-endian storage order is not supported",
+            | Self::ItaniumLayoutOnMicrosoftAbi => "System V layout requested here",
             | Self::StorageOrderArgumentCount => "expected one argument",
             | Self::StorageOrderArgument => "expected \"big-endian\" or \"little-endian\"",
             | Self::InvalidModeAttribute => "invalid scalar machine mode",
@@ -1412,6 +1419,11 @@ impl SemanticErrorKind {
                  target's little-endian order, which would differ from GCC's",
                 "GCC scalar_storage_order: the scalar members of a structure or union defined with \
                  it, or under `#pragma scalar_storage_order`, are stored in the given byte order",
+            ),
+            | Self::ItaniumLayoutOnMicrosoftAbi => (
+                "Itanium-compatible layout for the Microsoft C++ ABI is not yet supported",
+                "GCC gcc_struct asks for the System V record layout; Clang implements it only for \
+                 targets whose C++ ABI is the Itanium one, not for MSVC targets",
             ),
             | Self::StorageOrderArgumentCount => (
                 "wrong number of arguments specified for `scalar_storage_order` attribute",

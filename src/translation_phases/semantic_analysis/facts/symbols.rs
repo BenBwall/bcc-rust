@@ -215,8 +215,6 @@ pub(crate) enum UnsupportedAttribute {
     Naked,
     /// Clang `cpu_dispatch`/`cpu_specific`/`target_version` multiversioning.
     Multiversioning,
-    /// `ms_struct` or `gcc_struct` naming the other target's record layout.
-    RecordLayout,
     /// A constructor or destructor function that takes parameters.
     InitFunctionParameters,
     /// A section name that cannot be carried to the object file.
@@ -245,7 +243,6 @@ impl UnsupportedAttribute {
             | Self::Weakref => "the `weakref` attribute",
             | Self::Naked => "naked functions",
             | Self::Multiversioning => "function multiversioning attributes",
-            | Self::RecordLayout => "this record layout attribute",
             | Self::InitFunctionParameters => "constructors and destructors with parameters",
             | Self::SectionName => "this section name",
             | Self::AliasAssemblerLabel => "aliases involving assembler labels",
