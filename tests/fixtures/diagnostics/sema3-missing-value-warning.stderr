@@ -1,9 +1,9 @@
-warning: non-void function returns without a value
+warning: non-void function returns without a value [-Wreturn-mismatch]
  --> sema3-missing-value-warning.c:1:14
   |
 1 | int f(void) {return;}
   |              ^^^^^^^ no return value
   |
-  = note: C99 §6.8.6.4p1: C99 requires a value; C89 and GNU modes retain this form with a warning
+  = note: C99 §6.8.6.4p1: a return statement without an expression shall only appear in a function returning void; C89 permitted it
 
 1 warning generated.

@@ -79,7 +79,7 @@ fn undeclared_alloca_obeys_strict_and_gnu_modes() {
             matches!(
                 errors.as_slice(),
                 [TranslationError::Semantic(SemanticError {
-                    kind: SemanticErrorKind::UndeclaredIdentifier,
+                    kind: SemanticErrorKind::ImplicitFunctionDeclaration,
                     ..
                 })]
             ),
