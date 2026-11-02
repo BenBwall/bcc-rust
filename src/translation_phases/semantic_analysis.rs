@@ -1473,15 +1473,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                         // member in block and prototype scope and lays the
                         // record out when its declaration is reached
                         // (`variable_size` in GCC's `stor-layout.cc`), as
-                        // completion does (`VariableRecord`). Microsoft
-                        // record layout has no run-time form here, so such
-                        // a record stays unmodeled and is refused by name.
-                        if self.types.target.ms_bitfields {
-                            self.types.tags[tag]
-                                .unmodeled
-                                .set(Some(UnmodeledType::VariableMembers));
-                            self.types.tags[tag].tainted.set(true);
-                        }
+                        // completion does (`VariableRecord`).
                         self.types.tags[tag].variable_members.set(true);
                         let record = self.types.intern(TypeKind::Tag(tag));
                         self.types.mark_variably_modified(record);

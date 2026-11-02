@@ -89,30 +89,40 @@ mod tests {
         }
     }
 
-    /// Microsoft record layout keeps such a record unmodeled, refused by
-    /// name rather than laid out as GCC would.
+    /// Microsoft record layout, on a Windows target or by `ms_struct`,
+    /// keeps such a record unmodeled, refused by name rather than laid out
+    /// as GCC would.
     #[test]
     fn microsoft_layout_refuses_variable_records() {
-        let input = temporary("msvc.c");
-        std::fs::write(
-            &input,
-            "int f(int n) { struct s { int a[n]; char c; } s; s.c = 1; return s.c; }\n",
-        )
-        .unwrap();
-        let output = bcc(&[
-            GCC,
-            "--target=x86_64-w64-windows-gnu",
-            "--emit=ir",
-            input.to_str().unwrap(),
-        ]);
-        std::fs::remove_file(input).unwrap();
-        assert!(!output.status.success());
-        let stderr = text(&output.stderr);
-        assert!(
-            stderr.contains("structures with variably modified members in Microsoft record layout"),
-            "{stderr}"
-        );
-        assert!(!stderr.contains("internal error"), "{stderr}");
+        for (target, record) in [
+            ("--target=x86_64-w64-windows-gnu", "struct s { int a[n]; char c; }"),
+            (
+                "--target=x86_64-unknown-linux-gnu",
+                "struct __attribute__((ms_struct)) s { int a[n]; char c; }",
+            ),
+            (
+                "--target=x86_64-unknown-linux-gnu",
+                "struct s { int a[n]; char c; } __attribute__((ms_struct))",
+            ),
+        ] {
+            let input = temporary("msvc.c");
+            std::fs::write(
+                &input,
+                format!("int f(int n) {{ {record} s; s.c = 1; return s.c; }}\n"),
+            )
+            .unwrap();
+            let output = bcc(&[GCC, target, "--emit=ir", input.to_str().unwrap()]);
+            std::fs::remove_file(input).unwrap();
+            assert!(!output.status.success(), "{record}");
+            let stderr = text(&output.stderr);
+            assert!(
+                stderr.contains(
+                    "structures with variably modified members in Microsoft record layout"
+                ),
+                "{record}: {stderr}"
+            );
+            assert!(!stderr.contains("internal error"), "{record}: {stderr}");
+        }
     }
 
     fn bcc(args: &[&str]) -> Output {

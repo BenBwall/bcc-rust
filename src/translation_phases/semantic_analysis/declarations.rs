@@ -1224,7 +1224,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let mut required = u64::from(tag.alignment.get());
         let named = members.iter().filter(|m| m.initializable()).count();
         let mut too_large = false;
-        let mut variable = (tag.variable_members.get() && !ms && !tag.tainted.get())
+        // Microsoft record layout, on a Windows target or by `ms_struct`,
+        // has no run-time form here, so such a record stays unmodeled and
+        // is refused by name.
+        if tag.variable_members.get() && (ms || self.types.target.ms_bitfields) {
+            tag.unmodeled
+                .set(tag.unmodeled.get().or(Some(UnmodeledType::VariableMembers)));
+            tag.tainted.set(true);
+        }
+        let mut variable = (tag.variable_members.get() && !tag.tainted.get())
             .then(|| VariableLayout::new(self.types.tu, members.len()));
         for (index, &member) in members.iter().enumerate() {
             if let Some(variable) = &mut variable {
