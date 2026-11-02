@@ -81,7 +81,15 @@ fn compound_literals_with_static_or_thread_storage_name_themselves() {
         "int *f(void) { return &(static _Thread_local int){1}; }",
         "int *p = &(_Thread_local int){1};",
     ] {
-        let message = refusal(source);
+        // Clang parses no storage class in a compound literal; GCC does.
+        let errors = lower_with(
+            source,
+            crate::configuration::CompilerConfiguration::default()
+                .with_compiler_identity(crate::configuration::CompilerIdentity::Gcc),
+        )
+        .unwrap_err();
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        let message = &errors[0];
         assert!(
             message.ends_with("compound literals with static or thread storage duration"),
             "{source}: {message}"

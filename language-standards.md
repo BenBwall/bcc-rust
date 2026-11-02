@@ -2608,9 +2608,10 @@ These cases remain different from the compiler each identity claims:
   `-Wgnu-folding-constant`), an array designator (`[(int){1}] = 2`) and a
   GNU case range (`case 1 ... (int){3}:`).
 - C23 `constexpr` compound literals (`(constexpr int){3}`), which GCC 14
-  accepts in integer constant expressions and the bundled Clang does not
-  parse, are named constants under both identities (see "C23 `constexpr`
-  objects").
+  accepts in integer constant expressions, are named constants under the
+  GCC identity (see "C23 `constexpr` objects"). The bundled Clang parses
+  no storage-class specifier in a compound literal ("expected
+  expression"), and bcc's Clang identity reports one too.
 - GCC folds a `?:` before the casts around it, so `static int x = (int)(1
   ? (long)(int){3} : 0L);` is constant for GCC; bcc requires the `?:` to
   have the object's type and rejects it.
@@ -3389,6 +3390,7 @@ differ where the compilers do:
 | a narrow string's elements | read as `char`, so `-funsigned-char` matters | read as `signed char` whatever `char` is |
 | a complex initializer that rounds | error | accepted |
 | a bit-field initializer its width cannot hold | error | accepted, the member reading the truncated value |
+| a `constexpr` compound literal | named constant | error, as Clang parses no storage class in a compound literal |
 | more than one declarator, the name in its own initializer, a same-scope redeclaration, a tag declared in the declaration or initializer (C23 §6.7.1p12, implementation-defined) | error | accepted |
 
 Under both identities `constexpr` beside `extern` or `typedef`, a repeated

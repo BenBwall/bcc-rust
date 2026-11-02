@@ -306,6 +306,10 @@ pub(crate) enum SemanticErrorKind {
     AnnotationArgument,
     /// C99: §6.5.2.5p1, p. 75; PDF p. 87.
     InvalidCompoundLiteral,
+    /// Clang: a compound literal with a storage-class specifier, which C23
+    /// allows but Clang 23 does not parse ("expected expression").
+    /// C23 (N3220): §6.5.3.6 paragraph 4, p. 79; PDF p. 92.
+    LiteralStorageClass,
     /// C99: §6.8.4.1p1, p. 133; PDF p. 145.
     InvalidCondition,
     /// C99: §6.8.4.2p1, p. 134; PDF p. 146.
@@ -922,6 +926,7 @@ impl SemanticErrorKind {
             | Self::SelectAnySubject => "not a data item with external linkage",
             | Self::InvalidArgumentType => "argument does not convert to the parameter type",
             | Self::InvalidCompoundLiteral => "invalid compound literal type",
+            | Self::LiteralStorageClass => "Clang takes no storage class here",
             | Self::InvalidCondition => "condition is not scalar",
             | Self::InvalidSwitchExpression => "controlling expression is not an integer",
             | Self::FailedAssertion => "assertion is false",
@@ -1777,6 +1782,11 @@ impl SemanticErrorKind {
                 "compound literal requires a non-variable object type",
                 "C99 §6.5.2.5p1: a compound literal specifies an object type or an array of \
                  unknown size, not a variable-length array",
+            ),
+            | Self::LiteralStorageClass => (
+                "storage-class specifier in a compound literal",
+                "C23 §6.5.3.6p4: a compound literal takes `constexpr`, `register`, `static` or \
+                 `thread_local`, which Clang 23 does not parse",
             ),
             | Self::InvalidCondition => (
                 "condition requires scalar type",

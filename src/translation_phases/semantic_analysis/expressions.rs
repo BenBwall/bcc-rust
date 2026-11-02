@@ -69,14 +69,19 @@ use super::{
     },
 };
 use crate::{
+    configuration::RuleSet,
     float_parsing::LongDouble,
     half_precision::HalfFormat,
-    translation_phases::parsing::syntax::{
-        BinaryOperator,
-        Constant,
-        Expression,
-        ExpressionType,
-        UnaryOperator,
+    translation_phases::parsing::{
+        SpecifierExtensionKind,
+        declaration_syntax::DeclarationSpecifiers,
+        syntax::{
+            BinaryOperator,
+            Constant,
+            Expression,
+            ExpressionType,
+            UnaryOperator,
+        },
     },
 };
 
@@ -641,9 +646,22 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             .get(&super::type_name_identity(type_name))
             .copied()
             .unwrap_or_else(|| self.types.unknown());
+        let specifiers = type_name.declaration_specifiers;
         // C23 §6.5.3.6p4: a `constexpr` literal is a `constexpr` object, so
         // its type is `const`.
-        let constexpr = Self::constexpr_storage(type_name.declaration_specifiers.extensions);
+        let mut constexpr = Self::constexpr_storage(specifiers.extensions);
+        if self.context.configuration.compiler_identity().rules() == RuleSet::Clang
+            && !type_name.recovered
+            && literal_storage_class(specifiers)
+        {
+            self.error(
+                SemanticErrorKind::LiteralStorageClass,
+                specifiers.source_vectors,
+                None,
+                None,
+            );
+            constexpr = false;
+        }
         let ty = if constexpr && !self.types.unanalyzed(ty) {
             self.types.const_object(ty)
         } else {
@@ -912,4 +930,21 @@ impl Analyzer<'_, '_, '_> {
             info.constant = ConstantClass::Arithmetic;
         }
     }
+}
+
+/// Whether a compound literal's specifiers include a storage-class
+/// specifier: `constexpr`, `thread_local` or a keyword one.
+/// C23 (N3220): §6.5.3.6 paragraph 4, p. 79; PDF p. 92.
+fn literal_storage_class(specifiers: DeclarationSpecifiers<'_>) -> bool {
+    let mut chain = specifiers.extensions;
+    while let Some(item) = chain {
+        if matches!(
+            item.kind,
+            SpecifierExtensionKind::Constexpr | SpecifierExtensionKind::ThreadLocal(_)
+        ) {
+            return true;
+        }
+        chain = item.next;
+    }
+    specifiers.storage_class.is_some()
 }

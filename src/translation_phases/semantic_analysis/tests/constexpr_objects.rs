@@ -291,3 +291,21 @@ fn long_copy_chains_stay_named_constants() {
          v; static_assert(w.e.a == 1);",
     );
 }
+
+/// Clang 23 parses no storage-class specifier in a compound literal, so
+/// its identity rejects `constexpr` and the others there.
+#[test]
+fn clang_rejects_storage_classes_in_compound_literals() {
+    for source in [
+        "int a = (constexpr int){ 1 };",
+        "void f(void) { (void)(static int){ 1 }; }",
+        "void f(void) { (void)(register int){ 1 }; }",
+        "void f(void) { (void)(thread_local int){ 1 }; }",
+    ] {
+        assert_eq!(
+            kinds(source, CompilerIdentity::Clang),
+            [SemanticErrorKind::LiteralStorageClass],
+            "{source}"
+        );
+    }
+}
