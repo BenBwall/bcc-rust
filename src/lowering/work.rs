@@ -215,14 +215,20 @@ pub(super) enum Task<'tu> {
         ty:    TypeId,
         truth: bool,
     },
-    /// Evaluate the arms of a conditional once its condition has branched.
+    /// Evaluate the arms of a conditional once its condition has branched,
+    /// each converted by the distribution of that index, if any
+    /// (`saturation.rs`).
     ConditionalArms {
-        conditional: &'tu ConditionalExpression<'tu>,
-        then:        Block,
-        otherwise:   Block,
-        merge:       Block,
-        ty:          TypeId,
+        conditional:  &'tu ConditionalExpression<'tu>,
+        then:         Block,
+        otherwise:    Block,
+        merge:        Block,
+        ty:           TypeId,
+        distribution: Option<u32>,
     },
+    /// Convert the arm of a conditional on the stack as distribution
+    /// `.0` gives (`saturation.rs`).
+    ConvertArm(u32),
 }
 
 /// How expression statements are consumed while retaining their control flow.

@@ -62,6 +62,9 @@ const ROOM: f64 = 130.0;
 /// values.
 const COMPACT_BELOW: f64 = 720.0;
 const ROOM_COMPACT: f64 = 44.0;
+/// The width of blank tape that holds "NOT YET RUN" written across it
+/// (10 px type spaced .12 em).
+const UNRUN_ACROSS: f64 = 100.0;
 /// How long the tape takes to glide to a new scale, in milliseconds.
 const GLIDE_MS: f64 = 260.0;
 
@@ -756,6 +759,13 @@ pub fn Deck(
         let view = width.get_untracked();
         let room = room();
         let left = f64::from(element.scroll_left());
+        // A run that fits its window once the scale settles never scrolls
+        // on the way there: drawn at the wider scale for a few frames, its
+        // head would nudge the tape aside and back.
+        let settled = (px(at()) + 0.5) * fitted.get_untracked();
+        if running && !reduced_motion() && left < 0.5 && settled <= view - room {
+            return;
+        }
         // The head keeps the room for the end of the run to its right: past
         // that the tape moves just enough, so a short run that fits never
         // scrolls.
@@ -1215,6 +1225,12 @@ fn glide(
     });
 }
 
+/// The first rung of a folded recursion's ladder, below its row's top,
+/// and the height its rungs spread over: clear of the 13 px compact name
+/// tag, with the rungs' 3 px ticks inside the 40 px row.
+const LADDER_TOP: f64 = 17.0;
+const LADDER_SPAN: f64 = 16.0;
+
 /// Where each row's drawing sits: the y of each group's call bars (a rung
 /// of its ladder, if folded into one) and of each object's lane, and the
 /// lane name each object is drawn under.
@@ -1247,9 +1263,12 @@ fn layout<'a>(reel: &'a Reel, rows: &[Row]) -> Layout<'a> {
                 }
             },
             | Row::Ladder { groups } => {
+                // The rungs, with their 3 px end ticks, stay below the
+                // 13 px name tag that rides the row's top on a compact
+                // tape, so the tag never cuts one into stray ticks.
                 let rungs = px(groups.len().max(2) - 1);
                 for (rung, &at) in groups.iter().enumerate() {
-                    let y = top + 10.0 + px(rung) * (LANE - 20.0) / rungs;
+                    let y = top + LADDER_TOP + px(rung) * LADDER_SPAN / rungs;
                     calls.push((at, y, true));
                     fold(at, y);
                 }
@@ -1394,11 +1413,21 @@ fn tape_svg(
                     {lanes}
                     {flows}
                     <rect class="tape-blank" x=x(count) y=AXIS - 2.0 width=(width - x(count)).max(0.0) height=height />
-                    // A compact tape writes it down the narrow blank.
-                    {reel.open.then(|| if compact {
+                    // A compact tape writes it down the blank where the
+                    // blank is narrow; across it where it is wide, as before
+                    // the first step, when the tape may be too short to
+                    // hold it written down.
+                    {reel.open.then(|| if compact && width - x(count) < UNRUN_ACROSS {
                         view! { <text class="tape-unrun" transform=format!("translate({:.1} {:.1}) rotate(90)", x(count) + 14.0, AXIS + 10.0)>"NOT YET RUN"</text> }.into_any()
                     } else {
-                        view! { <text class="tape-unrun" x=x(count) + 10.0 y=AXIS + 16.0>"NOT YET RUN"</text> }.into_any()
+                        // Right of the first row's name where it rides on
+                        // a compact tape that has hardly begun.
+                        let clear = if compact {
+                            tags(reel, rows, 0.0).first().map_or(0.0, |tag| tag.2 + 8.0)
+                        } else {
+                            0.0
+                        };
+                        view! { <text class="tape-unrun" x=(x(count) + 10.0).max(clear) y=AXIS + 16.0>"NOT YET RUN"</text> }.into_any()
                     })}
                     {(count > 0).then(|| view! { <line class="tape-head" x1=head y1=AXIS - 4.0 x2=head y2=height /> })}
                 </svg>
@@ -1989,6 +2018,39 @@ mod tests {
             })
             .expect("a ladder");
         assert_eq!(ladder, [3, 4, 5, 6]);
+    }
+
+    /// A ladder's rungs and their 3 px ticks sit below the name tag a
+    /// compact tape rides on the row's top, and inside the row.
+    #[test]
+    fn ladder_rungs_clear_the_compact_name_tag() {
+        let history = execute(
+            "int depth(int n) {\n    if (n <= 0) {\n        return 0;\n    }\n    int r = depth(n \
+             - 1);\n    return r + 1;\n}\n\nint main(void) {\n    return depth(6);\n}\n",
+        );
+        let reel = Reel::record(&history);
+        let deepest = (0..history.len())
+            .max_by_key(|&at| history[at].stack.len())
+            .unwrap();
+        let rows = rows(&reel, deepest, &[]);
+        let place = rows
+            .iter()
+            .position(|row| matches!(row, Row::Ladder { .. }))
+            .expect("a ladder");
+        let top = AXIS + px(place) * LANE;
+        let rungs: Vec<f64> = layout(&reel, &rows)
+            .calls
+            .into_iter()
+            .filter(|&(_, _, rung)| rung)
+            .map(|(_, y, _)| y)
+            .collect();
+        assert_eq!(rungs.len(), 4);
+        for y in rungs {
+            assert!(
+                y - 3.0 > top + TAG && y + 3.0 < top + LANE,
+                "{y} in a row at {top}"
+            );
+        }
     }
 
     /// Every label against every bus segment drawn, at each step of `history`.
