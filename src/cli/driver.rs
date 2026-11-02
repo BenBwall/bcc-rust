@@ -213,7 +213,7 @@ pub(super) fn run(args: &Cli, matches: &ArgMatches) -> Result<i32, MainError> {
                     | Some(source) if args.driver.dependencies.is_some() => {
                         let dependencies =
                             dependencies::request(args, source, true, DependencyNames::default())?;
-                        let scanned = compile(args, source, Job::Scan, dependencies)?;
+                        let scanned = compile(args, source, Job::Scan, dependencies.as_ref())?;
                         status = combine(status, scanned.status);
                     },
                     | Some(source) => {
@@ -223,7 +223,7 @@ pub(super) fn run(args: &Cli, matches: &ArgMatches) -> Result<i32, MainError> {
                         };
                         let dependencies = dependencies::request(args, source, false, names)?;
                         let preprocessed =
-                            compile(args, source, Job::Preprocess(output), dependencies)?;
+                            compile(args, source, Job::Preprocess(output), dependencies.as_ref())?;
                         status = combine(status, preprocessed.status);
                     },
                     | None => {},
@@ -267,7 +267,8 @@ pub(super) fn run(args: &Cli, matches: &ArgMatches) -> Result<i32, MainError> {
                             job.emit_path = Some(path);
                             job.output_path = None;
                         }
-                        let generated = compile(args, source, Job::Generate(&job), dependencies)?;
+                        let generated =
+                            compile(args, source, Job::Generate(&job), dependencies.as_ref())?;
                         status = combine(status, generated.status);
                     },
                 }

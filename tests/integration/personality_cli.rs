@@ -4456,8 +4456,96 @@ mod tests {
             std::fs::read_to_string(directory.path("out.d")).unwrap(),
             "out.o: \\\n  b.c \\\n  inc.h\ninc.h:\n"
         );
+        // A link writes one rule, named after the output, listing every
+        // file its inputs read in order; `-MP` lists each after the first,
+        // the later inputs too, as `tcc` 0.9.27 writes them.
         let output = directory.bcc("--tcc-mode", &["-MMD", "b.c", "a.c", "-o", "prog"]);
         succeeds(&output);
+        assert_eq!(
+            std::fs::read_to_string(directory.path("prog.d")).unwrap(),
+            "prog: \\\n  b.c \\\n  inc.h \\\n  a.c\n"
+        );
+        let output = directory.bcc("--tcc-mode", &["-MD", "-MP", "b.c", "a.c", "-o", "prog"]);
+        succeeds(&output);
+        assert_eq!(
+            std::fs::read_to_string(directory.path("prog.d")).unwrap(),
+            "prog: \\\n  b.c \\\n  inc.h \\\n  a.c\ninc.h:\na.c:\n"
+        );
+        let output = directory.bcc("--tcc-mode", &["-MD", "b.c", "a.c", "-MF", "deps.out"]);
+        succeeds(&output);
+        assert_eq!(
+            std::fs::read_to_string(directory.path("deps.out")).unwrap(),
+            "a.out: \\\n  b.c \\\n  inc.h \\\n  a.c\n"
+        );
+        // Without `-o`, the rule still names the output, in `a.d`.
+        let output = directory.bcc("--tcc-mode", &["-MD", "b.c", "a.c"]);
+        succeeds(&output);
+        assert_eq!(
+            std::fs::read_to_string(directory.path("a.d")).unwrap(),
+            "a.out: \\\n  b.c \\\n  inc.h \\\n  a.c\n"
+        );
+        assert!(!directory.path("b.d").exists());
+        std::fs::remove_file(directory.path("a.d")).unwrap();
+        directory.write("main.c", "int main(void) { return 0; }\n");
+        let output = directory.bcc("--tcc-mode", &["-MD", "main.c"]);
+        succeeds(&output);
+        assert_eq!(
+            std::fs::read_to_string(directory.path("a.d")).unwrap(),
+            "a.out: \\\n  main.c\n"
+        );
+        // A failed link writes no rule.
+        let output = directory.bcc("--tcc-mode", &["-MD", "bad.c", "b.c", "-o", "failed"]);
+        assert_eq!(output.status.code(), Some(1));
+        assert!(!directory.path("failed.d").exists());
+        // Nor does a lone source whose link fails.
+        directory.write(
+            "unlinked.c",
+            "int f(void);\nint main(void) { return f(); }\n",
+        );
+        let output = directory.bcc("--tcc-mode", &["-MD", "-MF", "rule.d", "unlinked.c"]);
+        assert!(!output.status.success());
+        assert!(!directory.path("rule.d").exists());
+        // A header two inputs read is listed once, and standard input is
+        // `-`, first.
+        directory.write("c.c", "#include \"inc.h\"\nint c(void) { return VALUE; }\n");
+        let output = directory.bcc(
+            "--tcc-mode",
+            &[
+                "-MD", "-MP", "-MF", "shared.d", "a.c", "b.c", "c.c", "-o", "shared",
+            ],
+        );
+        succeeds(&output);
+        assert_eq!(
+            std::fs::read_to_string(directory.path("shared.d")).unwrap(),
+            "shared: \\\n  a.c \\\n  b.c \\\n  inc.h \\\n  c.c\nb.c:\ninc.h:\nc.c:\n"
+        );
+        let mut child = Command::new(env!("CARGO_BIN_EXE_bcc-rust"))
+            .args(["--tcc-mode", "-MD", "-c", "-", "-o", "piped.o"])
+            .current_dir(&directory.0)
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(b"#include \"inc.h\"\nint p(void) { return VALUE; }\n")
+            .unwrap();
+        assert!(child.wait().unwrap().success());
+        assert_eq!(
+            std::fs::read_to_string(directory.path("piped.d")).unwrap(),
+            "piped.o: \\\n  - \\\n  inc.h\n"
+        );
+        // An assembly input is listed as a C source is.
+        if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+            directory.write("s.s", ".globl s\ns:\n ret\n");
+            let output = directory.bcc("--tcc-mode", &["-MD", "b.c", "s.s", "a.c", "-o", "p"]);
+            succeeds(&output);
+            assert_eq!(
+                std::fs::read_to_string(directory.path("p.d")).unwrap(),
+                "p: \\\n  b.c \\\n  inc.h \\\n  s.s \\\n  a.c\n"
+            );
+        }
         let output = directory.bcc("--tcc-mode", &["-MD", "b.c", "-shared", "-o", "lib.so"]);
         succeeds(&output);
         assert_eq!(

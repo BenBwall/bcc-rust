@@ -275,8 +275,7 @@ pub(crate) struct LabelFacts<'tu> {
         not(test),
         expect(
             dead_code,
-            reason = "Resolved GNU local label identity; local-label execution remains \
-                      unsupported."
+            reason = "Resolved GNU local label identity; lowering reaches labels by identity."
         )
     )]
     pub(crate) local:      bool,
