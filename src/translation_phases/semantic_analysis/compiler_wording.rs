@@ -264,9 +264,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     fn msvc_type_spelling(&self, ty: TypeId) -> Option<&'tu str> {
         let spelling = self.type_spelling(ty, false)?;
         (!spelling.contains(['(', '['])
-            && !["long long", "_Bool", "_Complex", "_BitInt", "_Atomic", "__int128"]
-                .iter()
-                .any(|word| spelling.contains(word)))
+            && ![
+                "long long",
+                "_Bool",
+                "_Complex",
+                "_BitInt",
+                "_Atomic",
+                "__int128",
+            ]
+            .iter()
+            .any(|word| spelling.contains(word)))
         .then_some(spelling)
     }
 

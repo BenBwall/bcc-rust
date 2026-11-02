@@ -192,12 +192,11 @@ pub(super) fn split(text: &str) -> Vec<String> {
                     quoted = !quoted;
                 }
             },
-            | ' ' | '\t' | '\r' | '\n' if !quoted => {
+            | ' ' | '\t' | '\r' | '\n' if !quoted =>
                 if started {
                     words.push(std::mem::take(&mut word));
                     started = false;
-                }
-            },
+                },
             | _ => {
                 started = true;
                 word.push(character);

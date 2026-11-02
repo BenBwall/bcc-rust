@@ -38,14 +38,20 @@ const FILES: [(&str, &str); 14] = [
         "syntax.c",
         "int f(void) {\n    int x = 1\n    int y = 2;\n    x = 3\n    y = x;\n    return x\n}\n",
     ),
-    ("implicit.c", "int main(void) { return g(1); }\nint g(int x) { return x - 1; }\n"),
+    (
+        "implicit.c",
+        "int main(void) { return g(1); }\nint g(int x) { return x - 1; }\n",
+    ),
     (
         "pointers.c",
-        "int main(void) {\n    int *p = 5;\n    float *q = 0;\n    char **r = 0;\n    p = \
-         q;\n    p = r;\n    return 0;\n}\n",
+        "int main(void) {\n    int *p = 5;\n    float *q = 0;\n    char **r = 0;\n    p = q;\n    \
+         p = r;\n    return 0;\n}\n",
     ),
     // A command file whose first line passes the rest to the linker.
-    ("options.rsp", "/c a.c /link /SUBSYSTEM:CONSOLE\n/Foresponse.obj\n"),
+    (
+        "options.rsp",
+        "/c a.c /link /SUBSYSTEM:CONSOLE\n/Foresponse.obj\n",
+    ),
     ("define.rsp", "/DVALUE=4\n/EP pp.c\n"),
 ];
 
@@ -161,8 +167,20 @@ fn command_lines_match_cl() {
                 .chain(case.iter().copied())
                 .collect()
         };
-        let cl = run(msvc, &root.join(format!("{index}-cl")), true, &arguments, &[]);
-        let bcc = run(msvc, &root.join(format!("{index}-bcc")), false, &arguments, &[]);
+        let cl = run(
+            msvc,
+            &root.join(format!("{index}-cl")),
+            true,
+            &arguments,
+            &[],
+        );
+        let bcc = run(
+            msvc,
+            &root.join(format!("{index}-bcc")),
+            false,
+            &arguments,
+            &[],
+        );
         println!("\n==== {}", arguments.join(" "));
         for (name, run) in [("cl", &cl), ("bcc", &bcc)] {
             println!("{name}: status {:?}, created {:?}", run.status, run.created);
@@ -195,8 +213,20 @@ fn command_lines_match_cl() {
             .chain(case.iter().copied())
             .collect();
         let variables = [("CL", prepended), ("_CL_", appended)];
-        let cl = run(msvc, &root.join(format!("env{index}-cl")), true, &arguments, &variables);
-        let bcc = run(msvc, &root.join(format!("env{index}-bcc")), false, &arguments, &variables);
+        let cl = run(
+            msvc,
+            &root.join(format!("env{index}-cl")),
+            true,
+            &arguments,
+            &variables,
+        );
+        let bcc = run(
+            msvc,
+            &root.join(format!("env{index}-bcc")),
+            false,
+            &arguments,
+            &variables,
+        );
         let label = format!("CL={prepended} _CL_={appended} {}", arguments.join(" "));
         println!("\n==== {label}");
         for (name, run) in [("cl", &cl), ("bcc", &bcc)] {
@@ -218,9 +248,8 @@ fn coded(text: &str) -> Vec<String> {
             let (location, rest) = line.split_once("): ")?;
             let (severity, message) = rest.split_once(": ")?;
             let (kind, code) = severity.split_once(' ')?;
-            let coded = matches!(kind, "error" | "warning")
-                && code.len() == 5
-                && code.starts_with('C');
+            let coded =
+                matches!(kind, "error" | "warning") && code.len() == 5 && code.starts_with('C');
             let file = location.rsplit(['\\', '/']).next()?;
             coded.then(|| format!("{file}): {severity}: {message}"))
         })

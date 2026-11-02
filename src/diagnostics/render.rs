@@ -81,11 +81,12 @@ impl Renderer {
         // `cl` writes its code between the severity and the message:
         // `error C2065: 'y': undeclared identifier`.
         let severity: &str = match diagnostic.code {
-            | Some(code) if matches!(format, DiagnosticFormat::Msvc { .. }) => crate::diagnostics::format_in!(
-                scratch,
-                "{} {code}:",
-                severity.trim_end_matches(':')
-            ),
+            | Some(code) if matches!(format, DiagnosticFormat::Msvc { .. }) =>
+                crate::diagnostics::format_in!(
+                    scratch,
+                    "{} {code}:",
+                    severity.trim_end_matches(':')
+                ),
             | _ => severity,
         };
         let _ = writeln!(

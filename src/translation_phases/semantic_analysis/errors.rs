@@ -2504,8 +2504,10 @@ impl SemanticError {
         }
         let name = context.string_cache.at(self.name?);
         Some(match self.kind {
-            | SemanticErrorKind::UndeclaredIdentifier =>
-                ("C2065", format_in!(arena, "'{name}': undeclared identifier")),
+            | SemanticErrorKind::UndeclaredIdentifier => (
+                "C2065",
+                format_in!(arena, "'{name}': undeclared identifier"),
+            ),
             | SemanticErrorKind::ImplicitFunctionDeclaration
             | SemanticErrorKind::ImplicitLibraryFunction(_) => (
                 "C4013",
@@ -2521,8 +2523,9 @@ impl SemanticError {
                 | G::PointerToEnumCast
                 | G::VoidPointerToEnumCast,
             ) => ("C4311", arena.alloc_str(name)),
-            | SemanticErrorKind::PointerConstraint(G::IntToPointerCast | G::IntToVoidPointerCast) =>
-                ("C4312", arena.alloc_str(name)),
+            | SemanticErrorKind::PointerConstraint(
+                G::IntToPointerCast | G::IntToVoidPointerCast,
+            ) => ("C4312", arena.alloc_str(name)),
             | _ => return None,
         })
     }

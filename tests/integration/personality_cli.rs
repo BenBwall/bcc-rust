@@ -2545,7 +2545,8 @@ mod tests {
         directory.write("bad.c", "int f(void) {\n    return missing;\n}\n");
         directory.write(
             "syntax.c",
-            "int f(void) {\n    int x = 1\n    int y = 2;\n    x = 3\n    y = x;\n    return x\n}\n",
+            "int f(void) {\n    int x = 1\n    int y = 2;\n    x = 3\n    y = x;\n    return \
+             x\n}\n",
         );
         directory.write("implicit.c", "int main(void) { return g(1); }\n");
         directory.write(
@@ -2615,7 +2616,10 @@ mod tests {
             (
                 &["/wd4047", "/WX", "pointers.c"],
                 2,
-                &["pointers.c(5): error C4133: '=': incompatible types - from 'float *' to 'int *'"],
+                &[
+                    "pointers.c(5): error C4133: '=': incompatible types - from 'float *' to 'int \
+                     *'",
+                ],
             ),
             (&["/W0", "pointers.c"], 0, &[]),
             (
@@ -2630,7 +2634,12 @@ mod tests {
             ),
         ] {
             let output = cl(args);
-            assert_eq!(output.status.code(), Some(status), "{args:?}: {}", stderr(&output));
+            assert_eq!(
+                output.status.code(),
+                Some(status),
+                "{args:?}: {}",
+                stderr(&output)
+            );
             let printed: Vec<String> = stderr(&output).lines().map(str::to_owned).collect();
             assert_eq!(printed, lines, "{args:?}");
         }
@@ -2688,7 +2697,14 @@ mod tests {
         directory.write("nested.rsp", "@options.rsp\n");
         let nested = directory.bcc(
             "--msvc-mode",
-            &["/nologo", "/c", "/DX=5", "@nested.rsp", "x.c", "/Fonested.obj"],
+            &[
+                "/nologo",
+                "/c",
+                "/DX=5",
+                "@nested.rsp",
+                "x.c",
+                "/Fonested.obj",
+            ],
         );
         succeeds(&nested);
         assert!(
