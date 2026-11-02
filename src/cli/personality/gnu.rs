@@ -556,6 +556,19 @@ impl State<'_> {
         }
         let personality = self.invocation.personality;
         let target = || self.target.unwrap_or_else(|| host_target(personality));
+        // `-print-file-name=NAME`: the library or start file the link would
+        // use, found by the bundled clang in the target's directories, or
+        // NAME itself, as GCC and Clang print a file they do not find.
+        if let Some(name) = text.strip_prefix("-print-file-name=") {
+            return Some(Plan::print(format!(
+                "{}\n",
+                self.library_file(name, target())
+            )));
+        }
+        // `-print-prog-name=NAME`: the bundled tool bcc would run.
+        if let Some(name) = text.strip_prefix("-print-prog-name=") {
+            return Some(Plan::print(format!("{}\n", version::program_name(name))));
+        }
         match text {
             | "--version" =>
                 return Some(Plan::print(version::banner(
@@ -1178,6 +1191,29 @@ impl State<'_> {
                     | "-fapprox-func"
                     | "-fno-approx-func"
             );
+        // An unknown `-std=` is GCC's unrecognized option and Clang's invalid
+        // value, each with status 1 rather than clap's usage error.
+        if let Some(value) = text.strip_prefix("-std=")
+            && crate::configuration::LanguageMode::parse(value).is_none()
+        {
+            match self.compiler {
+                | Compiler::Gcc =>
+                    self.error(format_args!("unrecognized command-line option '{text}'")),
+                // Clang's compiler, not its driver, reports it, so the
+                // message has no `clang:` prefix.
+                | Compiler::Clang => {
+                    self.errors += 1;
+                    super::print(
+                        &format!(
+                            "error: invalid value '{value}' in '{text}'\n{}\n",
+                            crate::cli::arguments::STANDARD_NOTES.trim_end()
+                        ),
+                        true,
+                    );
+                },
+            }
+            return;
+        }
         if !clang_only
             && (PLAIN_OPTIONS.contains(&text)
                 || text.starts_with("-std=")
@@ -1302,6 +1338,29 @@ impl State<'_> {
     /// bcc cannot follow.
     fn unsupported(&mut self, option: &str, why: &str) {
         self.error(format_args!("'{option}' is not supported: {why}"));
+    }
+
+    /// The path the bundled clang finds for the library or start file
+    /// `name` on `target`, under `--sysroot` if given, or `name` itself.
+    fn library_file(&self, name: &str, target: Target) -> String {
+        let mut command = std::process::Command::new(version::program_name("clang"));
+        _ = command
+            .arg(format!("--target={}", target.triple()))
+            .arg(format!("-print-file-name={name}"));
+        if let Some(sysroot) = &self.sysroot {
+            _ = command.arg("--sysroot").arg(sysroot);
+        }
+        command
+            .output()
+            .ok()
+            .filter(|output| output.status.success())
+            .map(|output| {
+                String::from_utf8_lossy(&output.stdout)
+                    .trim_end()
+                    .to_owned()
+            })
+            .filter(|path| !path.is_empty())
+            .unwrap_or_else(|| name.to_owned())
     }
 
     fn error(&mut self, message: std::fmt::Arguments<'_>) {

@@ -467,6 +467,51 @@ mod tests {
         }
     }
 
+    /// `-print-file-name=` and `-print-prog-name=` answer as GCC and Clang
+    /// do, with a path to the file the link would use or the name itself;
+    /// an unknown `-std=` is an error with status 1 in each compiler's words.
+    #[test]
+    fn gnu_print_queries_and_unknown_standards() {
+        let directory = Directory::new();
+        directory.write("a.c", "int main(void) { return 0; }\n");
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            let output = directory.bcc(mode, &["-print-file-name=no-such-file.a"]);
+            succeeds(&output);
+            assert_eq!(stdout(&output), "no-such-file.a\n", "{mode}");
+            if cfg!(all(target_os = "linux", target_env = "gnu")) {
+                let output = directory.bcc(mode, &["-print-file-name=libc.so"]);
+                succeeds(&output);
+                let path = stdout(&output);
+                let path = Path::new(path.trim_end());
+                assert!(
+                    path.is_absolute() && path.exists(),
+                    "{mode}: {}",
+                    path.display()
+                );
+            }
+            let output = directory.bcc(mode, &["-print-prog-name=ld"]);
+            succeeds(&output);
+            assert!(
+                stdout(&output).trim_end().ends_with("ld.lld") || cfg!(windows),
+                "{mode}"
+            );
+            let output = directory.bcc(mode, &["-std=bogus", "-c", "a.c"]);
+            assert_eq!(output.status.code(), Some(1), "{mode}");
+        }
+        let output = directory.bcc("--gcc-mode", &["-std=bogus", "-c", "a.c"]);
+        assert!(
+            stderr(&output).contains("unrecognized command-line option '-std=bogus'"),
+            "{}",
+            stderr(&output)
+        );
+        let output = directory.bcc("--clang-mode", &["-std=bogus", "-c", "a.c"]);
+        assert!(
+            stderr(&output).contains("invalid value 'bogus' in '-std=bogus'"),
+            "{}",
+            stderr(&output)
+        );
+    }
+
     /// TCC names no warning options, so its diagnostics carry no `[-W…]`
     /// suffix, as GCC's and Clang's do.
     #[test]
