@@ -2158,7 +2158,9 @@ signatures expressed in target scalar/size/pointer patterns, closed type and
 operation rules, operand conversion/evaluation/constant constraints, feature and
 naming policy, effect classes and library equivalence. The generated sorted name
 index maps one spelling to one ID; `scripts/generate_builtin_index.py` preserves
-IDs when rows move or new entries are added. Descriptors contain no syntax,
+IDs when rows move or new entries are added, writes the file as rustfmt formats
+it, and with `--check` (run in CI's formatting job) fails when the index has
+drifted from the shards. Descriptors contain no syntax,
 semantic types, IR opcodes, checker/lowerer callbacks or diagnostic messages.
 Constraint identities adapt to the existing `SemanticErrorKind` catalog.
 

@@ -5,13 +5,21 @@ The scalar/library/math/atomic/checked/vector/type_generic/bits Rust shards and 
 generated x86 shard are the contract source. New IDs are appended;
 sorting names or inserting a shard row never renumbers an existing descriptor.
 No LLVM trees are read or changed; run `scripts/generate_x86_builtins.py` first.
+The output is formatted with the repository's nightly rustfmt, so it equals the
+checked-in file; `--check` compares instead of writing.
 """
 
+import argparse
 from pathlib import Path
 import re
+import subprocess
+import tempfile
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--check", action="store_true", help="fail if src/builtins/index.rs differs")
+    args = parser.parse_args()
     root = Path(__file__).resolve().parent.parent
     output = root / "src/builtins/index.rs"
     previous = output.read_text(encoding="utf-8") if output.exists() else ""
@@ -22,7 +30,8 @@ def main():
                   "x86"):
         source = (root / f"src/builtins/{shard}.rs").read_text(encoding="utf-8")
         for index, (identity, spelling) in enumerate(re.findall(
-                r'(?:descriptor|overload|math128|x86)\s*\(\s*Id::(\w+)\s*,\s*"([^"]+)"', source)):
+                r'(?:descriptor|overload|math128|x86)\s*\(\s*Id::(\w+)\s*,\s*'
+                r'(?:\w+::\w+\s*,\s*)?"([^"]+)"', source)):
             if identity not in ids:
                 ids[identity] = max(ids.values(), default=-1) + 1
             rows.append((identity, spelling, shard, index))
@@ -66,7 +75,17 @@ const NAMES: &[(&str, BuiltinId)] = &[
     text += "".join(f'    ("{spelling}", BuiltinId::{identity}),\n'
                     for identity, spelling, _, _ in sorted(rows, key=lambda row: row[1]))
     text += "];\n"
-    output.write_text(text, encoding="utf-8", newline="\n")
+    with tempfile.TemporaryDirectory() as directory:
+        generated = Path(directory) / "index.rs"
+        generated.write_text(text, encoding="utf-8", newline="\n")
+        subprocess.run(["rustfmt", "+nightly", "--edition", "2024",
+                        "--config-path", str(root / ".rustfmt.toml"), str(generated)], check=True)
+        text = generated.read_text(encoding="utf-8")
+    if args.check:
+        if text != previous:
+            raise SystemExit("src/builtins/index.rs differs from its shards; run scripts/generate_builtin_index.py")
+    else:
+        output.write_text(text, encoding="utf-8", newline="\n")
     print(f"Indexed {len(rows)} builtin contracts with stable IDs")
 
 
