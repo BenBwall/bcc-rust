@@ -467,6 +467,266 @@ mod tests {
         }
     }
 
+    /// `-print-file-name=` and `-print-prog-name=` answer as GCC and Clang
+    /// do, with a path to the file the link would use or the name itself.
+    #[test]
+    fn gnu_print_queries_name_files_and_programs() {
+        let directory = Directory::new();
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            let output = directory.bcc(mode, &["-print-file-name=no-such-file.a"]);
+            succeeds(&output);
+            assert_eq!(stdout(&output), "no-such-file.a\n", "{mode}");
+            if cfg!(all(target_os = "linux", target_env = "gnu")) {
+                let output = directory.bcc(mode, &["-print-file-name=libc.so"]);
+                succeeds(&output);
+                let path = stdout(&output);
+                let path = Path::new(path.trim_end());
+                assert!(
+                    path.is_absolute() && path.exists(),
+                    "{mode}: {}",
+                    path.display()
+                );
+            }
+            let output = directory.bcc(mode, &["-print-prog-name=ld"]);
+            succeeds(&output);
+            assert!(
+                stdout(&output).trim_end().ends_with("ld.lld") || cfg!(windows),
+                "{mode}"
+            );
+        }
+    }
+
+    /// Both compilers read the whole command line before they answer a
+    /// query, so the last `-print-file-name=` or `-print-prog-name=`
+    /// counts, a later `--sysroot` applies, the query that ranks first in
+    /// each compiler's own order answers, and the inputs go unread, as in
+    /// GCC 13.3 and Clang 23. GCC answers a `-dump` option where it stands,
+    /// before it reports an unrecognized option; Clang's driver errors make
+    /// its status 1, GCC's do not.
+    #[test]
+    fn gnu_queries_answer_once_the_command_line_is_read() {
+        let directory = Directory::new();
+        let answer = |mode: &str, args: &[&str]| {
+            let output = directory.bcc(mode, args);
+            (output.status.code(), stdout(&output), stderr(&output))
+        };
+        let help = |mode: &str| answer(mode, &["--help"]).1;
+        let file = |name: &str| (Some(0), format!("{name}\n"), String::new());
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            for args in [
+                &["-print-file-name=first", "-print-file-name=second"][..],
+                &["-print-prog-name=first", "-print-file-name=second"],
+                &["-print-file-name=second", "-print-prog-name=first"],
+                &["-print-libgcc-file-name", "-print-file-name=second"],
+                &["-print-file-name=second", "missing.c", "-c", "-o", "x.o"],
+            ] {
+                assert_eq!(answer(mode, args), file("second"), "{mode} {args:?}");
+            }
+            assert_eq!(
+                answer(mode, &["-print-prog-name=first", "-print-prog-name=second"]),
+                file("second"),
+                "{mode}"
+            );
+            assert!(!directory.path("x.o").exists(), "{mode}");
+            let (status, text, _) = answer(mode, &["-print-file-name=x", "-print-search-dirs"]);
+            assert_eq!(status, Some(0), "{mode}");
+            assert!(text.starts_with("install: "), "{mode}: {text}");
+            assert_eq!(
+                answer(mode, &["--version", "--help"]).1,
+                help(mode),
+                "{mode}"
+            );
+            assert_eq!(
+                answer(mode, &["--help", "--version"]).1,
+                help(mode),
+                "{mode}"
+            );
+            // A sysroot given after the query still applies.
+            if cfg!(all(target_os = "linux", target_env = "gnu")) {
+                std::fs::create_dir_all(directory.path("root/usr/lib")).unwrap();
+                directory.write("root/usr/lib/libfoo.a", "");
+                let expected = directory
+                    .path("root/usr/lib/libfoo.a")
+                    .canonicalize()
+                    .unwrap();
+                for args in [
+                    ["-print-file-name=libfoo.a", "--sysroot=root"],
+                    ["--sysroot=root", "-print-file-name=libfoo.a"],
+                ] {
+                    let (status, text, _) = answer(mode, &args);
+                    assert_eq!(status, Some(0), "{mode} {args:?}");
+                    let found = directory.path(text.trim_end()).canonicalize();
+                    assert_eq!(
+                        found.ok().as_ref(),
+                        Some(&expected),
+                        "{mode} {args:?}: {text}"
+                    );
+                }
+            }
+        }
+        // GCC's `-print-libgcc-file-name` is its `-print-file-name=libgcc.a`,
+        // so the later of the two answers; Clang's ranks below.
+        assert_eq!(
+            answer(
+                "--gcc-mode",
+                &["-print-file-name=x", "-print-libgcc-file-name"]
+            ),
+            file("libgcc.a")
+        );
+        assert_eq!(
+            answer(
+                "--clang-mode",
+                &["-print-file-name=x", "-print-libgcc-file-name"]
+            ),
+            file("x")
+        );
+        // GCC's `-dump` options answer at once; it reports the options it
+        // does not recognize only after reading them all, and with a query
+        // keeps status 0.
+        let version = answer("--gcc-mode", &["-dumpversion"]).1;
+        for args in [
+            &["-print-file-name=x", "-dumpversion"][..],
+            &["-fbogus", "-dumpversion", "-fbogus2"],
+        ] {
+            assert_eq!(
+                answer("--gcc-mode", args),
+                (Some(0), version.clone(), String::new())
+            );
+        }
+        assert_eq!(
+            answer("--gcc-mode", &["-fbogus", "-print-file-name=x"]),
+            (
+                Some(0),
+                "x\n".into(),
+                "gcc: error: unrecognized command-line option '-fbogus'\n".into()
+            )
+        );
+        assert_eq!(
+            answer("--gcc-mode", &["-print-sysroot"]),
+            (Some(0), String::new(), String::new())
+        );
+        assert_eq!(
+            answer("--gcc-mode", &["-print-sysroot", "--sysroot=root"]),
+            file("root")
+        );
+        // Clang answers `-dumpmachine` before `-dumpversion` wherever each
+        // stands; its driver errors still print, with status 1, and it
+        // knows neither `-print-sysroot` nor `-dumpfullversion` as queries.
+        let machine = answer("--clang-mode", &["-dumpmachine"]).1;
+        assert_eq!(
+            answer("--clang-mode", &["-dumpversion", "-dumpmachine"]),
+            (Some(0), machine, String::new())
+        );
+        assert_eq!(
+            answer("--clang-mode", &["-fbogus", "-print-file-name=x"]),
+            (
+                Some(1),
+                "x\n".into(),
+                "clang: error: unknown argument: '-fbogus'\n".into()
+            )
+        );
+        assert_eq!(
+            answer("--clang-mode", &["-print-multiarch", "-print-file-name=x"]),
+            (
+                Some(1),
+                "x\n".into(),
+                "clang: error: unsupported option '-print-multiarch'\n".into()
+            )
+        );
+        assert_eq!(
+            answer("--clang-mode", &["-std=bogus", "-print-file-name=x"]),
+            file("x")
+        );
+        let (status, _, text) = answer("--clang-mode", &["-print-sysroot"]);
+        assert_eq!(status, Some(1));
+        assert!(
+            text.contains("unknown argument: '-print-sysroot'"),
+            "{text}"
+        );
+        directory.write("a.c", "int x;\n");
+        assert_eq!(
+            answer(
+                "--clang-mode",
+                &["-dumpfullversion", "-fsyntax-only", "a.c"]
+            ),
+            (
+                Some(0),
+                String::new(),
+                "clang: warning: argument unused during compilation: '-dumpfullversion' \
+                 [-Wunused-command-line-argument]\n"
+                    .into()
+            )
+        );
+    }
+
+    /// An unknown `-std=` is GCC's unrecognized option wherever it stands,
+    /// while Clang's compiler refuses only the last `-std=`, once for each C
+    /// source it compiles, and not when its driver stops first, as in GCC
+    /// 13.3 and Clang 23.
+    #[test]
+    fn gnu_unknown_standards_are_refused_as_each_compiler_does() {
+        let directory = Directory::new();
+        directory.write("a.c", "int x;\n");
+        directory.write("b.c", "int y;\n");
+        let answer = |mode: &str, args: &[&str]| {
+            let output = directory.bcc(mode, args);
+            (output.status.code(), stdout(&output), stderr(&output))
+        };
+        let gcc_error = |option: &str| {
+            (
+                Some(1),
+                String::new(),
+                format!("gcc: error: unrecognized command-line option '{option}'\n"),
+            )
+        };
+        for args in [
+            &["-std=bogus", "-std=c17", "-fsyntax-only", "a.c"][..],
+            &["-std=c17", "-std=bogus", "-fsyntax-only", "a.c"],
+            &["-std=bogus", "-c", "a.c"],
+            &["-std=bogus", "missing.c"],
+        ] {
+            assert_eq!(
+                answer("--gcc-mode", args),
+                gcc_error("-std=bogus"),
+                "{args:?}"
+            );
+        }
+        assert_eq!(
+            answer(
+                "--clang-mode",
+                &["-std=bogus", "-std=c17", "-fsyntax-only", "a.c"]
+            ),
+            (Some(0), String::new(), String::new())
+        );
+        let invalid = "error: invalid value 'bogus' in '-std=bogus'\n";
+        for (args, count) in [
+            (&["-std=c17", "-std=bogus", "-fsyntax-only", "a.c"][..], 1),
+            (&["-std=bogus", "-c", "a.c"], 1),
+            (&["-std=bogus", "-fsyntax-only", "a.c", "b.c"], 2),
+        ] {
+            let (status, _, text) = answer("--clang-mode", args);
+            assert_eq!(status, Some(1), "{args:?}");
+            assert_eq!(text.matches(invalid).count(), count, "{args:?}: {text}");
+            assert!(
+                text.contains("note: use 'c99' or 'iso9899:1999'"),
+                "{args:?}: {text}"
+            );
+        }
+        assert_eq!(
+            answer("--clang-mode", &["-std=bogus", "missing.c"]),
+            (
+                Some(1),
+                String::new(),
+                "clang: error: no such file or directory: 'missing.c'\nclang: error: no input \
+                 files\n"
+                    .into()
+            )
+        );
+        let (status, _, text) = answer("--clang-mode", &["-std=bogus", "-c", "a.c", "-###"]);
+        assert_eq!(status, Some(0));
+        assert!(!text.contains("invalid value"), "{text}");
+    }
+
     /// GCC keeps every local current across a `__builtin_setjmp`'s second
     /// return, which `__builtin_longjmp` resumes: a local stored after the
     /// first return holds its new value there (gcc.dg/setjmp-3.c and
