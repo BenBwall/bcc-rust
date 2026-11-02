@@ -130,8 +130,15 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         let saturated = info.folding.overflowed()
             && self.unit.context.configuration.float_conversion_rules()
                 == crate::configuration::RuleSet::Gcc;
+        // A C23 named constant is still an object, whose address may be
+        // taken: its value replaces only its lvalue conversion.
+        let lvalue = matches!(
+            info.category,
+            ValueCategory::Lvalue | ValueCategory::ModifiableLvalue
+        );
         if (info.ice || saturated)
             && !info.runtime_query
+            && !lvalue
             && let Some(value) = info.integer
             && let Ok(representation @ (Repr::Int { .. } | Repr::Bool)) =
                 repr(&self.unit.sema.types, info.ty)
@@ -149,6 +156,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         // A wide one is a constant object of its limbs.
         if info.ice
             && !info.runtime_query
+            && !lvalue
             && let Some(value) = info.integer
             && self.wide_bit_int(info.ty).is_some()
         {

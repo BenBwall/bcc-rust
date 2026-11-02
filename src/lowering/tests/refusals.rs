@@ -147,14 +147,9 @@ fn errors_point_at_their_syntax_and_render() {
 #[test]
 fn unsupported_type_diagnostics_retain_the_actual_construct() {
     for (source, construct) in [
-        (
-            "int f(void) { constexpr int value=1; return value; }",
-            "constexpr objects",
-        ),
         ("_Decimal32 value;", "_Decimal32 types"),
         ("_Decimal64 value;", "_Decimal64 types"),
         ("_Decimal128 value;", "_Decimal128 types"),
-        ("constexpr auto value=1;", "constexpr objects"),
         (
             "typedef int Ext __attribute__((ext_vector_type(4))); Ext value;",
             "ext_vector_type types",

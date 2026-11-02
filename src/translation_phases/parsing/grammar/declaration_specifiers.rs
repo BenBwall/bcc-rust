@@ -831,14 +831,25 @@ impl<'tu> SpecifierList<'tu> {
         }
     }
 
-    /// Reports a storage class that cannot follow the thread specifier.
-    /// C11: §6.7.1 paragraph 2, p. 109; PDF p. 127.
+    /// Reports a storage class that cannot follow the thread specifier or
+    /// `constexpr`.
+    /// C11: §6.7.1 paragraph 2, p. 109; PDF p. 127. C23 (N3220): §6.7.2
+    /// paragraph 2, p. 99; PDF p. 112.
     fn report_storage_after_thread(
         &self,
         parser: &mut Parser<'_, 'tu, '_>,
         storage_class: StorageClass,
         token: Token,
     ) {
+        if constexpr_conflicts(storage_class) && self.has_constexpr() {
+            parser.report(
+                ParserErrorType::ConstexprStorageConflict {
+                    previous:    "constexpr",
+                    conflicting: storage_class.spelling(),
+                },
+                Some(token),
+            );
+        }
         if let Some(thread) = self.thread_spelling()
             && thread_conflicts(parser, storage_class)
         {
@@ -909,6 +920,26 @@ impl<'tu> SpecifierList<'tu> {
                 })
                 .map(|previous| (previous, spelling.spelling()))
         } else {
+            // C23 §6.7.2p2: `constexpr` joins `auto`, `register` or `static`
+            // only, and only once.
+            if self.has_constexpr() {
+                parser.report(ParserErrorType::ConstexprSpecifiedTwice, Some(token));
+                return true;
+            }
+            if let Some(storage_class) = self
+                .specifiers
+                .storage_class
+                .filter(|&storage_class| constexpr_conflicts(storage_class))
+            {
+                parser.report(
+                    ParserErrorType::ConstexprStorageConflict {
+                        previous:    storage_class.spelling(),
+                        conflicting: "constexpr",
+                    },
+                    Some(token),
+                );
+                return false;
+            }
             previous.map(|previous| (previous.spelling(), "constexpr"))
         };
         if let Some((previous, conflicting)) = conflict {
@@ -1229,6 +1260,13 @@ pub(in crate::translation_phases::parsing) fn thread_conflicts(
         | StorageClass::Auto => parser.context.configuration.standard() < CStandard::C23,
         | StorageClass::Register | StorageClass::Typedef => true,
     }
+}
+
+/// Whether `storage_class` cannot join `constexpr`: `extern` and
+/// `typedef`.
+/// C23 (N3220): §6.7.2 paragraph 2, p. 99; PDF p. 112.
+fn constexpr_conflicts(storage_class: StorageClass) -> bool {
+    matches!(storage_class, StorageClass::Extern | StorageClass::Typedef)
 }
 
 /// Classifies one storage-class-specifier keyword.

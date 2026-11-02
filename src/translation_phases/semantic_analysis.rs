@@ -81,6 +81,7 @@ mod traversal;
 mod constants;
 mod excess;
 mod integer;
+mod named_constants;
 mod types;
 mod wide_integers;
 
@@ -124,6 +125,7 @@ pub(crate) use expressions::{
 };
 pub(crate) use facts::*;
 pub(crate) use integer::Integer;
+pub(crate) use named_constants::ConstantPlace;
 pub(crate) use results::{
     Binding,
     BindingKind,
@@ -327,6 +329,7 @@ pub(crate) fn analyze<'tu>(
         size_query_sites: analyzer.size_query_sites,
         tag_declarations: analyzer.tag_declarations.leak(),
         wide_integers: analyzer.wide.into_values(),
+        named_constants: analyzer.named_constants,
         errors: analyzer.error_diagnostics,
     };
     result.entities = EntityFacts::retain(context, &result, &scratch, unit_arena, &symbol_requests);
@@ -393,6 +396,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 }
                 self.taint(d.recovered);
                 self.validate_declaration_list_item(d);
+                self.constexpr_declaration(d);
                 self.work.push(Work::DeclarationBase(d));
                 self.spec(d.declaration_specifiers, d.init_declarators.is_empty());
             },
@@ -534,6 +538,14 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             | Work::DeclarationEnd(declarator) => self.open_cleanup(declarator),
             | Work::Function(f) => {
                 self.taint(f.recovered);
+                if Self::constexpr_storage(f.declaration_specifiers.extensions) {
+                    self.error(
+                        SemanticErrorKind::InvalidConstexpr(errors::ConstexprFault::NotObject),
+                        f.declarator.source_vectors,
+                        f.declarator.identifier().map(|name| name.name),
+                        None,
+                    );
+                }
                 self.prepare_function(f);
                 self.work.push(Work::FunctionBase(f));
                 _ = self.misplaced_inference(
@@ -637,9 +649,13 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             | Work::EndInference => {
                 _ = self.inferences.pop();
             },
+            | Work::EndUnderspecified => self.underspecified -= 1,
             | Work::InitializeDone(binding, initializer) => {
                 self.record_constant_initializer(binding, initializer);
                 self.initialize_declaration(binding, initializer);
+                if let Some(errors_before) = self.constexpr_objects.remove(&binding) {
+                    self.constexpr_initialized(binding, initializer, errors_before);
+                }
                 self.finish_initializer_value_retention(binding, initializer);
                 self.finish_aggregate_initializer_emission(binding, initializer);
             },
@@ -1149,10 +1165,13 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     | _ => ty,
                 };
                 let name = p.declarator.and_then(Declarator::identifier);
+                // C23 §6.7.7.4p2: `constexpr` is no parameter's storage
+                // class either.
                 if p.declaration_specifiers
                     .storage_class
                     .is_some_and(|s| s != StorageClass::Register)
                     || self.thread_storage(p.declaration_specifiers.extensions)
+                    || Self::constexpr_storage(p.declaration_specifiers.extensions)
                 {
                     self.error(
                         SemanticErrorKind::InvalidParameter,
@@ -1889,6 +1908,8 @@ enum Work<'tu, 's> {
     InferInitialization(&'tu Declaration<'tu>, usize, bool, functions::ReferenceMark),
     /// An inferred declarator's initializer has been analyzed.
     EndInference,
+    /// A `constexpr` declaration or compound literal has been analyzed.
+    EndUnderspecified,
     InitializeDone(usize, &'tu Initializer<'tu>),
     Condition(ExpressionSlot<'tu>, bool),
     RequireConstant(
@@ -2123,6 +2144,18 @@ struct Analyzer<'a, 'tu, 's> {
     /// The type a declaration's first inferred declarator deduced, by the
     /// declaration's identity, for Clang's check of the others.
     inferred_leaves:         ArenaMap<'s, usize, TypeId>,
+    /// `constexpr` objects by binding, with the semantic error count before
+    /// their initializer was analyzed.
+    constexpr_objects:       ArenaMap<'s, usize, usize>,
+    /// The initializer of each `constexpr` object that is a named constant,
+    /// by binding; redeclarations share it.
+    named_objects:           ArenaMap<'s, usize, &'tu Initializer<'tu>>,
+    /// The named constant subobject an expression designates, by the
+    /// expression's identity.
+    named_constants:         ArenaMap<'tu, usize, ConstantPlace<'tu>>,
+    /// The `constexpr` declarations and compound literals being analyzed,
+    /// inside which GCC rejects declaring a tag.
+    underspecified:          u32,
 }
 
 // Tests

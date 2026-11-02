@@ -240,7 +240,6 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let info = self.expression_info(e);
         let mut fault = None;
         let ty = if let Some(reason) = self.unmodeled_extension_reason(spec.extensions) {
-            // `constexpr auto` stays as unmodeled as any `constexpr` object.
             self.types.unmodeled(reason)
         } else if self.types.unanalyzed(info.ty) {
             self.types.unknown()
@@ -455,15 +454,17 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     /// GCC rejects a tag declared or defined inside a C23 `auto`
-    /// initializer, where C23 leaves it implementation-defined
+    /// initializer, or anywhere in a `constexpr` declaration or compound
+    /// literal, where C23 leaves it implementation-defined
     /// (`in_underspecified_init`); Clang accepts it.
     /// C23 (N3220): §6.7.1 paragraph 12, p. 98; PDF p. 111.
     pub(super) fn underspecified_tag(&mut self, name: Option<Identifier>, source: SourceVectors) {
         if self.context.configuration.compiler_identity().rules() == RuleSet::Gcc
-            && self
-                .inferences
-                .iter()
-                .any(|inference| inference.keyword == InferenceKeyword::Auto)
+            && (self.underspecified > 0
+                || self
+                    .inferences
+                    .iter()
+                    .any(|inference| inference.keyword == InferenceKeyword::Auto))
         {
             self.error(
                 SemanticErrorKind::InvalidInference(InferenceFault::TagInInitializer),

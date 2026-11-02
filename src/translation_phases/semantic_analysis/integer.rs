@@ -80,6 +80,19 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             self.integers.push(None);
             return;
         }
+        // C23 §6.6p7-8: a named constant of integer type, or a cast of one
+        // of arithmetic type, has the value its initializer gives it.
+        let named = match expression.kind {
+            | E::Cast {
+                operand_expression, ..
+            } => self.named_cast_operand(operand_expression),
+            | _ => self.constant_place(expression).is_some(),
+        };
+        if named {
+            self.integers
+                .push(if info.ice { info.integer } else { None });
+            return;
+        }
         match expression.kind {
             | E::Constant(Constant::Integer(value)) => {
                 use super::super::preprocessing::IntegerTokenType as I;
@@ -266,6 +279,20 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 continue;
             }
             if let Some(&valid) = self.ice_operands.get(&key) {
+                values.push(valid);
+                continue;
+            }
+            // C23 §6.6p8: a named constant of integer type is an operand of
+            // an integer constant expression, and one of floating type the
+            // immediate operand of a cast (GCC; Clang folds that cast).
+            if self.constant_place(expression).is_some() {
+                let info = self.expression_info(expression);
+                let valid = (info.ice && info.integer.is_some())
+                    || (floating
+                        && self.context.configuration.compiler_identity().rules()
+                            == crate::configuration::RuleSet::Gcc
+                        && info.constant == super::ConstantClass::Arithmetic);
+                _ = self.ice_operands.insert(key, valid);
                 values.push(valid);
                 continue;
             }

@@ -615,6 +615,16 @@ pub(crate) enum ParserErrorType<'tu> {
         previous:    &'static str,
         conflicting: &'static str,
     },
+    /// `constexpr` beside `extern` or `typedef`, which it does not join;
+    /// `conflicting` is the later of the two.
+    /// C23 (N3220): §6.7.2 paragraph 2, p. 99; PDF p. 112.
+    ConstexprStorageConflict {
+        previous:    &'static str,
+        conflicting: &'static str,
+    },
+    /// `constexpr` occurred twice, which GCC and Clang reject.
+    /// C23 (N3220): §6.7.2 paragraph 2, p. 99; PDF p. 112.
+    ConstexprSpecifiedTwice,
     /// The same thread storage-class specifier occurred twice. C11 allows
     /// one, but GCC and Clang accept the repetition with a warning.
     /// C11: §6.7.1 paragraph 2, p. 109; PDF p. 127.
@@ -912,6 +922,8 @@ impl ParserErrorType<'_> {
             | Self::MemberDeclaresNothing => ParserDiagnosticCode::Quality,
             | Self::StorageClassRedefinition(..)
             | Self::ThreadStorageConflict { .. }
+            | Self::ConstexprStorageConflict { .. }
+            | Self::ConstexprSpecifiedTwice
             | Self::StaticSpecifiedTwice
             | Self::TypeQualifiersBothBeforeAndAfterStaticInArrayDirectDeclarator
             | Self::ConflictingTypeSpecifiers { .. }
@@ -1006,6 +1018,8 @@ impl ParserErrorType<'_> {
             self,
             Self::StorageClassRedefinition(..)
                 | Self::ThreadStorageConflict { .. }
+                | Self::ConstexprStorageConflict { .. }
+                | Self::ConstexprSpecifiedTwice
                 | Self::StaticSpecifiedTwice
                 | Self::ConflictingTypeSpecifiers { .. }
                 | Self::TypeSpecifierSpecifiedTwice(..)
@@ -1093,6 +1107,8 @@ impl ParserErrorType<'_> {
             | Self::ExpectedEnumeratorBeforeClosingCurlyBrace
             | Self::StorageClassRedefinition(..)
             | Self::ThreadStorageConflict { .. }
+            | Self::ConstexprStorageConflict { .. }
+            | Self::ConstexprSpecifiedTwice
             | Self::ThreadLocalSpecifiedTwice(_)
             | Self::DeclarationSpecifierNotAllowedHere(..)
             | Self::ConstSpecifiedTwice
@@ -1467,6 +1483,18 @@ impl ParserErrorType<'_> {
                 "C11 §6.7.1p2: thread storage combines only with `static` or `extern`, and GNU \
                  `__thread` does not combine with `_Thread_local`",
             ),
+            | Self::ConstexprStorageConflict {
+                previous,
+                conflicting,
+            } => new(format_in!(
+                arena,
+                "cannot combine `{previous}` and `{conflicting}`"
+            ))
+            .label(format_in!(arena, "`{previous}` was already specified"))
+            .note("C23 §6.7.2p2: `constexpr` combines only with `auto`, `register` or `static`"),
+            | Self::ConstexprSpecifiedTwice => new("duplicate `constexpr`")
+                .label("`constexpr` was already specified")
+                .note("C23 §6.7.2p2: a declaration gives `constexpr` at most once"),
             | Self::StaticSpecifiedTwice => new("duplicate `static` in array declarator")
                 .label("`static` was already specified")
                 .note("C99 §6.7.5: an array declarator takes `static` at most once"),

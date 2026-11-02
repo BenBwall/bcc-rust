@@ -1475,8 +1475,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     }
                 })
             };
+            // C23 §6.6p8: a named constant of arithmetic type may be the
+            // immediate operand of a cast too.
             info.ice = operand.ice
-                || matches!(immediate.kind, ExpressionType::Constant(Constant::Float(_)));
+                || matches!(immediate.kind, ExpressionType::Constant(Constant::Float(_)))
+                || (self.named_cast_operand(immediate) && operand.floating().is_some());
+            if !info.ice && operand.floating().is_some() && self.constant_place(immediate).is_some()
+            {
+                info.folding = ConstantFolding::NamedCast;
+            }
         }
         if operand.floating().is_some()
             && let Some(value) = self.floating_value(operand)
@@ -1948,7 +1955,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     /// C23: §7.21.2p2, p. 316; PDF p. 329: the null pointer type is
     /// distinct from ordinary pointer and arithmetic types.
-    pub(super) fn nullptr_type(&self, ty: TypeId) -> bool {
+    pub(in crate::translation_phases::semantic_analysis) fn nullptr_type(
+        &self,
+        ty: TypeId,
+    ) -> bool {
         matches!(
             self.types.nodes[self.types.non_atomic(ty).index],
             TypeKind::Nullptr

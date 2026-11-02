@@ -141,6 +141,18 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         info.integer = binding.value;
                         info.constant = ConstantClass::Arithmetic;
                     }
+                    self.constexpr_self_reference(index, name);
+                    // C23 §6.6p7: a `constexpr` object's name is a named
+                    // constant.
+                    if let Some(&initializer) = self.named_objects.get(&index) {
+                        self.read_named_constant(
+                            &mut info,
+                            super::ConstantPlace {
+                                initializer,
+                                offset: 0,
+                            },
+                        );
+                    }
                 } else if !self_reference && !e.recovered && !self.builtin_name(name) {
                     self.error(
                         SemanticErrorKind::UndeclaredIdentifier,
@@ -483,6 +495,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     member,
                     matches!(e.kind, E::IndirectMember { .. }),
                 );
+                // C23 §6.6p15: `.` on a structure or union constant forms a
+                // named constant.
+                if matches!(e.kind, E::DirectMember { .. }) && !self.types.unanalyzed(info.ty) {
+                    self.member_constant(&mut info, base_expression, member);
+                }
             },
             | E::Call {
                 function_expression,
@@ -515,6 +532,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     .get(&super::type_name_identity(type_name))
                     .copied()
                     .unwrap_or_else(|| self.types.unknown());
+                // C23 §6.5.3.6p4: a `constexpr` literal is a `constexpr`
+                // object, so its type is `const`.
+                let constexpr =
+                    Self::constexpr_storage(type_name.declaration_specifiers.extensions);
+                let ty = if constexpr && !self.types.unanalyzed(ty) {
+                    self.types.const_object(ty)
+                } else {
+                    ty
+                };
+                let errors_before = self.semantic_errors;
                 // §6.5.2.5p1 excludes variable length array types; a pointer
                 // to one is a valid compound literal type.
                 if !self.types.unanalyzed(ty)
@@ -533,6 +560,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         .check_initializer(ty, initializer, self.scope == 0, false, None)
                         .0;
                     self.fold_compound_literal(&mut info, initializer);
+                    if constexpr {
+                        self.constexpr_literal(&mut info, initializer, errors_before);
+                    }
                 }
                 info.category = self.object_category(info.ty);
                 info.static_address = self.scope == 0;

@@ -1602,10 +1602,11 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
 
     /// Writes the structure or union a compound literal of its type gives a
     /// static object: the bytes and addresses of the literal's own
-    /// initializer, as if it were written in braces. Semantic analysis
-    /// accepts no other expression here.
+    /// initializer, as if it were written in braces. A C23 named constant
+    /// gives the bytes its initializer stores in the subobject it
+    /// designates. Semantic analysis accepts no other expression here.
     /// GNU extension: GCC manual, "Compound Literals"; C99 §6.6p10, p. 96;
-    /// PDF p. 108.
+    /// PDF p. 108. C23 (N3220): §6.6 paragraphs 7 and 9, p. 95; PDF p. 108.
     fn static_copy(
         &mut self,
         bytes: &mut [u8],
@@ -1616,6 +1617,9 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
     ) -> Result<(), LoweringError> {
         let unsupported =
             || LoweringError::unsupported(Construct::StaticInitializer, expression.source_vectors);
+        if let Some(place) = self.sema.named_constant(expression) {
+            return self.static_named_copy(bytes, relocations, offset, ty, place, expression);
+        }
         let literal = loop {
             match expression.kind {
                 | ExpressionType::Parenthesized { expression: inner } => expression = inner,
@@ -1644,6 +1648,56 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
                     ..relocation
                 },
             );
+        }
+        Ok(())
+    }
+
+    /// Writes the bytes a C23 named constant's initializer stores in the
+    /// subobject of type `ty` it designates, `place`, at `offset`.
+    /// C23 (N3220): §6.6 paragraphs 7 and 13-15, pp. 95-96; PDF
+    /// pp. 108-109.
+    fn static_named_copy(
+        &mut self,
+        bytes: &mut [u8],
+        relocations: &mut ArenaVec<'_, Relocation>,
+        offset: u64,
+        ty: TypeId,
+        place: crate::translation_phases::semantic_analysis::ConstantPlace<'tu>,
+        expression: &'tu Expression<'tu>,
+    ) -> Result<(), LoweringError> {
+        let unsupported =
+            || LoweringError::unsupported(Construct::StaticInitializer, expression.source_vectors);
+        let object = self
+            .sema
+            .initializers
+            .plan(place.initializer)
+            .ok_or_else(unsupported)?
+            .ty;
+        let whole = types::layout(&self.sema.types, object)
+            .map_err(|kind| at(kind, expression.source_vectors))?
+            .size;
+        let size = types::layout(&self.sema.types, ty)
+            .map_err(|kind| at(kind, expression.source_vectors))?
+            .size;
+        let (object_bytes, object_relocations) =
+            self.static_bytes(object, whole, place.initializer, None)?;
+        let (from, start) = (index(place.offset, expression)?, index(offset, expression)?);
+        let length = index(size, expression)?;
+        let source = object_bytes
+            .get(from..from + length)
+            .ok_or_else(unsupported)?;
+        bytes[start..start + length].copy_from_slice(source);
+        discard(relocations, offset, offset + size, self.pointer_bytes());
+        for relocation in object_relocations {
+            if relocation.offset >= place.offset && relocation.offset < place.offset + size {
+                insert(
+                    relocations,
+                    Relocation {
+                        offset: relocation.offset - place.offset + offset,
+                        ..relocation
+                    },
+                );
+            }
         }
         Ok(())
     }
