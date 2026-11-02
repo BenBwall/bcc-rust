@@ -145,8 +145,8 @@ const PATH: [&str; 11] = [
      unchanged.",
     "Now `int`, `void` and `return` are keywords and `3` and `1` are integer constants of type \
      int: 38 tokens in all, each with its line and column.",
-    "`square(side + 1)` is a call node with a `+` node as its argument, and `n * n` is a `*` \
-     node under `square`'s return statement.",
+    "`square(side + 1)` is a call node with a `+` node as its argument, and `n * n` is a `*` node \
+     under `square`'s return statement.",
     "`square` has the type `int (int)`; `n`, `side` and `area` are 4-byte ints, and each read of \
      them is listed as a conversion of kind lvalue.",
     "No variable needs memory here: `side + 1` becomes `iadd.i32 nsw v0, v1` on values, and the \

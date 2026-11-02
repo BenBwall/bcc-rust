@@ -347,8 +347,8 @@ impl Stage {
                 "First, the file's bytes become characters, and lines ending in a backslash are \
                  joined: these logical lines go to phase 3.",
             | Self::PpTokens =>
-                "Phase 3 cuts the logical lines into preprocessing tokens, with each comment now \
-                 a space, for the preprocessor.",
+                "Phase 3 cuts the logical lines into preprocessing tokens, with each comment now a \
+                 space, for the preprocessor.",
             | Self::Preprocessor =>
                 "The preprocessor runs the directives and expands the macros, leaving one \
                  translation unit's preprocessing tokens, directives gone, for phases 5 to 7.",

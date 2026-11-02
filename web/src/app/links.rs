@@ -147,7 +147,9 @@ pub(super) fn announce(state: State) {
             | (_, 0) => (Side::Source, source),
             | _ => (Side::Output, output),
         };
-        timer.set_value(Some(Timeout::new(ANNOUNCE_DELAY_MS, move || say(side, line))));
+        timer.set_value(Some(Timeout::new(ANNOUNCE_DELAY_MS, move || {
+            say(side, line)
+        })));
     });
 }
 
@@ -162,9 +164,9 @@ impl State {
                 let headers = self.headers.get();
                 self.compilation.with(|compilation| {
                     let compilation = compilation.as_ref()?;
-                    let links = self.editor_text.with(|source| {
-                        pipeline::links(stage, compilation, source, headers)
-                    });
+                    let links = self
+                        .editor_text
+                        .with(|source| pipeline::links(stage, compilation, source, headers));
                     (!links.is_empty()).then(|| {
                         let linked = match side {
                             | Side::Source => links.outputs_for(line),
@@ -235,7 +237,8 @@ fn describe(side: Side, line: usize, linked: &[usize], view: View) -> String {
     };
     match (side, linked.is_empty(), exact) {
         | (Side::Source, true, _) => format!("Nothing in the {name} came from source line {line}."),
-        | (Side::Source, false, true) => format!("Source line {line} became {outputs} of the {name}."),
+        | (Side::Source, false, true) =>
+            format!("Source line {line} became {outputs} of the {name}."),
         | (Side::Source, false, false) => {
             format!("Source line {line} is in a function, on {outputs} of the {name}.")
         },
@@ -289,26 +292,41 @@ mod tests {
 
         // The keyboard alone.
         pointing.cursor(Side::Source, 4);
-        assert_eq!((pointing.line(Side::Source), pointing.line(Side::Output)), (4, 0));
+        assert_eq!(
+            (pointing.line(Side::Source), pointing.line(Side::Output)),
+            (4, 0)
+        );
 
         // The pointer moves over the output: it wins, and the source's
         // cursor no longer marks anything.
         pointing.hover(Side::Output, 9);
-        assert_eq!((pointing.line(Side::Source), pointing.line(Side::Output)), (0, 9));
+        assert_eq!(
+            (pointing.line(Side::Source), pointing.line(Side::Output)),
+            (0, 9)
+        );
 
         // The arrow keys move the cursor under the resting pointer.
         pointing.cursor(Side::Source, 5);
-        assert_eq!((pointing.line(Side::Source), pointing.line(Side::Output)), (5, 0));
+        assert_eq!(
+            (pointing.line(Side::Source), pointing.line(Side::Output)),
+            (5, 0)
+        );
 
         // The pointer moves again, then leaves: the cursor shows again.
         pointing.hover(Side::Output, 10);
         assert_eq!(pointing.line(Side::Output), 10);
         pointing.hover(Side::Output, 0);
-        assert_eq!((pointing.line(Side::Source), pointing.line(Side::Output)), (5, 0));
+        assert_eq!(
+            (pointing.line(Side::Source), pointing.line(Side::Output)),
+            (5, 0)
+        );
 
         // The focus leaves the editors.
         pointing.cursor(Side::Source, 0);
-        assert_eq!((pointing.line(Side::Source), pointing.line(Side::Output)), (0, 0));
+        assert_eq!(
+            (pointing.line(Side::Source), pointing.line(Side::Output)),
+            (0, 0)
+        );
 
         // The output's editor goes away under the pointer.
         pointing.hover(Side::Output, 3);
