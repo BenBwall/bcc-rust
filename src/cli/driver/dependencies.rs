@@ -207,9 +207,8 @@ impl DependencyRequest {
     /// link's files; TCC lists it as it lists a C source.
     pub(super) fn gather_input(&self, path: &Path) {
         if let Some(gathered) = &self.gathered {
-            let arena = Bump::new();
             let mut gathered = gathered.borrow_mut();
-            gathered.push_str(escape(&arena, &path.to_string_lossy()));
+            gathered.push_str(&path.to_string_lossy());
             gathered.push('\n');
         }
     }
@@ -241,6 +240,7 @@ pub(super) fn write(
     context: &Context<'_>,
     args: &Cli,
     request: &DependencyRequest,
+    stdin: bool,
 ) -> Result<(), MainError> {
     let arena = Bump::new();
     let mut text = ArenaString::new_in(&arena);
@@ -276,21 +276,29 @@ pub(super) fn write(
             .map(|&(index, _)| (index, context.get_source_file(index))),
     );
     files.sort_by_key(|&(index, _)| index);
+    // TCC names standard input `-`, first, and its rules carry names as
+    // they are, which `tcc_rules` escapes.
+    let tcc = context.configuration.compiler_identity() == CompilerIdentity::Tcc;
+    if tcc || request.gathered.is_some() {
+        let raw = stdin.then_some("-").into_iter().chain(
+            files
+                .iter()
+                .map(|(_, path)| &*arena.alloc_str(&path.to_string_lossy())),
+        );
+        if let Some(gathered) = &request.gathered {
+            let mut gathered = gathered.borrow_mut();
+            for name in raw {
+                gathered.push_str(name);
+                gathered.push('\n');
+            }
+            return Ok(());
+        }
+        let text = tcc_rules(&arena, args, &default, raw);
+        return emit(request, &text);
+    }
     let headers = files
         .iter()
         .map(|(_, path)| escape(&arena, &path.to_string_lossy()));
-    if let Some(gathered) = &request.gathered {
-        let mut gathered = gathered.borrow_mut();
-        for header in headers {
-            gathered.push_str(header);
-            gathered.push('\n');
-        }
-        return Ok(());
-    }
-    if context.configuration.compiler_identity() == CompilerIdentity::Tcc {
-        let text = tcc_rules(&arena, args, &default, headers);
-        return emit(request, &text);
-    }
     let mut first = true;
     let mut phony = ArenaString::new_in(&arena);
     for header in headers {
@@ -307,7 +315,9 @@ pub(super) fn write(
 
 /// TCC's form of a rule: `target: \`, then `  file \` per file, the last
 /// without the backslash; `-MP` adds `file:` for each file after the first,
-/// which for a link includes the later inputs, as `tcc` writes them.
+/// which for a link includes the later inputs, as `tcc` writes them. Each
+/// file is listed once, and only white space in its name is escaped
+/// (`escape_target_dep` in `tcctools.c`).
 fn tcc_rules<'a, 'h>(
     arena: &'a Bump,
     args: &Cli,
@@ -328,7 +338,21 @@ fn tcc_rules<'a, 'h>(
     }
     text.push(':');
     let mut phony = ArenaString::new_in(arena);
-    for (index, header) in headers.enumerate() {
+    let mut seen: ArenaVec<'_, &str> = ArenaVec::new_in(arena);
+    for header in headers {
+        if seen.contains(&header) {
+            continue;
+        }
+        seen.push(header);
+    }
+    for (index, &name) in seen.iter().enumerate() {
+        let mut header = ArenaString::new_in(arena);
+        for character in name.chars() {
+            if character.is_ascii_whitespace() {
+                header.push('\\');
+            }
+            header.push(character);
+        }
         _ = write!(text, " \\\n  {header}");
         if index != 0 && args.driver.phony_dependencies {
             _ = writeln!(phony, "{header}:");

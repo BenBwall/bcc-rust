@@ -161,7 +161,8 @@ pub(super) fn compile(
         job,
     )?;
     if let Some(dependencies) = dependencies {
-        dependencies::write(&context, args, dependencies)?;
+        let stdin = matches!(source, Source::File(path) | Source::Preprocessed(path) if path == Path::new("-"));
+        dependencies::write(&context, args, dependencies, stdin)?;
     }
     if args.driver.header_tree {
         dependencies::header_tree(&context);

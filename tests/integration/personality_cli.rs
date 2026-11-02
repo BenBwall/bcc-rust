@@ -4443,6 +4443,45 @@ mod tests {
         let output = directory.bcc("--tcc-mode", &["-MD", "bad.c", "b.c", "-o", "failed"]);
         assert_eq!(output.status.code(), Some(1));
         assert!(!directory.path("failed.d").exists());
+        // Nor does a lone source whose link fails.
+        directory.write(
+            "unlinked.c",
+            "int f(void);\nint main(void) { return f(); }\n",
+        );
+        let output = directory.bcc("--tcc-mode", &["-MD", "-MF", "rule.d", "unlinked.c"]);
+        assert!(!output.status.success());
+        assert!(!directory.path("rule.d").exists());
+        // A header two inputs read is listed once, and standard input is
+        // `-`, first.
+        directory.write("c.c", "#include \"inc.h\"\nint c(void) { return VALUE; }\n");
+        let output = directory.bcc(
+            "--tcc-mode",
+            &[
+                "-MD", "-MP", "-MF", "shared.d", "a.c", "b.c", "c.c", "-o", "shared",
+            ],
+        );
+        succeeds(&output);
+        assert_eq!(
+            std::fs::read_to_string(directory.path("shared.d")).unwrap(),
+            "shared: \\\n  a.c \\\n  b.c \\\n  inc.h \\\n  c.c\nb.c:\ninc.h:\nc.c:\n"
+        );
+        let mut child = Command::new(env!("CARGO_BIN_EXE_bcc-rust"))
+            .args(["--tcc-mode", "-MD", "-c", "-", "-o", "piped.o"])
+            .current_dir(&directory.0)
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(b"#include \"inc.h\"\nint p(void) { return VALUE; }\n")
+            .unwrap();
+        assert!(child.wait().unwrap().success());
+        assert_eq!(
+            std::fs::read_to_string(directory.path("piped.d")).unwrap(),
+            "piped.o: \\\n  - \\\n  inc.h\n"
+        );
         // An assembly input is listed as a C source is.
         if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
             directory.write("s.s", ".globl s\ns:\n ret\n");

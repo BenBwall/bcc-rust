@@ -58,8 +58,13 @@ pub(super) fn link(args: &Cli, inputs: &[Input<'_>]) -> Result<i32, MainError> {
         .expect("the link stage has an output");
     let sysroot = args.search.sysroot();
     let single = matches!(inputs, [Input::C(_)]);
+    // TCC writes a link's rule only once the link succeeded, which the
+    // one-step build cannot tell; its rule is gathered as for several.
+    let tcc = CompilerIdentity::from(args.compiler_identity) == CompilerIdentity::Tcc;
+    let tcc_rule = tcc && args.driver.write_dependencies.is_some();
     if single
         && sysroot.is_none()
+        && !tcc_rule
         && let Some(source) = inputs[0].c_source()
     {
         let base = default_output_base(args, source.path());
@@ -74,7 +79,6 @@ pub(super) fn link(args: &Cli, inputs: &[Input<'_>]) -> Result<i32, MainError> {
         .map(|generated| generated.status);
     }
     // TCC writes one rule for the whole link, after it succeeded.
-    let tcc = CompilerIdentity::from(args.compiler_identity) == CompilerIdentity::Tcc;
     let combined = if tcc {
         dependencies::request_link(args, output)?
     } else {
