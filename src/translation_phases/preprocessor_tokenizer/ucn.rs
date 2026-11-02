@@ -2,6 +2,8 @@
 //!
 //! C99: §6.4.2.1p3, p. 51; PDF p. 63; §6.4.3p1-4, p. 53; PDF p. 65; the
 //! permitted ranges are Annex D, pp. 440-441; PDF pp. 452-453.
+mod composition;
+
 use super::PreprocessorTokenType;
 use crate::{
     configuration::{
@@ -185,6 +187,32 @@ pub(crate) fn identifier_character(
         | standard if standard < CStandard::C23 => c11_character(code, first),
         | _ => unicode,
     }
+}
+
+/// Whether GCC finds the identifier spelled `text` outside Normalization
+/// Form C, which C23 requires of it, by the one case bcc detects: a
+/// character followed directly by a combining mark that canonical
+/// composition joins to it, as `a\u0300` stands for `à`. GCC also finds
+/// marks out of canonical order and composition across an intervening mark
+/// (`a\u0327\u0301`); bcc does not.
+/// C23: §6.4.2.1p3, p. 54; PDF p. 67.
+pub(super) fn composes_in_place(configuration: CompilerConfiguration, text: &str) -> bool {
+    let mut previous = None;
+    let mut index = 0;
+    while let Some(rest) = text.get(index..)
+        && let Some(next) = rest.chars().next()
+    {
+        let (character, length) =
+            decode(configuration, rest, index == 0).unwrap_or((next, next.len_utf8()));
+        if let Some(base) = previous
+            && composition::composes(base, character)
+        {
+            return true;
+        }
+        previous = Some(character);
+        index += length;
+    }
+    false
 }
 
 /// C11's ranges of characters allowed in identifiers (D.1), less those

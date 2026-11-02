@@ -607,6 +607,87 @@ mod tests {
         }
     }
 
+    /// GCC 14 warns of an identifier outside Normalization Form C
+    /// (`-Wnormalized`), as `a` followed by U+0300 is; C23 requires the
+    /// form, so there `-pedantic-errors` makes it an error. Clang has no
+    /// such check, nor the option.
+    #[test]
+    fn gcc_reports_identifiers_outside_normalization_form_c() {
+        let directory = Directory::new();
+        directory.write("raw.c", "int a\u{300};\n");
+        directory.write("ucn.c", "int a\\u0300;\n");
+        directory.write("composed.c", "int \u{E0}; int \\u00E0x;\n");
+        // (file, standard, options, accepted, warned) under GCC.
+        for file in ["raw.c", "ucn.c"] {
+            for (standard, options, accepted, warned) in [
+                ("-std=c23", &[][..], true, true),
+                ("-std=gnu23", &["-pedantic"], true, true),
+                ("-std=c23", &["-pedantic-errors"], false, true),
+                ("-std=gnu23", &["-pedantic-errors"], false, true),
+                ("-std=c17", &["-pedantic-errors"], true, true),
+                ("-std=c17", &["-Werror=normalized"], false, true),
+                (
+                    "-std=c23",
+                    &["-pedantic-errors", "-Wno-error=normalized"],
+                    true,
+                    true,
+                ),
+                (
+                    "-std=c23",
+                    &["-pedantic-errors", "-Wno-normalized"],
+                    true,
+                    false,
+                ),
+                (
+                    "-std=c23",
+                    &["-Wnormalized=none", "-pedantic-errors"],
+                    true,
+                    false,
+                ),
+                ("-std=c23", &["-pedantic-errors", "-w"], true, false),
+            ] {
+                let mut args = vec![standard, "-fsyntax-only"];
+                args.extend_from_slice(options);
+                args.push(file);
+                let output = directory.bcc("--gcc-mode", &args);
+                let message = stderr(&output);
+                assert_eq!(output.status.success(), accepted, "{args:?}: {message}");
+                assert_eq!(
+                    message.contains("is not in Normalization Form C"),
+                    warned,
+                    "{args:?}: {message}"
+                );
+            }
+            let output = directory.bcc(
+                "--clang-mode",
+                &["-std=c23", "-pedantic-errors", "-fsyntax-only", file],
+            );
+            succeeds(&output);
+            assert_eq!(stderr(&output), "");
+        }
+        let output = directory.bcc(
+            "--gcc-mode",
+            &[
+                "-std=c23",
+                "-pedantic-errors",
+                "-fsyntax-only",
+                "composed.c",
+            ],
+        );
+        succeeds(&output);
+        assert_eq!(stderr(&output), "");
+        let output = directory.bcc(
+            "--clang-mode",
+            &["-std=c23", "-Wno-normalized", "-fsyntax-only", "composed.c"],
+        );
+        succeeds(&output);
+        assert!(
+            stderr(&output).contains("unknown warning option '-Wno-normalized'"),
+            "{}",
+            stderr(&output)
+        );
+    }
+
     /// GCC names the x87 extended format `__float80`, the same type as
     /// `long double` on x86-64 Linux; Clang knows no such name.
     #[test]

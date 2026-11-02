@@ -11,12 +11,14 @@ use super::{
     super::{
         Lexer,
         PreprocessorTokenType,
+        PreprocessorTokenizerErrorType,
     },
     Lexed,
 };
 use crate::{
     configuration::{
         CStandard,
+        CompilerIdentity,
         Feature,
         RuleSet,
     },
@@ -235,10 +237,13 @@ impl Lexer<'_, '_, '_, '_> {
     }
 
     /// Extends `identifier` across UCNs and accepted multibyte characters.
+    /// GCC warns of one that is not in Normalization Form C, which C23
+    /// requires (`-Wnormalized`).
     /// C99: §6.4.2.1p1-3, p. 51; PDF p. 63; UCN form §6.4.3p1, p. 53;
-    /// PDF p. 65.
+    /// PDF p. 65. C23: §6.4.2.1p3, p. 54; PDF p. 67.
     #[cold]
     fn lex_extended_identifier(&mut self, start: usize, mut end: usize) -> Lexed {
+        let position = self.tracker.advance_past_deletions(start);
         let mut universal = false;
         loop {
             end += byte_scan::identifier_run(&self.bytes[end..]);
@@ -279,6 +284,15 @@ impl Lexer<'_, '_, '_, '_> {
                     end += self.char_at(end).len_utf8(),
                 | _ => break,
             }
+        }
+        let configuration = self.context.configuration;
+        if configuration.compiler_identity() == CompilerIdentity::Gcc
+            && super::ucn::composes_in_place(configuration, &self.text[start..end])
+        {
+            let error = PreprocessorTokenizerErrorType::Unnormalized {
+                required: configuration.standard() >= CStandard::C23,
+            };
+            self.diagnose_to(error, position, end);
         }
         let kind = if &self.bytes[start..end] == b"defined" {
             PreprocessorTokenType::Defined

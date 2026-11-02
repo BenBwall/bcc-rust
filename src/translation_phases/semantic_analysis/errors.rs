@@ -1203,6 +1203,8 @@ impl SemanticErrorKind {
                     | crate::configuration::DiagnosticGroup::ConstantConversion
                     | crate::configuration::DiagnosticGroup::Overflow
                     | crate::configuration::DiagnosticGroup::PedanticOverflow
+                    | crate::configuration::DiagnosticGroup::Normalized
+                    | crate::configuration::DiagnosticGroup::PedanticNormalized
                     | crate::configuration::DiagnosticGroup::Conversion
                     | crate::configuration::DiagnosticGroup::LiteralConversion
                     | crate::configuration::DiagnosticGroup::ExcessInitializers
