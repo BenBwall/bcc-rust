@@ -239,3 +239,240 @@ fn identities_follow_the_rule_families() {
         }
     }
 }
+
+/// One option sequence's severity for `group` under `identity` and
+/// `standard`, each option a `-W` group option or `-W[no-]all` (`None`).
+fn permerror_severity(
+    identity: CompilerIdentity,
+    standard: CStandard,
+    group: DiagnosticGroup,
+    options: &[(Option<DiagnosticGroup>, bool)],
+) -> Option<crate::translation_phases::ErrorSeverity> {
+    options
+        .iter()
+        .fold(
+            CompilerConfiguration::new(standard, ExtensionPolicy::Allow)
+                .with_gnu_extensions(true)
+                .with_compiler_identity(identity),
+            |configuration, &(option, enabled)| match option {
+                | Some(group) =>
+                    configuration.with_warning_option(group, WarningOption::Enable(enabled)),
+                | None => configuration.with_all_warnings(enabled),
+            },
+        )
+        .diagnostic_severity(group)
+}
+
+/// Re-enabling a disabled group gives Clang a warning and GCC its default
+/// error back; `-Wall` yields to a group's own option in GCC whatever the
+/// order and only to a later one in Clang; `-Wno-all` silences the implicit
+/// groups in both (and Clang's `-Wreturn-mismatch`), while any `-W[no-]all`
+/// makes GCC 14 warn about C89's `return;` (probed with GCC 14.2's `cc1` and
+/// Clang 23).
+#[test]
+fn permerror_options_follow_each_compiler() {
+    use CompilerIdentity::{
+        Clang,
+        Gcc,
+    };
+    use DiagnosticGroup as G;
+
+    use crate::translation_phases::ErrorSeverity::{
+        Error,
+        Warning,
+    };
+    let implicit = Some(G::ImplicitFunctionDeclaration);
+    let all = None;
+    for (identity, standard, group, options, expected) in [
+        (
+            Gcc,
+            CStandard::C17,
+            G::ImplicitFunctionDeclaration,
+            &[(implicit, false), (implicit, true)][..],
+            Some(Error),
+        ),
+        (
+            Clang,
+            CStandard::C17,
+            G::ImplicitFunctionDeclaration,
+            &[(implicit, false), (implicit, true)],
+            Some(Warning),
+        ),
+        (
+            Gcc,
+            CStandard::C17,
+            G::ImplicitFunctionDeclaration,
+            &[(implicit, false), (all, true)],
+            None,
+        ),
+        (
+            Clang,
+            CStandard::C17,
+            G::ImplicitFunctionDeclaration,
+            &[(implicit, false), (all, true)],
+            Some(Warning),
+        ),
+        (
+            Gcc,
+            CStandard::C17,
+            G::ImplicitFunctionDeclaration,
+            &[(all, true), (implicit, false)],
+            None,
+        ),
+        (
+            Clang,
+            CStandard::C17,
+            G::ImplicitFunctionDeclaration,
+            &[(all, true), (implicit, false)],
+            None,
+        ),
+        (
+            Gcc,
+            CStandard::C17,
+            G::ImplicitFunctionDeclaration,
+            &[(all, false)],
+            None,
+        ),
+        (
+            Clang,
+            CStandard::C17,
+            G::ImplicitFunctionDeclaration,
+            &[(all, false)],
+            None,
+        ),
+        (
+            Gcc,
+            CStandard::C17,
+            G::ImplicitFunctionDeclaration,
+            &[(all, false), (all, true)],
+            Some(Error),
+        ),
+        (
+            Clang,
+            CStandard::C17,
+            G::ImplicitFunctionDeclaration,
+            &[(all, false), (all, true)],
+            Some(Warning),
+        ),
+        (
+            Gcc,
+            CStandard::C89,
+            G::ImplicitFunctionDeclaration,
+            &[(all, true)],
+            Some(Warning),
+        ),
+        (
+            Gcc,
+            CStandard::C89,
+            G::ImplicitFunctionDeclaration,
+            &[(all, true), (all, false)],
+            None,
+        ),
+        (
+            Clang,
+            CStandard::C89,
+            G::ImplicitFunctionDeclaration,
+            &[(all, true), (all, false)],
+            None,
+        ),
+        (
+            Gcc,
+            CStandard::C89,
+            G::ImplicitInt,
+            &[(all, true)],
+            Some(Warning),
+        ),
+        (Gcc, CStandard::C89, G::ReturnMismatch, &[], None),
+        (
+            Gcc,
+            CStandard::C89,
+            G::ReturnMismatch,
+            &[(all, false)],
+            Some(Warning),
+        ),
+        (
+            Gcc,
+            CStandard::C17,
+            G::ReturnMismatch,
+            &[(all, false)],
+            Some(Error),
+        ),
+        (
+            Clang,
+            CStandard::C17,
+            G::ReturnMismatch,
+            &[(all, false)],
+            None,
+        ),
+        (
+            Gcc,
+            CStandard::C17,
+            G::VoidReturnMismatch,
+            &[(all, false)],
+            Some(Error),
+        ),
+        (
+            Clang,
+            CStandard::C17,
+            G::VoidReturnMismatch,
+            &[(all, false)],
+            None,
+        ),
+    ] {
+        assert_eq!(
+            permerror_severity(identity, standard, group, options),
+            expected,
+            "{identity:?} {standard:?} {group:?} {options:?}"
+        );
+    }
+}
+
+/// An explicit `-fno-permissive` makes GCC 14's C89 permerror warnings
+/// errors, leaving what C89 accepts silently, an implicit library
+/// function and a conditional's pointer mismatch as they were; a later
+/// `-fpermissive` wins.
+#[test]
+fn explicit_no_permissive_makes_gcc_c89_permerrors_errors() {
+    use DiagnosticGroup as G;
+
+    use crate::translation_phases::ErrorSeverity::{
+        Error,
+        Warning,
+    };
+    let gnu89 = CompilerConfiguration::new(CStandard::C89, ExtensionPolicy::Allow)
+        .with_gnu_extensions(true)
+        .with_compiler_identity(CompilerIdentity::Gcc);
+    for (group, expected) in [
+        (G::VoidReturnMismatch, Some(Error)),
+        (G::IntConversion, Some(Error)),
+        (G::IncompatiblePointerTypes, Some(Error)),
+        (G::IncompatibleFunctionPointerTypes, Some(Error)),
+        (G::DeclarationMissingParameterType, Some(Error)),
+        (G::ImplicitFunctionDeclaration, None),
+        (G::ImplicitInt, None),
+        (G::ReturnMismatch, None),
+        (G::ImplicitLibraryFunction, Some(Warning)),
+        (G::GccConditionalPointerMismatch, Some(Warning)),
+    ] {
+        let strict = gnu89.with_permissive(false);
+        assert_eq!(strict.diagnostic_severity(group), expected, "{group:?}");
+        assert_eq!(
+            strict.with_permissive(true).diagnostic_severity(group),
+            gnu89.diagnostic_severity(group),
+            "{group:?}"
+        );
+    }
+    let gnu17 = CompilerConfiguration::new(CStandard::C17, ExtensionPolicy::Allow)
+        .with_gnu_extensions(true)
+        .with_compiler_identity(CompilerIdentity::Gcc);
+    assert_eq!(
+        gnu17
+            .with_permissive(true)
+            .diagnostic_severity(G::GccConditionalPointerMismatch),
+        Some(Warning)
+    );
+    assert_eq!(
+        gnu17.diagnostic_severity(G::GccConditionalPointerMismatch),
+        Some(Error)
+    );
+}

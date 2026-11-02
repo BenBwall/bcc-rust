@@ -162,7 +162,8 @@ to the options TCC itself implements; see [TCC](#tcc).
   target's own ABI choices (`-mms-bitfields` for a Windows target,
   `-mlong-double-80` for Linux; `-m` options are judged for the target,
   after the whole command line is read), options that only change
-  which programs are accepted (`-fpermissive`), and options for other
+  which programs are accepted (`-fallow-parameterless-variadic-functions`),
+  and options for other
   languages (C++'s `-fno-rtti`).
 - **Warned and ignored**, for hardening and instrumentation that a correct
   program does not depend on: `-fstack-protector*`,
@@ -738,7 +739,8 @@ reject.
 | `-fasynchronous-unwind-tables`, `-msse`, `-m64`, `-g*`, `-B` | ignored |
 | `-b`, `-bt[N]`, `-bench` | ignored with a warning: bcc has no bounds checker, no backtraces and no statistics |
 | `-Werror`, `-Wdiscarded-qualifiers`, `-Wunsupported` | `-Werror`, `-Wincompatible-pointer-types-discards-qualifiers`; `-Wunsupported` makes the personality warn about ignored options |
-| `-Wall`, `-Wwrite-strings`, `-Wimplicit-function-declaration` | ignored: bcc's `-Wall` reports more than TCC's, and it has neither of the others |
+| `-Wimplicit-function-declaration` (and `no-`, `error=`) | passed on |
+| `-Wall`, `-Wwrite-strings` | ignored: bcc's `-Wall` reports more than TCC's, and it has no `-Wwrite-strings` |
 | any other `-W`, `-f` or `-m` | ignored, as TCC ignores it; the `-f` options that only bring bcc's code closer to TCC's (`-fwrapv`, `-fno-strict-overflow`, `-fwrapv-pointer`, `-fno-strict-aliasing`, `-fno-delete-null-pointer-checks`, `-fno-builtin*`) and the `-fpic` family are passed on |
 | `-ar ARGS...` | the bundled `llvm-ar ARGS...` |
 | `-dumpmachine` | `x86_64-pc-linux-gnu` (`-musl`, or `x86_64-pc-mingw32`), as `mob` prints it |
@@ -788,7 +790,8 @@ and what runs, except where noted:
 | Nested functions | `error: cannot use local functions` | refused (`not yet supported by lowering`) |
 | `asm goto` | `mob` only | accepted |
 | `__attribute__((vector_size))` | `'}' expected` | refused (`not yet supported by lowering: vector types`) |
-| `__builtin_clz`, `__builtin_bswap32`, `__builtin_add_overflow` | link error (`unresolved reference`) | builtins |
+| `__builtin_clz` | declared by `tccdefs.h`; link error (`unresolved reference`) without `libtcc1` | builtin |
+| `__builtin_bswap32`, `__builtin_add_overflow`, any `__builtin_` name TCC lacks | `warning: implicit declaration of function '__builtin_bswap32'`, an ordinary function, so the link fails unless the program defines it | same |
 | `_Complex` | `error: _Complex is not yet supported` (`mob`), parse error (0.9.27) | supported |
 | `_Atomic`, `<stdatomic.h>` | `mob` only | supported |
 | `__int128`, `__float128` | undeclared | types, with no size macros |
@@ -800,8 +803,8 @@ and what runs, except where noted:
 | Bit-field layout and packing (`packed`, `#pragma pack`, `:0`, 40-bit `long long` fields) | GCC's | same |
 | `alignas(32)` on a local | not always honoured (`mob` and 0.9.27 print 0 for the address test about one run in three) | honoured |
 | Plain C99 `inline` definition with no external one | a local function (`nm`: `t f`), so the program links | GCC's rule: no external definition, `undefined symbol: f` at link time |
-| Assignment to a `const` object, `return 1;` in a `void` function | warnings (`assignment of read-only location`, `void function returns a value`) | errors |
-| Implicit function declaration | `warning: implicit declaration of function 'foo'` | no diagnostic |
+| Assignment to a `const` object, `return 1;` in a `void` function | warnings (`assignment of read-only location`, `void function returns a value`) | same |
+| Implicit function declaration | `warning: implicit declaration of function 'foo'` | same |
 | Missing `return` in a non-`void` function | `warning: function might return no value: 'f'` | no diagnostic |
 
 Diagnostics keep bcc's wording. The common ones read:
@@ -1112,13 +1115,8 @@ would use:
   names; `FLT16_SNAN` and GCC's other `__builtin_*f16` constant builtins.
 - `__BASE_FILE__`, which GCC, Clang and TCC define (TCC lists it in
   `-dM`), is undefined in every identity.
-- TCC's warnings for an implicit function declaration (`implicit
-  declaration of function 'foo'`) and a function that may return no value
-  (`function might return no value: 'f'`) have no bcc counterpart, and the
-  constraint violations TCC only warns about, an assignment to a `const`
-  object (`assignment of read-only location`) and `return 1;` in a `void`
-  function (`void function returns a value`), are errors in bcc, as in
-  GCC.
+- TCC's warning for a function that may return no value (`function might
+  return no value: 'f'`) has no bcc counterpart.
 - A C99 `inline` definition with no external one: TCC emits it as a local
   function, so a program calling it links; bcc follows GCC and Clang and
   leaves the call to an external definition, so the link fails (`ld.lld:
