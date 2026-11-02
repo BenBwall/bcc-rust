@@ -2013,7 +2013,7 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
     /// The symbol and byte offset an address constant designates: a static
     /// object, function, string literal or, as a GNU extension, label,
     /// optionally selected by a constant conditional or with a constant
-    /// subscript, member offset or integer added.
+    /// subscript, member offset (through `.` or `->`) or integer added.
     /// C99: §6.6 paragraph 9, p. 96; PDF p. 108.
     /// C99: §6.5.3.2 paragraph 4, p. 79; PDF p. 91.
     /// C99: §6.5.15 paragraph 4, p. 90; PDF p. 102.
@@ -2134,6 +2134,27 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
                         .ok_or_else(unsupported)?;
                     expression = base_expression;
                     place = true;
+                },
+                // `&p->m`, or an array member `p->a` as a value: the member's
+                // offset from the address the pointer `p` holds, as
+                // `&(*p).m`.
+                | ExpressionType::IndirectMember {
+                    base_expression, ..
+                } if place || matches!(self.sema.types.kind(info.ty), TypeKind::Array(..)) => {
+                    let field = self.sema.selected_field(expression).ok_or_else(|| {
+                        LoweringError::missing(
+                            "member facts are not retained",
+                            expression.source_vectors,
+                        )
+                    })?;
+                    if field.width.is_some() {
+                        return Err(unsupported());
+                    }
+                    addend = addend
+                        .checked_add(i64::try_from(field.offset).map_err(|_| unsupported())?)
+                        .ok_or_else(unsupported)?;
+                    expression = base_expression;
+                    place = false;
                 },
                 | ExpressionType::Binary {
                     operator:
