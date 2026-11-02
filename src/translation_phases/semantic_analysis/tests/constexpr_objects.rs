@@ -2,6 +2,8 @@
 //! and their names and `.` members as named constants under each identity.
 //! C23 §6.7.2p2-6 and p16-17, §6.6p7-15, §6.5.3.6p4-7.
 
+use std::fmt::Write as _;
+
 use super::*;
 use crate::{
     configuration::{
@@ -279,7 +281,7 @@ fn wide_integers_convert_exactly_to_binary128() {
 fn long_copy_chains_stay_named_constants() {
     let mut source = String::from("struct S { int n; }; constexpr struct S s0 = { 42 };");
     for index in 1..=200 {
-        source.push_str(&format!(" constexpr struct S s{index} = s{};", index - 1));
+        write!(source, " constexpr struct S s{index} = s{};", index - 1).unwrap();
     }
     source.push_str(" static_assert(s200.n == 42);");
     holds(&source);
