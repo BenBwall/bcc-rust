@@ -471,6 +471,8 @@ mod tests {
     /// return, which `__builtin_longjmp` resumes: a local stored after the
     /// first return holds its new value there (gcc.dg/setjmp-3.c and
     /// setjmp-4.c, gcc.c-torture/execute/pr60003.c), on every back end.
+    /// So do a variable length array and a structure parameter, which live
+    /// at an address rather than in a stack slot.
     #[test]
     fn builtin_setjmp_keeps_locals_current_as_gcc_does() {
         if !cfg!(all(target_os = "linux", target_arch = "x86_64")) {
@@ -483,8 +485,11 @@ mod tests {
              {\n  int last = 0;\n  if (__builtin_setjmp(buf) == 0)\n    while (1) { last = 1; \
              raise0(); }\n  return last == 0 ? 0 : cmd;\n}\nint before(int cmd) {\n  int last = \
              0;\n  __builtin_setjmp(buf);\n  if (last == 0)\n    while (1) { last = 1; raise0(); \
-             }\n  return last == 0 ? 0 : cmd;\n}\nint main(void) { return after(3) + before(4); \
-             }\n",
+             }\n  return last == 0 ? 0 : cmd;\n}\nint vla(int n) {\n  int a[n];\n  a[0] = 0;\n  \
+             if (!__builtin_setjmp(buf)) { a[0] = 7; raise0(); }\n  return a[0] - 7;\n}\nstruct S \
+             { int x, y[4]; };\nint param(struct S s) {\n  if (!__builtin_setjmp(buf)) { s.x = 9; \
+             raise0(); }\n  return s.x - 9;\n}\nint main(void) {\n  struct S s = {0};\n  return \
+             after(3) + before(4) + vla(3) + param(s);\n}\n",
         );
         for options in [
             &["-O0"][..],

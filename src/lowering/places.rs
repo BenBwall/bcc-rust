@@ -114,7 +114,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
     /// `__builtin_longjmp` resumes it; Clang, and ISO `setjmp`, leave the
     /// unsaved ones indeterminate. GNU extension: GCC manual, "Nonlocal
     /// Gotos"; C99: §7.13.2.1p3, p. 244; PDF p. 256.
-    fn locals_survive_setjmp(&self) -> bool {
+    pub(super) fn locals_survive_setjmp(&self) -> bool {
         self.record.builtin_setjmp
             && self.unit.context.configuration.compiler_identity().rules()
                 == crate::configuration::RuleSet::Gcc
@@ -175,30 +175,37 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 )
             },
         };
-        if let Local::Slot(slot) = local
-            && self.locals_survive_setjmp()
-            && !self.unit.target.is_wasm()
-        {
-            self.escape_for_setjmp(slot, ty, source)?;
+        if self.locals_survive_setjmp() {
+            let address = match local {
+                | Local::Slot(slot) => Some(self.inst(InstData::StackAddr { slot }, Type::Ptr)),
+                | Local::Address(address) => Some(address),
+                | Local::Variable(_) => None,
+            };
+            if let Some(address) = address {
+                self.escape_for_setjmp(address, ty);
+            }
         }
         _ = self.locals.insert(binding, local);
         Ok(local)
     }
 
-    /// Passes the address of the local in `slot` to an empty volatile
+    /// Passes the `address` of a local of type `ty` to an empty volatile
     /// `asm` that may read and write memory, as `asm volatile("" :: "m"(x)
     /// : "memory")` does: the optimizer may then neither keep the local in
     /// a register nor carry a value across a call, so a resumed
     /// `__builtin_setjmp` reads what was last stored, as GCC guarantees.
-    fn escape_for_setjmp(
-        &mut self,
-        slot: StackSlot,
-        ty: TypeId,
-        source: SourceVectors,
-    ) -> Result<(), LoweringError> {
-        let layout = types::layout(&self.unit.sema.types, ty).map_err(|kind| at(kind, source))?;
-        let bytes = u32::try_from(layout.size).unwrap_or(u32::MAX).max(1);
-        let address = self.inst(InstData::StackAddr { slot }, Type::Ptr);
+    /// A variable length array's operand names its first byte; the memory
+    /// clobber covers the rest once its address has escaped. The wasm
+    /// target, which refuses `__builtin_setjmp`, takes no asm.
+    pub(super) fn escape_for_setjmp(&mut self, address: Value, ty: TypeId) {
+        if self.unit.target.is_wasm() {
+            return;
+        }
+        let bytes = types::layout(&self.unit.sema.types, ty)
+            .ok()
+            .and_then(|layout| u32::try_from(layout.size).ok())
+            .unwrap_or(1)
+            .max(1);
         let asm = self.scratch.alloc(InlineAsm {
             template:     "",
             operands:     self.scratch.alloc_slice_copy(&[AsmOperand {
@@ -216,7 +223,6 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         });
         let args = self.scratch.alloc_slice_copy(&[address]);
         _ = self.draft.push(Op::InlineAsm(asm, args), None);
-        Ok(())
     }
 
     /// The value of the object at `place`, whose lvalue type is `ty`,
