@@ -881,7 +881,7 @@ functions.
 | Revision | Phase-7 syntax | Left to later analysis |
 | --- | --- | --- |
 | C89/C90/C95 | Native implicit int; C99-origin mixed blocks, for declarations, designated initializers, compound literals, flexible array members, long long, trailing enum comma, `__func__`, and unambiguous qualified/static/`[*]` array syntax follow Allow/Warn/Deny | Variable bounds need constant evaluation to distinguish VLAs from constant arrays; flexible-member position and object layout |
-| C99 | Full C99 grammar; implicit int is retained with a removed-feature policy diagnostic | Type/name/control-flow constraints listed in the C99 checklist |
+| C99 | Full C99 grammar; implicit int is retained under `-Wimplicit-int` ([C type-safety permerrors](#c-type-safety-permerrors-2026-11-02)) | Type/name/control-flow constraints listed in the C99 checklist |
 | C11/C17 | `_Alignas` expression/type operands, `_Alignof` types (expression operands as a GNU extension), `_Atomic` type/qualifier, `_Generic` associations, `_Noreturn`, `_Static_assert`, `_Thread_local`, anonymous untagged aggregates; `_Alignas` in a plain type name is a constraint error | Alignment validity, storage-class combinations and aggregate layout; atomic eligibility and generic selection are analyzed |
 | C23 | All `[[...]]` attribute positions with standard/vendor names and balanced arguments; `bool`/`true`/`false`, `nullptr`, `constexpr`, `typeof`/`typeof_unqual`, message-optional `static_assert`, `alignas`/`alignof`/`thread_local` aliases; labels before declarations and at block end; `{}`; `_BitInt` with signedness; fixed enum underlying specifier-qualifier lists; `auto` type inference, alone or beside another storage class except `typedef`; unnamed definition parameters; ellipsis-only prototypes; empty parameter lists as prototypes; rejected identifier-list declarators; decimal type keywords; compound-literal storage classes | Attribute applicability/meaning, width values, enum type legality, decimal literal support and literal object lifetime; inferred types are analyzed (see "Type inference") |
 | C2y subset | `_Countof` unary expression or parenthesized type; type-controlling `_Generic`; `if`/`switch` declaration headers with an optional following expression; case ranges; `break`/`continue` label | Array/type/count evaluation, selection conversion, range overlap, and named control-target resolution |
@@ -1375,14 +1375,15 @@ the diagnostic is reported, so withheld diagnostics are not counted.
 - GNU/MSVC policy diagnostics stay active in their enabled dialects under
   pedantic options. `_Imaginary` reports the baseline unsupported-type
   diagnostic; classification does not claim imaginary type semantics.
-- Implicit int is a removed C89 feature, not a GNU extension: C99 and later
-  report `'implicit int' is a C89 feature removed in C99`.
-- Semantic calls to undeclared functions follow `ImplicitFunctionDeclaration`,
-  another removed C89 feature. C89/C95 and GNU modes create a declaration
-  under the configured pedantic policy. Known library names use the complete
-  library prototype and emit a warning naming the function and type, as Clang
-  does; all other names retain unprototyped int returns. Explicit declarations
-  keep the user's type. Strict C99 and later report an undeclared identifier.
+- Implicit int and implicit function declarations are removed C89 features,
+  not GNU extensions. Semantic analysis reports them under
+  `-Wimplicit-int` and `-Wimplicit-function-declaration`, whose severity
+  follows the identity and the revision
+  ([C type-safety permerrors](#c-type-safety-permerrors-2026-11-02)). A call
+  to an undeclared function declares it as C89 did, in every revision but
+  Clang's C23. Known library names use the complete library prototype, as
+  Clang does; all other names retain unprototyped int returns. Explicit
+  declarations keep the user's type.
   Ordinary non-call identifier lookup never creates an implicit declaration.
 - `__STRICT_ANSI__` is an implementation macro outside §6.10.8's protection, so
   `#undef` and `#define` apply to it as to any macro, as in GCC. The GNU builtins
@@ -2485,6 +2486,65 @@ Clang reports them. The line number applies, as in Clang, and a later line
 past 4294967295 wraps to 0; a larger `#line` number is an error and is
 ignored (C99 §6.10.4p3, p. 158; PDF p. 170, leaves these values undefined).
 
+
+## C type-safety permerrors (2026-11-02)
+
+GCC 14 made six C type-safety warnings errors in C99 and later
+("permerrors", GCC 14 release notes, "Porting to GCC 14"); `-fpermissive`
+or `-Wno-error=NAME` makes each a warning again, `-Wno-NAME` silences it,
+and `-w` leaves an error. Clang 16 and later (here the pinned Clang 23)
+refuse the same programs by default. bcc reports each under its `-W` group
+with a default that depends on the compiler identity and the revision
+(`CompilerConfiguration::permerror_default`); `-fpermissive` affects only
+the GCC identity, as in the compilers (Clang accepts and ignores it).
+Probed with GCC 14.2's `cc1`, host GCC 13 (wording), Clang 23.1.1 and TCC
+`mob`:
+
+| Diagnostic (`-W` group) | GCC identity | Clang identity (and the default CLI) | TCC | MSVC |
+| --- | --- | --- | --- | --- |
+| Call to an undeclared function (`implicit-function-declaration`) | error from C99 (C23 too); silent in C89 | error in C99 to C17; silent in C89; C23: undeclared identifier | warning | warning (`cl` C4013) |
+| Undeclared library function (same group) | error from C99; C89: GCC's `-Wbuiltin-declaration-mismatch` wording, warning | error from C99; warning in C89 | warning | warning |
+| Implicit int: declaration, function result, undeclared identifier-list parameter, prototype parameter (`implicit-int`) | error from C99 (C23 too); silent in C89 | error in C99 to C17; silent in C89; C23: `a type specifier is required for all declarations`, no option | silent | silent |
+| `return;` in a function with a result (`return-mismatch`) | error from C99; silent in C89 | error in every mode | warning | warning |
+| `return` with a value in a `void` function (`return-mismatch`) | error from C99; warning in C89 | error in every mode | warning | warning |
+| Identifier list in a declaration that is no definition (`declaration-missing-parameter-type`) | error from C99; warning in C89 | error in every mode, no option | silent | error, as clang-cl |
+| Integer/pointer conversion (`int-conversion`) | error from C99; warning in C89 | error in every mode | warning (driver) | error |
+| Incompatible pointers (`incompatible-pointer-types`, and Clang's `incompatible-function-pointer-types`, which GCC's group holds) | error from C99; warning in C89 | error in every mode | warning (driver) | error |
+
+`-Wall` turns on `-Wimplicit` (both implicit groups) and `-Wreturn-mismatch`,
+which matter only where they are otherwise off (C89); `-Wimplicit` is the
+parent of the two implicit groups.
+
+The GCC, Clang and TCC diagnostic formats use each compiler's words:
+
+| Diagnostic | GCC 14 | Clang 23 | TCC |
+| --- | --- | --- | --- |
+| implicit declaration | `implicit declaration of function 'f'` | `call to undeclared function 'f'; ISO C99 and later do not support implicit function declarations` | `implicit declaration of function 'f'` |
+| library function | as above | `call to undeclared library function 'printf' with type 'int (const char *, ...)'; ISO C99 and later do not support implicit function declarations` | as above |
+| implicit int | `type defaults to 'int' in declaration of 'x'`, `return type defaults to 'int'`, `type of 'x' defaults to 'int'` (at the function's name) | `type specifier missing, defaults to 'int'; ISO C99 and later do not support implicit int` (once per declaration), `parameter 'x' was not declared, defaults to 'int'; ...` | |
+| return mismatch | `'return' with no value, in function returning non-void`, `'return' with a value, in function returning void` (at the value) | `non-void function 'f' should return a value`, `void function 'g' should not return a value` | `'return' with no value`, `void function returns a value` |
+| identifier list | `parameter names (without types) in function declaration` (at the declaration) | `a parameter list without types is only allowed in a function definition` (at the first name) | |
+| int-conversion | `initialization of 'int *' from 'int' makes pointer from integer without a cast`, `assignment to ...`, `passing argument 1 of 'f' makes ...`, `returning 'int' from a function with return type 'int *' makes ...` (an initialization at its initializer) | `incompatible integer to pointer conversion initializing 'int *' with an expression of type 'int'`, `assigning to ... from ...`, `passing 'int' to parameter of type 'int *'`, `returning ... from a function with result type ...`, with `; take the address with &` or `; dereference with *` where that would fit | `assignment makes pointer from integer without a cast` (bcc keeps its own) |
+| incompatible pointers | `initialization of 'long int *' from incompatible pointer type 'int *'`, `passing argument 1 of 'f' from incompatible pointer type`, `returning 'int *' from a function with incompatible return type 'long int *'` | `incompatible pointer types initializing 'long *' with an expression of type 'int *'`; `incompatible function pointer types ...` for functions, which spell the source as Clang does (`int (int)`, `int[2]`) | `assignment from incompatible pointer type` |
+
+Deviations: bcc keeps no typedef names, so a type is spelled from its
+canonical form (`unsigned long` where Clang writes `'size_t' (aka 'unsigned
+long')`), and an unnamed tag or a vector keeps bcc's words; the notes are
+bcc's C99 citations, not GCC's `expected 'int *' but argument is of type
+'int'` or Clang's `passing argument to parameter 'p' here`; Clang's
+`-Wdeprecated-non-prototype` warning on an old-style definition is not
+modelled; MSVC keeps the Clang errors for the two pointer groups, where `cl`
+warns (C4047, C4133). The GCC torture survey lost no test
+(see the pull request).
+
+Under TCC, a `__builtin_` name TCC does not know (TCC `mob`'s `tcctok.h`
+and `tccdefs.h`: `expect`, `constant_p`, `frame_address`,
+`return_address`, `unreachable`, `types_compatible_p`, `choose_expr`, the
+`va_*` and `offsetof` macros, the library aliases `memcpy` to `abort`, and
+the `ffs`/`clz`/`ctz`/`clrsb`/`popcount`/`parity` families) is an ordinary
+identifier outside a system header: a call declares it implicitly with
+TCC's warning, and the program may define it (`int __builtin_frob(int x)`),
+as TCC does. `__builtin_abs(0)` then fails to link, as with TCC.
 
 ### Diagnostic parity follow-up (issues #49 and #54)
 

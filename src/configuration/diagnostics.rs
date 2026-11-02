@@ -12,7 +12,10 @@ use crate::translation_phases::ErrorSeverity;
 /// `file:line:col: error: message` lines with the snippet (Clang adds the
 /// error and warning counts), MSVC's `file(line,col): error: message`, or
 /// TCC's `file:line: error: message`.
-/// The wording and the snippets are bcc's in every format.
+/// The wording and the snippets are bcc's in every format, except for the
+/// diagnostics TCC's users meet most and the C type-safety diagnostics GCC 14
+/// and Clang make errors, which the TCC, GCC and Clang formats word as
+/// their compilers do.
 /// C99: §5.1.1.3 paragraph 1, p. 11; PDF p. 23 leaves the form of a
 /// diagnostic implementation-defined.
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Default)]
