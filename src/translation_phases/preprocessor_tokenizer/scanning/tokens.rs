@@ -81,7 +81,9 @@ impl Lexer<'_, '_, '_, '_> {
                 .configuration
                 .accepts(Feature::DollarIdentifiers) =>
                 self.lex_extended_identifier(start, start),
-            | b'\\' if super::ucn::decode(&self.text[start..], true).is_some() =>
+            | b'\\'
+                if super::ucn::decode(self.context.configuration, &self.text[start..], true)
+                    .is_some() =>
                 self.lex_identifier(start, start),
             | b'A'..=b'Z' | b'a'..=b'z' | b'_' => self.lex_identifier(start, start + 1),
             | b'.' => match self.peek(start + 1) {
@@ -182,7 +184,12 @@ impl Lexer<'_, '_, '_, '_> {
                 &[(b'=', T::ExclamationMarkEquals)],
             ),
             | b'=' => self.one_of(start, T::Equals, &[(b'=', T::EqualsEquals)]),
-            | 0x80.. if self.char_at(start).is_alphabetic() =>
+            | 0x80..
+                if super::ucn::identifier_character(
+                    self.context.configuration,
+                    self.char_at(start),
+                    true,
+                ) =>
                 self.lex_identifier(start, start + self.char_at(start).len_utf8()),
             | _ => self.lex_other(start),
         }
@@ -246,13 +253,29 @@ impl Lexer<'_, '_, '_, '_> {
                     self.record_extension(Feature::DollarIdentifiers, "$", position, 1);
                     end += 1;
                 },
-                | Some(b'\\') if super::ucn::decode(&self.text[end..], end == start).is_some() => {
-                    end += super::ucn::decode(&self.text[end..], end == start)
-                        .unwrap()
-                        .1;
+                | Some(b'\\')
+                    if super::ucn::decode(
+                        self.context.configuration,
+                        &self.text[end..],
+                        end == start,
+                    )
+                    .is_some() =>
+                {
+                    end += super::ucn::decode(
+                        self.context.configuration,
+                        &self.text[end..],
+                        end == start,
+                    )
+                    .unwrap()
+                    .1;
                     universal = true;
                 },
-                | Some(0x80..) if self.char_at(end).is_alphanumeric() =>
+                | Some(0x80..)
+                    if super::ucn::identifier_character(
+                        self.context.configuration,
+                        self.char_at(end),
+                        end == start,
+                    ) =>
                     end += self.char_at(end).len_utf8(),
                 | _ => break,
             }
@@ -330,9 +353,18 @@ impl Lexer<'_, '_, '_, '_> {
                         .configuration
                         .accepts(Feature::DollarIdentifiers) =>
                     end += 1,
-                | Some(b'\\') if super::ucn::decode(&self.text[end..], false).is_some() =>
-                    end += super::ucn::decode(&self.text[end..], false).unwrap().1,
-                | Some(0x80..) if self.char_at(end).is_alphanumeric() =>
+                | Some(b'\\')
+                    if super::ucn::decode(self.context.configuration, &self.text[end..], false)
+                        .is_some() =>
+                    end += super::ucn::decode(self.context.configuration, &self.text[end..], false)
+                        .unwrap()
+                        .1,
+                | Some(0x80..)
+                    if super::ucn::identifier_character(
+                        self.context.configuration,
+                        self.char_at(end),
+                        false,
+                    ) =>
                     end += self.char_at(end).len_utf8(),
                 | Some(_) => break,
                 // Reading the end of input leaves the position past any

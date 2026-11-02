@@ -467,6 +467,46 @@ mod tests {
         }
     }
 
+    /// Characters beyond ASCII in identifiers follow each compiler's sets:
+    /// Clang takes C99's Annex D in C99, C11's in C11 and C17 and Unicode's
+    /// in C23; GCC 14 takes any of them in every mode
+    /// (gcc.dg/ucnid-5-utf8.c, ucnid-15-utf8.c).
+    #[test]
+    fn identifier_characters_follow_each_compiler() {
+        let directory = Directory::new();
+        directory.write("emoji.c", "int a\u{1F600} = 2;\nint b\\U0001F600 = 3;\n");
+        directory.write("super.c", "int \u{3C0}\u{B2} = 9;\n");
+        // GCC reads `\u0024` as `$`; Clang refuses it.
+        directory.write(
+            "dollar.c",
+            "int a$b(void) { return 1; }\nint main(void) { return a\\u0024b() - 1; }\n",
+        );
+        let output = directory.bcc("--gcc-mode", &["-std=c99", "-fsyntax-only", "dollar.c"]);
+        succeeds(&output);
+        let output = directory.bcc("--clang-mode", &["-std=c99", "-fsyntax-only", "dollar.c"]);
+        assert!(!output.status.success());
+        for (file, standard, gcc, clang) in [
+            ("emoji.c", "c99", true, false),
+            ("emoji.c", "c11", true, true),
+            ("emoji.c", "c17", true, true),
+            ("emoji.c", "c23", true, false),
+            ("super.c", "c99", true, false),
+            ("super.c", "c11", true, true),
+            ("super.c", "c23", true, true),
+        ] {
+            for (mode, accepted) in [("--gcc-mode", gcc), ("--clang-mode", clang)] {
+                let std = format!("-std={standard}");
+                let output = directory.bcc(mode, &[std.as_str(), "-fsyntax-only", file]);
+                assert_eq!(
+                    output.status.success(),
+                    accepted,
+                    "{mode} {std} {file}: {}",
+                    stderr(&output)
+                );
+            }
+        }
+    }
+
     /// TCC names no warning options, so its diagnostics carry no `[-W…]`
     /// suffix, as GCC's and Clang's do.
     #[test]
