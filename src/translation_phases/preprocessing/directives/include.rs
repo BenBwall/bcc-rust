@@ -259,7 +259,17 @@ impl<'tu, 'x> Expander<'_, 'tu, '_, 'x> {
                 | None => false,
             }
         };
-        if guarded {
+        // GCC lists a guarded header it does not read again once: where its
+        // only earlier inclusion was forced, and so unlisted, the main
+        // file's include of it shows. Clang lists none.
+        let gcc = self.context.configuration.compiler_identity().rules()
+            == crate::configuration::RuleSet::Gcc;
+        let listed = |entries: &ArenaVec<'_, IncludeEntry>| {
+            entries
+                .iter()
+                .any(|entry| entry.file == file && !entry.forced)
+        };
+        if guarded && (!gcc || forced || self.context.include_entries.as_ref().is_none_or(listed)) {
             return;
         }
         let depth = u32::try_from(depth).expect("the include nesting limit is small");

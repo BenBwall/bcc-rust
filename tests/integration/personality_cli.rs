@@ -1141,6 +1141,22 @@ mod tests {
             succeeds(&output);
             assert_eq!(tree(&output), [expected], "{mode}: {}", stderr(&output));
         }
+        // A guarded header forced and then included by the main file: GCC
+        // lists the main file's include, as its only listed one; Clang
+        // lists neither.
+        directory.write(
+            "guarded.h",
+            "#ifndef GUARDED_H\n#define GUARDED_H\n#include \"sub.h\"\n#endif\n",
+        );
+        directory.write("g.c", "#include \"guarded.h\"\nint g;\n");
+        for (mode, expected) in [("--gcc-mode", &[". guarded.h"][..]), ("--clang-mode", &[])] {
+            let output = directory.bcc(
+                mode,
+                &["-H", "-fsyntax-only", "-include", "guarded.h", "g.c"],
+            );
+            succeeds(&output);
+            assert_eq!(tree(&output), expected, "{mode}: {}", stderr(&output));
+        }
         let output = directory.bcc(
             "--clang-cl-mode",
             &["/nologo", "/Zs", "/showIncludes", "/FIforced.h", "m.c"],
