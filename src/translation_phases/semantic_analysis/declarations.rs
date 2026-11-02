@@ -1058,9 +1058,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         );
                     }
                 } else if !declared_nested {
-                    let both_typedefs = kind == BindingKind::Typedef && old.kind == kind;
+                    // A typedef that redeclares a name, of a typedef or an
+                    // object, is a typedef redeclaration: TCC calls it an
+                    // incompatible redefinition either way.
+                    let typedef = kind == BindingKind::Typedef;
                     self.error(
-                        if both_typedefs {
+                        if typedef {
                             SemanticErrorKind::TypedefRedeclaration
                         } else {
                             SemanticErrorKind::DuplicateDeclaration
