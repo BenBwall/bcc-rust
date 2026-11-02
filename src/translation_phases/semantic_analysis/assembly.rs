@@ -66,7 +66,11 @@ use crate::{
         SourceVectors,
         parsing::{
             Asm,
-            syntax::Statement,
+            declaration_syntax::TypeQualifiers,
+            syntax::{
+                Expression,
+                Statement,
+            },
         },
         preprocessing::{
             StringTokenType,
@@ -465,6 +469,15 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             };
             let info = self.expression_info(operand.expression);
             let kind = if constraint.role.is_some_and(AsmRole::writes) {
+                // GCC refuses a string literal, a read-only array, as an
+                // output ("read-only location used as 'asm' output");
+                // Clang takes it as memory.
+                if self.context.configuration.compiler_identity()
+                    == crate::configuration::CompilerIdentity::Gcc
+                    && string_literal(operand.expression)
+                {
+                    return Err(at_expression(AsmFault::OutputLvalue));
+                }
                 self.output_location(info, constraint)
                     .map_err(at_expression)?
             } else if let Some(tie) = constraint.tied {
@@ -505,7 +518,20 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         info: ExpressionInfo<'tu>,
         constraint: &Constraint<'_>,
     ) -> Result<AsmOperandKind, AsmFault> {
-        if info.category != ValueCategory::ModifiableLvalue {
+        // GCC and Clang take a whole array, which no assignment may modify,
+        // as a memory output: the statement writes its bytes, even when the
+        // array is incomplete or its elements have const members. An array
+        // of const-qualified elements stays read-only.
+        let array = info.category == ValueCategory::Lvalue && {
+            let mut element = info.ty;
+            while let TypeKind::Array(inner, _) = self.types.nodes[element.index] {
+                element = inner;
+            }
+            element != info.ty
+                && !element.qualifiers.contains(TypeQualifiers::CONST)
+                && !info.ty.qualifiers.contains(TypeQualifiers::CONST)
+        };
+        if info.category != ValueCategory::ModifiableLvalue && !(array && constraint.memory) {
             return Err(AsmFault::OutputLvalue);
         }
         if let Some(condition) = constraint.flag {
@@ -914,4 +940,13 @@ impl AsmFault {
             ),
         }
     }
+}
+
+/// Whether `expression`, inside any parentheses, is a string literal.
+fn string_literal(mut expression: &Expression<'_>) -> bool {
+    use crate::translation_phases::parsing::syntax::ExpressionType;
+    while let ExpressionType::Parenthesized { expression: inner } = expression.kind {
+        expression = inner;
+    }
+    matches!(expression.kind, ExpressionType::StringLiteral(_))
 }
