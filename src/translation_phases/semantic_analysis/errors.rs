@@ -136,6 +136,10 @@ pub(crate) enum SemanticErrorKind {
     /// specifier, under `-Wimplicit-int`.
     /// C99: §6.7.2p2, p. 99; PDF p. 111.
     ImplicitIntReturn,
+    /// An unnamed prototype parameter whose specifiers name no type
+    /// (`int f(const);`), under `-Wimplicit-int`.
+    /// C99: §6.7.2p2, p. 99; PDF p. 111.
+    ImplicitIntTypeName,
     /// An identifier-list parameter without a declaration, under
     /// `-Wimplicit-int`; the name is the parameter's.
     /// C99: §6.9.1p6, p. 141; PDF p. 153.
@@ -1014,8 +1018,10 @@ impl SemanticErrorKind {
             | Self::VoidReturnMismatch => "value returned from a void function",
             | Self::ReturnMismatch => "no return value",
             | Self::ImplicitFunctionDeclaration => "undeclared function called here",
-            | Self::ImplicitInt | Self::ImplicitIntReturn | Self::TypeSpecifierRequired =>
-                "no type specifier",
+            | Self::ImplicitInt
+            | Self::ImplicitIntReturn
+            | Self::ImplicitIntTypeName
+            | Self::TypeSpecifierRequired => "no type specifier",
             | Self::ImplicitIntParameter => "undeclared parameter",
             | Self::DeclarationMissingParameterType | Self::IdentifierListDeclaration =>
                 "parameter names without types",
@@ -1159,7 +1165,8 @@ impl SemanticErrorKind {
                     | crate::configuration::DiagnosticGroup::PointerIntegerCompare => "comparison between pointer and integer",
                     | crate::configuration::DiagnosticGroup::OrderedCompareFunctionPointers => "ordered comparison of function pointers",
                     | crate::configuration::DiagnosticGroup::OrderedPointerIntegerCompare => "ordered comparison between pointer and integer",
-                    | crate::configuration::DiagnosticGroup::PointerTypeMismatch => "pointer type mismatch in conditional expression",
+                    | crate::configuration::DiagnosticGroup::PointerTypeMismatch
+                    | crate::configuration::DiagnosticGroup::GccConditionalPointerMismatch => "pointer type mismatch in conditional expression",
                     | crate::configuration::DiagnosticGroup::ConditionalTypeMismatch => "pointer/integer type mismatch in conditional expression",
                     | crate::configuration::DiagnosticGroup::PointerToIntCast
                     | crate::configuration::DiagnosticGroup::PointerToEnumCast
@@ -1599,6 +1606,11 @@ impl SemanticErrorKind {
             ),
             | Self::ImplicitInt => (
                 "type specifier missing, defaults to `int`",
+                "C99 §6.7.2p2: each declaration gives at least one type specifier; C89 defaulted \
+                 to `int`",
+            ),
+            | Self::ImplicitIntTypeName => (
+                "type specifier missing in a parameter, defaults to `int`",
                 "C99 §6.7.2p2: each declaration gives at least one type specifier; C89 defaulted \
                  to `int`",
             ),
@@ -2326,8 +2338,10 @@ impl SemanticErrorKind {
             | Self::PointerConstraint(group) => Some(group),
             | Self::ImplicitFunctionDeclaration => Some(G::ImplicitFunctionDeclaration),
             | Self::ImplicitLibraryFunction(_) => Some(G::ImplicitLibraryFunction),
-            | Self::ImplicitInt | Self::ImplicitIntReturn | Self::ImplicitIntParameter =>
-                Some(G::ImplicitInt),
+            | Self::ImplicitInt
+            | Self::ImplicitIntReturn
+            | Self::ImplicitIntParameter
+            | Self::ImplicitIntTypeName => Some(G::ImplicitInt),
             | Self::ReturnMismatch => Some(G::ReturnMismatch),
             | Self::VoidReturnMismatch => Some(G::VoidReturnMismatch),
             | Self::DeclarationMissingParameterType => Some(G::DeclarationMissingParameterType),
@@ -2410,10 +2424,16 @@ impl SemanticError {
             | (F::Gcc, SemanticErrorKind::ImplicitInt) =>
                 format_in!(arena, "type defaults to 'int' in declaration of '{name}'"),
             | (F::Gcc, SemanticErrorKind::ImplicitIntReturn) => "return type defaults to 'int'",
+            | (F::Gcc, SemanticErrorKind::ImplicitIntTypeName) =>
+                "type defaults to 'int' in type name",
             | (F::Gcc, SemanticErrorKind::ImplicitIntParameter) =>
                 format_in!(arena, "type of '{name}' defaults to 'int'"),
-            | (F::Clang, SemanticErrorKind::ImplicitInt | SemanticErrorKind::ImplicitIntReturn) =>
-                format_in!(arena, "type specifier missing, defaults to 'int'{iso}"),
+            | (
+                F::Clang,
+                SemanticErrorKind::ImplicitInt
+                | SemanticErrorKind::ImplicitIntReturn
+                | SemanticErrorKind::ImplicitIntTypeName,
+            ) => format_in!(arena, "type specifier missing, defaults to 'int'{iso}"),
             | (F::Clang, SemanticErrorKind::ImplicitIntParameter) => format_in!(
                 arena,
                 "parameter '{name}' was not declared, defaults to 'int'{iso}"

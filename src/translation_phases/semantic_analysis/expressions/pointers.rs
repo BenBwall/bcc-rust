@@ -611,7 +611,18 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         } else if let Some(composite) = self.types.composite(lp.unqualified(), rp.unqualified()) {
             composite
         } else {
-            self.pointer_diagnostic(DiagnosticGroup::PointerTypeMismatch, source);
+            // GCC 14 reports it under `-Wincompatible-pointer-types`, an
+            // error from C99.
+            self.pointer_diagnostic(
+                if self.context.configuration.compiler_identity()
+                    == crate::configuration::CompilerIdentity::Gcc
+                {
+                    DiagnosticGroup::GccConditionalPointerMismatch
+                } else {
+                    DiagnosticGroup::PointerTypeMismatch
+                },
+                source,
+            );
             let void = self.types.scalar(Scalar::Void);
             return Some(self.types.intern(TypeKind::Pointer(void)));
         };

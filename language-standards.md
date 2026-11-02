@@ -2504,16 +2504,41 @@ Probed with GCC 14.2's `cc1`, host GCC 13 (wording), Clang 23.1.1 and TCC
 | --- | --- | --- | --- | --- |
 | Call to an undeclared function (`implicit-function-declaration`) | error from C99 (C23 too); silent in C89 | error in C99 to C17; silent in C89; C23: undeclared identifier | warning | warning (`cl` C4013) |
 | Undeclared library function (same group) | error from C99; C89: GCC's `-Wbuiltin-declaration-mismatch` wording, warning | error from C99; warning in C89 | warning | warning |
-| Implicit int: declaration, function result, undeclared identifier-list parameter, prototype parameter (`implicit-int`) | error from C99 (C23 too); silent in C89 | error in C99 to C17; silent in C89; C23: `a type specifier is required for all declarations`, no option | silent | silent |
+| Implicit int: declaration, function result, undeclared identifier-list parameter, prototype parameter, named or not (`implicit-int`) | error from C99 (C23 too); silent in C89 | error in C99 to C17; silent in C89; C23: `a type specifier is required for all declarations`, no option | silent | silent |
 | `return;` in a function with a result (`return-mismatch`) | error from C99; silent in C89 | error in every mode | warning | warning |
 | `return` with a value in a `void` function (`return-mismatch`) | error from C99; warning in C89 | error in every mode | warning | warning |
 | Identifier list in a declaration that is no definition (`declaration-missing-parameter-type`) | error from C99; warning in C89 | error in every mode, no option | silent | error, as clang-cl |
 | Integer/pointer conversion (`int-conversion`) | error from C99; warning in C89 | error in every mode | warning (driver) | error |
 | Incompatible pointers (`incompatible-pointer-types`, and Clang's `incompatible-function-pointer-types`, which GCC's group holds) | error from C99; warning in C89 | error in every mode | warning (driver) | error |
+| Conditional operands pointing to incompatible types (GCC: `incompatible-pointer-types`; Clang: `pointer-type-mismatch`) | error from C99; warning in C89, even with `-fno-permissive` | warning | warning | warning |
 
-`-Wall` turns on `-Wimplicit` (both implicit groups) and `-Wreturn-mismatch`,
-which matter only where they are otherwise off (C89); `-Wimplicit` is the
-parent of the two implicit groups.
+An explicit `-fno-permissive` makes GCC's C89 warnings in the table errors
+(the `void` return, identifier lists and both pointer groups), and leaves
+what C89 accepts silently, an undeclared library function and the
+conditional mismatch as they were; the last of `-fpermissive` and
+`-fno-permissive` decides. GCC re-enables a disabled group
+(`-Wno-implicit-function-declaration -Wimplicit-function-declaration`) at
+its default severity, where Clang makes it a warning.
+
+`-Wall` and `-Wno-all` follow each compiler (GCC 14.2's `cc1`, Clang 23):
+
+- GCC's `-Wall` holds `-Wimplicit`, the parent of the two implicit groups,
+  and sets them only where no option of their own did, whatever the order
+  (`-Wno-implicit-function-declaration -Wall` stays silent); `-Wno-all`
+  turns them off, even from C99, where they are errors otherwise. Either
+  option makes GCC warn about C89's `return;` in a function with a result.
+- Clang's `-Wall` and `-Wno-all` set the implicit groups and
+  `-Wreturn-mismatch` at their place on the command line: a later option of
+  the group's own wins, and a group `-Wall` turns back on after a `-Wno-`
+  or `-Wno-all` is a warning.
+
+In a system header, GCC 14 reports a permerror that is an error (so not
+under `-fpermissive`, or in C89 where it warns); Clang withholds its
+default errors there as it withholds warnings, and TCC and MSVC keep bcc's
+withholding of warnings.
+
+In C89, GCC warns about an undeclared library function only when its type
+is incompatible with `int ()` (`printf`, `strlen`), not for `abs`.
 
 The GCC, Clang and TCC diagnostic formats use each compiler's words:
 
@@ -2527,7 +2552,15 @@ The GCC, Clang and TCC diagnostic formats use each compiler's words:
 | int-conversion | `initialization of 'int *' from 'int' makes pointer from integer without a cast`, `assignment to ...`, `passing argument 1 of 'f' makes ...`, `returning 'int' from a function with return type 'int *' makes ...` (an initialization at its initializer) | `incompatible integer to pointer conversion initializing 'int *' with an expression of type 'int'`, `assigning to ... from ...`, `passing 'int' to parameter of type 'int *'`, `returning ... from a function with result type ...`, with `; take the address with &` or `; dereference with *` where that would fit | `assignment makes pointer from integer without a cast` (bcc keeps its own) |
 | incompatible pointers | `initialization of 'long int *' from incompatible pointer type 'int *'`, `passing argument 1 of 'f' from incompatible pointer type`, `returning 'int *' from a function with incompatible return type 'long int *'` | `incompatible pointer types initializing 'long *' with an expression of type 'int *'`; `incompatible function pointer types ...` for functions, which spell the source as Clang does (`int (int)`, `int[2]`) | `assignment from incompatible pointer type` |
 
-Deviations: bcc keeps no typedef names, so a type is spelled from its
+Deviations: an unnamed implicit-int parameter is reported at its
+specifiers, where GCC points at the declaration and Clang just past the
+specifiers, and GCC's conditional mismatch at the `?` rather than the `:`,
+without GCC's notes naming both types; Clang's own wording for the
+conditional mismatch (`pointer type mismatch ('int *' and 'long *')`) is
+not modelled. A struct member or type name without a type specifier
+(`struct S { const m; }`, `sizeof(const)`) stays the parser's hard
+"missing type specifier" error, where both compilers report
+`-Wimplicit-int` permerrors. bcc keeps no typedef names, so a type is spelled from its
 canonical form (`unsigned long` where Clang writes `'size_t' (aka 'unsigned
 long')`), and an unnamed tag or a vector keeps bcc's words; the notes are
 bcc's C99 citations, not GCC's `expected 'int *' but argument is of type

@@ -981,11 +981,16 @@ format: GCC 14 in GNU17 ([gcc](sema-permerrors-gcc.c)), with `-fpermissive`
 ([c23-clang](sema-permerrors-c23-clang.c)); and bcc's own words under the
 default identity ([bcc](sema-permerrors-bcc.c)). They cover
 `ImplicitFunctionDeclaration`, `ImplicitLibraryFunction`, `ImplicitInt`,
-`ImplicitIntReturn`, `ImplicitIntParameter`, `ReturnMismatch`,
+`ImplicitIntReturn`, `ImplicitIntParameter`, `ImplicitIntTypeName` (an unnamed
+parameter), `ReturnMismatch`,
 `VoidReturnMismatch`, `DeclarationMissingParameterType`,
 `IdentifierListDeclaration`, `TypeSpecifierRequired` and the worded
-`-Wint-conversion` and incompatible-pointer diagnostics. Against GCC 14.2's
-`cc1` and Clang 23.1.1 every line matches but three: GCC's extra
-`-Wbuiltin-declaration-mismatch` warning for `printf` in GNU17, Clang's
-`-Wdeprecated-non-prototype` warning for the old-style definition, and
-Clang's C23 `use of undeclared identifier`, where bcc keeps its own words.
+`-Wint-conversion` and incompatible-pointer diagnostics, and GCC's
+`-Wincompatible-pointer-types` for a conditional's mismatched pointers. Against GCC 14.2's
+`cc1` and Clang 23.1.1 every line matches in severity and option, and in
+wording but for GCC's extra `-Wbuiltin-declaration-mismatch` warning for
+`printf` in GNU17, Clang's `-Wdeprecated-non-prototype` warning for the
+old-style definition, Clang's wording of the conditional mismatch, and
+Clang's C23 `use of undeclared identifier`, where bcc keeps its own words;
+the unnamed parameter and GCC's conditional mismatch are reported a few
+columns from the compilers' locations.

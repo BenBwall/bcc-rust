@@ -89,6 +89,7 @@ impl TranslationError<'_> {
                 | semantic_analysis::SemanticErrorKind::ImplicitInt
                 | semantic_analysis::SemanticErrorKind::ImplicitIntReturn
                 | semantic_analysis::SemanticErrorKind::ImplicitIntParameter
+                | semantic_analysis::SemanticErrorKind::ImplicitIntTypeName
                 | semantic_analysis::SemanticErrorKind::ReturnMismatch
                 | semantic_analysis::SemanticErrorKind::VoidReturnMismatch
                 | semantic_analysis::SemanticErrorKind::DeclarationMissingParameterType =>

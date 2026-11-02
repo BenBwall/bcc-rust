@@ -126,4 +126,20 @@ error: incompatible integer and pointer conversion [-Wint-conversion]
    |
    = note: C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
 
-16 errors generated.
+error: type specifier missing in a parameter, defaults to `int` [-Wimplicit-int]
+  --> sema-permerrors-bcc.c:21:13
+   |
+21 | int unnamed(const);
+   |             ^^^^^ no type specifier
+   |
+   = note: C99 §6.7.2p2: each declaration gives at least one type specifier; C89 defaulted to `int`
+
+warning: pointer type mismatch in conditional expression [-Wpointer-type-mismatch]
+  --> sema-permerrors-bcc.c:22:49
+   |
+22 | void *choose(int c, int *p, long *q) { return c ? p : q; }
+   |                                                 ^^^^^ pointer constraint violation
+   |
+   = note: C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
+
+17 errors and 1 warning generated.

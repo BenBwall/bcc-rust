@@ -71,18 +71,26 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
-    /// Reports a prototype parameter whose specifiers name no type
-    /// (`int f(register x)`).
+    /// Reports a prototype parameter whose specifiers name no type, named
+    /// (`int f(register x)`) or not (`int f(const);`, which GCC words as a
+    /// type name), at its declarator, or where the specifiers end.
     /// C99: §6.7.2p2, p. 99; PDF p. 111.
     pub(super) fn implicit_parameter_type(
         &mut self,
         specifiers: DeclarationSpecifiers<'tu>,
         declarator: Option<Declarator<'tu>>,
     ) {
-        if specifiers.implicit_int
-            && let Some(name) = declarator.and_then(Declarator::identifier)
-        {
-            self.implicit_int(SemanticErrorKind::ImplicitInt, name);
+        if !specifiers.implicit_int {
+            return;
+        }
+        match declarator.and_then(Declarator::identifier) {
+            | Some(name) => self.implicit_int(SemanticErrorKind::ImplicitInt, name),
+            | None => {
+                let site = declarator.map_or(specifiers.source_vectors, |declarator| {
+                    declarator.source_vectors
+                });
+                self.implicit_int_at(SemanticErrorKind::ImplicitIntTypeName, site, None);
+            },
         }
     }
 
@@ -90,23 +98,22 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// C23, where no option controls it.
     /// C99: §6.7.2p2, p. 99; PDF p. 111.
     pub(super) fn implicit_int(&mut self, kind: SemanticErrorKind, name: Identifier) {
+        self.implicit_int_at(kind, name.source_vectors, Some(name.name));
+    }
+
+    /// [`Self::implicit_int`] at `site`, naming `name` if there is one.
+    fn implicit_int_at(
+        &mut self,
+        kind: SemanticErrorKind,
+        site: SourceVectors,
+        name: Option<crate::util::string_cache::StringCacheId>,
+    ) {
         if self.context.configuration.standard() >= CStandard::C23
             && self.context.configuration.compiler_identity().rules() == RuleSet::Clang
         {
-            self.error(
-                SemanticErrorKind::TypeSpecifierRequired,
-                name.source_vectors,
-                Some(name.name),
-                None,
-            );
+            self.error(SemanticErrorKind::TypeSpecifierRequired, site, name, None);
         } else {
-            self.group_diagnostic(
-                DiagnosticGroup::ImplicitInt,
-                kind,
-                name.source_vectors,
-                Some(name.name),
-                None,
-            );
+            self.group_diagnostic(DiagnosticGroup::ImplicitInt, kind, site, name, None);
         }
     }
 

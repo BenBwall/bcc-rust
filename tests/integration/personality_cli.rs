@@ -635,6 +635,60 @@ mod tests {
         assert_eq!(stderr(&tcc), "");
     }
 
+    /// GCC 14 reports its permerrors in a system header too, when they are
+    /// errors; Clang withholds its default errors there, and every warning
+    /// stays withheld.
+    #[test]
+    fn permerrors_in_system_headers_follow_each_compiler() {
+        let directory = Directory::new();
+        std::fs::create_dir_all(directory.path("sys")).unwrap();
+        directory.write("main.c", "#include <bad.h>\nint main(void) { return 0; }\n");
+        for (header, gcc_message) in [
+            (
+                "void f(int *p){long *q=p;}",
+                "error: initialization of 'long int *' from incompatible pointer type 'int *' \
+                 [-Wincompatible-pointer-types]",
+            ),
+            (
+                "int f(void){return frob();}",
+                "error: implicit declaration of function 'frob' [-Wimplicit-function-declaration]",
+            ),
+            (
+                "extern x;",
+                "error: type defaults to 'int' in declaration of 'x' [-Wimplicit-int]",
+            ),
+            (
+                "int f(void){return;}",
+                "error: 'return' with no value, in function returning non-void [-Wreturn-mismatch]",
+            ),
+            (
+                "void f(int c,int *p,long *q){void *x=c?p:q;}",
+                "error: pointer type mismatch in conditional expression \
+                 [-Wincompatible-pointer-types]",
+            ),
+        ] {
+            directory.write("sys/bad.h", &format!("{header}\n"));
+            let compile = |mode: &str, options: &[&str]| {
+                let mut args = vec!["-std=gnu17", "-isystem", "sys", "-fsyntax-only"];
+                args.extend_from_slice(options);
+                args.push("main.c");
+                directory.bcc(mode, &args)
+            };
+            let gcc = compile("--gcc-mode", &[]);
+            assert!(!gcc.status.success(), "{header}");
+            assert!(
+                stderr(&gcc).contains(gcc_message),
+                "{header}: {}",
+                stderr(&gcc)
+            );
+            for (mode, options) in [("--gcc-mode", &["-fpermissive"][..]), ("--clang-mode", &[])] {
+                let quiet = compile(mode, options);
+                succeeds(&quiet);
+                assert_eq!(stderr(&quiet), "", "{header} {mode} {options:?}");
+            }
+        }
+    }
+
     /// TCC knows only its own few `__builtin_` names (TCC mob `tcctok.h`
     /// and `tccdefs.h`): a call to any other is an implicit declaration of
     /// an ordinary function, which the program may define. Its builtins

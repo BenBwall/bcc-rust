@@ -846,6 +846,46 @@ fn unnamed_definition_parameter_fallback_matches_clang_severity_without_duplicat
     }
 }
 
+/// A prototype parameter without a type specifier is implicit int whether
+/// it is named or not, as GCC 14 and Clang 23 report it.
+#[test]
+fn unnamed_implicit_int_parameters_are_reported() {
+    use crate::configuration::{
+        CompilerConfiguration,
+        CompilerIdentity,
+        ExtensionPolicy,
+    };
+    for identity in [CompilerIdentity::Gcc, CompilerIdentity::Clang] {
+        let configuration = CompilerConfiguration::new(CStandard::C17, ExtensionPolicy::Allow)
+            .with_gnu_extensions(true)
+            .with_compiler_identity(identity);
+        with_configuration(
+            "int f(const); int g(int a, volatile *); int h(register); int k(register x);",
+            configuration,
+            |context, _| {
+                let kinds: Vec<_> = context
+                    .take_pending_errors()
+                    .iter()
+                    .map(|error| match error {
+                        | TranslationError::Semantic(error) => error.kind,
+                        | other => panic!("{other:?}"),
+                    })
+                    .collect();
+                assert_eq!(
+                    kinds,
+                    [
+                        SemanticErrorKind::ImplicitIntTypeName,
+                        SemanticErrorKind::ImplicitIntTypeName,
+                        SemanticErrorKind::ImplicitIntTypeName,
+                        SemanticErrorKind::ImplicitInt,
+                    ],
+                    "{identity:?}"
+                );
+            },
+        );
+    }
+}
+
 /// An undeclared identifier-list parameter is silent in C89 and, under
 /// Clang's rules, an error from C99 in strict and GNU modes alike
 /// (`-Wimplicit-int`), whatever the pedantic policy.

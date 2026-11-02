@@ -68,3 +68,10 @@ sema-permerrors-gnu89.c:19:10: warning: returning 'int' from a function with ret
    |
    = note: C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
 
+sema-permerrors-gnu89.c:22:49: warning: pointer type mismatch in conditional expression [-Wincompatible-pointer-types]
+   |
+22 | void *choose(int c, int *p, long *q) { return c ? p : q; }
+   |                                                 ^^^^^ pointer constraint violation
+   |
+   = note: C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1
+

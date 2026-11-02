@@ -18,3 +18,5 @@ int *convert(int i, int *p, long *lp, int (*fp)(double)) {
   printf("%d", j);
   return i;
 }
+int unnamed(const);
+void *choose(int c, int *p, long *q) { return c ? p : q; }

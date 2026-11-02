@@ -2769,6 +2769,17 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             );
             self.bindings.last_mut().expect("implicit binding").origin =
                 super::super::BindingOrigin::ImplicitOrdinary;
+            // GCC warns in C89 only about a library function whose type
+            // `int ()` does not match ("incompatible implicit declaration
+            // of built-in function"), so `abs` passes silently.
+            if let Some((ty, _)) = library
+                && self.context.configuration.compiler_identity()
+                    == crate::configuration::CompilerIdentity::Gcc
+                && self.context.configuration.standard() < CStandard::C99
+                && self.matches_implicit_int_function(ty)
+            {
+                return;
+            }
             let (group, kind) = match library {
                 | Some((_, spelling)) => (
                     crate::configuration::DiagnosticGroup::ImplicitLibraryFunction,
@@ -2781,6 +2792,39 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             };
             self.group_diagnostic(group, kind, name.source_vectors, Some(name.name), None);
         }
+    }
+
+    /// Whether the function type `ty` is compatible with `int ()`: it
+    /// returns `int`, has no ellipsis, and each parameter has a type the
+    /// default argument promotions leave alone.
+    /// C99: §6.7.5.3p15, pp. 119-120; PDF pp. 131-132.
+    fn matches_implicit_int_function(&self, ty: TypeId) -> bool {
+        let TypeKind::Function {
+            result,
+            parameters,
+            variadic: false,
+            ..
+        } = self.types.nodes[ty.index]
+        else {
+            return false;
+        };
+        matches!(
+            self.types.nodes[result.index],
+            TypeKind::Scalar(Scalar::Int)
+        ) && parameters.iter().all(|parameter| {
+            !matches!(
+                self.types.nodes[parameter.index],
+                TypeKind::Scalar(
+                    Scalar::Bool
+                        | Scalar::Char
+                        | Scalar::SignedChar
+                        | Scalar::UnsignedChar
+                        | Scalar::Short
+                        | Scalar::UnsignedShort
+                        | Scalar::Float
+                )
+            )
+        })
     }
 
     /// GCC builtins use reserved identifiers declared by the implementation;
