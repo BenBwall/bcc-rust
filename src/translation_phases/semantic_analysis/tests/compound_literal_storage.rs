@@ -136,6 +136,17 @@ fn register_array_objects_do_not_decay() {
         kinds_as(subscript, CompilerIdentity::Clang),
         [K::RegisterArrayAddress]
     );
+    // One error for the element's address: GCC's for `&`, Clang's for the
+    // conversion.
+    let address = "void f(void) { register int a[2]; (void)&a[1]; }";
+    assert_eq!(
+        kinds_as(address, CompilerIdentity::Gcc),
+        [K::InvalidAddressOperand]
+    );
+    assert_eq!(
+        kinds_as(address, CompilerIdentity::Clang),
+        [K::RegisterArrayAddress]
+    );
 }
 
 /// Clang 23 parses no storage-class specifier in a compound literal; its

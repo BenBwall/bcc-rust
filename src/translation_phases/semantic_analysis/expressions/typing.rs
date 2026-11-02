@@ -471,10 +471,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     } else {
                         left.ice && left.integer.is_some()
                     };
-                // Array decay retains the designated register object;
-                // reading a register pointer does not transfer its storage.
+                // Array decay retains the designated register object, which
+                // GCC subscripts; reading a register pointer does not
+                // transfer its storage. Clang reported the decay itself.
                 // C99 §6.5.3.2p1, p. 78; PDF p. 90.
-                info.register = pointer.register
+                info.register = gcc_subscript
+                    && pointer.register
                     && matches!(self.types.nodes[pointer.ty.index], TypeKind::Array(..));
             },
             | B::Multiplication | B::Division | B::Modulo => {
@@ -2089,7 +2091,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
         // C99 §6.3.2.1p3, p. 46; PDF p. 58: converting an array of
         // register storage to a pointer is undefined; GCC and Clang reject
-        // it as taking the register object's address.
+        // it as taking the register object's address. The pointer still
+        // types what uses it.
         if matches!(kind, Some(ConversionKind::ArrayDecay)) && info.register {
             self.error(
                 SemanticErrorKind::RegisterArrayAddress,
@@ -2097,7 +2100,6 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 None,
                 None,
             );
-            return self.types.unknown();
         }
         if let Some(kind) = kind {
             self.convert(info.expression, ty, kind);
