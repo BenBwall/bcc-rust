@@ -4374,7 +4374,17 @@ mod tests {
         assert_eq!(stdout(&output), "b.o\n");
         let output = directory.bcc("--tcc-mode", &["-ar", "cr", "new.a", "missing.o"]);
         assert_eq!(output.status.code(), Some(2));
-        assert_eq!(stderr(&output), "tcc: ar: can't open file missing.o\n");
+        assert_eq!(stderr(&output), "tcc: ar: can't open file missing.o \n");
+        // An input that is no ELF object of TCC's class leaves no library;
+        // `v` names each object as it is read.
+        directory.write("bad.o", "not an object\n");
+        let output = directory.bcc("--tcc-mode", &["-ar", "rcs", "bad.a", "a.o", "bad.o"]);
+        assert_eq!(output.status.code(), Some(2));
+        assert_eq!(stderr(&output), "tcc: ar: Unsupported Elf Class: bad.o\n");
+        assert!(!directory.path("bad.a").exists());
+        let output = directory.bcc("--tcc-mode", &["-ar", "rcsv", "v.a", "a.o", "b.o"]);
+        succeeds(&output);
+        assert_eq!(stdout(&output), "a - a.o\na - b.o\n");
         let output = directory.bcc("--tcc-mode", &["-ar", "t", "absent.a"]);
         assert_eq!(output.status.code(), Some(2));
         assert_eq!(stderr(&output), "tcc: ar: can't open file absent.a\n");

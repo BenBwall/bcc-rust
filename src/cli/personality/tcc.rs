@@ -185,21 +185,37 @@ fn archive(arguments: &[OsString]) -> Result<Plan, MainError> {
         }));
         run.push(library.clone());
     } else {
-        if let Some(missing) = objects
-            .iter()
-            .find(|object| std::fs::File::open(object).is_err())
-        {
-            return fail(format_args!(
-                "can't open file {}",
-                missing.to_string_lossy()
-            ));
-        }
-        // TCC writes a fresh library rather than updating one.
+        // TCC opens the library for writing first, so a failure below
+        // leaves none; then, object by object, it names each with `v`
+        // ("a - NAME"), and refuses one it cannot open or whose ELF class
+        // is not its own (`ELFCLASS64` on x86-64). It writes a fresh library
+        // rather than updating one.
         if Path::new(library).is_file() && std::fs::remove_file(library).is_err() {
             return fail(format_args!(
                 "can't create file {}",
                 library.to_string_lossy()
             ));
+        }
+        let mut listed = String::new();
+        for object in &objects {
+            let name = object.to_string_lossy();
+            let Ok(bytes) = std::fs::read(object) else {
+                super::print(&listed, false);
+                return fail(format_args!("can't open file {name} "));
+            };
+            if verbose {
+                let _ = writeln!(listed, "a - {name}");
+            }
+            if bytes.get(4) != Some(&2) {
+                super::print(&listed, false);
+                return fail(format_args!("Unsupported Elf Class: {name}"));
+            }
+        }
+        if !listed.is_empty() {
+            plan.steps.push(Step::Print {
+                text:   listed,
+                stderr: false,
+            });
         }
         run.push("rcs".into());
         run.push(library.clone());
