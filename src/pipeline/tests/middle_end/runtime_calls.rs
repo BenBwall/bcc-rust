@@ -249,7 +249,11 @@ fn implicit_library_calls_match_interpreter_and_native_arms() {
         for target in [Target::LinuxGnu, Target::WindowsGnu] {
             let configuration = CompilerConfiguration::default()
                 .with_target(target)
-                .with_gnu_extensions(true);
+                .with_gnu_extensions(true)
+                .with_warning_option(
+                    crate::configuration::DiagnosticGroup::ImplicitFunctionDeclaration,
+                    crate::configuration::WarningOption::Error(false),
+                );
             for (optimize, profile) in STAGES {
                 let actual = with_configured_module(
                     source,
@@ -337,7 +341,11 @@ fn implicit_library_abi_and_noundef_match_clang() {
             Profile::PostAbi,
             CompilerConfiguration::default()
                 .with_target(target)
-                .with_gnu_extensions(true),
+                .with_gnu_extensions(true)
+                .with_warning_option(
+                    crate::configuration::DiagnosticGroup::ImplicitFunctionDeclaration,
+                    crate::configuration::WarningOption::Error(false),
+                ),
             |module, _| {
                 let mut bcc = String::new();
                 crate::backend::llvm::emit_module(module, target, &mut bcc).unwrap();

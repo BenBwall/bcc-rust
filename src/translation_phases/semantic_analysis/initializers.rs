@@ -110,6 +110,16 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         if initializer.recovered || (self.types.unanalyzed(ty) && !variable_size) {
             return (ty, None);
         }
+        // An empty initializer fills a variable length array with zeros at
+        // run time, as C23 lets it (an extension before C23, which the
+        // parser reports, as GCC and Clang accept it in every mode).
+        // C23: §6.7.10 paragraphs 4 and 11, pp. 128-129; PDF pp. 141-142.
+        if variable_size
+            && matches!(initializer.kind, InitializerType::InitializerList(list)
+                if list.elements.is_empty())
+        {
+            return (ty, None);
+        }
         if variable_size
             || (!self.complete_object(ty)
                 && !matches!(
@@ -249,7 +259,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                             }
                             let errors_before_conversion = self.semantic_errors;
                             if matches!(self.types.nodes[target.index], TypeKind::Array(..))
-                                || !self.assignment_conversion_at(target, info, diagnostic_site)
+                                || !self.initializer_conversion(target, info, diagnostic_site)
                             {
                                 self.error(
                                     SemanticErrorKind::InvalidInitializer,

@@ -34,7 +34,10 @@ use super::{
     },
 };
 use crate::{
-    configuration::CStandard,
+    configuration::{
+        CStandard,
+        RuleSet,
+    },
     translation_phases::{
         SourceVectors,
         parsing::{
@@ -171,22 +174,22 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     self.values.push(ty);
                     return;
                 }
-                let builtin = match self.context.string_cache.at(name.name) {
-                    | "__int128_t" => Some(Scalar::Int128),
-                    | "__uint128_t" => Some(Scalar::UnsignedInt128),
-                    | _ => None,
-                };
-                if let Some(scalar) = builtin {
-                    let ty = self.types.scalar(scalar);
-                    self.values.push(ty);
-                    return;
-                }
-                let ty = self
+                // A program's own typedef of the name hides the built-in one.
+                let declared = self
                     .lookup(Namespace::Ordinary, name.name)
                     .and_then(|entry| {
                         let binding = self.bindings[entry.binding];
                         (binding.kind == BindingKind::Typedef).then_some(binding.ty)
                     });
+                let builtin = self
+                    .builtin_typedef(name.name)
+                    .filter(|_| declared.is_none());
+                if let Some(scalar) = builtin {
+                    let ty = self.types.scalar(scalar);
+                    self.values.push(ty);
+                    return;
+                }
+                let ty = declared;
                 if ty.is_none() {
                     self.error(
                         SemanticErrorKind::UnknownTypedef,
@@ -221,6 +224,18 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         .packed
                         .set(attributes.packed || self.context.configuration.pack_structures());
                     self.types.tags[tag].alignment.set(attributes.alignment);
+                    self.record_layout(tag, s.attributes, true);
+                    if self.types.tags[tag].microsoft_layout.get() == Some(false)
+                        && self.context.configuration.compiler_identity().rules() == RuleSet::Clang
+                        && self.context.configuration.target() == crate::target::Target::WindowsMsvc
+                    {
+                        self.error(
+                            SemanticErrorKind::ItaniumLayoutOnMicrosoftAbi,
+                            s.identifier.map_or(s.source_vectors, |n| n.source_vectors),
+                            None,
+                            None,
+                        );
+                    }
                     let before = self
                         .pack_alignments
                         .partition_point(|&(position, _)| position <= s.pack_position);
@@ -238,6 +253,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     {
                         _ = self.transparent_unions.insert(tag, source);
                     }
+                }
+                if !define {
+                    self.record_layout(tag, s.attributes, false);
                 }
                 if !define || kind != TagKind::Union {
                     self.inapplicable_transparent_union(kind, s.attributes);
@@ -407,7 +425,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if self.semantic_errors != errors_before || self.unanalyzed_constant(width) {
             return 0;
         }
-        let gcc = self.context.configuration.bit_int_rules() == crate::configuration::RuleSet::Gcc;
+        let gcc = self.context.configuration.bit_int_rules() == RuleSet::Gcc;
         let info = self.expression_info(width);
         // Typing folds the width; it is an integer constant expression
         // when no operand reads an object, even an unevaluated one.
@@ -965,6 +983,26 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// C99: §6.7p3-4, p. 97; PDF p. 109; §6.2.7p2-4, p. 40; PDF p. 52. Repeated
     /// typedef exception: C11 §6.7p3, p. 108;
     /// PDF p. 126.
+    /// The scalar a built-in typedef name denotes: GNU's `__int128_t` and
+    /// `__uint128_t`, and GCC's `__float80` where `long double` is x87.
+    /// GNU extension: GCC manual, "128-bit Integers", "Additional Floating
+    /// Types".
+    pub(super) fn builtin_typedef(
+        &self,
+        name: crate::util::string_cache::StringCacheId,
+    ) -> Option<Scalar> {
+        match self.context.string_cache.at(name) {
+            | "__int128_t" => Some(Scalar::Int128),
+            | "__uint128_t" => Some(Scalar::UnsignedInt128),
+            | "__float80"
+                if crate::translation_phases::parsing::float80_names_long_double(
+                    self.context.configuration,
+                ) =>
+                Some(Scalar::LongDouble),
+            | _ => None,
+        }
+    }
+
     pub(super) fn bind(
         &mut self,
         name: Identifier,
@@ -975,6 +1013,35 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         value: Option<Integer>,
     ) {
         let visible = self.lookup(Namespace::Ordinary, name.name);
+        // The built-in typedef names are declared at file scope: an object
+        // or function there by the same name redeclares one as a different
+        // kind of symbol, as GCC and Clang report it. Clang also refuses an
+        // enumeration constant of the name and a typedef of another type,
+        // which GCC accepts.
+        if self.scope == 0
+            && visible.is_none()
+            && let Some(scalar) = self.builtin_typedef(name.name)
+        {
+            let clang = self.context.configuration.compiler_identity().rules() == RuleSet::Clang;
+            let conflict = match kind {
+                | BindingKind::Object | BindingKind::Function => true,
+                | BindingKind::Enumerator => clang,
+                | BindingKind::Typedef => clang && ty != self.types.scalar(scalar),
+                | BindingKind::Parameter => false,
+            };
+            if conflict {
+                self.error(
+                    if kind == BindingKind::Typedef {
+                        SemanticErrorKind::TypedefRedeclaration
+                    } else {
+                        SemanticErrorKind::IncompatibleDeclaration
+                    },
+                    name.source_vectors,
+                    Some(name.name),
+                    None,
+                );
+            }
+        }
         if self.bind_overload(
             name,
             ty,
@@ -1188,7 +1255,17 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let tag = self.types.tags[id];
         let mut output = ArenaVec::new_in(self.types.tu);
         let (mut bytes, mut alignment, mut bit_end) = (0_u64, 1_u64, 0_u64);
-        let ms = self.types.target.ms_bitfields;
+        let ms = tag
+            .microsoft_layout
+            .get()
+            .unwrap_or(self.types.target.ms_bitfields);
+        // GCC's Microsoft layout (`ms_struct`, MinGW) gives a union the
+        // alignment of its nonzero bit-fields, and packing shrinks one to its
+        // bits; Clang's ignores their alignment in a union. MSVC targets
+        // follow `cl`, as Clang's Microsoft layout does.
+        let gcc_ms = ms
+            && self.context.configuration.compiler_identity().rules() == RuleSet::Gcc
+            && self.context.configuration.target() != crate::target::Target::WindowsMsvc;
         let mut ms_unit: Option<(u64, u64, u64)> = None; // size, byte start, used bits
         let mut required = u64::from(tag.alignment.get());
         let named = members.iter().filter(|m| m.initializable()).count();
@@ -1341,7 +1418,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             // The System V ABI ignores unnamed bit-fields when aligning a
             // structure or union; in a union one still occupies its bytes.
             let unnamed_bit_field = member.name.is_none() && member.width.is_some();
-            if !(unnamed_bit_field || ms && tag.kind == TagKind::Union && member.width.is_some()) {
+            let aligns = match member.width {
+                | None => true,
+                | Some(width) if ms && tag.kind == TagKind::Union => gcc_ms && width != 0,
+                | Some(_) => !unnamed_bit_field,
+            };
+            if aligns {
                 alignment = alignment.max(layout.align);
             }
             let mut resolved = member;
@@ -1370,6 +1452,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                                 == crate::target::Target::WindowsMsvc =>
                         layout.size,
                     | Some(0) if ms => 0,
+                    | Some(width) if gcc_ms && (packed || pack != 0) =>
+                        u64::from(width).div_ceil(8),
                     | Some(_) if ms => layout.size,
                     // GCC packed union fields occupy their bits, including
                     // named fields. Microsoft allocation still reserves the
@@ -1560,6 +1644,34 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
     }
 
+    /// Records the bit-field layout `ms_struct` or `gcc_struct` asks of a
+    /// record not yet complete, at its definition or at another occurrence
+    /// of its tag. GCC reads the attribute only on the definition; Clang's
+    /// record inherits one from every earlier declaration, even a reference
+    /// such as `struct __attribute__((ms_struct)) S *p`.
+    /// GNU extension: GCC manual, "x86 Type Attributes", `ms_struct`.
+    /// <https://gcc.gnu.org/onlinedocs/gcc/x86-Type-Attributes.html>
+    fn record_layout(
+        &mut self,
+        tag: usize,
+        attributes: Option<&'tu super::SpecifierExtension<'tu>>,
+        definition: bool,
+    ) {
+        let record = self.types.tags[tag];
+        let clang = self.context.configuration.compiler_identity().rules() == RuleSet::Clang;
+        if record.complete.get() || !(definition || clang) {
+            return;
+        }
+        let earlier = if clang {
+            record.microsoft_layout.get()
+        } else {
+            None
+        };
+        record
+            .microsoft_layout
+            .set(self.record_layout_request(attributes, earlier));
+    }
+
     /// The alignment a non-bit-field member requires in Microsoft layout:
     /// its own `_Alignas` or `aligned`, a typedef's alignment, and what a
     /// record (or array of records) of its type requires.
@@ -1585,8 +1697,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// zero-width bit-field in a structure. One that follows a nonzero
     /// bit-field ends that bit-field's unit; the caller's cursor is already
     /// at the unit's end, and the next member starts at or past this boundary.
-    /// Otherwise it affects layout only on MinGW, and only when it carries an
-    /// explicit alignment.
+    /// Otherwise it affects layout only when it carries an explicit
+    /// alignment, and not on MSVC targets.
     ///
     /// MSVC (Clang's Microsoft layout, which `cl.exe` agrees with): the
     /// declared type's adjusted alignment, already capped by `#pragma pack`.
@@ -1595,6 +1707,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// the padding before the next unit. Clang's MinGW layout ignores the
     /// pack cap here and lays such packed records out with overlapping
     /// fields, so GCC, the platform's compiler, is followed.
+    /// `ms_struct` on other targets: under Clang's rules the declared
+    /// type's size, or the explicit alignment of a field that ends no unit,
+    /// aligns both even in a packed record and past `#pragma pack`, which
+    /// caps only nonzero widths. GCC 14 places the next field at the
+    /// explicit alignment of a field that ends no unit, capped by `#pragma
+    /// pack`, without aligning the record.
     /// C99: §6.7.2.1 paragraph 11, p. 102; PDF p. 114 (the unit ends);
     /// implementation-defined allocation, §6.7.2.1p10.
     /// <https://gcc.gnu.org/onlinedocs/gcc/x86-Variable-Attributes.html>
@@ -1619,15 +1737,32 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             };
             return (boundary, boundary);
         }
-        if !closes_unit {
-            let boundary = align.max(explicit);
-            return (boundary, boundary);
-        }
         let natural = self
             .types
             .natural_alignment(member.ty)
             .unwrap_or(1)
             .max(explicit);
+        if !self.types.target.ms_bitfields {
+            match self.context.configuration.compiler_identity().rules() {
+                | RuleSet::Clang => {
+                    let boundary = if closes_unit { natural } else { explicit };
+                    return (boundary, boundary);
+                },
+                | RuleSet::Gcc if !closes_unit => {
+                    let placement = if pack == 0 {
+                        explicit
+                    } else {
+                        explicit.min(u64::from(pack))
+                    };
+                    return (1, placement);
+                },
+                | RuleSet::Gcc => {},
+            }
+        }
+        if !closes_unit {
+            let boundary = align.max(explicit);
+            return (boundary, boundary);
+        }
         let record = if pack == 0 {
             natural
         } else {
@@ -1814,6 +1949,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             contains_flexible: Cell::new(false),
             compatible: Cell::new(Scalar::Int),
             packed: Cell::new(false),
+            microsoft_layout: Cell::new(None),
             transparent: Cell::new(false),
             max_member_alignment: Cell::new(0),
             alignment: Cell::new(0),

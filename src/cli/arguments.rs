@@ -333,7 +333,11 @@ impl Cli {
         let configuration =
             CompilerConfiguration::new(self.standard.standard, ExtensionPolicy::Allow)
                 .with_gnu_extensions(self.standard.gnu);
-        let configuration = configuration.with_target(self.target);
+        // Warning options read the identity: Clang's `-Wno-X` forgets an
+        // earlier `-Werror=X`, GCC's keeps it.
+        let configuration = configuration
+            .with_target(self.target)
+            .with_compiler_identity(self.compiler_identity.into());
         self.language_option
             .iter()
             .filter_map(|option| LanguageFlag::parse(option))
@@ -642,6 +646,9 @@ enum LanguageFlag {
     PackAll(bool),
     /// `-fvisibility=default|hidden|protected|internal`.
     Visibility(crate::configuration::DefaultVisibility),
+    /// `-fpermissive` (true) or `-fno-permissive`: GCC's C type-safety
+    /// errors become warnings.
+    Permissive(bool),
     /// `-fbuiltin`, `-fno-builtin` or `-fno-builtin-NAME`, which
     /// [`Cli::library_builtins`] reads in order.
     Builtins,
@@ -811,6 +818,8 @@ impl LanguageFlag {
             | "-fcommon"
             | "-fno-common" => return Some(Self::Code),
             | "-fbuiltin" | "-fno-builtin" => return Some(Self::Builtins),
+            | "-fpermissive" => return Some(Self::Permissive(true)),
+            | "-fno-permissive" => return Some(Self::Permissive(false)),
             | "-fpack-struct" => return Some(Self::PackAll(true)),
             | "-fno-pack-struct" => return Some(Self::PackAll(false)),
             | _ => {},
@@ -873,10 +882,14 @@ impl LanguageFlag {
             | Self::Relocation
             | Self::Code
             | Self::Builtins => configuration,
-            | Self::AllWarnings(enabled) => configuration.with_warning_option(
-                DiagnosticGroup::UnusedFunction,
-                WarningOption::Enable(enabled),
-            ),
+            // GCC's and Clang's `-Wall` hold `-Wimplicit` and
+            // `-Wreturn-mismatch`, each in its own way.
+            | Self::AllWarnings(enabled) => configuration
+                .with_warning_option(
+                    DiagnosticGroup::UnusedFunction,
+                    WarningOption::Enable(enabled),
+                )
+                .with_all_warnings(enabled),
             | Self::WarningsAsErrors(enabled) => configuration.with_warnings_as_errors(enabled),
             | Self::WarningGroup(group, option) => configuration.with_warning_option(group, option),
             | Self::Pedantic(policy) => configuration.with_extension_policy(policy),
@@ -906,6 +919,7 @@ impl LanguageFlag {
                 .with_pack_structures(false)
                 .with_default_pack(0),
             | Self::Visibility(visibility) => configuration.with_default_visibility(visibility),
+            | Self::Permissive(enabled) => configuration.with_permissive(enabled),
         }
     }
 }

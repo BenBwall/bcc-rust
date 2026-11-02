@@ -1225,6 +1225,12 @@ fn glide(
     });
 }
 
+/// The first rung of a folded recursion's ladder, below its row's top,
+/// and the height its rungs spread over: clear of the 13 px compact name
+/// tag, with the rungs' 3 px ticks inside the 40 px row.
+const LADDER_TOP: f64 = 17.0;
+const LADDER_SPAN: f64 = 16.0;
+
 /// Where each row's drawing sits: the y of each group's call bars (a rung
 /// of its ladder, if folded into one) and of each object's lane, and the
 /// lane name each object is drawn under.
@@ -1257,9 +1263,12 @@ fn layout<'a>(reel: &'a Reel, rows: &[Row]) -> Layout<'a> {
                 }
             },
             | Row::Ladder { groups } => {
+                // The rungs, with their 3 px end ticks, stay below the
+                // 13 px name tag that rides the row's top on a compact
+                // tape, so the tag never cuts one into stray ticks.
                 let rungs = px(groups.len().max(2) - 1);
                 for (rung, &at) in groups.iter().enumerate() {
-                    let y = top + 10.0 + px(rung) * (LANE - 20.0) / rungs;
+                    let y = top + LADDER_TOP + px(rung) * LADDER_SPAN / rungs;
                     calls.push((at, y, true));
                     fold(at, y);
                 }
@@ -2009,6 +2018,39 @@ mod tests {
             })
             .expect("a ladder");
         assert_eq!(ladder, [3, 4, 5, 6]);
+    }
+
+    /// A ladder's rungs and their 3 px ticks sit below the name tag a
+    /// compact tape rides on the row's top, and inside the row.
+    #[test]
+    fn ladder_rungs_clear_the_compact_name_tag() {
+        let history = execute(
+            "int depth(int n) {\n    if (n <= 0) {\n        return 0;\n    }\n    int r = depth(n \
+             - 1);\n    return r + 1;\n}\n\nint main(void) {\n    return depth(6);\n}\n",
+        );
+        let reel = Reel::record(&history);
+        let deepest = (0..history.len())
+            .max_by_key(|&at| history[at].stack.len())
+            .unwrap();
+        let rows = rows(&reel, deepest, &[]);
+        let place = rows
+            .iter()
+            .position(|row| matches!(row, Row::Ladder { .. }))
+            .expect("a ladder");
+        let top = AXIS + px(place) * LANE;
+        let rungs: Vec<f64> = layout(&reel, &rows)
+            .calls
+            .into_iter()
+            .filter(|&(_, _, rung)| rung)
+            .map(|(_, y, _)| y)
+            .collect();
+        assert_eq!(rungs.len(), 4);
+        for y in rungs {
+            assert!(
+                y - 3.0 > top + TAG && y + 3.0 < top + LANE,
+                "{y} in a row at {top}"
+            );
+        }
     }
 
     /// Every label against every bus segment drawn, at each step of `history`.

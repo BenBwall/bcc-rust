@@ -745,6 +745,15 @@ impl CompilerConfiguration {
         self.suppress_warnings
     }
 
+    /// GCC's `-fpermissive`, which makes its C type-safety errors
+    /// warnings again, or `-fno-permissive`, which makes those it only
+    /// warns about in C89 errors too; other identities' compilers ignore
+    /// both in C.
+    pub(crate) const fn with_permissive(mut self, enabled: bool) -> Self {
+        self.permissive = Some(enabled);
+        self
+    }
+
     /// The most recursive grammar productions the parser keeps active at
     /// once before it stops with a resource diagnostic.
     pub(crate) const fn max_nesting_depth(self) -> u32 {
@@ -865,6 +874,7 @@ impl CompilerConfiguration {
             fast_math_saved: 0,
             signaling_nans: false,
             suppress_warnings: false,
+            permissive: None,
             max_nesting_depth: super::DEFAULT_MAX_NESTING_DEPTH,
             warnings_as_errors: false,
             identity: super::CompilerIdentity::Clang,

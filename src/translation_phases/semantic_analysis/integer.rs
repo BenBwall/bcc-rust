@@ -128,7 +128,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     wide: None,
                 }));
             },
-            | E::Boolean(value) => self.integers.push(Some(Integer::int(i128::from(value)))),
+            | E::Boolean(value) => self.integers.push(Some(Integer::boolean(value))),
             | E::Identifier(name) => {
                 let value = self.lookup(Namespace::Ordinary, name.name).and_then(|e| {
                     let binding = self.bindings[e.binding];
@@ -1062,6 +1062,16 @@ impl Integer {
             l.cast_value(((l.value as u128) << shift) as i128),
             l.value < 0,
         ))
+    }
+
+    /// The value of `false` or `true`: a `bool`, one bit wide.
+    pub(crate) const fn boolean(value: bool) -> Self {
+        Self {
+            value:  if value { 1 } else { 0 },
+            bits:   1,
+            signed: false,
+            wide:   None,
+        }
     }
 
     pub(crate) const fn int(value: i128) -> Self {

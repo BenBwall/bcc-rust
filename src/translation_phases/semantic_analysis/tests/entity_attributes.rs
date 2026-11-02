@@ -859,7 +859,7 @@ fn unimplementable_attributes_and_conventions_are_retained_refusals() {
         (
             "struct __attribute__((gcc_struct)) S { int a : 3; };",
             Target::WindowsGnu,
-            Some(UnsupportedAttribute::RecordLayout),
+            None,
         ),
         (
             "struct __attribute__((ms_struct)) S { int a : 3; };",
