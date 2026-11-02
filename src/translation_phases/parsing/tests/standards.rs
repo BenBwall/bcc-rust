@@ -1268,6 +1268,27 @@ fn constexpr_rejects_extern_typedef_and_repetition() {
     }
 }
 
+/// C23 (N3220) §6.5.3.6p4 and p7: `typedef`, `auto` and `extern` are no
+/// compound literal's storage class; GCC and Clang reject them.
+#[test]
+fn other_storage_classes_are_rejected_in_compound_literals() {
+    for source in [
+        "void f(void){ (typedef int){0}; }",
+        "void f(void){ (auto int){0}; }",
+        "void f(void){ (extern int){0}; }",
+    ] {
+        with_parse_configuration(source, mode(CStandard::C23, ExtensionPolicy::Allow), |p| {
+            assert!(
+                parser_errors(p).any(|error| matches!(
+                    error,
+                    super::super::errors::ParserErrorType::DeclarationSpecifierNotAllowedHere(_)
+                )),
+                "{source}"
+            );
+        });
+    }
+}
+
 #[test]
 fn alignof_expression_is_accepted_as_a_gnu_extension() {
     for policy in [

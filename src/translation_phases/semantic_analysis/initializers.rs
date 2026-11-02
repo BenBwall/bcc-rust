@@ -908,6 +908,50 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         (literal, converted)
     }
 
+    /// The storage duration of the compound literal `e` and whether it is
+    /// `register`, as for an object its storage-class specifiers declare in
+    /// the literal's scope: static at file scope or with `static`, thread
+    /// with `thread_local`, else automatic. A file-scope `register` literal
+    /// and a block-scope `thread_local` one without `static` break the
+    /// constraints on such a declaration.
+    /// C23 (N3220): §6.5.3.6 paragraphs 4 and 7, p. 79; PDF p. 92;
+    /// §6.7.2 paragraph 3, p. 99; PDF p. 112; §6.9 paragraph 2.
+    pub(super) fn literal_storage(
+        &mut self,
+        e: &'tu Expression<'tu>,
+        type_name: &'tu crate::translation_phases::parsing::declaration_syntax::TypeName<'tu>,
+    ) -> (Duration, bool) {
+        use crate::translation_phases::parsing::syntax::StorageClass;
+        let specifiers = type_name.declaration_specifiers;
+        let file = self.scope == 0;
+        let thread = self.thread_storage(specifiers.extensions);
+        let register = specifiers.storage_class == Some(StorageClass::Register);
+        let static_class = specifiers.storage_class == Some(StorageClass::Static);
+        if file && register {
+            self.error(
+                SemanticErrorKind::InvalidStorage,
+                e.source_vectors,
+                None,
+                None,
+            );
+        } else if !file && thread && !static_class {
+            self.error(
+                SemanticErrorKind::ThreadLocalBlockScope,
+                e.source_vectors,
+                None,
+                None,
+            );
+        }
+        let duration = if thread {
+            Duration::Thread
+        } else if file || static_class {
+            Duration::Static
+        } else {
+            Duration::Automatic
+        };
+        (duration, register && !file)
+    }
+
     /// Checks the compound literal `literal`, which
     /// [`Self::whole_compound_literal`] found in `e`, as the initializer of a
     /// static object, which GCC and Clang accept as if its braced list were

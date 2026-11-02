@@ -1443,13 +1443,32 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
         Ok(())
     }
 
-    /// File-scope compound literals designate distinct unnamed static objects.
+    /// The object of a compound literal with static or thread storage
+    /// duration in a function: like a file-scope one, initialized once
+    /// before the program (or thread) starts, and keeping its value between
+    /// evaluations.
+    /// C23 (N3220): §6.5.3.6 paragraph 7, p. 79; PDF p. 92.
+    pub(super) fn local_static_literal(
+        &mut self,
+        expression: &'tu Expression<'tu>,
+        initializer: &'tu Initializer<'tu>,
+        ty: TypeId,
+        thread_local: bool,
+    ) -> Result<GlobalId, LoweringError> {
+        let global = self.static_compound_literal(expression, initializer, ty, thread_local)?;
+        self.define_static_initializers()?;
+        Ok(global)
+    }
+
+    /// File-scope compound literals designate distinct unnamed static objects,
+    /// as do `static` and `thread_local` ones in a function.
     /// C99: §6.5.2.5p5-6, pp. 75-76; PDF pp. 87-88.
     fn static_compound_literal(
         &mut self,
         expression: &'tu Expression<'tu>,
         initializer: &'tu Initializer<'tu>,
         ty: TypeId,
+        thread_local: bool,
     ) -> Result<GlobalId, LoweringError> {
         let key = std::ptr::from_ref(expression).addr();
         if let Some(&global) = self.compound_literals.get(&key) {
@@ -1461,12 +1480,12 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
         let global = self.module.declare_global(
             name,
             GlobalDecl {
-                linkage:      IrLinkage::Internal,
-                size:         layout.size,
-                align:        super::alignment::storage_alignment(&self.sema.types, ty)
+                linkage: IrLinkage::Internal,
+                size: layout.size,
+                align: super::alignment::storage_alignment(&self.sema.types, ty)
                     .map_err(|kind| at(kind, expression.source_vectors))?,
-                constant:     self.sema.types.readonly_object(ty),
-                thread_local: false,
+                constant: self.sema.types.readonly_object(ty) && !thread_local,
+                thread_local,
             },
         );
         _ = self.compound_literals.insert(key, global);
@@ -2091,17 +2110,14 @@ impl<'a, 'tu> Unit<'a, 'tu, '_> {
                 continue;
             }
             match expression.kind {
+                // Semantic analysis gives a thread-local literal's address
+                // no constant (C11 §6.6p9).
                 | ExpressionType::CompoundLiteral {
                     type_name,
                     initializer,
-                } => {
-                    if super::expressions::literal_storage(type_name, false) {
-                        return Err(LoweringError::unsupported(
-                            Construct::CompoundLiteralStorage,
-                            expression.source_vectors,
-                        ));
-                    }
-                    let global = self.static_compound_literal(expression, initializer, info.ty)?;
+                } if super::expressions::literal_global(type_name, false) != Some(true) => {
+                    let global =
+                        self.static_compound_literal(expression, initializer, info.ty, false)?;
                     return Ok((RelocationTarget::Symbol(Symbol::Global(global)), addend));
                 },
                 // GNU extension: GCC "Labels as Values" tables, as in Lua's

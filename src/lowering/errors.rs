@@ -110,7 +110,6 @@ pub(crate) enum Construct {
     Initializer,
     SelectionDeclaration,
     Extension,
-    CompoundLiteralStorage,
     /// An automatic object or compound literal of 4 GiB or more, beyond the
     /// IR's 32-bit stack slot sizes.
     LargeAutomaticObject,
@@ -193,8 +192,6 @@ impl Construct {
                 "conversions between complex types and _BitInt types of more than 128 bits",
             | Self::WideBitIntTemporaries =>
                 "functions whose wide _BitInt results need more than 6 MiB of stack",
-            | Self::CompoundLiteralStorage =>
-                "compound literals with static or thread storage duration",
         }
     }
 }
