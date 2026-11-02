@@ -467,6 +467,60 @@ mod tests {
         }
     }
 
+    /// GCC names the x87 extended format `__float80`, the same type as
+    /// `long double` on x86-64 Linux; Clang knows no such name.
+    #[test]
+    fn float80_is_gccs_name_for_long_double() {
+        if !cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+            return;
+        }
+        let directory = Directory::new();
+        directory.write(
+            "f80.c",
+            "__float80 x = 1.5;\n_Static_assert(sizeof(__float80) == sizeof(long double), \
+             \"\");\nint main(void) { __float80 y = x * 2; return (int)y + _Generic((__float80)0, \
+             long double: 0, default: 10); }\n",
+        );
+        let output = directory.bcc("--gcc-mode", &["-pedantic-errors", "f80.c", "-o", "f80"]);
+        succeeds(&output);
+        assert_eq!(stderr(&output), "");
+        let run = Command::new(directory.path("f80")).output().unwrap();
+        assert_eq!(run.status.code(), Some(3));
+        let output = directory.bcc("--clang-mode", &["-fsyntax-only", "f80.c"]);
+        assert!(!output.status.success());
+        assert!(stderr(&output).contains("__float80"), "{}", stderr(&output));
+        // A program's own typedef of the name hides GCC's, and a local
+        // object may take the name; a file-scope one redeclares it.
+        directory.write(
+            "shadow.c",
+            "int main(void) {\n  typedef int __float80;\n  __float80 x = 3;\n  \
+             _Static_assert(sizeof(x) == sizeof(int), \"shadow\");\n  { int __float80 = 1; x += \
+             __float80; }\n  return x;\n}\n",
+        );
+        let output = directory.bcc("--gcc-mode", &["shadow.c", "-o", "shadow"]);
+        succeeds(&output);
+        let run = Command::new(directory.path("shadow")).output().unwrap();
+        assert_eq!(run.status.code(), Some(4));
+        // (source, GCC accepts, Clang accepts), as GCC 14 and Clang 23 do.
+        for (source, gcc, clang) in [
+            ("int __float80;\n", false, true),
+            ("int __int128_t;\n", false, false),
+            ("int __int128_t(void);\n", false, false),
+            ("enum E { __float80 = 3 };\n", true, true),
+            ("enum E { __int128_t = 3 };\n", true, false),
+            ("typedef double __int128_t;\n", true, false),
+            ("typedef int __uint128_t;\n", true, false),
+            ("typedef __int128 __int128_t;\n", true, true),
+            ("void f(void) { enum { __int128_t }; }\n", true, true),
+        ] {
+            directory.write("redeclared.c", source);
+            for (mode, accepted) in [("--gcc-mode", gcc), ("--clang-mode", clang)] {
+                let output = directory.bcc(mode, &["-std=c17", "-fsyntax-only", "redeclared.c"]);
+                assert_eq!(output.status.success(), accepted, "{mode} {source}");
+            }
+        }
+    }
+
     /// TCC names no warning options, so its diagnostics carry no `[-W…]`
     /// suffix, as GCC's and Clang's do.
     #[test]
