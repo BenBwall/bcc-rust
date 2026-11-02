@@ -66,6 +66,7 @@ use crate::{
         SourceVectors,
         parsing::{
             Asm,
+            declaration_syntax::TypeQualifiers,
             syntax::Statement,
         },
         preprocessing::{
@@ -506,12 +507,18 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         constraint: &Constraint<'_>,
     ) -> Result<AsmOperandKind, AsmFault> {
         // GCC and Clang take a whole array, which no assignment may modify,
-        // as a memory output: the statement writes its bytes. A
-        // const-qualified one stays read-only.
-        let array = info.category == ValueCategory::Lvalue
-            && matches!(self.types.nodes[info.ty.index], TypeKind::Array(..))
-            && self.complete_object(info.ty)
-            && !self.contains_const(info.ty);
+        // as a memory output: the statement writes its bytes, even when the
+        // array is incomplete or its elements have const members. An array
+        // of const-qualified elements stays read-only.
+        let array = info.category == ValueCategory::Lvalue && {
+            let mut element = info.ty;
+            while let TypeKind::Array(inner, _) = self.types.nodes[element.index] {
+                element = inner;
+            }
+            element != info.ty
+                && !element.qualifiers.contains(TypeQualifiers::CONST)
+                && !info.ty.qualifiers.contains(TypeQualifiers::CONST)
+        };
         if info.category != ValueCategory::ModifiableLvalue && !(array && constraint.memory) {
             return Err(AsmFault::OutputLvalue);
         }

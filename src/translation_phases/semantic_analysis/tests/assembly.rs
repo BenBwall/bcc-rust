@@ -98,12 +98,17 @@ fn arrays_are_memory_outputs() {
         "int a[4]; void f(void) { __asm__(\"\" : \"+m\"(a)); }",
         "struct s { short x, y; } p[2]; void f(void) { __asm__(\"\" : \"=m\"(p)); }",
         "int a[2][3]; void f(void) { __asm__(\"\" : \"+m\"(a[1])); }",
+        "extern int a[]; void f(void) { __asm__(\"\" : \"=m\"(a)); }",
+        "struct s { const int x; int y; } p[2]; void f(void) { __asm__(\"\" : \"+m\"(p)); }",
+        "union u { const int x; int y; } p[2]; void f(void) { __asm__(\"\" : \"=m\"(p)); }",
     ] {
         assert_eq!(kinds(body), [], "{body}");
     }
     for body in [
         "const int c[2]; void f(void) { __asm__(\"\" : \"=m\"(c)); }",
-        "struct s { const int x; } p[2]; void f(void) { __asm__(\"\" : \"+m\"(p)); }",
+        "const int c[2][3]; void f(void) { __asm__(\"\" : \"=m\"(c)); }",
+        "typedef const int T[2]; T c; void f(void) { __asm__(\"\" : \"=m\"(c)); }",
+        "struct s { const int x; } q; void f(void) { __asm__(\"\" : \"=m\"(q)); }",
     ] {
         assert_eq!(
             kinds(body),
