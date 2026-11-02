@@ -2740,13 +2740,20 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 });
             return;
         }
+        // Clang 23 declares an undeclared library function implicitly in
+        // C23 too, under its default-error `-Wimplicit-function-declaration`
+        // ("call to undeclared library function"); any other name is
+        // undeclared there.
         if let ExpressionType::Identifier(name) = e.kind
             && self.lookup(Namespace::Ordinary, name.name).is_none()
-            && (self.context.configuration.standard() < CStandard::C23
-                || self.context.configuration.compiler_identity().rules()
-                    == crate::configuration::RuleSet::Gcc)
         {
+            let pre_c23 = self.context.configuration.standard() < CStandard::C23
+                || self.context.configuration.compiler_identity().rules()
+                    == crate::configuration::RuleSet::Gcc;
             let library = self.implicit_library_type(name);
+            if !pre_c23 && library.is_none() {
+                return;
+            }
             let ty = library.map_or_else(
                 || {
                     let result = self.types.scalar(Scalar::Int);

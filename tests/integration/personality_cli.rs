@@ -809,6 +809,75 @@ mod tests {
                 0,
                 "warning: call to undeclared function 'frob'",
             ),
+            // GCC's C89 implicit int is a pedantic warning once enabled,
+            // and GCC's pedantic errors outlast `-w`.
+            (
+                "--gcc-mode",
+                &["-std=c89", "-Wall", "-pedantic-errors"],
+                "implicit.c",
+                1,
+                "error: type defaults to 'int' in declaration of 'x'",
+            ),
+            (
+                "--gcc-mode",
+                &["-std=c89", "-Wall", "-fno-permissive"],
+                "implicit.c",
+                1,
+                "error: type defaults to 'int' in declaration of 'x'",
+            ),
+            (
+                "--gcc-mode",
+                &["-std=c89", "-w", "-pedantic-errors"],
+                "pointer.c",
+                1,
+                pointer,
+            ),
+            (
+                "--gcc-mode",
+                &["-std=c89", "-pedantic-errors", "-w"],
+                "pointer.c",
+                1,
+                pointer,
+            ),
+            (
+                "--gcc-mode",
+                &["-std=c89", "-Wall", "-pedantic-errors"],
+                "library.c",
+                0,
+                "warning: implicit declaration of function 'abs'",
+            ),
+            // Clang's C89 library function is a pedantic warning, which
+            // its `-w` silences first; in C23 it stays a demotable error.
+            (
+                "--clang-mode",
+                &["-std=c89", "-pedantic-errors"],
+                "library.c",
+                1,
+                "abs",
+            ),
+            (
+                "--clang-mode",
+                &["-std=c89", "-w", "-pedantic-errors"],
+                "library.c",
+                0,
+                "",
+            ),
+            (
+                "--clang-mode",
+                &["-std=c23", "-Wno-error=implicit-function-declaration"],
+                "library.c",
+                0,
+                "warning: call to undeclared library function 'abs'",
+            ),
+            (
+                "--clang-mode",
+                &["-std=c23", "-Wno-implicit-function-declaration"],
+                "library.c",
+                0,
+                "",
+            ),
+            ("--clang-mode", &["-std=c23"], "library.c", 1, "abs"),
+            ("--clang-mode", &["-std=c23"], "undeclared.c", 1, "frob"),
         ] {
             let mut args = vec!["-isystem", "sys", "-fsyntax-only"];
             args.extend_from_slice(options);

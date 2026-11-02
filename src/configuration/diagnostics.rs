@@ -189,19 +189,29 @@ impl CompilerConfiguration {
                 | None => group.default_severity(),
             }
         };
+        // GCC makes a pedantic warning an error before `-w` can silence
+        // it; Clang's `-w` silences it first.
+        let gcc = self.identity == super::CompilerIdentity::Gcc;
+        let pedantic = self.pedantic_error(group);
         // Clang 23's `-w` also silences its default-error
         // `-Wargument-outside-range`, though not `-Wint-conversion` or
         // `-Wincompatible-function-pointer-types`.
         if self.suppress_warnings
+            && !(gcc && pedantic)
             && (default == ErrorSeverity::Warning || group == DiagnosticGroup::ArgumentOutsideRange)
         {
             return None;
         }
+        // GCC's C89 implicit int, when an option enables it, is a pedantic
+        // warning that `-fno-permissive` makes an error too.
+        let no_permissive =
+            gcc && group == DiagnosticGroup::ImplicitInt && self.permissive == Some(false);
         let error = option.error().unwrap_or(
-            default == ErrorSeverity::Error
-                || self.warnings_as_errors
-                || self.pedantic_error(group),
+            default == ErrorSeverity::Error || self.warnings_as_errors || pedantic || no_permissive,
         );
+        if gcc && pedantic && error {
+            return Some(ErrorSeverity::Error);
+        }
         let severity = if error {
             ErrorSeverity::Error
         } else {
@@ -236,8 +246,17 @@ impl CompilerConfiguration {
     /// Whether `-pedantic-errors` makes `group` an error: Clang's
     /// `ExtWarn` diagnostics, except that GCC's `-fpermissive` keeps its
     /// permerrors warnings whatever `-pedantic-errors` says.
+    /// GCC's C89 implicit int and Clang's implicitly declared library
+    /// function are pedantic warnings as well, in their compilers only.
     fn pedantic_error(self, group: DiagnosticGroup) -> bool {
-        group.pedantic_promoted()
+        let promoted = group.pedantic_promoted()
+            || match group {
+                | DiagnosticGroup::ImplicitInt => self.identity == super::CompilerIdentity::Gcc,
+                | DiagnosticGroup::ImplicitLibraryFunction =>
+                    self.identity.rules() == super::RuleSet::Clang,
+                | _ => false,
+            };
+        promoted
             && self.extension_policy == ExtensionPolicy::Deny
             && !(self.identity == super::CompilerIdentity::Gcc
                 && group.default() == GroupDefault::Permerror

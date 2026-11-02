@@ -784,11 +784,12 @@ fn implicit_library_declarations_retain_prototypes_and_warn_once() {
                             })
                             .collect();
                         assert_eq!(warnings.len(), 6);
-                        // Clang warns in C89 and refuses them from C99.
+                        // Clang warns in C89, unless `-pedantic-errors`
+                        // promotes the warning, and refuses them from C99.
                         for warning in warnings {
                             assert_eq!(
                                 warning.severity(),
-                                if standard < CStandard::C99 {
+                                if standard < CStandard::C99 && policy != ExtensionPolicy::Deny {
                                     ErrorSeverity::Warning
                                 } else {
                                     ErrorSeverity::Error
