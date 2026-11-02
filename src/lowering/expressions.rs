@@ -1173,34 +1173,20 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 let single = self.widen_half(value);
                 self.float_from(single, Repr::Float { ty: Type::F32 }, to, source)?
             },
-            // Under GCC's rules a finite `float` constant widens exactly to a
-            // `double` one, whose conversion GCC folds (`saturation.rs`).
-            | Repr::Float { ty: Type::F32 }
-                if to == Type::F64
-                    && let Some(bits) = self.gcc_floating_constant(value)
-                    && let Ok(single) = u32::try_from(bits)
-                    && f32::from_bits(single).is_finite() =>
-                self.fconst(
-                    Type::F64,
-                    u128::from(f64::from(f32::from_bits(single)).to_bits()),
-                ),
+            // Under GCC's rules a constant converts to another format as a
+            // constant, exactly or rounded to nearest even, an infinity or
+            // a NaN included, so that GCC's fold of its conversion to an
+            // integer applies to it (`saturation.rs`).
+            | Repr::Float { ty }
+                if let Some(bits) = self.gcc_floating_constant(value)
+                    && let Some(converted) = super::saturation::convert_constant(
+                        bits,
+                        ty,
+                        to,
+                        self.unit.context.configuration.signaling_nans(),
+                    ) =>
+                self.fconst(to, converted),
             | Repr::Float { ty } if ty.bits() < to.bits() => self.convert(Opcode::Fpext, to, value),
-            // Under GCC's rules a finite `double` constant rounds to a
-            // `float` one as GCC folds it, to nearest.
-            | Repr::Float { ty: Type::F64 }
-                if to == Type::F32
-                    && self.gcc_floating_constant(value).is_some_and(|bits| {
-                        u64::try_from(bits).is_ok_and(|bits| f64::from_bits(bits).is_finite())
-                    }) =>
-            {
-                let bits = self.draft.float_constant(value).unwrap_or_default();
-                #[expect(
-                    clippy::cast_possible_truncation,
-                    reason = "the conversion rounds to nearest, as GCC folds it"
-                )]
-                let single = f64::from_bits(u64::try_from(bits).unwrap_or_default()) as f32;
-                self.fconst(Type::F32, u128::from(single.to_bits()))
-            },
             | Repr::Float { .. } => self.convert(Opcode::Fptrunc, to, value),
             | Repr::Int { .. } | Repr::Bool => {
                 let signed = from.signed();

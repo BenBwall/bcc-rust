@@ -670,6 +670,63 @@ mod tests {
         prints_on_every_back_end("--compiler-identity=clang", stored, &["-w"], "8 8\n4 4\n");
     }
 
+    /// GCC folds a floating constant of any format, through casts to any
+    /// floating type and as an arm of a `?:`, exactly before its conversion
+    /// to an integer, so an infinity saturates to the field's or type's
+    /// bound and a NaN to 0, and a `long double` or `__float128` arm or one
+    /// rounded to `float` saturates as a `double` one does.
+    #[test]
+    fn wide_and_nonfinite_floating_constants_saturate() {
+        let source = b"#include <stdio.h>\n\
+            struct S { int s : 5; unsigned u : 5; };\n\
+            __attribute__((noinline)) void f(int c) {\n\
+              struct S b; int i; unsigned u; long long l; unsigned char uc;\n\
+              b.s = c ? __builtin_inff() : 0.0; b.u = c ? __builtin_inff() : 0.0; printf(\"a %d %u\\n\", b.s, b.u);\n\
+              b.s = c ? -__builtin_inf() : 0.0; b.u = c ? -__builtin_inf() : 0.0; printf(\"b %d %u\\n\", b.s, b.u);\n\
+              b.s = c ? __builtin_nan(\"\") : 1.0; b.u = c ? __builtin_nanf(\"\") : 1.0; printf(\"c %d %u\\n\", b.s, b.u);\n\
+              b.s = c ? -__builtin_nan(\"\") : 1.0; b.u = c ? -__builtin_nan(\"\") : 1.0; printf(\"d %d %u\\n\", b.s, b.u);\n\
+              b.s = __builtin_inf(); b.u = -__builtin_inf(); printf(\"e %d %u\\n\", b.s, b.u);\n\
+              b.s = __builtin_nan(\"\"); b.u = __builtin_nanl(\"\"); printf(\"f %d %u\\n\", b.s, b.u);\n\
+              b.s = (float)(c ? 1e300 : 0.0); b.u = (float)(c ? -1e300 : 0.0); printf(\"g %d %u\\n\", b.s, b.u);\n\
+              i = c ? __builtin_inf() : 0.0; u = c ? -__builtin_inf() : 0.0; l = c ? __builtin_nan(\"\") : 0.0; uc = c ? __builtin_infl() : 0.0;\n\
+              printf(\"h %d %u %lld %u\\n\", i, u, l, uc);\n\
+              i = __builtin_inf(); u = __builtin_inf(); l = -__builtin_inf(); uc = __builtin_nan(\"\");\n\
+              printf(\"i %d %u %lld %u\\n\", i, u, l, uc);\n\
+              b.s = (double)(c ? 100.0L : 200.0L); b.u = (float)(c ? 100.0L : 200.0L); printf(\"j %d %u\\n\", b.s, b.u);\n\
+              b.s = (double)(c ? 100.0Q : 200.0Q); b.u = (long double)(c ? 100.0f : (c ? 1e10 : 2.0L)); printf(\"k %d %u\\n\", b.s, b.u);\n\
+              b.s = (float)(c ? 1e39L : 2.0L); b.u = (double)(c ? 1e5000L : 2.0L); printf(\"l %d %u\\n\", b.s, b.u);\n\
+            }\n\
+            int main(void) { f(0); f(1); return 0; }\n";
+        let expected = [
+            "a 0 0\n",
+            "b 0 0\n",
+            "c 1 1\n",
+            "d 1 1\n",
+            "e 15 0\n",
+            "f 0 0\n",
+            "g 0 0\n",
+            "h 0 0 0 0\n",
+            "i 2147483647 4294967295 -9223372036854775808 0\n",
+            "j 15 31\n",
+            "k 15 2\n",
+            "l 2 2\n",
+            "a 15 31\n",
+            "b -16 0\n",
+            "c 0 0\n",
+            "d 0 0\n",
+            "e 15 0\n",
+            "f 0 0\n",
+            "g 15 0\n",
+            "h 2147483647 0 0 255\n",
+            "i 2147483647 4294967295 -9223372036854775808 0\n",
+            "j 15 31\n",
+            "k 15 31\n",
+            "l 15 31\n",
+        ]
+        .concat();
+        prints_on_every_back_end("--compiler-identity=gcc", source, &["-w"], &expected);
+    }
+
     /// A trailing array member reached through a pointer may extend past
     /// its bound, as a flexible array member does, so GCC and Clang answer
     /// `__builtin_object_size` mode 1 for it from the complete object:

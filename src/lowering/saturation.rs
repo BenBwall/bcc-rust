@@ -30,6 +30,8 @@ use super::{
     },
 };
 use crate::{
+    binary128::Binary128,
+    float_parsing::bits as floats,
     ir::{
         Type,
         Value,
@@ -46,6 +48,7 @@ use crate::{
         },
     },
     util::bump::ArenaVec,
+    x87::X87,
 };
 
 /// An expression whose conversion GCC folds into the arms of a floating
@@ -298,6 +301,37 @@ impl<'tu, 's> FunctionLowerer<'_, '_, 'tu, '_, 's> {
         self.operands.push(item);
         Ok(())
     }
+}
+
+/// The bits of the floating constant `bits` of type `from` converted to the
+/// floating type `to`: exactly when `to` holds it, else rounded to nearest
+/// even, as GCC folds the conversion; an infinity stays one and a NaN one.
+/// Binary128 holds every value of `f32`, `f64` and `f80` exactly, so the
+/// conversion goes through it. `None` for a half type, and under
+/// `-fsignaling-nans` for a signaling NaN, whose conversion raises
+/// "invalid" at run time.
+/// C99: §6.3.1.5, p. 44; PDF p. 56; §F.3 paragraph 1, pp. 445-447;
+/// PDF pp. 457-459.
+pub(super) fn convert_constant(
+    bits: u128,
+    from: Type,
+    to: Type,
+    signaling_nans: bool,
+) -> Option<u128> {
+    if to.half_format().is_some() {
+        return None;
+    }
+    let value = match from {
+        | Type::F32 => Binary128::from_f32(f32::from_bits(u32::try_from(bits).ok()?)),
+        | Type::F64 => Binary128::from_f64(f64::from_bits(u64::try_from(bits).ok()?)),
+        | Type::F80 => Binary128::from_x87(X87::from_bits(bits)),
+        | Type::F128 => Binary128::from_bits(bits),
+        | _ => return None,
+    };
+    if signaling_nans && value.is_signaling() {
+        return None;
+    }
+    floats::binary128_bits(value, to)
 }
 
 /// The bound of an integer `width` bits wide and of signedness `signed`
