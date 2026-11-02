@@ -166,6 +166,36 @@ impl Expander<'_, '_, '_, '_> {
             .first_source_vector_or_default(token.source_vectors)
     }
 
+    /// The source file `__BASE_FILE__` names: the main source file. Clang
+    /// takes the main file's presumed name where the expansion, or the
+    /// outermost `#include` that leads to it, sits, so an earlier `#line`
+    /// there renames it; GCC and TCC keep the name on the command line.
+    /// GNU extension: GCC manual, "Common Predefined Macros".
+    pub(in crate::translation_phases::preprocessing) fn base_source_file_index(&self) -> u32 {
+        if !matches!(
+            self.context.configuration.compiler_identity(),
+            CompilerIdentity::Clang | CompilerIdentity::ClangCl
+        ) {
+            return 0;
+        }
+        let main = self.tokenizer_stack.iter().position(|frame| {
+            matches!(
+                frame.frame_type,
+                TokenizerFrameType::SourceFile {
+                    physical_source_file_index: 0,
+                    ..
+                }
+            )
+        });
+        match main {
+            // The innermost frame's tokenizer is the live one; a frame
+            // below keeps the state it was left in.
+            | Some(index) if index + 1 == self.tokenizer_stack.len() => self.source_file_index(),
+            | Some(index) => self.tokenizer_stack[index].tokenizer.source_file_index(),
+            | None => 0,
+        }
+    }
+
     pub(in crate::translation_phases::preprocessing) fn physical_source_file_index(&self) -> u32 {
         self.tokenizer_stack
             .iter()

@@ -505,6 +505,70 @@ mod tests {
         }
     }
 
+    /// Clang's `__BASE_FILE__` is the main file's presumed name where the
+    /// outermost `#include` (or the expansion itself) sits, so a `#line`
+    /// there renames it; GCC and TCC keep the command line's name. Standard
+    /// input is `<stdin>` in Clang, an empty name in GCC and `-` in TCC.
+    #[test]
+    fn base_file_follows_each_identity_for_line_and_stdin() {
+        use std::io::Write as _;
+        let directory = Directory::new();
+        directory.write("h.h", "const char *h = __BASE_FILE__;\n");
+        directory.write(
+            "m.c",
+            "#include \"h.h\"\n#line 9 \"z.c\"\nconst char *m = __BASE_FILE__;\n#include \"h.h\"\n",
+        );
+        for (mode, renamed) in [
+            ("--clang-mode", true),
+            ("--gcc-mode", false),
+            ("--tcc-mode", false),
+        ] {
+            let output = directory.bcc(mode, &["-E", "-P", "m.c"]);
+            succeeds(&output);
+            let lines: Vec<_> = stdout(&output)
+                .lines()
+                .filter(|line| !line.trim().is_empty())
+                .map(str::to_owned)
+                .collect();
+            let late = if renamed { "z.c" } else { "m.c" };
+            assert_eq!(
+                lines,
+                [
+                    "const char *h = \"m.c\";".to_owned(),
+                    format!("const char *m = \"{late}\";"),
+                    format!("const char *h = \"{late}\";"),
+                ],
+                "{mode}"
+            );
+        }
+        for (mode, name) in [
+            ("--clang-mode", "<stdin>"),
+            ("--gcc-mode", ""),
+            ("--tcc-mode", "-"),
+        ] {
+            let mut child = Command::new(env!("CARGO_BIN_EXE_bcc-rust"))
+                .args([mode, "-E", "-P", "-x", "c", "-"])
+                .current_dir(&directory.0)
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .spawn()
+                .unwrap();
+            child
+                .stdin
+                .take()
+                .unwrap()
+                .write_all(b"__BASE_FILE__\n")
+                .unwrap();
+            let output = child.wait_with_output().unwrap();
+            assert!(output.status.success(), "{mode}");
+            assert_eq!(
+                String::from_utf8_lossy(&output.stdout).trim(),
+                format!("\"{name}\""),
+                "{mode}"
+            );
+        }
+    }
+
     /// TCC names no warning options, so its diagnostics carry no `[-W…]`
     /// suffix, as GCC's and Clang's do.
     #[test]
