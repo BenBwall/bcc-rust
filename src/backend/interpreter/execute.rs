@@ -393,7 +393,16 @@ impl Machine<'_, '_, '_> {
                 ),
             // The machine code of inline assembly is outside the IR's
             // semantics; skipping it could silently change the program.
-            | InstData::InlineAsm { .. } => return Err(Fault::Unsupported(Unsupported::InlineAsm)),
+            // An empty template with no outputs runs no instruction: it is
+            // a compiler barrier (`asm volatile("" ::: "memory")`), which
+            // the interpreter's exact memory needs no help keeping.
+            | InstData::InlineAsm { asm, .. } => {
+                let asm = self.module.inline_asm(asm);
+                if !asm.template.trim().is_empty() || asm.output_count() != 0 {
+                    return Err(Fault::Unsupported(Unsupported::InlineAsm));
+                }
+                return Ok(None);
+            },
             | InstData::CallIndirect { sig, args } => {
                 let (&callee, args) = body
                     .value_list(args)

@@ -1190,25 +1190,39 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let mut field_ty = field.ty;
         // C99 §6.7.2.1p12, GNU packed: a member cannot promise more
         // alignment than its containing object and byte offset guarantee.
+        let record_alignment = self
+            .types
+            .layout(ty)
+            .map(|layout| layout.align)
+            .or_else(|| self.types.alignment(ty))
+            .unwrap_or(1);
         let base_alignment = if indirect {
-            self.types.layout(ty).map_or(1, |layout| layout.align)
+            record_alignment
         } else {
-            base.place_alignment().map_or_else(
-                || self.types.layout(ty).map_or(1, |layout| layout.align),
-                u64::from,
-            )
+            base.place_alignment().map_or(record_alignment, u64::from)
         };
         let offset_alignment = if field.offset == 0 {
             base_alignment
         } else {
             1_u64 << field.offset.trailing_zeros()
         };
+        // GNU: a member after one of variable size is at a run-time base
+        // known to be aligned only so far.
+        let segment_alignment = self.types.tags[id]
+            .variable
+            .get()
+            .map_or(u64::MAX, |record| {
+                record.known_alignment(record.member_segments[field.path.index])
+            });
         let alignment = self
             .types
             .layout(field_ty)
-            .map_or(1, |layout| layout.align)
+            .map(|layout| layout.align)
+            .or_else(|| self.types.alignment(field_ty))
+            .unwrap_or(1)
             .min(base_alignment)
-            .min(offset_alignment);
+            .min(offset_alignment)
+            .min(segment_alignment);
         // C23 §6.7.3.6p4 (p. 118; PDF p. 131): storage alignment of
         // the member place does not change its intrinsic type. Follow the
         // resolved anonymous-member path to recover the declaring member.
@@ -1490,8 +1504,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     }
                 })
             };
+            // C23 §6.6p8: a named constant of arithmetic type may be the
+            // immediate operand of a cast too.
             info.ice = operand.ice
-                || matches!(immediate.kind, ExpressionType::Constant(Constant::Float(_)));
+                || matches!(immediate.kind, ExpressionType::Constant(Constant::Float(_)))
+                || (self.named_cast_operand(immediate) && operand.floating().is_some());
+            if !info.ice && operand.floating().is_some() && self.constant_place(immediate).is_some()
+            {
+                info.folding = ConstantFolding::NamedCast;
+            }
         }
         if operand.floating().is_some()
             && let Some(value) = self.floating_value(operand)
@@ -1963,7 +1984,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     /// C23: §7.21.2p2, p. 316; PDF p. 329: the null pointer type is
     /// distinct from ordinary pointer and arithmetic types.
-    pub(super) fn nullptr_type(&self, ty: TypeId) -> bool {
+    pub(in crate::translation_phases::semantic_analysis) fn nullptr_type(
+        &self,
+        ty: TypeId,
+    ) -> bool {
         matches!(
             self.types.nodes[self.types.non_atomic(ty).index],
             TypeKind::Nullptr

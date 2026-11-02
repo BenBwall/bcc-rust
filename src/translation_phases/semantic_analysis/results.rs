@@ -75,6 +75,7 @@ pub(crate) struct SemanticTranslationUnit<'tu> {
     pub(crate) type_names:              &'tu [super::TypeNameFacts<'tu>],
     pub(super) type_name_indices:       ArenaMap<'tu, usize, super::TypeNameId>,
     pub(super) declaration_sites:       ArenaMap<'tu, usize, BoundSiteFacts<'tu>>,
+    pub(super) definition_bounds:       ArenaMap<'tu, usize, &'tu [usize]>,
     pub(super) size_query_sites:        ArenaMap<'tu, usize, super::SizeQueryFacts<'tu>>,
     /// Typed results in child-before-parent order; an expression's ordinal
     /// is its index here.
@@ -101,6 +102,9 @@ pub(crate) struct SemanticTranslationUnit<'tu> {
     /// The exact values of folded constants of bit-precise types wider than
     /// 128 bits that `i128` does not hold; see [`Self::integer_limbs`].
     pub(super) wide_integers:           super::WideValues<'tu>,
+    /// The C23 named constant subobject an expression designates, by the
+    /// expression's identity; see [`Self::named_constant`].
+    pub(super) named_constants:         ArenaMap<'tu, usize, super::ConstantPlace<'tu>>,
     /// Error-severity diagnostics semantic analysis reported; warnings and
     /// diagnostics suppressed inside recovered syntax are not counted.
     pub(crate) errors:                  usize,
@@ -224,6 +228,10 @@ impl Duration {
 /// have a record; lowering refuses their unit through the error gate.
 /// C99: §6.9.1 paragraphs 2-10, pp. 141-142; PDF pp. 153-154.
 #[derive(Debug, Clone, Copy)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "Each flag is an independent fact about the body that lowering reads on its own."
+)]
 pub(crate) struct FunctionRecord<'tu> {
     pub(crate) control:           super::FunctionControl,
     pub(crate) parameter_facts:   &'tu [super::ParameterFacts<'tu>],
@@ -254,6 +262,10 @@ pub(crate) struct FunctionRecord<'tu> {
     /// so lowering expands a copy of it at each direct call instead of
     /// lowering it once. GNU extension: GCC manual, "Constructing Calls".
     pub(crate) va_arg_pack:       bool,
+    /// The body calls `__builtin_setjmp`. GCC keeps every local current
+    /// across its second return, so under GCC's identity lowering keeps
+    /// them in memory. GNU extension: GCC manual, "Nonlocal Gotos".
+    pub(crate) builtin_setjmp:    bool,
 }
 
 /// A lexical scope and its enclosing scope.
@@ -316,6 +328,15 @@ pub(crate) struct Definition {
 }
 
 impl<'tu> SemanticTranslationUnit<'tu> {
+    /// The bounds a nested function definition's own type writes, which its
+    /// definer evaluates where the definition is (GNU).
+    pub(crate) fn definition_bounds(&self, definition: &FunctionDefinition<'tu>) -> &'tu [usize] {
+        self.definition_bounds
+            .get(&std::ptr::from_ref(definition).addr())
+            .copied()
+            .unwrap_or_default()
+    }
+
     /// Identity-indexed type-site execution; provenance is not a binding join.
     pub(crate) fn declaration_site(
         &self,
@@ -412,6 +433,26 @@ impl<'tu> SemanticTranslationUnit<'tu> {
     ) -> Option<&'tu ExpressionInfo<'tu>> {
         self.expression_index(expression)
             .map(|index| &self.expressions[index])
+    }
+
+    /// The subobject of a C23 named constant (a `constexpr` object or
+    /// compound literal) that `expression` designates, through
+    /// parentheses: lowering reads a static copy of one from the named
+    /// constant's initializer.
+    /// C23 (N3220): §6.6 paragraphs 7 and 13-15, pp. 95-96; PDF pp. 108-109.
+    pub(crate) fn named_constant(
+        &self,
+        mut expression: &Expression<'tu>,
+    ) -> Option<super::ConstantPlace<'tu>> {
+        while let crate::translation_phases::parsing::syntax::ExpressionType::Parenthesized {
+            expression: inner,
+        } = expression.kind
+        {
+            expression = inner;
+        }
+        self.named_constants
+            .get(&std::ptr::from_ref(expression).addr())
+            .copied()
     }
 
     /// The conversions applied to expression `index`, in application order:
