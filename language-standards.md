@@ -3422,7 +3422,7 @@ A C23 compound literal's storage-class specifiers declare its object as
 | `static` (with `constexpr` too) | static | static: one object, initialized once before the program starts, keeping its value between evaluations |
 | `thread_local` with `static` | thread | thread |
 | `thread_local` alone | thread | error, as for a declaration (§6.7.2p3) |
-| `register` | error (§6.9p2) | automatic, whose address `&` cannot take |
+| `register` | error (§6.9p2) | automatic; neither `&` nor an array's conversion to a pointer takes its address |
 | `typedef`, `auto`, `extern` | error | error |
 
 A static literal's initializer must be constant, as a static object's is,
@@ -3433,12 +3433,15 @@ static object there does; a `const` one does not. Lowering gives a
 block-scope static literal an internal global, and a thread-local one a
 thread-local global, like a file-scope literal's; GCC 14 accepts and runs
 `gcc.dg/c23-complit-*.c` the same way, and bcc reports an error on every
-line GCC 14 does there except one. Under the Clang identity a
-storage-class specifier in a compound literal is an error, as the bundled
-Clang parses none.
+line GCC 14 does there except one. GCC still subscripts a `register`
+array, literal or object, which Clang rejects with the conversion; bcc
+follows each identity. Under the Clang identity a storage-class specifier
+in a compound literal is an error, as the bundled Clang parses none.
 
 Deviations:
 
 - GCC rejects a repeated `thread_local` in a literal (`(static
   thread_local thread_local int){0}`) as in a declaration; bcc warns, as
   Clang does for a declaration.
+- GCC reports a `register` array's conversion at the start of the
+  function that contains it; bcc reports it at the operand.

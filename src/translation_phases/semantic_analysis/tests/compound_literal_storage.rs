@@ -12,11 +12,16 @@ use crate::configuration::{
 
 /// The semantic error kinds of `source` in C23 under GCC's identity.
 fn kinds(source: &str) -> Vec<SemanticErrorKind> {
+    kinds_as(source, CompilerIdentity::Gcc)
+}
+
+/// The semantic error kinds of `source` in C23 under `identity`.
+fn kinds_as(source: &str, identity: CompilerIdentity) -> Vec<SemanticErrorKind> {
     let mut result = Vec::new();
     with_configuration(
         source,
         CompilerConfiguration::new(CStandard::C23, ExtensionPolicy::Allow)
-            .with_compiler_identity(CompilerIdentity::Gcc)
+            .with_compiler_identity(identity)
             .with_target(crate::target::Target::LinuxGnu),
         |context, _| {
             for error in context.take_pending_errors() {
@@ -84,5 +89,69 @@ fn literal_storage_breaks_declaration_constraints() {
         ),
     ] {
         assert_eq!(kinds(source), [kind], "{source}");
+    }
+}
+
+/// A register array converted to a pointer has its address taken, which
+/// GCC reports ("address of register compound literal requested"); GCC
+/// still subscripts one.
+#[test]
+fn register_literal_arrays_do_not_decay() {
+    use SemanticErrorKind as K;
+    for (source, expected) in [
+        (
+            "void g(int *); void f(void) { g((register int[2]){ 1, 2 }); }",
+            &[K::RegisterArrayAddress][..],
+        ),
+        (
+            "void f(void) { int *p = (register int[2]){ 1, 2 }; }",
+            &[K::RegisterArrayAddress],
+        ),
+        ("int f(void) { return (register int[2]){ 1, 2 }[1]; }", &[]),
+        (
+            "int *f(void) { return &(register int[2]){ 1, 2 }[1]; }",
+            &[K::InvalidAddressOperand],
+        ),
+    ] {
+        assert_eq!(kinds(source), expected, "{source}");
+    }
+}
+
+/// The same holds for a register array object, which Clang does not even
+/// subscript ("address of register variable requested").
+#[test]
+fn register_array_objects_do_not_decay() {
+    use SemanticErrorKind as K;
+    let call = "void g(int *); void f(void) { register int a[2] = { 1, 2 }; g(a); }";
+    let subscript = "int f(void) { register int a[2] = { 1, 2 }; return a[1]; }";
+    for identity in [CompilerIdentity::Gcc, CompilerIdentity::Clang] {
+        assert_eq!(
+            kinds_as(call, identity),
+            [K::RegisterArrayAddress],
+            "{identity:?}"
+        );
+    }
+    assert_eq!(kinds_as(subscript, CompilerIdentity::Gcc), []);
+    assert_eq!(
+        kinds_as(subscript, CompilerIdentity::Clang),
+        [K::RegisterArrayAddress]
+    );
+}
+
+/// Clang 23 parses no storage-class specifier in a compound literal; its
+/// identity reports the specifiers once and types a plain literal.
+#[test]
+fn clang_rejects_literal_storage_classes() {
+    for source in [
+        "int *p = &(register int){ 0 };",
+        "void f(void) { int *q = &(thread_local int){ 0 }; }",
+        "int f(void) { return (register int[2]){ 1, 2 }[0]; }",
+        "int *f(void) { return &(static int){ 1 }; }",
+    ] {
+        assert_eq!(
+            kinds_as(source, CompilerIdentity::Clang),
+            [SemanticErrorKind::LiteralStorageClass],
+            "{source}"
+        );
     }
 }

@@ -398,8 +398,18 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             }
         }
         let op = compound.unwrap_or(op);
-        let lt = self.converted(left);
-        let rt = self.converted(right);
+        // GCC subscripts a register array without taking its address
+        // ("ISO C forbids subscripting 'register' array" under -pedantic);
+        // Clang rejects the conversion as anywhere else.
+        let gcc_subscript = op == B::Subscript
+            && self.context.configuration.compiler_identity().rules()
+                == crate::configuration::RuleSet::Gcc;
+        let subscripted = |operand: ExpressionInfo<'tu>| ExpressionInfo {
+            register: operand.register && !gcc_subscript,
+            ..operand
+        };
+        let lt = self.converted(subscripted(left));
+        let rt = self.converted(subscripted(right));
         let int = self.types.scalar(Scalar::Int);
         if op == B::Comma {
             let mut result = Self::expression_result(e, rt);
@@ -2071,6 +2081,18 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         {
             self.error(
                 SemanticErrorKind::IncompleteValue,
+                info.expression.source_vectors,
+                None,
+                None,
+            );
+            return self.types.unknown();
+        }
+        // C99 §6.3.2.1p3, p. 46; PDF p. 58: converting an array of
+        // register storage to a pointer is undefined; GCC and Clang reject
+        // it as taking the register object's address.
+        if matches!(kind, Some(ConversionKind::ArrayDecay)) && info.register {
+            self.error(
+                SemanticErrorKind::RegisterArrayAddress,
                 info.expression.source_vectors,
                 None,
                 None,
