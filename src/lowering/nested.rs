@@ -21,11 +21,18 @@
 //! trampoline area; one only the definer itself uses is a slot of its own,
 //! made where the definer takes the address.
 //!
+//! A `goto` from a nested function to a label of a function around it is
+//! GCC's non-local goto. That function's record points to its receiver: the
+//! index of the label to resume at and a `jmp_buf`, which it saves with
+//! `_setjmp` before each call it makes and, on the second return, follows
+//! to the label; the jump stores the index and calls `longjmp`
+//! ([`FunctionLowerer::nonlocal_goto`], [`FunctionLowerer::save_receiver`]).
+//!
 //! For `int f(int n) { int g(void) { return n; } return g(); }`, `g` reads
 //! `n` through word 2 of `f`'s record, and `f`'s call of `g` passes the
 //! record as `g`'s last argument.
 //!
-//! GNU extension: GCC manual, "Nested Functions".
+//! GNU extension: GCC manual, "Nested Functions" and "Local Labels".
 //! <https://gcc.gnu.org/onlinedocs/gcc/Nested-Functions.html>
 //! C99: §6.2.1 paragraph 4, pp. 29-30; PDF pp. 41-42 (block scope);
 //! §6.2.4 paragraph 5, p. 32; PDF p. 44 (automatic lifetime).
@@ -36,6 +43,10 @@ use super::{
     LoweringError,
     Unit,
     module_items::at,
+    ssa::{
+        Op,
+        Terminator,
+    },
 };
 use crate::{
     ir::{
@@ -45,6 +56,7 @@ use crate::{
         FuncId,
         InstData,
         InstFlags,
+        IntCC,
         Opcode,
         SigId,
         Signature,
@@ -57,7 +69,9 @@ use crate::{
         parsing::syntax::FunctionDefinition,
         semantic_analysis::{
             BindingKind,
+            FunctionId,
             FunctionRecord,
+            LabelId,
             Linkage,
             ScopeKind,
             SemanticTranslationUnit,
@@ -101,22 +115,44 @@ pub(super) struct NestedFunctions<'a> {
     /// The record word of each object nested functions use, by the
     /// function scope it belongs to and its binding.
     words:                ArenaMap<'a, (usize, usize), u32>,
-    /// Each function scope's captured objects and record trampolines.
+    /// The record word that holds each function scope's non-local goto
+    /// receiver, if a nested function jumps to one of its labels.
+    receivers:            ArenaMap<'a, usize, u32>,
+    /// Each function scope's captured objects, record trampolines and
+    /// non-local goto targets.
     lists:                ArenaMap<'a, usize, Lists>,
-    /// The captured objects, `(binding, word, next)`, linked per scope.
-    captures:             ArenaVec<'a, (usize, u32, u32)>,
+    /// The record words, `(capture, word, next)`, linked per scope.
+    captures:             ArenaVec<'a, (Capture, u32, u32)>,
     /// The record trampolines, `(function, next)`, linked per scope.
     trampolines:          ArenaVec<'a, (FuncId, u32)>,
     /// The index of each record trampoline in its scope's area.
     trampoline_indexes:   ArenaMap<'a, (usize, FuncId), u32>,
+    /// The labels nested functions jump to, `(label, next)`, linked per
+    /// scope.
+    nonlocal_labels:      ArenaVec<'a, (LabelId, u32)>,
+    /// The index of each of those labels in its function's receiver.
+    label_indexes:        ArenaMap<'a, LabelId, u32>,
+    /// The function scope of each function definition, by its control
+    /// identity.
+    function_scopes:      ArenaMap<'a, FunctionId, usize>,
     /// The binding of each function definition at file scope, by its
     /// function scope.
     outermost:            ArenaMap<'a, usize, usize>,
 }
 
-/// A function scope's captured objects as `(word, binding)` and its
-/// record trampolines as `(index, function)`.
-type Layout<'s> = (ArenaVec<'s, (u32, usize)>, ArenaVec<'s, (u32, FuncId)>);
+/// A function scope's record words as `(word, capture)` and its record
+/// trampolines as `(index, function)`.
+type Layout<'s> = (ArenaVec<'s, (u32, Capture)>, ArenaVec<'s, (u32, FuncId)>);
+
+/// What a record word after the first two holds.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Capture {
+    /// The address of an object of the function, by its binding.
+    Object(usize),
+    /// The address of the function's non-local goto receiver: the index
+    /// of the label to resume at, then a `jmp_buf`.
+    Receiver,
+}
 
 /// The heads and lengths of one function scope's lists in
 /// [`NestedFunctions`].
@@ -126,6 +162,8 @@ struct Lists {
     capture_count:    u32,
     trampolines:      u32,
     trampoline_count: u32,
+    labels:           u32,
+    label_count:      u32,
 }
 
 impl Lists {
@@ -134,16 +172,20 @@ impl Lists {
         capture_count:    0,
         trampolines:      u32::MAX,
         trampoline_count: 0,
+        labels:           u32::MAX,
+        label_count:      0,
     };
 }
 
 impl<'a> NestedFunctions<'a> {
     pub(super) fn new(arena: &'a Bump, sema: &SemanticTranslationUnit<'_>) -> Self {
         let mut outermost = ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, arena);
+        let mut function_scopes = ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, arena);
         for record in sema.functions {
             if let Some(binding) = record.binding {
                 _ = outermost.insert(record.scope, binding);
             }
+            _ = function_scopes.insert(record.control.id, record.scope);
         }
         Self {
             functions: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, arena),
@@ -151,10 +193,14 @@ impl<'a> NestedFunctions<'a> {
             definers: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, arena),
             parents: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, arena),
             words: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, arena),
+            receivers: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, arena),
             lists: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, arena),
             captures: ArenaVec::new_in(arena),
             trampolines: ArenaVec::new_in(arena),
             trampoline_indexes: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, arena),
+            nonlocal_labels: ArenaVec::new_in(arena),
+            label_indexes: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, arena),
+            function_scopes,
             outermost,
         }
     }
@@ -171,14 +217,58 @@ impl<'a> NestedFunctions<'a> {
         if let Some(&word) = self.words.get(&(owner, binding)) {
             return word;
         }
+        let word = self.add_word(owner, Capture::Object(binding));
+        _ = self.words.insert((owner, binding), word);
+        word
+    }
+
+    /// Assigns `owner`'s next record word to `capture`.
+    fn add_word(&mut self, owner: usize, capture: Capture) -> u32 {
         let lists = self.lists.entry(owner).or_insert(Lists::EMPTY);
         let word = lists.capture_count + 2;
         let index = u32::try_from(self.captures.len()).expect("captures fit u32");
-        self.captures.push((binding, word, lists.captures));
+        self.captures.push((capture, word, lists.captures));
         lists.captures = index;
         lists.capture_count += 1;
-        _ = self.words.insert((owner, binding), word);
         word
+    }
+
+    /// The record word of `owner`'s non-local goto receiver and the index
+    /// there of `label`, a label of `owner` a nested function jumps to,
+    /// each assigned on first use.
+    fn nonlocal_target(&mut self, owner: usize, label: LabelId) -> (u32, u32) {
+        let word = match self.receivers.get(&owner) {
+            | Some(&word) => word,
+            | None => {
+                let word = self.add_word(owner, Capture::Receiver);
+                _ = self.receivers.insert(owner, word);
+                word
+            },
+        };
+        if let Some(&index) = self.label_indexes.get(&label) {
+            return (word, index);
+        }
+        let lists = self.lists.entry(owner).or_insert(Lists::EMPTY);
+        let index = lists.label_count;
+        let link = u32::try_from(self.nonlocal_labels.len()).expect("labels fit u32");
+        self.nonlocal_labels.push((label, lists.labels));
+        lists.labels = link;
+        lists.label_count += 1;
+        _ = self.label_indexes.insert(label, index);
+        (word, index)
+    }
+
+    /// `owner`'s labels that nested functions jump to, as `(index, label)`,
+    /// in `arena`.
+    fn nonlocal_labels<'s>(&self, owner: usize, arena: &'s Bump) -> ArenaVec<'s, (u32, LabelId)> {
+        let lists = self.lists.get(&owner).copied().unwrap_or(Lists::EMPTY);
+        let mut labels = ArenaVec::with_capacity_in(lists.label_count as usize, arena);
+        let mut next = lists.labels;
+        while let Some(&(label, link)) = self.nonlocal_labels.get(next as usize) {
+            labels.push((self.label_indexes[&label], label));
+            next = link;
+        }
+        labels
     }
 
     /// The index in `owner`'s trampoline area of the trampoline of `func`,
@@ -203,8 +293,8 @@ impl<'a> NestedFunctions<'a> {
         let lists = self.lists.get(&owner).copied().unwrap_or(Lists::EMPTY);
         let mut captures = ArenaVec::with_capacity_in(lists.capture_count as usize, arena);
         let mut next = lists.captures;
-        while let Some(&(binding, word, link)) = self.captures.get(next as usize) {
-            captures.push((word, binding));
+        while let Some(&(capture, word, link)) = self.captures.get(next as usize) {
+            captures.push((word, capture));
             next = link;
         }
         let mut trampolines = ArenaVec::with_capacity_in(lists.trampoline_count as usize, arena);
@@ -378,6 +468,49 @@ impl<'tu> Unit<'_, 'tu, '_> {
                 .is_some_and(|binding| self.reachable.contains(binding))
     }
 
+    /// The external C library function `name`, declared with `params` and
+    /// `result` unless the unit declares it already with the same types.
+    fn library_function(
+        &mut self,
+        name: &str,
+        params: &[Type],
+        result: Option<Type>,
+        source: SourceVectors,
+    ) -> Result<FuncId, LoweringError> {
+        if let Some(symbol) = self.module.symbol(name) {
+            let crate::ir::Symbol::Function(func) = symbol else {
+                return Err(LoweringError::missing(
+                    "a C library function's name names an object",
+                    source,
+                ));
+            };
+            let signature = self.module.function_signature(func);
+            if signature.params != params || signature.result != result || signature.variadic {
+                return Err(LoweringError::missing(
+                    "a C library function is declared with another type",
+                    source,
+                ));
+            }
+            return Ok(func);
+        }
+        let signature = self.module.intern(Signature {
+            params,
+            aggregates: &[],
+            noundef: &[],
+            result,
+            variadic: false,
+            variadic_fixed: None,
+            extensions: &[],
+            result_extension: None,
+            result_noundef: false,
+            variadic_noundef: false,
+            chain: false,
+        });
+        Ok(self
+            .module
+            .declare_function(name, signature, crate::ir::Linkage::External))
+    }
+
     /// Whether the function scope `scope` builds a chain record: it
     /// defines a nested function.
     fn builds_record(&self, scope: usize) -> bool {
@@ -417,7 +550,20 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
         };
         let at = self.offset_address(record, 8);
         self.store_pointer(area, at);
-        for &(word, binding) in &objects {
+        for &(word, capture) in &objects {
+            let binding = match capture {
+                | Capture::Object(binding) => binding,
+                | Capture::Receiver => {
+                    let receiver = self.fresh_object(RECEIVER_BYTES, RECEIVER_ALIGN, source)?;
+                    let at = self.offset_address(record, 8 * u64::from(word));
+                    self.store_pointer(receiver, at);
+                    self.receiver = Some(super::Receiver {
+                        buffer:   receiver,
+                        dispatch: self.draft.create_block(&[]),
+                    });
+                    continue;
+                },
+            };
             let source = self.unit.sema.bindings[binding].name.source_vectors;
             // A parameter is in place already, where it arrived or in a
             // copy; any other object gets its slot now.
@@ -581,6 +727,159 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
         ))
     }
 
+    /// Jumps from this nested function to `label`, a label of a function
+    /// around it: stores the label's index in that function's receiver and
+    /// `longjmp`s to the environment it saved there before the call that
+    /// is still running, which then continues at the label. No cleanup
+    /// runs on the way, in either function, as in GCC.
+    /// GNU extension: GCC manual, "Nested Functions" and "Local Labels".
+    /// <https://gcc.gnu.org/onlinedocs/gcc/Nested-Functions.html>
+    pub(super) fn nonlocal_goto(
+        &mut self,
+        label: LabelId,
+        source: SourceVectors,
+    ) -> Result<(), LoweringError> {
+        let function = self.unit.sema.control.labels[label.0].function;
+        let owner = self
+            .unit
+            .nested
+            .function_scopes
+            .get(&function)
+            .copied()
+            .ok_or_else(|| LoweringError::missing("a label's function has no scope", source))?;
+        let (_, jump) = self.receiver_functions(source)?;
+        // Expanded into a caller, this body's writes would reach the label
+        // as values that skip the `longjmp`, which no edge shows; as a call,
+        // it writes the definer's objects in memory, which the receiver's
+        // `_setjmp` returns to.
+        if let Some(func) = self
+            .record
+            .binding
+            .and_then(|binding| self.unit.nested.functions.get(&binding).copied())
+        {
+            self.unit.module.function_mut(func).inlining = crate::ir::InlineControl::Never;
+        }
+        let (word, index) = self.unit.nested.nonlocal_target(owner, label);
+        let record = self.record_of(owner, source)?;
+        let at = self.offset_address(record, 8 * u64::from(word));
+        let receiver = self.load_pointer(at);
+        let index = self.iconst(Type::I64, i128::from(index));
+        _ = self.draft.push(
+            self.memory_op(InstData::Store {
+                ty:    Type::I64,
+                flags: InstFlags::empty(),
+                align: WORD,
+                tag:   None,
+                args:  [index, receiver],
+            }),
+            None,
+        );
+        let buffer = self.offset_address(receiver, RECEIVER_BUFFER);
+        let one = self.iconst(Type::I32, 1);
+        let args = self.scratch.alloc_slice_copy(&[buffer, one]);
+        _ = self.draft.push(Op::Call(jump, args), None);
+        self.draft
+            .terminate_and_continue_dead(Terminator::Unreachable);
+        Ok(())
+    }
+
+    /// The C library's `_setjmp` and `longjmp`, which save and restore a
+    /// receiver's environment: a `returns_twice` call clobbers every
+    /// register that does not survive a call, so nothing live across it
+    /// stays in one. LLVM's `llvm.eh.sjlj.setjmp`, which `__builtin_setjmp`
+    /// uses, lets x86-64 condition flags live across its second return.
+    /// Windows' `longjmp` unwinds through structured exception handling,
+    /// and WebAssembly cannot restore another function's frame, so both
+    /// refuse the jump.
+    /// C99: §7.13.1.1, p. 243; PDF p. 255; §7.13.2.1, p. 244; PDF p. 256.
+    fn receiver_functions(
+        &mut self,
+        source: SourceVectors,
+    ) -> Result<(FuncId, FuncId), LoweringError> {
+        if !matches!(
+            self.unit.target,
+            crate::target::Target::LinuxGnu | crate::target::Target::LinuxMusl
+        ) {
+            return Err(LoweringError::unsupported(
+                Construct::NonLocalGotoTarget,
+                source,
+            ));
+        }
+        let save = self
+            .unit
+            .library_function("_setjmp", &[Type::Ptr], Some(Type::I32), source)?;
+        self.unit.module.function_mut(save).returns_twice = true;
+        let jump = self
+            .unit
+            .library_function("longjmp", &[Type::Ptr, Type::I32], None, source)?;
+        Ok((save, jump))
+    }
+
+    /// Before a call, in a function a nested function jumps out to: saves
+    /// the environment in the receiver, so that a jump from inside the call
+    /// resumes here, with every value and dynamic allocation as it is at
+    /// the call, and continues at the label the receiver names. GCC gives
+    /// each call an abnormal edge to its non-local goto receiver in the
+    /// same way.
+    /// GNU extension: GCC manual, "Nested Functions".
+    pub(super) fn save_receiver(&mut self, source: SourceVectors) -> Result<(), LoweringError> {
+        let Some(receiver) = self.receiver else {
+            return Ok(());
+        };
+        let (save, _) = self.receiver_functions(source)?;
+        let buffer = self.offset_address(receiver.buffer, RECEIVER_BUFFER);
+        let args = self.scratch.alloc_slice_copy(&[buffer]);
+        let resumed = self
+            .draft
+            .push(Op::Call(save, args), Some(Type::I32))
+            .expect("`_setjmp` has a result");
+        let zero = self.iconst(Type::I32, 0);
+        let resumed = self.icmp(IntCC::Ne, resumed, zero);
+        let next = self.draft.create_block(&[]);
+        self.draft.brif(resumed, receiver.dispatch, next);
+        self.draft.seal(next);
+        self.draft.switch_to(next);
+        Ok(())
+    }
+
+    /// Ends the receiver's dispatch, once every call that reaches it is
+    /// lowered: it continues at the label whose index the jump stored.
+    pub(super) fn dispatch_receiver(&mut self) {
+        let Some(receiver) = self.receiver else {
+            return;
+        };
+        let labels = self
+            .unit
+            .nested
+            .nonlocal_labels(self.record.scope, self.scratch);
+        let Some((&(_, last), others)) = labels.split_last() else {
+            return;
+        };
+        self.draft.switch_to(receiver.dispatch);
+        let index = self.inst(
+            InstData::Load {
+                ty:    Type::I64,
+                flags: InstFlags::empty(),
+                align: WORD,
+                tag:   None,
+                addr:  receiver.buffer,
+            },
+            Type::I64,
+        );
+        let default = self.label_block(last);
+        let default = self.draft.edge(default, &[]);
+        let mut cases = ArenaVec::with_capacity_in(others.len(), self.scratch);
+        for &(index, label) in others {
+            let block = self.label_block(label);
+            cases.push((i128::from(index), self.draft.edge(block, &[])));
+        }
+        self.draft.terminate(Terminator::Switch {
+            value: index,
+            default,
+            cases,
+        });
+    }
+
     /// Writes the trampoline at `storage` that calls `func` with `chain`.
     fn make_trampoline(&mut self, storage: Value, func: FuncId, chain: Value) {
         let target = self.inst(InstData::FuncAddr { func }, Type::Ptr);
@@ -634,6 +933,19 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
         );
     }
 }
+
+/// The size of a non-local goto receiver: the label index, then a
+/// `jmp_buf`, 200 bytes in glibc and musl on x86-64.
+const RECEIVER_BYTES: u64 = RECEIVER_BUFFER + 200;
+
+/// Where a receiver's `jmp_buf` starts.
+const RECEIVER_BUFFER: u64 = 16;
+
+/// The alignment of a receiver, a `jmp_buf`'s at most.
+const RECEIVER_ALIGN: Align = match Align::from_bytes(16) {
+    | Some(align) => align,
+    | None => Align::BYTE,
+};
 
 /// The alignment of a record word.
 const WORD: Align = match Align::from_bytes(8) {
