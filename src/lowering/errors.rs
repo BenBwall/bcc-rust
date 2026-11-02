@@ -92,8 +92,11 @@ pub(crate) enum Construct {
     StructuredExceptionHandling,
     NamedJump,
     /// A `goto` from a nested function to a label of a function around
-    /// it. GNU extension: GCC manual, "Nested Functions".
-    NonLocalGoto,
+    /// it on a Windows target, whose `longjmp` unwinds through structured
+    /// exception handling, or on WebAssembly, whose code cannot restore
+    /// another function's frame. GNU extension: GCC manual, "Nested
+    /// Functions".
+    NonLocalGotoTarget,
     /// A nested function on `x86_64-pc-windows-msvc`, whose stack probe
     /// `__chkstk` clobbers the `%r10` its static chain arrives in.
     NestedChainTarget,
@@ -177,7 +180,8 @@ impl Construct {
             | Self::Attribute(attribute) => attribute.description(),
             | Self::StructuredExceptionHandling => "structured exception handling",
             | Self::NamedJump => "named break and continue",
-            | Self::NonLocalGoto => "a jump out of a nested function",
+            | Self::NonLocalGotoTarget =>
+                "a jump out of a nested function on Windows and WebAssembly targets",
             | Self::NestedChainTarget => "nested functions on x86_64-pc-windows-msvc",
             | Self::NestedTrampolineTarget =>
                 "the address of a nested function on x86_64-w64-windows-gnu",
