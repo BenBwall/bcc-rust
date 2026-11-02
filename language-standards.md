@@ -3281,9 +3281,9 @@ constant layout and may be initialized, as in GCC. A result of such a type,
 which only a nested function can have, is returned in memory the caller
 allocates. Refused by name ("this use of a structure or union with a
 member of variable size"): a volatile copy and an `asm` operand of it; under
-Microsoft record layout (the Windows targets) the record stays unmodeled
-and is refused as "structures with variably modified members in Microsoft
-record layout".
+Microsoft record layout (the Windows targets, or `ms_struct`) the record
+stays unmodeled and is refused as "structures with variably modified
+members in Microsoft record layout".
 
 ## Type inference: C23 `auto` and GNU `__auto_type` (2026-10-31)
 

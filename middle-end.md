@@ -2837,16 +2837,29 @@ offset 0 and each later one at a base computed at run time from an earlier
 one. A member of variable size starts a segment of its own, its base the
 cursor rounded up to the member's alignment (at run time only when the
 earlier base is not known to be aligned that far), and the next segment
-starts at its end; a member of constant size that needs more alignment
-than its segment's base is known to have starts a segment rounded up at
-run time; any other member is at a constant offset in its segment. A
+starts at its end. That end is known to be aligned only as far as both
+the member's start and its size are: an array's size is a multiple of its
+element's, a record's of its own alignment, but `aligned` or `_Alignas` on
+the member does not round its size, so after `char a[n]
+__attribute__((aligned(32)))` a `long` is aligned to 8 at run time, as
+GCC's `place_field` rounds a variable offset up to the field's alignment.
+A member of constant size that needs more alignment than its segment's
+base is known to have starts a segment rounded up at run time; any other
+member is at a constant offset in its segment. A zero-width bit-field
+keeps its declared type's boundary there even in a packed record. A
 bit-field after a member of variable size takes the next bits, whatever
 unit they straddle, since GCC checks the straddle only at a constant
 offset (`struct { char a[n]; int b : 3; int c : 7; char d; }` puts `d` at
 `n + 2`). A union's members all start at 0. GCC 13's offsets, sizes,
 alignments and bit placement agree on the probes for every rule above
 (packed and `aligned` records, nested records, zero-width bit-fields and
-unions included).
+unions included). A generated matrix of 1,792 records (sixteen leading
+members of variable size, `aligned`, packed and nested ones among them,
+times fourteen kinds of following members, including bit-fields, a second
+member of variable size and nested records, in plain, packed,
+`#pragma pack(1)`, `(2)` and `(4)`, `aligned(64)` and `ms_struct`
+structures and in unions) prints what GCC 13.3 and GCC 14.2 print on every
+back end; the `ms_struct` ones are refused by name.
 
 The size formula DAG (`facts/sizes.rs`) gains `Sum`, `AlignUp` and `Max`
 nodes; each segment's base and each such record's size are formulas over
