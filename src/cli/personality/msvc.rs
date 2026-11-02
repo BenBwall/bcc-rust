@@ -15,7 +15,10 @@
 //! ignores those that cannot change the program, warns about hardening, and
 //! refuses the rest with a `Command line error`; `/Zp`, `/Za`, the runtime
 //! options and `/Zc:trigraphs` map onto bcc's packing, Microsoft extension,
-//! macro and trigraph options.
+//! macro and trigraph options. The command line is read with the `CL` and
+//! `_CL_` environment variables around it and each command file (`@file`)
+//! in its place (`command_files`). The warning level and `/wd`, `/we` and
+//! `/w1`-`/w4` control the warnings bcc reports with `cl`'s code.
 //!
 //! An argument that starts with `/` is an option only if clang-cl knows it
 //! (`known::clang_cl_option`), which is decided before any option is
@@ -37,6 +40,8 @@ use std::{
         PathBuf,
     },
 };
+
+mod command_files;
 
 use super::{
     Invocation,
@@ -79,7 +84,19 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
     // clang-cl reads its `/clang:` options after the others, wherever they
     // stand, so they win over `cl`'s (`/clang:-fsigned-char` over `/J`).
     let mut clang_options: Vec<OsString> = Vec::new();
-    let mut arguments = invocation.arguments.iter().map(OsString::as_os_str);
+    // `CL`, the command line with its command files, then `_CL_`.
+    let expanded = match command_files::expand(&invocation.arguments, clang_cl) {
+        | Ok(arguments) => arguments,
+        | Err(file) => {
+            state.command_line_error(
+                invocation,
+                Some("D8022"),
+                format_args!("cannot open '{}'", file.to_string_lossy()),
+            );
+            return Err(MainError::Reported(ERROR_STATUS));
+        },
+    };
+    let mut arguments = expanded.iter().map(OsString::as_os_str);
     while let Some(argument) = arguments.next() {
         if state.linking {
             state.link.push(link_option(argument));
@@ -275,7 +292,7 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         if let Some(banner) = banner {
             super::print(&banner, true);
         }
-        if invocation.arguments.is_empty() {
+        if expanded.is_empty() {
             super::print(
                 &format!(
                     "usage: {} [ option... ] filename... [ /link linkoption... ]\n",
