@@ -25,6 +25,7 @@
 
 use super::{
     Analyzer,
+    BitRange,
     ConstantClass,
     ExpressionInfo,
     InitOperation,
@@ -60,12 +61,14 @@ use crate::{
 };
 
 /// The subobject of a named constant an expression designates: `offset`
-/// bytes into the object `initializer` initializes.
+/// bytes into the object `initializer` initializes, and for a bit-field
+/// member its bits from there.
 /// C23 (N3220): §6.6 paragraphs 7 and 15, pp. 95-96; PDF pp. 108-109.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct ConstantPlace<'tu> {
     pub(crate) initializer: &'tu Initializer<'tu>,
     pub(crate) offset:      u64,
+    pub(crate) bit_field:   Option<BitRange>,
 }
 
 impl<'tu> Analyzer<'_, 'tu, '_> {
@@ -168,6 +171,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 ConstantPlace {
                     initializer,
                     offset: 0,
+                    bit_field: None,
                 },
             );
         }
@@ -206,10 +210,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         for operation in plan.operations {
             let fault = match *operation {
                 | InitOperation::Store {
-                    value, destination, ..
+                    value,
+                    destination,
+                    bit_field,
+                    ..
                 } => {
                     let e = plan.values[value.0 as usize].expression;
                     self.constexpr_value_fault(destination.ty, e)
+                        .or_else(|| {
+                            bit_field.and_then(|bits| self.bit_field_fault(destination.ty, bits, e))
+                        })
                         .map(|fault| (fault, e.source_vectors))
                 },
                 | InitOperation::Copy { value, .. } => {
@@ -355,6 +365,33 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         (!self.exactly_converts(target, value)).then_some(ConstexprFault::NotRepresentable)
     }
 
+    /// Why, under GCC's identity, the integer constant `e` cannot initialize
+    /// a bit-field of type `target` and width `bits.width`: its value
+    /// converted to `target` does not fit the width. Clang takes the value
+    /// truncated to the width, with a warning.
+    /// C23 (N3220): §6.7.2 paragraph 6, p. 99; PDF p. 112; §6.7.3.2
+    /// paragraph 12, p. 106; PDF p. 119.
+    fn bit_field_fault(
+        &self,
+        target: TypeId,
+        bits: BitRange,
+        e: &'tu Expression<'tu>,
+    ) -> Option<ConstexprFault> {
+        if self.context.configuration.compiler_identity().rules() != RuleSet::Gcc {
+            return None;
+        }
+        let (type_bits, signed) = self.integer_type(target)?;
+        let integer = self.expression_info(e).integer?;
+        // A bit-field wider than 128 bits keeps its value unchecked, as
+        // [`Self::member_constant`] reads none from it.
+        if type_bits > 128 || integer.wide.is_some() {
+            return None;
+        }
+        let value = integer.cast(type_bits, signed);
+        (value.cast(bits.width, signed).value != value.value)
+            .then_some(ConstexprFault::NotRepresentable)
+    }
+
     /// Whether the arithmetic constant `value` converted to `target` is the
     /// same value: an integer keeps its value, a floating value is exactly
     /// representable (converting it back gives it again), and a signaling
@@ -370,10 +407,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             if self.integer_type(target).is_some() {
                 return converted.integer.is_some_and(|c| c.value == integer.value);
             }
-            if converted.binary128().is_some() {
-                // Binary128's 113 significand bits hold every integer
-                // constant of up to 64 bits.
-                return integer.bits <= 64;
+            if let Some(converted) = converted.binary128() {
+                // The value is exact when converting it back gives it again;
+                // a value only the wide table holds is checked no further.
+                return integer.wide.is_none()
+                    && converted.imag.is_zero()
+                    && converted.real.to_integer(integer.signed, 128)
+                        == Some(integer.value.cast_unsigned());
             }
             return converted.floating().is_some_and(|floating| {
                 floating.imag.is_zero()
@@ -476,9 +516,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             .copied()
     }
 
-    /// Records `place` as the subobject `info`'s expression designates, and
-    /// gives a scalar one the value the named constant's initializer stores
-    /// there: an integer one is an integer constant expression operand.
+    /// Records `place`, moved through the copies that give it its value, as
+    /// the subobject `info`'s expression designates, and gives a scalar one
+    /// the value the named constant's initializer stores there: an integer
+    /// one is an integer constant expression operand, a bit-field's
+    /// truncated to its width.
     /// C23 (N3220): §6.6 paragraphs 7-8 and 10, pp. 95-96; PDF
     /// pp. 108-109.
     pub(super) fn read_named_constant(
@@ -486,10 +528,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         info: &mut ExpressionInfo<'tu>,
         place: ConstantPlace<'tu>,
     ) {
+        let ty = self.types.non_atomic(info.ty).unqualified();
+        let place = self.copied_place(place, ty);
         _ = self
             .named_constants
             .insert(std::ptr::from_ref(info.expression).addr(), place);
-        let ty = self.types.non_atomic(info.ty).unqualified();
         let pointer = self.pointer_target(ty).is_some() || self.nullptr_type(ty);
         if !pointer && !self.arithmetic(ty) {
             return;
@@ -527,7 +570,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if read.constant != ConstantClass::Arithmetic {
             return;
         }
-        info.integer = read.integer;
+        info.integer = match (read.integer, place.bit_field, self.integer_type(ty)) {
+            | (Some(integer), Some(bits), Some((type_bits, signed))) =>
+                Some(integer.cast(bits.width, signed).cast(type_bits, signed)),
+            | (integer, ..) => integer,
+        };
         info.folded = read.folded;
         info.unfolded_binary128 = read.unfolded_binary128;
         info.constant = ConstantClass::Arithmetic;
@@ -540,59 +587,139 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     fn stored_value(&self, mut place: ConstantPlace<'tu>, ty: TypeId) -> Option<Stored<'tu>> {
         let size = self.types.layout(ty)?.size;
         // Each copy of a whole structure or union moves to the named
-        // constant it copies; the chain ends at an object's own value.
-        for _ in 0..64 {
+        // constant it copies. Recorded places start past the copies that
+        // hold them whole ([`Self::copied_place`]), so the walk takes a step
+        // per copy nested in the type rather than per copy declared.
+        loop {
             let plan = self.initializers.plan(place.initializer)?;
-            let covers = |offset: u64, of: TypeId| {
-                self.types.layout(of).is_some_and(|layout| {
-                    offset <= place.offset && place.offset + size <= offset + layout.size
-                })
-            };
+            let span = Span::new(place.offset, place.bit_field, size);
             let mut found = None;
             for operation in plan.operations {
                 match *operation {
-                    | InitOperation::Zero { destination, .. }
-                    | InitOperation::EmptyScalar { destination, .. }
-                        if covers(destination.offset, destination.ty) =>
-                        found = Some(Found::Zero),
+                    | InitOperation::Repeat { .. } | InitOperation::Unmodeled { .. } =>
+                        return None,
                     | InitOperation::Store {
                         value,
                         destination,
-                        bit_field: None,
+                        bit_field,
                         ..
-                    } if destination.offset == place.offset && destination.ty.index == ty.index =>
+                    } if destination.offset == place.offset
+                        && bit_field == place.bit_field
+                        && destination.ty.index == ty.index =>
                         found = Some(Found::Value(plan.values[value.0 as usize].expression)),
+                    | InitOperation::Zero { destination, .. }
+                    | InitOperation::EmptyScalar { destination, .. }
+                        if self.covers(destination, span) =>
+                        found = Some(Found::Zero),
                     | InitOperation::Copy {
                         value, destination, ..
-                    } if covers(destination.offset, destination.ty) =>
+                    } if self.covers(destination, span) =>
                         found = Some(Found::Copy(
                             plan.values[value.0 as usize].expression,
                             destination.offset,
                         )),
-                    | InitOperation::Store { destination, .. }
-                    | InitOperation::String { destination, .. }
-                        if covers(destination.offset, destination.ty)
-                            || (place.offset <= destination.offset
-                                && destination.offset < place.offset + size) =>
+                    | InitOperation::Store { .. } | InitOperation::String { .. }
+                        if self
+                            .written_span(operation)
+                            .is_none_or(|written| written.overlaps(span)) =>
                         found = None,
-                    | InitOperation::Repeat { .. } | InitOperation::Unmodeled { .. } =>
-                        return None,
                     | _ => {},
                 }
             }
             match found? {
                 | Found::Zero => return Some(Stored::Zero),
                 | Found::Value(e) => return Some(Stored::Value(self.expression_info(e))),
-                | Found::Copy(e, offset) => {
-                    let copied = self.constant_place(e)?;
-                    place = ConstantPlace {
-                        initializer: copied.initializer,
-                        offset:      copied.offset + (place.offset - offset),
-                    };
-                },
+                | Found::Copy(e, offset) => place = self.through_copy(place, e, offset)?,
             }
         }
-        None
+    }
+
+    /// `place`, of type `ty`, moved through each copy of a structure or
+    /// union that last writes all of it, and has it as a subobject, to the
+    /// named constant the copy reads. The copy's own place was recorded
+    /// this way, so a chain of copies `s1 = s0`, `s2 = s1`, ... takes one
+    /// step per copy declared. A union stays where a copy of its member
+    /// covers it, as that copy does not tell which member is active.
+    /// C23 (N3220): §6.6 paragraph 7, p. 95; PDF p. 108.
+    fn copied_place(&self, mut place: ConstantPlace<'tu>, ty: TypeId) -> ConstantPlace<'tu> {
+        let Some(size) = self.types.layout(ty).map(|layout| layout.size) else {
+            return place;
+        };
+        loop {
+            let Some(plan) = self.initializers.plan(place.initializer) else {
+                return place;
+            };
+            let span = Span::new(place.offset, place.bit_field, size);
+            let mut copy = None;
+            for operation in plan.operations {
+                match *operation {
+                    | InitOperation::Repeat { .. } | InitOperation::Unmodeled { .. } =>
+                        return place,
+                    | InitOperation::Copy {
+                        value, destination, ..
+                    } if destination.offset <= place.offset
+                        && self.contains_subobject(
+                            destination.ty,
+                            place.offset - destination.offset,
+                            ty,
+                        ) =>
+                        copy = Some((plan.values[value.0 as usize].expression, destination.offset)),
+                    | _ if self
+                        .written_span(operation)
+                        .is_none_or(|written| written.overlaps(span)) =>
+                        copy = None,
+                    | _ => {},
+                }
+            }
+            let Some(next) = copy.and_then(|(e, offset)| self.through_copy(place, e, offset))
+            else {
+                return place;
+            };
+            place = next;
+        }
+    }
+
+    /// `place` read through the copy of the named constant `e` placed at
+    /// `offset`: the same subobject of the place `e` designates.
+    fn through_copy(
+        &self,
+        place: ConstantPlace<'tu>,
+        e: &'tu Expression<'tu>,
+        offset: u64,
+    ) -> Option<ConstantPlace<'tu>> {
+        let copied = self.constant_place(e)?;
+        Some(ConstantPlace {
+            initializer: copied.initializer,
+            offset:      copied.offset + (place.offset - offset),
+            bit_field:   place.bit_field,
+        })
+    }
+
+    /// Whether the subobject `destination` holds all of `span`.
+    fn covers(&self, destination: super::Subobject, span: Span) -> bool {
+        self.types
+            .layout(destination.ty)
+            .is_some_and(|layout| Span::new(destination.offset, None, layout.size).covers(span))
+    }
+
+    /// The bits `operation` writes, or `None` for a range repeated or not
+    /// modeled, which may write anywhere.
+    fn written_span(&self, operation: &InitOperation<'tu>) -> Option<Span> {
+        let (destination, bit_field) = match *operation {
+            | InitOperation::Zero { destination, .. }
+            | InitOperation::Select { destination, .. }
+            | InitOperation::Copy { destination, .. }
+            | InitOperation::String { destination, .. }
+            | InitOperation::EmptyScalar { destination, .. } => (destination, None),
+            | InitOperation::Store {
+                destination,
+                bit_field,
+                ..
+            } => (destination, bit_field),
+            | InitOperation::Repeat { .. } | InitOperation::Unmodeled { .. } => return None,
+        };
+        let size = self.types.layout(destination.ty)?.size;
+        Some(Span::new(destination.offset, bit_field, size))
     }
 
     /// Records the place of `base.member` when `base` designates a named
@@ -619,7 +746,17 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let Some(field) = self.types.tags[id].fields.get().get(index).copied() else {
             return;
         };
-        if field.width.is_some() {
+        // A bit-field's value is the bits of its width (C23 §6.7.3.2p12),
+        // read here for an integer type of at most 128 bits.
+        let bit_field = field.width.map(|width| BitRange {
+            bit_offset: field.bit_offset,
+            width,
+        });
+        if bit_field.is_some()
+            && self
+                .integer_type(field.ty)
+                .is_none_or(|(bits, _)| bits > 128)
+        {
             return;
         }
         if self.types.tags[id].kind == TagKind::Union
@@ -631,7 +768,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             info,
             ConstantPlace {
                 initializer: place.initializer,
-                offset:      place.offset + field.offset,
+                offset: place.offset + field.offset,
+                bit_field,
             },
         );
     }
@@ -639,7 +777,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// The member the initializer of a named constant gives a value in the
     /// union of type `union` at `place`.
     fn active_member(&self, mut place: ConstantPlace<'tu>, union: TypeId) -> Option<usize> {
-        for _ in 0..64 {
+        // As in [`Self::stored_value`], a step per nested copy.
+        loop {
             let plan = self.initializers.plan(place.initializer)?;
             let mut active = None;
             for operation in plan.operations {
@@ -672,16 +811,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             }
             match active? {
                 | Active::Member(member) => return Some(member),
-                | Active::Copy(e, offset) => {
-                    let copied = self.constant_place(e)?;
-                    place = ConstantPlace {
-                        initializer: copied.initializer,
-                        offset:      copied.offset + (place.offset - offset),
-                    };
-                },
+                | Active::Copy(e, offset) => place = self.through_copy(place, e, offset)?,
             }
         }
-        None
     }
 
     /// Whether an object of type `outer` has a subobject of type `inner`,
@@ -760,4 +892,42 @@ enum Found<'tu> {
 enum Active<'tu> {
     Member(usize),
     Copy(&'tu Expression<'tu>, u64),
+}
+
+/// The bits of an object a subobject or bit-field occupies, from the
+/// object's start.
+#[derive(Clone, Copy)]
+struct Span {
+    start: u64,
+    end:   u64,
+}
+
+impl Span {
+    /// The `size` bytes at `offset`, or the bits of `bit_field` from there.
+    fn new(offset: u64, bit_field: Option<BitRange>, size: u64) -> Self {
+        let start = offset.saturating_mul(8);
+        match bit_field {
+            | Some(bits) => {
+                let start = start.saturating_add(u64::from(bits.bit_offset));
+                Self {
+                    start,
+                    end: start.saturating_add(u64::from(bits.width)),
+                }
+            },
+            | None => Self {
+                start,
+                end: start.saturating_add(size.saturating_mul(8)),
+            },
+        }
+    }
+
+    /// Whether `self` holds all of `other`.
+    const fn covers(self, other: Self) -> bool {
+        self.start <= other.start && other.end <= self.end
+    }
+
+    /// Whether `self` and `other` share a bit.
+    const fn overlaps(self, other: Self) -> bool {
+        self.start < other.end && other.start < self.end
+    }
 }

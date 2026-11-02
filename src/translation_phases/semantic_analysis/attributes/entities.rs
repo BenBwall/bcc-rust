@@ -1414,7 +1414,7 @@ fn follows_definition(rule: Rule, name: &str) -> bool {
         Rule::Representation
             | Rule::TransparentUnion
             | Rule::Convention(_)
-            | Rule::RecordLayout { .. }
+            | Rule::RecordLayout
             | Rule::Alias
             | Rule::CallDiagnostic
     ) && name != "noreturn"

@@ -2222,9 +2222,9 @@ Implemented meanings, with Clang's applicability diagnostics:
 | Implemented (entity) | `noinline`, `noipa`, `always_inline`, diagnostic `nonnull`, `alias`, `cleanup`, `constructor`, `destructor`, `section` (and MSVC `allocate`), `used`, `visibility`, `weak`, `aligned` on functions, `selectany`, `returns_twice` (the same retained fact the external-symbol catalog gives `setjmp`, `_setjmp`, `__sigsetjmp`, `vfork` and their MinGW-w64 spellings; the native back end refuses calls to such functions) |
 | Implemented (call diagnostics) | GNU `error("message")`, `warning("message")`, including `gnu::` spelling; emitted direct calls after bcc and LLVM IR optimization, with `-Wattribute-warning` control |
 | Implemented (call contracts) | `overloadable`, `pass_object_size`, `pass_dynamic_object_size`, `diagnose_if`, `enable_if`, `unavailable`; unsupported predicate shapes diagnose and unmodeled object-size origins remain unknown |
-| Implemented (representation) | `aligned`, `packed`, scalar `mode`, `vector_size`, `transparent_union`; `gnu_inline`; `ms_struct` on Windows targets, `gcc_struct` on Linux targets |
+| Implemented (representation) | `aligned`, `packed`, scalar `mode`, `vector_size`, `transparent_union`; `gnu_inline`; `ms_struct` and `gcc_struct`, which give the record Microsoft's or System V's bit-field layout whatever the target's, with each identity's rules where GCC and Clang differ (union bit-field alignment, zero-width fields in packed records, an attribute on an earlier declaration); under Clang's rules a `gcc_struct` record on an MSVC target is an error, as in Clang 23, but at its definition rather than where its layout is first needed |
 | Calling conventions | `cdecl`, `regparm`: the x86-64 C convention. `stdcall`, `fastcall`, `thiscall`: accepted on Windows, warning elsewhere; `pascal`: warning everywhere (as Clang). `ms_abi` on Windows and `sysv_abi` on Linux are the default; the opposite one, `vectorcall` (and the `__vectorcall` keyword), `regcall`, `preserve_*`, `swift*`, `intel_ocl_bicc`, `interrupt`, `no_caller_saved_registers` and the other non-x86 conventions are refused |
-| Refused by lowering (dropping would change behavior) | `ifunc`, `weakref`, `naked`, `cpu_dispatch`, `cpu_specific`, `target_version`, `address_space`, Swift ABI parameter attributes, `internal_linkage`, the foreign record layout (`gcc_struct` on Windows, `ms_struct` on Linux) |
+| Refused by lowering (dropping would change behavior) | `ifunc`, `weakref`, `naked`, `cpu_dispatch`, `cpu_specific`, `target_version`, `address_space`, Swift ABI parameter attributes, `internal_linkage` |
 | Dropped with a warning | `common` (bcc emits ordinary definitions), `target`, `target_clones` (the default version runs), `weak_import` (still weak where the dead-code model folds), `copy` |
 | Supported | `dllimport` and `dllexport`: Clang's diagnostics, `__imp_name` references, export directives, and inline-body retention with COMDAT linkage |
 | Accepted, nothing to honor | hints, diagnostics and optimization promises: `access`, `alloc_align`, `alloc_size`, `artificial`, `assume`, `assume_aligned`, `cold`, `const`, `counted_by`, `deprecated`, `designated_init`, `fallthrough`, `flag_enum`, `flatten`, `format`, `format_arg`, `hot`, `leaf`, `malloc`, `maybe_unused`, `may_alias` (no type-based alias analysis), `musttail`, `no_*` instrumentation and sanitizer controls, `noclone`, `nocommon`, `nonstring`, `noreturn` (its only effect is on which code counts as emitted; see `semantic-analysis.md`), `nothrow`, `optimize`, `pure`, `retain`, `returns_nonnull`, `sentinel`, `simd`, `tls_model`, `unused`, `warn_unused_result`, the thread-safety capability attributes, and the C23 standard attributes; see the catalog for the full list |
@@ -2608,9 +2608,10 @@ These cases remain different from the compiler each identity claims:
   `-Wgnu-folding-constant`), an array designator (`[(int){1}] = 2`) and a
   GNU case range (`case 1 ... (int){3}:`).
 - C23 `constexpr` compound literals (`(constexpr int){3}`), which GCC 14
-  accepts in integer constant expressions and the bundled Clang does not
-  parse, are named constants under both identities (see "C23 `constexpr`
-  objects").
+  accepts in integer constant expressions, are named constants under the
+  GCC identity (see "C23 `constexpr` objects"). The bundled Clang parses
+  no storage-class specifier in a compound literal ("expected
+  expression"), and bcc's Clang identity reports one too.
 - GCC folds a `?:` before the casts around it, so `static int x = (int)(1
   ? (long)(int){3} : 0L);` is constant for GCC; bcc requires the `?:` to
   have the object's type and rejects it.
@@ -3364,8 +3365,9 @@ type without changing value, a signaling NaN keeping its type; no member,
 recursively, is atomic, volatile or restrict-qualified, and the type is not
 variably modified. A `constexpr` compound literal is checked the same way.
 
-Its name, a `.` member of it (through copies of whole structures and only
-for a union's initialized member) and a `constexpr` compound literal are
+Its name, a `.` member of it (through copies of whole structures, only for
+a union's initialized member, and for a bit-field with the value of its
+width) and a `constexpr` compound literal are
 named constants (§6.6p7, p13-15): they designate a subobject of the named
 constant's initializer, whose plan gives a scalar one its value. An integer
 one is an integer constant expression operand, so `constexpr int n = 4;
@@ -3387,6 +3389,8 @@ differ where the compilers do:
 | integer object initialized by `(int)(double)1.0` | error (not an integer constant expression) | accepted (an integer constant) |
 | a narrow string's elements | read as `char`, so `-funsigned-char` matters | read as `signed char` whatever `char` is |
 | a complex initializer that rounds | error | accepted |
+| a bit-field initializer its width cannot hold | error | accepted, the member reading the truncated value |
+| a `constexpr` compound literal | named constant | error, as Clang parses no storage class in a compound literal |
 | more than one declarator, the name in its own initializer, a same-scope redeclaration, a tag declared in the declaration or initializer (C23 §6.7.1p12, implementation-defined) | error | accepted |
 
 Under both identities `constexpr` beside `extern` or `typedef`, a repeated
@@ -3399,6 +3403,8 @@ Deviations:
 - Clang 23 folds an element of a `constexpr` array read with a constant
   index (`arr[1]`) with `-Wgnu-folding-constant`; bcc reads no element, as
   GCC does, and reports a non-constant expression under both identities.
+- Clang 23 warns when a bit-field takes a value its width truncates
+  (`-Wbitfield-constant-conversion`); bcc does not.
 - Clang 23 reports `static const int v; constexpr const int v = 1;` as a
   non-static declaration following a static one, although it gives the
   object internal linkage; bcc accepts it under the Clang identity.
@@ -3427,12 +3433,12 @@ static object there does; a `const` one does not. Lowering gives a
 block-scope static literal an internal global, and a thread-local one a
 thread-local global, like a file-scope literal's; GCC 14 accepts and runs
 `gcc.dg/c23-complit-*.c` the same way, and bcc reports an error on every
-line GCC 14 does there except one.
+line GCC 14 does there except one. Under the Clang identity a
+storage-class specifier in a compound literal is an error, as the bundled
+Clang parses none.
 
 Deviations:
 
 - GCC rejects a repeated `thread_local` in a literal (`(static
   thread_local thread_local int){0}`) as in a declaration; bcc warns, as
   Clang does for a declaration.
-- The bundled Clang parses no storage class in a compound literal; bcc
-  accepts them under the Clang identity too.

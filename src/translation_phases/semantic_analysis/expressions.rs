@@ -69,14 +69,19 @@ use super::{
     },
 };
 use crate::{
+    configuration::RuleSet,
     float_parsing::LongDouble,
     half_precision::HalfFormat,
-    translation_phases::parsing::syntax::{
-        BinaryOperator,
-        Constant,
-        Expression,
-        ExpressionType,
-        UnaryOperator,
+    translation_phases::parsing::{
+        SpecifierExtensionKind,
+        declaration_syntax::DeclarationSpecifiers,
+        syntax::{
+            BinaryOperator,
+            Constant,
+            Expression,
+            ExpressionType,
+            UnaryOperator,
+        },
     },
 };
 
@@ -150,6 +155,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                             super::ConstantPlace {
                                 initializer,
                                 offset: 0,
+                                bit_field: None,
                             },
                         );
                     }
@@ -249,9 +255,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 info.integer = Some(Integer::int(0).cast(64, false));
                 info.constant = ConstantClass::Address;
             },
+            // C23 §6.4.4.6p3: `false` and `true` are constants of type
+            // `bool`.
             | E::Boolean(value) => {
-                info.ty = self.types.scalar(Scalar::Int);
-                info.integer = Some(Integer::int(i128::from(value)));
+                info.ty = self.types.scalar(Scalar::Bool);
+                info.integer = Some(Integer::boolean(value));
                 info.ice = true;
                 info.constant = ConstantClass::Arithmetic;
             },
@@ -624,7 +632,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// Types the compound literal `e` of the type `type_name` names, as an
     /// object its `initializer` initializes: its storage-class specifiers
     /// give its storage duration, as [`Self::literal_storage`] tells, and a
-    /// `constexpr` one is a `const` named constant.
+    /// `constexpr` one is a `const` named constant. Clang's identity
+    /// rejects the specifiers, as Clang parses none.
     /// C99: §6.5.2.5 paragraphs 1-6, pp. 75-76; PDF pp. 87-88. C23 (N3220):
     /// §6.5.3.6 paragraphs 4-7, p. 79; PDF p. 92.
     fn type_compound_literal(
@@ -639,16 +648,40 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             .get(&super::type_name_identity(type_name))
             .copied()
             .unwrap_or_else(|| self.types.unknown());
+        let specifiers = type_name.declaration_specifiers;
         // C23 §6.5.3.6p4: a `constexpr` literal is a `constexpr` object, so
         // its type is `const`.
-        let constexpr = Self::constexpr_storage(type_name.declaration_specifiers.extensions);
+        let mut constexpr = Self::constexpr_storage(specifiers.extensions);
+        let clang_storage = self.context.configuration.compiler_identity().rules()
+            == RuleSet::Clang
+            && !type_name.recovered
+            && literal_storage_class(specifiers);
+        if clang_storage {
+            self.error(
+                SemanticErrorKind::LiteralStorageClass,
+                specifiers.source_vectors,
+                None,
+                None,
+            );
+            constexpr = false;
+        }
         let ty = if constexpr && !self.types.unanalyzed(ty) {
             self.types.const_object(ty)
         } else {
             ty
         };
         let errors_before = self.semantic_errors;
-        let (duration, register) = self.literal_storage(e, type_name);
+        // Clang's error leaves a literal without storage-class specifiers.
+        let (duration, register) = if clang_storage {
+            let duration = if self.scope == 0 {
+                Duration::Static
+            } else {
+                Duration::Automatic
+            };
+            (duration, false)
+        } else {
+            self.literal_storage(e, type_name)
+        };
         // §6.5.2.5p1 excludes variable length array types; a pointer to one
         // is a valid compound literal type.
         if !self.types.unanalyzed(ty)
@@ -918,4 +951,21 @@ impl Analyzer<'_, '_, '_> {
             info.constant = ConstantClass::Arithmetic;
         }
     }
+}
+
+/// Whether a compound literal's specifiers include a storage-class
+/// specifier: `constexpr`, `thread_local` or a keyword one.
+/// C23 (N3220): §6.5.3.6 paragraph 4, p. 79; PDF p. 92.
+fn literal_storage_class(specifiers: DeclarationSpecifiers<'_>) -> bool {
+    let mut chain = specifiers.extensions;
+    while let Some(item) = chain {
+        if matches!(
+            item.kind,
+            SpecifierExtensionKind::Constexpr | SpecifierExtensionKind::ThreadLocal(_)
+        ) {
+            return true;
+        }
+        chain = item.next;
+    }
+    specifiers.storage_class.is_some()
 }

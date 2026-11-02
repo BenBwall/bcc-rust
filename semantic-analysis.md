@@ -624,10 +624,13 @@ C23 named constants (`named_constants.rs`) extend both evaluators. A
 initializer, maps to that initializer (`Analyzer::named_objects`, shared by
 redeclarations), and an identifier naming it, a `.` member of a structure
 or union constant and a `constexpr` compound literal record the
-`ConstantPlace` they designate: an initializer and a byte offset into the
-object it initializes. `Analyzer::read_named_constant` gives a scalar place
-the value the initializer's plan stores there, following whole-structure
-copies to the named constant they copy, and an integer one is an ICE
+`ConstantPlace` they designate: an initializer, a byte offset into the
+object it initializes and, for a bit-field member, its bits from there.
+`Analyzer::read_named_constant` records each place past the copies of
+whole structures and unions that give it its value, so a chain of copies
+costs one step per copy, and gives a scalar place the value the
+initializer's plan stores there, a bit-field's truncated to its width,
+following the copies nested inside it; an integer one is an ICE
 operand, as is a cast of a floating one under GCC's identity
 (`valid_ice_operands` and `evaluate` take the recorded value). The places
 are retained (`SemanticTranslationUnit::named_constant`), so lowering

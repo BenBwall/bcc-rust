@@ -201,3 +201,111 @@ fn constexpr_compound_literals_are_named_constants() {
         )]
     );
 }
+
+/// A bit-field member of a named constant is one too, with the value of
+/// its width: in a static assertion, an enumerator and an array bound,
+/// through copies and after a designator writes it again.
+#[test]
+fn bit_field_members_are_named_constants() {
+    holds(
+        "struct S { unsigned x : 3; int y : 3; bool b : 1; unsigned z; }; constexpr struct S s = \
+         { 3, -4, 1, 7 }; static_assert(s.x == 3); static_assert(s.y == -4); static_assert(s.b); \
+         static_assert(s.z == 7); enum { E = s.x + s.y }; static_assert(E == -1); constexpr \
+         struct S t = s; static_assert(t.x == 3); int a[t.x]; static_assert(sizeof a == 3 * \
+         sizeof(int)); struct A { int k; struct { unsigned u : 4; }; }; constexpr struct A q = { \
+         1, { 9 } }; static_assert(q.u == 9);",
+    );
+    // The later designator gives the value; GCC's `-Woverride-init` and
+    // Clang's `-Winitializer-overrides` report the earlier one.
+    for identity in [CompilerIdentity::Gcc, CompilerIdentity::Clang] {
+        assert_eq!(
+            kinds(
+                "struct S { unsigned x : 3; int y : 3; }; constexpr struct S r = { .x = 1, .y = \
+                 2, .x = 5 }; static_assert(r.x == 5 && r.y == 2);",
+                identity
+            ),
+            [SemanticErrorKind::InitializerOverride],
+            "{identity:?}"
+        );
+    }
+}
+
+/// GCC rejects a value a bit-field's width cannot hold; Clang takes it
+/// truncated to the width.
+#[test]
+fn bit_field_width_bounds_the_value_under_gcc() {
+    for source in [
+        "struct S { unsigned x : 3; }; constexpr struct S s = { 8 };",
+        "struct S { int y : 3; }; constexpr struct S s = { 4 };",
+    ] {
+        rejects(
+            source,
+            CompilerIdentity::Gcc,
+            ConstexprFault::NotRepresentable,
+        );
+    }
+    assert_eq!(
+        kinds(
+            "struct S { unsigned x : 3; int y : 3; }; constexpr struct S s = { 8, 4 }; \
+             static_assert(s.x == 0); static_assert(s.y == -4);",
+            CompilerIdentity::Clang
+        ),
+        []
+    );
+}
+
+/// An integer of more than 64 bits initializes a `_Float128` when the
+/// type holds its value exactly.
+#[test]
+fn wide_integers_convert_exactly_to_binary128() {
+    assert_eq!(
+        kinds(
+            "constexpr _BitInt(128) n = 1; constexpr _Float128 f = n; constexpr unsigned \
+             _BitInt(128) m = (unsigned _BitInt(128))1 << 127; constexpr _Float128 g = m; \
+             constexpr _BitInt(128) k = -((_BitInt(128))1 << 126); constexpr _Float128 h = k;",
+            CompilerIdentity::Gcc
+        ),
+        []
+    );
+    rejects(
+        "constexpr _BitInt(128) n = ((_BitInt(128))1 << 120) + 1; constexpr _Float128 f = n;",
+        CompilerIdentity::Gcc,
+        ConstexprFault::NotRepresentable,
+    );
+}
+
+/// A chain of structure copies stays a named constant however long it is.
+#[test]
+fn long_copy_chains_stay_named_constants() {
+    let mut source = String::from("struct S { int n; }; constexpr struct S s0 = { 42 };");
+    for index in 1..=200 {
+        source.push_str(&format!(" constexpr struct S s{index} = s{};", index - 1));
+    }
+    source.push_str(" static_assert(s200.n == 42);");
+    holds(&source);
+    // A copy of a union's largest member covers the union, yet the union
+    // keeps the member its initializer selects.
+    holds(
+        "struct s { int a; int b; }; union u { int i; struct s e; }; constexpr struct s s0 = { 1, \
+         7 }; constexpr union u v = { .e = s0 }; static_assert(v.e.b == 7); constexpr union u w = \
+         v; static_assert(w.e.a == 1);",
+    );
+}
+
+/// Clang 23 parses no storage-class specifier in a compound literal, so
+/// its identity rejects `constexpr` and the others there.
+#[test]
+fn clang_rejects_storage_classes_in_compound_literals() {
+    for source in [
+        "int a = (constexpr int){ 1 };",
+        "void f(void) { (void)(static int){ 1 }; }",
+        "void f(void) { (void)(register int){ 1 }; }",
+        "void f(void) { (void)(thread_local int){ 1 }; }",
+    ] {
+        assert_eq!(
+            kinds(source, CompilerIdentity::Clang),
+            [SemanticErrorKind::LiteralStorageClass],
+            "{source}"
+        );
+    }
+}
