@@ -567,6 +567,71 @@ mod tests {
         assert!(!gcc.status.success());
     }
 
+    /// GCC 14 refuses an implicit function declaration in C99 and later
+    /// unless `-fpermissive` or `-Wno-error=` makes it a warning, and
+    /// accepts it in GNU89; Clang refuses it whatever `-fpermissive` and
+    /// `-w` say; TCC warns, and `-Wno-implicit-function-declaration`
+    /// silences it.
+    #[test]
+    fn implicit_declarations_follow_each_driver() {
+        let directory = Directory::new();
+        directory.write("i.c", "int main(void) { return f(1); }\nint f(int x) { return x - 1; }\n");
+        let compile = |mode: &str, options: &[&str]| {
+            let mut args = vec!["-c", "i.c", "-o", "i.o"];
+            args.extend_from_slice(options);
+            directory.bcc(mode, &args)
+        };
+        let gcc_error = "i.c:1:25: error: implicit declaration of function 'f' \
+                         [-Wimplicit-function-declaration]";
+        let refused = compile("--gcc-mode", &[]);
+        assert!(!refused.status.success());
+        assert!(stderr(&refused).contains(gcc_error), "{}", stderr(&refused));
+        let refused = compile("--gcc-mode", &["-w"]);
+        assert!(!refused.status.success(), "{}", stderr(&refused));
+        for options in [
+            &["-fpermissive"][..],
+            &["-Wno-error=implicit-function-declaration"],
+        ] {
+            let warned = compile("--gcc-mode", options);
+            succeeds(&warned);
+            assert!(
+                stderr(&warned).contains(&gcc_error.replace("error:", "warning:")),
+                "{options:?}: {}",
+                stderr(&warned)
+            );
+        }
+        for options in [&["-std=gnu89"][..], &["-Wno-implicit-function-declaration"]] {
+            let silent = compile("--gcc-mode", options);
+            succeeds(&silent);
+            assert_eq!(stderr(&silent), "", "{options:?}");
+        }
+        for options in [&[][..], &["-fpermissive"], &["-w"]] {
+            let refused = compile("--clang-mode", options);
+            assert!(!refused.status.success(), "{options:?}");
+            assert!(
+                stderr(&refused).contains(
+                    "error: call to undeclared function 'f'; ISO C99 and later do not support \
+                     implicit function declarations [-Wimplicit-function-declaration]"
+                ),
+                "{options:?}: {}",
+                stderr(&refused)
+            );
+        }
+        succeeds(&compile(
+            "--clang-mode",
+            &["-Wno-error=implicit-function-declaration"],
+        ));
+        let tcc = compile("--tcc-mode", &[]);
+        succeeds(&tcc);
+        assert_eq!(
+            stderr(&tcc),
+            "i.c:1: warning: implicit declaration of function 'f'\n"
+        );
+        let tcc = compile("--tcc-mode", &["-Wno-implicit-function-declaration"]);
+        succeeds(&tcc);
+        assert_eq!(stderr(&tcc), "");
+    }
+
     /// TCC knows only its own few `__builtin_` names (TCC mob `tcctok.h`
     /// and `tccdefs.h`): a call to any other is an implicit declaration of
     /// an ordinary function, which the program may define. Its builtins
