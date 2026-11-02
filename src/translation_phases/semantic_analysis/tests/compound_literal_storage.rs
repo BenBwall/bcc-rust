@@ -147,6 +147,22 @@ fn register_array_objects_do_not_decay() {
         kinds_as(address, CompilerIdentity::Clang),
         [K::RegisterArrayAddress]
     );
+    // Clang checks only a register array named directly: an array member
+    // of a register structure decays there. GCC subscripts it but rejects
+    // any other conversion.
+    let member = "struct S { int a[2]; }; void g(int *); int f(void) { register struct S s = {{1, \
+                  2}}; g(s.a); return s.a[1]; }";
+    assert_eq!(kinds_as(member, CompilerIdentity::Clang), []);
+    assert_eq!(
+        kinds_as(member, CompilerIdentity::Gcc),
+        [K::RegisterArrayAddress]
+    );
+    let parenthesized = "void g(int *); void f(void) { register int a[2]; g((a)); }";
+    assert_eq!(kinds_as(parenthesized, CompilerIdentity::Clang), []);
+    assert_eq!(
+        kinds_as(parenthesized, CompilerIdentity::Gcc),
+        [K::RegisterArrayAddress]
+    );
 }
 
 /// Clang 23 parses no storage-class specifier in a compound literal; its

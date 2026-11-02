@@ -2091,9 +2091,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         }
         // C99 §6.3.2.1p3, p. 46; PDF p. 58: converting an array of
         // register storage to a pointer is undefined; GCC and Clang reject
-        // it as taking the register object's address. The pointer still
-        // types what uses it.
-        if matches!(kind, Some(ConversionKind::ArrayDecay)) && info.register {
+        // it as taking the register object's address. Clang checks only a
+        // register array named directly, so an array member of a register
+        // structure, or a parenthesized name, decays there; GCC rejects
+        // those too. The pointer still types what uses it.
+        if matches!(kind, Some(ConversionKind::ArrayDecay))
+            && info.register
+            && (self.context.configuration.compiler_identity().rules()
+                == crate::configuration::RuleSet::Gcc
+                || matches!(info.expression.kind, ExpressionType::Identifier(_)))
+        {
             self.error(
                 SemanticErrorKind::RegisterArrayAddress,
                 info.expression.source_vectors,
