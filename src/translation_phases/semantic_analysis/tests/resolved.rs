@@ -201,7 +201,11 @@ fn m3_implicit_declarations_are_discovered_through_transparent_wrappers() {
         for spelling in ["c89", "gnu99"] {
             let mode = LanguageMode::parse(spelling).unwrap();
             let configuration = CompilerConfiguration::new(mode.standard, ExtensionPolicy::Allow)
-                .with_gnu_extensions(mode.gnu);
+                .with_gnu_extensions(mode.gnu)
+                .with_warning_option(
+                    crate::configuration::DiagnosticGroup::ImplicitFunctionDeclaration,
+                    crate::configuration::WarningOption::Enable(false),
+                );
             with_configuration(&source, configuration, |context, sema| {
                 assert_eq!(
                     context.error_count(),
@@ -223,7 +227,7 @@ fn m3_implicit_declarations_are_discovered_through_transparent_wrappers() {
             assert!(context.take_pending_errors().iter().any(|error| matches!(
                 error,
                 TranslationError::Semantic(error)
-                    if error.kind == SemanticErrorKind::UndeclaredIdentifier
+                    if error.kind == SemanticErrorKind::ImplicitFunctionDeclaration
             )));
         });
     }

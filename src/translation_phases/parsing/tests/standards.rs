@@ -102,7 +102,7 @@ fn c99_constructs_follow_policy_in_every_pre_c99_mode() {
 }
 
 #[test]
-fn implicit_int_is_native_in_c90_and_a_policy_extension_afterward() {
+fn implicit_int_is_parsed_in_every_revision() {
     for standard in [
         CStandard::C89,
         CStandard::C95,
@@ -115,10 +115,9 @@ fn implicit_int_is_native_in_c90_and_a_policy_extension_afterward() {
             mode(standard, ExtensionPolicy::Warn),
             |p| {
                 assert_eq!(parser_errors(p).count(), 0, "{:?}", p.errors);
-                assert_eq!(
-                    extensions(p).len(),
-                    if standard < CStandard::C99 { 0 } else { 2 }
-                );
+                // Semantic analysis reports it (`-Wimplicit-int`).
+                assert_eq!(extensions(p).len(), 0);
+                assert!(declaration(p, 0).declaration_specifiers.implicit_int);
                 assert_eq!(
                     declaration(p, 0).declaration_specifiers.type_specifiers,
                     TypeSpecifiers::Int
@@ -859,10 +858,8 @@ fn implicit_return_types_support_pointer_and_parenthesized_declarators() {
             |p| {
                 assert_eq!(parser_errors(p).count(), 0, "{standard:?}: {:?}", p.errors);
                 assert_eq!(p.items.len(), 2);
-                assert_eq!(
-                    extensions(p).len(),
-                    if standard < CStandard::C99 { 0 } else { 2 }
-                );
+                // Semantic analysis reports it (`-Wimplicit-int`).
+                assert_eq!(extensions(p).len(), 0);
                 assert_eq!(
                     function_definition(p, 0)
                         .declaration_specifiers

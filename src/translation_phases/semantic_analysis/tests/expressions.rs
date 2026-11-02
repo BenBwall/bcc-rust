@@ -497,42 +497,72 @@ fn const_record_arrays_and_bitfield_promotions() {
     );
 }
 
+/// An undeclared called identifier is declared as in C89, silently before
+/// C99 and under `-Wimplicit-function-declaration` from C99, an error by
+/// default for Clang and GCC 14 in strict and GNU modes alike; Clang 23
+/// declares none in C23, where GCC 14 still does.
 #[test]
 fn implicit_function_declarations_follow_the_language_mode() {
-    use crate::configuration::{
-        CompilerConfiguration,
-        ExtensionPolicy,
-        LanguageMode,
+    use crate::{
+        configuration::{
+            CompilerConfiguration,
+            CompilerIdentity,
+            ExtensionPolicy,
+            LanguageMode,
+        },
+        translation_phases::{
+            ErrorSeverity,
+            GetSeverity,
+        },
     };
-    for spelling in ["c89", "gnu89", "gnu99"] {
+    for (spelling, identity, expected) in [
+        ("c89", CompilerIdentity::Clang, None),
+        ("gnu89", CompilerIdentity::Gcc, None),
+        ("c99", CompilerIdentity::Clang, Some(ErrorSeverity::Error)),
+        ("gnu99", CompilerIdentity::Clang, Some(ErrorSeverity::Error)),
+        ("gnu17", CompilerIdentity::Gcc, Some(ErrorSeverity::Error)),
+        ("c23", CompilerIdentity::Gcc, Some(ErrorSeverity::Error)),
+        ("gnu11", CompilerIdentity::Tcc, Some(ErrorSeverity::Warning)),
+        ("c17", CompilerIdentity::Msvc, Some(ErrorSeverity::Warning)),
+    ] {
         let mode = LanguageMode::parse(spelling).unwrap();
-        let configuration = CompilerConfiguration::new(mode.standard, ExtensionPolicy::Allow)
-            .with_gnu_extensions(mode.gnu);
+        let configuration = CompilerConfiguration::new(mode.standard, ExtensionPolicy::Deny)
+            .with_gnu_extensions(mode.gnu)
+            .with_compiler_identity(identity);
         with_configuration(
             "int f(void) {return undeclared(1);}",
             configuration,
             |context, unit| {
-                assert_eq!(context.pending_error_count(), 0, "{spelling}");
+                let errors = context.take_pending_errors();
+                let severities: Vec<_> = errors
+                    .iter()
+                    .map(|error| {
+                        assert!(
+                            matches!(error, TranslationError::Semantic(e)
+                                if e.kind == SemanticErrorKind::ImplicitFunctionDeclaration),
+                            "{spelling}: {error:?}"
+                        );
+                        error.severity()
+                    })
+                    .collect();
+                assert_eq!(
+                    severities,
+                    expected.into_iter().collect::<Vec<_>>(),
+                    "{spelling}"
+                );
                 assert!(unit.bindings.iter().any(|b| b.kind == BindingKind::Function
                     && context.string_cache.at(b.name.name) == "undeclared"));
             },
         );
     }
-    rejects(
-        "int f(void) {return undeclared(1);}",
-        SemanticErrorKind::UndeclaredIdentifier,
-    );
-    let configuration =
-        CompilerConfiguration::new(CStandard::C99, ExtensionPolicy::Deny).with_gnu_extensions(true);
+    let configuration = CompilerConfiguration::new(CStandard::C23, ExtensionPolicy::Allow);
     with_configuration(
         "int f(void) {return undeclared(1);}",
         configuration,
         |context, _| {
             assert!(
-                context
-                    .take_pending_errors()
-                    .iter()
-                    .any(|e| matches!(e, TranslationError::Extension(_)))
+                context.take_pending_errors().iter().any(|e| matches!(e,
+                    TranslationError::Semantic(e) if e.kind == SemanticErrorKind::UndeclaredIdentifier))
             );
         },
     );
@@ -754,8 +784,16 @@ fn implicit_library_declarations_retain_prototypes_and_warn_once() {
                             })
                             .collect();
                         assert_eq!(warnings.len(), 6);
+                        // Clang warns in C89 and refuses them from C99.
                         for warning in warnings {
-                            assert_eq!(warning.severity(), ErrorSeverity::Warning);
+                            assert_eq!(
+                                warning.severity(),
+                                if standard < CStandard::C99 {
+                                    ErrorSeverity::Warning
+                                } else {
+                                    ErrorSeverity::Error
+                                }
+                            );
                             let SemanticErrorKind::ImplicitLibraryFunction(ty) = warning.kind
                             else {
                                 unreachable!()
@@ -804,10 +842,14 @@ fn explicit_library_declaration_keeps_the_user_type() {
             );
         },
     );
-    rejects(
-        "int main(void) {exit(0);}",
-        SemanticErrorKind::UndeclaredIdentifier,
-    );
+    with_source("int main(void) {exit(0);}", |context, _| {
+        let errors = context.take_pending_errors();
+        assert!(
+            matches!(errors.as_slice(), [TranslationError::Semantic(e)]
+                if matches!(e.kind, SemanticErrorKind::ImplicitLibraryFunction(_))),
+            "{errors:?}"
+        );
+    });
     with_configuration(
         "void f(void) { memcpy(0, 0); }",
         crate::configuration::CompilerConfiguration::default().with_gnu_extensions(true),

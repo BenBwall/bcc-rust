@@ -237,7 +237,12 @@ fn binding_origins_keep_implicit_registered_and_opaque_calls_distinct() {
     with_configuration(
         "int f(void){(void)__atomic_always_lock_free(4,0);
         (void)__builtin_classify_type(0);(void)__builtin_M4_unknown();return external();}",
-        crate::configuration::CompilerConfiguration::default().with_gnu_extensions(true),
+        crate::configuration::CompilerConfiguration::default()
+            .with_gnu_extensions(true)
+            .with_warning_option(
+                crate::configuration::DiagnosticGroup::ImplicitFunctionDeclaration,
+                crate::configuration::WarningOption::Enable(false),
+            ),
         |context, unit| {
             assert_eq!(unit.errors, 0, "{:?}", context.take_pending_errors());
             for (spelling, origin) in [
