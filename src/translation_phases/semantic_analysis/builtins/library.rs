@@ -46,7 +46,9 @@ impl Analyzer<'_, '_, '_> {
         }
         let Some(descriptor) = crate::builtins::ordinary(spelling) else {
             let sized = sized_atomic(spelling)?;
-            return self.sized_atomic_type(sized);
+            let ty = self.sized_atomic_type(sized)?;
+            let text = self.type_spelling(ty, false).unwrap_or_default();
+            return Some((ty, self.context.string_cache.intern(text)));
         };
         let signature = descriptor.signature;
         let variadic = signature.variadic;
