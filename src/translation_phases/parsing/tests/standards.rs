@@ -1233,6 +1233,41 @@ fn constexpr_and_thread_local_compound_literals_are_recognized() {
     }
 }
 
+/// C23 (N3220) §6.7.2p2: `constexpr` joins only `auto`, `register` and
+/// `static`, once.
+#[test]
+fn constexpr_rejects_extern_typedef_and_repetition() {
+    for source in [
+        "extern constexpr int a = 1;",
+        "constexpr extern int a = 1;",
+        "typedef constexpr int t;",
+        "constexpr typedef int t;",
+        "constexpr constexpr int a = 1;",
+    ] {
+        with_parse_configuration(source, mode(CStandard::C23, ExtensionPolicy::Allow), |p| {
+            let errors: Vec<_> = parser_errors(p).collect();
+            assert!(
+                matches!(
+                    errors[..],
+                    [
+                        super::super::errors::ParserErrorType::ConstexprStorageConflict { .. }
+                            | super::super::errors::ParserErrorType::ConstexprSpecifiedTwice
+                    ]
+                ),
+                "{source}: {errors:?}"
+            );
+        });
+    }
+    for source in [
+        "static constexpr int a = 1;",
+        "void f(void) { register constexpr int a = 1; auto constexpr b = 2; }",
+    ] {
+        with_parse_configuration(source, mode(CStandard::C23, ExtensionPolicy::Allow), |p| {
+            assert_eq!(parser_errors(p).count(), 0, "{source}");
+        });
+    }
+}
+
 #[test]
 fn alignof_expression_is_accepted_as_a_gnu_extension() {
     for policy in [
