@@ -489,6 +489,23 @@ mod tests {
         let output = directory.bcc("--clang-mode", &["-fsyntax-only", "f80.c"]);
         assert!(!output.status.success());
         assert!(stderr(&output).contains("__float80"), "{}", stderr(&output));
+        // A program's own typedef of the name hides GCC's, and a local
+        // object may take the name; a file-scope one redeclares it.
+        directory.write(
+            "shadow.c",
+            "int main(void) {\n  typedef int __float80;\n  __float80 x = 3;\n  \
+             _Static_assert(sizeof(x) == sizeof(int), \"shadow\");\n  { int __float80 = 1; x += \
+             __float80; }\n  return x;\n}\n",
+        );
+        let output = directory.bcc("--gcc-mode", &["shadow.c", "-o", "shadow"]);
+        succeeds(&output);
+        let run = Command::new(directory.path("shadow")).output().unwrap();
+        assert_eq!(run.status.code(), Some(4));
+        for source in ["int __float80;\n", "int __int128_t;\n"] {
+            directory.write("redeclared.c", source);
+            let output = directory.bcc("--gcc-mode", &["-fsyntax-only", "redeclared.c"]);
+            assert!(!output.status.success(), "{source}");
+        }
     }
 
     /// TCC names no warning options, so its diagnostics carry no `[-W…]`

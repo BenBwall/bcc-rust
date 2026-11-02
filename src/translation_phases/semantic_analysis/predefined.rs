@@ -273,13 +273,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         };
         let ty = match self.context.string_cache.at(name.name) {
             | "__builtin_va_list" => self.va_list_type?,
-            | "__int128_t" => self.types.scalar(Scalar::Int128),
-            | "__uint128_t" => self.types.scalar(Scalar::UnsignedInt128),
-            | "__float80"
-                if crate::translation_phases::parsing::float80_names_long_double(
-                    self.context.configuration,
-                ) =>
-                self.types.scalar(Scalar::LongDouble),
+            | _ if self
+                .lookup_at(Namespace::Ordinary, name.name, scope)
+                .is_none()
+                && self.builtin_typedef(name.name).is_some() =>
+                self.types.scalar(self.builtin_typedef(name.name)?),
             | _ => {
                 let binding = self.bindings[self
                     .lookup_at(Namespace::Ordinary, name.name, scope)?

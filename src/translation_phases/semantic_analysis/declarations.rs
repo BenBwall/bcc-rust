@@ -171,27 +171,22 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     self.values.push(ty);
                     return;
                 }
-                let builtin = match self.context.string_cache.at(name.name) {
-                    | "__int128_t" => Some(Scalar::Int128),
-                    | "__uint128_t" => Some(Scalar::UnsignedInt128),
-                    | "__float80"
-                        if crate::translation_phases::parsing::float80_names_long_double(
-                            self.context.configuration,
-                        ) =>
-                        Some(Scalar::LongDouble),
-                    | _ => None,
-                };
-                if let Some(scalar) = builtin {
-                    let ty = self.types.scalar(scalar);
-                    self.values.push(ty);
-                    return;
-                }
-                let ty = self
+                // A program's own typedef of the name hides the built-in one.
+                let declared = self
                     .lookup(Namespace::Ordinary, name.name)
                     .and_then(|entry| {
                         let binding = self.bindings[entry.binding];
                         (binding.kind == BindingKind::Typedef).then_some(binding.ty)
                     });
+                let builtin = self
+                    .builtin_typedef(name.name)
+                    .filter(|_| declared.is_none());
+                if let Some(scalar) = builtin {
+                    let ty = self.types.scalar(scalar);
+                    self.values.push(ty);
+                    return;
+                }
+                let ty = declared;
                 if ty.is_none() {
                     self.error(
                         SemanticErrorKind::UnknownTypedef,
@@ -970,6 +965,26 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// C99: §6.7p3-4, p. 97; PDF p. 109; §6.2.7p2-4, p. 40; PDF p. 52. Repeated
     /// typedef exception: C11 §6.7p3, p. 108;
     /// PDF p. 126.
+    /// The scalar a built-in typedef name denotes: GNU's `__int128_t` and
+    /// `__uint128_t`, and GCC's `__float80` where `long double` is x87.
+    /// GNU extension: GCC manual, "128-bit Integers", "Additional Floating
+    /// Types".
+    pub(super) fn builtin_typedef(
+        &self,
+        name: crate::util::string_cache::StringCacheId,
+    ) -> Option<Scalar> {
+        match self.context.string_cache.at(name) {
+            | "__int128_t" => Some(Scalar::Int128),
+            | "__uint128_t" => Some(Scalar::UnsignedInt128),
+            | "__float80"
+                if crate::translation_phases::parsing::float80_names_long_double(
+                    self.context.configuration,
+                ) =>
+                Some(Scalar::LongDouble),
+            | _ => None,
+        }
+    }
+
     pub(super) fn bind(
         &mut self,
         name: Identifier,
@@ -980,6 +995,21 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         value: Option<Integer>,
     ) {
         let visible = self.lookup(Namespace::Ordinary, name.name);
+        // The built-in typedef names are declared at file scope: an object
+        // or function there by the same name redeclares one as a different
+        // kind of symbol, as GCC and Clang report it.
+        if self.scope == 0
+            && kind != BindingKind::Typedef
+            && visible.is_none()
+            && self.builtin_typedef(name.name).is_some()
+        {
+            self.error(
+                SemanticErrorKind::IncompatibleDeclaration,
+                name.source_vectors,
+                Some(name.name),
+                None,
+            );
+        }
         if self.bind_overload(
             name,
             ty,
