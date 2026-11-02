@@ -144,7 +144,18 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 statement.source_vectors,
             )
         })?;
-        self.tasks.push(Task::CleanupNormal(statement));
+        // GNU: a value of variable size is snapshotted on the stack above
+        // the block's arrays, which stay until an enclosing scope or the
+        // function releases them.
+        self.tasks.push(
+            if mode == StatementMode::Value
+                && super::types::variable_size(&self.unit.sema.types, ty)
+            {
+                Task::CleanupKeepStack(statement)
+            } else {
+                Task::CleanupNormal(statement)
+            },
+        );
         if let (Some(tail), Some(expression)) = (resolved.outer_tail, resolved.value_tail)
             && !self
                 .unit

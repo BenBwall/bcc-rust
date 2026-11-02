@@ -416,7 +416,8 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
                 self.push_item(Operand::Value(size), result);
                 Ok(())
             },
-            | Task::CleanupNormal(statement) => self.cleanup_normal(statement),
+            | Task::CleanupNormal(statement) => self.cleanup_normal(statement, false),
+            | Task::CleanupKeepStack(statement) => self.cleanup_normal(statement, true),
             | Task::Enter { block, seal } => {
                 if seal {
                     self.draft.seal(block);

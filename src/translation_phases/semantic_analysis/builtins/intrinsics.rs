@@ -215,6 +215,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         valid = false;
                         break;
                     }
+                    // GNU: a member after one of variable size is at a
+                    // run-time offset.
+                    if self.types.tags[id]
+                        .variable
+                        .get()
+                        .is_some_and(|record| record.member_segments[member.path.index] != 0)
+                    {
+                        offset = None;
+                    }
                     let computed = offset.and_then(|n| n.checked_add(member.offset));
                     valid &= offset.is_none() || computed.is_some();
                     offset = computed;
@@ -237,7 +246,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     // The GNU intrinsic accepts runtime integer paths; the
                     // standard macro's address-constant contract remains
                     // C99 §7.17p3, p. 254; PDF p. 266.
-                    if !info.ice {
+                    if !info.ice || self.variable_size(element) {
                         offset = None;
                         ty = element;
                         continue;
@@ -306,6 +315,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 members:              Cell::new(&[]),
                 fields:               Cell::new(&[]),
                 layout:               Cell::new(Some(self.types.target.va_list)),
+                variable:             Cell::new(None),
+                variable_members:     Cell::new(false),
                 complete:             Cell::new(true),
                 tainted:              Cell::new(false),
                 unmodeled:            Cell::new(None),

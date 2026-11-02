@@ -1152,6 +1152,12 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
             let declared = facts.declared;
             let incoming = facts.promoted;
             let parameter_source = lowerer.unit.sema.bindings[parameter].name.source_vectors;
+            // GNU: a record of variable size arrives as the address of the
+            // caller's copy, which is the parameter object.
+            if types::variable_size(&lowerer.unit.sema.types, declared) {
+                _ = lowerer.locals.insert(parameter, Local::Address(value));
+                continue;
+            }
             if matches!(
                 lowerer.repr(declared, parameter_source)?,
                 Repr::Aggregate | Repr::Complex { .. }

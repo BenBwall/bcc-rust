@@ -16,6 +16,7 @@ use crate::{
     ir::{
         InstData,
         InstFlags,
+        IntCC,
         Opcode,
         Type,
         Value,
@@ -32,7 +33,10 @@ use crate::{
             TypeId,
         },
     },
-    util::bump::ArenaVec,
+    util::bump::{
+        ArenaMap,
+        ArenaVec,
+    },
 };
 
 impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
@@ -158,42 +162,171 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
 
     pub(super) fn emit_size_formula(
         &mut self,
-        mut formula: crate::translation_phases::semantic_analysis::SizeFormulaId,
+        formula: crate::translation_phases::semantic_analysis::SizeFormulaId,
         source: SourceVectors,
     ) -> Result<Value, LoweringError> {
         let facts = &self.unit.sema.sizes;
         let mut products = ArenaVec::new_in(self.scratch);
+        let mut node = formula;
         let size = loop {
-            match facts.formulas.get(formula.0).copied().ok_or_else(|| {
+            match facts.formulas.get(node.0).copied().ok_or_else(|| {
                 LoweringError::missing("size formula node is not retained", source)
             })? {
                 | SizeFormula::Constant(size) => break size,
                 | SizeFormula::Product { inner, extent } => {
                     products.push(extent);
-                    formula = inner;
+                    node = inner;
                 },
+                // GNU's records of variable size sum, align and compare.
+                | SizeFormula::Sum(..) | SizeFormula::AlignUp(..) | SizeFormula::Max(..) =>
+                    return self.emit_size_dag(formula, source),
             }
         };
         // Keep the existing scalar instruction order while interpreting the
         // semantic DAG. No type walk or factor discovery occurs here.
         let mut factors = ArenaVec::new_in(self.scratch);
         for &extent in &products {
-            let value = match extent {
-                | SizeExtent::Constant(size) => self.iconst(Type::I64, i128::from(size)),
-                | SizeExtent::Bound(id) => {
-                    let var = self.bounds.get(&id.0).copied().ok_or_else(|| {
-                        LoweringError::missing("VLA bound was not evaluated", source)
-                    })?;
-                    self.draft.use_var(var)
-                },
-            };
-            factors.push(value);
+            factors.push(self.extent_value(extent, source)?);
         }
         let mut size = self.iconst(Type::I64, i128::from(size));
         for &factor in factors.iter().rev() {
             size = self.binary_inst(Opcode::Imul, InstFlags::empty(), size, factor);
         }
         Ok(size)
+    }
+
+    /// The value of a size formula with sums, run-time alignment or
+    /// maxima, GNU's records with a member of variable size: each node once,
+    /// operands first, with an explicit stack.
+    /// GNU extension: GCC manual, "Variable Length".
+    fn emit_size_dag(
+        &mut self,
+        formula: crate::translation_phases::semantic_analysis::SizeFormulaId,
+        source: SourceVectors,
+    ) -> Result<Value, LoweringError> {
+        let facts = &self.unit.sema.sizes;
+        let mut values = ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, self.scratch);
+        let mut stack = ArenaVec::new_in(self.scratch);
+        stack.push((formula, false));
+        while let Some((node, ready)) = stack.pop() {
+            if values.contains_key(&node) {
+                continue;
+            }
+            let data = facts.formulas.get(node.0).copied().ok_or_else(|| {
+                LoweringError::missing("size formula node is not retained", source)
+            })?;
+            let operands = facts.operands(node);
+            if !ready {
+                stack.push((node, true));
+                for operand in operands.into_iter().flatten() {
+                    if !values.contains_key(&operand) {
+                        stack.push((operand, false));
+                    }
+                }
+                continue;
+            }
+            let operand = |index: usize| operands[index].map(|operand| values[&operand]);
+            let value = match data {
+                | SizeFormula::Constant(size) => self.iconst(Type::I64, i128::from(size)),
+                | SizeFormula::Product { extent, .. } => {
+                    let inner = operand(0).expect("a product has an operand");
+                    let factor = self.extent_value(extent, source)?;
+                    self.binary_inst(Opcode::Imul, InstFlags::empty(), inner, factor)
+                },
+                | SizeFormula::Sum(..) => {
+                    let (left, right) = (operand(0), operand(1));
+                    let (Some(left), Some(right)) = (left, right) else {
+                        unreachable!("a sum has two operands")
+                    };
+                    self.binary_inst(Opcode::Iadd, InstFlags::empty(), left, right)
+                },
+                | SizeFormula::AlignUp(_, align) => {
+                    let inner = operand(0).expect("an alignment has an operand");
+                    let mask = i128::from(align - 1);
+                    let addend = self.iconst(Type::I64, mask);
+                    let sum = self.binary_inst(Opcode::Iadd, InstFlags::empty(), inner, addend);
+                    let mask = self.iconst(Type::I64, !mask);
+                    self.binary_inst(Opcode::And, InstFlags::empty(), sum, mask)
+                },
+                | SizeFormula::Max(..) => {
+                    let (left, right) = (operand(0), operand(1));
+                    let (Some(left), Some(right)) = (left, right) else {
+                        unreachable!("a maximum has two operands")
+                    };
+                    let greater = self.icmp(IntCC::Ugt, left, right);
+                    self.choose(greater, left, right)
+                },
+            };
+            _ = values.insert(node, value);
+        }
+        Ok(values[&formula])
+    }
+
+    /// The value of one array extent: a constant, or a saved bound.
+    fn extent_value(
+        &mut self,
+        extent: SizeExtent,
+        source: SourceVectors,
+    ) -> Result<Value, LoweringError> {
+        Ok(match extent {
+            | SizeExtent::Constant(size) => self.iconst(Type::I64, i128::from(size)),
+            | SizeExtent::Bound(id) => {
+                let var = self.bounds.get(&id.0).copied().ok_or_else(|| {
+                    // A nested function reaches a bound its definer saved.
+                    if self.chain_in.is_some() {
+                        LoweringError::unsupported(super::Construct::NestedVariablyModified, source)
+                    } else {
+                        LoweringError::missing("VLA bound was not evaluated", source)
+                    }
+                })?;
+                self.draft.use_var(var)
+            },
+        })
+    }
+
+    /// The address of the segment of the record `tag` that its member
+    /// `member` is in, from the record's address `base`: GNU's record with a
+    /// member of variable size places the members after it at run-time
+    /// offsets (`VariableRecord`).
+    /// GNU extension: GCC manual, "Variable Length".
+    pub(super) fn segment_address(
+        &mut self,
+        base: Value,
+        tag: usize,
+        member: usize,
+        source: SourceVectors,
+    ) -> Result<Value, LoweringError> {
+        Ok(match self.segment_offset(tag, member, source)? {
+            | Some(offset) => self.ptr_add(base, offset),
+            | None => base,
+        })
+    }
+
+    /// The run-time offset of the segment of the record `tag` that its
+    /// member `member` is in, as an `i64`; `None` for the first segment,
+    /// at offset 0.
+    pub(super) fn segment_offset(
+        &mut self,
+        tag: usize,
+        member: usize,
+        source: SourceVectors,
+    ) -> Result<Option<Value>, LoweringError> {
+        let Some(record) = self.unit.sema.types.tags[tag].variable.get() else {
+            return Ok(None);
+        };
+        let segment = record.member_segments.get(member).copied().ok_or_else(|| {
+            LoweringError::missing("a member of a variable record has no segment", source)
+        })?;
+        if segment == 0 {
+            return Ok(None);
+        }
+        let formula = self
+            .unit
+            .sema
+            .sizes
+            .segment_base(tag, segment)
+            .ok_or_else(|| LoweringError::missing("a segment has no base formula", source))?;
+        self.emit_size_formula(formula, source).map(Some)
     }
 
     /// Stack tokens are lowering SSA variables keyed by semantic region.
@@ -238,6 +371,17 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         transition: Transition,
         source: SourceVectors,
     ) -> Result<(), LoweringError> {
+        self.release(transition, source, false)
+    }
+
+    /// Runs the cleanups `transition` leaves, innermost first; with
+    /// `keep_stack`, those of variable length arrays release nothing.
+    fn release(
+        &mut self,
+        transition: Transition,
+        source: SourceVectors,
+        keep_stack: bool,
+    ) -> Result<(), LoweringError> {
         let regions = self.unit.sema.control.regions;
         let mut cleanup = regions[transition.left.first.0].nearest_cleanup;
         let common = regions[transition.left.stop_before.0];
@@ -247,6 +391,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 break;
             }
             match fact.cleanup {
+                | CleanupKind::AutomaticVla(_) if keep_stack => {},
                 | CleanupKind::AutomaticVla(_) => {
                     let token = self.vla_tokens.get(&region).copied().ok_or_else(|| {
                         LoweringError::missing("VLA region has no stack token", source)
@@ -274,6 +419,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
     pub(super) fn cleanup_normal(
         &mut self,
         statement: &Statement<'_>,
+        keep_stack: bool,
     ) -> Result<(), LoweringError> {
         let transition = self
             .unit
@@ -287,7 +433,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 )
             })?
             .exit;
-        self.cleanup_transition(transition, statement.source_vectors)
+        self.release(transition, statement.source_vectors, keep_stack)
     }
 
     pub(super) fn cleanup_jump(

@@ -158,12 +158,15 @@ pub(crate) use types::{
     Member,
     Parameter,
     Scalar,
+    Segment,
+    SegmentBase,
     Tag,
     TagKind,
     TypeId,
     TypeKind,
     Types,
     UnmodeledType,
+    VariableRecord,
 };
 pub(crate) use wide_integers::{
     WideId,
@@ -393,18 +396,27 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 }
                 self.taint(d.recovered);
                 self.validate_declaration_list_item(d);
-                self.work.push(Work::DeclarationBase(d));
+                self.work
+                    .push(Work::DeclarationBase(d, self.types.runtime_bounds.len()));
                 self.spec(d.declaration_specifiers, d.init_declarators.is_empty());
             },
-            | Work::DeclarationBase(d) => {
+            | Work::DeclarationBase(d, bound_start) => {
                 let base = self.take_type();
                 if let Some(operand_evaluations) =
                     self.spec_evaluations(d.declaration_specifiers.type_specifiers)
                 {
+                    // GNU: the declaration that defines a record with a
+                    // member of variable size evaluates its bounds, once,
+                    // however many declarators share it.
+                    let bounds = self.with_member_bounds(
+                        self.spec_bounds(d.declaration_specifiers.type_specifiers),
+                        bound_start,
+                    );
+                    self.record_bound_origins(bounds, BoundEvaluationSite::Specifiers);
                     _ = self.declaration_sites.insert(
                         std::ptr::from_ref(d).addr(),
                         BoundSiteFacts {
-                            bounds: self.spec_bounds(d.declaration_specifiers.type_specifiers),
+                            bounds,
                             ty: base,
                             operand_evaluations,
                         },
@@ -1011,12 +1023,11 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                             );
                         }
                     }
-                    value.to_u64().map_or_else(
-                        || self.types.variable_bound(expression),
-                        ArrayBound::Constant,
-                    )
+                    value
+                        .to_u64()
+                        .map_or_else(|| self.variable_bound(expression), ArrayBound::Constant)
                 } else {
-                    self.types.variable_bound(expression)
+                    self.variable_bound(expression)
                 };
                 let ty = self
                     .types
@@ -1461,12 +1472,17 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                         // GNU extension: GCC accepts a variably modified
                         // member in block and prototype scope and lays the
                         // record out when its declaration is reached
-                        // (`variable_size` in GCC's `stor-layout.cc`).
-                        // Lowering has no run-time record layout, so the
-                        // record stays unmodeled and is refused by name.
-                        self.types.tags[tag]
-                            .unmodeled
-                            .set(Some(UnmodeledType::VariableMembers));
+                        // (`variable_size` in GCC's `stor-layout.cc`), as
+                        // completion does (`VariableRecord`). Microsoft
+                        // record layout has no run-time form here, so such
+                        // a record stays unmodeled and is refused by name.
+                        if self.types.target.ms_bitfields {
+                            self.types.tags[tag]
+                                .unmodeled
+                                .set(Some(UnmodeledType::VariableMembers));
+                            self.types.tags[tag].tainted.set(true);
+                        }
+                        self.types.tags[tag].variable_members.set(true);
                         let record = self.types.intern(TypeKind::Tag(tag));
                         self.types.mark_variably_modified(record);
                     } else {
@@ -1481,8 +1497,8 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                             name.map(|n| n.name),
                             None,
                         );
+                        self.types.tags[tag].tainted.set(true);
                     }
-                    self.types.tags[tag].tainted.set(true);
                 }
                 if let Some(name) = name
                     && let Some(previous) = self
@@ -1850,7 +1866,9 @@ enum Work<'tu, 's> {
     DeclaredAlignment(DeclaredAlignment<'tu>),
     Root(ExternalDeclaration<'tu>),
     Declaration(&'tu Declaration<'tu>),
-    DeclarationBase(&'tu Declaration<'tu>),
+    /// A declaration whose specifiers are analyzed, and the number of
+    /// runtime bounds before them.
+    DeclarationBase(&'tu Declaration<'tu>, usize),
     DeclarationDeclarator(Declarator<'tu>, DeclarationSpecifiers<'tu>, TypeId, bool),
     BindReady(
         Declarator<'tu>,
@@ -2072,6 +2090,10 @@ struct Analyzer<'a, 'tu, 's> {
     runtime_bounds:          ArenaVec<'tu, RuntimeBound<'tu>>,
     bound_origins:           ArenaMap<'s, usize, BoundEvaluationSite>,
     bound_expression_starts: ArenaMap<'s, usize, usize>,
+    /// The runtime bounds written in a record's member list, in order: the
+    /// declaration or type name that defines the record evaluates them, as
+    /// GCC does (GNU).
+    member_bounds:           ArenaVec<'s, usize>,
     integer_models:          ArenaMap<'s, usize, Option<(u32, bool)>>,
     resolved:                resolved::ResolvedBuilder<'tu, 's>,
     expressions:             ArenaVec<'tu, ExpressionInfo<'tu>>,

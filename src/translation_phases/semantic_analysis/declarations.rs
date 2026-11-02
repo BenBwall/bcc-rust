@@ -25,11 +25,14 @@ use super::{
         Member,
         Parameter,
         Scalar,
+        Segment,
+        SegmentBase,
         Tag,
         TagKind,
         TypeId,
         TypeKind,
         UnmodeledType,
+        VariableRecord,
         align_up,
     },
 };
@@ -1193,7 +1196,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let mut required = u64::from(tag.alignment.get());
         let named = members.iter().filter(|m| m.initializable()).count();
         let mut too_large = false;
+        let mut variable = (tag.variable_members.get() && !ms && !tag.tainted.get())
+            .then(|| VariableLayout::new(self.types.tu, members.len()));
         for (index, &member) in members.iter().enumerate() {
+            if let Some(variable) = &mut variable {
+                variable.member_segments.push(variable.current);
+            }
             let source = member
                 .name
                 .map_or(member.source_vectors, |n| n.source_vectors);
@@ -1250,6 +1258,24 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             } else {
                 self.types.layout(member.ty)
             };
+            // GNU: from the first member of variable size on, a structure's
+            // members are placed at run-time offsets.
+            if let Some(variable) = &mut variable
+                && (variable.current != 0 || layout.is_none())
+                && (layout.is_some() || self.variable_size(member.ty))
+            {
+                let resolved = self.place_variable_member(
+                    tag,
+                    member,
+                    layout,
+                    variable,
+                    &mut bytes,
+                    &mut bit_end,
+                    &mut alignment,
+                );
+                output.push(resolved);
+                continue;
+            }
             let Some(mut layout) = layout else {
                 if !self.types.unanalyzed(member.ty) && !self.variably_modified(member.ty) {
                     self.error(
@@ -1547,7 +1573,17 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         tag.required_alignment
             .set(u32::try_from(required).unwrap_or(u32::MAX));
         alignment = alignment.max(u64::from(tag.alignment.get()));
-        if !tag.tainted.get() {
+        if let Some(variable) = variable
+            && !tag.tainted.get()
+            && (variable.current != 0 || !variable.segments.is_empty())
+        {
+            tag.variable.set(Some(self.types.tu.alloc(VariableRecord {
+                align:           alignment,
+                segments:        variable.segments.leak(),
+                member_segments: variable.member_segments.leak(),
+                end:             bytes,
+            })));
+        } else if !tag.tainted.get() {
             tag.layout
                 .set(align_up(bytes, alignment).map(|size| Layout {
                     size,
@@ -1558,6 +1594,141 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             let ty = self.types.intern(TypeKind::Tag(id));
             self.make_transparent_union(ty, source);
         }
+    }
+
+    /// Places `member` of the record `tag` at a run-time offset, GCC's
+    /// `place_field` with a variable offset: `bytes` and `bit_end` are the
+    /// cursor within the current segment, whose base is known to be aligned
+    /// to `variable.known`. A member of variable size starts a segment of
+    /// its own, rounded up to its alignment, and the next segment starts at
+    /// its end. A member of constant size that needs more alignment than
+    /// the base is known to have starts a segment rounded up at run time;
+    /// any other is placed after the cursor as at a constant offset, except
+    /// that a bit-field takes the next bits, whatever unit they straddle, as
+    /// GCC checks the straddle only at a constant offset. In a union every
+    /// member starts at 0, and those of variable size join the size.
+    /// GNU extension: GCC manual, "Variable Length"; GCC's `stor-layout.cc`.
+    /// C99: §6.7.2.1 paragraphs 10-15, pp. 102-103; PDF pp. 114-115.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "The completion loop's cursor, shared with constant placement."
+    )]
+    fn place_variable_member(
+        &self,
+        tag: &Tag<'tu>,
+        member: Member,
+        layout: Option<Layout>,
+        variable: &mut VariableLayout<'tu>,
+        bytes: &mut u64,
+        bit_end: &mut u64,
+        alignment: &mut u64,
+    ) -> Member {
+        let mut resolved = member;
+        let natural = layout
+            .map(|layout| layout.align)
+            .or_else(|| self.types.alignment(member.ty))
+            .unwrap_or(1);
+        let packed = tag.packed.get() || member.packed;
+        let mut align = if packed {
+            u64::from(member.explicit_alignment.max(1))
+        } else {
+            natural
+        };
+        let pack = tag.max_member_alignment.get();
+        if pack != 0 && member.width != Some(0) {
+            align = align.min(u64::from(pack));
+        }
+        if pack != 0 {
+            resolved.ty = resolved
+                .ty
+                .with_alignment(u32::try_from(align).unwrap_or(0));
+        }
+        let unnamed_bit_field = member.name.is_none() && member.width.is_some();
+        if !unnamed_bit_field {
+            *alignment = (*alignment).max(align);
+        }
+        resolved.offset = 0;
+        resolved.bit_offset = 0;
+        if tag.kind == TagKind::Union {
+            match layout {
+                | Some(layout) =>
+                    *bytes = (*bytes).max(match member.width {
+                        | Some(width) if unnamed_bit_field || packed || pack != 0 =>
+                            u64::from(width).div_ceil(8),
+                        | _ => layout.size,
+                    }),
+                | None => variable.segments.push(Segment {
+                    base:  SegmentBase::After {
+                        previous: 0,
+                        ty:       member.ty,
+                    },
+                    known: align,
+                }),
+            }
+            return resolved;
+        }
+        let Some(layout) = layout else {
+            let before = if align <= variable.known {
+                SegmentBase::Aligned {
+                    previous: variable.current,
+                    before:   align_up(*bytes, align).unwrap_or(*bytes),
+                    align:    1,
+                }
+            } else {
+                SegmentBase::Aligned {
+                    previous: variable.current,
+                    before: *bytes,
+                    align,
+                }
+            };
+            let start = variable.push(before, align);
+            if let Some(segment) = variable.member_segments.last_mut() {
+                *segment = start;
+            }
+            // The member's size is a multiple of its type's alignment, which
+            // packing or `aligned` may make differ from its own.
+            let known = align.min(self.types.alignment(member.ty).unwrap_or(1));
+            _ = variable.push(
+                SegmentBase::After {
+                    previous: start,
+                    ty:       member.ty,
+                },
+                known,
+            );
+            *bytes = 0;
+            *bit_end = 0;
+            return resolved;
+        };
+        if let Some(width) = member.width
+            && width != 0
+        {
+            resolved.offset = *bit_end / 8;
+            resolved.bit_offset = u32::try_from(*bit_end % 8).unwrap_or(0);
+            *bit_end += u64::from(width);
+            *bytes = (*bytes).max((*bit_end).div_ceil(8));
+            return resolved;
+        }
+        if align > variable.known {
+            let base = SegmentBase::Aligned {
+                previous: variable.current,
+                before: *bytes,
+                align,
+            };
+            _ = variable.push(base, align);
+            if let Some(segment) = variable.member_segments.last_mut() {
+                *segment = variable.current;
+            }
+            *bytes = 0;
+        }
+        let offset = align_up(*bytes, align).unwrap_or(*bytes);
+        resolved.offset = offset;
+        *bytes = if member.width.is_some() {
+            offset
+        } else {
+            offset.saturating_add(layout.size)
+        };
+        *bit_end = (*bytes).saturating_mul(8);
+        resolved
     }
 
     /// The alignment a non-bit-field member requires in Microsoft layout:
@@ -1808,6 +1979,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             members: Cell::new(&[]),
             fields: Cell::new(&[]),
             layout: Cell::new(None),
+            variable: Cell::new(None),
+            variable_members: Cell::new(false),
             complete: Cell::new(false),
             tainted: Cell::new(false),
             unmodeled: Cell::new(None),
@@ -2153,4 +2326,35 @@ fn standard_integer(spec: TypeSpecifiers<'_>) -> Option<Scalar> {
         | S::UnsignedLongLong | S::UnsignedLongLongInt => Scalar::UnsignedLongLong,
         | _ => return None,
     })
+}
+
+/// The segments of a [`VariableRecord`] as completion places its members.
+struct VariableLayout<'tu> {
+    segments:        ArenaVec<'tu, Segment>,
+    member_segments: ArenaVec<'tu, u32>,
+    /// The segment members are placed in now; 0 until a member of variable
+    /// size is reached.
+    current:         u32,
+    /// The alignment its base is known to have.
+    known:           u64,
+}
+
+impl<'tu> VariableLayout<'tu> {
+    fn new(arena: &'tu crate::util::bump::Bump, members: usize) -> Self {
+        Self {
+            segments:        ArenaVec::new_in(arena),
+            member_segments: ArenaVec::with_capacity_in(members, arena),
+            current:         0,
+            known:           u64::MAX,
+        }
+    }
+
+    /// Starts the segment whose base is `base`, known to be aligned to
+    /// `known`, and returns its index.
+    fn push(&mut self, base: SegmentBase, known: u64) -> u32 {
+        self.segments.push(Segment { base, known });
+        self.current = u32::try_from(self.segments.len()).unwrap_or(u32::MAX);
+        self.known = known;
+        self.current
+    }
 }

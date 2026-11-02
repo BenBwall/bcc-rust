@@ -2773,6 +2773,58 @@ functions, 29 pass on LLVM at `-O0` and `-O2` and on the native back end;
 the rest need non-local gotos (9), variably modified types or captures (4)
 or label addresses across functions (2).
 
+## GNU records with members of variable size (2026-11-02)
+
+Under GCC's identity a block-scope structure or union may have a member of
+variable size (`struct { int a; char b[n]; short c; }`), which GCC lays out
+when the definition is reached (`variable_size` in `stor-layout.cc`).
+Semantic analysis completes such a record with a `VariableRecord` instead
+of a constant `Layout`: a structure is a run of segments, the first at
+offset 0 and each later one at a base computed at run time from an earlier
+one. A member of variable size starts a segment of its own, its base the
+cursor rounded up to the member's alignment (at run time only when the
+earlier base is not known to be aligned that far), and the next segment
+starts at its end; a member of constant size that needs more alignment
+than its segment's base is known to have starts a segment rounded up at
+run time; any other member is at a constant offset in its segment. A
+bit-field after a member of variable size takes the next bits, whatever
+unit they straddle, since GCC checks the straddle only at a constant
+offset (`struct { char a[n]; int b : 3; int c : 7; char d; }` puts `d` at
+`n + 2`). A union's members all start at 0. GCC 13's offsets, sizes,
+alignments and bit placement agree on the probes for every rule above
+(packed and `aligned` records, nested records, zero-width bit-fields and
+unions included).
+
+The size formula DAG (`facts/sizes.rs`) gains `Sum`, `AlignUp` and `Max`
+nodes; each segment's base and each such record's size are formulas over
+its members' sizes, and arrays of the record multiply them as for a VLA.
+Formulas are built on demand with an explicit stack, since a record may be
+interned before the member types it needs. The bounds in a record's member
+list are evaluated by the declaration or type name that defines it, once
+for all its declarators, as GCC does.
+
+Lowering follows the formulas: an automatic object of such a type is a
+dynamic allocation released like a VLA's, a member's address adds its
+segment's base (`segment_address`), a copy copies the run-time size, and
+`sizeof`, pointer arithmetic and strides use the record's formula. A
+run-time `offsetof` (a non-constant index, a member after one of variable
+size, or an element of variable size) evaluates its indices in order and
+sums the bases, offsets and products. Such a record passed by value travels
+by invisible reference, as GCC passes it: the caller copies it to the
+stack and passes the copy's address, which `va_arg` of its type reads too.
+A statement expression whose value has variable size snapshots it above
+the block's arrays, which then stay until an enclosing scope or the
+function releases them, since the snapshot is newer than they are.
+Refused by name: a function result of such a type, a volatile copy, an
+`asm` operand of it, and, on the Windows targets, whose Microsoft record
+layout has no run-time form here, the record itself.
+
+**Evidence.** The 14 GCC 13 survey tests that stopped at these records
+pass on LLVM at `-O0` and `-O2`, on the native back end and in the
+interpreter with and without bcc's optimizer;
+`tests/fixtures/programs/variable_records.c` prints what GCC 13 prints at
+`-O0` and `-O2` on each of them (`variable_records.rs`).
+
 ## GNU complex integer types (2026-10-30)
 
 A complex integer value is a `Repr::Complex` pair whose component is the IR

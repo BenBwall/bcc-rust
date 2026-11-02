@@ -1175,25 +1175,39 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let mut field_ty = field.ty;
         // C99 §6.7.2.1p12, GNU packed: a member cannot promise more
         // alignment than its containing object and byte offset guarantee.
+        let record_alignment = self
+            .types
+            .layout(ty)
+            .map(|layout| layout.align)
+            .or_else(|| self.types.alignment(ty))
+            .unwrap_or(1);
         let base_alignment = if indirect {
-            self.types.layout(ty).map_or(1, |layout| layout.align)
+            record_alignment
         } else {
-            base.place_alignment().map_or_else(
-                || self.types.layout(ty).map_or(1, |layout| layout.align),
-                u64::from,
-            )
+            base.place_alignment().map_or(record_alignment, u64::from)
         };
         let offset_alignment = if field.offset == 0 {
             base_alignment
         } else {
             1_u64 << field.offset.trailing_zeros()
         };
+        // GNU: a member after one of variable size is at a run-time base
+        // known to be aligned only so far.
+        let segment_alignment = self.types.tags[id]
+            .variable
+            .get()
+            .map_or(u64::MAX, |record| {
+                record.known_alignment(record.member_segments[field.path.index])
+            });
         let alignment = self
             .types
             .layout(field_ty)
-            .map_or(1, |layout| layout.align)
+            .map(|layout| layout.align)
+            .or_else(|| self.types.alignment(field_ty))
+            .unwrap_or(1)
             .min(base_alignment)
-            .min(offset_alignment);
+            .min(offset_alignment)
+            .min(segment_alignment);
         // C23 §6.7.3.6p4 (p. 118; PDF p. 131): storage alignment of
         // the member place does not change its intrinsic type. Follow the
         // resolved anonymous-member path to recover the declaring member.

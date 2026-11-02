@@ -399,7 +399,11 @@ operations and reports enumerators outside int through the extension policy.
 Positive constant array bounds
 use the same evaluator; runtime bounds at file scope/with linkage are rejected,
 as are variably modified members (§6.7.2.1p8, §6.7.5.2p2) and `[*]` outside a
-prototype that is not a definition (§6.7.5.2p4). Arrays and records larger than
+prototype that is not a definition (§6.7.5.2p4). Under GCC's identity a
+block-scope record may have variably modified members, as in GCC; one with a
+member of variable size completes with a run-time `VariableRecord` layout
+instead of a constant one (`middle-end.md`, "GNU records with members of
+variable size"). Arrays and records larger than
 PTRDIFF_MAX bytes exceed this implementation's object-size limit and are rejected
 without dropping members.
 
