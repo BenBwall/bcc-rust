@@ -149,13 +149,31 @@ impl CompilerConfiguration {
     /// Records `-pedantic-errors`, which also denies extensions.
     pub(crate) const fn with_pedantic_errors(mut self) -> Self {
         self.pedantic_errors = true;
-        self.extension_policy = ExtensionPolicy::Deny;
+        self.with_pedantic_as_error(true)
+    }
+
+    /// `-pedantic` or `-Wpedantic` (true), or `-Wno-pedantic` (false):
+    /// whether pedantic diagnostics are reported. Enabling them keeps
+    /// whether they are errors, as GCC and Clang do after
+    /// `-pedantic-errors -Wpedantic`.
+    pub(crate) const fn with_pedantic(mut self, enabled: bool) -> Self {
+        self.extension_policy = if !enabled {
+            ExtensionPolicy::Allow
+        } else if self.pedantic_as_error {
+            ExtensionPolicy::Deny
+        } else {
+            ExtensionPolicy::Warn
+        };
         self
     }
 
-    /// GCC's `-Wno-error=pedantic`: pedantic diagnostics stay warnings.
-    pub(crate) const fn without_pedantic_errors(mut self) -> Self {
-        if matches!(self.extension_policy, ExtensionPolicy::Deny) {
+    /// `-Werror=pedantic` (true), which also enables pedantic diagnostics,
+    /// or `-Wno-error=pedantic` (false), which keeps them warnings.
+    pub(crate) const fn with_pedantic_as_error(mut self, error: bool) -> Self {
+        self.pedantic_as_error = error;
+        if error {
+            self.extension_policy = ExtensionPolicy::Deny;
+        } else if matches!(self.extension_policy, ExtensionPolicy::Deny) {
             self.extension_policy = ExtensionPolicy::Warn;
         }
         self
@@ -850,6 +868,7 @@ impl CompilerConfiguration {
             msvc: 0,
             extension_policy,
             pedantic_errors: false,
+            pedantic_as_error: false,
             accepted: 0,
             native: 0,
             repeated_specifier_warnings: true,

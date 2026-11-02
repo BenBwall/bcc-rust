@@ -37,6 +37,7 @@ use crate::{
         LanguageMode,
         MsvcFeature,
         RelaxedFloatingPoint,
+        RuleSet,
         WarningOption,
     },
     target::{
@@ -338,8 +339,16 @@ impl Cli {
         let configuration = configuration
             .with_target(self.target)
             .with_compiler_identity(self.compiler_identity.into());
+        // Clang reads `-pedantic` and `-pedantic-errors` before every `-W`
+        // option, so `-Wno-pedantic` and `-Wno-error=pedantic` outrank them
+        // wherever they appear; GCC reads all of them in order.
+        let clang = configuration.compiler_identity().rules() == RuleSet::Clang;
+        let first =
+            |option: &&String| clang && matches!(option.as_str(), "-pedantic" | "-pedantic-errors");
         self.language_option
             .iter()
+            .filter(first)
+            .chain(self.language_option.iter().filter(|option| !first(option)))
             .filter_map(|option| LanguageFlag::parse(option))
             .fold(configuration, |configuration, flag| {
                 flag.apply(configuration)
@@ -600,12 +609,12 @@ enum LanguageFlag {
     AllWarnings(bool),
     ExtraWarnings,
     UnknownWarning,
-    /// `-pedantic` or `-Wpedantic` (warn), or `-pedantic-errors` (deny).
-    Pedantic(ExtensionPolicy),
+    /// `-pedantic` or `-Wpedantic` (true), or `-Wno-pedantic` (false).
+    Pedantic(bool),
     /// `-pedantic-errors`.
     PedanticErrors,
-    /// `-Wno-error=pedantic`.
-    PedanticNoError,
+    /// `-Werror=pedantic` (true) or `-Wno-error=pedantic` (false).
+    PedanticAsError(bool),
     /// `-fms-extensions` or `-fno-ms-extensions`.
     MsvcExtensions(bool),
     /// `-fms-<feature>` or `-fno-ms-<feature>`.
@@ -713,15 +722,16 @@ impl FloatingPointGroup {
 impl LanguageFlag {
     fn parse(text: &str) -> Option<Self> {
         match text {
-            | "-pedantic" | "-Wpedantic" => return Some(Self::Pedantic(ExtensionPolicy::Warn)),
+            | "-pedantic" | "-Wpedantic" => return Some(Self::Pedantic(true)),
             | "-pedantic-errors" => return Some(Self::PedanticErrors),
-            | "-Wno-error=pedantic" => return Some(Self::PedanticNoError),
+            | "-Werror=pedantic" => return Some(Self::PedanticAsError(true)),
+            | "-Wno-error=pedantic" => return Some(Self::PedanticAsError(false)),
             | "-Werror" => return Some(Self::WarningsAsErrors(true)),
             | "-Wno-error" => return Some(Self::WarningsAsErrors(false)),
             | "-Wall" => return Some(Self::AllWarnings(true)),
             | "-Wno-all" => return Some(Self::AllWarnings(false)),
             | "-Wextra" | "-Wno-extra" => return Some(Self::ExtraWarnings),
-            | "-Wno-pedantic" => return Some(Self::Pedantic(ExtensionPolicy::Allow)),
+            | "-Wno-pedantic" => return Some(Self::Pedantic(false)),
             | "-fhosted" => return Some(Self::Hosted(true)),
             | "-ffreestanding" => return Some(Self::Hosted(false)),
             | "-fgnu89-inline" => return Some(Self::Gnu89Inline(true)),
@@ -892,9 +902,9 @@ impl LanguageFlag {
                 .with_all_warnings(enabled),
             | Self::WarningsAsErrors(enabled) => configuration.with_warnings_as_errors(enabled),
             | Self::WarningGroup(group, option) => configuration.with_warning_option(group, option),
-            | Self::Pedantic(policy) => configuration.with_extension_policy(policy),
+            | Self::Pedantic(enabled) => configuration.with_pedantic(enabled),
             | Self::PedanticErrors => configuration.with_pedantic_errors(),
-            | Self::PedanticNoError => configuration.without_pedantic_errors(),
+            | Self::PedanticAsError(error) => configuration.with_pedantic_as_error(error),
             | Self::MsvcExtensions(enabled) => configuration.with_msvc_extensions(enabled),
             | Self::MsvcFeature(feature, enabled) =>
                 configuration.with_msvc_feature(feature, enabled),

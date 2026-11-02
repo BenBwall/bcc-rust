@@ -89,6 +89,11 @@ pub(crate) struct CompilerConfiguration {
     /// default-on extension warnings errors then, which `-Wno-pedantic`
     /// does not undo.
     pedantic_errors: bool,
+    /// Pedantic diagnostics are errors whenever they are enabled: set by
+    /// `-pedantic-errors` and `-Werror=pedantic`, cleared by
+    /// `-Wno-error=pedantic`, and kept through `-Wno-pedantic`, so a later
+    /// `-Wpedantic` turns them back on as errors, as in GCC and Clang.
+    pedantic_as_error: bool,
     accepted: u128,
     native: u128,
     repeated_specifier_warnings: bool,
