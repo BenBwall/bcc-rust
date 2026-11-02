@@ -73,6 +73,8 @@ impl CompilerConfiguration {
             | DiagnosticGroup::ImplicitFunctionDeclaration =>
                 &[DiagnosticGroup::ImplicitLibraryFunction],
             | DiagnosticGroup::ReturnMismatch => &[DiagnosticGroup::VoidReturnMismatch],
+            | DiagnosticGroup::IncompatiblePointerTypes =>
+                &[DiagnosticGroup::GccConditionalPointerMismatch],
             | _ => &[],
         };
         for &child in children {
@@ -86,6 +88,25 @@ impl CompilerConfiguration {
             self.warning_options[DiagnosticGroup::PointerQualifiers as usize].apply(option);
             self.warning_options[DiagnosticGroup::IncompatibleFunctionPointerTypes as usize]
                 .apply(option);
+        }
+        self
+    }
+
+    /// `-Wall` (true) or `-Wno-all` at its argv position, for the groups
+    /// whose meaning under it bcc models: `-Wimplicit`'s and
+    /// `-Wreturn-mismatch`'s. Each group records the setting apart from its
+    /// own options, which take precedence in GCC whatever their order and
+    /// only when they come later in Clang
+    /// ([`WarningSettings::enabled_with_all`]).
+    pub(crate) fn with_all_warnings(mut self, enabled: bool) -> Self {
+        for group in [
+            DiagnosticGroup::ImplicitFunctionDeclaration,
+            DiagnosticGroup::ImplicitLibraryFunction,
+            DiagnosticGroup::ImplicitInt,
+            DiagnosticGroup::ReturnMismatch,
+            DiagnosticGroup::VoidReturnMismatch,
+        ] {
+            self.warning_options[group as usize].apply_all(enabled);
         }
         self
     }
@@ -154,10 +175,12 @@ impl CompilerConfiguration {
                     || (group.default() == GroupDefault::Extension
                         && self.extension_policy != ExtensionPolicy::Allow),
         };
-        if !option.enabled().unwrap_or(enabled) {
+        let clang = self.identity.rules() == super::RuleSet::Clang;
+        if !option.enabled_with_all(group, clang).unwrap_or(enabled) {
             return None;
         }
-        let default = if option.reenabled_warning() {
+        // GCC re-enables a disabled group at its default severity.
+        let default = if option.reenabled_warning() && clang {
             ErrorSeverity::Warning
         } else {
             match permerror {
@@ -188,6 +211,20 @@ impl CompilerConfiguration {
         } else {
             Some(severity)
         }
+    }
+
+    /// Whether a diagnostic of `group` at `severity` is reported in a
+    /// system header, which withholds warnings and warning groups: GCC 14
+    /// reports its permerrors there when they are errors, while Clang
+    /// withholds its default-error groups too.
+    pub(crate) fn reported_in_system_headers(
+        self,
+        group: DiagnosticGroup,
+        severity: ErrorSeverity,
+    ) -> bool {
+        severity == ErrorSeverity::Error
+            && self.identity == super::CompilerIdentity::Gcc
+            && group.default() == GroupDefault::Permerror
     }
 
     /// The severity of a [`GroupDefault::Permerror`] group before any
@@ -230,11 +267,20 @@ impl CompilerConfiguration {
                 | G::ImplicitLibraryFunction => Some(if c99 { Error } else { Warning }),
                 | _ => Some(Error),
             },
-            | I::Gcc if c99 => Some(if self.permissive { Warning } else { Error }),
+            | I::Gcc if c99 => Some(if self.permissive == Some(true) {
+                Warning
+            } else {
+                Error
+            }),
             | I::Gcc => match group {
                 | G::ImplicitFunctionDeclaration | G::ImplicitInt | G::ReturnMismatch => None,
                 // GCC's own "incompatible implicit declaration of built-in
-                // function" warning stands in for a library function.
+                // function" warning stands in for a library function, and
+                // GCC 14 keeps a conditional's mismatch a warning in C89
+                // whatever `-fno-permissive` says.
+                | G::ImplicitLibraryFunction | G::GccConditionalPointerMismatch => Some(Warning),
+                // An explicit `-fno-permissive` makes the others errors.
+                | _ if self.permissive == Some(false) => Some(Error),
                 | _ => Some(Warning),
             },
         }
@@ -330,6 +376,10 @@ diagnostic_groups! {
     /// `return` with a value in a function returning `void`, which GCC
     /// reports in C89 too.
     VoidReturnMismatch => Some("return-mismatch"), Permerror, true;
+    /// GCC: conditional operands that point to incompatible types, which
+    /// GCC 14 reports under `-Wincompatible-pointer-types` (Clang:
+    /// `PointerTypeMismatch`).
+    GccConditionalPointerMismatch => Some("incompatible-pointer-types"), Permerror, true;
     /// GCC: an identifier list in a function declarator that is no
     /// definition (`void f(x);`). Clang refuses it outright.
     DeclarationMissingParameterType => Some("declaration-missing-parameter-type"), Permerror, false;
@@ -464,13 +514,16 @@ pub(crate) enum WarningOption {
 /// A group's options, packed into a byte so that the per-group table keeps
 /// [`CompilerConfiguration`] small enough to pass by value: whether it is
 /// enabled and whether it is an error, each unset or set (bits 0-1 and
-/// 2-3: 0 unset, 2 false, 3 true), and bit 4 for a group re-enabled after
-/// it was disabled, which Clang reports as a warning even when it defaults
-/// to an error.
+/// 2-3: 0 unset, 2 false, 3 true); bit 4 for a group re-enabled after it
+/// was disabled, which Clang reports as a warning even when it defaults to
+/// an error; and what the last `-Wall` or `-Wno-all` said (bits 5-6, as
+/// the others), with bit 7 set while it came after the group's own options.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct WarningSettings(u8);
 
 impl WarningSettings {
+    const ALL: u32 = 5;
+    const ALL_LAST: u8 = 1 << 7;
     pub(super) const DEFAULT: Self = Self(0);
     const ENABLED: u32 = 0;
     const ERROR: u32 = 2;
@@ -506,6 +559,47 @@ impl WarningSettings {
         self.0 & Self::REENABLED != 0
     }
 
+    /// Whether the group's options and `-Wall` enable or disable it.
+    /// GCC's `-Wall` sets only what no option of the group's own set,
+    /// whatever their order (`LangEnabledBy`), and holds the implicit
+    /// groups; any `-Wall` or `-Wno-all` makes GCC 14 warn about C89's
+    /// `return;` in a function with a result. Clang's `-Wall` and
+    /// `-Wno-all` set every group they hold, `-Wreturn-mismatch` included,
+    /// unless the group's own option comes later.
+    const fn enabled_with_all(self, group: DiagnosticGroup, clang: bool) -> Option<bool> {
+        let all = self.get(Self::ALL);
+        let explicit = self.enabled();
+        if clang {
+            if self.0 & Self::ALL_LAST != 0 {
+                all
+            } else if explicit.is_some() {
+                explicit
+            } else {
+                all
+            }
+        } else if explicit.is_some() {
+            explicit
+        } else {
+            match group {
+                | DiagnosticGroup::ImplicitFunctionDeclaration
+                | DiagnosticGroup::ImplicitLibraryFunction
+                | DiagnosticGroup::ImplicitInt => all,
+                | DiagnosticGroup::ReturnMismatch if all.is_some() => Some(true),
+                | _ => None,
+            }
+        }
+    }
+
+    /// Records `-Wall` (true) or `-Wno-all`, which Clang's later `-Wall`
+    /// re-enables from, as from a group's own `-Wno-`.
+    const fn apply_all(&mut self, enabled: bool) {
+        self.set(Self::ALL, Some(enabled));
+        self.0 |= Self::ALL_LAST;
+        if !enabled {
+            self.0 |= Self::REENABLED;
+        }
+    }
+
     /// Applies a parent group's option to a child that only `-pedantic`
     /// enables: disabling it, or setting its severity, but leaving whether
     /// it reports to the extension policy otherwise.
@@ -518,6 +612,7 @@ impl WarningSettings {
     }
 
     fn apply(&mut self, option: WarningOption) {
+        self.0 &= !Self::ALL_LAST;
         match option {
             | WarningOption::Enable(enabled) => {
                 self.set(Self::ENABLED, Some(enabled));

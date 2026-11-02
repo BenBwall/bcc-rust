@@ -873,22 +873,14 @@ impl LanguageFlag {
             | Self::Relocation
             | Self::Code
             | Self::Builtins => configuration,
-            // GCC's and Clang's `-Wall` hold `-Wimplicit`, and GCC's
-            // `-Wreturn-mismatch` too; they matter only in C89, where those
-            // groups are otherwise off.
-            | Self::AllWarnings(true) => [
-                DiagnosticGroup::UnusedFunction,
-                DiagnosticGroup::Implicit,
-                DiagnosticGroup::ReturnMismatch,
-            ]
-            .into_iter()
-            .fold(configuration, |configuration, group| {
-                configuration.with_warning_option(group, WarningOption::Enable(true))
-            }),
-            | Self::AllWarnings(false) => configuration.with_warning_option(
-                DiagnosticGroup::UnusedFunction,
-                WarningOption::Enable(false),
-            ),
+            // GCC's and Clang's `-Wall` hold `-Wimplicit` and
+            // `-Wreturn-mismatch`, each in its own way.
+            | Self::AllWarnings(enabled) => configuration
+                .with_warning_option(
+                    DiagnosticGroup::UnusedFunction,
+                    WarningOption::Enable(enabled),
+                )
+                .with_all_warnings(enabled),
             | Self::WarningsAsErrors(enabled) => configuration.with_warnings_as_errors(enabled),
             | Self::WarningGroup(group, option) => configuration.with_warning_option(group, option),
             | Self::Pedantic(policy) => configuration.with_extension_policy(policy),
