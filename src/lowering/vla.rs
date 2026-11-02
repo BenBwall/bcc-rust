@@ -134,6 +134,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         let value = self.extend(value, signed, super::types::int_type(bits));
         let value = self.extend(value, converted_signed, Type::I64);
         self.draft.def_var(self.bounds[&index], value);
+        self.capture_bound(index, value);
         Ok(())
     }
 
@@ -270,16 +271,15 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
     ) -> Result<Value, LoweringError> {
         Ok(match extent {
             | SizeExtent::Constant(size) => self.iconst(Type::I64, i128::from(size)),
-            | SizeExtent::Bound(id) => {
-                let var = self.bounds.get(&id.0).copied().ok_or_else(|| {
-                    // A nested function reaches a bound its definer saved.
-                    if self.chain_in.is_some() {
-                        LoweringError::unsupported(super::Construct::NestedVariablyModified, source)
-                    } else {
-                        LoweringError::missing("VLA bound was not evaluated", source)
-                    }
-                })?;
-                self.draft.use_var(var)
+            | SizeExtent::Bound(id) => match self.bounds.get(&id.0).copied() {
+                | Some(var) => self.draft.use_var(var),
+                // GNU: a nested function reads a bound its definer saved.
+                | None if self.chain_in.is_some() => self.captured_bound(id.0, source)?,
+                | None =>
+                    return Err(LoweringError::missing(
+                        "VLA bound was not evaluated",
+                        source,
+                    )),
             },
         })
     }

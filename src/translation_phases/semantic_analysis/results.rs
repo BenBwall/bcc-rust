@@ -75,6 +75,7 @@ pub(crate) struct SemanticTranslationUnit<'tu> {
     pub(crate) type_names:              &'tu [super::TypeNameFacts<'tu>],
     pub(super) type_name_indices:       ArenaMap<'tu, usize, super::TypeNameId>,
     pub(super) declaration_sites:       ArenaMap<'tu, usize, BoundSiteFacts<'tu>>,
+    pub(super) definition_bounds:       ArenaMap<'tu, usize, &'tu [usize]>,
     pub(super) size_query_sites:        ArenaMap<'tu, usize, super::SizeQueryFacts<'tu>>,
     /// Typed results in child-before-parent order; an expression's ordinal
     /// is its index here.
@@ -319,6 +320,15 @@ pub(crate) struct Definition {
 }
 
 impl<'tu> SemanticTranslationUnit<'tu> {
+    /// The bounds a nested function definition's own type writes, which its
+    /// definer evaluates where the definition is (GNU).
+    pub(crate) fn definition_bounds(&self, definition: &FunctionDefinition<'tu>) -> &'tu [usize] {
+        self.definition_bounds
+            .get(&std::ptr::from_ref(definition).addr())
+            .copied()
+            .unwrap_or_default()
+    }
+
     /// Identity-indexed type-site execution; provenance is not a binding join.
     pub(crate) fn declaration_site(
         &self,

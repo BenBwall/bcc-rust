@@ -111,6 +111,9 @@ pub(crate) struct RuntimeBound<'tu> {
     pub(crate) conversion:   Scalar,
     pub(crate) site:         BoundEvaluationSite,
     pub(crate) dependencies: &'tu [BoundId],
+    /// The scope the bound is written in, which tells the function that
+    /// evaluates it and from which a nested function reads it (GNU).
+    pub(crate) scope:        usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -2785,11 +2785,35 @@ handling, and on WebAssembly, which cannot restore another function's
 frame. The interpreter refuses a jump out of a `qsort` comparison
 (`nestfunc-6.c`), as it refuses any `longjmp` out of one.
 
+A nested function also uses the variably modified objects and types of
+the functions around it. The record word of a captured VLA, or of an
+object of GNU's records of variable size, holds the address its definer
+stores when it allocates the object, since the object does not exist on
+entry. A runtime bound a nested function needs and does not evaluate
+itself is read from a record word too: semantic analysis retains the scope
+each bound is written in (`RuntimeBound::scope`), which names the function
+that evaluates it, or the function whose parameters write it; that function
+stores the bound's value in its record word each time it evaluates it, so
+a bound saved anew on each loop iteration is the current one. A nested
+function whose own type is variably modified (`char (*f(void))[++n]`, or
+one returning a record of the definer's of variable size) has its result's
+and specifiers' bounds evaluated by its definer where the definition is, as
+GCC evaluates them (`definition_bounds`), and read from the record inside
+it. A result of variable size is returned in memory: the caller allocates
+its run-time size and passes the address first, as GCC returns it, and the
+callee copies its value there.
+
 Not yet supported, and refused: the address of a label of a function
-around a nested function, a use of a variably modified object of an
-enclosing function, and a nested function whose own type is variably
-modified (its bounds are its definer's, which GCC evaluates at the
-definition), which its definer refuses at the definition too.
+around a nested function.
+
+The 11 GCC 13 survey tests that stopped at a nested function's use of a
+variably modified object or type of its definer (`921017-1.c`,
+`nested-func-9.c`, `nested-func-12.c` to `-17.c`, `nested-vla-1.c`,
+`nested-vla-3.c`, `torture/pr8081.c`) pass on LLVM at `-O0` and `-O2`, on
+the native back end and in the interpreter with and without bcc's
+optimizer; `nested_variably_modified.c` prints what GCC 13 prints at
+`-O0` and `-O2` on each. `gcc.dg/nested-vla-2.c`, whose `typeof` bound
+GCC 13 evaluates wrongly (it aborts), passes as the test expects.
 
 **Evidence.** Of the 44 GCC 15.2 survey tests that stopped at nested
 functions, 29 pass on LLVM at `-O0` and `-O2` and on the native back end;
@@ -2877,7 +2901,9 @@ stack and passes the copy's address, which `va_arg` of its type reads too.
 A statement expression whose value has variable size snapshots it above
 the block's arrays, which then stay until an enclosing scope or the
 function releases them, since the snapshot is newer than they are.
-Refused by name: a function result of such a type, a volatile copy, an
+A function result of such a type is returned in memory (see "GNU nested
+functions", the only functions that can have one). Refused by name: a
+volatile copy, an
 `asm` operand of it, and, on the Windows targets, whose Microsoft record
 layout has no run-time form here, the record itself.
 

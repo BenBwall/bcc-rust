@@ -198,8 +198,11 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 | BlockItem::Declaration(d) => self.tasks.push(Task::Declaration(d)),
                 // A nested function is lowered as a function of its own
                 // (`nested.rs`); its definition runs nothing here.
-                | BlockItem::FunctionDefinition(definition) =>
-                    self.nested_definition(definition)?,
+                // The definer evaluates the bounds of its type.
+                | BlockItem::FunctionDefinition(definition) => {
+                    let tasks = self.nested_definition(definition)?;
+                    self.push_all(&tasks);
+                },
             }
         }
         Ok(())

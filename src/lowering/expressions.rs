@@ -2426,8 +2426,14 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             .map_err(|kind| at(kind, source))?;
         if described {
             signature.variadic_fixed = Some(
-                u32::try_from(fixed + usize::from(signature.result_param().is_some()))
-                    .map_err(|_| LoweringError::missing("too many call arguments", source))?,
+                u32::try_from(
+                    fixed
+                        + usize::from(
+                            signature.result_param().is_some()
+                                || types::variable_size(&self.unit.sema.types, result),
+                        ),
+                )
+                .map_err(|_| LoweringError::missing("too many call arguments", source))?,
             );
             signature.variadic_noundef = false;
         }
@@ -2436,6 +2442,15 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         let mut result_object = None;
         if let Some(ParamAbi::Result(layout)) = signature.result_param() {
             let object = self.fresh_object(layout.size, layout.align, source)?;
+            args.push(object);
+            result_object = Some(object);
+        } else if types::variable_size(&self.unit.sema.types, result) {
+            // GNU: a result of variable size goes to memory of its run-time
+            // size, passed first.
+            let size = self.runtime_size(result, source)?;
+            let align = super::alignment::storage_alignment(&self.unit.sema.types, result)
+                .map_err(|kind| at(kind, source))?;
+            let object = self.dynamic_object(size, Some(align));
             args.push(object);
             result_object = Some(object);
         }

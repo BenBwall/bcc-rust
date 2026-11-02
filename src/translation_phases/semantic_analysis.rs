@@ -331,6 +331,7 @@ pub(crate) fn analyze<'tu>(
         type_names,
         type_name_indices: analyzer.retained_type_names,
         declaration_sites: analyzer.declaration_sites,
+        definition_bounds: analyzer.definition_bounds,
         size_query_sites: analyzer.size_query_sites,
         tag_declarations: analyzer.tag_declarations.leak(),
         wide_integers: analyzer.wide.into_values(),
@@ -563,7 +564,8 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 }
                 self.implicit_return_type(f);
                 self.prepare_function(f);
-                self.work.push(Work::FunctionBase(f));
+                self.work
+                    .push(Work::FunctionBase(f, self.types.runtime_bounds.len()));
                 _ = self.misplaced_inference(
                     f.declaration_specifiers.type_specifiers,
                     inference::InferenceFault::FunctionDeclarator,
@@ -571,14 +573,26 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 );
                 self.spec(f.declaration_specifiers, false);
             },
-            | Work::FunctionBase(f) => {
+            | Work::FunctionBase(f, bound_start) => {
                 let base = self.take_type();
-                self.work.push(Work::FunctionBody(f));
+                self.work.push(Work::FunctionBody(f, bound_start));
                 self.work
                     .push(Work::Declarator(f.declarator, base, false, false));
             },
-            | Work::FunctionBody(f) => {
+            | Work::FunctionBody(f, bound_start) => {
                 let ty = self.take_type();
+                // GNU: a nested function's own type may be variably
+                // modified; its definer evaluates the bounds written in its
+                // result and specifiers where the definition is, as GCC
+                // does. Its parameters' are its own, at entry.
+                let bounds =
+                    self.with_member_bounds(self.bound_actions(ty, bound_start), bound_start);
+                if !bounds.is_empty() {
+                    self.record_bound_origins(bounds, BoundEvaluationSite::Specifiers);
+                    _ = self
+                        .definition_bounds
+                        .insert(std::ptr::from_ref(f).addr(), bounds);
+                }
                 self.work.push(Work::FunctionBodyReady(f, ty));
                 self.prepare_function_attributes(f.declarator, f.declaration_specifiers.extensions);
             },
@@ -1898,8 +1912,10 @@ enum Work<'tu, 's> {
     /// region opens here.
     DeclarationEnd(usize),
     Function(&'tu FunctionDefinition<'tu>),
-    FunctionBase(&'tu FunctionDefinition<'tu>),
-    FunctionBody(&'tu FunctionDefinition<'tu>),
+    /// A function definition whose specifiers are analyzed, and the number
+    /// of runtime bounds before them.
+    FunctionBase(&'tu FunctionDefinition<'tu>, usize),
+    FunctionBody(&'tu FunctionDefinition<'tu>, usize),
     FunctionBodyReady(&'tu FunctionDefinition<'tu>, TypeId),
     FunctionWork(functions::FunctionWork<'tu>),
     StatementWork(statements::StatementWork<'tu>),
@@ -2069,6 +2085,9 @@ struct Analyzer<'a, 'tu, 's> {
     type_names:              ArenaVec<'s, (&'tu TypeName<'tu>, TypeId)>,
     retained_type_names:     ArenaMap<'tu, usize, TypeNameId>,
     declaration_sites:       ArenaMap<'tu, usize, BoundSiteFacts<'tu>>,
+    /// The bounds a nested function definition's own type writes, by
+    /// definition identity, which its definer evaluates (GNU).
+    definition_bounds:       ArenaMap<'tu, usize, &'tu [usize]>,
     type_name_sites:         ArenaMap<'s, usize, BoundSiteFacts<'tu>>,
     size_query_sites:        ArenaMap<'tu, usize, SizeQueryFacts<'tu>>,
     typeof_sites:            ArenaMap<'s, usize, BoundSiteFacts<'tu>>,
@@ -2112,6 +2131,8 @@ struct Analyzer<'a, 'tu, 's> {
     /// declaration or type name that defines the record evaluates them, as
     /// GCC does (GNU).
     member_bounds:           ArenaVec<'s, usize>,
+    /// The scope each runtime bound is written in, by bound index.
+    bound_scopes:            ArenaVec<'s, usize>,
     integer_models:          ArenaMap<'s, usize, Option<(u32, bool)>>,
     resolved:                resolved::ResolvedBuilder<'tu, 's>,
     expressions:             ArenaVec<'tu, ExpressionInfo<'tu>>,

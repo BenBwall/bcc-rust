@@ -134,7 +134,9 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     ty,
                 )
                 .map_err(|kind| at(kind, source))?;
-                Local::Address(self.dynamic_object(size, Some(align)))
+                let address = self.dynamic_object(size, Some(align));
+                self.capture_allocation(binding, address);
+                Local::Address(address)
             },
             | _ => {
                 let layout =
