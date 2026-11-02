@@ -43,7 +43,6 @@ use crate::{
         IntCC,
         MemFlags,
         Opcode,
-        StackSlot,
         Type,
         Value,
     },
