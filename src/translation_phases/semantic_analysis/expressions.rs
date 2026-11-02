@@ -526,47 +526,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | E::CompoundLiteral {
                 type_name,
                 initializer,
-            } => {
-                let ty = self
-                    .resolved_type_names
-                    .get(&super::type_name_identity(type_name))
-                    .copied()
-                    .unwrap_or_else(|| self.types.unknown());
-                // C23 §6.5.3.6p4: a `constexpr` literal is a `constexpr`
-                // object, so its type is `const`.
-                let constexpr =
-                    Self::constexpr_storage(type_name.declaration_specifiers.extensions);
-                let ty = if constexpr && !self.types.unanalyzed(ty) {
-                    self.types.const_object(ty)
-                } else {
-                    ty
-                };
-                let errors_before = self.semantic_errors;
-                // §6.5.2.5p1 excludes variable length array types; a pointer
-                // to one is a valid compound literal type.
-                if !self.types.unanalyzed(ty)
-                    && ((matches!(self.types.nodes[ty.index], TypeKind::Array(..))
-                        && self.variably_modified(ty))
-                        || (!self.complete_object(ty)
-                            && !matches!(
-                                self.types.nodes[ty.index],
-                                TypeKind::Array(_, ArrayBound::Incomplete)
-                            )))
-                {
-                    info = self.invalid_expression(e, SemanticErrorKind::InvalidCompoundLiteral);
-                } else {
-                    // A compound literal's flexible array member stays empty.
-                    info.ty = self
-                        .check_initializer(ty, initializer, self.scope == 0, false, None)
-                        .0;
-                    self.fold_compound_literal(&mut info, initializer);
-                    if constexpr {
-                        self.constexpr_literal(&mut info, initializer, errors_before);
-                    }
-                }
-                info.category = self.object_category(info.ty);
-                info.static_address = self.scope == 0;
-            },
+            } => info = self.type_compound_literal(e, type_name, initializer),
             | E::StatementExpression(statement) => {
                 if let Some((_, tail)) = self.statement_expression_tail(statement) {
                     // GNU extension: GCC "Statement Exprs" returns the value
@@ -661,6 +621,59 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 }
 
 impl<'tu> Analyzer<'_, 'tu, '_> {
+    /// Types the compound literal `e` of the type `type_name` names, as an
+    /// object its `initializer` initializes: a file-scope one has static
+    /// storage duration, and a `constexpr` one is a `const` named constant.
+    /// C99: §6.5.2.5 paragraphs 1-6, pp. 75-76; PDF pp. 87-88. C23 (N3220):
+    /// §6.5.3.6 paragraphs 4-7, p. 79; PDF p. 92.
+    fn type_compound_literal(
+        &mut self,
+        e: &'tu Expression<'tu>,
+        type_name: &'tu crate::translation_phases::parsing::declaration_syntax::TypeName<'tu>,
+        initializer: &'tu crate::translation_phases::parsing::declaration_syntax::Initializer<'tu>,
+    ) -> ExpressionInfo<'tu> {
+        let mut info = Self::expression_result(e, self.types.unknown());
+        let ty = self
+            .resolved_type_names
+            .get(&super::type_name_identity(type_name))
+            .copied()
+            .unwrap_or_else(|| self.types.unknown());
+        // C23 §6.5.3.6p4: a `constexpr` literal is a `constexpr` object, so
+        // its type is `const`.
+        let constexpr = Self::constexpr_storage(type_name.declaration_specifiers.extensions);
+        let ty = if constexpr && !self.types.unanalyzed(ty) {
+            self.types.const_object(ty)
+        } else {
+            ty
+        };
+        let errors_before = self.semantic_errors;
+        // §6.5.2.5p1 excludes variable length array types; a pointer to one
+        // is a valid compound literal type.
+        if !self.types.unanalyzed(ty)
+            && ((matches!(self.types.nodes[ty.index], TypeKind::Array(..))
+                && self.variably_modified(ty))
+                || (!self.complete_object(ty)
+                    && !matches!(
+                        self.types.nodes[ty.index],
+                        TypeKind::Array(_, ArrayBound::Incomplete)
+                    )))
+        {
+            info = self.invalid_expression(e, SemanticErrorKind::InvalidCompoundLiteral);
+        } else {
+            // A compound literal's flexible array member stays empty.
+            info.ty = self
+                .check_initializer(ty, initializer, self.scope == 0, false, None)
+                .0;
+            self.fold_compound_literal(&mut info, initializer);
+            if constexpr {
+                self.constexpr_literal(&mut info, initializer, errors_before);
+            }
+        }
+        info.category = self.object_category(info.ty);
+        info.static_address = self.scope == 0;
+        info
+    }
+
     /// Carries into `info`, the result of `e`, the folding its operands
     /// had.
     /// C99: §6.6 paragraph 10, p. 96; PDF p. 108.

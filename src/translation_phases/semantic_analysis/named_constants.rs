@@ -500,22 +500,28 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if pointer {
             // A null pointer, but no null pointer constant (C23 §6.6
             // footnote 118).
-            if stored.is_none_or(|value| {
-                self.nullptr_type(value.ty) || value.integer.is_some_and(Integer::is_zero)
-            }) {
+            if match stored {
+                | Stored::Zero => true,
+                | Stored::Value(value) =>
+                    self.nullptr_type(value.ty) || value.integer.is_some_and(Integer::is_zero),
+            } {
                 let bits = u32::try_from(self.types.target.pointer.size * 8).unwrap_or(64);
                 info.integer = Some(Integer::int(0).cast(bits, false));
                 info.constant = ConstantClass::Arithmetic;
             }
             return;
         }
-        let value = stored.unwrap_or_else(|| {
-            let mut zero = Self::expression_result(info.expression, self.types.scalar(Scalar::Int));
-            zero.integer = Some(Integer::int(0));
-            zero.ice = true;
-            zero.constant = ConstantClass::Arithmetic;
-            zero
-        });
+        let value = match stored {
+            | Stored::Value(value) => value,
+            | Stored::Zero => {
+                let mut zero =
+                    Self::expression_result(info.expression, self.types.scalar(Scalar::Int));
+                zero.integer = Some(Integer::int(0));
+                zero.ice = true;
+                zero.constant = ConstantClass::Arithmetic;
+                zero
+            },
+        };
         let mut read = Self::expression_result(info.expression, ty);
         self.fold_conversion(&mut read, ty, value);
         if read.constant != ConstantClass::Arithmetic {
@@ -529,13 +535,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     }
 
     /// The value the named constant's initializer stores in the scalar
-    /// subobject of type `ty` at `place`: `Some(None)` for zero, and `None`
-    /// when the plan gives it no single constant value.
-    fn stored_value(
-        &self,
-        mut place: ConstantPlace<'tu>,
-        ty: TypeId,
-    ) -> Option<Option<ExpressionInfo<'tu>>> {
+    /// subobject of type `ty` at `place`, or `None` when the plan gives it
+    /// no single constant value.
+    fn stored_value(&self, mut place: ConstantPlace<'tu>, ty: TypeId) -> Option<Stored<'tu>> {
         let size = self.types.layout(ty)?.size;
         // Each copy of a whole structure or union moves to the named
         // constant it copies; the chain ends at an object's own value.
@@ -579,8 +581,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 }
             }
             match found? {
-                | Found::Zero => return Some(None),
-                | Found::Value(e) => return Some(Some(self.expression_info(e))),
+                | Found::Zero => return Some(Stored::Zero),
+                | Found::Value(e) => return Some(Stored::Value(self.expression_info(e))),
                 | Found::Copy(e, offset) => {
                     let copied = self.constant_place(e)?;
                     place = ConstantPlace {
@@ -733,6 +735,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         self.context.configuration.compiler_identity().rules() == RuleSet::Gcc
             && self.constant_place(operand).is_some()
     }
+}
+
+/// The value a named constant's initializer gives a scalar subobject.
+#[derive(Clone, Copy)]
+enum Stored<'tu> {
+    /// Zero, from an omitted or empty initializer.
+    Zero,
+    /// The value of an expression, converted to the subobject's type.
+    Value(ExpressionInfo<'tu>),
 }
 
 /// What a named constant's initializer last stored over a subobject.
