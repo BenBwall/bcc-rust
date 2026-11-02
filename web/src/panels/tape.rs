@@ -62,6 +62,9 @@ const ROOM: f64 = 130.0;
 /// values.
 const COMPACT_BELOW: f64 = 720.0;
 const ROOM_COMPACT: f64 = 44.0;
+/// The width of blank tape that holds "NOT YET RUN" written across it
+/// (10 px type spaced .12 em).
+const UNRUN_ACROSS: f64 = 100.0;
 /// How long the tape takes to glide to a new scale, in milliseconds.
 const GLIDE_MS: f64 = 260.0;
 
@@ -1394,11 +1397,21 @@ fn tape_svg(
                     {lanes}
                     {flows}
                     <rect class="tape-blank" x=x(count) y=AXIS - 2.0 width=(width - x(count)).max(0.0) height=height />
-                    // A compact tape writes it down the narrow blank.
-                    {reel.open.then(|| if compact {
+                    // A compact tape writes it down the blank where the
+                    // blank is narrow; across it where it is wide, as before
+                    // the first step, when the tape may be too short to
+                    // hold it written down.
+                    {reel.open.then(|| if compact && width - x(count) < UNRUN_ACROSS {
                         view! { <text class="tape-unrun" transform=format!("translate({:.1} {:.1}) rotate(90)", x(count) + 14.0, AXIS + 10.0)>"NOT YET RUN"</text> }.into_any()
                     } else {
-                        view! { <text class="tape-unrun" x=x(count) + 10.0 y=AXIS + 16.0>"NOT YET RUN"</text> }.into_any()
+                        // Right of the first row's name where it rides on
+                        // a compact tape that has hardly begun.
+                        let clear = if compact {
+                            tags(reel, rows, 0.0).first().map_or(0.0, |tag| tag.2 + 8.0)
+                        } else {
+                            0.0
+                        };
+                        view! { <text class="tape-unrun" x=(x(count) + 10.0).max(clear) y=AXIS + 16.0>"NOT YET RUN"</text> }.into_any()
                     })}
                     {(count > 0).then(|| view! { <line class="tape-head" x1=head y1=AXIS - 4.0 x2=head y2=height /> })}
                 </svg>
