@@ -467,6 +467,30 @@ mod tests {
         }
     }
 
+    /// GCC names the x87 extended format `__float80`, the same type as
+    /// `long double` on x86-64 Linux; Clang knows no such name.
+    #[test]
+    fn float80_is_gccs_name_for_long_double() {
+        if !cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+            return;
+        }
+        let directory = Directory::new();
+        directory.write(
+            "f80.c",
+            "__float80 x = 1.5;\n_Static_assert(sizeof(__float80) == sizeof(long double), \
+             \"\");\nint main(void) { __float80 y = x * 2; return (int)y + _Generic((__float80)0, \
+             long double: 0, default: 10); }\n",
+        );
+        let output = directory.bcc("--gcc-mode", &["-pedantic-errors", "f80.c", "-o", "f80"]);
+        succeeds(&output);
+        assert_eq!(stderr(&output), "");
+        let run = Command::new(directory.path("f80")).output().unwrap();
+        assert_eq!(run.status.code(), Some(3));
+        let output = directory.bcc("--clang-mode", &["-fsyntax-only", "f80.c"]);
+        assert!(!output.status.success());
+        assert!(stderr(&output).contains("__float80"), "{}", stderr(&output));
+    }
+
     /// TCC names no warning options, so its diagnostics carry no `[-W…]`
     /// suffix, as GCC's and Clang's do.
     #[test]

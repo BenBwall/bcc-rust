@@ -174,6 +174,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 let builtin = match self.context.string_cache.at(name.name) {
                     | "__int128_t" => Some(Scalar::Int128),
                     | "__uint128_t" => Some(Scalar::UnsignedInt128),
+                    | "__float80"
+                        if crate::translation_phases::parsing::float80_names_long_double(
+                            self.context.configuration,
+                        ) =>
+                        Some(Scalar::LongDouble),
                     | _ => None,
                 };
                 if let Some(scalar) = builtin {
