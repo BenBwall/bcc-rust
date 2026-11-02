@@ -82,15 +82,7 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         },
         | Some(Query::MoreHelp) => return Ok(Plan::print(more_help(&invocation.name))),
         | Some(Query::Print(text)) => return Ok(Plan::print(text.clone())),
-        | Some(Query::Archive(arguments)) => {
-            plan.steps.push(Step::Run {
-                program:   version::program_name("ar").into(),
-                name:      None,
-                arguments: arguments.clone(),
-                stdin:     None,
-            });
-            return Ok(plan);
-        },
+        | Some(Query::Archive(arguments)) => return archive(arguments),
         | _ if state.verbose > 0 => plan.steps.push(Step::Print {
             text:   version::banner(invocation.personality, &invocation.name, target),
             stderr: false,
@@ -125,6 +117,101 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         }
     }
     state.steps(invocation, target, plan)
+}
+
+/// `tcc -ar ARGS...` as TCC's own archiver reads it (`tcc_tool_ar` in
+/// `tcctools.c`), run by `llvm-ar`. The first argument, or any starting
+/// with `-`, holds the operation letters, and the first other argument is
+/// the library. A missing library, a destructive operation TCC does not
+/// implement (`habdiopN`) or a `-x.y` argument prints TCC's usage with
+/// status 1. `t` lists the members' names and `x` extracts them (`x - NAME`
+/// with `v` or `t`); TCC's table has no long form. Otherwise TCC writes a
+/// new library of exactly the given objects, with a symbol table, replacing
+/// any old one. A file it cannot open ends it with status 2.
+fn archive(arguments: &[OsString]) -> Result<Plan, MainError> {
+    let mut usage = false;
+    let (mut extract, mut table, mut verbose) = (false, false, false);
+    let mut library: Option<&OsString> = None;
+    let mut objects = Vec::new();
+    for (index, argument) in arguments.iter().enumerate() {
+        let text = argument.to_string_lossy();
+        let option = text.starts_with('-');
+        if option && text.contains('.') {
+            usage = true;
+        }
+        if option || (index == 0 && !text.contains('.')) {
+            usage |= text.chars().any(|c| "habdiopN".contains(c));
+            extract |= text.contains('x');
+            table |= text.contains('t');
+            verbose |= text.contains('v');
+        } else if library.is_none() {
+            library = Some(argument);
+        } else {
+            objects.push(argument.clone());
+        }
+    }
+    let Some(library) = library.filter(|_| !usage) else {
+        super::print(
+            "usage: tcc -ar [crstvx] lib [files]\ncreate library ([abdiopN] not supported).\n",
+            true,
+        );
+        return Err(MainError::Reported(1));
+    };
+    let fail = |message: std::fmt::Arguments<'_>| {
+        super::print(&format!("tcc: ar: {message}\n"), true);
+        Err(MainError::Reported(2))
+    };
+    let mut plan = Plan::default();
+    let mut run = vec![];
+    if extract || table {
+        use std::io::Read as _;
+        let mut magic = [0_u8; 8];
+        let Ok(mut file) = std::fs::File::open(library) else {
+            return fail(format_args!(
+                "can't open file {}",
+                library.to_string_lossy()
+            ));
+        };
+        if file.read_exact(&mut magic).is_err() || &magic != b"!<arch>\n" {
+            return fail(format_args!(
+                "not an ar archive {}",
+                library.to_string_lossy()
+            ));
+        }
+        run.push(OsString::from(match (extract, table || verbose) {
+            | (true, true) => "xv",
+            | (true, false) => "x",
+            | (false, _) => "t",
+        }));
+        run.push(library.clone());
+    } else {
+        if let Some(missing) = objects
+            .iter()
+            .find(|object| std::fs::File::open(object).is_err())
+        {
+            return fail(format_args!(
+                "can't open file {}",
+                missing.to_string_lossy()
+            ));
+        }
+        // TCC writes a fresh library rather than updating one.
+        if Path::new(library).is_file() && std::fs::remove_file(library).is_err() {
+            return fail(format_args!(
+                "can't create file {}",
+                library.to_string_lossy()
+            ));
+        }
+        run.push("rcs".into());
+        run.push(library.clone());
+        run.extend(objects);
+    }
+    plan.steps.push(Step::Run {
+        program:   version::program_name("ar").into(),
+        name:      None,
+        arguments: run,
+        stdin:     None,
+    });
+    Ok(plan)
 }
 
 /// What a command line asks for instead of a compilation.
