@@ -2846,11 +2846,19 @@ GCC's `place_field` rounds a variable offset up to the field's alignment.
 A member of constant size that needs more alignment than its segment's
 base is known to have starts a segment rounded up at run time; any other
 member is at a constant offset in its segment. A zero-width bit-field
-keeps its declared type's boundary there even in a packed record. A
+keeps its declared type's alignment (a typedef's included) and its own
+`aligned` there, even in a packed record or under `#pragma pack`. A
 bit-field after a member of variable size takes the next bits, whatever
 unit they straddle, since GCC checks the straddle only at a constant
 offset (`struct { char a[n]; int b : 3; int c : 7; char d; }` puts `d` at
-`n + 2`). A union's members all start at 0. GCC 13's offsets, sizes,
+`n + 2`), but its own `aligned`, capped by `#pragma pack` and not by
+packing, still rounds its start up (at run time when the segment's base
+is not known to be aligned that far), named or not: `struct { char a[n];
+int b : 3 __attribute__((aligned(8))); char c; }` puts `c` at 9 for one
+element. A named one aligns the record to its declared type and its
+`aligned`, capped by `#pragma pack`, which wins over packing. A union's
+members all start at 0, and a bit-field in one occupies its width in
+whole bytes, as at a constant offset. GCC 13's offsets, sizes,
 alignments and bit placement agree on the probes for every rule above
 (packed and `aligned` records, nested records, zero-width bit-fields and
 unions included). A generated matrix of 1,792 records (sixteen leading
@@ -2859,7 +2867,19 @@ times fourteen kinds of following members, including bit-fields, a second
 member of variable size and nested records, in plain, packed,
 `#pragma pack(1)`, `(2)` and `(4)`, `aligned(64)` and `ms_struct`
 structures and in unions) prints what GCC 13.3 and GCC 14.2 print on every
-back end; the `ms_struct` ones are refused by name.
+back end; the `ms_struct` ones are refused by name. A second family of
+2,295 records puts bit-fields with explicit alignment after fifteen kinds
+of member of variable size (seventeen tails: `aligned` on named, unnamed,
+packed and 64-bit bit-fields, on the declared type through a typedef that
+raises or lowers it, zero-width ones, and runs of several) in plain,
+packed, `#pragma pack(1)`, `(2)` and `(4)`, packed under `#pragma pack(4)`,
+`aligned` and packed-`aligned` structures and in unions, and prints what
+both GCCs print too. Not modeled at any offset: GCC gives a bit-field
+whose width is that of an integer mode the mode's alignment when the
+cursor is known to have it, which shows only when a typedef lowers the
+declared type's alignment (with `typedef long L2
+__attribute__((aligned(2)))`, `struct { L2 b : 32; }` is aligned to 4 by
+GCC and to 2 by bcc).
 
 The size formula DAG (`facts/sizes.rs`) gains `Sum`, `AlignUp` and `Max`
 nodes; each segment's base and each such record's size are formulas over

@@ -237,9 +237,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 info.integer = Some(Integer::int(0).cast(64, false));
                 info.constant = ConstantClass::Address;
             },
+            // C23 §6.4.4.6p3: `false` and `true` are constants of type
+            // `bool`.
             | E::Boolean(value) => {
-                info.ty = self.types.scalar(Scalar::Int);
-                info.integer = Some(Integer::int(i128::from(value)));
+                info.ty = self.types.scalar(Scalar::Bool);
+                info.integer = Some(Integer::boolean(value));
                 info.ice = true;
                 info.constant = ConstantClass::Arithmetic;
             },

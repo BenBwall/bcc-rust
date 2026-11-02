@@ -178,8 +178,8 @@ and final flexible-array alignment with no elements included in the size. Bit-fi
 allocate low-order bits first, may share bytes across differing integer base types,
 and do not cross the allocation boundary of their declared base type. Unnamed
 bit-fields never increase aggregate alignment: an unnamed zero-width field
-advances to its base-type boundary, and in a union an unnamed bit-field occupies
-only the bytes its width needs. Plain-int bit-fields are signed; integer bit-field types beyond the
+advances to its base-type boundary, and in a union a bit-field occupies only the
+bytes its width needs (GCC and Clang; the union's alignment rounds its size). Plain-int bit-fields are signed; integer bit-field types beyond the
 C99-required int/unsigned-int/bool set are accepted as an implementation-defined
 choice following the target ABI. GCC's flexible-array forms (in a union, as a
 structure's only member, a flexible structure nested in a structure, and arrays

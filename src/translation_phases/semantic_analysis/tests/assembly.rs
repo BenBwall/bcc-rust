@@ -90,6 +90,75 @@ fn operands_take_registers_memory_immediates_ties_and_flags() {
 
 /// `g` takes a register for a constant no instruction encodes as an
 /// immediate, and memory for an aggregate; `i` takes an address constant.
+/// GCC and Clang take a whole array as a memory output, though no
+/// assignment may modify it; a const-qualified one stays read-only.
+#[test]
+fn arrays_are_memory_outputs() {
+    for body in [
+        "int a[4]; void f(void) { __asm__(\"\" : \"+m\"(a)); }",
+        "struct s { short x, y; } p[2]; void f(void) { __asm__(\"\" : \"=m\"(p)); }",
+        "int a[2][3]; void f(void) { __asm__(\"\" : \"+m\"(a[1])); }",
+        "extern int a[]; void f(void) { __asm__(\"\" : \"=m\"(a)); }",
+        "struct s { const int x; int y; } p[2]; void f(void) { __asm__(\"\" : \"+m\"(p)); }",
+        "union u { const int x; int y; } p[2]; void f(void) { __asm__(\"\" : \"=m\"(p)); }",
+    ] {
+        assert_eq!(kinds(body), [], "{body}");
+    }
+    for body in [
+        "const int c[2]; void f(void) { __asm__(\"\" : \"=m\"(c)); }",
+        "const int c[2][3]; void f(void) { __asm__(\"\" : \"=m\"(c)); }",
+        "typedef const int T[2]; T c; void f(void) { __asm__(\"\" : \"=m\"(c)); }",
+        "struct s { const int x; } q; void f(void) { __asm__(\"\" : \"=m\"(q)); }",
+    ] {
+        assert_eq!(
+            kinds(body),
+            [SemanticErrorKind::InvalidAsm(AsmFault::OutputLvalue)],
+            "{body}"
+        );
+    }
+}
+
+/// GCC refuses a string literal as an output ("read-only location used as
+/// 'asm' output"); Clang takes it as a memory operand.
+#[test]
+fn string_literal_outputs_follow_each_compiler() {
+    use crate::configuration::CompilerIdentity::{
+        Clang,
+        Gcc,
+    };
+    for body in [
+        "void f(void) { __asm__(\"\" : \"=m\"(\"abc\")); }",
+        "void f(void) { __asm__(\"\" : \"+m\"((\"abc\"))); }",
+    ] {
+        for (identity, expected) in [
+            (
+                Gcc,
+                &[SemanticErrorKind::InvalidAsm(AsmFault::OutputLvalue)][..],
+            ),
+            (Clang, &[]),
+        ] {
+            let mut kinds = Vec::new();
+            with_configuration(
+                body,
+                crate::configuration::CompilerConfiguration::default()
+                    .with_compiler_identity(identity),
+                |context, _| {
+                    kinds.extend(
+                        context
+                            .take_pending_errors()
+                            .iter()
+                            .filter_map(|e| match e {
+                                | TranslationError::Semantic(e) => Some(e.kind),
+                                | _ => None,
+                            }),
+                    );
+                },
+            );
+            assert_eq!(kinds, expected, "{identity:?} {body}");
+        }
+    }
+}
+
 #[test]
 fn generic_constraints_follow_the_operand() {
     facts(

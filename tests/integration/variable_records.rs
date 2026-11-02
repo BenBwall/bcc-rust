@@ -31,7 +31,7 @@ mod tests {
     const GCC: &str = "--compiler-identity=gcc";
 
     /// One block of output per call of `run`, for 3 and 2, 1 and 5, and 8
-    /// and 1 elements, then one per call of `aligned`.
+    /// and 1 elements, then one per call of `aligned` and of `bitfields`.
     const EXPECTED: &str = concat!(
         "value 20 41\n",
         "S 48 4 16 24 40\nidx 12 32\ncopy 1 2 3 14 0.25 932744692\ndiff 2 48\n",
@@ -51,6 +51,17 @@ mod tests {
         "A5 32 4 20 55 5 15\nA6 5 4 16\nA7 12 2 4 17\n",
         "A1 32 8 11\nA2 8 6 12\nA3 32 16 16 13\nA4 8 7 -2 14 200\n",
         "A5 48 8 36 55 5 15\nA6 9 8 16\nA7 14 2 6 17\n",
+        // Bit-fields with explicit alignment after members of variable size,
+        // for 1, 3 and 6 elements.
+        "B1 16 8 9 1820967390 3 1\nB2 8 4 4 3348480957 -1 200 2\nB3 18 1 17 3 3\n",
+        "B4 16 8 9 3314426916 2 -7 5 4\nB5 16 8 9 266668192 -3 5\nB6 16 16 5 3264938205 9 6\n",
+        "B7 17 1 16 7 7\nB8 3 1 2 39 8\nB9 4 2 3 4039 2 -60 9\nB10 4 4 2 1271 1 10\nB11 6 2\n",
+        "B1 16 8 9 1820967390 3 1\nB2 8 4 6 12422909 -1 200 2\nB3 18 1 17 3 3\n",
+        "B4 16 8 9 3314426916 2 -7 5 4\nB5 16 8 9 266668192 -3 5\nB6 16 16 5 3264938205 9 6\n",
+        "B7 17 1 16 7 7\nB8 5 1 4 39 8\nB9 6 2 5 4039 2 -60 9\nB10 8 4 4 1221431 1 10\nB11 6 2\n",
+        "B1 16 8 9 1820967390 3 1\nB2 12 4 10 206362319 -1 200 2\nB3 18 1 17 3 3\n",
+        "B4 24 8 17 2898999716 2 -7 5 4\nB5 16 8 9 266668192 -3 5\nB6 16 16 9 3830445917 9 6\n",
+        "B7 17 1 16 7 7\nB8 9 1 8 969 8\nB9 10 2 9 61699 2 -60 9\nB10 8 4 7 41 1 10\nB11 6 2\n",
     );
 
     #[test]

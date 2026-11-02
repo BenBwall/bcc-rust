@@ -8,7 +8,11 @@
    expression's value of variable size, records passed through `...`
    by invisible reference, and members after one whose `aligned` attribute
    or packing does not round its variable size (the next member is aligned
-   at run time by its own alignment). Prints what GCC prints. */
+   at run time by its own alignment), and bit-fields after one with explicit
+   alignment, which still rounds them up (at run time if need be; capped by
+   `#pragma pack` but not by packing), unnamed, zero-width (aligned to the
+   declared type, a typedef's alignment included) and several in a row.
+   Prints what GCC prints. */
 #include <stdarg.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -107,6 +111,52 @@ static void aligned(int n) {
   printf("A6 %zu %zu %d\n", sizeof a6, offsetof(struct A6, c), a6.c);
   printf("A7 %zu %zu %zu %ld\n", sizeof a7, _Alignof(struct A7), offsetof(struct A7, c), a7.c);
 }
+typedef int A16 __attribute__((aligned(16)));
+typedef long long L2 __attribute__((aligned(2)));
+#define SHOW(tag, x, format, ...)                                                \
+  printf(#tag " %zu %zu %zu %u " format "\n", sizeof x, _Alignof(struct tag),     \
+         offsetof(struct tag, c), sum(&x, sizeof x), __VA_ARGS__)
+static void bitfields(int n) {
+  struct B1 { char a[n]; int b : 3 __attribute__((aligned(8))); char c; } b1;
+  struct B2 { char a[n]; int z : 3; int b : 9 __attribute__((aligned(2))); char c; } b2;
+  struct B3 { char a[n]; int : 3 __attribute__((aligned(16))); char c; } b3;
+  struct B4 {
+    char a[n];
+    int b : 3 __attribute__((aligned(4)));
+    int d : 5 __attribute__((aligned(2)));
+    short z : 4 __attribute__((aligned(8)));
+    char c;
+  } b4;
+  struct B5 { char a[n]; int b : 3 __attribute__((packed, aligned(8))); char c; } __attribute__((packed)) b5;
+  struct B6 { char a[n]; A16 b : 5 __attribute__((aligned(4))); char c; } b6;
+  struct B7 { char a[n]; A16 : 0; char c; } b7;
+  struct B8 { char a[n]; char z; L2 : 0; char c; } b8;
+#pragma pack(push, 2)
+  struct B9 { char a[n]; int z : 3; long b : 7 __attribute__((aligned(32))); char c; } b9;
+#pragma pack(pop)
+#pragma pack(push, 4)
+  struct B10 { char a[n]; int b : 3; char c; } __attribute__((packed)) b10;
+#pragma pack(pop)
+  union B11 { char a[n]; char z; L2 b : 33; } b11;
+  memset(&b1, 0, sizeof b1); memset(&b2, 0, sizeof b2); memset(&b3, 0, sizeof b3);
+  memset(&b4, 0, sizeof b4); memset(&b5, 0, sizeof b5); memset(&b6, 0, sizeof b6);
+  memset(&b7, 0, sizeof b7); memset(&b8, 0, sizeof b8); memset(&b9, 0, sizeof b9);
+  memset(&b10, 0, sizeof b10);
+  b1.b = 3; b1.c = 1; b2.z = -1; b2.b = 200; b2.c = 2; b3.c = 3;
+  b4.b = 2; b4.d = -7; b4.z = 5; b4.c = 4; b5.b = -3; b5.c = 5; b6.b = 9; b6.c = 6;
+  b7.c = 7; b8.z = 1; b8.c = 8; b9.z = 2; b9.b = -60; b9.c = 9; b10.b = 1; b10.c = 10;
+  SHOW(B1, b1, "%d %d", b1.b, b1.c);
+  SHOW(B2, b2, "%d %d %d", b2.z, b2.b, b2.c);
+  SHOW(B3, b3, "%d", b3.c);
+  SHOW(B4, b4, "%d %d %d %d", b4.b, b4.d, b4.z, b4.c);
+  SHOW(B5, b5, "%d %d", b5.b, b5.c);
+  SHOW(B6, b6, "%d %d", b6.b, b6.c);
+  SHOW(B7, b7, "%d", b7.c);
+  SHOW(B8, b8, "%d", b8.c);
+  SHOW(B9, b9, "%d %d %d", b9.z, b9.b, b9.c);
+  SHOW(B10, b10, "%d %d", b10.b, b10.c);
+  printf("B11 %zu %zu\n", sizeof b11, _Alignof(union B11));
+}
 int main(void) {
   printf("value %d %d\n", value(1), value(4));
   printf("%d\n", run(3, 2));
@@ -115,5 +165,8 @@ int main(void) {
   aligned(1);
   aligned(3);
   aligned(6);
+  bitfields(1);
+  bitfields(3);
+  bitfields(6);
   return 0;
 }
