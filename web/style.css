@@ -588,6 +588,13 @@
   .tape-bus[data-access="read"] polygon { stroke: var(--flow); stroke-width: 2; }
   .tape-bus[data-access="designate"] polygon, .tape-bus[data-access="address"] polygon { stroke: var(--screen-ink); stroke-width: 1.5; stroke-dasharray: 3 2; }
   .tape-bus.is-indeterminate text { fill: #b5b4ac; paint-order: stroke; stroke: var(--screen); stroke-width: 3px; }
+  /* A compact tape's pinned value sits on its bar above the slants that
+     cross it: a halo of the bar's own fill breaks each line around the
+     text, so the value reads whole. */
+  .tape-labels > .tape-bus text { paint-order: stroke; stroke: #1d1d1b; stroke-width: 5px; stroke-linejoin: round; }
+  .tape-labels > .tape-bus.is-now text { stroke: #2c2c29; }
+  .tape-labels > .tape-bus[data-access="write"] text, .tape-labels > .tape-bus[data-access="create"] text { stroke: var(--accent); }
+  .tape-labels > .tape-bus.is-indeterminate text { stroke: var(--screen); stroke-width: 3px; }
   .tape-hatch { stroke: #77776f; stroke-width: 1.2; }
   .tape-end { stroke: var(--screen-dim); stroke-width: 1.5; }
   .tape-flow line { stroke: var(--flow); stroke-width: 1.4; }
