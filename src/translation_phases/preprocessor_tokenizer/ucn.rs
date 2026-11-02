@@ -112,6 +112,14 @@ pub(super) fn decode(
     {
         return Some(('$', length));
     }
+    // No universal character name spells a character of the basic set or a
+    // control character: C99 and C11 keep only `$`, `@` and `` ` `` below
+    // U+00A0, none of them an identifier character, and C23, whose basic
+    // set holds all three, keeps none. GCC and Clang refuse every one.
+    // C99: §6.4.3p2, p. 53; PDF p. 65. C23: §6.4.3p2, p. 56; PDF p. 69.
+    if code < 0xA0 {
+        return None;
+    }
     let character = char::from_u32(code)?;
     identifier_character(configuration, character, first).then_some((character, length))
 }
@@ -139,15 +147,17 @@ fn universal_character(text: &str) -> Option<(u32, usize)> {
 /// `XID_Start` and `XID_Continue` by Rust's alphabetic and alphanumeric
 /// classes); GCC 14 takes any of them in every mode.
 /// C99: Annex D, pp. 440-441; PDF pp. 452-453. C11: Annex D, pp. 664-665;
-/// PDF pp. 682-683. C23: §6.4.2.1p3, p. 58; PDF p. 71.
+/// PDF pp. 682-683. C23: §6.4.2.1p3, p. 54; PDF p. 67.
 pub(crate) fn identifier_character(
     configuration: CompilerConfiguration,
     character: char,
     first: bool,
 ) -> bool {
     let code = u32::from(character);
-    // `XID_Continue` also holds the combining marks and the middle dots
-    // (`Other_ID_Continue`), which Rust's alphanumeric class lacks.
+    // `XID_Continue` also holds the nonspacing combining marks and the
+    // middle dots (`Other_ID_Continue`), which Rust's alphanumeric class
+    // lacks; the enclosing marks among U+20D0-U+20FF (U+20DD-U+20E0,
+    // U+20E2-U+20E4) and its unassigned tail are not identifier characters.
     let unicode = if first {
         character.is_alphabetic()
     } else {
@@ -157,7 +167,9 @@ pub(crate) fn identifier_character(
                 | 0x0387
                 | 0x0300..=0x036F
                 | 0x1DC0..=0x1DFF
-                | 0x20D0..=0x20FF
+                | 0x20D0..=0x20DC
+                | 0x20E1
+                | 0x20E5..=0x20F0
                 | 0xFE20..=0xFE2F
             )
     };

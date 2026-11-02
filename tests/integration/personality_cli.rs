@@ -531,6 +531,82 @@ mod tests {
         }
     }
 
+    /// U+20D0-U+20FF continue a C23 identifier only where they are
+    /// `XID_Continue`: its nonspacing marks, not its enclosing marks.
+    /// Clang 23 refuses `a` followed by U+20DD in C23, as GCC 14 does
+    /// under `-pedantic`; GCC also takes C11's set, which holds it.
+    #[test]
+    fn enclosing_marks_continue_no_c23_identifier() {
+        let directory = Directory::new();
+        directory.write("enclosing.c", "int a\u{20DD};\n");
+        directory.write("enclosing-ucn.c", "int a\\u20DD;\n");
+        directory.write("nonspacing.c", "int a\u{20D0};\n");
+        directory.write("nonspacing-ucn.c", "int a\\u20D0;\n");
+        for (file, options, gcc, clang) in [
+            ("enclosing.c", &[][..], true, false),
+            ("enclosing.c", &["-pedantic"], false, false),
+            ("enclosing-ucn.c", &[], true, false),
+            ("enclosing-ucn.c", &["-pedantic"], false, false),
+            ("nonspacing.c", &["-pedantic"], true, true),
+            ("nonspacing-ucn.c", &["-pedantic"], true, true),
+        ] {
+            for (mode, accepted) in [("--gcc-mode", gcc), ("--clang-mode", clang)] {
+                let mut args = vec!["-std=c23", "-fsyntax-only"];
+                args.extend_from_slice(options);
+                args.push(file);
+                let output = directory.bcc(mode, &args);
+                assert_eq!(
+                    output.status.success(),
+                    accepted,
+                    "{mode} {args:?}: {}",
+                    stderr(&output)
+                );
+            }
+        }
+    }
+
+    /// No universal character name spells a basic or control character in
+    /// an identifier (C99 and C23 §6.4.3p2): GCC 14 and Clang 23 refuse
+    /// `\u0061`, `a\u0030` and the like in every mode. GCC alone reads
+    /// `\u0024` as `$`.
+    #[test]
+    fn universal_character_names_spell_no_basic_character() {
+        let directory = Directory::new();
+        for (index, source) in [
+            "int \\u0061;\n",
+            "int \\U00000061;\n",
+            "int a\\u0030;\n",
+            "int a\\u005F;\n",
+            "int a\\u0040;\n",
+            "int a\\u0060;\n",
+            "int a\\u0001;\n",
+            "int a\\u009F;\n",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let file = format!("basic{index}.c");
+            directory.write(&file, source);
+            for standard in ["-std=c99", "-std=c17", "-std=c23", "-std=gnu17"] {
+                for mode in ["--gcc-mode", "--clang-mode"] {
+                    let output = directory.bcc(mode, &[standard, "-fsyntax-only", &file]);
+                    assert!(
+                        !output.status.success(),
+                        "{mode} {standard} {source}: {}",
+                        stderr(&output)
+                    );
+                }
+            }
+        }
+        directory.write("dollar.c", "int a\\u0024;\n");
+        for standard in ["-std=c99", "-std=c23"] {
+            let output = directory.bcc("--gcc-mode", &[standard, "-fsyntax-only", "dollar.c"]);
+            succeeds(&output);
+            let output = directory.bcc("--clang-mode", &[standard, "-fsyntax-only", "dollar.c"]);
+            assert!(!output.status.success());
+        }
+    }
+
     /// GCC names the x87 extended format `__float80`, the same type as
     /// `long double` on x86-64 Linux; Clang knows no such name.
     #[test]
