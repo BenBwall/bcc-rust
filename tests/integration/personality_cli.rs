@@ -467,6 +467,44 @@ mod tests {
         }
     }
 
+    /// `__BASE_FILE__` names the main source file as the command line
+    /// wrote it, wherever it is expanded, as in GCC, Clang and TCC.
+    #[test]
+    fn base_file_names_the_main_source() {
+        let directory = Directory::new();
+        std::fs::create_dir_all(directory.path("sub")).unwrap();
+        directory.write("sub/h.h", "const char *h = __BASE_FILE__;\n");
+        directory.write("forced.h", "const char *f = __BASE_FILE__;\n");
+        directory.write(
+            "m.c",
+            "#include \"sub/h.h\"\nconst char *m = __BASE_FILE__;\n#ifdef __BASE_FILE__\nint \
+             defined_ok;\n#endif\n",
+        );
+        for mode in ["--gcc-mode", "--clang-mode", "--tcc-mode"] {
+            let output = directory.bcc(mode, &["-E", "-P", "m.c"]);
+            succeeds(&output);
+            let text = stdout(&output);
+            for line in [
+                "const char *h = \"m.c\";",
+                "const char *m = \"m.c\";",
+                "int defined_ok;",
+            ] {
+                assert!(text.contains(line), "{mode}: {line} in {text}");
+            }
+        }
+        // In a forced include GCC and TCC name the main file too (Clang
+        // says `<built-in>` there, which bcc does not mimic).
+        for mode in ["--gcc-mode", "--tcc-mode"] {
+            let output = directory.bcc(mode, &["-E", "-P", "-include", "forced.h", "m.c"]);
+            succeeds(&output);
+            assert!(
+                stdout(&output).contains("const char *f = \"m.c\";"),
+                "{mode}: {}",
+                stdout(&output)
+            );
+        }
+    }
+
     /// TCC names no warning options, so its diagnostics carry no `[-W…]`
     /// suffix, as GCC's and Clang's do.
     #[test]

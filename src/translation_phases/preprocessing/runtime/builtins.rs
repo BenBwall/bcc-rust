@@ -57,9 +57,17 @@ impl Expander<'_, '_, '_, '_> {
         match self.context.string_cache.at(token.contents) {
             // C99 §6.10.8p1: each built-in expands to an ordinary
             // token spelled as C source, located at the invocation.
-            | "__FILE__" => {
+            // `__BASE_FILE__` names the main source file, as written on the
+            // command line, wherever it is expanded; GCC, Clang and TCC
+            // define it. GNU extension: GCC manual, "Common Predefined
+            // Macros".
+            | name @ ("__FILE__" | "__BASE_FILE__") => {
                 let invocation = self.current_line_location(token);
-                let file = self.context.get_source_file(invocation.source_file_index);
+                let file = self.context.get_source_file(if name == "__BASE_FILE__" {
+                    0
+                } else {
+                    invocation.source_file_index
+                });
                 // A name that is not UTF-8 keeps its bytes, as GCC's and
                 // Clang's do.
                 let contents = if let Some(text) = raw_bytes::path_text(self.scratch, file) {

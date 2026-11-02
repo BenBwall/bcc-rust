@@ -1110,8 +1110,10 @@ would use:
   `-fno-semantic-interposition`, so the option is refused.
 - Decimal floating types, and with them GCC's C23 `<float.h>` `DEC*`
   names; `FLT16_SNAN` and GCC's other `__builtin_*f16` constant builtins.
-- `__BASE_FILE__`, which GCC, Clang and TCC define (TCC lists it in
-  `-dM`), is undefined in every identity.
+- TCC lists `__BASE_FILE__` in `-dM`; bcc defines it in every identity
+  but, as GCC and Clang, does not list it. In a `-include` header Clang
+  expands it to `"<built-in>"`; bcc names the main file there, as GCC and
+  TCC do.
 - TCC's warnings for an implicit function declaration (`implicit
   declaration of function 'foo'`) and a function that may return no value
   (`function might return no value: 'f'`) have no bcc counterpart, and the
