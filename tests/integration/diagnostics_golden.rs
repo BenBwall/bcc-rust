@@ -126,8 +126,11 @@ mod tests {
         for fixture in fixtures() {
             let output = run(&fixture);
             let stderr = String::from_utf8_lossy(&output.stderr);
-            // The process fails exactly when it reported an error.
-            let errors = stderr.lines().any(|line| line.starts_with("error"));
+            // The process fails exactly when it reported an error, in bcc's
+            // format or in GCC's and Clang's `file:line:col: error:`.
+            let errors = stderr
+                .lines()
+                .any(|line| line.starts_with("error") || line.contains(": error: "));
             if output.status.code() != Some(i32::from(errors)) {
                 failures.push(format!(
                     "{}: exit status {:?} with errors: {errors}: {stderr}",

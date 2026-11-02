@@ -95,7 +95,11 @@ impl<'tu> Context<'tu> {
         source: SourceVectors,
     ) -> Option<ErrorSeverity> {
         let severity = self.configuration.diagnostic_severity(group)?;
-        (!self.withholds(severity, true, source)).then_some(severity)
+        (self
+            .configuration
+            .reported_in_system_headers(group, severity)
+            || !self.withholds(severity, true, source))
+        .then_some(severity)
     }
 
     pub(crate) fn ignore_tokenizer_errors(&self) -> bool {

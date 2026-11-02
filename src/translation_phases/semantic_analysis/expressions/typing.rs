@@ -382,6 +382,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 left.ty,
                 right,
                 e.operator_source_vectors.unwrap_or(e.source_vectors),
+                super::super::compiler_wording::ConversionSite::Assignment,
             ) {
                 return self.invalid_expression(e, SemanticErrorKind::InvalidAssignment);
             }
@@ -1009,6 +1010,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             && (arguments.len() < parameters.len()
                 || (!variadic && arguments.len() != parameters.len()));
         let mut unmodeled = self.types.unmodeled_type(result);
+        // GCC names the called function in its words.
+        let callee_name = function
+            .binding
+            .filter(|_| {
+                matches!(
+                    self.selected_designator(function.expression).kind,
+                    ExpressionType::Identifier(_)
+                )
+            })
+            .map(|binding| self.bindings[binding].name.name);
         for (index, &argument) in arguments.iter().enumerate() {
             let info = self.expression_info(argument);
             unmodeled = unmodeled.or(self.types.unmodeled_type(info.ty));
@@ -1020,7 +1031,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     self.convert(argument, parameter, ConversionKind::TransparentUnion);
                     continue;
                 }
-                if !self.assignment_conversion(parameter, info) {
+                let site = super::super::compiler_wording::ConversionSite::Argument {
+                    position: index + 1,
+                    callee:   callee_name,
+                };
+                if !self.assignment_conversion_for(parameter, info, site) {
                     failed = true;
                     self.error(
                         SemanticErrorKind::InvalidArgumentType,
@@ -2653,8 +2668,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         self.types.composite(left, right).is_some()
     }
 
-    /// C89 implicit function declarations are retained in GNU modes.
-    /// Strict C99 and later require a declaration. Known library names use
+    /// C89 implicit function declarations are retained, under
+    /// `-Wimplicit-function-declaration`, whose severity follows the
+    /// identity and the revision (an error in C99 and later for GCC 14 and
+    /// Clang). Clang no longer declares one in C23, where the identifier is
+    /// undeclared; GCC, TCC and `cl` still do. Known library names use
     /// their real prototypes, as Clang does, rather than C89 implicit int.
     /// C99: §6.5.2.2 paragraphs 6 and 9, pp. 71-72; PDF pp. 83-84;
     /// §7.1.4 paragraph 2, p. 167; PDF p. 179.
@@ -2722,23 +2740,32 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 });
             return;
         }
+        // Clang 23 declares an undeclared library function implicitly in
+        // C23 too, under its default-error `-Wimplicit-function-declaration`
+        // ("call to undeclared library function"); any other name is
+        // undeclared there.
         if let ExpressionType::Identifier(name) = e.kind
             && self.lookup(Namespace::Ordinary, name.name).is_none()
-            && (self
-                .context
-                .configuration
-                .is_native(crate::configuration::Feature::ImplicitFunctionDeclaration)
-                || self.context.configuration.gnu_extensions())
         {
-            let ty = self.implicit_library_type(name).unwrap_or_else(|| {
-                let result = self.types.scalar(Scalar::Int);
-                self.types.intern(TypeKind::Function {
-                    result,
-                    parameters: &[],
-                    prototype: false,
-                    variadic: false,
-                })
-            });
+            let pre_c23 = self.context.configuration.standard() < CStandard::C23
+                || self.context.configuration.compiler_identity().rules()
+                    == crate::configuration::RuleSet::Gcc;
+            let library = self.implicit_library_type(name);
+            if !pre_c23 && library.is_none() {
+                return;
+            }
+            let ty = library.map_or_else(
+                || {
+                    let result = self.types.scalar(Scalar::Int);
+                    self.types.intern(TypeKind::Function {
+                        result,
+                        parameters: &[],
+                        prototype: false,
+                        variadic: false,
+                    })
+                },
+                |(ty, _)| ty,
+            );
             self.bind(
                 name,
                 ty,
@@ -2749,23 +2776,112 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             );
             self.bindings.last_mut().expect("implicit binding").origin =
                 super::super::BindingOrigin::ImplicitOrdinary;
-            self.context.report_extension(
-                crate::configuration::Feature::ImplicitFunctionDeclaration,
-                "implicit function declaration",
-                name.source_vectors,
-            );
+            // GCC's sized atomic routines (`__atomic_load_4` and the like)
+            // are built-ins GCC declares itself, so a call to one is no
+            // implicit declaration.
+            if library.is_some()
+                && crate::builtins::ordinary(self.context.string_cache.at(name.name)).is_none()
+            {
+                return;
+            }
+            // GCC warns in C89 only about a library function whose type
+            // `int ()` does not match ("incompatible implicit declaration
+            // of built-in function"), so `abs` passes silently, unless an
+            // option (`-Wall`, `-Wimplicit`, `-Werror=`) enables
+            // `-Wimplicit-function-declaration`, which reports it as any
+            // other implicit declaration.
+            if let Some((ty, _)) = library
+                && self.context.configuration.compiler_identity()
+                    == crate::configuration::CompilerIdentity::Gcc
+                && self.context.configuration.standard() < CStandard::C99
+                && self.matches_implicit_int_function(ty)
+            {
+                let group = crate::configuration::DiagnosticGroup::ImplicitFunctionDeclaration;
+                if self
+                    .context
+                    .configuration
+                    .diagnostic_severity(group)
+                    .is_some()
+                {
+                    self.group_diagnostic(
+                        group,
+                        SemanticErrorKind::ImplicitFunctionDeclaration,
+                        name.source_vectors,
+                        Some(name.name),
+                        None,
+                    );
+                }
+                return;
+            }
+            let (group, kind) = match library {
+                | Some((_, spelling)) => (
+                    crate::configuration::DiagnosticGroup::ImplicitLibraryFunction,
+                    SemanticErrorKind::ImplicitLibraryFunction(spelling),
+                ),
+                | None => (
+                    crate::configuration::DiagnosticGroup::ImplicitFunctionDeclaration,
+                    SemanticErrorKind::ImplicitFunctionDeclaration,
+                ),
+            };
+            self.group_diagnostic(group, kind, name.source_vectors, Some(name.name), None);
         }
+    }
+
+    /// Whether the function type `ty` is compatible with `int ()`: it
+    /// returns `int`, has no ellipsis, and each parameter has a type the
+    /// default argument promotions leave alone.
+    /// C99: §6.7.5.3p15, pp. 119-120; PDF pp. 131-132.
+    fn matches_implicit_int_function(&self, ty: TypeId) -> bool {
+        let TypeKind::Function {
+            result,
+            parameters,
+            variadic: false,
+            ..
+        } = self.types.nodes[ty.index]
+        else {
+            return false;
+        };
+        matches!(
+            self.types.nodes[result.index],
+            TypeKind::Scalar(Scalar::Int)
+        ) && parameters.iter().all(|parameter| {
+            !matches!(
+                self.types.nodes[parameter.index],
+                TypeKind::Scalar(
+                    Scalar::Bool
+                        | Scalar::Char
+                        | Scalar::SignedChar
+                        | Scalar::UnsignedChar
+                        | Scalar::Short
+                        | Scalar::UnsignedShort
+                        | Scalar::Float
+                )
+            )
+        })
     }
 
     /// GCC builtins use reserved identifiers declared by the implementation;
     /// an undeclared builtin retains an unmodeled result rather than implicit
-    /// int.
+    /// int. TCC knows only its own few: any other `__builtin_` name outside
+    /// a system header is an ordinary identifier there, which a call
+    /// declares implicitly and a program may define.
     /// C99: §7.1.3 paragraph 1, p. 166; PDF p. 178.
     pub(in crate::translation_phases::semantic_analysis) fn builtin_name(
         &self,
         name: Identifier,
     ) -> bool {
-        crate::builtins::lookup(self.context.string_cache.at(name.name)).is_some_and(|descriptor| {
+        let spelling = self.context.string_cache.at(name.name);
+        if self.context.configuration.compiler_identity()
+            == crate::configuration::CompilerIdentity::Tcc
+            && spelling.starts_with("__builtin_")
+            && !tcc_builtin(spelling, self.context.configuration.target())
+            && !self
+                .context
+                .in_system_header(self.context.first_source_vector(name.source_vectors))
+        {
+            return false;
+        }
+        crate::builtins::lookup(spelling).is_some_and(|descriptor| {
             match descriptor.availability.naming {
                 | crate::builtins::NamingPolicy::GnuOrdinary =>
                     self.context.configuration.gnu_extensions(),
@@ -2900,4 +3016,45 @@ pub(in crate::translation_phases::semantic_analysis) struct ExpressionIndex<'tu>
     pub(in crate::translation_phases::semantic_analysis) expressions: ArenaMap<'tu, usize, usize>,
     pub(in crate::translation_phases::semantic_analysis) conversions: &'tu [Conversion<'tu>],
     pub(in crate::translation_phases::semantic_analysis) conversion_starts: &'tu [usize],
+}
+
+/// Whether TCC (`mob`) knows `spelling` as a builtin: the operators
+/// its parser implements (`tcctok.h`), the macros and the prototypes its
+/// `tccdefs.h` predefines (the library aliases, bound to the library names,
+/// only off Windows), and the bit-counting family its runtime provides.
+fn tcc_builtin(spelling: &str, target: crate::target::Target) -> bool {
+    const OPERATORS: &[&str] = &[
+        "expect",
+        "constant_p",
+        "frame_address",
+        "return_address",
+        "unreachable",
+        "va_start",
+        "va_arg",
+        "va_copy",
+        "va_end",
+        "offsetof",
+        "extract_return_addr",
+        "types_compatible_p",
+        "choose_expr",
+    ];
+    const LIBRARY: &[&str] = &[
+        "memcpy", "memmove", "memset", "memcmp", "strlen", "strcpy", "strncpy", "strcmp",
+        "strncmp", "strcat", "strncat", "strchr", "strrchr", "strdup", "malloc", "realloc",
+        "calloc", "memalign", "free", "alloca", "abort",
+    ];
+    const BITS: &[&str] = &["ffs", "clz", "ctz", "clrsb", "popcount", "parity"];
+    let Some(name) = spelling.strip_prefix("__builtin_") else {
+        return false;
+    };
+    let windows = matches!(
+        target,
+        crate::target::Target::WindowsGnu | crate::target::Target::WindowsMsvc
+    );
+    OPERATORS.contains(&name)
+        || (!windows && LIBRARY.contains(&name))
+        || BITS.iter().any(|&bits| {
+            name.strip_prefix(bits)
+                .is_some_and(|suffix| matches!(suffix, "" | "l" | "ll"))
+        })
 }

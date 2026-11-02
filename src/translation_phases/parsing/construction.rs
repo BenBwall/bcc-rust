@@ -121,6 +121,15 @@ impl<'c, 'tu, 'p> Parser<'c, 'tu, 'p> {
                 super::scope::NameClass::Typedef,
             );
         }
+        // GCC names the x87 extended format `__float80` on the targets
+        // whose `long double` it is; Clang does not.
+        // GNU extension: GCC manual, "Additional Floating Types".
+        if float80_names_long_double(context.configuration) {
+            scopes.publish(
+                context.string_cache.intern("__float80"),
+                super::scope::NameClass::Typedef,
+            );
+        }
         let tree = context.tu_arena();
         let limits = ParserLimits::for_configuration(context.configuration);
         Self {
@@ -225,4 +234,14 @@ impl GetSourceFileIndex for Parser<'_, '_, '_> {
     fn source_file_index(&self) -> u32 {
         self.cursor.upstream.source_file_index()
     }
+}
+
+/// Whether `__float80` is a built-in name for `long double`: under GCC's
+/// identity, where `long double` is the x87 extended format.
+/// GNU extension: GCC manual, "Additional Floating Types".
+pub(crate) fn float80_names_long_double(
+    configuration: crate::configuration::CompilerConfiguration,
+) -> bool {
+    configuration.compiler_identity() == crate::configuration::CompilerIdentity::Gcc
+        && configuration.target().layout().long_double_is_x87()
 }

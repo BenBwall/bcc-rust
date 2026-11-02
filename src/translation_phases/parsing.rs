@@ -89,6 +89,7 @@ pub(crate) mod syntax;
 mod syntax_log;
 mod translation_unit;
 
+pub(crate) use construction::float80_names_long_double;
 #[cfg(test)]
 pub(crate) use declaration_syntax::DirectDeclarator;
 pub(crate) use declaration_syntax::TypeSpecifiers;

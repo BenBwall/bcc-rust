@@ -82,15 +82,7 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         },
         | Some(Query::MoreHelp) => return Ok(Plan::print(more_help(&invocation.name))),
         | Some(Query::Print(text)) => return Ok(Plan::print(text.clone())),
-        | Some(Query::Archive(arguments)) => {
-            plan.steps.push(Step::Run {
-                program:   version::program_name("ar").into(),
-                name:      None,
-                arguments: arguments.clone(),
-                stdin:     None,
-            });
-            return Ok(plan);
-        },
+        | Some(Query::Archive(arguments)) => return archive(arguments),
         | _ if state.verbose > 0 => plan.steps.push(Step::Print {
             text:   version::banner(invocation.personality, &invocation.name, target),
             stderr: false,
@@ -125,6 +117,122 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         }
     }
     state.steps(invocation, target, plan)
+}
+
+/// `tcc -ar ARGS...` as TCC's own archiver reads it (`tcc_tool_ar` in
+/// `tcctools.c`), run by `llvm-ar`. The first argument, or any starting
+/// with `-`, holds the operation letters, and the first other argument is
+/// the library. A missing library, a destructive operation TCC does not
+/// implement (`habdiopN`) or a `-x.y` argument prints TCC's usage with
+/// status 1. `t` lists the members' names and `x` extracts them (`x - NAME`
+/// with `v` or `t`); TCC's table has no long form. Otherwise TCC writes a
+/// new library of exactly the given objects, with a symbol table, replacing
+/// any old one. A file it cannot open ends it with status 2.
+fn archive(arguments: &[OsString]) -> Result<Plan, MainError> {
+    let mut usage = false;
+    let (mut extract, mut table, mut verbose) = (false, false, false);
+    let mut library: Option<&OsString> = None;
+    let mut objects = Vec::new();
+    for (index, argument) in arguments.iter().enumerate() {
+        let text = argument.to_string_lossy();
+        let option = text.starts_with('-');
+        if option && text.contains('.') {
+            usage = true;
+        }
+        if option || (index == 0 && !text.contains('.')) {
+            usage |= text.chars().any(|c| "habdiopN".contains(c));
+            extract |= text.contains('x');
+            table |= text.contains('t');
+            verbose |= text.contains('v');
+        } else if library.is_none() {
+            library = Some(argument);
+        } else {
+            objects.push(argument.clone());
+        }
+    }
+    let Some(library) = library.filter(|_| !usage) else {
+        super::print(
+            "usage: tcc -ar [crstvx] lib [files]\ncreate library ([abdiopN] not supported).\n",
+            true,
+        );
+        return Err(MainError::Reported(1));
+    };
+    let fail = |message: std::fmt::Arguments<'_>| {
+        super::print(&format!("tcc: ar: {message}\n"), true);
+        Err(MainError::Reported(2))
+    };
+    let mut plan = Plan::default();
+    let mut run = vec![];
+    if extract || table {
+        use std::io::Read as _;
+        let mut magic = [0_u8; 8];
+        let Ok(mut file) = std::fs::File::open(library) else {
+            return fail(format_args!(
+                "can't open file {}",
+                library.to_string_lossy()
+            ));
+        };
+        if file.read_exact(&mut magic).is_err() || &magic != b"!<arch>\n" {
+            return fail(format_args!(
+                "not an ar archive {}",
+                library.to_string_lossy()
+            ));
+        }
+        run.push(OsString::from(match (extract, table || verbose) {
+            | (true, true) => "xv",
+            | (true, false) => "x",
+            | (false, _) => "t",
+        }));
+        run.push(library.clone());
+    } else {
+        // TCC opens the library for writing first, so a failure below
+        // leaves none; then, object by object, it names each with `v`
+        // ("a - NAME"), and refuses one it cannot open or whose ELF class
+        // is not its own (`ELFCLASS64` on x86-64); bcc also takes its own
+        // x86-64 COFF objects. It writes a fresh library rather than
+        // updating one.
+        if Path::new(library).is_file() && std::fs::remove_file(library).is_err() {
+            return fail(format_args!(
+                "can't create file {}",
+                library.to_string_lossy()
+            ));
+        }
+        let mut listed = String::new();
+        for object in &objects {
+            let name = object.to_string_lossy();
+            let Ok(bytes) = std::fs::read(object) else {
+                super::print(&listed, false);
+                return fail(format_args!("can't open file {name} "));
+            };
+            if verbose {
+                let _ = writeln!(listed, "a - {name}");
+            }
+            // bcc's own objects for a Windows target are COFF (machine
+            // 0x8664), which it archives as TCC archives its ELF ones.
+            let elf64 = bytes.starts_with(b"\x7fELF") && bytes.get(4) == Some(&2);
+            let coff = bytes.starts_with(&[0x64, 0x86]);
+            if !(elf64 || coff) {
+                super::print(&listed, false);
+                return fail(format_args!("Unsupported Elf Class: {name}"));
+            }
+        }
+        if !listed.is_empty() {
+            plan.steps.push(Step::Print {
+                text:   listed,
+                stderr: false,
+            });
+        }
+        run.push("rcs".into());
+        run.push(library.clone());
+        run.extend(objects);
+    }
+    plan.steps.push(Step::Run {
+        program:   version::program_name("ar").into(),
+        name:      None,
+        arguments: run,
+        stdin:     None,
+    });
+    Ok(plan)
 }
 
 /// What a command line asks for instead of a compilation.
@@ -673,7 +781,8 @@ impl Parser<'_> {
                 self.state.warn_unsupported = enabled;
                 return;
             },
-            | "" | "all" | "write-strings" | "implicit-function-declaration" => return,
+            | "" | "all" | "write-strings" => return,
+            | "implicit-function-declaration" => "implicit-function-declaration",
             | "discarded-qualifiers" => "incompatible-pointer-types-discards-qualifiers",
             | _ => {
                 self.unsupported(text);
@@ -1026,17 +1135,9 @@ impl State {
                     },
                     | _ => {},
                 }
-                // TCC writes one rule for the whole link; bcc writes one
-                // per source, so it is named after the output only when
-                // there is one source.
-                if sources().count() == 1 {
-                    self.dependency_options(&mut step, &output);
-                } else if let Some(all) = self.dependencies {
-                    step.push(if all { "-MD" } else { "-MMD" }.into());
-                    if self.phony {
-                        step.push("-MP".into());
-                    }
-                }
+                // TCC writes one rule for the whole link, which the driver
+                // gathers from every input under TCC's identity.
+                self.dependency_options(&mut step, &output);
                 step.extend(words(self.inputs.iter()));
                 step.push(concat("--output=", &output));
                 plan.steps.push(Step::Bcc(step));

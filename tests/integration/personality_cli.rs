@@ -531,6 +531,60 @@ mod tests {
         }
     }
 
+    /// GCC names the x87 extended format `__float80`, the same type as
+    /// `long double` on x86-64 Linux; Clang knows no such name.
+    #[test]
+    fn float80_is_gccs_name_for_long_double() {
+        if !cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+            return;
+        }
+        let directory = Directory::new();
+        directory.write(
+            "f80.c",
+            "__float80 x = 1.5;\n_Static_assert(sizeof(__float80) == sizeof(long double), \
+             \"\");\nint main(void) { __float80 y = x * 2; return (int)y + _Generic((__float80)0, \
+             long double: 0, default: 10); }\n",
+        );
+        let output = directory.bcc("--gcc-mode", &["-pedantic-errors", "f80.c", "-o", "f80"]);
+        succeeds(&output);
+        assert_eq!(stderr(&output), "");
+        let run = Command::new(directory.path("f80")).output().unwrap();
+        assert_eq!(run.status.code(), Some(3));
+        let output = directory.bcc("--clang-mode", &["-fsyntax-only", "f80.c"]);
+        assert!(!output.status.success());
+        assert!(stderr(&output).contains("__float80"), "{}", stderr(&output));
+        // A program's own typedef of the name hides GCC's, and a local
+        // object may take the name; a file-scope one redeclares it.
+        directory.write(
+            "shadow.c",
+            "int main(void) {\n  typedef int __float80;\n  __float80 x = 3;\n  \
+             _Static_assert(sizeof(x) == sizeof(int), \"shadow\");\n  { int __float80 = 1; x += \
+             __float80; }\n  return x;\n}\n",
+        );
+        let output = directory.bcc("--gcc-mode", &["shadow.c", "-o", "shadow"]);
+        succeeds(&output);
+        let run = Command::new(directory.path("shadow")).output().unwrap();
+        assert_eq!(run.status.code(), Some(4));
+        // (source, GCC accepts, Clang accepts), as GCC 14 and Clang 23 do.
+        for (source, gcc, clang) in [
+            ("int __float80;\n", false, true),
+            ("int __int128_t;\n", false, false),
+            ("int __int128_t(void);\n", false, false),
+            ("enum E { __float80 = 3 };\n", true, true),
+            ("enum E { __int128_t = 3 };\n", true, false),
+            ("typedef double __int128_t;\n", true, false),
+            ("typedef int __uint128_t;\n", true, false),
+            ("typedef __int128 __int128_t;\n", true, true),
+            ("void f(void) { enum { __int128_t }; }\n", true, true),
+        ] {
+            directory.write("redeclared.c", source);
+            for (mode, accepted) in [("--gcc-mode", gcc), ("--clang-mode", clang)] {
+                let output = directory.bcc(mode, &["-std=c17", "-fsyntax-only", "redeclared.c"]);
+                assert_eq!(output.status.success(), accepted, "{mode} {source}");
+            }
+        }
+    }
+
     /// TCC names no warning options, so its diagnostics carry no `[-W…]`
     /// suffix, as GCC's and Clang's do.
     #[test]
@@ -629,6 +683,405 @@ mod tests {
         // Other identities keep C's constraint.
         let gcc = directory.bcc("--gcc-mode", &["-c", "ro.c"]);
         assert!(!gcc.status.success());
+    }
+
+    /// GCC 14 refuses an implicit function declaration in C99 and later
+    /// unless `-fpermissive` or `-Wno-error=` makes it a warning, and
+    /// accepts it in GNU89; Clang refuses it whatever `-fpermissive` and
+    /// `-w` say; TCC warns, and `-Wno-implicit-function-declaration`
+    /// silences it.
+    #[test]
+    fn implicit_declarations_follow_each_driver() {
+        let directory = Directory::new();
+        directory.write(
+            "i.c",
+            "int main(void) { return f(1); }\nint f(int x) { return x - 1; }\n",
+        );
+        let compile = |mode: &str, options: &[&str]| {
+            let mut args = vec!["-c", "i.c", "-o", "i.o"];
+            args.extend_from_slice(options);
+            directory.bcc(mode, &args)
+        };
+        let gcc_error = "i.c:1:25: error: implicit declaration of function 'f' \
+                         [-Wimplicit-function-declaration]";
+        let refused = compile("--gcc-mode", &[]);
+        assert!(!refused.status.success());
+        assert!(stderr(&refused).contains(gcc_error), "{}", stderr(&refused));
+        let refused = compile("--gcc-mode", &["-w"]);
+        assert!(!refused.status.success(), "{}", stderr(&refused));
+        for options in [
+            &["-fpermissive"][..],
+            &["-Wno-error=implicit-function-declaration"],
+        ] {
+            let warned = compile("--gcc-mode", options);
+            succeeds(&warned);
+            assert!(
+                stderr(&warned).contains(&gcc_error.replace("error:", "warning:")),
+                "{options:?}: {}",
+                stderr(&warned)
+            );
+        }
+        for options in [&["-std=gnu89"][..], &["-Wno-implicit-function-declaration"]] {
+            let silent = compile("--gcc-mode", options);
+            succeeds(&silent);
+            assert_eq!(stderr(&silent), "", "{options:?}");
+        }
+        for options in [&[][..], &["-fpermissive"], &["-w"]] {
+            let refused = compile("--clang-mode", options);
+            assert!(!refused.status.success(), "{options:?}");
+            assert!(
+                stderr(&refused).contains(
+                    "error: call to undeclared function 'f'; ISO C99 and later do not support \
+                     implicit function declarations [-Wimplicit-function-declaration]"
+                ),
+                "{options:?}: {}",
+                stderr(&refused)
+            );
+        }
+        succeeds(&compile(
+            "--clang-mode",
+            &["-Wno-error=implicit-function-declaration"],
+        ));
+        let tcc = compile("--tcc-mode", &[]);
+        succeeds(&tcc);
+        assert_eq!(
+            stderr(&tcc),
+            "i.c:1: warning: implicit declaration of function 'f'\n"
+        );
+        let tcc = compile("--tcc-mode", &["-Wno-implicit-function-declaration"]);
+        succeeds(&tcc);
+        assert_eq!(stderr(&tcc), "");
+    }
+
+    /// GCC 14 reports its permerrors in a system header too, when they are
+    /// errors; Clang withholds its default errors there, and every warning
+    /// stays withheld.
+    #[test]
+    fn permerrors_in_system_headers_follow_each_compiler() {
+        let directory = Directory::new();
+        std::fs::create_dir_all(directory.path("sys")).unwrap();
+        directory.write("main.c", "#include <bad.h>\nint main(void) { return 0; }\n");
+        for (header, gcc_message) in [
+            (
+                "void f(int *p){long *q=p;}",
+                "error: initialization of 'long int *' from incompatible pointer type 'int *' \
+                 [-Wincompatible-pointer-types]",
+            ),
+            (
+                "int f(void){return frob();}",
+                "error: implicit declaration of function 'frob' [-Wimplicit-function-declaration]",
+            ),
+            (
+                "extern x;",
+                "error: type defaults to 'int' in declaration of 'x' [-Wimplicit-int]",
+            ),
+            (
+                "int f(void){return;}",
+                "error: 'return' with no value, in function returning non-void [-Wreturn-mismatch]",
+            ),
+            (
+                "void f(int c,int *p,long *q){void *x=c?p:q;}",
+                "error: pointer type mismatch in conditional expression \
+                 [-Wincompatible-pointer-types]",
+            ),
+        ] {
+            directory.write("sys/bad.h", &format!("{header}\n"));
+            let compile = |mode: &str, options: &[&str]| {
+                let mut args = vec!["-std=gnu17", "-isystem", "sys", "-fsyntax-only"];
+                args.extend_from_slice(options);
+                args.push("main.c");
+                directory.bcc(mode, &args)
+            };
+            let gcc = compile("--gcc-mode", &[]);
+            assert!(!gcc.status.success(), "{header}");
+            assert!(
+                stderr(&gcc).contains(gcc_message),
+                "{header}: {}",
+                stderr(&gcc)
+            );
+            for (mode, options) in [("--gcc-mode", &["-fpermissive"][..]), ("--clang-mode", &[])] {
+                let quiet = compile(mode, options);
+                succeeds(&quiet);
+                assert_eq!(stderr(&quiet), "", "{header} {mode} {options:?}");
+            }
+        }
+    }
+
+    /// The options around GCC 14's permerrors and Clang's default errors,
+    /// as each compiler orders them: `-Werror` does not reach into a system
+    /// header, `-fpermissive` beats `-pedantic-errors`, GCC's `-Wno-X`
+    /// keeps an earlier `-Werror=X`, Clang's `-Wno-error=X` keeps a later
+    /// `-Wall`, and an enabled `-Wimplicit-function-declaration` reports a
+    /// C89 library function GCC otherwise passes.
+    #[test]
+    fn permerror_options_follow_each_compiler() {
+        let directory = Directory::new();
+        std::fs::create_dir_all(directory.path("sys")).unwrap();
+        directory.write("sys/bad.h", "void f(int *p){long *q=p;(void)q;}\n");
+        directory.write("main.c", "#include <bad.h>\nint main(void) { return 0; }\n");
+        directory.write("pointer.c", "void f(int *p){long *q=p;(void)q;}\n");
+        directory.write("library.c", "int f(void){return abs(-1);}\n");
+        directory.write("undeclared.c", "int f(void){return frob();}\n");
+        directory.write("implicit.c", "extern x;\n");
+        let pointer = "initialization of 'long int *' from incompatible pointer type 'int *' \
+                       [-Wincompatible-pointer-types]";
+        // (mode, options, file, exit status, expected stderr fragment or "").
+        for (mode, options, file, status, message) in [
+            (
+                "--gcc-mode",
+                &["-std=gnu89", "-Werror"][..],
+                "main.c",
+                0,
+                "",
+            ),
+            (
+                "--gcc-mode",
+                &["-std=gnu89", "-Werror=incompatible-pointer-types"],
+                "main.c",
+                0,
+                "",
+            ),
+            (
+                "--gcc-mode",
+                &["-std=gnu17", "-fpermissive", "-Werror"],
+                "main.c",
+                0,
+                "",
+            ),
+            (
+                "--gcc-mode",
+                &["-std=gnu89", "-fno-permissive"],
+                "main.c",
+                1,
+                pointer,
+            ),
+            (
+                "--gcc-mode",
+                &["-std=gnu89", "-pedantic-errors"],
+                "main.c",
+                1,
+                pointer,
+            ),
+            (
+                "--gcc-mode",
+                &["-std=gnu17", "-fpermissive", "-pedantic-errors"],
+                "main.c",
+                0,
+                "",
+            ),
+            (
+                "--gcc-mode",
+                &["-std=gnu17", "-fpermissive", "-pedantic-errors"],
+                "pointer.c",
+                0,
+                pointer,
+            ),
+            (
+                "--gcc-mode",
+                &["-std=gnu89", "-Werror=implicit-function-declaration"],
+                "library.c",
+                1,
+                "error: implicit declaration of function 'abs'",
+            ),
+            (
+                "--gcc-mode",
+                &["-std=gnu89", "-Wall"],
+                "library.c",
+                0,
+                "warning: implicit declaration of function 'abs' [-Wimplicit-function-declaration]",
+            ),
+            ("--gcc-mode", &["-std=gnu89"], "library.c", 0, ""),
+            (
+                "--gcc-mode",
+                &[
+                    "-std=gnu89",
+                    "-Werror=implicit-int",
+                    "-Wno-implicit-int",
+                    "-Wimplicit-int",
+                ],
+                "implicit.c",
+                1,
+                "error: type defaults to 'int' in declaration of 'x'",
+            ),
+            (
+                "--clang-mode",
+                &[
+                    "-std=gnu17",
+                    "-Wno-implicit-function-declaration",
+                    "-Wall",
+                    "-Wno-error=implicit-function-declaration",
+                ],
+                "undeclared.c",
+                0,
+                "warning: call to undeclared function 'frob'",
+            ),
+            (
+                "--clang-mode",
+                &[
+                    "-std=gnu17",
+                    "-Werror=implicit-function-declaration",
+                    "-Wno-implicit-function-declaration",
+                    "-Wimplicit-function-declaration",
+                ],
+                "undeclared.c",
+                0,
+                "warning: call to undeclared function 'frob'",
+            ),
+            // GCC's C89 implicit int is a pedantic warning once enabled,
+            // and GCC's pedantic errors outlast `-w`.
+            (
+                "--gcc-mode",
+                &["-std=c89", "-Wall", "-pedantic-errors"],
+                "implicit.c",
+                1,
+                "error: type defaults to 'int' in declaration of 'x'",
+            ),
+            (
+                "--gcc-mode",
+                &["-std=c89", "-Wall", "-fno-permissive"],
+                "implicit.c",
+                1,
+                "error: type defaults to 'int' in declaration of 'x'",
+            ),
+            (
+                "--gcc-mode",
+                &["-std=c89", "-w", "-pedantic-errors"],
+                "pointer.c",
+                1,
+                pointer,
+            ),
+            (
+                "--gcc-mode",
+                &["-std=c89", "-pedantic-errors", "-w"],
+                "pointer.c",
+                1,
+                pointer,
+            ),
+            (
+                "--gcc-mode",
+                &["-std=c89", "-Wall", "-pedantic-errors"],
+                "library.c",
+                0,
+                "warning: implicit declaration of function 'abs'",
+            ),
+            // Clang's C89 library function is a pedantic warning, which
+            // its `-w` silences first; in C23 it stays a demotable error.
+            (
+                "--clang-mode",
+                &["-std=c89", "-pedantic-errors"],
+                "library.c",
+                1,
+                "abs",
+            ),
+            (
+                "--clang-mode",
+                &["-std=c89", "-w", "-pedantic-errors"],
+                "library.c",
+                0,
+                "",
+            ),
+            (
+                "--clang-mode",
+                &["-std=c23", "-Wno-error=implicit-function-declaration"],
+                "library.c",
+                0,
+                "warning: call to undeclared library function 'abs'",
+            ),
+            (
+                "--clang-mode",
+                &["-std=c23", "-Wno-implicit-function-declaration"],
+                "library.c",
+                0,
+                "",
+            ),
+            ("--clang-mode", &["-std=c23"], "library.c", 1, "abs"),
+            ("--clang-mode", &["-std=c23"], "undeclared.c", 1, "frob"),
+        ] {
+            let mut args = vec!["-isystem", "sys", "-fsyntax-only"];
+            args.extend_from_slice(options);
+            args.push(file);
+            let output = directory.bcc(mode, &args);
+            let stderr = stderr(&output);
+            assert_eq!(
+                output.status.code(),
+                Some(status),
+                "{mode} {args:?}: {stderr}"
+            );
+            if message.is_empty() {
+                assert_eq!(stderr, "", "{mode} {args:?}");
+            } else {
+                assert!(stderr.contains(message), "{mode} {args:?}: {stderr}");
+            }
+        }
+    }
+
+    /// TCC knows only its own few `__builtin_` names (TCC mob `tcctok.h`
+    /// and `tccdefs.h`): a call to any other is an implicit declaration of
+    /// an ordinary function, which the program may define. Its builtins
+    /// keep their meaning.
+    #[test]
+    fn tcc_unknown_builtins_are_ordinary_functions() {
+        let directory = Directory::new();
+        for (source, name) in [
+            (
+                "int main(void){return __builtin_finite(1.0)!=7;}\nint __builtin_finite(double \
+                 x){return 7;}\n",
+                "__builtin_finite",
+            ),
+            (
+                "int main(void){return __builtin_frob(2);}\nint __builtin_frob(int x){return \
+                 x-2;}\n",
+                "__builtin_frob",
+            ),
+        ] {
+            directory.write("b.c", source);
+            let output = directory.bcc("--tcc-mode", &["-c", "b.c", "-o", "b.o"]);
+            succeeds(&output);
+            assert_eq!(
+                stderr(&output),
+                format!("b.c:1: warning: implicit declaration of function '{name}'\n")
+            );
+            if cfg!(all(target_os = "linux", target_env = "gnu")) {
+                succeeds(&directory.bcc("--tcc-mode", &["-w", "b.c", "-o", "b"]));
+                let run = Command::new(directory.path("b")).output().unwrap();
+                assert_eq!(run.status.code(), Some(0), "{source}");
+            }
+        }
+        directory.write(
+            "known.c",
+            "#include <stdarg.h>\nstruct S { int a, b; };\nstatic int first(int n, ...) { va_list \
+             ap; va_start(ap, n); int r = va_arg(ap, int); va_end(ap); return r; }\nint \
+             main(void) { return __builtin_expect(first(1, 0), 0) + !__builtin_constant_p(3) + \
+             (__builtin_frame_address(0) == 0) + __builtin_popcount(0) + \
+             (int)__builtin_offsetof(struct S, a); }\n",
+        );
+        let output = directory.bcc("--tcc-mode", &["-c", "known.c", "-o", "known.o"]);
+        succeeds(&output);
+        assert_eq!(stderr(&output), "");
+        // `tccdefs.h` binds the library aliases (`__builtin_alloca` to
+        // `alloca`) only off Windows.
+        directory.write(
+            "alloca.c",
+            "void *alloca(__SIZE_TYPE__);\nint main(void) { char *p = __builtin_alloca(4); p[0] = \
+             0; return p[0]; }\n",
+        );
+        let output = directory.bcc("--tcc-mode", &["-c", "alloca.c", "-o", "alloca.o"]);
+        succeeds(&output);
+        if cfg!(windows) {
+            assert!(
+                stderr(&output)
+                    .contains("warning: implicit declaration of function '__builtin_alloca'"),
+                "{}",
+                stderr(&output)
+            );
+        } else {
+            assert_eq!(stderr(&output), "");
+        }
+        // Other identities keep the GCC builtin.
+        directory.write("gcc.c", "int main(void){return !__builtin_finite(1.0);}\n");
+        let output = directory.bcc("--gcc-mode", &["-c", "gcc.c", "-o", "gcc.o"]);
+        succeeds(&output);
+        assert_eq!(stderr(&output), "");
     }
 
     /// An empty translation unit, such as a source whose text is all
@@ -4401,6 +4854,62 @@ mod tests {
         );
     }
 
+    /// `tcc -ar` checks its arguments as TCC's own archiver does
+    /// (`tcc_tool_ar`): its usage for a missing library or an operation it
+    /// lacks, names alone for `t`/`tv`, status 2 for a file it cannot open,
+    /// and a fresh library of exactly the given objects.
+    #[test]
+    fn tcc_ar_reads_its_arguments_as_tcc_does() {
+        if !cfg!(target_os = "linux") {
+            return;
+        }
+        let directory = Directory::new();
+        directory.write("a.c", "int a(void) { return 1; }\n");
+        directory.write("b.c", "int b(void) { return 2; }\n");
+        succeeds(&directory.bcc("--tcc-mode", &["-c", "a.c", "b.c"]));
+        let usage =
+            "usage: tcc -ar [crstvx] lib [files]\ncreate library ([abdiopN] not supported).\n";
+        for args in [
+            &["-ar"][..],
+            &["-ar", "rcs"],
+            &["-ar", "d", "lib.a", "a.o"],
+            &["-ar", "-x.y", "lib.a"],
+        ] {
+            let output = directory.bcc("--tcc-mode", args);
+            assert_eq!(output.status.code(), Some(1), "{args:?}");
+            assert_eq!(stderr(&output), usage, "{args:?}");
+        }
+        succeeds(&directory.bcc("--tcc-mode", &["-ar", "rcs", "lib.a", "a.o", "b.o"]));
+        for op in ["t", "tv"] {
+            let output = directory.bcc("--tcc-mode", &["-ar", op, "lib.a"]);
+            succeeds(&output);
+            assert_eq!(stdout(&output), "a.o\nb.o\n", "{op}");
+        }
+        // A new library replaces the old one rather than updating it.
+        succeeds(&directory.bcc("--tcc-mode", &["-ar", "rcs", "lib.a", "b.o"]));
+        let output = directory.bcc("--tcc-mode", &["-ar", "t", "lib.a"]);
+        assert_eq!(stdout(&output), "b.o\n");
+        let output = directory.bcc("--tcc-mode", &["-ar", "cr", "new.a", "missing.o"]);
+        assert_eq!(output.status.code(), Some(2));
+        assert_eq!(stderr(&output), "tcc: ar: can't open file missing.o \n");
+        // An input that is no ELF object of TCC's class leaves no library;
+        // `v` names each object as it is read.
+        directory.write("bad.o", "not an object\n");
+        let output = directory.bcc("--tcc-mode", &["-ar", "rcs", "bad.a", "a.o", "bad.o"]);
+        assert_eq!(output.status.code(), Some(2));
+        assert_eq!(stderr(&output), "tcc: ar: Unsupported Elf Class: bad.o\n");
+        assert!(!directory.path("bad.a").exists());
+        let output = directory.bcc("--tcc-mode", &["-ar", "rcsv", "v.a", "a.o", "b.o"]);
+        succeeds(&output);
+        assert_eq!(stdout(&output), "a - a.o\na - b.o\n");
+        let output = directory.bcc("--tcc-mode", &["-ar", "t", "absent.a"]);
+        assert_eq!(output.status.code(), Some(2));
+        assert_eq!(stderr(&output), "tcc: ar: can't open file absent.a\n");
+        let output = directory.bcc("--tcc-mode", &["-ar", "t", "a.c"]);
+        assert_eq!(output.status.code(), Some(2));
+        assert_eq!(stderr(&output), "tcc: ar: not an ar archive a.c\n");
+    }
+
     /// TCC names its outputs after its inputs (`a.c` → `a.o`, standard
     /// input → `a.out`), compiles each `-c` input on its own and stops at
     /// the first that fails, and writes make rules one file to a line.
@@ -4466,8 +4975,96 @@ mod tests {
             std::fs::read_to_string(directory.path("out.d")).unwrap(),
             "out.o: \\\n  b.c \\\n  inc.h\ninc.h:\n"
         );
+        // A link writes one rule, named after the output, listing every
+        // file its inputs read in order; `-MP` lists each after the first,
+        // the later inputs too, as `tcc` 0.9.27 writes them.
         let output = directory.bcc("--tcc-mode", &["-MMD", "b.c", "a.c", "-o", "prog"]);
         succeeds(&output);
+        assert_eq!(
+            std::fs::read_to_string(directory.path("prog.d")).unwrap(),
+            "prog: \\\n  b.c \\\n  inc.h \\\n  a.c\n"
+        );
+        let output = directory.bcc("--tcc-mode", &["-MD", "-MP", "b.c", "a.c", "-o", "prog"]);
+        succeeds(&output);
+        assert_eq!(
+            std::fs::read_to_string(directory.path("prog.d")).unwrap(),
+            "prog: \\\n  b.c \\\n  inc.h \\\n  a.c\ninc.h:\na.c:\n"
+        );
+        let output = directory.bcc("--tcc-mode", &["-MD", "b.c", "a.c", "-MF", "deps.out"]);
+        succeeds(&output);
+        assert_eq!(
+            std::fs::read_to_string(directory.path("deps.out")).unwrap(),
+            "a.out: \\\n  b.c \\\n  inc.h \\\n  a.c\n"
+        );
+        // Without `-o`, the rule still names the output, in `a.d`.
+        let output = directory.bcc("--tcc-mode", &["-MD", "b.c", "a.c"]);
+        succeeds(&output);
+        assert_eq!(
+            std::fs::read_to_string(directory.path("a.d")).unwrap(),
+            "a.out: \\\n  b.c \\\n  inc.h \\\n  a.c\n"
+        );
+        assert!(!directory.path("b.d").exists());
+        std::fs::remove_file(directory.path("a.d")).unwrap();
+        directory.write("main.c", "int main(void) { return 0; }\n");
+        let output = directory.bcc("--tcc-mode", &["-MD", "main.c"]);
+        succeeds(&output);
+        assert_eq!(
+            std::fs::read_to_string(directory.path("a.d")).unwrap(),
+            "a.out: \\\n  main.c\n"
+        );
+        // A failed link writes no rule.
+        let output = directory.bcc("--tcc-mode", &["-MD", "bad.c", "b.c", "-o", "failed"]);
+        assert_eq!(output.status.code(), Some(1));
+        assert!(!directory.path("failed.d").exists());
+        // Nor does a lone source whose link fails.
+        directory.write(
+            "unlinked.c",
+            "int f(void);\nint main(void) { return f(); }\n",
+        );
+        let output = directory.bcc("--tcc-mode", &["-MD", "-MF", "rule.d", "unlinked.c"]);
+        assert!(!output.status.success());
+        assert!(!directory.path("rule.d").exists());
+        // A header two inputs read is listed once, and standard input is
+        // `-`, first.
+        directory.write("c.c", "#include \"inc.h\"\nint c(void) { return VALUE; }\n");
+        let output = directory.bcc(
+            "--tcc-mode",
+            &[
+                "-MD", "-MP", "-MF", "shared.d", "a.c", "b.c", "c.c", "-o", "shared",
+            ],
+        );
+        succeeds(&output);
+        assert_eq!(
+            std::fs::read_to_string(directory.path("shared.d")).unwrap(),
+            "shared: \\\n  a.c \\\n  b.c \\\n  inc.h \\\n  c.c\nb.c:\ninc.h:\nc.c:\n"
+        );
+        let mut child = Command::new(env!("CARGO_BIN_EXE_bcc-rust"))
+            .args(["--tcc-mode", "-MD", "-c", "-", "-o", "piped.o"])
+            .current_dir(&directory.0)
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(b"#include \"inc.h\"\nint p(void) { return VALUE; }\n")
+            .unwrap();
+        assert!(child.wait().unwrap().success());
+        assert_eq!(
+            std::fs::read_to_string(directory.path("piped.d")).unwrap(),
+            "piped.o: \\\n  - \\\n  inc.h\n"
+        );
+        // An assembly input is listed as a C source is.
+        if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+            directory.write("s.s", ".globl s\ns:\n ret\n");
+            let output = directory.bcc("--tcc-mode", &["-MD", "b.c", "s.s", "a.c", "-o", "p"]);
+            succeeds(&output);
+            assert_eq!(
+                std::fs::read_to_string(directory.path("p.d")).unwrap(),
+                "p: \\\n  b.c \\\n  inc.h \\\n  s.s \\\n  a.c\n"
+            );
+        }
         let output = directory.bcc("--tcc-mode", &["-MD", "b.c", "-shared", "-o", "lib.so"]);
         succeeds(&output);
         assert_eq!(
