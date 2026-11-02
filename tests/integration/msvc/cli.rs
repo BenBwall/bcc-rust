@@ -1,8 +1,8 @@
 //! `bcc --msvc-mode` against the real `cl.exe` on the same command lines,
-//! each run in a fresh copy of the same directory: the exit status, the
-//! files each writes, and what each prints. The report shows every
-//! command line side by side; the test fails where a case's [`Expect`]
-//! says they should agree.
+//! each run in a fresh copy of the same directory with the same `CL` and
+//! `_CL_` environment variables: the exit status, the files each writes,
+//! and what each prints. The report shows every command line side by side;
+//! the test fails where a case's [`Expect`] says they should agree.
 
 use std::{
     collections::BTreeSet,
@@ -19,7 +19,7 @@ use super::toolchain::{
 use crate::native::run_native;
 
 /// The files each command line starts with.
-const FILES: [(&str, &str); 9] = [
+const FILES: [(&str, &str); 14] = [
     ("a.c", "int b(void);\nint main(void) { return b() - 2; }\n"),
     ("b.c", "int b(void) { return 2; }\n"),
     (
@@ -34,6 +34,19 @@ const FILES: [(&str, &str); 9] = [
     // Both warn about the truncating cast (`cl`'s C4311).
     ("cast.c", "int f(int *p) { return (int)p; }\n"),
     ("bad.c", "int main(void) {\n    return missing;\n}\n"),
+    (
+        "syntax.c",
+        "int f(void) {\n    int x = 1\n    int y = 2;\n    x = 3\n    y = x;\n    return x\n}\n",
+    ),
+    ("implicit.c", "int main(void) { return g(1); }\nint g(int x) { return x - 1; }\n"),
+    (
+        "pointers.c",
+        "int main(void) {\n    int *p = 5;\n    float *q = 0;\n    char **r = 0;\n    p = \
+         q;\n    p = r;\n    return 0;\n}\n",
+    ),
+    // A command file whose first line passes the rest to the linker.
+    ("options.rsp", "/c a.c /link /SUBSYSTEM:CONSOLE\n/Foresponse.obj\n"),
+    ("define.rsp", "/DVALUE=4\n/EP pp.c\n"),
 ];
 
 /// What a command line must agree on.
@@ -43,6 +56,9 @@ enum Expect {
     Results,
     /// Those and every line printed.
     Output,
+    /// Those and the diagnostics with a code (`x.c(2): error C2065:
+    /// ...`), which `cl` writes to stdout and bcc to stderr.
+    Diagnostics,
     /// A difference driver-modes.md records; reported, not checked.
     Documented,
 }
@@ -91,6 +107,33 @@ const CASES: &[(&[&str], Expect)] = &[
     (&["/HELP"], Expect::Results),
     // The banners differ by design.
     (&["-c", "a.c"], Expect::Results),
+    // `cl`'s codes and words for the common diagnostics, at its default
+    // warning level and the others.
+    (&["/c", "bad.c"], Expect::Diagnostics),
+    (&["/c", "syntax.c"], Expect::Diagnostics),
+    (&["/c", "implicit.c"], Expect::Diagnostics),
+    (&["/W3", "/c", "implicit.c"], Expect::Diagnostics),
+    (&["/W4", "/wd4013", "/c", "implicit.c"], Expect::Diagnostics),
+    (&["/w14013", "/c", "implicit.c"], Expect::Diagnostics),
+    (&["/we4013", "/c", "implicit.c"], Expect::Diagnostics),
+    (&["/WX", "/c", "implicit.c"], Expect::Diagnostics),
+    (&["/c", "pointers.c"], Expect::Diagnostics),
+    (&["/wd4047", "/c", "pointers.c"], Expect::Diagnostics),
+    (&["/W0", "/c", "pointers.c"], Expect::Diagnostics),
+    (&["/WX", "/c", "pointers.c"], Expect::Results),
+    (&["/c", "cast.c"], Expect::Diagnostics),
+    // Command files.
+    (&["@options.rsp"], Expect::Output),
+    (&["@define.rsp"], Expect::Results),
+    (&["/c", "@missing.rsp", "a.c"], Expect::Output),
+];
+
+/// Command lines compared with the `CL` and `_CL_` environment variables
+/// set, after `/nologo`.
+const ENVIRONMENT_CASES: &[(&[&str], &str, &str)] = &[
+    (&["a.c"], "/c /Foenvironment.obj", ""),
+    (&["/Fofirst.obj", "a.c"], "/c", "/Folast.obj"),
+    (&["/c", "pp.c"], "/DVALUE#2", "/Fodefined.obj"),
 ];
 
 /// What one compiler did with one command line.
@@ -118,8 +161,8 @@ fn command_lines_match_cl() {
                 .chain(case.iter().copied())
                 .collect()
         };
-        let cl = run(msvc, &root.join(format!("{index}-cl")), true, &arguments);
-        let bcc = run(msvc, &root.join(format!("{index}-bcc")), false, &arguments);
+        let cl = run(msvc, &root.join(format!("{index}-cl")), true, &arguments, &[]);
+        let bcc = run(msvc, &root.join(format!("{index}-bcc")), false, &arguments, &[]);
         println!("\n==== {}", arguments.join(" "));
         for (name, run) in [("cl", &cl), ("bcc", &bcc)] {
             println!("{name}: status {:?}, created {:?}", run.status, run.created);
@@ -139,14 +182,60 @@ fn command_lines_match_cl() {
             differences.compare(&format!("{label}: stdout"), &cl.stdout, &bcc.stdout);
             differences.compare(&format!("{label}: stderr"), &cl.stderr, &bcc.stderr);
         }
+        if expect == Expect::Diagnostics {
+            differences.compare(
+                &format!("{label}: diagnostics"),
+                &coded(&cl.stdout),
+                &coded(&bcc.stderr),
+            );
+        }
+    }
+    for (index, &(case, prepended, appended)) in ENVIRONMENT_CASES.iter().enumerate() {
+        let arguments: Vec<&str> = std::iter::once("/nologo")
+            .chain(case.iter().copied())
+            .collect();
+        let variables = [("CL", prepended), ("_CL_", appended)];
+        let cl = run(msvc, &root.join(format!("env{index}-cl")), true, &arguments, &variables);
+        let bcc = run(msvc, &root.join(format!("env{index}-bcc")), false, &arguments, &variables);
+        let label = format!("CL={prepended} _CL_={appended} {}", arguments.join(" "));
+        println!("\n==== {label}");
+        for (name, run) in [("cl", &cl), ("bcc", &bcc)] {
+            println!("{name}: status {:?}, created {:?}", run.status, run.created);
+        }
+        differences.compare(&format!("{label}: status"), &cl.status, &bcc.status);
+        differences.compare(&format!("{label}: files"), &cl.created, &bcc.created);
+        differences.compare(&format!("{label}: stdout"), &cl.stdout, &bcc.stdout);
     }
     drop(fs::remove_dir_all(root));
     differences.assert_none("command line");
 }
 
-/// Runs `cl` or `bcc --msvc-mode` with `arguments` in a fresh `directory`
-/// holding [`FILES`] and an empty `obj`.
-fn run(msvc: &Msvc, directory: &Path, cl: bool, arguments: &[&str]) -> Run {
+/// The diagnostics with a code in `text`, without the directory before each
+/// file name: `bad.c(2): error C2065: 'missing': undeclared identifier`.
+fn coded(text: &str) -> Vec<String> {
+    text.lines()
+        .filter_map(|line| {
+            let (location, rest) = line.split_once("): ")?;
+            let (severity, message) = rest.split_once(": ")?;
+            let (kind, code) = severity.split_once(' ')?;
+            let coded = matches!(kind, "error" | "warning")
+                && code.len() == 5
+                && code.starts_with('C');
+            let file = location.rsplit(['\\', '/']).next()?;
+            coded.then(|| format!("{file}): {severity}: {message}"))
+        })
+        .collect()
+}
+
+/// Runs `cl` or `bcc --msvc-mode` with `arguments` and the environment
+/// `variables` in a fresh `directory` holding [`FILES`] and an empty `obj`.
+fn run(
+    msvc: &Msvc,
+    directory: &Path,
+    cl: bool,
+    arguments: &[&str],
+    variables: &[(&str, &str)],
+) -> Run {
     fs::create_dir_all(directory.join("inc")).unwrap();
     fs::create_dir_all(directory.join("obj")).unwrap();
     for (name, text) in FILES {
@@ -154,6 +243,13 @@ fn run(msvc: &Msvc, directory: &Path, cl: bool, arguments: &[&str]) -> Run {
     }
     let before = listing(directory);
     let mut command = if cl { msvc.cl() } else { msvc.bcc() };
+    for &(name, value) in variables {
+        _ = if value.is_empty() {
+            command.env_remove(name)
+        } else {
+            command.env(name, value)
+        };
+    }
     let output = run_native(command.current_dir(directory).args(arguments)).unwrap();
     // `cl /Zi` writes a program database, which bcc does not.
     let created = listing(directory)
