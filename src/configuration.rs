@@ -85,6 +85,10 @@ pub(crate) struct CompilerConfiguration {
     /// [`MSVC_COMPATIBILITY`](features::MSVC_COMPATIBILITY).
     msvc: u16,
     extension_policy: ExtensionPolicy,
+    /// `-pedantic-errors` appeared, whatever came after it: Clang makes its
+    /// default-on extension warnings errors then, which `-Wno-pedantic`
+    /// does not undo.
+    pedantic_errors: bool,
     accepted: u128,
     native: u128,
     repeated_specifier_warnings: bool,

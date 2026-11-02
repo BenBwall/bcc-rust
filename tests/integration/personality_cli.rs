@@ -528,6 +528,27 @@ mod tests {
             succeeds(&output);
             assert_eq!(stderr(&output), "", "{mode} system header");
         }
+        // GCC's `-Wno-error=pedantic` keeps its warning one, and a later
+        // `-Wno-pedantic` silences it; Clang's error outlasts both.
+        for (mode, options, status) in [
+            (
+                "--gcc-mode",
+                &["-pedantic-errors", "-Wno-error=pedantic"][..],
+                0,
+            ),
+            ("--gcc-mode", &["-pedantic-errors", "-Wno-pedantic"], 0),
+            ("--clang-mode", &["-pedantic-errors", "-Wno-pedantic"], 1),
+            (
+                "--clang-mode",
+                &["-pedantic-errors", "-Wno-error=pedantic"],
+                1,
+            ),
+        ] {
+            let mut args = options.to_vec();
+            args.extend(["-fsyntax-only", "bare.c"]);
+            let output = directory.bcc(mode, &args);
+            assert_eq!(output.status.code(), Some(status), "{mode} {options:?}");
+        }
         // TCC refuses `_Complex` altogether.
         let output = directory.bcc("--tcc-mode", &["-c", "plain.c", "-o", "plain.o"]);
         assert!(!output.status.success());

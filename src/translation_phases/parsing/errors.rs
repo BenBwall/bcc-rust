@@ -136,18 +136,23 @@ impl<'tu> Parser<'_, 'tu, '_> {
         {
             return;
         }
+        // Clang's warning is an error wherever `-pedantic-errors` appeared;
+        // GCC's is a `-Wpedantic` diagnostic, which its pedantic options
+        // enable and make errors.
         let plain_complex_severity = plain_complex.then(|| {
-            let baseline = if self.context.configuration.compiler_identity().rules()
-                == crate::configuration::RuleSet::Clang
-            {
-                crate::translation_phases::DiagnosticPolicy::Warning
+            let configuration = self.context.configuration;
+            if configuration.compiler_identity().rules() == crate::configuration::RuleSet::Clang {
+                Some(if configuration.pedantic_errors() {
+                    ErrorSeverity::Error
+                } else {
+                    ErrorSeverity::Warning
+                })
             } else {
-                crate::translation_phases::DiagnosticPolicy::Extension
-            };
-            crate::translation_phases::policy_severity(
-                self.context.configuration.extension_policy(),
-                baseline,
-            )
+                crate::translation_phases::policy_severity(
+                    configuration.extension_policy(),
+                    crate::translation_phases::DiagnosticPolicy::Extension,
+                )
+            }
         });
         if plain_complex_severity == Some(None) {
             return;

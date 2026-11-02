@@ -598,6 +598,10 @@ enum LanguageFlag {
     UnknownWarning,
     /// `-pedantic` or `-Wpedantic` (warn), or `-pedantic-errors` (deny).
     Pedantic(ExtensionPolicy),
+    /// `-pedantic-errors`.
+    PedanticErrors,
+    /// `-Wno-error=pedantic`.
+    PedanticNoError,
     /// `-fms-extensions` or `-fno-ms-extensions`.
     MsvcExtensions(bool),
     /// `-fms-<feature>` or `-fno-ms-<feature>`.
@@ -703,7 +707,8 @@ impl LanguageFlag {
     fn parse(text: &str) -> Option<Self> {
         match text {
             | "-pedantic" | "-Wpedantic" => return Some(Self::Pedantic(ExtensionPolicy::Warn)),
-            | "-pedantic-errors" => return Some(Self::Pedantic(ExtensionPolicy::Deny)),
+            | "-pedantic-errors" => return Some(Self::PedanticErrors),
+            | "-Wno-error=pedantic" => return Some(Self::PedanticNoError),
             | "-Werror" => return Some(Self::WarningsAsErrors(true)),
             | "-Wno-error" => return Some(Self::WarningsAsErrors(false)),
             | "-Wall" => return Some(Self::AllWarnings(true)),
@@ -875,6 +880,8 @@ impl LanguageFlag {
             | Self::WarningsAsErrors(enabled) => configuration.with_warnings_as_errors(enabled),
             | Self::WarningGroup(group, option) => configuration.with_warning_option(group, option),
             | Self::Pedantic(policy) => configuration.with_extension_policy(policy),
+            | Self::PedanticErrors => configuration.with_pedantic_errors(),
+            | Self::PedanticNoError => configuration.without_pedantic_errors(),
             | Self::MsvcExtensions(enabled) => configuration.with_msvc_extensions(enabled),
             | Self::MsvcFeature(feature, enabled) =>
                 configuration.with_msvc_feature(feature, enabled),

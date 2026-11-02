@@ -146,6 +146,26 @@ impl CompilerConfiguration {
         self
     }
 
+    /// Records `-pedantic-errors`, which also denies extensions.
+    pub(crate) const fn with_pedantic_errors(mut self) -> Self {
+        self.pedantic_errors = true;
+        self.extension_policy = ExtensionPolicy::Deny;
+        self
+    }
+
+    /// GCC's `-Wno-error=pedantic`: pedantic diagnostics stay warnings.
+    pub(crate) const fn without_pedantic_errors(mut self) -> Self {
+        if matches!(self.extension_policy, ExtensionPolicy::Deny) {
+            self.extension_policy = ExtensionPolicy::Warn;
+        }
+        self
+    }
+
+    /// Whether `-pedantic-errors` appeared on the command line.
+    pub(crate) const fn pedantic_errors(self) -> bool {
+        self.pedantic_errors
+    }
+
     pub(crate) const fn with_optimization(mut self, optimization: (bool, bool)) -> Self {
         self.optimization = optimization;
         self
@@ -820,6 +840,7 @@ impl CompilerConfiguration {
             gnu: false,
             msvc: 0,
             extension_policy,
+            pedantic_errors: false,
             accepted: 0,
             native: 0,
             repeated_specifier_warnings: true,
