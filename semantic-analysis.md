@@ -178,8 +178,8 @@ and final flexible-array alignment with no elements included in the size. Bit-fi
 allocate low-order bits first, may share bytes across differing integer base types,
 and do not cross the allocation boundary of their declared base type. Unnamed
 bit-fields never increase aggregate alignment: an unnamed zero-width field
-advances to its base-type boundary, and in a union an unnamed bit-field occupies
-only the bytes its width needs. Plain-int bit-fields are signed; integer bit-field types beyond the
+advances to its base-type boundary, and in a union a bit-field occupies only the
+bytes its width needs (GCC and Clang; the union's alignment rounds its size). Plain-int bit-fields are signed; integer bit-field types beyond the
 C99-required int/unsigned-int/bool set are accepted as an implementation-defined
 choice following the target ABI. GCC's flexible-array forms (in a union, as a
 structure's only member, a flexible structure nested in a structure, and arrays
@@ -399,7 +399,11 @@ operations and reports enumerators outside int through the extension policy.
 Positive constant array bounds
 use the same evaluator; runtime bounds at file scope/with linkage are rejected,
 as are variably modified members (§6.7.2.1p8, §6.7.5.2p2) and `[*]` outside a
-prototype that is not a definition (§6.7.5.2p4). Arrays and records larger than
+prototype that is not a definition (§6.7.5.2p4). Under GCC's identity a
+block-scope record may have variably modified members, as in GCC; one with a
+member of variable size completes with a run-time `VariableRecord` layout
+instead of a constant one (`middle-end.md`, "GNU records with members of
+variable size"). Arrays and records larger than
 PTRDIFF_MAX bytes exceed this implementation's object-size limit and are rejected
 without dropping members.
 

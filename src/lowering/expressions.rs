@@ -697,6 +697,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     "member access retains its field width"
                 );
                 self.member_base(base, base_ty, source)?;
+                let base = self.segment_address(base, member.tag, field.path.index, source)?;
                 let address = self.offset_address(base, field.offset);
                 let align = self.place_alignment(
                     address,
@@ -709,7 +710,17 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                         bit_offset: field.bit_offset,
                         width,
                     };
-                    let bit_field = self.bit_field(access_ty, field.offset, bits, source)?;
+                    let mut bit_field = self.bit_field(access_ty, field.offset, bits, source)?;
+                    // GNU: after a member of variable size, the unit is only
+                    // as aligned as its run-time segment.
+                    if self.unit.sema.types.tags[member.tag]
+                        .variable
+                        .get()
+                        .is_some()
+                        && align.bytes() < bit_field.align.bytes()
+                    {
+                        bit_field.align = align;
+                    }
                     Place::BitField(address, bit_field)
                 } else {
                     Place::Memory(address)
@@ -2429,8 +2440,14 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             .map_err(|kind| at(kind, source))?;
         if described {
             signature.variadic_fixed = Some(
-                u32::try_from(fixed + usize::from(signature.result_param().is_some()))
-                    .map_err(|_| LoweringError::missing("too many call arguments", source))?,
+                u32::try_from(
+                    fixed
+                        + usize::from(
+                            signature.result_param().is_some()
+                                || types::variable_size(&self.unit.sema.types, result),
+                        ),
+                )
+                .map_err(|_| LoweringError::missing("too many call arguments", source))?,
             );
             signature.variadic_noundef = false;
         }
@@ -2439,6 +2456,15 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         let mut result_object = None;
         if let Some(ParamAbi::Result(layout)) = signature.result_param() {
             let object = self.fresh_object(layout.size, layout.align, source)?;
+            args.push(object);
+            result_object = Some(object);
+        } else if types::variable_size(&self.unit.sema.types, result) {
+            // GNU: a result of variable size goes to memory of its run-time
+            // size, passed first.
+            let size = self.runtime_size(result, source)?;
+            let align = super::alignment::storage_alignment(&self.unit.sema.types, result)
+                .map_err(|kind| at(kind, source))?;
+            let object = self.dynamic_object(size, Some(align));
             args.push(object);
             result_object = Some(object);
         }
@@ -2653,10 +2679,35 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         item: Item,
         source: SourceVectors,
     ) -> Result<Operand, LoweringError> {
-        let layout =
-            types::layout(&self.unit.sema.types, item.ty).map_err(|kind| at(kind, source))?;
         let align = super::alignment::storage_alignment(&self.unit.sema.types, item.ty)
             .map_err(|kind| at(kind, source))?;
+        // GNU: a record of variable size is copied to the stack at its
+        // run-time size; the callee receives the copy's address.
+        if types::variable_size(&self.unit.sema.types, item.ty) {
+            let (Operand::Aggregate(from)
+            | Operand::Place(Place::Memory(from))
+            | Operand::Value(from)) = item.operand
+            else {
+                return Err(LoweringError::missing(
+                    "a structure argument has no address",
+                    source,
+                ));
+            };
+            let size = self.runtime_size(item.ty, source)?;
+            let copy = self.dynamic_object(size, Some(align));
+            _ = self.draft.push(
+                self.memory_op(InstData::MemoryRange {
+                    opcode: Opcode::Copy,
+                    flags:  InstFlags::empty(),
+                    align:  self.place_alignment(from, Align::BYTE),
+                    args:   [copy, from, size],
+                }),
+                None,
+            );
+            return Ok(Operand::Aggregate(copy));
+        }
+        let layout =
+            types::layout(&self.unit.sema.types, item.ty).map_err(|kind| at(kind, source))?;
         let (from, source_align) = match item.operand {
             | Operand::Aggregate(from) => (from, self.place_alignment(from, Align::BYTE)),
             | Operand::Place(Place::Memory(from)) | Operand::Value(from) => (from, align),

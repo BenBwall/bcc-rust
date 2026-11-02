@@ -158,14 +158,21 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
 
     /// Whether an object of type `ty` has a size known only at run time: a
     /// variable length array, an array of them, or GCC's record with a
-    /// variably modified member.
+    /// member of variable size.
     /// C99: §6.7.5.2 paragraph 4, p. 116; PDF p. 128.
     pub(super) fn variable_size(&self, mut ty: TypeId) -> bool {
         loop {
             match self.types.nodes[ty.index] {
                 | TypeKind::Array(_, ArrayBound::Variable(_) | ArrayBound::Star) => return true,
                 | TypeKind::Array(element, _) => ty = element,
-                | TypeKind::Tag(_) => return self.variably_modified(ty),
+                // A record with only pointers to arrays of variable length
+                // has a constant size; one Microsoft layout leaves unmodeled
+                // counts as variable.
+                | TypeKind::Tag(id) => {
+                    let tag = self.types.tags[id];
+                    return tag.variable.get().is_some()
+                        || (tag.tainted.get() && self.variably_modified(ty));
+                },
                 | _ => return false,
             }
         }

@@ -72,6 +72,10 @@ pub(crate) enum Construct {
     ComplexAtomic,
     Atomic,
     VariableLengthArray,
+    /// A use of GNU's structure or union with a member of variable size
+    /// that lowering does not implement. GNU extension: GCC manual,
+    /// "Variable Length".
+    VariableSizeRecord,
     LabelAddress,
     /// MSVC `__asm` blocks.
     InlineAssembly,
@@ -105,9 +109,6 @@ pub(crate) enum Construct {
     /// not executable, which GCC's MinGW port makes so through
     /// `__enable_execute_stack` at each trampoline.
     NestedTrampolineTarget,
-    /// A nested function's use of a variably modified object of the
-    /// function around it, whose bounds that function keeps.
-    NestedVariablyModified,
     Builtin,
     StaticInitializer,
     Initializer,
@@ -167,6 +168,8 @@ impl Construct {
             | Self::ComplexAtomic => "atomic complex values",
             | Self::Atomic => "atomic types",
             | Self::VariableLengthArray => "variable length arrays",
+            | Self::VariableSizeRecord =>
+                "this use of a structure or union with a member of variable size",
             | Self::LabelAddress => "label addresses",
             | Self::InlineAssembly => "MSVC inline assembly",
             | Self::InlineAssemblyOperand =>
@@ -184,8 +187,6 @@ impl Construct {
             | Self::NestedChainTarget => "nested functions on x86_64-pc-windows-msvc",
             | Self::NestedTrampolineTarget =>
                 "the address of a nested function on x86_64-w64-windows-gnu",
-            | Self::NestedVariablyModified =>
-                "a nested function's use of a variably modified object of its definer",
             | Self::Builtin => "this builtin",
             | Self::StaticInitializer => "this static initializer",
             | Self::Initializer => "this initializer",

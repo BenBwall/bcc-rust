@@ -162,12 +162,15 @@ pub(crate) use types::{
     Member,
     Parameter,
     Scalar,
+    Segment,
+    SegmentBase,
     Tag,
     TagKind,
     TypeId,
     TypeKind,
     Types,
     UnmodeledType,
+    VariableRecord,
 };
 pub(crate) use wide_integers::{
     WideId,
@@ -328,6 +331,7 @@ pub(crate) fn analyze<'tu>(
         type_names,
         type_name_indices: analyzer.retained_type_names,
         declaration_sites: analyzer.declaration_sites,
+        definition_bounds: analyzer.definition_bounds,
         size_query_sites: analyzer.size_query_sites,
         tag_declarations: analyzer.tag_declarations.leak(),
         wide_integers: analyzer.wide.into_values(),
@@ -400,18 +404,27 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 self.validate_declaration_list_item(d);
                 self.constexpr_declaration(d);
                 self.implicit_declaration_defaults(d);
-                self.work.push(Work::DeclarationBase(d));
+                self.work
+                    .push(Work::DeclarationBase(d, self.types.runtime_bounds.len()));
                 self.spec(d.declaration_specifiers, d.init_declarators.is_empty());
             },
-            | Work::DeclarationBase(d) => {
+            | Work::DeclarationBase(d, bound_start) => {
                 let base = self.take_type();
                 if let Some(operand_evaluations) =
                     self.spec_evaluations(d.declaration_specifiers.type_specifiers)
                 {
+                    // GNU: the declaration that defines a record with a
+                    // member of variable size evaluates its bounds, once,
+                    // however many declarators share it.
+                    let bounds = self.with_member_bounds(
+                        self.spec_bounds(d.declaration_specifiers.type_specifiers),
+                        bound_start,
+                    );
+                    self.record_bound_origins(bounds, BoundEvaluationSite::Specifiers);
                     _ = self.declaration_sites.insert(
                         std::ptr::from_ref(d).addr(),
                         BoundSiteFacts {
-                            bounds: self.spec_bounds(d.declaration_specifiers.type_specifiers),
+                            bounds,
                             ty: base,
                             operand_evaluations,
                         },
@@ -551,7 +564,8 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 }
                 self.implicit_return_type(f);
                 self.prepare_function(f);
-                self.work.push(Work::FunctionBase(f));
+                self.work
+                    .push(Work::FunctionBase(f, self.types.runtime_bounds.len()));
                 _ = self.misplaced_inference(
                     f.declaration_specifiers.type_specifiers,
                     inference::InferenceFault::FunctionDeclarator,
@@ -559,14 +573,26 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 );
                 self.spec(f.declaration_specifiers, false);
             },
-            | Work::FunctionBase(f) => {
+            | Work::FunctionBase(f, bound_start) => {
                 let base = self.take_type();
-                self.work.push(Work::FunctionBody(f));
+                self.work.push(Work::FunctionBody(f, bound_start));
                 self.work
                     .push(Work::Declarator(f.declarator, base, false, false));
             },
-            | Work::FunctionBody(f) => {
+            | Work::FunctionBody(f, bound_start) => {
                 let ty = self.take_type();
+                // GNU: a nested function's own type may be variably
+                // modified; its definer evaluates the bounds written in its
+                // result and specifiers where the definition is, as GCC
+                // does. Its parameters' are its own, at entry.
+                let bounds =
+                    self.with_member_bounds(self.bound_actions(ty, bound_start), bound_start);
+                if !bounds.is_empty() {
+                    self.record_bound_origins(bounds, BoundEvaluationSite::Specifiers);
+                    _ = self
+                        .definition_bounds
+                        .insert(std::ptr::from_ref(f).addr(), bounds);
+                }
                 self.work.push(Work::FunctionBodyReady(f, ty));
                 self.prepare_function_attributes(f.declarator, f.declaration_specifiers.extensions);
             },
@@ -1031,12 +1057,11 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                             );
                         }
                     }
-                    value.to_u64().map_or_else(
-                        || self.types.variable_bound(expression),
-                        ArrayBound::Constant,
-                    )
+                    value
+                        .to_u64()
+                        .map_or_else(|| self.variable_bound(expression), ArrayBound::Constant)
                 } else {
-                    self.types.variable_bound(expression)
+                    self.variable_bound(expression)
                 };
                 let ty = self
                     .types
@@ -1485,12 +1510,9 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                         // GNU extension: GCC accepts a variably modified
                         // member in block and prototype scope and lays the
                         // record out when its declaration is reached
-                        // (`variable_size` in GCC's `stor-layout.cc`).
-                        // Lowering has no run-time record layout, so the
-                        // record stays unmodeled and is refused by name.
-                        self.types.tags[tag]
-                            .unmodeled
-                            .set(Some(UnmodeledType::VariableMembers));
+                        // (`variable_size` in GCC's `stor-layout.cc`), as
+                        // completion does (`VariableRecord`).
+                        self.types.tags[tag].variable_members.set(true);
                         let record = self.types.intern(TypeKind::Tag(tag));
                         self.types.mark_variably_modified(record);
                     } else {
@@ -1505,8 +1527,8 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                             name.map(|n| n.name),
                             None,
                         );
+                        self.types.tags[tag].tainted.set(true);
                     }
-                    self.types.tags[tag].tainted.set(true);
                 }
                 if let Some(name) = name
                     && let Some(previous) = self
@@ -1874,7 +1896,9 @@ enum Work<'tu, 's> {
     DeclaredAlignment(DeclaredAlignment<'tu>),
     Root(ExternalDeclaration<'tu>),
     Declaration(&'tu Declaration<'tu>),
-    DeclarationBase(&'tu Declaration<'tu>),
+    /// A declaration whose specifiers are analyzed, and the number of
+    /// runtime bounds before them.
+    DeclarationBase(&'tu Declaration<'tu>, usize),
     DeclarationDeclarator(Declarator<'tu>, DeclarationSpecifiers<'tu>, TypeId, bool),
     BindReady(
         Declarator<'tu>,
@@ -1888,8 +1912,10 @@ enum Work<'tu, 's> {
     /// region opens here.
     DeclarationEnd(usize),
     Function(&'tu FunctionDefinition<'tu>),
-    FunctionBase(&'tu FunctionDefinition<'tu>),
-    FunctionBody(&'tu FunctionDefinition<'tu>),
+    /// A function definition whose specifiers are analyzed, and the number
+    /// of runtime bounds before them.
+    FunctionBase(&'tu FunctionDefinition<'tu>, usize),
+    FunctionBody(&'tu FunctionDefinition<'tu>, usize),
     FunctionBodyReady(&'tu FunctionDefinition<'tu>, TypeId),
     FunctionWork(functions::FunctionWork<'tu>),
     StatementWork(statements::StatementWork<'tu>),
@@ -2059,6 +2085,9 @@ struct Analyzer<'a, 'tu, 's> {
     type_names:              ArenaVec<'s, (&'tu TypeName<'tu>, TypeId)>,
     retained_type_names:     ArenaMap<'tu, usize, TypeNameId>,
     declaration_sites:       ArenaMap<'tu, usize, BoundSiteFacts<'tu>>,
+    /// The bounds a nested function definition's own type writes, by
+    /// definition identity, which its definer evaluates (GNU).
+    definition_bounds:       ArenaMap<'tu, usize, &'tu [usize]>,
     type_name_sites:         ArenaMap<'s, usize, BoundSiteFacts<'tu>>,
     size_query_sites:        ArenaMap<'tu, usize, SizeQueryFacts<'tu>>,
     typeof_sites:            ArenaMap<'s, usize, BoundSiteFacts<'tu>>,
@@ -2098,6 +2127,12 @@ struct Analyzer<'a, 'tu, 's> {
     runtime_bounds:          ArenaVec<'tu, RuntimeBound<'tu>>,
     bound_origins:           ArenaMap<'s, usize, BoundEvaluationSite>,
     bound_expression_starts: ArenaMap<'s, usize, usize>,
+    /// The runtime bounds written in a record's member list, in order: the
+    /// declaration or type name that defines the record evaluates them, as
+    /// GCC does (GNU).
+    member_bounds:           ArenaVec<'s, usize>,
+    /// The scope each runtime bound is written in, by bound index.
+    bound_scopes:            ArenaVec<'s, usize>,
     integer_models:          ArenaMap<'s, usize, Option<(u32, bool)>>,
     resolved:                resolved::ResolvedBuilder<'tu, 's>,
     expressions:             ArenaVec<'tu, ExpressionInfo<'tu>>,
