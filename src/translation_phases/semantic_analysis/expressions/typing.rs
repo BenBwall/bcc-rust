@@ -474,11 +474,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     };
                 // Array decay retains the designated register object, which
                 // GCC subscripts; reading a register pointer does not
-                // transfer its storage. Clang reported the decay itself.
-                // C99 §6.5.3.2p1, p. 78; PDF p. 90.
-                info.register = gcc_subscript
-                    && pointer.register
-                    && matches!(self.types.nodes[pointer.ty.index], TypeKind::Array(..));
+                // transfer its storage. Clang reported the decay of a
+                // register array named directly; any other register array
+                // (a structure's member, a parenthesized name) decayed
+                // silently, so its element stays register storage and `&`
+                // of it is refused there. C99 §6.5.3.2p1, p. 78; PDF p. 90.
+                info.register = pointer.register
+                    && matches!(self.types.nodes[pointer.ty.index], TypeKind::Array(..))
+                    && (gcc_subscript
+                        || !matches!(pointer.expression.kind, ExpressionType::Identifier(_)));
             },
             | B::Multiplication | B::Division | B::Modulo => {
                 if !(self.arithmetic(lt) && self.arithmetic(rt))

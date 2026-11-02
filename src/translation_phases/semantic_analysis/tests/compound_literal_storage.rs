@@ -157,6 +157,18 @@ fn register_array_objects_do_not_decay() {
         kinds_as(member, CompilerIdentity::Gcc),
         [K::RegisterArrayAddress]
     );
+    // Its element is still register storage, so Clang refuses its address
+    // once, as it does through a parenthesized name.
+    let element = "void f(void) { register struct S { int a[2]; } s; int *p = &s.a[1]; }";
+    assert_eq!(
+        kinds_as(element, CompilerIdentity::Clang),
+        [K::InvalidAddressOperand]
+    );
+    let element = "void f(void) { register int a[2]; int *p = &(a)[1]; }";
+    assert_eq!(
+        kinds_as(element, CompilerIdentity::Clang),
+        [K::InvalidAddressOperand]
+    );
     let parenthesized = "void g(int *); void f(void) { register int a[2]; g((a)); }";
     assert_eq!(kinds_as(parenthesized, CompilerIdentity::Clang), []);
     assert_eq!(
