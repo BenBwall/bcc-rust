@@ -94,6 +94,11 @@ pub(crate) struct CompilerConfiguration {
     /// `-Wno-error=pedantic`, and kept through `-Wno-pedantic`, so a later
     /// `-Wpedantic` turns them back on as errors, as in GCC and Clang.
     pedantic_as_error: bool,
+    /// GCC's `-Werror=pedantic`: `Some(true)` while it makes `-Wpedantic`
+    /// diagnostics errors, `Some(false)` once a later `-Wno-error=pedantic`
+    /// keeps them warnings, `None` without it or after `-Wno-pedantic`.
+    /// Only the diagnostics bcc files under `-Wpedantic` for GCC read it.
+    werror_pedantic: Option<bool>,
     accepted: u128,
     native: u128,
     repeated_specifier_warnings: bool,

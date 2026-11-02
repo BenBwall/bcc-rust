@@ -904,7 +904,8 @@ impl LanguageFlag {
             | Self::WarningGroup(group, option) => configuration.with_warning_option(group, option),
             | Self::Pedantic(enabled) => configuration.with_pedantic(enabled),
             | Self::PedanticErrors => configuration.with_pedantic_errors(),
-            | Self::PedanticAsError(error) => configuration.with_pedantic_as_error(error),
+            | Self::PedanticAsError(true) => configuration.with_werror_pedantic(),
+            | Self::PedanticAsError(false) => configuration.with_pedantic_as_error(false),
             | Self::MsvcExtensions(enabled) => configuration.with_msvc_extensions(enabled),
             | Self::MsvcFeature(feature, enabled) =>
                 configuration.with_msvc_feature(feature, enabled),

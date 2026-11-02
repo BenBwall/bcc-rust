@@ -148,10 +148,19 @@ impl<'tu> Parser<'_, 'tu, '_> {
                     ErrorSeverity::Warning
                 })
             } else {
-                crate::translation_phases::policy_severity(
+                // `-Werror=pedantic` enables it as an error, or as a warning
+                // after `-Wno-error=pedantic`; `-w` silenced it above.
+                let policy = crate::translation_phases::policy_severity(
                     configuration.extension_policy(),
                     crate::translation_phases::DiagnosticPolicy::Extension,
-                )
+                );
+                match (policy, configuration.werror_pedantic()) {
+                    | (Some(ErrorSeverity::Error), _) | (_, Some(true)) =>
+                        Some(ErrorSeverity::Error),
+                    | (Some(severity), _) => Some(severity),
+                    | (None, Some(false)) => Some(ErrorSeverity::Warning),
+                    | (None, None) => None,
+                }
             }
         });
         if plain_complex_severity == Some(None) {

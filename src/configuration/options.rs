@@ -160,6 +160,9 @@ impl CompilerConfiguration {
     /// whether they are errors, as GCC and Clang do after
     /// `-pedantic-errors -Wpedantic`.
     pub(crate) const fn with_pedantic(mut self, enabled: bool) -> Self {
+        if !enabled {
+            self.werror_pedantic = None;
+        }
         self.extension_policy = if !enabled {
             ExtensionPolicy::Allow
         } else if self.pedantic_as_error {
@@ -170,16 +173,35 @@ impl CompilerConfiguration {
         self
     }
 
-    /// `-Werror=pedantic` (true), which also enables pedantic diagnostics,
-    /// or `-Wno-error=pedantic` (false), which keeps them warnings.
+    /// `-pedantic-errors` (true), or `-Wno-error=pedantic` (false), which
+    /// keeps pedantic diagnostics warnings, including a `-Werror=pedantic`
+    /// one.
     pub(crate) const fn with_pedantic_as_error(mut self, error: bool) -> Self {
         self.pedantic_as_error = error;
         if error {
             self.extension_policy = ExtensionPolicy::Deny;
-        } else if matches!(self.extension_policy, ExtensionPolicy::Deny) {
-            self.extension_policy = ExtensionPolicy::Warn;
+        } else {
+            if matches!(self.extension_policy, ExtensionPolicy::Deny) {
+                self.extension_policy = ExtensionPolicy::Warn;
+            }
+            if matches!(self.werror_pedantic, Some(true)) {
+                self.werror_pedantic = Some(false);
+            }
         }
         self
+    }
+
+    /// `-Werror=pedantic`: enables GCC's `-Wpedantic` diagnostics as errors,
+    /// which `-w` still silences, unlike `-pedantic-errors`.
+    pub(crate) const fn with_werror_pedantic(mut self) -> Self {
+        self.werror_pedantic = Some(true);
+        self
+    }
+
+    /// What `-Werror=pedantic` asks of a `-Wpedantic` diagnostic: an error
+    /// (`Some(true)`), a warning (`Some(false)`), or nothing.
+    pub(crate) const fn werror_pedantic(self) -> Option<bool> {
+        self.werror_pedantic
     }
 
     /// Whether `-pedantic-errors` appeared on the command line.
@@ -872,6 +894,7 @@ impl CompilerConfiguration {
             extension_policy,
             pedantic_errors: false,
             pedantic_as_error: false,
+            werror_pedantic: None,
             accepted: 0,
             native: 0,
             repeated_specifier_warnings: true,
