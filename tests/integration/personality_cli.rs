@@ -4790,6 +4790,62 @@ mod tests {
         );
     }
 
+    /// `tcc -ar` checks its arguments as TCC's own archiver does
+    /// (`tcc_tool_ar`): its usage for a missing library or an operation it
+    /// lacks, names alone for `t`/`tv`, status 2 for a file it cannot open,
+    /// and a fresh library of exactly the given objects.
+    #[test]
+    fn tcc_ar_reads_its_arguments_as_tcc_does() {
+        if !cfg!(target_os = "linux") {
+            return;
+        }
+        let directory = Directory::new();
+        directory.write("a.c", "int a(void) { return 1; }\n");
+        directory.write("b.c", "int b(void) { return 2; }\n");
+        succeeds(&directory.bcc("--tcc-mode", &["-c", "a.c", "b.c"]));
+        let usage =
+            "usage: tcc -ar [crstvx] lib [files]\ncreate library ([abdiopN] not supported).\n";
+        for args in [
+            &["-ar"][..],
+            &["-ar", "rcs"],
+            &["-ar", "d", "lib.a", "a.o"],
+            &["-ar", "-x.y", "lib.a"],
+        ] {
+            let output = directory.bcc("--tcc-mode", args);
+            assert_eq!(output.status.code(), Some(1), "{args:?}");
+            assert_eq!(stderr(&output), usage, "{args:?}");
+        }
+        succeeds(&directory.bcc("--tcc-mode", &["-ar", "rcs", "lib.a", "a.o", "b.o"]));
+        for op in ["t", "tv"] {
+            let output = directory.bcc("--tcc-mode", &["-ar", op, "lib.a"]);
+            succeeds(&output);
+            assert_eq!(stdout(&output), "a.o\nb.o\n", "{op}");
+        }
+        // A new library replaces the old one rather than updating it.
+        succeeds(&directory.bcc("--tcc-mode", &["-ar", "rcs", "lib.a", "b.o"]));
+        let output = directory.bcc("--tcc-mode", &["-ar", "t", "lib.a"]);
+        assert_eq!(stdout(&output), "b.o\n");
+        let output = directory.bcc("--tcc-mode", &["-ar", "cr", "new.a", "missing.o"]);
+        assert_eq!(output.status.code(), Some(2));
+        assert_eq!(stderr(&output), "tcc: ar: can't open file missing.o \n");
+        // An input that is no ELF object of TCC's class leaves no library;
+        // `v` names each object as it is read.
+        directory.write("bad.o", "not an object\n");
+        let output = directory.bcc("--tcc-mode", &["-ar", "rcs", "bad.a", "a.o", "bad.o"]);
+        assert_eq!(output.status.code(), Some(2));
+        assert_eq!(stderr(&output), "tcc: ar: Unsupported Elf Class: bad.o\n");
+        assert!(!directory.path("bad.a").exists());
+        let output = directory.bcc("--tcc-mode", &["-ar", "rcsv", "v.a", "a.o", "b.o"]);
+        succeeds(&output);
+        assert_eq!(stdout(&output), "a - a.o\na - b.o\n");
+        let output = directory.bcc("--tcc-mode", &["-ar", "t", "absent.a"]);
+        assert_eq!(output.status.code(), Some(2));
+        assert_eq!(stderr(&output), "tcc: ar: can't open file absent.a\n");
+        let output = directory.bcc("--tcc-mode", &["-ar", "t", "a.c"]);
+        assert_eq!(output.status.code(), Some(2));
+        assert_eq!(stderr(&output), "tcc: ar: not an ar archive a.c\n");
+    }
+
     /// TCC names its outputs after its inputs (`a.c` → `a.o`, standard
     /// input → `a.out`), compiles each `-c` input on its own and stops at
     /// the first that fails, and writes make rules one file to a line.
