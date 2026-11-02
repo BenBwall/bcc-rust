@@ -61,7 +61,10 @@ use crate::{
             compile_module,
         },
     },
-    configuration::CompilerConfiguration,
+    configuration::{
+        CompilerConfiguration,
+        CompilerIdentity,
+    },
     headers::HeaderSearch,
     ir::{
         Module,
@@ -308,6 +311,73 @@ fn static_initializers_reach_members_through_arrows() {
         for (optimize, profile) in STAGES {
             let (status, _) = with_module(source, target, optimize, profile, interpret);
             assert_eq!(status, 31, "{target:?} {optimize} {profile:?}");
+        }
+    }
+}
+
+/// `ms_struct` gives a record Microsoft's bit-field layout on a System V
+/// target, as GCC lays it out (gcc.dg/bf-ms-layout-*.c): each field of a new
+/// size starts a unit of its type, and a zero-width field after a
+/// bit-field ends the unit.
+/// GNU extension: GCC manual, "x86 Type Attributes", `ms_struct`.
+#[test]
+fn ms_struct_records_take_microsofts_layout() {
+    let source = "struct __attribute__((ms_struct)) M { char a : 4; int b : 4; char c; };\nstruct \
+                  G { char a : 4; int b : 4; char c; };\nstruct __attribute__((ms_struct)) Z { \
+                  char a : 3; int : 0; char b; };\nstruct __attribute__((ms_struct, packed)) P { \
+                  char a : 4; short b : 4; };\nint main(void) { struct M m = {3, -2, 7}; return \
+                  (sizeof(struct M) == 12) + (sizeof(struct G) == 4) * 2 + (sizeof(struct Z) == \
+                  8) * 4 + (sizeof(struct P) == 3) * 8 + (__builtin_offsetof(struct M, c) == 8) * \
+                  16 + (m.a == 3 && m.b == -2 && m.c == 7) * 32; }\n";
+    for (optimize, profile) in STAGES {
+        let (status, _) = with_module(source, Target::LinuxGnu, optimize, profile, interpret);
+        assert_eq!(status, 63, "{optimize} {profile:?}");
+    }
+}
+
+/// The `ms_struct` layouts GCC 14 and Clang 23 give differently on a System
+/// V target, each under its identity: a union's bit-field alignment, an
+/// attribute on an earlier declaration, and a zero-width bit-field in a
+/// packed record or under `#pragma pack`. The fields keep their values.
+/// GNU extension: GCC manual, "x86 Type Attributes", `ms_struct`.
+#[test]
+fn ms_struct_layouts_follow_the_identity() {
+    let source = "union __attribute__((ms_struct)) U { unsigned char a : 4; unsigned int b : 4; \
+                  char c; };\nstruct __attribute__((ms_struct)) F;\nstruct F { unsigned char a : \
+                  4; unsigned int b : 4; char c; };\nstruct __attribute__((ms_struct, packed)) ZP \
+                  { unsigned char a : 3; int : 0; char b; };\n#pragma pack(push, 1)\nstruct \
+                  __attribute__((ms_struct)) ZK { unsigned char a : 3; int : 0; char b; \
+                  };\n#pragma pack(pop)\nint main(void) { struct F f = {3, 9, 7}; struct ZK k = \
+                  {5, 6}; struct ZP z = {2, 8}; union U u; u.b = 11; return (_Alignof(union U) == \
+                  ALIGN_U) + (sizeof(struct F) == SIZE_F) * 2 + (__builtin_offsetof(struct F, c) \
+                  == OFFSET_F) * 4 + (sizeof(struct ZP) == SIZE_ZP) * 8 + \
+                  (__builtin_offsetof(struct ZK, b) == OFFSET_ZK) * 16 + (f.a == 3 && f.b == 9 && \
+                  f.c == 7 && k.a == 5 && k.b == 6 && z.a == 2 && z.b == 8 && u.b == 11) * 32; }\n";
+    for (identity, values) in [
+        (
+            CompilerIdentity::Gcc,
+            "#define ALIGN_U 4\n#define SIZE_F 4\n#define OFFSET_F 1\n#define SIZE_ZP 4\n#define \
+             OFFSET_ZK 1\n",
+        ),
+        (
+            CompilerIdentity::Clang,
+            "#define ALIGN_U 1\n#define SIZE_F 12\n#define OFFSET_F 8\n#define SIZE_ZP 8\n#define \
+             OFFSET_ZK 4\n",
+        ),
+    ] {
+        let configuration = CompilerConfiguration::default()
+            .with_target(Target::LinuxGnu)
+            .with_compiler_identity(identity);
+        for (optimize, profile) in STAGES {
+            let (status, _) = with_configured_module(
+                &format!("{values}{source}"),
+                Target::LinuxGnu,
+                optimize,
+                profile,
+                configuration,
+                interpret,
+            );
+            assert_eq!(status, 63, "{identity:?} {optimize} {profile:?}");
         }
     }
 }

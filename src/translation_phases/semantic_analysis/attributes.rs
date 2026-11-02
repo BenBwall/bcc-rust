@@ -175,8 +175,6 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                     | catalog::Convention::Other => Some(UnsupportedAttribute::CallingConvention),
                 },
                 | catalog::Rule::Unsupported(capability) => Some(capability),
-                | catalog::Rule::RecordLayout { microsoft } =>
-                    (microsoft != windows).then_some(UnsupportedAttribute::RecordLayout),
                 | catalog::Rule::Ignored => {
                     let name = self.context.string_cache.intern(attribute.name);
                     self.error(

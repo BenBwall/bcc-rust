@@ -520,7 +520,7 @@ fn vla_restore_keeps_alloca_storage_under_gcc() {
                     CompilerConfiguration::default()
                         .with_target(target)
                         .with_gnu_extensions(true)
-                        .with_compiler_identity(crate::configuration::CompilerIdentity::Gcc),
+                        .with_compiler_identity(CompilerIdentity::Gcc),
                     |module, target| {
                         let arena = Bump::new();
                         let mut host = DefaultHost::for_target(&arena, target);
