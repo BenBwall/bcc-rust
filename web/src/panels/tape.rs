@@ -55,10 +55,12 @@ const ZOOM_MAX: f64 = 64.0;
 /// Room the tape keeps right of the playhead for the end of the run: the
 /// blank tape and "NOT YET RUN" after the last recorded step.
 const ROOM: f64 = 130.0;
-/// Below this width the deck is compact (a phone): the tape takes the
-/// whole width, each lane's name rides on its lane, and the end of the run
-/// keeps less room.
-const COMPACT_BELOW: f64 = 560.0;
+/// Below this width the deck is compact (a phone or a narrow window): the
+/// tape takes the whole width, each lane's name rides on its lane, and the
+/// end of the run keeps less room. Up to about 720 px the name column and
+/// the room would leave the tape less than 450 px, too little for its
+/// values.
+const COMPACT_BELOW: f64 = 720.0;
 const ROOM_COMPACT: f64 = 44.0;
 /// How long the tape takes to glide to a new scale, in milliseconds.
 const GLIDE_MS: f64 = 260.0;
