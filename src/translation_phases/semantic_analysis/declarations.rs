@@ -1440,12 +1440,13 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     | Some(width) if gcc_ms && (packed || pack != 0) =>
                         u64::from(width).div_ceil(8),
                     | Some(_) if ms => layout.size,
-                    // GCC packed union fields occupy their bits, including
-                    // named fields. Microsoft allocation still reserves the
-                    // declared unit (handled above).
-                    | Some(width) if unnamed_bit_field || packed || pack != 0 =>
-                        u64::from(width).div_ceil(8),
-                    | _ => layout.size,
+                    // GCC and Clang union bit-fields occupy their bits in
+                    // whole bytes (GCC's `place_union_field`); the union's
+                    // alignment rounds the size up, which a typedef that
+                    // lowers the declared type's alignment shows. Microsoft
+                    // allocation still reserves the declared unit (above).
+                    | Some(width) => u64::from(width).div_ceil(8),
+                    | None => layout.size,
                 });
             } else if let Some(width) = member.width {
                 if ms {
@@ -1648,8 +1649,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// the base is known to have starts a segment rounded up at run time;
     /// any other is placed after the cursor as at a constant offset, except
     /// that a bit-field takes the next bits, whatever unit they straddle, as
-    /// GCC checks the straddle only at a constant offset. In a union every
-    /// member starts at 0, and those of variable size join the size.
+    /// GCC checks the straddle only at a constant offset; one with explicit
+    /// alignment is still rounded up to it, at run time if need be. In a
+    /// union every member starts at 0, and those of variable size join the
+    /// size.
     /// GNU extension: GCC manual, "Variable Length"; GCC's `stor-layout.cc`.
     /// C99: §6.7.2.1 paragraphs 10-15, pp. 102-103; PDF pp. 114-115.
     #[expect(
@@ -1672,16 +1675,22 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             .or_else(|| self.types.alignment(member.ty))
             .unwrap_or(1);
         let packed = tag.packed.get() || member.packed;
+        let pack = u64::from(tag.max_member_alignment.get());
+        let explicit = u64::from(member.explicit_alignment);
         // Neither packing nor `#pragma pack` moves a zero-width bit-field
-        // off the boundary of its declared type, as at a constant offset.
+        // off its declared type's alignment (a typedef's included) or its
+        // own `aligned` (GCC's `layout_decl`). A nonzero bit-field aligns
+        // the record to its declared type and its `aligned`, capped by
+        // `#pragma pack`, which takes precedence over packing, or else by
+        // packing to its `aligned` alone (`update_alignment_for_field`).
         let mut align = match (member.width, layout) {
-            | (Some(0), Some(layout)) => layout.size.max(u64::from(member.explicit_alignment)),
-            | _ if packed => u64::from(member.explicit_alignment.max(1)),
+            | (Some(0), Some(layout)) => layout.align.max(explicit),
+            | (Some(_), Some(_)) if pack != 0 => natural.max(explicit),
+            | _ if packed => explicit.max(1),
             | _ => natural,
         };
-        let pack = tag.max_member_alignment.get();
         if pack != 0 && member.width != Some(0) {
-            align = align.min(u64::from(pack));
+            align = align.min(pack);
         }
         if pack != 0 {
             resolved.ty = resolved
@@ -1749,6 +1758,30 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if let Some(width) = member.width
             && width != 0
         {
+            // Its own `aligned`, capped by `#pragma pack` but not by
+            // packing, rounds its start up: within the segment when the
+            // base is known to be so aligned, and otherwise at run time
+            // (`place_field`).
+            let desired = if pack == 0 {
+                explicit
+            } else {
+                explicit.min(pack)
+            };
+            if desired > variable.known {
+                let base = SegmentBase::Aligned {
+                    previous: variable.current,
+                    before:   (*bit_end).div_ceil(8),
+                    align:    desired,
+                };
+                _ = variable.push(base, desired);
+                if let Some(segment) = variable.member_segments.last_mut() {
+                    *segment = variable.current;
+                }
+                *bytes = 0;
+                *bit_end = 0;
+            } else if desired != 0 {
+                *bit_end = align_up(*bit_end, desired.saturating_mul(8)).unwrap_or(*bit_end);
+            }
             resolved.offset = *bit_end / 8;
             resolved.bit_offset = u32::try_from(*bit_end % 8).unwrap_or(0);
             *bit_end += u64::from(width);
