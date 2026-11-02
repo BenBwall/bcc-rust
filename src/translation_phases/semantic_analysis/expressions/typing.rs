@@ -2771,13 +2771,31 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 super::super::BindingOrigin::ImplicitOrdinary;
             // GCC warns in C89 only about a library function whose type
             // `int ()` does not match ("incompatible implicit declaration
-            // of built-in function"), so `abs` passes silently.
+            // of built-in function"), so `abs` passes silently, unless an
+            // option (`-Wall`, `-Wimplicit`, `-Werror=`) enables
+            // `-Wimplicit-function-declaration`, which reports it as any
+            // other implicit declaration.
             if let Some((ty, _)) = library
                 && self.context.configuration.compiler_identity()
                     == crate::configuration::CompilerIdentity::Gcc
                 && self.context.configuration.standard() < CStandard::C99
                 && self.matches_implicit_int_function(ty)
             {
+                let group = crate::configuration::DiagnosticGroup::ImplicitFunctionDeclaration;
+                if self
+                    .context
+                    .configuration
+                    .diagnostic_severity(group)
+                    .is_some()
+                {
+                    self.group_diagnostic(
+                        group,
+                        SemanticErrorKind::ImplicitFunctionDeclaration,
+                        name.source_vectors,
+                        Some(name.name),
+                        None,
+                    );
+                }
                 return;
             }
             let (group, kind) = match library {

@@ -52,9 +52,10 @@ impl CompilerConfiguration {
         group: DiagnosticGroup,
         option: WarningOption,
     ) -> Self {
-        self.warning_options[group as usize].apply(option);
+        let clang = self.identity.rules() == super::RuleSet::Clang;
+        self.warning_options[group as usize].apply(option, clang);
         if group == DiagnosticGroup::UnknownPragmas {
-            self.warning_options[DiagnosticGroup::UnknownStdcPragma as usize].apply(option);
+            self.warning_options[DiagnosticGroup::UnknownStdcPragma as usize].apply(option, clang);
         }
         let children: &[DiagnosticGroup] = match group {
             | DiagnosticGroup::PointerToIntCast => &[
@@ -78,16 +79,16 @@ impl CompilerConfiguration {
             | _ => &[],
         };
         for &child in children {
-            self.warning_options[child as usize].apply(option);
+            self.warning_options[child as usize].apply(option, clang);
         }
         if group == DiagnosticGroup::Overflow {
             self.warning_options[DiagnosticGroup::PedanticOverflow as usize]
                 .apply_to_pedantic(option);
         }
         if group == DiagnosticGroup::IncompatiblePointerTypes {
-            self.warning_options[DiagnosticGroup::PointerQualifiers as usize].apply(option);
+            self.warning_options[DiagnosticGroup::PointerQualifiers as usize].apply(option, clang);
             self.warning_options[DiagnosticGroup::IncompatibleFunctionPointerTypes as usize]
-                .apply(option);
+                .apply(option, clang);
         }
         self
     }
@@ -199,7 +200,7 @@ impl CompilerConfiguration {
         let error = option.error().unwrap_or(
             default == ErrorSeverity::Error
                 || self.warnings_as_errors
-                || (group.pedantic_promoted() && self.extension_policy == ExtensionPolicy::Deny),
+                || self.pedantic_error(group),
         );
         let severity = if error {
             ErrorSeverity::Error
@@ -217,6 +218,9 @@ impl CompilerConfiguration {
     /// system header, which withholds warnings and warning groups: GCC 14
     /// reports its permerrors there when they are errors, while Clang
     /// withholds its default-error groups too.
+    /// Only an error of GCC's own making counts: the permerror's default,
+    /// or `-pedantic-errors`; `-Werror` and `-Werror=X` promote warnings
+    /// that a system header never reports.
     pub(crate) fn reported_in_system_headers(
         self,
         group: DiagnosticGroup,
@@ -225,6 +229,19 @@ impl CompilerConfiguration {
         severity == ErrorSeverity::Error
             && self.identity == super::CompilerIdentity::Gcc
             && group.default() == GroupDefault::Permerror
+            && (self.permerror_default(group) == Some(ErrorSeverity::Error)
+                || self.pedantic_error(group))
+    }
+
+    /// Whether `-pedantic-errors` makes `group` an error: Clang's
+    /// `ExtWarn` diagnostics, except that GCC's `-fpermissive` keeps its
+    /// permerrors warnings whatever `-pedantic-errors` says.
+    fn pedantic_error(self, group: DiagnosticGroup) -> bool {
+        group.pedantic_promoted()
+            && self.extension_policy == ExtensionPolicy::Deny
+            && !(self.identity == super::CompilerIdentity::Gcc
+                && group.default() == GroupDefault::Permerror
+                && self.permissive == Some(true))
     }
 
     /// The severity of a [`GroupDefault::Permerror`] group before any
@@ -605,20 +622,24 @@ impl WarningSettings {
     /// it reports to the extension policy otherwise.
     fn apply_to_pedantic(&mut self, option: WarningOption) {
         match option {
-            | WarningOption::Enable(false) => self.apply(option),
+            | WarningOption::Enable(false) => self.apply(option, true),
             | WarningOption::Enable(true) => self.set(Self::ENABLED, None),
             | WarningOption::Error(error) => self.set(Self::ERROR, Some(error)),
         }
     }
 
-    fn apply(&mut self, option: WarningOption) {
-        self.0 &= !Self::ALL_LAST;
+    /// Applies one of the group's own options. Clang's `-Wno-X` forgets an
+    /// earlier `-Werror=X`, which GCC's keeps for a later `-WX`; an option
+    /// that enables or disables the group overrides an earlier Clang
+    /// `-Wall`, while `-Wno-error=X` changes only its severity.
+    fn apply(&mut self, option: WarningOption, clang: bool) {
         match option {
             | WarningOption::Enable(enabled) => {
+                self.0 &= !Self::ALL_LAST;
                 self.set(Self::ENABLED, Some(enabled));
                 if !enabled {
                     self.0 |= Self::REENABLED;
-                    if self.error() == Some(true) {
+                    if clang && self.error() == Some(true) {
                         self.set(Self::ERROR, None);
                     }
                 }
@@ -626,6 +647,7 @@ impl WarningSettings {
             | WarningOption::Error(error) => {
                 self.set(Self::ERROR, Some(error));
                 if error {
+                    self.0 &= !Self::ALL_LAST;
                     self.set(Self::ENABLED, Some(true));
                 }
             },

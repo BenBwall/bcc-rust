@@ -689,6 +689,145 @@ mod tests {
         }
     }
 
+    /// The options around GCC 14's permerrors and Clang's default errors,
+    /// as each compiler orders them: `-Werror` does not reach into a system
+    /// header, `-fpermissive` beats `-pedantic-errors`, GCC's `-Wno-X`
+    /// keeps an earlier `-Werror=X`, Clang's `-Wno-error=X` keeps a later
+    /// `-Wall`, and an enabled `-Wimplicit-function-declaration` reports a
+    /// C89 library function GCC otherwise passes.
+    #[test]
+    fn permerror_options_follow_each_compiler() {
+        let directory = Directory::new();
+        std::fs::create_dir_all(directory.path("sys")).unwrap();
+        directory.write("sys/bad.h", "void f(int *p){long *q=p;(void)q;}\n");
+        directory.write("main.c", "#include <bad.h>\nint main(void) { return 0; }\n");
+        directory.write("pointer.c", "void f(int *p){long *q=p;(void)q;}\n");
+        directory.write("library.c", "int f(void){return abs(-1);}\n");
+        directory.write("undeclared.c", "int f(void){return frob();}\n");
+        directory.write("implicit.c", "extern x;\n");
+        let pointer = "initialization of 'long int *' from incompatible pointer type 'int *' \
+                       [-Wincompatible-pointer-types]";
+        // (mode, options, file, exit status, expected stderr fragment or "").
+        for (mode, options, file, status, message) in [
+            (
+                "--gcc-mode",
+                &["-std=gnu89", "-Werror"][..],
+                "main.c",
+                0,
+                "",
+            ),
+            (
+                "--gcc-mode",
+                &["-std=gnu89", "-Werror=incompatible-pointer-types"],
+                "main.c",
+                0,
+                "",
+            ),
+            (
+                "--gcc-mode",
+                &["-std=gnu17", "-fpermissive", "-Werror"],
+                "main.c",
+                0,
+                "",
+            ),
+            (
+                "--gcc-mode",
+                &["-std=gnu89", "-fno-permissive"],
+                "main.c",
+                1,
+                pointer,
+            ),
+            (
+                "--gcc-mode",
+                &["-std=gnu89", "-pedantic-errors"],
+                "main.c",
+                1,
+                pointer,
+            ),
+            (
+                "--gcc-mode",
+                &["-std=gnu17", "-fpermissive", "-pedantic-errors"],
+                "main.c",
+                0,
+                "",
+            ),
+            (
+                "--gcc-mode",
+                &["-std=gnu17", "-fpermissive", "-pedantic-errors"],
+                "pointer.c",
+                0,
+                pointer,
+            ),
+            (
+                "--gcc-mode",
+                &["-std=gnu89", "-Werror=implicit-function-declaration"],
+                "library.c",
+                1,
+                "error: implicit declaration of function 'abs'",
+            ),
+            (
+                "--gcc-mode",
+                &["-std=gnu89", "-Wall"],
+                "library.c",
+                0,
+                "warning: implicit declaration of function 'abs' [-Wimplicit-function-declaration]",
+            ),
+            ("--gcc-mode", &["-std=gnu89"], "library.c", 0, ""),
+            (
+                "--gcc-mode",
+                &[
+                    "-std=gnu89",
+                    "-Werror=implicit-int",
+                    "-Wno-implicit-int",
+                    "-Wimplicit-int",
+                ],
+                "implicit.c",
+                1,
+                "error: type defaults to 'int' in declaration of 'x'",
+            ),
+            (
+                "--clang-mode",
+                &[
+                    "-std=gnu17",
+                    "-Wno-implicit-function-declaration",
+                    "-Wall",
+                    "-Wno-error=implicit-function-declaration",
+                ],
+                "undeclared.c",
+                0,
+                "warning: call to undeclared function 'frob'",
+            ),
+            (
+                "--clang-mode",
+                &[
+                    "-std=gnu17",
+                    "-Werror=implicit-function-declaration",
+                    "-Wno-implicit-function-declaration",
+                    "-Wimplicit-function-declaration",
+                ],
+                "undeclared.c",
+                0,
+                "warning: call to undeclared function 'frob'",
+            ),
+        ] {
+            let mut args = vec!["-isystem", "sys", "-fsyntax-only"];
+            args.extend_from_slice(options);
+            args.push(file);
+            let output = directory.bcc(mode, &args);
+            let stderr = stderr(&output);
+            assert_eq!(
+                output.status.code(),
+                Some(status),
+                "{mode} {args:?}: {stderr}"
+            );
+            if message.is_empty() {
+                assert_eq!(stderr, "", "{mode} {args:?}");
+            } else {
+                assert!(stderr.contains(message), "{mode} {args:?}: {stderr}");
+            }
+        }
+    }
+
     /// TCC knows only its own few `__builtin_` names (TCC mob `tcctok.h`
     /// and `tccdefs.h`): a call to any other is an implicit declaration of
     /// an ordinary function, which the program may define. Its builtins

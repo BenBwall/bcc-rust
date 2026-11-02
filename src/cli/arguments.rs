@@ -333,7 +333,11 @@ impl Cli {
         let configuration =
             CompilerConfiguration::new(self.standard.standard, ExtensionPolicy::Allow)
                 .with_gnu_extensions(self.standard.gnu);
-        let configuration = configuration.with_target(self.target);
+        // Warning options read the identity: Clang's `-Wno-X` forgets an
+        // earlier `-Werror=X`, GCC's keeps it.
+        let configuration = configuration
+            .with_target(self.target)
+            .with_compiler_identity(self.compiler_identity.into());
         self.language_option
             .iter()
             .filter_map(|option| LanguageFlag::parse(option))
