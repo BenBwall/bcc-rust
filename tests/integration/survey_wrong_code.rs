@@ -727,6 +727,34 @@ mod tests {
         prints_on_every_back_end("--compiler-identity=gcc", source, &["-w"], &expected);
     }
 
+    /// Under `-fsignaling-nans` a signaling NaN constant is converted to
+    /// another floating type at run time, raising "invalid", as GCC does at
+    /// `-O0`, whether it is an arm of a `?:`, nested in one, cast (the last
+    /// one unconditionally) or an initializer: the fold that saturates
+    /// floating constants for GCC leaves it alone. Built only: the
+    /// interpreter has no floating-point environment.
+    #[test]
+    fn signaling_nan_conversions_keep_their_exception() {
+        let source = b"#include <stdio.h>\n\
+            #include <fenv.h>\n\
+            struct S { int x : 5; };\n\
+            __attribute__((noinline)) void f(int c) {\n\
+              feclearexcept(FE_ALL_EXCEPT); volatile double a = c ? __builtin_nansf(\"\") : 1.0; int ea = !!fetestexcept(FE_INVALID);\n\
+              feclearexcept(FE_ALL_EXCEPT); volatile float b = (float)(c ? __builtin_nans(\"\") : 1.0); int eb = !!fetestexcept(FE_INVALID);\n\
+              feclearexcept(FE_ALL_EXCEPT); volatile long double d = c ? (c ? __builtin_nans(\"\") : 2.0) : 1.0L; int ed = !!fetestexcept(FE_INVALID);\n\
+              feclearexcept(FE_ALL_EXCEPT); volatile double e[1] = { c ? __builtin_nansf(\"\") : 1.0 }; int ee = !!fetestexcept(FE_INVALID);\n\
+              feclearexcept(FE_ALL_EXCEPT); volatile double g = (double)__builtin_nansf(\"\"); int eg = !!fetestexcept(FE_INVALID);\n\
+              printf(\"%d %d %d %d %d\\n\", ea, eb, ed, ee, eg);\n\
+            }\n\
+            int main(void) { f(0); f(1); return 0; }\n";
+        builds_on_every_back_end(
+            "--compiler-identity=gcc",
+            source,
+            &["-w", "-fsignaling-nans", "-lm"],
+            "0 0 0 0 1\n1 1 1 1 1\n",
+        );
+    }
+
     /// A trailing array member reached through a pointer may extend past
     /// its bound, as a flexible array member does, so GCC and Clang answer
     /// `__builtin_object_size` mode 1 for it from the complete object:

@@ -318,7 +318,9 @@ pub(super) fn convert_constant(
     to: Type,
     signaling_nans: bool,
 ) -> Option<u128> {
-    if to.half_format().is_some() {
+    // The signaling status is read from the encoding itself: the
+    // conversions into binary128 quiet a NaN.
+    if to.half_format().is_some() || (signaling_nans && signaling(bits, from)) {
         return None;
     }
     let value = match from {
@@ -328,10 +330,26 @@ pub(super) fn convert_constant(
         | Type::F128 => Binary128::from_bits(bits),
         | _ => return None,
     };
-    if signaling_nans && value.is_signaling() {
-        return None;
-    }
     floats::binary128_bits(value, to)
+}
+
+/// Whether `bits` encodes a signaling NaN of the floating type `from`: an
+/// exponent of all ones, a nonzero fraction, and the quiet bit, the
+/// fraction's highest, clear. The x87 format's explicit integer bit is no
+/// part of the fraction.
+fn signaling(bits: u128, from: Type) -> bool {
+    let (exponent_bits, fraction_bits, explicit) = match from {
+        | Type::F32 => (8, 23, false),
+        | Type::F64 => (11, 52, false),
+        | Type::F80 => (15, 63, true),
+        | Type::F128 => (15, 112, false),
+        | _ => return false,
+    };
+    let shift = fraction_bits + u32::from(explicit);
+    let exponent = (bits >> shift) & ((1_u128 << exponent_bits) - 1);
+    let fraction = bits & ((1_u128 << fraction_bits) - 1);
+    let quiet = 1_u128 << (fraction_bits - 1);
+    exponent == (1_u128 << exponent_bits) - 1 && fraction != 0 && fraction & quiet == 0
 }
 
 /// The bound of an integer `width` bits wide and of signedness `signed`
@@ -404,6 +422,48 @@ fn saturate(encoding: u128, from: Type, width: u32, signed: bool) -> Option<i128
 mod tests {
     use super::saturate;
     use crate::ir::Type;
+
+    #[test]
+    fn signaling_nans_are_read_from_their_encoding() {
+        use super::{
+            convert_constant,
+            signaling,
+        };
+        let f32 = |value: u32| u128::from(value);
+        let f64 = |value: u64| u128::from(value);
+        assert!(signaling(f32(0x7FA0_0000), Type::F32));
+        assert!(!signaling(f32(0x7FC0_0000), Type::F32));
+        assert!(!signaling(f32(0x7F80_0000), Type::F32));
+        assert!(signaling(f64(0xFFF4_0000_0000_0000), Type::F64));
+        assert!(!signaling(f64(0x7FF8_0000_0000_0000), Type::F64));
+        // x87: integer bit set, quiet bit (62) clear, payload nonzero.
+        assert!(signaling(
+            0x7FFF_u128 << 64 | 0xA000_0000_0000_0000,
+            Type::F80
+        ));
+        assert!(!signaling(
+            0x7FFF_u128 << 64 | 0xC000_0000_0000_0000,
+            Type::F80
+        ));
+        assert!(!signaling(
+            0x7FFF_u128 << 64 | 0x8000_0000_0000_0000,
+            Type::F80
+        ));
+        assert!(signaling(0x7FFF_4000_u128 << 96, Type::F128));
+        assert!(!signaling(0x7FFF_8000_u128 << 96, Type::F128));
+        // Under -fsignaling-nans a signaling NaN is not folded; otherwise it
+        // folds, quieted, as GCC folds it.
+        assert_eq!(
+            convert_constant(f32(0x7FA0_0000), Type::F32, Type::F64, true),
+            None
+        );
+        assert!(convert_constant(f32(0x7FA0_0000), Type::F32, Type::F64, false).is_some());
+        assert!(convert_constant(f32(0x7FC0_0000), Type::F32, Type::F64, true).is_some());
+        assert_eq!(
+            convert_constant(f64(0x7FF4_0000_0000_0000), Type::F64, Type::F32, true),
+            None
+        );
+    }
 
     #[test]
     fn out_of_range_constants_saturate_as_gcc_folds_them() {
