@@ -315,7 +315,13 @@ pub(super) fn header_tree(context: &Context<'_>) {
     let arena = Bump::new();
     let mut text = ArenaString::new_in(&arena);
     let clang = context.configuration.compiler_identity().rules() == RuleSet::Clang;
-    for entry in context.include_entries.iter().flatten() {
+    // `-H` leaves out the headers the command line forces.
+    for entry in context
+        .include_entries
+        .iter()
+        .flatten()
+        .filter(|entry| !entry.forced)
+    {
         for _ in 0..entry.depth {
             text.push('.');
         }

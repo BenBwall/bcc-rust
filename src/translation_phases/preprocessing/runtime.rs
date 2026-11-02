@@ -135,8 +135,8 @@ pub(super) struct PreprocessorState<'pp> {
     /// this vector stays empty, keeping its capacity.
     file_frames:                    ArenaVec<'pp, FileFrame<'pp>>,
     pub(super) command_line_file:   Option<u32>,
-    /// The nesting depth of the default header (`Context::preinclude`)
-    /// while its headers are read, which `-H` leaves out with it.
+    /// The nesting depth of a command-line include while its headers are
+    /// read, which `-H` leaves out with it.
     pub(super) unlisted_depth:      Option<usize>,
     /// Provenance of open conditionals is owned because token iteration
     /// compacts temporary preprocessor provenance while groups remain open.

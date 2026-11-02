@@ -1116,6 +1116,75 @@ mod tests {
         }
     }
 
+    /// `-H` leaves out the `-include` files and the headers they include,
+    /// as GCC and Clang do, while `/showIncludes` lists the `/FI` ones, as
+    /// clang-cl does.
+    #[test]
+    fn header_trees_leave_out_forced_includes() {
+        let directory = Directory::new();
+        directory.write("forced.h", "#include \"sub.h\"\n");
+        directory.write("sub.h", "int s;\n");
+        directory.write("main.h", "int mh;\n");
+        directory.write("m.c", "#include \"main.h\"\nint m;\n");
+        let tree = |output: &Output| -> Vec<String> {
+            stderr(output)
+                .lines()
+                .filter(|line| line.starts_with(". ") || line.starts_with("Note: including"))
+                .map(str::to_owned)
+                .collect()
+        };
+        // Clang names a header beside the main file `./`, `.\\` escaped on
+        // Windows, and clang-cl's `/showIncludes` `.\` unescaped.
+        let (here, cl_here) = if cfg!(windows) {
+            (r".\\", r".\")
+        } else {
+            ("./", "./")
+        };
+        let clang_main = format!(". {here}main.h");
+        for (mode, expected) in [
+            ("--gcc-mode", ". main.h"),
+            ("--clang-mode", clang_main.as_str()),
+        ] {
+            let output = directory.bcc(
+                mode,
+                &["-H", "-fsyntax-only", "-include", "forced.h", "m.c"],
+            );
+            succeeds(&output);
+            assert_eq!(tree(&output), [expected], "{mode}: {}", stderr(&output));
+        }
+        // A guarded header forced and then included by the main file: GCC
+        // lists the main file's include, as its only listed one; Clang
+        // lists neither.
+        directory.write(
+            "guarded.h",
+            "#ifndef GUARDED_H\n#define GUARDED_H\n#include \"sub.h\"\n#endif\n",
+        );
+        directory.write("g.c", "#include \"guarded.h\"\nint g;\n");
+        for (mode, expected) in [("--gcc-mode", &[". guarded.h"][..]), ("--clang-mode", &[])] {
+            let output = directory.bcc(
+                mode,
+                &["-H", "-fsyntax-only", "-include", "guarded.h", "g.c"],
+            );
+            succeeds(&output);
+            assert_eq!(tree(&output), expected, "{mode}: {}", stderr(&output));
+        }
+        let output = directory.bcc(
+            "--clang-cl-mode",
+            &["/nologo", "/Zs", "/showIncludes", "/FIforced.h", "m.c"],
+        );
+        succeeds(&output);
+        assert_eq!(
+            tree(&output),
+            [
+                format!("Note: including file: {cl_here}forced.h"),
+                format!("Note: including file:  {cl_here}sub.h"),
+                format!("Note: including file: {cl_here}main.h")
+            ],
+            "{}",
+            stderr(&output)
+        );
+    }
+
     /// `-H` leaves out GCC's default header and every header it includes,
     /// as GCC does, and lists the main file's headers after it.
     #[test]
