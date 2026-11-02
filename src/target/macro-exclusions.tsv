@@ -19,7 +19,6 @@ __FPCLASS_POSZERO	Floating classification intrinsics are not implemented.
 __FPCLASS_QNAN	Floating classification intrinsics are not implemented.
 __FPCLASS_SNAN	Floating classification intrinsics are not implemented.
 __FXSR__	Vector/CPU intrinsics, inline assembly and address-space semantics are not implemented.
-__GCC_ASM_FLAG_OUTPUTS__	Vector/CPU intrinsics, inline assembly and address-space semantics are not implemented.
 __GCC_CONSTRUCTIVE_SIZE	Vector/CPU intrinsics, inline assembly and address-space semantics are not implemented.
 __GCC_DESTRUCTIVE_SIZE	Vector/CPU intrinsics, inline assembly and address-space semantics are not implemented.
 __GCC_HAVE_DWARF2_CFI_ASM	DWARF CFI assembly and unwind code generation are not implemented.

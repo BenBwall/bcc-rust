@@ -29,6 +29,10 @@ mod tests {
     /// Exits with 0, or with the number of the first check that fails. The
     /// 64-bit operands are `long long`, which `long` is not on Windows.
     const PROGRAM: &str = r#"
+/* GCC and Clang announce the `=@ccCOND` outputs `equal` uses. */
+#ifndef __GCC_ASM_FLAG_OUTPUTS__
+#error "no flag outputs"
+#endif
 static unsigned long long rdtsc(void) {
     unsigned lo, hi;
     __asm__ __volatile__("rdtsc" : "=a"(lo), "=d"(hi));
