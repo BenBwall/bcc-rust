@@ -121,6 +121,25 @@ impl<'tu> Parser<'_, 'tu, '_> {
         {
             return;
         }
+        // Plain `_Complex` means `_Complex double`: Clang warns, GCC only
+        // under `-pedantic`; `-pedantic-errors` makes it an error in both.
+        let plain_complex = matches!(error_type, ParserErrorType::IncompleteComplexTypeSpecifier);
+        let plain_complex_severity = plain_complex.then(|| {
+            let baseline = if self.context.configuration.compiler_identity().rules()
+                == crate::configuration::RuleSet::Clang
+            {
+                crate::translation_phases::DiagnosticPolicy::Warning
+            } else {
+                crate::translation_phases::DiagnosticPolicy::Extension
+            };
+            crate::translation_phases::policy_severity(
+                self.context.configuration.extension_policy(),
+                baseline,
+            )
+        });
+        if plain_complex_severity == Some(None) {
+            return;
+        }
         let insertion_point = if error_type.expects_terminating_semicolon() {
             self.semicolon_insertion_point(token)
         } else {
@@ -134,6 +153,8 @@ impl<'tu> Parser<'_, 'tu, '_> {
                     crate::translation_phases::DiagnosticPolicy::Warning,
                 )
                 .unwrap_or(ErrorSeverity::Warning)
+            } else if let Some(Some(severity)) = plain_complex_severity {
+                severity
             } else if matches!(error_type, ParserErrorType::EmptyTranslationUnit) {
                 crate::translation_phases::policy_severity(
                     self.context.configuration.extension_policy(),
@@ -1525,8 +1546,8 @@ impl ParserErrorType<'_> {
             .label("not a type name in scope")
             .note("C99 §6.7.7: an identifier names a type only after a `typedef` declares it"),
             | Self::IncompleteComplexTypeSpecifier =>
-                new("`_Complex` requires `float`, `double`, or `long double`")
-                    .label("incomplete complex type")
+                new("plain `_Complex` requires a type specifier; assuming `_Complex double`")
+                    .label("no `float`, `double` or `long double` here")
                     .note(SPECIFIER_COMBINATIONS_NOTE),
             | Self::BothStaticAndPointerInArrayDirectDeclarator =>
                 new("`static` and `*` in one array declarator")

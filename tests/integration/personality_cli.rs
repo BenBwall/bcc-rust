@@ -467,6 +467,45 @@ mod tests {
         }
     }
 
+    /// Plain `_Complex` means `_Complex double` to GCC and Clang: Clang
+    /// warns, GCC only under `-pedantic`, and `-pedantic-errors` refuses it
+    /// in both (gcc.c-torture/execute/20070614-1.c).
+    #[test]
+    fn plain_complex_means_complex_double() {
+        if !cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+            return;
+        }
+        let directory = Directory::new();
+        directory.write(
+            "plain.c",
+            "_Complex v = 3.0 + 1.0i;\n_Static_assert(sizeof v == 2 * sizeof(double), \
+             \"\");\n_Complex twice(_Complex z) { return z + z; }\nint main(void) { return \
+             (int)__real__ twice(v) + (int)__imag__ twice(v); }\n",
+        );
+        for (mode, options, warns) in [
+            ("--gcc-mode", &[][..], false),
+            ("--gcc-mode", &["-pedantic"], true),
+            ("--clang-mode", &[], true),
+        ] {
+            let mut args = options.to_vec();
+            args.extend(["plain.c", "-o", "plain"]);
+            let output = directory.bcc(mode, &args);
+            succeeds(&output);
+            assert_eq!(
+                stderr(&output).contains("_Complex"),
+                warns,
+                "{mode} {options:?}: {}",
+                stderr(&output)
+            );
+            let run = Command::new(directory.path("plain")).output().unwrap();
+            assert_eq!(run.status.code(), Some(8), "{mode} {options:?}");
+        }
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            let output = directory.bcc(mode, &["-pedantic-errors", "-fsyntax-only", "plain.c"]);
+            assert!(!output.status.success(), "{mode}");
+        }
+    }
+
     /// TCC names no warning options, so its diagnostics carry no `[-W…]`
     /// suffix, as GCC's and Clang's do.
     #[test]
