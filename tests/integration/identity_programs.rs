@@ -94,6 +94,14 @@ mod tests {
         matches_the_claimed_compiler_in("inferred_auto.c", "-std=gnu2x", true);
     }
 
+    /// C23 `constexpr` objects as named constants in integer constant
+    /// expressions, static initializers and code, at file and block scope,
+    /// with GCC's `constexpr` compound literals; on wasm32 too.
+    #[test]
+    fn constexpr_objects_match_the_claimed_compiler() {
+        matches_the_claimed_compiler_in("constexpr_objects.c", "-std=gnu2x", true);
+    }
+
     /// Signed left shifts that wrap, and `__LINE__` as a macro argument in
     /// a replacement list.
     #[test]

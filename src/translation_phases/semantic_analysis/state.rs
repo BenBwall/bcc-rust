@@ -118,6 +118,10 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
             enum_ranges: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             inferences: ArenaVec::new_in(scratch),
             inferred_leaves: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            constexpr_objects: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            named_objects: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            named_constants: ArenaMap::with_hasher_in(FxBuildHasher, tu),
+            underspecified: 0,
         };
         analyzer.scopes.push(Scope {
             parent: None,

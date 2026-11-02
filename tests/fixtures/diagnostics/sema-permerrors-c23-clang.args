@@ -1,0 +1,1 @@
+--compiler-identity=clang --diagnostic-format=clang -std=c23

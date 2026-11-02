@@ -115,12 +115,46 @@ pub(crate) enum SemanticErrorKind {
     InlineInternalReference,
     /// C99: §6.7.4p3, p. 112; PDF p. 124.
     InlineStaticObject,
+    /// `return` with a value in a function returning `void`, under
+    /// `-Wreturn-mismatch`; the name is the function's.
     /// C99: §6.8.6.4p1, p. 139; PDF p. 151.
-    VoidReturnValue,
+    VoidReturnMismatch,
+    /// `return;` in a function returning a value, under
+    /// `-Wreturn-mismatch`; the name is the function's.
     /// C99: §6.8.6.4p1, p. 139; PDF p. 151.
-    MissingReturnValue,
-    /// C99: §6.8.6.4p1, p. 139; PDF p. 151.
-    MissingReturnValueWarning,
+    ReturnMismatch,
+    /// A call to an undeclared identifier, which declares it as C89 did,
+    /// under `-Wimplicit-function-declaration`.
+    /// C99: §6.5.1p2, p. 69; PDF p. 81; C89 §3.3.2.2 declared it
+    /// `extern int f();`.
+    ImplicitFunctionDeclaration,
+    /// Declaration specifiers without a type specifier, under
+    /// `-Wimplicit-int`; the name is the declared one.
+    /// C99: §6.7.2p2, p. 99; PDF p. 111.
+    ImplicitInt,
+    /// A function definition's declaration specifiers without a type
+    /// specifier, under `-Wimplicit-int`.
+    /// C99: §6.7.2p2, p. 99; PDF p. 111.
+    ImplicitIntReturn,
+    /// An unnamed prototype parameter whose specifiers name no type
+    /// (`int f(const);`), under `-Wimplicit-int`.
+    /// C99: §6.7.2p2, p. 99; PDF p. 111.
+    ImplicitIntTypeName,
+    /// An identifier-list parameter without a declaration, under
+    /// `-Wimplicit-int`; the name is the parameter's.
+    /// C99: §6.9.1p6, p. 141; PDF p. 153.
+    ImplicitIntParameter,
+    /// A nonempty identifier list in a function declarator that is no
+    /// definition, under GCC's `-Wdeclaration-missing-parameter-type`.
+    /// C99: §6.7.5.3p3, p. 118; PDF p. 130.
+    DeclarationMissingParameterType,
+    /// Clang: implicit int in C23, an error no option controls.
+    /// C23: §6.7.3.1p2, p. 103; PDF p. 116.
+    TypeSpecifierRequired,
+    /// Clang and clang-cl: a nonempty identifier list in a function
+    /// declarator that is no definition, an error no option controls.
+    /// C99: §6.7.5.3p3, p. 118; PDF p. 130.
+    IdentifierListDeclaration,
     /// C99: §6.8.6.4p3, p. 139; PDF p. 151.
     InvalidReturnConversion,
     /// C99: §6.8.5p3, p. 135; PDF p. 147.
@@ -306,6 +340,10 @@ pub(crate) enum SemanticErrorKind {
     AnnotationArgument,
     /// C99: §6.5.2.5p1, p. 75; PDF p. 87.
     InvalidCompoundLiteral,
+    /// Clang: a compound literal with a storage-class specifier, which C23
+    /// allows but Clang 23 does not parse ("expected expression").
+    /// C23 (N3220): §6.5.3.6 paragraph 4, p. 79; PDF p. 92.
+    LiteralStorageClass,
     /// C99: §6.8.4.1p1, p. 133; PDF p. 145.
     InvalidCondition,
     /// C99: §6.8.4.2p1, p. 134; PDF p. 146.
@@ -645,6 +683,9 @@ pub(crate) enum SemanticErrorKind {
     /// C23 (N3220): §6.7.10 paragraphs 1-2, pp. 134-135; PDF pp. 147-148;
     /// §6.7.1 paragraph 12, p. 98; PDF p. 111.
     InvalidInference(super::inference::InferenceFault),
+    /// C23 `constexpr` object and compound literal constraints.
+    /// C23 (N3220): §6.7.2 paragraphs 2-6, p. 99; PDF p. 112.
+    InvalidConstexpr(ConstexprFault),
     /// Clang `-Wunknown-attributes`: an attribute name no rule knows.
     /// C23: §6.7.13.2p2, p. 143; PDF p. 156 (unrecognized attributes are
     /// ignored). GNU extension: GCC manual, "Attribute Syntax".
@@ -835,6 +876,7 @@ impl SemanticErrorKind {
             | Self::ImmediateOutOfRange { .. } => "outside the builtin's valid range",
             | Self::InvalidAsm(fault) => fault.label(),
             | Self::InvalidInference(fault) => fault.label(),
+            | Self::InvalidConstexpr(fault) => fault.label(),
             | Self::CallAttribute | Self::CallAttributeWarning => "function attribute diagnostic",
             | Self::NoViableOverload => "no viable overload",
             | Self::AmbiguousOverload => "ambiguous overload",
@@ -918,6 +960,7 @@ impl SemanticErrorKind {
             | Self::SelectAnySubject => "not a data item with external linkage",
             | Self::InvalidArgumentType => "argument does not convert to the parameter type",
             | Self::InvalidCompoundLiteral => "invalid compound literal type",
+            | Self::LiteralStorageClass => "Clang takes no storage class here",
             | Self::InvalidCondition => "condition is not scalar",
             | Self::InvalidSwitchExpression => "controlling expression is not an integer",
             | Self::FailedAssertion => "assertion is false",
@@ -988,8 +1031,16 @@ impl SemanticErrorKind {
             | Self::UnusedStaticFunction => "never defined",
             | Self::InlineInternalReference => "internal identifier in an inline definition",
             | Self::InlineStaticObject => "modifiable static object in an inline definition",
-            | Self::VoidReturnValue => "value returned from a void function",
-            | Self::MissingReturnValue | Self::MissingReturnValueWarning => "no return value",
+            | Self::VoidReturnMismatch => "value returned from a void function",
+            | Self::ReturnMismatch => "no return value",
+            | Self::ImplicitFunctionDeclaration => "undeclared function called here",
+            | Self::ImplicitInt
+            | Self::ImplicitIntReturn
+            | Self::ImplicitIntTypeName
+            | Self::TypeSpecifierRequired => "no type specifier",
+            | Self::ImplicitIntParameter => "undeclared parameter",
+            | Self::DeclarationMissingParameterType | Self::IdentifierListDeclaration =>
+                "parameter names without types",
             | Self::InvalidReturnConversion => "value cannot be returned as the result type",
             | Self::InvalidForDeclaration => "not an automatic object",
             | Self::DuplicateLabel => "label defined again here",
@@ -1130,7 +1181,8 @@ impl SemanticErrorKind {
                     | crate::configuration::DiagnosticGroup::PointerIntegerCompare => "comparison between pointer and integer",
                     | crate::configuration::DiagnosticGroup::OrderedCompareFunctionPointers => "ordered comparison of function pointers",
                     | crate::configuration::DiagnosticGroup::OrderedPointerIntegerCompare => "ordered comparison between pointer and integer",
-                    | crate::configuration::DiagnosticGroup::PointerTypeMismatch => "pointer type mismatch in conditional expression",
+                    | crate::configuration::DiagnosticGroup::PointerTypeMismatch
+                    | crate::configuration::DiagnosticGroup::GccConditionalPointerMismatch => "pointer type mismatch in conditional expression",
                     | crate::configuration::DiagnosticGroup::ConditionalTypeMismatch => "pointer/integer type mismatch in conditional expression",
                     | crate::configuration::DiagnosticGroup::PointerToIntCast
                     | crate::configuration::DiagnosticGroup::PointerToEnumCast
@@ -1162,7 +1214,14 @@ impl SemanticErrorKind {
                     | crate::configuration::DiagnosticGroup::PedanticOverflow
                     | crate::configuration::DiagnosticGroup::Conversion
                     | crate::configuration::DiagnosticGroup::LiteralConversion
-                    | crate::configuration::DiagnosticGroup::ExcessInitializers => "warning-group diagnostic",
+                    | crate::configuration::DiagnosticGroup::ExcessInitializers
+                    | crate::configuration::DiagnosticGroup::ImplicitFunctionDeclaration
+                    | crate::configuration::DiagnosticGroup::ImplicitLibraryFunction
+                    | crate::configuration::DiagnosticGroup::ImplicitInt
+                    | crate::configuration::DiagnosticGroup::Implicit
+                    | crate::configuration::DiagnosticGroup::ReturnMismatch
+                    | crate::configuration::DiagnosticGroup::VoidReturnMismatch
+                    | crate::configuration::DiagnosticGroup::DeclarationMissingParameterType => "warning-group diagnostic",
                 },
                 "C99 §6.5.16.1p1, §6.5.15p3, §6.5.9p2, §6.5.8p2, §6.5.2.2p2,p7, §6.8.6.4p3 and §6.7.8p11: pointer constraints require a diagnostic; a warning satisfies §5.1.1.3p1",
             ),
@@ -1437,6 +1496,7 @@ impl SemanticErrorKind {
             ),
             | Self::InvalidAsm(fault) => fault.explanation(),
             | Self::InvalidInference(fault) => fault.explanation(),
+            | Self::InvalidConstexpr(fault) => fault.explanation(),
             | Self::ImmediateOutOfRange { .. } => (
                 "argument value is outside the valid range",
                 "Clang x86 intrinsics: the immediate operand must lie in the builtin's \
@@ -1551,20 +1611,55 @@ impl SemanticErrorKind {
                 "C99 §6.7.4p3: an inline definition with external linkage contains no definition \
                  of a modifiable object with static storage duration",
             ),
-            | Self::VoidReturnValue => (
+            | Self::VoidReturnMismatch => (
                 "void function returns an expression",
                 "C99 §6.8.6.4p1: a return statement with an expression shall not appear in a \
                  function returning void",
             ),
-            | Self::MissingReturnValue => (
+            | Self::ReturnMismatch => (
                 "non-void function returns without a value",
-                "C99 §6.8.6.4p1: a return statement without an expression appears only in a \
-                 function returning void",
+                "C99 §6.8.6.4p1: a return statement without an expression shall only appear in a \
+                 function returning void; C89 permitted it",
             ),
-            | Self::MissingReturnValueWarning => (
-                "non-void function returns without a value",
-                "C99 §6.8.6.4p1: C99 requires a value; C89 and GNU modes retain this form with a \
-                 warning",
+            | Self::ImplicitFunctionDeclaration => (
+                "implicit declaration of function",
+                "C99 §6.5.1p2: an identifier is a primary expression only if it is declared; C89 \
+                 §3.3.2.2 declared an undeclared called identifier as `extern int f();`",
+            ),
+            | Self::ImplicitInt => (
+                "type specifier missing, defaults to `int`",
+                "C99 §6.7.2p2: each declaration gives at least one type specifier; C89 defaulted \
+                 to `int`",
+            ),
+            | Self::ImplicitIntTypeName => (
+                "type specifier missing in a parameter, defaults to `int`",
+                "C99 §6.7.2p2: each declaration gives at least one type specifier; C89 defaulted \
+                 to `int`",
+            ),
+            | Self::ImplicitIntReturn => (
+                "return type defaults to `int`",
+                "C99 §6.7.2p2: each declaration gives at least one type specifier; C89 defaulted \
+                 to `int`",
+            ),
+            | Self::ImplicitIntParameter => (
+                "parameter was not declared, defaults to `int`",
+                "C99 §6.9.1p6: every identifier in the identifier list shall be declared; C89 \
+                 defaulted to `int`",
+            ),
+            | Self::TypeSpecifierRequired => (
+                "a type specifier is required for all declarations",
+                "C23 §6.7.3.1p2: each declaration gives at least one type specifier unless its \
+                 type is inferred",
+            ),
+            | Self::IdentifierListDeclaration => (
+                "a parameter list without types is only allowed in a function definition",
+                "C99 §6.7.5.3p3: an identifier list in a function declarator that is not part of \
+                 a definition shall be empty",
+            ),
+            | Self::DeclarationMissingParameterType => (
+                "parameter names without types in a function declaration",
+                "C99 §6.7.5.3p3: an identifier list in a function declarator that is not part of \
+                 a definition shall be empty",
             ),
             | Self::InvalidReturnConversion => (
                 "return expression cannot be converted to the function result type",
@@ -1772,6 +1867,11 @@ impl SemanticErrorKind {
                 "compound literal requires a non-variable object type",
                 "C99 §6.5.2.5p1: a compound literal specifies an object type or an array of \
                  unknown size, not a variable-length array",
+            ),
+            | Self::LiteralStorageClass => (
+                "storage-class specifier in a compound literal",
+                "C23 §6.5.3.6p4: a compound literal takes `constexpr`, `register`, `static` or \
+                 `thread_local`, which Clang 23 does not parse",
             ),
             | Self::InvalidCondition => (
                 "condition requires scalar type",
@@ -2257,7 +2357,133 @@ impl SemanticErrorKind {
     }
 }
 
+impl SemanticErrorKind {
+    /// The warning group that controls this diagnostic, if any.
+    pub(crate) const fn group(self) -> Option<crate::configuration::DiagnosticGroup> {
+        use crate::configuration::DiagnosticGroup as G;
+        match self {
+            | Self::PointerConstraint(group) => Some(group),
+            | Self::ImplicitFunctionDeclaration => Some(G::ImplicitFunctionDeclaration),
+            | Self::ImplicitLibraryFunction(_) => Some(G::ImplicitLibraryFunction),
+            | Self::ImplicitInt
+            | Self::ImplicitIntReturn
+            | Self::ImplicitIntParameter
+            | Self::ImplicitIntTypeName => Some(G::ImplicitInt),
+            | Self::ReturnMismatch => Some(G::ReturnMismatch),
+            | Self::VoidReturnMismatch => Some(G::VoidReturnMismatch),
+            | Self::DeclarationMissingParameterType => Some(G::DeclarationMissingParameterType),
+            | _ => self.attribute_group(),
+        }
+    }
+}
+
 impl SemanticError {
+    /// GCC 14's, Clang 23's and TCC's own words for the C type-safety
+    /// diagnostics those compilers make errors or warnings by default, in
+    /// their diagnostic formats, with the `-W` option each names (none for
+    /// TCC, and none for a Clang error that no option controls); other
+    /// diagnostics, and the other formats, keep bcc's.
+    fn compiler_message<'d>(
+        &self,
+        context: &Context<'_>,
+        arena: &'d Bump,
+    ) -> Option<(&'d str, Option<&'static str>)> {
+        use crate::configuration::DiagnosticFormat as F;
+        let format = context.configuration.diagnostic_format();
+        let name = self.name.map_or("", |name| context.string_cache.at(name));
+        let c99 = context.configuration.standard() >= crate::configuration::CStandard::C99;
+        let group = self
+            .kind
+            .group()
+            .and_then(crate::configuration::DiagnosticGroup::name);
+        let iso = if c99 {
+            "; ISO C99 and later do not support implicit int"
+        } else {
+            ""
+        };
+        let message = match (format, self.kind) {
+            // The conversion's words, which semantic analysis put together
+            // with the types (`Analyzer::conversion_wording`); GCC has one
+            // group for all incompatible pointers.
+            | (F::Gcc | F::Clang, SemanticErrorKind::PointerConstraint(group))
+                if self.name.is_some() =>
+            {
+                let option = if format == F::Gcc
+                    && group
+                        == crate::configuration::DiagnosticGroup::IncompatibleFunctionPointerTypes
+                {
+                    crate::configuration::DiagnosticGroup::IncompatiblePointerTypes.name()
+                } else {
+                    group.name()
+                };
+                return Some((arena.alloc_str(name), option));
+            },
+            | (F::Gcc, SemanticErrorKind::ImplicitLibraryFunction(_)) if !c99 => {
+                let message = format_in!(
+                    arena,
+                    "incompatible implicit declaration of built-in function '{name}'"
+                );
+                return Some((message, Some("builtin-declaration-mismatch")));
+            },
+            | (F::Clang, SemanticErrorKind::ImplicitFunctionDeclaration) if c99 => format_in!(
+                arena,
+                "call to undeclared function '{name}'; ISO C99 and later do not support implicit \
+                 function declarations"
+            ),
+            | (
+                F::Gcc | F::Tcc,
+                SemanticErrorKind::ImplicitFunctionDeclaration
+                | SemanticErrorKind::ImplicitLibraryFunction(_),
+            )
+            | (F::Clang, SemanticErrorKind::ImplicitFunctionDeclaration) =>
+                format_in!(arena, "implicit declaration of function '{name}'"),
+            | (F::Clang, SemanticErrorKind::ImplicitLibraryFunction(ty)) if c99 => format_in!(
+                arena,
+                "call to undeclared library function '{name}' with type '{}'; ISO C99 and later \
+                 do not support implicit function declarations",
+                context.string_cache.at(ty)
+            ),
+            | (F::Clang, SemanticErrorKind::ImplicitLibraryFunction(ty)) => format_in!(
+                arena,
+                "implicitly declaring library function '{name}' with type '{}'",
+                context.string_cache.at(ty)
+            ),
+            | (F::Gcc, SemanticErrorKind::ImplicitInt) =>
+                format_in!(arena, "type defaults to 'int' in declaration of '{name}'"),
+            | (F::Gcc, SemanticErrorKind::ImplicitIntReturn) => "return type defaults to 'int'",
+            | (F::Gcc, SemanticErrorKind::ImplicitIntTypeName) =>
+                "type defaults to 'int' in type name",
+            | (F::Gcc, SemanticErrorKind::ImplicitIntParameter) =>
+                format_in!(arena, "type of '{name}' defaults to 'int'"),
+            | (
+                F::Clang,
+                SemanticErrorKind::ImplicitInt
+                | SemanticErrorKind::ImplicitIntReturn
+                | SemanticErrorKind::ImplicitIntTypeName,
+            ) => format_in!(arena, "type specifier missing, defaults to 'int'{iso}"),
+            | (F::Clang, SemanticErrorKind::ImplicitIntParameter) => format_in!(
+                arena,
+                "parameter '{name}' was not declared, defaults to 'int'{iso}"
+            ),
+            | (F::Gcc, SemanticErrorKind::ReturnMismatch) =>
+                "'return' with no value, in function returning non-void",
+            | (F::Gcc, SemanticErrorKind::VoidReturnMismatch) =>
+                "'return' with a value, in function returning void",
+            | (F::Clang, SemanticErrorKind::ReturnMismatch) =>
+                format_in!(arena, "non-void function '{name}' should return a value"),
+            | (F::Clang, SemanticErrorKind::VoidReturnMismatch) =>
+                format_in!(arena, "void function '{name}' should not return a value"),
+            | (F::Tcc, SemanticErrorKind::ReturnMismatch) => "'return' with no value",
+            | (F::Tcc, SemanticErrorKind::VoidReturnMismatch) => "void function returns a value",
+            | (F::Gcc, SemanticErrorKind::DeclarationMissingParameterType) =>
+                "parameter names (without types) in function declaration",
+            | (F::Clang, SemanticErrorKind::TypeSpecifierRequired) =>
+                return Some(("a type specifier is required for all declarations", None)),
+            | _ => return None,
+        };
+        Some((message, if format == F::Tcc { None } else { group }))
+    }
+
     /// TCC's own words for the diagnostics its users meet most, in TCC's
     /// diagnostic format (TCC mob, `tccgen.c` and `tccpp.c`); other
     /// diagnostics keep bcc's.
@@ -2344,6 +2570,12 @@ impl ToDiagnostic for SemanticError {
             )
         } else if let SemanticErrorKind::PragmaPackShow(value) = self.kind {
             format_in!(arena, "value of #pragma pack(show) == {value}")
+        } else if matches!(
+            self.kind,
+            SemanticErrorKind::ReturnMismatch | SemanticErrorKind::VoidReturnMismatch
+        ) {
+            // The name, the function's, is for Clang's wording.
+            message
         } else if let Some(name) = self.name {
             format_in!(
                 arena,
@@ -2363,10 +2595,7 @@ impl ToDiagnostic for SemanticError {
         } else {
             message
         };
-        let group = match self.kind {
-            | SemanticErrorKind::PointerConstraint(group) => Some(group),
-            | _ => self.kind.attribute_group(),
-        };
+        let group = self.kind.group();
         let message =
             if let Some(group) = group.and_then(crate::configuration::DiagnosticGroup::name) {
                 suffixed = true;
@@ -2374,9 +2603,13 @@ impl ToDiagnostic for SemanticError {
             } else {
                 message
             };
-        let (message, suffixed) = match self.tcc_message(context, arena) {
-            | Some(tcc) => (tcc, false),
-            | None => (message, suffixed),
+        let (message, suffixed) = match self.compiler_message(context, arena) {
+            | Some((text, Some(group))) => (format_in!(arena, "{text} [-W{group}]"), true),
+            | Some((text, None)) => (text, false),
+            | None => match self.tcc_message(context, arena) {
+                | Some(tcc) => (tcc, false),
+                | None => (message, suffixed),
+            },
         };
         let explanation = Explanation::new(arena, message);
         let explanation = if suffixed {
@@ -2449,7 +2682,6 @@ impl GetSeverity for SemanticError {
                 | SemanticErrorKind::PragmaPackIgnored
                 | SemanticErrorKind::EmptyCaseRange
                 | SemanticErrorKind::ReadOnlyLocation
-                | SemanticErrorKind::MissingReturnValueWarning
                 | SemanticErrorKind::PredefinedOutsideFunction
                 | SemanticErrorKind::InvalidAtomicOrder
                 | SemanticErrorKind::InvalidAtomicFailureOrder
@@ -2497,5 +2729,130 @@ impl GetPosition for SemanticError {
 impl GetSourceVectors for SemanticError {
     fn source_vectors(&self, _context: &mut Context<'_>) -> SourceVectors {
         self.source_vectors
+    }
+}
+
+/// Why a `constexpr` object or compound literal breaks the C23
+/// constraints on it.
+/// C23 (N3220): §6.7.2 paragraphs 2-6, p. 99; PDF p. 112.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ConstexprFault {
+    /// A function or a declaration without an initializer.
+    NotObject,
+    MissingInitializer,
+    /// An atomic, volatile or restrict-qualified object type.
+    Qualifiers,
+    /// A member with such a type, even recursively.
+    MemberQualifiers,
+    VariablyModified,
+    /// A value that is no constant expression.
+    NotConstant,
+    IntegerNotIce,
+    ArithmeticNotConstant,
+    PointerNotNull,
+    /// A conversion to the subobject's type changes the value.
+    NotRepresentable,
+    ComplexToReal,
+    /// GCC: more than one declarator.
+    MultipleDeclarators,
+    /// GCC: the object's name inside its own initializer.
+    SelfReference,
+    /// GCC: a redeclaration of an identifier of the same scope.
+    Redeclared,
+}
+
+impl ConstexprFault {
+    /// The short label of the diagnostic.
+    pub(super) const fn label(self) -> &'static str {
+        match self {
+            | Self::NotObject => "not an object definition",
+            | Self::MissingInitializer => "no initializer",
+            | Self::Qualifiers => "invalid qualifiers",
+            | Self::MemberQualifiers => "member with invalid qualifiers",
+            | Self::VariablyModified => "variably modified type",
+            | Self::NotConstant => "not a constant expression",
+            | Self::IntegerNotIce => "not an integer constant expression",
+            | Self::ArithmeticNotConstant => "not an arithmetic constant expression",
+            | Self::PointerNotNull => "not a null pointer",
+            | Self::NotRepresentable => "value changes in conversion",
+            | Self::ComplexToReal => "complex value",
+            | Self::MultipleDeclarators => "second declarator",
+            | Self::SelfReference => "used in its own initializer",
+            | Self::Redeclared => "already declared in this scope",
+        }
+    }
+
+    /// The message and note of the diagnostic.
+    pub(super) const fn explanation(self) -> (&'static str, &'static str) {
+        match self {
+            | Self::NotObject => (
+                "constexpr requires an initialized object declaration",
+                "C23 §6.7.2p5: a constexpr declaration defines an object and has an initializer; \
+                 constexpr functions are undefined behavior in C",
+            ),
+            | Self::MissingInitializer => (
+                "a constexpr object requires an initializer",
+                "C23 §6.7.2p5: the declaration shall be a definition and shall have an initializer",
+            ),
+            | Self::Qualifiers => (
+                "a constexpr object cannot have an atomic, volatile or restrict-qualified type",
+                "C23 §6.7.2p5: a constexpr object shall not have an atomic type or a type that is \
+                 volatile or restrict qualified",
+            ),
+            | Self::MemberQualifiers => (
+                "a member of a constexpr object has an atomic, volatile or restrict-qualified type",
+                "C23 §6.7.2p5: no member of a constexpr object, even recursively, shall have an \
+                 atomic type or a type that is volatile or restrict qualified",
+            ),
+            | Self::VariablyModified => (
+                "a constexpr object cannot have a variably modified type",
+                "C23 §6.7.2p5: a constexpr object shall not have a variably modified type",
+            ),
+            | Self::NotConstant => (
+                "constexpr initializer is not a constant expression",
+                "C23 §6.7.2p6: every value a constexpr object is initialized with is a constant \
+                 expression",
+            ),
+            | Self::IntegerNotIce => (
+                "constexpr integer initializer is not an integer constant expression",
+                "C23 §6.7.2p6: an integer subobject of a constexpr object is initialized by an \
+                 integer constant expression",
+            ),
+            | Self::ArithmeticNotConstant => (
+                "constexpr initializer is not an arithmetic constant expression",
+                "C23 §6.7.2p6: an arithmetic subobject of a constexpr object is initialized by an \
+                 arithmetic constant expression",
+            ),
+            | Self::PointerNotNull => (
+                "constexpr pointer initializer is not null",
+                "C23 §6.7.2p6: a pointer subobject of a constexpr object is initialized by a null \
+                 pointer",
+            ),
+            | Self::NotRepresentable => (
+                "constexpr initializer is not representable in the type of the object",
+                "C23 §6.7.2p5: the value of a constexpr initializer is exactly representable in \
+                 its target type; no conversion may change it",
+            ),
+            | Self::MultipleDeclarators => (
+                "constexpr may only be used with a single declarator",
+                "C23 §6.7.1p12: an underspecified declaration of more than one identifier is \
+                 implementation-defined; GCC rejects it",
+            ),
+            | Self::SelfReference => (
+                "a constexpr object is used in its own initializer",
+                "C23 §6.2.1p7: an underspecified identifier's scope starts when its definition is \
+                 completed; GCC rejects the use",
+            ),
+            | Self::Redeclared => (
+                "a constexpr declaration redeclares an identifier of the same scope",
+                "C23 §6.7.1p12: redeclaring an identifier of the same scope this way is \
+                 implementation-defined; GCC rejects it",
+            ),
+            | Self::ComplexToReal => (
+                "constexpr initializer for a real type has a complex type",
+                "C23 §6.7.2p6: an object of real floating type is initialized by a value of \
+                 integer or real floating type",
+            ),
+        }
     }
 }

@@ -157,6 +157,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 initializer,
             } => {
                 _ = self.work.pop();
+                if Self::constexpr_storage(type_name.declaration_specifiers.extensions) {
+                    self.underspecified += 1;
+                    self.work.push(Work::EndUnderspecified);
+                }
                 self.work.push(Work::CompoundInitializer(e, initializer));
                 self.work.push(Work::DiscardType);
                 // Clang recovers folded bounds here, where C99 §6.5.2.5p1

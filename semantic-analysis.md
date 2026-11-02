@@ -432,7 +432,7 @@ Stage-1 boundaries, with their current disposition:
   `__int16`, `__int32` and `__int64` are not: as in Clang, they are `char`,
   `short`, `int` and `long long`, and `signed` or `unsigned` selects that
   variant. Only alignment
-  specifiers, constexpr storage, MSVC pointer-size modifiers and
+  specifiers, MSVC pointer-size modifiers and
   attributes naming `align`, `packed`, `mode` or `ext_vector_type`
   (and non-vector `aligned`) make that one declaration's type unavailable; other
   attributes and the calling conventions that x86-64 ignores leave it intact. A
@@ -623,6 +623,25 @@ results round to the expression type. Integer arithmetic uses checked signed
 the late compiler-builtin division objects before LTO.
 Exceptional constant evaluation produces one primary diagnostic.
 
+C23 named constants (`named_constants.rs`) extend both evaluators. A
+`constexpr` object's binding, once `Work::InitializeDone` has checked its
+initializer, maps to that initializer (`Analyzer::named_objects`, shared by
+redeclarations), and an identifier naming it, a `.` member of a structure
+or union constant and a `constexpr` compound literal record the
+`ConstantPlace` they designate: an initializer, a byte offset into the
+object it initializes and, for a bit-field member, its bits from there.
+`Analyzer::read_named_constant` records each place past the copies of
+whole structures and unions that give it its value, so a chain of copies
+costs one step per copy, and gives a scalar place the value the
+initializer's plan stores there, a bit-field's truncated to its width,
+following the copies nested inside it; an integer one is an ICE
+operand, as is a cast of a floating one under GCC's identity
+(`valid_ice_operands` and `evaluate` take the recorded value). The places
+are retained (`SemanticTranslationUnit::named_constant`), so lowering
+copies a structure constant into a static object from its initializer's
+bytes. `language-standards.md` ("C23 `constexpr` objects") lists the
+constraints and each identity's choices.
+
 #### Initializer current objects
 
 `initializers.rs` implements §6.7.8p17-22 (pp. 126-128, PDF pp. 138-140) with
@@ -774,9 +793,9 @@ enforces the missing-name constraint when that parser policy is silent, includin
 typedef spellings that the parser cannot resolve. `[*]` is excluded from definition
 parameters while nested function prototypes retain prototype scope. Definitions
 check storage classes, complete return object types and declaration-list
-consistency. Missing K&R declarations bind `int` before the body: native in C89/C95,
-a constraint diagnostic in strict C99 and later, and shared implicit-int extension
-policy in GNU modes. This prevents accidental lookup of a same-named global.
+consistency. Missing K&R declarations bind `int` before the body, reported under
+`-Wimplicit-int` with the identity's severity (silent in C89, an error from C99 for
+GCC 14 and Clang). This prevents accidental lookup of a same-named global.
 
 `__func__` is a function-entry binding for a static const character array,
 including before its first use (§6.4.2.2p1, printed p. 52, PDF p. 64). Its

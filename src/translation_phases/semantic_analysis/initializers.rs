@@ -266,7 +266,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                             }
                             let errors_before_conversion = self.semantic_errors;
                             if matches!(self.types.nodes[target.index], TypeKind::Array(..))
-                                || !self.assignment_conversion_at(target, info, diagnostic_site)
+                                || !self.initializer_conversion(target, info, diagnostic_site)
                             {
                                 self.error(
                                     SemanticErrorKind::InvalidInitializer,
@@ -751,6 +751,15 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         e: &'tu Expression<'tu>,
         bits: Option<BitRange>,
     ) {
+        // C23 §6.6p9: a named constant is a constant expression, a
+        // structure or union one included; one of pointer type is null.
+        if self.constant_place(e).is_some()
+            && (!self.scalar_type(target)
+                || (self.pointer_target(target).is_some()
+                    && info.integer.is_some_and(Integer::is_zero)))
+        {
+            return;
+        }
         let bit_width = bits.map(|bits| bits.width);
         let bit_field = bits.is_some();
         let overflow = self.static_float_conversion(target, info, e, bit_width)
@@ -934,7 +943,10 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         e: &'tu Expression<'tu>,
         literal: &'tu Expression<'tu>,
     ) {
-        if !self.context.configuration.folds_compound_literals() {
+        // C23 §6.6p9: a `constexpr` literal is a compound literal constant.
+        if !self.context.configuration.folds_compound_literals()
+            && self.constant_place(literal).is_none()
+        {
             self.context.report_extension(
                 crate::configuration::Feature::ConstantCompoundLiteral,
                 "compound literal as a constant initializer",

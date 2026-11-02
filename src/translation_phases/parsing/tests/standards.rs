@@ -102,7 +102,7 @@ fn c99_constructs_follow_policy_in_every_pre_c99_mode() {
 }
 
 #[test]
-fn implicit_int_is_native_in_c90_and_a_policy_extension_afterward() {
+fn implicit_int_is_parsed_in_every_revision() {
     for standard in [
         CStandard::C89,
         CStandard::C95,
@@ -115,10 +115,9 @@ fn implicit_int_is_native_in_c90_and_a_policy_extension_afterward() {
             mode(standard, ExtensionPolicy::Warn),
             |p| {
                 assert_eq!(parser_errors(p).count(), 0, "{:?}", p.errors);
-                assert_eq!(
-                    extensions(p).len(),
-                    if standard < CStandard::C99 { 0 } else { 2 }
-                );
+                // Semantic analysis reports it (`-Wimplicit-int`).
+                assert_eq!(extensions(p).len(), 0);
+                assert!(declaration(p, 0).declaration_specifiers.implicit_int);
                 assert_eq!(
                     declaration(p, 0).declaration_specifiers.type_specifiers,
                     TypeSpecifiers::Int
@@ -859,10 +858,8 @@ fn implicit_return_types_support_pointer_and_parenthesized_declarators() {
             |p| {
                 assert_eq!(parser_errors(p).count(), 0, "{standard:?}: {:?}", p.errors);
                 assert_eq!(p.items.len(), 2);
-                assert_eq!(
-                    extensions(p).len(),
-                    if standard < CStandard::C99 { 0 } else { 2 }
-                );
+                // Semantic analysis reports it (`-Wimplicit-int`).
+                assert_eq!(extensions(p).len(), 0);
                 assert_eq!(
                     function_definition(p, 0)
                         .declaration_specifiers
@@ -1229,6 +1226,41 @@ fn constexpr_and_thread_local_compound_literals_are_recognized() {
                     .any(|x| matches!(x.kind, ExpressionType::CompoundLiteral { .. })),
                 "{source}"
             );
+        });
+    }
+}
+
+/// C23 (N3220) §6.7.2p2: `constexpr` joins only `auto`, `register` and
+/// `static`, once.
+#[test]
+fn constexpr_rejects_extern_typedef_and_repetition() {
+    for source in [
+        "extern constexpr int a = 1;",
+        "constexpr extern int a = 1;",
+        "typedef constexpr int t;",
+        "constexpr typedef int t;",
+        "constexpr constexpr int a = 1;",
+    ] {
+        with_parse_configuration(source, mode(CStandard::C23, ExtensionPolicy::Allow), |p| {
+            let errors: Vec<_> = parser_errors(p).collect();
+            assert!(
+                matches!(
+                    errors[..],
+                    [
+                        super::super::errors::ParserErrorType::ConstexprStorageConflict { .. }
+                            | super::super::errors::ParserErrorType::ConstexprSpecifiedTwice
+                    ]
+                ),
+                "{source}: {errors:?}"
+            );
+        });
+    }
+    for source in [
+        "static constexpr int a = 1;",
+        "void f(void) { register constexpr int a = 1; auto constexpr b = 2; }",
+    ] {
+        with_parse_configuration(source, mode(CStandard::C23, ExtensionPolicy::Allow), |p| {
+            assert_eq!(parser_errors(p).count(), 0, "{source}");
         });
     }
 }

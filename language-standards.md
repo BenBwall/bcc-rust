@@ -665,7 +665,7 @@ mode gate and policy diagnostics (`Imaginary` reports an unsupported type); a
 | EmptyInitializers | - | - | - | - | - | Y | Y | extension | parser |
 | EnumUnderlyingType | - | - | - | - | - | Y | Y | extension | parser |
 | AutoTypeInference | - | - | - | - | - | Y | Y | extension | parser |
-| Constexpr | - | - | - | - | - | Y | Y | extension | parser |
+| Constexpr | - | - | - | - | - | Y | Y | extension | parser, sema, lowering |
 | Nullptr | - | - | - | - | - | Y | Y | extension | parser |
 | WideEnumerators | - | - | - | - | - | Y | Y | extension | semantic analysis |
 | Countof | - | - | - | - | - | - | Y | extension | parser |
@@ -881,7 +881,7 @@ functions.
 | Revision | Phase-7 syntax | Left to later analysis |
 | --- | --- | --- |
 | C89/C90/C95 | Native implicit int; C99-origin mixed blocks, for declarations, designated initializers, compound literals, flexible array members, long long, trailing enum comma, `__func__`, and unambiguous qualified/static/`[*]` array syntax follow Allow/Warn/Deny | Variable bounds need constant evaluation to distinguish VLAs from constant arrays; flexible-member position and object layout |
-| C99 | Full C99 grammar; implicit int is retained with a removed-feature policy diagnostic | Type/name/control-flow constraints listed in the C99 checklist |
+| C99 | Full C99 grammar; implicit int is retained under `-Wimplicit-int` ([C type-safety permerrors](#c-type-safety-permerrors-2026-11-02)) | Type/name/control-flow constraints listed in the C99 checklist |
 | C11/C17 | `_Alignas` expression/type operands, `_Alignof` types (expression operands as a GNU extension), `_Atomic` type/qualifier, `_Generic` associations, `_Noreturn`, `_Static_assert`, `_Thread_local`, anonymous untagged aggregates; `_Alignas` in a plain type name is a constraint error | Alignment validity, storage-class combinations and aggregate layout; atomic eligibility and generic selection are analyzed |
 | C23 | All `[[...]]` attribute positions with standard/vendor names and balanced arguments; `bool`/`true`/`false`, `nullptr`, `constexpr`, `typeof`/`typeof_unqual`, message-optional `static_assert`, `alignas`/`alignof`/`thread_local` aliases; labels before declarations and at block end; `{}`; `_BitInt` with signedness; fixed enum underlying specifier-qualifier lists; `auto` type inference, alone or beside another storage class except `typedef`; unnamed definition parameters; ellipsis-only prototypes; empty parameter lists as prototypes; rejected identifier-list declarators; decimal type keywords; compound-literal storage classes | Attribute applicability/meaning, width values, enum type legality, decimal literal support and literal object lifetime; inferred types are analyzed (see "Type inference") |
 | C2y subset | `_Countof` unary expression or parenthesized type; type-controlling `_Generic`; `if`/`switch` declaration headers with an optional following expression; case ranges; `break`/`continue` label | Array/type/count evaluation, selection conversion, range overlap, and named control-target resolution |
@@ -1375,14 +1375,15 @@ the diagnostic is reported, so withheld diagnostics are not counted.
 - GNU/MSVC policy diagnostics stay active in their enabled dialects under
   pedantic options. `_Imaginary` reports the baseline unsupported-type
   diagnostic; classification does not claim imaginary type semantics.
-- Implicit int is a removed C89 feature, not a GNU extension: C99 and later
-  report `'implicit int' is a C89 feature removed in C99`.
-- Semantic calls to undeclared functions follow `ImplicitFunctionDeclaration`,
-  another removed C89 feature. C89/C95 and GNU modes create a declaration
-  under the configured pedantic policy. Known library names use the complete
-  library prototype and emit a warning naming the function and type, as Clang
-  does; all other names retain unprototyped int returns. Explicit declarations
-  keep the user's type. Strict C99 and later report an undeclared identifier.
+- Implicit int and implicit function declarations are removed C89 features,
+  not GNU extensions. Semantic analysis reports them under
+  `-Wimplicit-int` and `-Wimplicit-function-declaration`, whose severity
+  follows the identity and the revision
+  ([C type-safety permerrors](#c-type-safety-permerrors-2026-11-02)). A call
+  to an undeclared function declares it as C89 did, in every revision but
+  Clang's C23. Known library names use the complete library prototype, as
+  Clang does; all other names retain unprototyped int returns. Explicit
+  declarations keep the user's type.
   Ordinary non-call identifier lookup never creates an implicit declaration.
 - `__STRICT_ANSI__` is an implementation macro outside §6.10.8's protection, so
   `#undef` and `#define` apply to it as to any macro, as in GCC. The GNU builtins
@@ -1680,7 +1681,7 @@ usual promotions. A later object redeclaration supplies its typedef-derived
 alignment, while explicit object alignment requests remain inherited.
 
 Lowering diagnostics for unmodeled types retain the actual construct through
-typedefs, arrays and record members: `_BitInt`, `constexpr`, decimal types,
+typedefs, arrays and record members: `_BitInt`, decimal types,
 types GCC infers from bit-fields, fixed-underlying enums, MSVC pointer
 modifiers or `ext_vector_type`. They no longer list unrelated possible causes.
 
@@ -2486,6 +2487,98 @@ past 4294967295 wraps to 0; a larger `#line` number is an error and is
 ignored (C99 §6.10.4p3, p. 158; PDF p. 170, leaves these values undefined).
 
 
+## C type-safety permerrors (2026-11-02)
+
+GCC 14 made six C type-safety warnings errors in C99 and later
+("permerrors", GCC 14 release notes, "Porting to GCC 14"); `-fpermissive`
+or `-Wno-error=NAME` makes each a warning again, `-Wno-NAME` silences it,
+and `-w` leaves an error. Clang 16 and later (here the pinned Clang 23)
+refuse the same programs by default. bcc reports each under its `-W` group
+with a default that depends on the compiler identity and the revision
+(`CompilerConfiguration::permerror_default`); `-fpermissive` affects only
+the GCC identity, as in the compilers (Clang accepts and ignores it).
+Probed with GCC 14.2's `cc1`, host GCC 13 (wording), Clang 23.1.1 and TCC
+`mob`:
+
+| Diagnostic (`-W` group) | GCC identity | Clang identity (and the default CLI) | TCC | MSVC |
+| --- | --- | --- | --- | --- |
+| Call to an undeclared function (`implicit-function-declaration`) | error from C99 (C23 too); silent in C89 | error in C99 to C17; silent in C89; C23: undeclared identifier | warning | warning (`cl` C4013) |
+| Undeclared library function (same group) | error from C99; C89: GCC's `-Wbuiltin-declaration-mismatch` wording, warning | error from C99; warning in C89 | warning | warning |
+| Implicit int: declaration, function result, undeclared identifier-list parameter, prototype parameter, named or not (`implicit-int`) | error from C99 (C23 too); silent in C89 | error in C99 to C17; silent in C89; C23: `a type specifier is required for all declarations`, no option | silent | silent |
+| `return;` in a function with a result (`return-mismatch`) | error from C99; silent in C89 | error in every mode | warning | warning |
+| `return` with a value in a `void` function (`return-mismatch`) | error from C99; warning in C89 | error in every mode | warning | warning |
+| Identifier list in a declaration that is no definition (`declaration-missing-parameter-type`) | error from C99; warning in C89 | error in every mode, no option | silent | error, as clang-cl |
+| Integer/pointer conversion (`int-conversion`) | error from C99; warning in C89 | error in every mode | warning (driver) | error |
+| Incompatible pointers (`incompatible-pointer-types`, and Clang's `incompatible-function-pointer-types`, which GCC's group holds) | error from C99; warning in C89 | error in every mode | warning (driver) | error |
+| Conditional operands pointing to incompatible types (GCC: `incompatible-pointer-types`; Clang: `pointer-type-mismatch`) | error from C99; warning in C89, even with `-fno-permissive` | warning | warning | warning |
+
+An explicit `-fno-permissive` makes GCC's C89 warnings in the table errors
+(the `void` return, identifier lists and both pointer groups), and leaves
+what C89 accepts silently, an undeclared library function and the
+conditional mismatch as they were; the last of `-fpermissive` and
+`-fno-permissive` decides. GCC re-enables a disabled group
+(`-Wno-implicit-function-declaration -Wimplicit-function-declaration`) at
+its default severity, where Clang makes it a warning.
+
+`-Wall` and `-Wno-all` follow each compiler (GCC 14.2's `cc1`, Clang 23):
+
+- GCC's `-Wall` holds `-Wimplicit`, the parent of the two implicit groups,
+  and sets them only where no option of their own did, whatever the order
+  (`-Wno-implicit-function-declaration -Wall` stays silent); `-Wno-all`
+  turns them off, even from C99, where they are errors otherwise. Either
+  option makes GCC warn about C89's `return;` in a function with a result.
+- Clang's `-Wall` and `-Wno-all` set the implicit groups and
+  `-Wreturn-mismatch` at their place on the command line: a later option of
+  the group's own wins, and a group `-Wall` turns back on after a `-Wno-`
+  or `-Wno-all` is a warning.
+
+In a system header, GCC 14 reports a permerror that is an error (so not
+under `-fpermissive`, or in C89 where it warns); Clang withholds its
+default errors there as it withholds warnings, and TCC and MSVC keep bcc's
+withholding of warnings.
+
+In C89, GCC warns about an undeclared library function only when its type
+is incompatible with `int ()` (`printf`, `strlen`), not for `abs`.
+
+The GCC, Clang and TCC diagnostic formats use each compiler's words:
+
+| Diagnostic | GCC 14 | Clang 23 | TCC |
+| --- | --- | --- | --- |
+| implicit declaration | `implicit declaration of function 'f'` | `call to undeclared function 'f'; ISO C99 and later do not support implicit function declarations` | `implicit declaration of function 'f'` |
+| library function | as above | `call to undeclared library function 'printf' with type 'int (const char *, ...)'; ISO C99 and later do not support implicit function declarations` | as above |
+| implicit int | `type defaults to 'int' in declaration of 'x'`, `return type defaults to 'int'`, `type of 'x' defaults to 'int'` (at the function's name) | `type specifier missing, defaults to 'int'; ISO C99 and later do not support implicit int` (once per declaration), `parameter 'x' was not declared, defaults to 'int'; ...` | |
+| return mismatch | `'return' with no value, in function returning non-void`, `'return' with a value, in function returning void` (at the value) | `non-void function 'f' should return a value`, `void function 'g' should not return a value` | `'return' with no value`, `void function returns a value` |
+| identifier list | `parameter names (without types) in function declaration` (at the declaration) | `a parameter list without types is only allowed in a function definition` (at the first name) | |
+| int-conversion | `initialization of 'int *' from 'int' makes pointer from integer without a cast`, `assignment to ...`, `passing argument 1 of 'f' makes ...`, `returning 'int' from a function with return type 'int *' makes ...` (an initialization at its initializer) | `incompatible integer to pointer conversion initializing 'int *' with an expression of type 'int'`, `assigning to ... from ...`, `passing 'int' to parameter of type 'int *'`, `returning ... from a function with result type ...`, with `; take the address with &` or `; dereference with *` where that would fit | `assignment makes pointer from integer without a cast` (bcc keeps its own) |
+| incompatible pointers | `initialization of 'long int *' from incompatible pointer type 'int *'`, `passing argument 1 of 'f' from incompatible pointer type`, `returning 'int *' from a function with incompatible return type 'long int *'` | `incompatible pointer types initializing 'long *' with an expression of type 'int *'`; `incompatible function pointer types ...` for functions, which spell the source as Clang does (`int (int)`, `int[2]`) | `assignment from incompatible pointer type` |
+
+Deviations: an unnamed implicit-int parameter is reported at its
+specifiers, where GCC points at the declaration and Clang just past the
+specifiers, and GCC's conditional mismatch at the `?` rather than the `:`,
+without GCC's notes naming both types; Clang's own wording for the
+conditional mismatch (`pointer type mismatch ('int *' and 'long *')`) is
+not modelled. A struct member or type name without a type specifier
+(`struct S { const m; }`, `sizeof(const)`) stays the parser's hard
+"missing type specifier" error, where both compilers report
+`-Wimplicit-int` permerrors. bcc keeps no typedef names, so a type is spelled from its
+canonical form (`unsigned long` where Clang writes `'size_t' (aka 'unsigned
+long')`), and an unnamed tag or a vector keeps bcc's words; the notes are
+bcc's C99 citations, not GCC's `expected 'int *' but argument is of type
+'int'` or Clang's `passing argument to parameter 'p' here`; Clang's
+`-Wdeprecated-non-prototype` warning on an old-style definition is not
+modelled; MSVC keeps the Clang errors for the two pointer groups, where `cl`
+warns (C4047, C4133). The GCC torture survey lost no test
+(see the pull request).
+
+Under TCC, a `__builtin_` name TCC does not know (TCC `mob`'s `tcctok.h`
+and `tccdefs.h`: `expect`, `constant_p`, `frame_address`,
+`return_address`, `unreachable`, `types_compatible_p`, `choose_expr`, the
+`va_*` and `offsetof` macros, the library aliases `memcpy` to `abort`, and
+the `ffs`/`clz`/`ctz`/`clrsb`/`popcount`/`parity` families) is an ordinary
+identifier outside a system header: a call declares it implicitly with
+TCC's warning, and the program may define it (`int __builtin_frob(int x)`),
+as TCC does. `__builtin_abs(0)` then fails to link, as with TCC.
+
 ### Diagnostic parity follow-up (issues #49 and #54)
 
 C23 `nullptr` has its own retained scalar type, with pointer size and alignment.
@@ -2607,9 +2700,11 @@ These cases remain different from the compiler each identity claims:
   (`char a[(int){3}] = {0};` in a block, which Clang folds with
   `-Wgnu-folding-constant`), an array designator (`[(int){1}] = 2`) and a
   GNU case range (`case 1 ... (int){3}:`).
-- C23 `constexpr` compound literals (`(constexpr int){3}`), which GCC 15
-  accepts in integer constant expressions and the bundled Clang does not
-  parse, stay unmodeled with `constexpr` objects: lowering refuses them.
+- C23 `constexpr` compound literals (`(constexpr int){3}`), which GCC 14
+  accepts in integer constant expressions, are named constants under the
+  GCC identity (see "C23 `constexpr` objects"). The bundled Clang parses
+  no storage-class specifier in a compound literal ("expected
+  expression"), and bcc's Clang identity reports one too.
 - GCC folds a `?:` before the casts around it, so `static int x = (int)(1
   ? (long)(int){3} : 0L);` is constant for GCC; bcc requires the `?:` to
   have the object's type and rejects it.
@@ -3335,8 +3430,8 @@ arm, wasm32 included, and print what GCC 13.3 and Clang 23 print.
 
 Deviations and limits:
 
-- `constexpr auto` infers its type but stays refused with every `constexpr`
-  object ("constexpr objects").
+- `constexpr auto` infers its type and is a named constant like any
+  `constexpr` object.
 - GCC types a C23 `auto` object inferred from a bit-field with the
   bit-field's own type (`sizeof` 1 for a 2-bit field), which lowering
   refuses ("types inferred from bit-fields"); GCC 13 and 15 agree.
@@ -3360,3 +3455,64 @@ Deviations and limits:
   `auto x [[maybe_unused]] = 1;`) used to be misread as an unknown type name
   followed by a declarator; after a storage-class specifier the identifier
   is now the declarator, as in GCC and Clang.
+
+## C23 `constexpr` objects (2026-11-02)
+
+A `constexpr` object is an ordinary object whose type is implicitly
+`const` (an array's elements are) and which has internal linkage at file
+scope; at block scope it is automatic unless `static` is also given, and
+lowering stores it as any `const` object with its initializer (C23 §6.7.2p16-17).
+`named_constants.rs` checks its initializer against §6.7.2p5-6: every value
+it stores is a constant of the kind its subobject asks for (an integer
+constant expression for an integer, an arithmetic constant expression for
+a floating type, a null pointer for a pointer, a named constant or
+`constexpr` literal for a copied structure or union) and converts to that
+type without changing value, a signaling NaN keeping its type; no member,
+recursively, is atomic, volatile or restrict-qualified, and the type is not
+variably modified. A `constexpr` compound literal is checked the same way.
+
+Its name, a `.` member of it (through copies of whole structures, only for
+a union's initialized member, and for a bit-field with the value of its
+width) and a `constexpr` compound literal are
+named constants (§6.6p7, p13-15): they designate a subobject of the named
+constant's initializer, whose plan gives a scalar one its value. An integer
+one is an integer constant expression operand, so `constexpr int n = 4;
+int a[n];` declares an ordinary array, and `static_assert`, case labels,
+bit-field widths, `alignas`, designators and enumerators take them; any is a
+constant in a static initializer, a structure one copied from its
+initializer's bytes. A null pointer named constant is no null pointer
+constant (§6.6 footnote 118). Lowering still evaluates a named constant as
+an object, so its address may be taken.
+
+The constraints are checked against GCC 14.2's `cc1` and Clang 23 with the
+`gcc.dg/c23-constexpr-*.c` tests: under the GCC identity bcc reports an
+error on exactly the lines GCC 14 does in each of them. The identities
+differ where the compilers do:
+
+| Form | GCC | Clang |
+| --- | --- | --- |
+| `(int) d` for a floating named constant `d` | integer constant expression operand (§6.6p8) | folded with `-Wgnu-folding-constant` |
+| integer object initialized by `(int)(double)1.0` | error (not an integer constant expression) | accepted (an integer constant) |
+| a narrow string's elements | read as `char`, so `-funsigned-char` matters | read as `signed char` whatever `char` is |
+| a complex initializer that rounds | error | accepted |
+| a bit-field initializer its width cannot hold | error | accepted, the member reading the truncated value |
+| a `constexpr` compound literal | named constant | error, as Clang parses no storage class in a compound literal |
+| more than one declarator, the name in its own initializer, a same-scope redeclaration, a tag declared in the declaration or initializer (C23 §6.7.1p12, implementation-defined) | error | accepted |
+
+Under both identities `constexpr` beside `extern` or `typedef`, a repeated
+`constexpr`, `constexpr` on a function, a parameter or an empty declaration,
+a missing initializer and `auto` with `constexpr` and a type specifier are
+errors; before C23 `constexpr` is no keyword, as in GCC and Clang.
+
+Deviations:
+
+- Clang 23 folds an element of a `constexpr` array read with a constant
+  index (`arr[1]`) with `-Wgnu-folding-constant`; bcc reads no element, as
+  GCC does, and reports a non-constant expression under both identities.
+- Clang 23 warns when a bit-field takes a value its width truncates
+  (`-Wbitfield-constant-conversion`); bcc does not.
+- Clang 23 reports `static const int v; constexpr const int v = 1;` as a
+  non-static declaration following a static one, although it gives the
+  object internal linkage; bcc accepts it under the Clang identity.
+- bcc's diagnostics have their own wording; GCC's and Clang's messages
+  differ from each other too.

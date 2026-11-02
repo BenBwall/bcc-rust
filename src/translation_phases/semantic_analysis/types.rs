@@ -353,6 +353,26 @@ impl<'tu, 's> TypeInterner<'tu, 's> {
         ty
     }
 
+    /// Adds `const` to an object type, to an array's elements for an array,
+    /// as a `constexpr` object's type receives it.
+    /// C23 (N3220): §6.7.2 paragraph 16, p. 100; PDF p. 113; §6.7.4.1
+    /// paragraph 10, p. 121; PDF p. 134.
+    pub(crate) fn const_object(&mut self, mut ty: TypeId) -> TypeId {
+        let mut bounds = ArenaVec::new_in(self.scratch);
+        while let TypeKind::Array(element, bound) = self.nodes[ty.index] {
+            bounds.push((bound, ty.alignment, ty.qualifiers));
+            ty = element;
+        }
+        ty = ty.qualified(TypeQualifiers::CONST);
+        while let Some((bound, alignment, qualifiers)) = bounds.pop() {
+            ty = self
+                .intern(TypeKind::Array(ty, bound))
+                .with_alignment(alignment)
+                .qualified(qualifiers);
+        }
+        ty
+    }
+
     /// The qualifiers of an object type, counting those of an array's
     /// elements as the array's own. C99 qualifies only the elements; C23
     /// qualifies both, and Clang applies that in every mode to pointer
@@ -522,7 +542,6 @@ pub(crate) enum UnmodeledType {
     /// A `_BitInt(N)` whose width could not be checked, because it reads
     /// an unanalyzed construct; a checked width gives [`TypeKind::BitInt`].
     BitInt,
-    Constexpr,
     Decimal32,
     Decimal64,
     Decimal128,
@@ -542,7 +561,6 @@ impl UnmodeledType {
     pub(crate) const fn description(self) -> &'static str {
         match self {
             | Self::BitInt => "_BitInt types of an unanalyzed width",
-            | Self::Constexpr => "constexpr objects",
             | Self::Decimal32 => "_Decimal32 types",
             | Self::Decimal64 => "_Decimal64 types",
             | Self::Decimal128 => "_Decimal128 types",

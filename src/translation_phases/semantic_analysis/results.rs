@@ -102,6 +102,9 @@ pub(crate) struct SemanticTranslationUnit<'tu> {
     /// The exact values of folded constants of bit-precise types wider than
     /// 128 bits that `i128` does not hold; see [`Self::integer_limbs`].
     pub(super) wide_integers:           super::WideValues<'tu>,
+    /// The C23 named constant subobject an expression designates, by the
+    /// expression's identity; see [`Self::named_constant`].
+    pub(super) named_constants:         ArenaMap<'tu, usize, super::ConstantPlace<'tu>>,
     /// Error-severity diagnostics semantic analysis reported; warnings and
     /// diagnostics suppressed inside recovered syntax are not counted.
     pub(crate) errors:                  usize,
@@ -422,6 +425,26 @@ impl<'tu> SemanticTranslationUnit<'tu> {
     ) -> Option<&'tu ExpressionInfo<'tu>> {
         self.expression_index(expression)
             .map(|index| &self.expressions[index])
+    }
+
+    /// The subobject of a C23 named constant (a `constexpr` object or
+    /// compound literal) that `expression` designates, through
+    /// parentheses: lowering reads a static copy of one from the named
+    /// constant's initializer.
+    /// C23 (N3220): §6.6 paragraphs 7 and 13-15, pp. 95-96; PDF pp. 108-109.
+    pub(crate) fn named_constant(
+        &self,
+        mut expression: &Expression<'tu>,
+    ) -> Option<super::ConstantPlace<'tu>> {
+        while let crate::translation_phases::parsing::syntax::ExpressionType::Parenthesized {
+            expression: inner,
+        } = expression.kind
+        {
+            expression = inner;
+        }
+        self.named_constants
+            .get(&std::ptr::from_ref(expression).addr())
+            .copied()
     }
 
     /// The conversions applied to expression `index`, in application order:
