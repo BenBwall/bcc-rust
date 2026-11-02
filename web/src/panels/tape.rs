@@ -759,6 +759,13 @@ pub fn Deck(
         let view = width.get_untracked();
         let room = room();
         let left = f64::from(element.scroll_left());
+        // A run that fits its window once the scale settles never scrolls
+        // on the way there: drawn at the wider scale for a few frames, its
+        // head would nudge the tape aside and back.
+        let settled = (px(at()) + 0.5) * fitted.get_untracked();
+        if running && !reduced_motion() && left < 0.5 && settled <= view - room {
+            return;
+        }
         // The head keeps the room for the end of the run to its right: past
         // that the tape moves just enough, so a short run that fits never
         // scrolls.
