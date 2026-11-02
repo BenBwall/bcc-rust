@@ -1,9 +1,9 @@
-error: non-void function returns without a value
+error: non-void function returns without a value [-Wreturn-mismatch]
  --> sema3-missing-value.c:1:14
   |
 1 | int f(void) {return;}
   |              ^^^^^^^ no return value
   |
-  = note: C99 §6.8.6.4p1: a return statement without an expression appears only in a function returning void
+  = note: C99 §6.8.6.4p1: a return statement without an expression shall only appear in a function returning void; C89 permitted it
 
 1 error generated.

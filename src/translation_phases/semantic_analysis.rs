@@ -71,6 +71,7 @@ mod emission;
 mod expressions;
 mod facts;
 mod functions;
+mod implicit;
 mod inference;
 mod initializers;
 mod predefined;
@@ -97,6 +98,7 @@ mod type_generic;
 mod vectors;
 
 // Diagnostics and inspection
+mod compiler_wording;
 mod diagnostics;
 mod errors;
 mod inspection;
@@ -397,6 +399,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                 self.taint(d.recovered);
                 self.validate_declaration_list_item(d);
                 self.constexpr_declaration(d);
+                self.implicit_declaration_defaults(d);
                 self.work.push(Work::DeclarationBase(d));
                 self.spec(d.declaration_specifiers, d.init_declarators.is_empty());
             },
@@ -546,6 +549,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                         None,
                     );
                 }
+                self.implicit_return_type(f);
                 self.prepare_function(f);
                 self.work.push(Work::FunctionBase(f));
                 _ = self.misplaced_inference(
@@ -1056,6 +1060,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
                         params,
                         std::ptr::from_ref(&list.as_slice()[index]).addr(),
                     ));
+                    self.implicit_parameter_type(p.declaration_specifiers, p.declarator);
                     // A C23 `auto` parameter already reports its storage
                     // class.
                     if p.declaration_specifiers.storage_class.is_none() {

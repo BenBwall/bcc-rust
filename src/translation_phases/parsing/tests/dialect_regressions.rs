@@ -609,8 +609,10 @@ fn alignment_specifier_belongs_only_to_declarations_and_compound_literals() {
     );
 }
 
+/// The parser records implicit int and leaves its diagnostic, which
+/// depends on the identity, to semantic analysis (`-Wimplicit-int`).
 #[test]
-fn implicit_int_after_c89_is_a_removed_feature() {
+fn implicit_int_after_c89_is_recorded_for_semantic_analysis() {
     let source = "static x = 1;\n";
     for gnu in [false, true] {
         with_parse_configuration(
@@ -618,10 +620,7 @@ fn implicit_int_after_c89_is_a_removed_feature() {
             mode(CStandard::C99, gnu, ExtensionPolicy::Warn),
             |p| {
                 assert_clean_parse(p, source);
-                assert_eq!(
-                    extensions(p),
-                    ["'implicit int' is a C89 feature removed in C99"]
-                );
+                assert!(extensions(p).is_empty(), "{:?}", p.errors);
             },
         );
     }

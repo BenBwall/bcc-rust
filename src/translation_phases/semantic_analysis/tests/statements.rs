@@ -110,7 +110,7 @@ fn implicit_old_style_parameters_bind_and_shadow_in_c89() {
     );
     assert_eq!(
         kinds("int f(a,b) int a; { return b; }"),
-        [SemanticErrorKind::InvalidDefinitionParameterList]
+        [SemanticErrorKind::ImplicitIntParameter]
     );
 }
 
@@ -368,11 +368,11 @@ fn jumps_compare_declaration_scope_paths() {
 fn return_assignment_conversion_is_retained() {
     assert_eq!(
         kinds("void f(void) {return 1;}"),
-        [SemanticErrorKind::VoidReturnValue]
+        [SemanticErrorKind::VoidReturnMismatch]
     );
     assert_eq!(
         kinds("int f(void) {return;}"),
-        [SemanticErrorKind::MissingReturnValue]
+        [SemanticErrorKind::ReturnMismatch]
     );
     assert_eq!(
         kinds("int *f(const int *p) {return p;}"),
@@ -393,30 +393,68 @@ fn return_assignment_conversion_is_retained() {
     });
 }
 
+/// `-Wreturn-mismatch` follows the identity and the revision: Clang 23
+/// errors in every mode; GCC 14 errors in C99 and later unless
+/// `-fpermissive`, and in C89 warns only about a value in a `void`
+/// function; TCC warns.
 #[test]
-fn return_modes_preserve_c89_and_gnu_diagnostics() {
-    for configuration in [
-        crate::configuration::CompilerConfiguration::new(
-            CStandard::C89,
-            crate::configuration::ExtensionPolicy::Allow,
+fn return_mismatches_follow_the_identity_and_revision() {
+    use crate::{
+        configuration::{
+            CompilerConfiguration,
+            CompilerIdentity as I,
+            ExtensionPolicy,
+        },
+        translation_phases::{
+            ErrorSeverity::{
+                Error,
+                Warning,
+            },
+            GetSeverity,
+        },
+    };
+    let mode = |identity, standard| {
+        CompilerConfiguration::new(standard, ExtensionPolicy::Allow)
+            .with_gnu_extensions(true)
+            .with_compiler_identity(identity)
+    };
+    for (configuration, no_value, value) in [
+        (mode(I::Clang, CStandard::C89), Some(Error), Some(Error)),
+        (mode(I::Clang, CStandard::C17), Some(Error), Some(Error)),
+        (mode(I::Gcc, CStandard::C89), None, Some(Warning)),
+        (mode(I::Gcc, CStandard::C17), Some(Error), Some(Error)),
+        (
+            mode(I::Gcc, CStandard::C17).with_permissive(true),
+            Some(Warning),
+            Some(Warning),
         ),
-        crate::configuration::CompilerConfiguration::default().with_gnu_extensions(true),
+        (mode(I::Tcc, CStandard::C11), Some(Warning), Some(Warning)),
+        (mode(I::Msvc, CStandard::C17), Some(Warning), Some(Warning)),
     ] {
-        with_configuration("int f(void) {return;}", configuration, |context, _| {
-            let errors = context.take_pending_errors();
-            assert!(
-                matches!(errors.as_slice(), [TranslationError::Semantic(e)] if e.kind == SemanticErrorKind::MissingReturnValueWarning)
-            );
-        });
+        for (source, expected) in [
+            ("int f(void) {return;}", no_value),
+            ("void f(void) {return 1;}", value),
+        ] {
+            with_configuration(source, configuration, |context, _| {
+                let errors = context.take_pending_errors();
+                let severities: Vec<_> = errors.iter().map(GetSeverity::severity).collect();
+                assert_eq!(
+                    severities,
+                    expected.into_iter().collect::<Vec<_>>(),
+                    "{source} {:?}",
+                    configuration.compiler_identity()
+                );
+            });
+        }
     }
     with_configuration(
         "void g(void) {} void f(void) {return g();}",
-        crate::configuration::CompilerConfiguration::default().with_gnu_extensions(true),
+        CompilerConfiguration::default().with_gnu_extensions(true),
         |context, _| assert_eq!(context.pending_error_count(), 0),
     );
     assert_eq!(
         kinds("void g(void) {} void f(void) {return g();}"),
-        [SemanticErrorKind::VoidReturnValue]
+        [SemanticErrorKind::VoidReturnMismatch]
     );
 }
 
@@ -629,7 +667,7 @@ fn malformed_statements_suppress_dependent_constraints() {
             let (last, parser_errors) = errors.split_last().unwrap();
             assert!(
                 matches!(last, TranslationError::Semantic(e)
-                    if e.kind == SemanticErrorKind::VoidReturnValue),
+                    if e.kind == SemanticErrorKind::VoidReturnMismatch),
                 "{source}: {errors:?}"
             );
             let parser_kinds: Vec<_> = parser_errors
@@ -808,8 +846,51 @@ fn unnamed_definition_parameter_fallback_matches_clang_severity_without_duplicat
     }
 }
 
+/// A prototype parameter without a type specifier is implicit int whether
+/// it is named or not, as GCC 14 and Clang 23 report it.
 #[test]
-fn implicit_old_style_parameters_keep_strict_error_and_gnu_extension_policy() {
+fn unnamed_implicit_int_parameters_are_reported() {
+    use crate::configuration::{
+        CompilerConfiguration,
+        CompilerIdentity,
+        ExtensionPolicy,
+    };
+    for identity in [CompilerIdentity::Gcc, CompilerIdentity::Clang] {
+        let configuration = CompilerConfiguration::new(CStandard::C17, ExtensionPolicy::Allow)
+            .with_gnu_extensions(true)
+            .with_compiler_identity(identity);
+        with_configuration(
+            "int f(const); int g(int a, volatile *); int h(register); int k(register x);",
+            configuration,
+            |context, _| {
+                let kinds: Vec<_> = context
+                    .take_pending_errors()
+                    .iter()
+                    .map(|error| match error {
+                        | TranslationError::Semantic(error) => error.kind,
+                        | other => panic!("{other:?}"),
+                    })
+                    .collect();
+                assert_eq!(
+                    kinds,
+                    [
+                        SemanticErrorKind::ImplicitIntTypeName,
+                        SemanticErrorKind::ImplicitIntTypeName,
+                        SemanticErrorKind::ImplicitIntTypeName,
+                        SemanticErrorKind::ImplicitInt,
+                    ],
+                    "{identity:?}"
+                );
+            },
+        );
+    }
+}
+
+/// An undeclared identifier-list parameter is silent in C89 and, under
+/// Clang's rules, an error from C99 in strict and GNU modes alike
+/// (`-Wimplicit-int`), whatever the pedantic policy.
+#[test]
+fn implicit_old_style_parameters_follow_the_revision() {
     use crate::{
         configuration::{
             CompilerConfiguration,
@@ -832,15 +913,7 @@ fn implicit_old_style_parameters_keep_strict_error_and_gnu_extension_policy() {
                     CompilerConfiguration::new(standard, policy).with_gnu_extensions(gnu),
                     |context, _| {
                         let errors = context.take_pending_errors();
-                        let expected = if standard == CStandard::C89
-                            || (gnu && policy == ExtensionPolicy::Allow)
-                        {
-                            None
-                        } else if gnu && policy == ExtensionPolicy::Warn {
-                            Some(ErrorSeverity::Warning)
-                        } else {
-                            Some(ErrorSeverity::Error)
-                        };
+                        let expected = (standard != CStandard::C89).then_some(ErrorSeverity::Error);
                         assert_eq!(errors.len(), usize::from(expected.is_some()), "{errors:?}");
                         if let Some(expected) = expected {
                             assert_eq!(errors[0].severity(), expected);
