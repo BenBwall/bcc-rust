@@ -60,7 +60,10 @@ use crate::{
     translation_phases::{
         SourceVectors,
         parsing::{
-            declaration_syntax::Initializer,
+            declaration_syntax::{
+                Initializer,
+                InitializerType,
+            },
             syntax::Expression,
         },
         semantic_analysis::{
@@ -210,6 +213,20 @@ impl<'tu, 's> FunctionLowerer<'_, '_, 'tu, '_, 's> {
         ty: TypeId,
         initializer: &'tu Initializer<'tu>,
     ) -> Result<(), LoweringError> {
+        // An empty initializer of a variable length array, which semantic
+        // analysis plans nothing for: zeros over its run-time size.
+        // C23: §6.7.10 paragraphs 4 and 11, pp. 128-129; PDF pp. 141-142.
+        if matches!(initializer.kind, InitializerType::InitializerList(list)
+                if list.elements.is_empty())
+            && self.unit.sema.initializers.plan(initializer).is_none()
+            && self.unit.sema.sizes.constant_size(ty).is_none()
+        {
+            let size = self.runtime_size(ty, initializer.source_vectors)?;
+            let address = self.object_address(object)?;
+            let byte = self.iconst(Type::I8, 0);
+            self.memory_range(Opcode::Fill, [address, byte, size]);
+            return Ok(());
+        }
         let (leaves, plan) = leaves(
             self.unit.sema,
             ty,

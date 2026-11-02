@@ -505,7 +505,14 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
         info: ExpressionInfo<'tu>,
         constraint: &Constraint<'_>,
     ) -> Result<AsmOperandKind, AsmFault> {
-        if info.category != ValueCategory::ModifiableLvalue {
+        // GCC and Clang take a whole array, which no assignment may modify,
+        // as a memory output: the statement writes its bytes. A
+        // const-qualified one stays read-only.
+        let array = info.category == ValueCategory::Lvalue
+            && matches!(self.types.nodes[info.ty.index], TypeKind::Array(..))
+            && self.complete_object(info.ty)
+            && !self.contains_const(info.ty);
+        if info.category != ValueCategory::ModifiableLvalue && !(array && constraint.memory) {
             return Err(AsmFault::OutputLvalue);
         }
         if let Some(condition) = constraint.flag {

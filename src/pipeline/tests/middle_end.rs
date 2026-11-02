@@ -292,6 +292,36 @@ fn aggregate_reinitialization_preserves_explicit_bytes() {
     }
 }
 
+/// C23's empty initializer zeros a variable length array, sized at run
+/// time, and `true` and `false` are `bool` constants, as GCC and Clang
+/// compile them. C23: §6.7.10p4 and p11, pp. 128-129; PDF pp. 141-142;
+/// §6.4.4.6p3, p. 66; PDF p. 79.
+#[test]
+fn c23_empty_vla_initializers_zero_and_booleans_are_bool() {
+    let source = "void *memset(void *, int, unsigned long);\nint sum(int n) { int s = 0; volatile \
+                  int v[n] = {}; for (int i = 0; i < n; i++) s += v[i]; for (int i = 0; i < n; \
+                  i++) v[i] = -1; return s; }\nint grid(int n) { long m[n][n + 1] = {}; long s = \
+                  0; for (int i = 0; i < n; i++) for (int j = 0; j <= n; j++) s += m[i][j] + 1; \
+                  return (int)s; }\nint main(void) { int r = sum(3) + sum(5) + grid(3) - 12; r += \
+                  _Generic(true, bool: 0, default: 100) + _Generic(false, _Bool: 0, default: \
+                  100); r += sizeof true == sizeof(bool) ? 0 : 1000; return r; }\n";
+    let configuration = CompilerConfiguration::new(
+        crate::configuration::CStandard::C23,
+        crate::configuration::ExtensionPolicy::Allow,
+    );
+    for (optimize, profile) in STAGES {
+        let (status, _) = with_configured_module(
+            source,
+            Target::LinuxGnu,
+            optimize,
+            profile,
+            configuration.with_target(Target::LinuxGnu),
+            interpret,
+        );
+        assert_eq!(status, 0, "{optimize} {profile:?}");
+    }
+}
+
 #[test]
 fn aggregate_reinitialization_matches_native_arms_and_clang() {
     let Some(target) = host() else { return };

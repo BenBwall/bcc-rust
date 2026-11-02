@@ -1786,7 +1786,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
     /// Checks recursive const membership when classifying modifiable lvalues.
     /// C99: §6.3.2.1 paragraph 1, p. 46; PDF p. 58.
-    fn contains_const(&mut self, ty: TypeId) -> bool {
+    pub(in crate::translation_phases::semantic_analysis) fn contains_const(
+        &mut self,
+        ty: TypeId,
+    ) -> bool {
         let mut pending = ArenaVec::new_in(self.scratch);
         pending.push((ty, false));
         while let Some((current, ready)) = pending.pop() {

@@ -90,6 +90,29 @@ fn operands_take_registers_memory_immediates_ties_and_flags() {
 
 /// `g` takes a register for a constant no instruction encodes as an
 /// immediate, and memory for an aggregate; `i` takes an address constant.
+/// GCC and Clang take a whole array as a memory output, though no
+/// assignment may modify it; a const-qualified one stays read-only.
+#[test]
+fn arrays_are_memory_outputs() {
+    for body in [
+        "int a[4]; void f(void) { __asm__(\"\" : \"+m\"(a)); }",
+        "struct s { short x, y; } p[2]; void f(void) { __asm__(\"\" : \"=m\"(p)); }",
+        "int a[2][3]; void f(void) { __asm__(\"\" : \"+m\"(a[1])); }",
+    ] {
+        assert_eq!(kinds(body), [], "{body}");
+    }
+    for body in [
+        "const int c[2]; void f(void) { __asm__(\"\" : \"=m\"(c)); }",
+        "struct s { const int x; } p[2]; void f(void) { __asm__(\"\" : \"+m\"(p)); }",
+    ] {
+        assert_eq!(
+            kinds(body),
+            [SemanticErrorKind::InvalidAsm(AsmFault::OutputLvalue)],
+            "{body}"
+        );
+    }
+}
+
 #[test]
 fn generic_constraints_follow_the_operand() {
     facts(
