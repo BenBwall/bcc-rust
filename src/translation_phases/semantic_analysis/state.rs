@@ -51,6 +51,7 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
             type_names: ArenaVec::new_in(scratch),
             retained_type_names: ArenaMap::with_hasher_in(FxBuildHasher, tu),
             declaration_sites: ArenaMap::with_hasher_in(FxBuildHasher, tu),
+            definition_bounds: ArenaMap::with_hasher_in(FxBuildHasher, tu),
             type_name_sites: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             size_query_sites: ArenaMap::with_hasher_in(FxBuildHasher, tu),
             typeof_sites: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
@@ -86,6 +87,8 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
             runtime_bounds: ArenaVec::new_in(tu),
             bound_origins: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             bound_expression_starts: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            member_bounds: ArenaVec::new_in(scratch),
+            bound_scopes: ArenaVec::new_in(scratch),
             next_parameter: 0,
             function_controls: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             expression_indices: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
@@ -115,6 +118,10 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
             enum_ranges: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             inferences: ArenaVec::new_in(scratch),
             inferred_leaves: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            constexpr_objects: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            named_objects: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            named_constants: ArenaMap::with_hasher_in(FxBuildHasher, tu),
+            underspecified: 0,
         };
         analyzer.scopes.push(Scope {
             parent: None,

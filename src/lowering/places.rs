@@ -33,7 +33,11 @@ use super::{
 };
 use crate::{
     ir::{
+        AsmClobbers,
+        AsmConstraint,
+        AsmOperand,
         FloatCC,
+        InlineAsm,
         InstData,
         InstFlags,
         IntCC,
@@ -104,6 +108,17 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         })
     }
 
+    /// Whether this function's locals live in memory because GCC keeps
+    /// them current across a `__builtin_setjmp`'s second return, where a
+    /// `__builtin_longjmp` resumes it; Clang, and ISO `setjmp`, leave the
+    /// unsaved ones indeterminate. GNU extension: GCC manual, "Nonlocal
+    /// Gotos"; C99: §7.13.2.1p3, p. 244; PDF p. 256.
+    pub(super) fn locals_survive_setjmp(&self) -> bool {
+        self.record.builtin_setjmp
+            && self.unit.context.configuration.compiler_identity().rules()
+                == crate::configuration::RuleSet::Gcc
+    }
+
     /// The storage of an automatic object, allocated on first use.
     pub(super) fn local(
         &mut self,
@@ -122,11 +137,10 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             | Some(value_type)
                 if !types::is_volatile(ty)
                     && !matches!(self.unit.sema.types.kind(ty), TypeKind::Atomic(_))
-                    && !self.unit.address_taken.contains(&binding) =>
+                    && !self.unit.address_taken.contains(&binding)
+                    && !self.locals_survive_setjmp() =>
                 Local::Variable(self.draft.declare_var(value_type)),
-            | _ if self.unit.sema.types.layout(ty).is_none()
-                && matches!(self.unit.sema.types.kind(ty), TypeKind::Array(..)) =>
-            {
+            | _ if types::variable_size(&self.unit.sema.types, ty) => {
                 let size = self.runtime_size(ty, source)?;
                 self.enter_vla(binding, source)?;
                 let align = super::alignment::variable_alignment(
@@ -136,7 +150,9 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     ty,
                 )
                 .map_err(|kind| at(kind, source))?;
-                Local::Address(self.dynamic_object(size, Some(align)))
+                let address = self.dynamic_object(size, Some(align));
+                self.capture_allocation(binding, address);
+                Local::Address(address)
             },
             | _ => {
                 let layout =
@@ -158,8 +174,54 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 )
             },
         };
+        if self.locals_survive_setjmp() {
+            let address = match local {
+                | Local::Slot(slot) => Some(self.inst(InstData::StackAddr { slot }, Type::Ptr)),
+                | Local::Address(address) => Some(address),
+                | Local::Variable(_) => None,
+            };
+            if let Some(address) = address {
+                self.escape_for_setjmp(address, ty);
+            }
+        }
         _ = self.locals.insert(binding, local);
         Ok(local)
+    }
+
+    /// Passes the `address` of a local of type `ty` to an empty volatile
+    /// `asm` that may read and write memory, as `asm volatile("" :: "m"(x)
+    /// : "memory")` does: the optimizer may then neither keep the local in
+    /// a register nor carry a value across a call, so a resumed
+    /// `__builtin_setjmp` reads what was last stored, as GCC guarantees.
+    /// A variable length array's operand names its first byte; the memory
+    /// clobber covers the rest once its address has escaped. The wasm
+    /// target, which refuses `__builtin_setjmp`, takes no asm.
+    pub(super) fn escape_for_setjmp(&mut self, address: Value, ty: TypeId) {
+        if self.unit.target.is_wasm() {
+            return;
+        }
+        let bytes = types::layout(&self.unit.sema.types, ty)
+            .ok()
+            .and_then(|layout| u32::try_from(layout.size).ok())
+            .unwrap_or(1)
+            .max(1);
+        let asm = self.scratch.alloc(InlineAsm {
+            template:     "",
+            operands:     self.scratch.alloc_slice_copy(&[AsmOperand {
+                output: false,
+                early_clobber: false,
+                constraint: AsmConstraint::Memory,
+                ty: Type::I8,
+                bytes,
+            }]),
+            clobbers:     AsmClobbers {
+                memory: true,
+                ..AsmClobbers::default()
+            },
+            side_effects: true,
+        });
+        let args = self.scratch.alloc_slice_copy(&[address]);
+        _ = self.draft.push(Op::InlineAsm(asm, args), None);
     }
 
     /// The value of the object at `place`, whose lvalue type is `ty`,
@@ -189,6 +251,10 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             },
             | (Place::Memory(address), Repr::Complex { .. }) =>
                 self.load_complex(address, ty, source)?,
+            // GNU: a record of variable size is used where it is.
+            | (Place::Memory(address), Repr::Aggregate)
+                if types::variable_size(&self.unit.sema.types, ty) && !types::is_volatile(ty) =>
+                Operand::Aggregate(address),
             | (Place::Memory(address), Repr::Aggregate) => {
                 let layout =
                     types::layout(&self.unit.sema.types, ty).map_err(|kind| at(kind, source))?;
@@ -281,11 +347,16 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             },
             | (Place::Memory(address), Operand::Aggregate(from)) => {
                 // C99 §6.5.16.1p3: the objects may overlap only exactly.
-                let layout =
-                    types::layout(&self.unit.sema.types, ty).map_err(|kind| at(kind, source))?;
-                let guaranteed = self.place_alignment(address, types::align(layout));
-                self.retain_alignment(address, guaranteed);
-                let size = self.iconst(Type::I64, i128::from(layout.size));
+                // GNU: a record of variable size copies its run-time size.
+                let size = if types::variable_size(&self.unit.sema.types, ty) {
+                    self.runtime_size(ty, source)?
+                } else {
+                    let layout = types::layout(&self.unit.sema.types, ty)
+                        .map_err(|kind| at(kind, source))?;
+                    let guaranteed = self.place_alignment(address, types::align(layout));
+                    self.retain_alignment(address, guaranteed);
+                    self.iconst(Type::I64, i128::from(layout.size))
+                };
                 let flags = if types::is_volatile(ty) {
                     InstFlags::MAY_OVERLAP | InstFlags::VOLATILE
                 } else {
