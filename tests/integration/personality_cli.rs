@@ -1133,7 +1133,18 @@ mod tests {
                 .map(str::to_owned)
                 .collect()
         };
-        for (mode, expected) in [("--gcc-mode", ". main.h"), ("--clang-mode", ". ./main.h")] {
+        // Clang names a header beside the main file `./`, `.\\` escaped on
+        // Windows, and clang-cl's `/showIncludes` `.\` unescaped.
+        let (here, cl_here) = if cfg!(windows) {
+            (r".\\", r".\")
+        } else {
+            ("./", "./")
+        };
+        let clang_main = format!(". {here}main.h");
+        for (mode, expected) in [
+            ("--gcc-mode", ". main.h"),
+            ("--clang-mode", clang_main.as_str()),
+        ] {
             let output = directory.bcc(
                 mode,
                 &["-H", "-fsyntax-only", "-include", "forced.h", "m.c"],
@@ -1165,9 +1176,9 @@ mod tests {
         assert_eq!(
             tree(&output),
             [
-                "Note: including file: ./forced.h",
-                "Note: including file:  ./sub.h",
-                "Note: including file: ./main.h"
+                format!("Note: including file: {cl_here}forced.h"),
+                format!("Note: including file:  {cl_here}sub.h"),
+                format!("Note: including file: {cl_here}main.h")
             ],
             "{}",
             stderr(&output)
