@@ -57,6 +57,23 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         self.assignment_conversion_at(target, source, source.expression.source_vectors, site)
     }
 
+    /// [`Self::assignment_conversion`] of an initializer, reported at
+    /// `diagnostic_site`.
+    /// C99: §6.7.8p11, p. 126; PDF p. 138.
+    pub(in crate::translation_phases::semantic_analysis) fn initializer_conversion(
+        &mut self,
+        target: TypeId,
+        source: ExpressionInfo<'tu>,
+        diagnostic_site: SourceVectors,
+    ) -> bool {
+        self.assignment_conversion_at(
+            target,
+            source,
+            diagnostic_site,
+            ConversionSite::Initialization,
+        )
+    }
+
     /// Uses the assignment operator as the diagnostic location while the
     /// conversion remains attached to its operand.
     /// C99: §6.5.16.1p1, p. 92; PDF p. 104.

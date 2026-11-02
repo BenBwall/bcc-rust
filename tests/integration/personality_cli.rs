@@ -575,7 +575,10 @@ mod tests {
     #[test]
     fn implicit_declarations_follow_each_driver() {
         let directory = Directory::new();
-        directory.write("i.c", "int main(void) { return f(1); }\nint f(int x) { return x - 1; }\n");
+        directory.write(
+            "i.c",
+            "int main(void) { return f(1); }\nint f(int x) { return x - 1; }\n",
+        );
         let compile = |mode: &str, options: &[&str]| {
             let mut args = vec!["-c", "i.c", "-o", "i.o"];
             args.extend_from_slice(options);
@@ -666,9 +669,9 @@ mod tests {
         }
         directory.write(
             "known.c",
-            "#include <stdarg.h>\nstruct S { int a, b; };\nstatic int first(int n, ...) { \
-             va_list ap; va_start(ap, n); int r = va_arg(ap, int); va_end(ap); return r; \
-             }\nint main(void) { char *p = __builtin_alloca(4); p[0] = 0; return \
+            "#include <stdarg.h>\nstruct S { int a, b; };\nstatic int first(int n, ...) { va_list \
+             ap; va_start(ap, n); int r = va_arg(ap, int); va_end(ap); return r; }\nint \
+             main(void) { char *p = __builtin_alloca(4); p[0] = 0; return \
              __builtin_expect(first(1, 0), 0) + !__builtin_constant_p(3) + \
              (__builtin_frame_address(0) == 0) + __builtin_popcount(0) + \
              (int)__builtin_offsetof(struct S, a) + p[0]; }\n",
@@ -677,10 +680,7 @@ mod tests {
         succeeds(&output);
         assert_eq!(stderr(&output), "");
         // Other identities keep the GCC builtin.
-        directory.write(
-            "gcc.c",
-            "int main(void){return !__builtin_finite(1.0);}\n",
-        );
+        directory.write("gcc.c", "int main(void){return !__builtin_finite(1.0);}\n");
         let output = directory.bcc("--gcc-mode", &["-c", "gcc.c", "-o", "gcc.o"]);
         succeeds(&output);
         assert_eq!(stderr(&output), "");

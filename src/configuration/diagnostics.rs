@@ -127,7 +127,7 @@ impl CompilerConfiguration {
     /// Whether a warning was explicitly requested, independently of its
     /// context-dependent default (for example GNU folding outside bounds).
     pub(crate) fn diagnostic_requested(self, group: DiagnosticGroup) -> bool {
-        self.warning_options[group as usize].enabled == Some(true)
+        self.warning_options[group as usize].enabled() == Some(true)
     }
 
     /// Constraint diagnostics remain enabled under Allow; pedantic Deny
@@ -154,10 +154,10 @@ impl CompilerConfiguration {
                     || (group.default() == GroupDefault::Extension
                         && self.extension_policy != ExtensionPolicy::Allow),
         };
-        if !option.enabled.unwrap_or(enabled) {
+        if !option.enabled().unwrap_or(enabled) {
             return None;
         }
-        let default = if option.reenabled_warning {
+        let default = if option.reenabled_warning() {
             ErrorSeverity::Warning
         } else {
             match permerror {
@@ -173,7 +173,7 @@ impl CompilerConfiguration {
         {
             return None;
         }
-        let error = option.error.unwrap_or(
+        let error = option.error().unwrap_or(
             default == ErrorSeverity::Error
                 || self.warnings_as_errors
                 || (group.pedantic_promoted() && self.extension_policy == ExtensionPolicy::Deny),
@@ -211,6 +211,7 @@ impl CompilerConfiguration {
             Error,
             Warning,
         };
+
         use super::CompilerIdentity as I;
         let c99 = self.standard >= super::CStandard::C99;
         match self.identity {
@@ -460,20 +461,50 @@ pub(crate) enum WarningOption {
     Error(bool),
 }
 
+/// A group's options, packed into a byte so that the per-group table keeps
+/// [`CompilerConfiguration`] small enough to pass by value: whether it is
+/// enabled and whether it is an error, each unset or set (bits 0-1 and
+/// 2-3: 0 unset, 2 false, 3 true), and bit 4 for a group re-enabled after
+/// it was disabled, which Clang reports as a warning even when it defaults
+/// to an error.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct WarningSettings {
-    enabled:           Option<bool>,
-    error:             Option<bool>,
-    /// Clang re-enables a disabled default-error group as a warning.
-    reenabled_warning: bool,
-}
+pub(super) struct WarningSettings(u8);
 
 impl WarningSettings {
-    pub(super) const DEFAULT: Self = Self {
-        enabled:           None,
-        error:             None,
-        reenabled_warning: false,
-    };
+    pub(super) const DEFAULT: Self = Self(0);
+    const ENABLED: u32 = 0;
+    const ERROR: u32 = 2;
+    const REENABLED: u8 = 1 << 4;
+
+    const fn get(self, shift: u32) -> Option<bool> {
+        match (self.0 >> shift) & 3 {
+            | 0 => None,
+            | 3 => Some(true),
+            | _ => Some(false),
+        }
+    }
+
+    const fn set(&mut self, shift: u32, value: Option<bool>) {
+        let bits = match value {
+            | None => 0,
+            | Some(false) => 2,
+            | Some(true) => 3,
+        };
+        self.0 = (self.0 & !(3 << shift)) | (bits << shift);
+    }
+
+    const fn enabled(self) -> Option<bool> {
+        self.get(Self::ENABLED)
+    }
+
+    const fn error(self) -> Option<bool> {
+        self.get(Self::ERROR)
+    }
+
+    /// Clang re-enables a disabled default-error group as a warning.
+    const fn reenabled_warning(self) -> bool {
+        self.0 & Self::REENABLED != 0
+    }
 
     /// Applies a parent group's option to a child that only `-pedantic`
     /// enables: disabling it, or setting its severity, but leaving whether
@@ -481,26 +512,26 @@ impl WarningSettings {
     fn apply_to_pedantic(&mut self, option: WarningOption) {
         match option {
             | WarningOption::Enable(false) => self.apply(option),
-            | WarningOption::Enable(true) => self.enabled = None,
-            | WarningOption::Error(error) => self.error = Some(error),
+            | WarningOption::Enable(true) => self.set(Self::ENABLED, None),
+            | WarningOption::Error(error) => self.set(Self::ERROR, Some(error)),
         }
     }
 
     fn apply(&mut self, option: WarningOption) {
         match option {
             | WarningOption::Enable(enabled) => {
-                self.enabled = Some(enabled);
+                self.set(Self::ENABLED, Some(enabled));
                 if !enabled {
-                    self.reenabled_warning = true;
-                    if self.error == Some(true) {
-                        self.error = None;
+                    self.0 |= Self::REENABLED;
+                    if self.error() == Some(true) {
+                        self.set(Self::ERROR, None);
                     }
                 }
             },
             | WarningOption::Error(error) => {
-                self.error = Some(error);
+                self.set(Self::ERROR, Some(error));
                 if error {
-                    self.enabled = Some(true);
+                    self.set(Self::ENABLED, Some(true));
                 }
             },
         }

@@ -2334,9 +2334,7 @@ printf(\"%f %f %F\\n\",1e100,-0.0,1.0/0.0); return 0; }",
             }
         }
         let source = "int main(void) { exit(0); }";
-        assert!(
-            text(&bcc(source, &["--interpret", "-std=gnu89"]).stderr).contains("warning:")
-        );
+        assert!(text(&bcc(source, &["--interpret", "-std=gnu89"]).stderr).contains("warning:"));
         let output = bcc(source, &["--interpret", "-std=gnu89", "-w"]);
         assert!(output.status.success());
         assert!(output.stderr.is_empty(), "{}", text(&output.stderr));

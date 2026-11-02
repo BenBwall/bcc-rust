@@ -2941,7 +2941,7 @@ pub(in crate::translation_phases::semantic_analysis) struct ExpressionIndex<'tu>
     pub(in crate::translation_phases::semantic_analysis) conversion_starts: &'tu [usize],
 }
 
-/// Whether TCC (TinyCC mob) knows `spelling` as a builtin: the operators
+/// Whether TCC (`mob`) knows `spelling` as a builtin: the operators
 /// its parser implements (`tcctok.h`), the macros and the prototypes its
 /// `tccdefs.h` predefines (the library aliases, bound to the library names,
 /// only off Windows), and the bit-counting family its runtime provides.
@@ -2962,9 +2962,9 @@ fn tcc_builtin(spelling: &str, target: crate::target::Target) -> bool {
         "choose_expr",
     ];
     const LIBRARY: &[&str] = &[
-        "memcpy", "memmove", "memset", "memcmp", "strlen", "strcpy", "strncpy", "strcmp", "strncmp",
-        "strcat", "strncat", "strchr", "strrchr", "strdup", "malloc", "realloc", "calloc",
-        "memalign", "free", "alloca", "abort",
+        "memcpy", "memmove", "memset", "memcmp", "strlen", "strcpy", "strncpy", "strcmp",
+        "strncmp", "strcat", "strncat", "strchr", "strrchr", "strdup", "malloc", "realloc",
+        "calloc", "memalign", "free", "alloca", "abort",
     ];
     const BITS: &[&str] = &["ffs", "clz", "ctz", "clrsb", "popcount", "parity"];
     let Some(name) = spelling.strip_prefix("__builtin_") else {

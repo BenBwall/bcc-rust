@@ -449,7 +449,7 @@ fn return_mismatches_follow_the_identity_and_revision() {
     }
     with_configuration(
         "void g(void) {} void f(void) {return g();}",
-        crate::configuration::CompilerConfiguration::default().with_gnu_extensions(true),
+        CompilerConfiguration::default().with_gnu_extensions(true),
         |context, _| assert_eq!(context.pending_error_count(), 0),
     );
     assert_eq!(
@@ -873,8 +873,7 @@ fn implicit_old_style_parameters_follow_the_revision() {
                     CompilerConfiguration::new(standard, policy).with_gnu_extensions(gnu),
                     |context, _| {
                         let errors = context.take_pending_errors();
-                        let expected =
-                            (standard != CStandard::C89).then_some(ErrorSeverity::Error);
+                        let expected = (standard != CStandard::C89).then_some(ErrorSeverity::Error);
                         assert_eq!(errors.len(), usize::from(expected.is_some()), "{errors:?}");
                         if let Some(expected) = expected {
                             assert_eq!(errors[0].severity(), expected);

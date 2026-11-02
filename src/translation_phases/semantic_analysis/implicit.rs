@@ -126,7 +126,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         let Some(first) = parameters.as_slice().first() else {
                             continue;
                         };
-                        if self.context.configuration.compiler_identity().ms_compatible_rules()
+                        if self
+                            .context
+                            .configuration
+                            .compiler_identity()
+                            .ms_compatible_rules()
                             == RuleSet::Clang
                         {
                             self.error(

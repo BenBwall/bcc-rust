@@ -313,7 +313,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             self.types.nodes[result.index],
             TypeKind::Scalar(Scalar::Void)
         );
-        let name = function.syntax.declarator.identifier().map(|name| name.name);
+        let name = function
+            .syntax
+            .declarator
+            .identifier()
+            .map(|name| name.name);
         if slot.is_none() && !void {
             self.group_diagnostic(
                 crate::configuration::DiagnosticGroup::ReturnMismatch,

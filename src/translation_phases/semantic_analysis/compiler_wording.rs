@@ -159,11 +159,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             text.push_str(first);
             text.push_str(middle);
             text.push_str(last);
-            text.push_str(if matches!(site, ConversionSite::Argument { .. } | ConversionSite::Return) {
-                to
-            } else {
-                from_spelling
-            });
+            text.push_str(
+                if matches!(
+                    site,
+                    ConversionSite::Argument { .. } | ConversionSite::Return
+                ) {
+                    to
+                } else {
+                    from_spelling
+                },
+            );
             text.push('\'');
             if group != DiagnosticGroup::IncompatibleFunctionPointerTypes {
                 text.push_str(self.clang_conversion_hint(target, from, source));
@@ -191,8 +196,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if matches!(
             source.category,
             ValueCategory::Lvalue | ValueCategory::ModifiableLvalue
-        )
-            && let Some(pointee) = self.pointer_target(target)
+        ) && let Some(pointee) = self.pointer_target(target)
             && pointee.qualifiers.contains(source.ty.qualifiers)
             && self
                 .types
@@ -352,9 +356,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// A scalar type's keywords: GCC's, which spell out `int` and put
     /// `unsigned` after the size, or Clang's; `bool` from C23.
     fn diagnostic_scalar_spelling(&self, scalar: Scalar, gcc: bool) -> &'static str {
-        if scalar == Scalar::Bool
-            && self.context.configuration.standard() >= CStandard::C23
-        {
+        if scalar == Scalar::Bool && self.context.configuration.standard() >= CStandard::C23 {
             return "bool";
         }
         match (scalar, gcc) {

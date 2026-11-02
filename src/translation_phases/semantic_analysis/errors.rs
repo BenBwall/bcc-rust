@@ -1014,11 +1014,11 @@ impl SemanticErrorKind {
             | Self::VoidReturnMismatch => "value returned from a void function",
             | Self::ReturnMismatch => "no return value",
             | Self::ImplicitFunctionDeclaration => "undeclared function called here",
-            | Self::ImplicitInt | Self::ImplicitIntReturn => "no type specifier",
+            | Self::ImplicitInt | Self::ImplicitIntReturn | Self::TypeSpecifierRequired =>
+                "no type specifier",
             | Self::ImplicitIntParameter => "undeclared parameter",
             | Self::DeclarationMissingParameterType | Self::IdentifierListDeclaration =>
                 "parameter names without types",
-            | Self::TypeSpecifierRequired => "no type specifier",
             | Self::InvalidReturnConversion => "value cannot be returned as the result type",
             | Self::InvalidForDeclaration => "not an automatic object",
             | Self::DuplicateLabel => "label defined again here",
@@ -2351,7 +2351,10 @@ impl SemanticError {
         let format = context.configuration.diagnostic_format();
         let name = self.name.map_or("", |name| context.string_cache.at(name));
         let c99 = context.configuration.standard() >= crate::configuration::CStandard::C99;
-        let group = self.kind.group().and_then(crate::configuration::DiagnosticGroup::name);
+        let group = self
+            .kind
+            .group()
+            .and_then(crate::configuration::DiagnosticGroup::name);
         let iso = if c99 {
             "; ISO C99 and later do not support implicit int"
         } else {
@@ -2365,7 +2368,8 @@ impl SemanticError {
                 if self.name.is_some() =>
             {
                 let option = if format == F::Gcc
-                    && group == crate::configuration::DiagnosticGroup::IncompatibleFunctionPointerTypes
+                    && group
+                        == crate::configuration::DiagnosticGroup::IncompatibleFunctionPointerTypes
                 {
                     crate::configuration::DiagnosticGroup::IncompatiblePointerTypes.name()
                 } else {
@@ -2373,24 +2377,23 @@ impl SemanticError {
                 };
                 return Some((arena.alloc_str(name), option));
             },
-            | (F::Gcc | F::Tcc, SemanticErrorKind::ImplicitFunctionDeclaration) =>
-                format_in!(arena, "implicit declaration of function '{name}'"),
-            | (F::Gcc, SemanticErrorKind::ImplicitLibraryFunction(_)) if c99 =>
-                format_in!(arena, "implicit declaration of function '{name}'"),
-            | (F::Gcc, SemanticErrorKind::ImplicitLibraryFunction(_)) => {
+            | (F::Gcc, SemanticErrorKind::ImplicitLibraryFunction(_)) if !c99 => {
                 let message = format_in!(
                     arena,
                     "incompatible implicit declaration of built-in function '{name}'"
                 );
                 return Some((message, Some("builtin-declaration-mismatch")));
             },
-            | (F::Tcc, SemanticErrorKind::ImplicitLibraryFunction(_)) =>
-                format_in!(arena, "implicit declaration of function '{name}'"),
             | (F::Clang, SemanticErrorKind::ImplicitFunctionDeclaration) if c99 => format_in!(
                 arena,
                 "call to undeclared function '{name}'; ISO C99 and later do not support implicit \
                  function declarations"
             ),
+            | (
+                F::Gcc | F::Tcc,
+                SemanticErrorKind::ImplicitFunctionDeclaration
+                | SemanticErrorKind::ImplicitLibraryFunction(_),
+            )
             | (F::Clang, SemanticErrorKind::ImplicitFunctionDeclaration) =>
                 format_in!(arena, "implicit declaration of function '{name}'"),
             | (F::Clang, SemanticErrorKind::ImplicitLibraryFunction(ty)) if c99 => format_in!(
