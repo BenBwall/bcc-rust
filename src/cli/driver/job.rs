@@ -66,7 +66,7 @@ pub(super) fn compile(
     args: &Cli,
     source: Source<'_>,
     job: Job<'_>,
-    dependencies: Option<DependencyRequest>,
+    dependencies: Option<&DependencyRequest>,
 ) -> Result<Generated, MainError> {
     let tu = Bump::new();
     let read: Result<(&str, bool, &Path), _> = match source {
@@ -161,7 +161,8 @@ pub(super) fn compile(
         job,
     )?;
     if let Some(dependencies) = dependencies {
-        dependencies::write(&context, args, &dependencies)?;
+        let stdin = matches!(source, Source::File(path) | Source::Preprocessed(path) if path == Path::new("-"));
+        dependencies::write(&context, args, dependencies, stdin)?;
     }
     if args.driver.header_tree {
         dependencies::header_tree(&context);
