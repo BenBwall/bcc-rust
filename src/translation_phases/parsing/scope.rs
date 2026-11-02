@@ -50,26 +50,30 @@ pub(super) struct ScopeStack<'p> {
     /// The file-scope names whose latest declaration is a typedef, indexed
     /// by string-cache ID. A file-scope ordinary declaration of the name
     /// removes it.
-    file_typedefs:            RegionBitSet,
+    file_typedefs:               RegionBitSet,
     /// Nested scopes, with the innermost scope last.
-    pub(super) nested_scopes: ArenaVec<'p, Scope>,
+    pub(super) nested_scopes:    ArenaVec<'p, Scope>,
     /// Bindings of every open nested scope in the order they were made, so a
     /// scope's bindings follow those of the scopes enclosing it.
-    bindings:                 ArenaVec<'p, Binding>,
+    bindings:                    ArenaVec<'p, Binding>,
     /// The innermost nested binding of each name that has one, as an index
     /// into `bindings`, so a lookup costs one probe however many scopes are
     /// open.
-    innermost:                ArenaMap<'p, StringCacheId, usize>,
+    innermost:                   ArenaMap<'p, StringCacheId, usize>,
     /// Records of prototype scopes whose bindings outlive the scope for a
     /// possible function definition (C99 §6.2.1p4).
-    retained_prototypes:      ArenaVec<'p, RetainedPrototype>,
+    retained_prototypes:         ArenaVec<'p, RetainedPrototype>,
     /// Bindings referenced by `retained_prototypes`.
-    retained_names:           ArenaVec<'p, (StringCacheId, NameClass)>,
+    retained_names:              ArenaVec<'p, (StringCacheId, NameClass)>,
+    /// Whether selection and iteration statements form blocks of their
+    /// own, as since C99; in C90 and C95 their bindings belong to the
+    /// enclosing block.
+    pub(super) statement_blocks: bool,
     #[cfg(test)]
-    pub(super) trace:         ScopeTrace,
+    pub(super) trace:            ScopeTrace,
     /// Hash-map probes made by name lookups, for complexity regression tests.
     #[cfg(test)]
-    pub(super) lookup_probes: std::cell::Cell<usize>,
+    pub(super) lookup_probes:    std::cell::Cell<usize>,
 }
 
 impl ScopeStack<'_> {
@@ -135,6 +139,17 @@ impl ScopeStack<'_> {
         );
         while self.nested_scopes.len() > depth {
             let Scope { kind, start } = self.nested_scopes.pop().expect("scope depth was checked");
+            // A C90 selection or iteration statement forms no block: its
+            // bindings join the enclosing one.
+            let implicit = matches!(
+                kind,
+                ScopeKind::ImplicitSelection | ScopeKind::ImplicitIteration
+            );
+            let start = if implicit && !self.statement_blocks && !self.nested_scopes.is_empty() {
+                self.bindings.len()
+            } else {
+                start
+            };
             while self.bindings.len() > start {
                 let binding = self.bindings.pop().expect("binding count was checked");
                 if binding.outer == NO_OUTER_BINDING {
@@ -376,6 +391,7 @@ impl<'p> ScopeStack<'p> {
             innermost:                  ArenaMap::with_hasher_in(FxBuildHasher, arena),
             retained_prototypes:        ArenaVec::new_in(arena),
             retained_names:             ArenaVec::new_in(arena),
+            statement_blocks:           true,
             #[cfg(test)]
             trace:                      ScopeTrace::new(),
             #[cfg(test)]

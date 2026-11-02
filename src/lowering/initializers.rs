@@ -426,6 +426,12 @@ impl<'tu, 's> FunctionLowerer<'_, '_, 'tu, '_, 's> {
                     value,
                     bit_field,
                 } => {
+                    // GCC saturates a floating `?:` initializing a bit-field
+                    // to the field's width, arm by arm (`saturation.rs`).
+                    if let Some(bits) = bit_field {
+                        let signed = self.repr(ty, expression.source_vectors)?.signed();
+                        _ = self.distribute(expression, &[], Some((bits.width, signed)))?;
+                    }
                     self.initializer_expression(
                         &mut tasks,
                         &mut remembered,

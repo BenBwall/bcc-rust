@@ -39,18 +39,20 @@
 //!   lists.
 //! - Function bodies: `work.rs` defines tasks and operands; `statements.rs`
 //!   lowers statements and declarations; `expressions.rs` operators, calls and
-//!   conversions, including the floating ones; `half.rs` the `_Float16` values
-//!   evaluated in `float`; `argument_pack.rs` the copies of a function using
-//!   GNU `__builtin_va_arg_pack ()` made for its calls; `places.rs` lvalues,
-//!   loads and stores; `alignment.rs` owns backing-place guarantees and all
-//!   memory and allocation alignment; `bit_fields.rs` bit-field reads and
-//!   writes; `bit_int.rs` the bit-precise integers calls pass in memory;
-//!   `wide_bit_int.rs` those of more than 128 bits, which live in memory and
-//!   compute in the C runtime beside it; `vectors.rs` GNU vectors, which live
-//!   in memory and compute lane by lane; `initializers.rs` walks braced
-//!   initializers; `assembly.rs` lowers GNU `asm` statements; `vla.rs`
-//!   evaluates saved array extents and runs the cleanups of the regions an exit
-//!   leaves: dynamic stack restores, and GNU cleanup calls from `cleanup.rs`.
+//!   conversions, including the floating ones; `saturation.rs` GCC's folds of
+//!   floating constants converted out of an integer's range; `half.rs` the
+//!   `_Float16` values evaluated in `float`; `argument_pack.rs` the copies of a
+//!   function using GNU `__builtin_va_arg_pack ()` made for its calls;
+//!   `places.rs` lvalues, loads and stores; `alignment.rs` owns backing-place
+//!   guarantees and all memory and allocation alignment; `bit_fields.rs`
+//!   bit-field reads and writes; `bit_int.rs` the bit-precise integers calls
+//!   pass in memory; `wide_bit_int.rs` those of more than 128 bits, which live
+//!   in memory and compute in the C runtime beside it; `vectors.rs` GNU
+//!   vectors, which live in memory and compute lane by lane; `initializers.rs`
+//!   walks braced initializers; `assembly.rs` lowers GNU `asm` statements;
+//!   `vla.rs` evaluates saved array extents and runs the cleanups of the
+//!   regions an exit leaves: dynamic stack restores, and GNU cleanup calls from
+//!   `cleanup.rs`.
 //! - Construction: `ssa.rs` holds the draft function and its SSA variables;
 //!   `emit.rs` copies a finished draft into the module; `types.rs` maps C types
 //!   to IR types; shared `crate::float_parsing::bits` turns folded floating
@@ -87,6 +89,7 @@ mod nested;
 mod places;
 #[cfg(feature = "recursive-lowering-study")]
 mod recursive;
+mod saturation;
 mod statements;
 mod vectors;
 mod vla;
@@ -561,77 +564,83 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
                 otherwise,
                 merge,
                 ty,
-            } => {
-                self.conditional_arms(conditional, then, otherwise, merge, ty);
-                Ok(())
-            },
+                distribution,
+            } => self.conditional_arms(conditional, then, otherwise, merge, ty, distribution),
+            | Task::ConvertArm(index) => self.convert_arm(index),
         }
     }
 }
 
 /// The state of lowering one function body.
 struct FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
-    unit:               &'u mut Unit<'a, 'tu, 'ir>,
-    record:             &'tu FunctionRecord<'tu>,
+    unit:                &'u mut Unit<'a, 'tu, 'ir>,
+    record:              &'tu FunctionRecord<'tu>,
     /// The function's name, for naming its static locals.
-    name:               &'a str,
-    draft:              Draft<'s>,
-    scratch:            &'s Bump,
+    name:                &'a str,
+    draft:               Draft<'s>,
+    scratch:             &'s Bump,
     #[cfg(feature = "recursive-lowering-study")]
-    recursion:          recursive::State,
-    tasks:              ArenaVec<'s, Task<'tu>>,
-    operands:           ArenaVec<'s, Item>,
-    complex_values:     ArenaVec<'s, [crate::ir::Value; 2]>,
+    recursion:           recursive::State,
+    tasks:               ArenaVec<'s, Task<'tu>>,
+    operands:            ArenaVec<'s, Item>,
+    complex_values:      ArenaVec<'s, [crate::ir::Value; 2]>,
     /// The `f32` values GCC carries for a plain half converted to the
     /// other half type, which a cast leaves unrounded (`half.rs`).
-    widened:            ArenaVec<'s, crate::ir::Value>,
+    widened:             ArenaVec<'s, crate::ir::Value>,
     /// The constants among them, which GCC rounds as `?:` arms.
-    widened_constants:  ArenaVec<'s, crate::ir::Value>,
+    widened_constants:   ArenaVec<'s, crate::ir::Value>,
     /// Folded half constants GCC does not fold as it parses, which it
     /// converts as run-time values.
-    runtime_constants:  ArenaVec<'s, crate::ir::Value>,
+    runtime_constants:   ArenaVec<'s, crate::ir::Value>,
     /// The arms of GCC's conditionals, by address, and whether either arm
     /// of each is evaluated with excess precision (`half.rs`).
-    conditional_arms:   ArenaVec<'s, (usize, bool)>,
+    conditional_arms:    ArenaVec<'s, (usize, bool)>,
     /// Whether the conversions being applied belong to an arm of a GCC
     /// conditional neither of whose arms keeps excess precision.
-    plain_arm:          bool,
-    initializer_values: ArenaVec<'s, Item>,
+    plain_arm:           bool,
+    /// The latest conversion of a floating constant to an integer under
+    /// GCC's rules, with the constant's bits and type, until the next
+    /// conversions or store (`saturation.rs`).
+    floating_conversion: Option<(crate::ir::Value, u128, Type)>,
+    /// The expressions whose integer conversion GCC folds into the arms of
+    /// a floating `?:` (`saturation.rs`).
+    distributions:       ArenaVec<'s, saturation::Distribution<'s>>,
+    initializer_values:  ArenaVec<'s, Item>,
     /// The guaranteed alignment of each known backing address.
-    alignments:         ArenaMap<'s, crate::ir::Value, crate::ir::Align>,
+    alignments:          ArenaMap<'s, crate::ir::Value, crate::ir::Align>,
     /// The storage of each automatic object, by binding.
-    locals:             ArenaMap<'s, usize, Local>,
-    incoming_sizes:     ArenaMap<'s, usize, crate::ir::Value>,
+    locals:              ArenaMap<'s, usize, Local>,
+    incoming_sizes:      ArenaMap<'s, usize, crate::ir::Value>,
     /// The block of each label, created at its first `goto` or definition.
-    labels:             ArenaMap<'s, LabelId, Block>,
-    targets:            ArenaMap<'s, StatementId, JumpTargets>,
+    labels:              ArenaMap<'s, LabelId, Block>,
+    targets:             ArenaMap<'s, StatementId, JumpTargets>,
     /// The case blocks of the open switches, sealed when each ends.
-    switch_blocks:      ArenaVec<'s, Block>,
+    switch_blocks:       ArenaVec<'s, Block>,
     /// Where each open switch's blocks start in `switch_blocks`.
-    switch_starts:      ArenaVec<'s, usize>,
+    switch_starts:       ArenaVec<'s, usize>,
     /// The stack slots of wide `_BitInt` results, and the address of the
     /// live value each holds (`wide_bit_int.rs`).
-    wide_temporaries:   ArenaVec<'s, wide_bit_int::Temporary>,
+    wide_temporaries:    ArenaVec<'s, wide_bit_int::Temporary>,
     /// While positive, a consumed wide result keeps its slot: the code
     /// being lowered runs more than once (an atomic update's retry loop).
-    wide_holds:         u32,
+    wide_holds:          u32,
     /// The unqualified result type that `return` converts to.
-    result:             TypeId,
-    bounds:             ArenaMap<'s, usize, ssa::Var>,
-    vla_tokens:         ArenaMap<'s, RegionId, ssa::Var>,
+    result:              TypeId,
+    bounds:              ArenaMap<'s, usize, ssa::Var>,
+    vla_tokens:          ArenaMap<'s, RegionId, ssa::Var>,
     /// The block computed gotos branch through, once one exists.
-    indirect:           Option<Block>,
+    indirect:            Option<Block>,
     /// In a copy made for a call (`argument_pack.rs`), the anonymous
     /// arguments it received.
-    pack:               Option<&'s [Item]>,
+    pack:                Option<&'s [Item]>,
     /// A nested function's static chain: its definer's record
     /// (`nested.rs`).
-    chain_in:           Option<crate::ir::Value>,
+    chain_in:            Option<crate::ir::Value>,
     /// This function's own chain record, if it defines nested functions.
-    chain_record:       Option<crate::ir::Value>,
+    chain_record:        Option<crate::ir::Value>,
     /// The trampoline slot of each nested function whose address this
     /// function takes.
-    trampolines:        ArenaMap<'s, FuncId, crate::ir::StackSlot>,
+    trampolines:         ArenaMap<'s, FuncId, crate::ir::StackSlot>,
 }
 
 /// Traversal controls kept outside the AST and retained IR.

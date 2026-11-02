@@ -14,6 +14,24 @@
 //! - `va_arg` evaluates the size expressions of its type name
 //!   (gcc.dg/vla-14.c), and under GCC's rules an `alloca` block outlives the
 //!   VLA scope it was made in (gcc.dg/vla-24.c).
+//! - Under C90 a selection or iteration statement forms no block, so a tag or
+//!   enumeration constant declared in its controlling expression stays visible
+//!   after it (gcc.dg/c90-scope-1.c).
+//! - Under GCC's rules a floating constant converted out of an integer's range
+//!   folds to the bound GCC saturates it to
+//!   (gcc.c-torture/execute/20031003-1.c).
+//! - Under GCC's rules the arms of a floating `?:` converted to an integer
+//!   saturate one by one, to a bit-field's width when stored into one (review
+//!   of #231).
+//! - A trailing array reached through a pointer has no subobject size of its
+//!   own for `__builtin_object_size` mode 1 (`gcc.dg/pr101836_5.c`).
+//! - Under GCC's rules the size-specific atomic routines such as
+//!   `__atomic_store_16` have libatomic's prototypes, so their operands keep
+//!   their width (gcc.dg/atomic-store-6.c).
+//! - The conversions between floating types and `_BitInt` wider than 128 bits
+//!   round as the rounding mode asks, raise "invalid" and saturate out of
+//!   range, and raise "inexact" for a discarded fraction (gcc.dg/bitint-28.c,
+//!   bitint-29.c, bitint-31.c).
 
 #[cfg(test)]
 #[expect(
@@ -522,6 +540,336 @@ mod tests {
         prints_on_every_back_end("--compiler-identity=gcc", source, &["-std=gnu99"], "");
     }
 
+    /// C90, and C95 with it, has no blocks for selection and iteration
+    /// statements: a tag or enumeration constant, which may hide a typedef
+    /// name, declared in a controlling expression belongs to the enclosing
+    /// block, as in GCC and Clang, under every spelling of those modes, and
+    /// so does a `for` declaration. A compound substatement is still a
+    /// block of its own.
+    #[test]
+    fn c90_selection_and_iteration_statements_form_no_blocks() {
+        let source = b"struct foo { char a; };\n\
+            typedef int T;\n\
+            int sfoo(void) {\n\
+            if (sizeof (struct foo { int a; double b; }))\n\
+            (void) 0;\n\
+            return sizeof (struct foo);\n\
+            }\n\
+            int counted(void) {\n\
+            int n = 0;\n\
+            while (sizeof (enum { E = 3 }) && n < E)\n\
+            n++;\n\
+            return E + n;\n\
+            }\n\
+            int shadowed(void) {\n\
+            if (sizeof (enum { T = 2 }))\n\
+            ;\n\
+            return T;\n\
+            }\n\
+            int compound(void) {\n\
+            if (1) {\n\
+            struct foo { int w[4]; };\n\
+            }\n\
+            return sizeof (struct foo);\n\
+            }\n\
+            int main(void) {\n\
+            return sfoo() != 16 || counted() != 6 || shadowed() != 2 || compound() != 1;\n\
+            }\n";
+        for identity in IDENTITIES {
+            for standard in [
+                "-std=c89",
+                "-std=c90",
+                "-std=iso9899:1990",
+                "-std=iso9899:199409",
+                "-std=gnu89",
+                "-std=gnu90",
+            ] {
+                prints_on_every_back_end(identity, source, &[standard, "-pedantic-errors"], "");
+            }
+        }
+        let c99 = b"struct foo { char a; };\n\
+            int main(void) {\n\
+            if (sizeof (struct foo { int a; double b; }))\n\
+            (void) 0;\n\
+            for (int i = 0; i < (int)sizeof (struct foo { int w[4]; }); i++)\n\
+            ;\n\
+            return sizeof (struct foo) != 1;\n\
+            }\n";
+        for identity in IDENTITIES {
+            prints_on_every_back_end(identity, c99, &["-std=c99"], "");
+        }
+        // A `for` declaration, a C99 feature Clang accepts under gnu89 (GCC
+        // rejects it), belongs to the enclosing block too.
+        let declaration = b"int main(void) {\n\
+            for (int i = 0; i < 3; i++)\n\
+            ;\n\
+            return i - 3;\n\
+            }\n";
+        prints_on_every_back_end(IDENTITIES[0], declaration, &["-std=gnu89", "-w"], "");
+    }
+
+    /// GCC folds a floating constant converted out of an integer type's
+    /// range to the bound it saturates to (0 for a NaN) in code, as in a
+    /// static initializer; the conversion is undefined, and Clang converts
+    /// at run time.
+    #[test]
+    fn out_of_range_float_constants_fold_to_gccs_bound() {
+        let source = b"__attribute__((noinline)) int f1(void) { return (int)2147483648.0f; }\n\
+            __attribute__((noinline)) int f2(void) { return (int)(float)2147483647; }\n\
+            __attribute__((noinline)) unsigned f3(void) { return (unsigned)-1.0; }\n\
+            __attribute__((noinline)) int f4(void) { return (int)__builtin_nan(\"\"); }\n\
+            __attribute__((noinline)) int f5(void) { return (int)-1e10 == -2147483647 - 1; }\n\
+            int main(void) {\n\
+            return f1() != 2147483647 || f2() != 2147483647 || f3() != 0 || f4() != 0 || !f5();\n\
+            }\n";
+        prints_on_every_back_end("--compiler-identity=gcc", source, &["-w"], "");
+        // The implicit conversions of such constants fold too: assignment,
+        // initialization, argument, return, and a bit-field store, which
+        // GCC saturates to the field's width.
+        let implicit = b"#include <stdio.h>\n\
+            struct B { int b : 5; unsigned u : 5; } bs;\n\
+            __attribute__((noinline)) int id(int x) { return x; }\n\
+            __attribute__((noinline)) int ret(void) { return 3e9; }\n\
+            __attribute__((noinline)) unsigned char retc(void) { return 300.0; }\n\
+            int main(void) {\n\
+            int x; x = 3e9; printf(\"%d\", x);\n\
+            int y = -3e9; printf(\" %d\", y);\n\
+            printf(\" %d %d %d\", id(3e9), ret(), retc());\n\
+            unsigned u; u = -1.0; printf(\" %u\", u);\n\
+            struct B l = { 1e10, 1e10 }; printf(\" %d %u\", l.b, l.u);\n\
+            bs.b = 1e10; bs.u = -1e10; printf(\" %d %u\", bs.b, bs.u);\n\
+            printf(\" %d\\n\", bs.b = -1e10);\n\
+            return 0;\n\
+            }\n";
+        prints_on_every_back_end(
+            "--compiler-identity=gcc",
+            implicit,
+            &["-w"],
+            "2147483647 -2147483648 2147483647 2147483647 255 0 15 31 15 0 -16\n",
+        );
+        // Only a store whose operand is the floating constant saturates to
+        // the field: an integer converted from one earlier, or by a cast,
+        // keeps its low bits, and a constant in the declared type's range
+        // still saturates to the field's.
+        let fields = b"#include <stdio.h>\n\
+            struct B { int s : 5; unsigned u : 5; };\n\
+            int main(void) {\n\
+            struct B a = { 100.0, 100.0 };\n\
+            struct B b; b.s = 100.0; b.u = 100.0;\n\
+            struct B c; c.s = (int)1e10; c.u = (unsigned)1e10;\n\
+            struct B d; d.s = (int)100.0; d.u = (unsigned)100.0;\n\
+            struct B e; int x = 1e10; unsigned y = 1e10; e.s = x; e.u = y;\n\
+            struct B f; f.s = 7.9; f.u = -0.5;\n\
+            printf(\"%d %u / %d %u / %d %u / %d %u / %d %u / %d %u\\n\", a.s, a.u, b.s, b.u, c.s,\n\
+            c.u, d.s, d.u, e.s, e.u, f.s, f.u);\n\
+            return 0;\n\
+            }\n";
+        prints_on_every_back_end(
+            "--compiler-identity=gcc",
+            fields,
+            &["-w"],
+            "15 31 / 15 31 / -1 31 / 4 4 / -1 31 / 7 0\n",
+        );
+    }
+
+    /// GCC folds the conversion of a floating `?:` to an integer into its
+    /// arms: each constant arm saturates on its own, to a bit-field's width
+    /// when the `?:` is stored into one, also through nested `?:`,
+    /// parentheses, casts to floating types and arms converted to the
+    /// `?:`'s type, while a run-time arm converts as it would alone and a
+    /// cast to an integer type ends the saturation. Clang converts the
+    /// merged value at run time.
+    #[test]
+    fn conditional_floating_constants_saturate_arm_by_arm() {
+        let source = b"#include <stdio.h>\n\
+            struct B { int s : 5; unsigned u : 5; };\n\
+            volatile double e = 7.0;\n\
+            __attribute__((noinline)) void f(int c, int k) {\n\
+            struct B b;\n\
+            b.s = c ? 100.0 : 200.0; b.u = c ? 100.0 : 200.0; printf(\"a %d %u\\n\", b.s, b.u);\n\
+            b.s = c ? 100.0 : 100.0; b.u = c ? -1e10 : 1e10; printf(\"b %d %u\\n\", b.s, b.u);\n\
+            b.s = c ? (k ? 100.0 : 3.0) : -100.0; b.u = c ? (k ? 100.0 : 3.0) : 2.0;\n\
+            printf(\"c %d %u\\n\", b.s, b.u);\n\
+            b.s = c ? 100.0 : e; b.u = c ? 100.0 : e; printf(\"d %d %u\\n\", b.s, b.u);\n\
+            b.s = (double)(c ? 100.0 : 200.0); b.u = (float)(c ? 100.0 : 200.0);\n\
+            printf(\"e %d %u\\n\", b.s, b.u);\n\
+            b.s = (int)(c ? 100.0 : 200.0); b.u = (unsigned)(c ? 100.0 : 200.0);\n\
+            printf(\"f %d %u\\n\", b.s, b.u);\n\
+            b.s = c ? 100 : 200.0; printf(\"g %d\\n\", b.s);\n\
+            b.s = c ? 100.0f : 200.0; printf(\"i %d\\n\", b.s);\n\
+            int x = c ? 1e10 : 2e10; b.s = x; printf(\"j %d %d\\n\", x, b.s);\n\
+            }\n\
+            int main(void) { f(0, 0); f(1, 0); f(1, 1); return 0; }\n";
+        let expected = [
+            "a 15 31\nb 15 31\nc -16 2\nd 7 7\ne 15 31\nf 8 8\ng 15\ni 15\nj 2147483647 -1\n",
+            "a 15 31\nb 15 0\nc 3 3\nd 15 31\ne 15 31\nf 4 4\ng 15\ni 15\nj 2147483647 -1\n",
+            "a 15 31\nb 15 0\nc 15 31\nd 15 31\ne 15 31\nf 4 4\ng 15\ni 15\nj 2147483647 -1\n",
+        ]
+        .concat();
+        prints_on_every_back_end("--compiler-identity=gcc", source, &["-w"], &expected);
+        // Initializers, arguments and returns, of `int` and wider types.
+        let contexts = b"#include <stdio.h>\n\
+            struct B { int s : 5; unsigned u : 5; };\n\
+            __attribute__((noinline)) int id(int x) { return x; }\n\
+            __attribute__((noinline)) int ret(int c) { return c ? 1e10 : -1e10; }\n\
+            __attribute__((noinline)) unsigned char retc(int c) { return c ? 300.0 : -5.0; }\n\
+            __attribute__((noinline)) void f(int c) {\n\
+            struct B a = { c ? 100.0 : 200.0, (c ? 100.0 : 200.0) };\n\
+            struct B l[1] = { { c ? -100.0 : 1.0, c ? 3.0 : 40.0 } };\n\
+            printf(\"%d %u %d %u %d %d %d\", a.s, a.u, l[0].s, l[0].u, id(c ? 1e10 : 2.0), ret(c),\n\
+            retc(c));\n\
+            unsigned u = c ? -1.0 : 5e9; long long w = c ? 1e30 : -1e30;\n\
+            printf(\" %u %lld\\n\", u, w);\n\
+            }\n\
+            int main(void) { f(0); f(1); return 0; }\n";
+        prints_on_every_back_end(
+            "--compiler-identity=gcc",
+            contexts,
+            &["-w"],
+            "15 31 1 31 2 -2147483648 0 4294967295 -9223372036854775808\n15 31 -16 3 2147483647 \
+             2147483647 255 0 9223372036854775807\n",
+        );
+        let stored = b"#include <stdio.h>\n\
+            struct B { int s : 5; unsigned u : 5; };\n\
+            __attribute__((noinline)) void f(int c) {\n\
+            struct B b;\n\
+            b.s = c ? 100.0 : 200.0;\n\
+            b.u = c ? 100.0 : 200.0;\n\
+            printf(\"%d %u\\n\", b.s, b.u);\n\
+            }\n\
+            int main(void) { f(0); f(1); return 0; }\n";
+        prints_on_every_back_end("--compiler-identity=gcc", stored, &["-w"], "15 31\n15 31\n");
+        prints_on_every_back_end("--compiler-identity=clang", stored, &["-w"], "8 8\n4 4\n");
+    }
+
+    /// A trailing array member reached through a pointer may extend past
+    /// its bound, as a flexible array member does, so GCC and Clang answer
+    /// `__builtin_object_size` mode 1 for it from the complete object:
+    /// unknown through a parameter, the remaining size once the object is
+    /// known (a local, an allocation), so that mode 1 never exceeds mode 0
+    /// and a fortified copy into it does not trap. Mode 3 keeps its declared
+    /// size, as in Clang (GCC 13 answers 0); so do an array that is no
+    /// trailing one and the array of a declared object. Clang also takes a
+    /// trailing structure member's trailing array, and the last element of
+    /// each dimension of a trailing array of structures, as unbounded;
+    /// GCC 13 at `-O2` bounds both by their declared size (at `-O0` it
+    /// answers every query through a pointer unknown).
+    #[test]
+    fn trailing_arrays_through_pointers_have_no_subobject_bound() {
+        let source = b"#include <stdio.h>\n\
+            #include <stdlib.h>\n\
+            struct a { int x; int c[4]; };\n\
+            struct b { int c[4]; int x; };\n\
+            struct n { int y; struct a in; };\n\
+            union u { int c[2]; char d; };\n\
+            struct f { int n; char c[4]; };\n\
+            struct e { int n; struct f a[2]; };\n\
+            struct m { int n; struct f a[2][2]; };\n\
+            __attribute__((noinline)) void f(struct a *p, struct b *q, struct n *r, union u *v,\n\
+            struct e *w, struct m *x) {\n\
+            struct a s;\n\
+            printf(\"%zd %zd %zd %zd %zd %zd %zd %zd\\n\", __builtin_object_size(p->c, 1),\n\
+            __builtin_object_size(p->c, 3), __builtin_object_size((*p).c, 1),\n\
+            __builtin_object_size(q->c, 1), __builtin_object_size(r->in.c, 1),\n\
+            __builtin_object_size(v->c, 1), __builtin_object_size(s.c, 1),\n\
+            __builtin_object_size(&p->c[1], 1));\n\
+            printf(\"%zd %zd %zd\\n\", __builtin_object_size(p[0].c, 1),\n\
+            __builtin_object_size(w->a[1].c, 1), __builtin_object_size(w->a[0].c, 1));\n\
+            printf(\"%zd %zd %zd\\n\", __builtin_object_size(x->a[1][1].c, 1),\n\
+            __builtin_object_size(x->a[1][0].c, 1), __builtin_object_size(x->a[0][1].c, 1));\n\
+            }\n\
+            __attribute__((noinline)) void fill(struct f *p, const char *s, size_t n) {\n\
+            __builtin___memcpy_chk(p[0].c, s, n, __builtin_object_size(p[0].c, 1));\n\
+            }\n\
+            int main(void) {\n\
+            static char buf[64];\n\
+            f((void *)buf, (void *)buf, (void *)buf, (void *)buf, (void *)buf, (void *)buf);\n\
+            struct f local, *lp = &local;\n\
+            struct f *hp = malloc(sizeof (struct f) + 10);\n\
+            printf(\"%zd %zd %zd %zd\\n\", __builtin_object_size(lp->c, 1),\n\
+            __builtin_object_size(lp->c, 0), __builtin_object_size(hp->c, 1),\n\
+            __builtin_object_size(hp->c + 2, 1));\n\
+            struct f *big = malloc(sizeof *big + 16);\n\
+            fill(big, \"0123456789\", 10);\n\
+            printf(\"%.10s\\n\", big->c);\n\
+            return 0;\n\
+            }\n";
+        prints_on_every_back_end(
+            IDENTITIES[0],
+            source,
+            &[],
+            "-1 16 -1 16 -1 -1 16 -1\n-1 -1 4\n-1 4 4\n4 4 14 12\n0123456789\n",
+        );
+        prints_on_every_back_end(
+            IDENTITIES[1],
+            source,
+            &[],
+            "-1 16 -1 16 16 -1 16 -1\n-1 4 4\n4 4 4\n4 4 14 12\n0123456789\n",
+        );
+    }
+
+    /// Conversions between floating types and a `_BitInt` wider than 128
+    /// bits follow Annex F as GCC's libgcc does: the rounding mode decides
+    /// the direction for a negative value too, a value out of range or a
+    /// NaN raises "invalid" and gives the nearest bound (the maximum for a
+    /// NaN), and a discarded fraction raises "inexact". The operands are
+    /// volatile, as no `FENV_ACCESS` keeps LLVM from reusing a conversion
+    /// across `fesetround`. Built only: the interpreter has no
+    /// floating-point environment.
+    #[test]
+    fn wide_bit_int_floating_conversions_follow_the_floating_environment() {
+        let source = b"#include <fenv.h>\n\
+            #include <stdio.h>\n\
+            __attribute__((noinline)) _BitInt(135) from_d(double d) { return d; }\n\
+            __attribute__((noinline)) unsigned _BitInt(135) from_du(double d) { return d; }\n\
+            __attribute__((noinline)) _BitInt(135) from_l(long double d) { return d; }\n\
+            __attribute__((noinline)) float to_f(_BitInt(192) b) { return b; }\n\
+            __attribute__((noinline)) double to_d(_BitInt(192) b) { return b; }\n\
+            static volatile _BitInt(192) negative = -10141203895131470501001744613377wb,\n\
+            positive = 10141203895131470501001744613377wb,\n\
+            wide = -(((_BitInt(192))0x20000000000001 << 80) | 1);\n\
+            static int flags(void) {\n\
+            int raised = (fetestexcept(FE_INVALID) ? 1 : 0) | (fetestexcept(FE_INEXACT) ? 2 : 0);\n\
+            feclearexcept(FE_ALL_EXCEPT);\n\
+            return raised;\n\
+            }\n\
+            int main(void) {\n\
+            const _BitInt(135) max = 21778071482940061661655974875633165533183wb;\n\
+            feclearexcept(FE_ALL_EXCEPT);\n\
+            printf(\"%d\", from_d(__builtin_inf()) == max); printf(\" %d\", flags());\n\
+            printf(\" %d\", from_d(-__builtin_inf()) == -max - 1); printf(\" %d\", flags());\n\
+            printf(\" %d\", from_d(__builtin_nan(\"\")) == max); printf(\" %d\", flags());\n\
+            printf(\" %d\", from_d(0x1p140) == max); printf(\" %d\", flags());\n\
+            printf(\" %d\", from_d(-0x1p134) == -max - 1); printf(\" %d\", flags());\n\
+            printf(\" %d\", from_l(-0x1p134L) == -max - 1); printf(\" %d\", flags());\n\
+            printf(\" %d\", from_du(-1.0) == 0); printf(\" %d\", flags());\n\
+            printf(\" %d\", from_du(-0.5) == 0); printf(\" %d\", flags());\n\
+            printf(\" %d\", from_d(-2.5) == -2); printf(\" %d\", flags());\n\
+            printf(\" %d\", from_d(0x1p100) == (_BitInt(135))1 << 100); printf(\" %d\\n\", flags());\n\
+            static const int modes[] = {FE_TONEAREST, FE_DOWNWARD, FE_UPWARD, FE_TOWARDZERO};\n\
+            for (int i = 0; i < 4; i++) {\n\
+            fesetround(modes[i]);\n\
+            float n = to_f(negative);\n\
+            double m = to_d(wide);\n\
+            float p = to_f(positive);\n\
+            fesetround(FE_TONEAREST);\n\
+            printf(\"%a %a %a\\n\", n, m, p);\n\
+            }\n\
+            return 0;\n\
+            }\n";
+        let expected = [
+            "1 1 1 1 1 1 1 1 1 0 1 0 1 1 1 2 1 2 1 0\n",
+            "-0x1.fffffep+102 -0x1.0000000000001p+133 0x1.fffffep+102\n",
+            "-0x1.fffffep+102 -0x1.0000000000001p+133 0x1.fffffcp+102\n",
+            "-0x1.fffffcp+102 -0x1p+133 0x1.fffffep+102\n",
+            "-0x1.fffffcp+102 -0x1p+133 0x1.fffffcp+102\n",
+        ]
+        .concat();
+        for identity in IDENTITIES {
+            builds_on_every_back_end(identity, source, &["-std=c23", "-lm"], &expected);
+        }
+    }
+
     /// `source` exits 0 and prints `expected` interpreted (unoptimized and
     /// with bcc's optimizer) and built by LLVM at `-O0` and `-O2` and by
     /// the native back end. Only on an x86-64 GNU/Linux host: bcc's default
@@ -551,6 +899,83 @@ mod tests {
             );
             assert_eq!(text(&output.stdout), expected, "{identity} {mode:?}");
         }
+        for mode in [&["-O0"][..], &["-O2"], &["--backend=native"]] {
+            let executable = temporary("program.exe");
+            let built = bcc(&[
+                &[identity, path, "-o", executable.to_str().unwrap()][..],
+                flags,
+                mode,
+            ]
+            .concat());
+            assert!(
+                built.status.success(),
+                "{identity} {mode:?}: {}",
+                text(&built.stderr)
+            );
+            let run = run_native(&mut Command::new(&executable)).unwrap();
+            assert_eq!(run.status.code(), Some(0), "{identity} {mode:?}");
+            assert_eq!(text(&run.stdout), expected, "{identity} {mode:?}");
+            std::fs::remove_file(executable).unwrap();
+        }
+        std::fs::remove_file(input).unwrap();
+    }
+
+    /// GCC declares the size-specific atomic routines, libatomic's entry
+    /// points, with their operand types, so a 16-byte store passes all 128
+    /// bits rather than an implicitly declared `int`. Built only: the
+    /// interpreter has no libatomic. bcc calls libatomic for every size,
+    /// where GCC inlines those up to 8 bytes; it needed `-latomic` for them
+    /// before as well.
+    #[test]
+    fn sized_atomic_routines_have_gccs_prototypes() {
+        let source = b"__int128 i;\n\
+            unsigned long long l;\n\
+            short s;\n\
+            int main(void) {\n\
+            __atomic_store_16(&i, -1, 0);\n\
+            if (i != -1) return 1;\n\
+            if (__atomic_load_16(&i, 5) != (unsigned __int128)-1) return 2;\n\
+            __atomic_store_8(&l, 0x123456789abcdefULL, 5);\n\
+            if (__atomic_fetch_add_8(&l, 1, 5) != 0x123456789abcdefULL || l != 0x123456789abcdf0ULL)\n\
+            return 3;\n\
+            short e = 0;\n\
+            if (!__atomic_compare_exchange_2(&s, &e, 7, 0, 5, 5) || s != 7) return 4;\n\
+            if (__atomic_compare_exchange_2(&s, &e, 9, 0, 5, 5) || e != 7) return 5;\n\
+            if (__atomic_exchange_16(&i, 5, 5) != (unsigned __int128)-1 || i != 5) return 6;\n\
+            return 0;\n\
+            }\n";
+        builds_on_every_back_end("--compiler-identity=gcc", source, &["-latomic"], "");
+        // Their pointers are GCC's `volatile void *`, and `const volatile
+        // void *` for a load, so qualified operands draw no warning.
+        let qualified = b"const int ci = 3;\n\
+            volatile int vi;\n\
+            int main(void) {\n\
+            __atomic_store_4(&vi, __atomic_load_4(&ci, 5), 5);\n\
+            int e = 3;\n\
+            return !__atomic_compare_exchange_4(&vi, &e, 9, 0, 5, 5);\n\
+            }\n";
+        let output = check(
+            "--compiler-identity=gcc",
+            qualified,
+            &["-Wall", "-fsyntax-only"],
+        );
+        let stderr = text(&output.stderr);
+        assert!(output.status.success() && stderr.is_empty(), "{stderr}");
+    }
+
+    /// [`prints_on_every_back_end`] for the compiled back ends alone.
+    fn builds_on_every_back_end(identity: &str, source: &[u8], flags: &[&str], expected: &str) {
+        if !cfg!(all(
+            target_os = "linux",
+            target_arch = "x86_64",
+            target_env = "gnu"
+        )) {
+            eprintln!("skipping: the programs run on an x86-64 GNU/Linux host only");
+            return;
+        }
+        let input = temporary("program.c");
+        std::fs::write(&input, source).unwrap();
+        let path = input.to_str().unwrap();
         for mode in [&["-O0"][..], &["-O2"], &["--backend=native"]] {
             let executable = temporary("program.exe");
             let built = bcc(&[

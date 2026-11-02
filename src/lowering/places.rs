@@ -257,6 +257,8 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
     ) -> Result<Item, LoweringError> {
         let value = self.settle(value);
         let ty = place.ty;
+        let converted = self.floating_conversion;
+        self.floating_conversion = None;
         let Operand::Place(target) = place.operand else {
             return Err(LoweringError::missing(
                 "an assignment target is not an lvalue",
@@ -311,6 +313,12 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             | (Place::BitField(address, field), _) => {
                 let value = self.value(value, source)?;
                 let result = self.value_type(ty, source)?;
+                // GCC saturates a floating constant to the field's width.
+                let signed = self.repr(ty, source)?.signed();
+                self.floating_conversion = converted;
+                let value = self
+                    .field_constant(value, result, field.width, signed)
+                    .unwrap_or(value);
                 let volatile = types::is_volatile(ty);
                 Operand::Value(self.store_bit_field(address, field, volatile, value, result))
             },
