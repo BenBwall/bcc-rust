@@ -476,6 +476,30 @@ mod tests {
         let directory = Directory::new();
         directory.write("emoji.c", "int a\u{1F600} = 2;\nint b\\U0001F600 = 3;\n");
         directory.write("super.c", "int \u{3C0}\u{B2} = 9;\n");
+        // With a pedantic option, GCC enforces the standard's own set; a
+        // combining mark or middle dot continues a C23 identifier.
+        directory.write("mark.c", "int a\\u0300;\nint b\\u00B7;\n");
+        for (file, standard, options, gcc, clang) in [
+            ("emoji.c", "c99", &["-pedantic"][..], false, false),
+            ("emoji.c", "c11", &["-pedantic"], true, true),
+            ("emoji.c", "c23", &["-pedantic"], false, false),
+            ("mark.c", "c23", &[], true, true),
+            ("mark.c", "c23", &["-pedantic"], true, true),
+        ] {
+            for (mode, accepted) in [("--gcc-mode", gcc), ("--clang-mode", clang)] {
+                let std = format!("-std={standard}");
+                let mut args = vec![std.as_str(), "-fsyntax-only"];
+                args.extend_from_slice(options);
+                args.push(file);
+                let output = directory.bcc(mode, &args);
+                assert_eq!(
+                    output.status.success(),
+                    accepted,
+                    "{mode} {args:?}: {}",
+                    stderr(&output)
+                );
+            }
+        }
         // GCC reads `\u0024` as `$`; Clang refuses it.
         directory.write(
             "dollar.c",

@@ -146,12 +146,26 @@ pub(crate) fn identifier_character(
     first: bool,
 ) -> bool {
     let code = u32::from(character);
+    // `XID_Continue` also holds the combining marks and the middle dots
+    // (`Other_ID_Continue`), which Rust's alphanumeric class lacks.
     let unicode = if first {
         character.is_alphabetic()
     } else {
         character.is_alphanumeric()
+            || matches!(code,
+                | 0x00B7
+                | 0x0387
+                | 0x0300..=0x036F
+                | 0x1DC0..=0x1DFF
+                | 0x20D0..=0x20FF
+                | 0xFE20..=0xFE2F
+            )
     };
-    if configuration.compiler_identity().rules() == RuleSet::Gcc {
+    // GCC takes any of the sets unless a pedantic option asks for the
+    // standard's own, which it then enforces with an error.
+    if configuration.compiler_identity().rules() == RuleSet::Gcc
+        && configuration.extension_policy() == crate::configuration::ExtensionPolicy::Allow
+    {
         return c99_character(code, first) || c11_character(code, first) || unicode;
     }
     match configuration.standard() {
