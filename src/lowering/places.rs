@@ -124,9 +124,7 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     && !matches!(self.unit.sema.types.kind(ty), TypeKind::Atomic(_))
                     && !self.unit.address_taken.contains(&binding) =>
                 Local::Variable(self.draft.declare_var(value_type)),
-            | _ if self.unit.sema.types.layout(ty).is_none()
-                && matches!(self.unit.sema.types.kind(ty), TypeKind::Array(..)) =>
-            {
+            | _ if types::variable_size(&self.unit.sema.types, ty) => {
                 let size = self.runtime_size(ty, source)?;
                 self.enter_vla(binding, source)?;
                 let align = super::alignment::variable_alignment(
@@ -189,6 +187,10 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             },
             | (Place::Memory(address), Repr::Complex { .. }) =>
                 self.load_complex(address, ty, source)?,
+            // GNU: a record of variable size is used where it is.
+            | (Place::Memory(address), Repr::Aggregate)
+                if types::variable_size(&self.unit.sema.types, ty) && !types::is_volatile(ty) =>
+                Operand::Aggregate(address),
             | (Place::Memory(address), Repr::Aggregate) => {
                 let layout =
                     types::layout(&self.unit.sema.types, ty).map_err(|kind| at(kind, source))?;
@@ -281,11 +283,16 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             },
             | (Place::Memory(address), Operand::Aggregate(from)) => {
                 // C99 §6.5.16.1p3: the objects may overlap only exactly.
-                let layout =
-                    types::layout(&self.unit.sema.types, ty).map_err(|kind| at(kind, source))?;
-                let guaranteed = self.place_alignment(address, types::align(layout));
-                self.retain_alignment(address, guaranteed);
-                let size = self.iconst(Type::I64, i128::from(layout.size));
+                // GNU: a record of variable size copies its run-time size.
+                let size = if types::variable_size(&self.unit.sema.types, ty) {
+                    self.runtime_size(ty, source)?
+                } else {
+                    let layout = types::layout(&self.unit.sema.types, ty)
+                        .map_err(|kind| at(kind, source))?;
+                    let guaranteed = self.place_alignment(address, types::align(layout));
+                    self.retain_alignment(address, guaranteed);
+                    self.iconst(Type::I64, i128::from(layout.size))
+                };
                 let flags = if types::is_volatile(ty) {
                     InstFlags::MAY_OVERLAP | InstFlags::VOLATILE
                 } else {

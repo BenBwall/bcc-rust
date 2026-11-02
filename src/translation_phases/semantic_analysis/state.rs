@@ -86,6 +86,7 @@ impl<'c, 'tu, 's> Analyzer<'c, 'tu, 's> {
             runtime_bounds: ArenaVec::new_in(tu),
             bound_origins: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             bound_expression_starts: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
+            member_bounds: ArenaVec::new_in(scratch),
             next_parameter: 0,
             function_controls: ArenaMap::with_hasher_in(FxBuildHasher, scratch),
             expression_indices: ArenaMap::with_hasher_in(FxBuildHasher, scratch),

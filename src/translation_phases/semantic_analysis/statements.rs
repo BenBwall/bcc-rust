@@ -563,9 +563,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         {
             return;
         }
+        // An automatic object of variable size, a VLA or GNU's record with
+        // a member of variable size, releases its storage on exit.
         let cleanup = if b.kind == BindingKind::Object
             && b.duration == super::Duration::Automatic
-            && matches!(self.types.nodes[b.ty.index], TypeKind::Array(..))
+            && self.variable_size(b.ty)
         {
             CleanupKind::AutomaticVla(BindingId(binding))
         } else {

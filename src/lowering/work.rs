@@ -52,6 +52,10 @@ pub(super) enum Task<'tu> {
         crate::translation_phases::SourceVectors,
     ),
     CleanupNormal(&'tu Statement<'tu>),
+    /// The same, keeping the stack of the block's variable length arrays:
+    /// a statement expression's value of variable size is copied above
+    /// them (GNU).
+    CleanupKeepStack(&'tu Statement<'tu>),
     /// Emit a GNU `asm` statement whose operands are on the stack.
     Assembly(&'tu Statement<'tu>),
 

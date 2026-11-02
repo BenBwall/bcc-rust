@@ -307,8 +307,28 @@ pub(super) fn layout(types: &Types<'_>, ty: TypeId) -> Result<Layout, LoweringEr
             }
             element = inner;
         }
+        if types.variable_record(element).is_some() {
+            return LoweringErrorKind::Unsupported(Construct::VariableSizeRecord);
+        }
         LoweringErrorKind::MissingFact("an object type has no layout")
     })
+}
+
+/// Whether an object of type `ty` has a size known only at run time: a
+/// variable length array, an array of them, or GNU's record with a member
+/// of variable size, or an array of those.
+/// C99: §6.7.5.2 paragraph 4, p. 116; PDF p. 128.
+pub(super) fn variable_size(types: &Types<'_>, mut ty: TypeId) -> bool {
+    if types.layout(ty).is_some() {
+        return false;
+    }
+    loop {
+        match types.kind(ty) {
+            | TypeKind::Array(_, ArrayBound::Variable(_)) => return true,
+            | TypeKind::Array(element, _) => ty = element,
+            | _ => return types.variable_record(ty).is_some(),
+        }
+    }
 }
 
 pub(super) fn align(layout: Layout) -> Align {
@@ -344,11 +364,13 @@ pub(super) fn aggregate_layout<'s>(
     rules: RuleSet,
     scratch: &'s Bump,
 ) -> Result<AggregateLayout<'s>, LoweringErrorKind> {
-    let whole = types
-        .aggregate_value_layout(ty)
-        .ok_or(LoweringErrorKind::MissingFact(
-            "an aggregate value has no nominal layout",
-        ))?;
+    let whole = types.aggregate_value_layout(ty).ok_or_else(|| {
+        if variable_size(types, ty) {
+            LoweringErrorKind::Unsupported(Construct::VariableSizeRecord)
+        } else {
+            LoweringErrorKind::MissingFact("an aggregate value has no nominal layout")
+        }
+    })?;
     flattened_layout(types, ty, whole, rules, scratch)
 }
 

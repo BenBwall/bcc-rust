@@ -44,6 +44,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             let mut seen_formulas = ArenaSet::with_hasher_in(FxBuildHasher, self.scratch);
             let mut seen = ArenaMap::with_hasher_in(FxBuildHasher, self.scratch);
             let mut work = ArenaVec::new_in(self.scratch);
+            let mut formulas = ArenaVec::new_in(self.scratch);
             work.push(expression);
             while let Some(expression) = work.pop() {
                 if seen
@@ -56,20 +57,24 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 // Size queries and pointer operations consume saved extents.
                 let info = self.expression_info(expression);
                 let mut include_type = |ty: TypeId| {
-                    if let Some(mut formula) = sizes.formula(ty) {
-                        while seen_formulas.insert(formula) {
-                            let SizeFormula::Product { inner, extent } = sizes.formulas[formula.0]
-                            else {
-                                break;
-                            };
-                            if let SizeExtent::Bound(bound) = extent
-                                && bound.0 < index
-                                && seen_bounds.insert(bound)
-                            {
-                                dependencies.push(bound);
-                            }
-                            formula = inner;
+                    let Some(formula) = sizes.formula(ty) else {
+                        return;
+                    };
+                    formulas.push(formula);
+                    while let Some(formula) = formulas.pop() {
+                        if !seen_formulas.insert(formula) {
+                            continue;
                         }
+                        if let SizeFormula::Product {
+                            extent: SizeExtent::Bound(bound),
+                            ..
+                        } = sizes.formulas[formula.0]
+                            && bound.0 < index
+                            && seen_bounds.insert(bound)
+                        {
+                            dependencies.push(bound);
+                        }
+                        formulas.extend(sizes.operands(formula).into_iter().flatten());
                     }
                 };
                 if let Some(query) = self

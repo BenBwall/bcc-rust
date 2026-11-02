@@ -368,3 +368,21 @@ fn gcc_struct_on_msvc_targets_is_an_error_under_clang() {
         );
     }
 }
+
+/// A bit-field in a union occupies its width in whole bytes, and the
+/// union's alignment rounds the size up, which shows when a typedef lowers
+/// the declared type's alignment: GCC 13 and Clang 23 agree.
+#[test]
+fn union_bit_fields_occupy_their_bytes() {
+    let source = "typedef long L2 __attribute__((aligned(2)));
+                  union U { char z; L2 b : 33; };
+                  union V { long b : 33; };";
+    for identity in [CompilerIdentity::Gcc, CompilerIdentity::Clang] {
+        check_as(
+            identity,
+            Target::LinuxGnu,
+            source,
+            &[("U", (6, 2, &[("b", 0)])), ("V", (8, 8, &[("b", 0)]))],
+        );
+    }
+}

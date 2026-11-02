@@ -72,6 +72,10 @@ pub(crate) enum Construct {
     ComplexAtomic,
     Atomic,
     VariableLengthArray,
+    /// A use of GNU's structure or union with a member of variable size
+    /// that lowering does not implement. GNU extension: GCC manual,
+    /// "Variable Length".
+    VariableSizeRecord,
     LabelAddress,
     /// MSVC `__asm` blocks.
     InlineAssembly,
@@ -168,6 +172,8 @@ impl Construct {
             | Self::ComplexAtomic => "atomic complex values",
             | Self::Atomic => "atomic types",
             | Self::VariableLengthArray => "variable length arrays",
+            | Self::VariableSizeRecord =>
+                "this use of a structure or union with a member of variable size",
             | Self::LabelAddress => "label addresses",
             | Self::InlineAssembly => "MSVC inline assembly",
             | Self::InlineAssemblyOperand =>
