@@ -754,9 +754,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 .entry(tag)
                 .or_insert(name.name);
         }
-        let prior = self
+        let prior_index = self
             .lookup(Namespace::Ordinary, name.name)
-            .map(|e| self.bindings[e.binding]);
+            .map(|e| e.binding);
+        let prior = prior_index.map(|index| self.bindings[index]);
         // An unanalyzed type, such as GNU `__typeof__` of a function, cannot
         // show whether it declares an object or a function, so it redeclares
         // the visible function rather than conflicting with its kind.
@@ -764,6 +765,21 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             || (!typedef
                 && self.types.nodes[ty.index] == TypeKind::Unknown
                 && prior.is_some_and(|p| p.kind == BindingKind::Function));
+        // C23 §6.7.2p16: a `constexpr` object is implicitly `const`.
+        let constexpr = !typedef && Self::constexpr_storage(spec.extensions);
+        if constexpr && function {
+            self.error(
+                SemanticErrorKind::InvalidConstexpr(super::errors::ConstexprFault::NotObject),
+                name.source_vectors,
+                Some(name.name),
+                None,
+            );
+        }
+        let ty = if constexpr && !function && !self.types.unanalyzed(ty) {
+            self.types.const_object(ty)
+        } else {
+            ty
+        };
         if file
             && matches!(
                 spec.storage_class,
@@ -823,9 +839,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         } else {
             BindingKind::Object
         };
+        // C23 §6.7.2p17: a file-scope `constexpr` object has internal
+        // linkage.
         let linkage = if typedef {
             Linkage::None
-        } else if file && spec.storage_class == Some(StorageClass::Static) {
+        } else if file && (spec.storage_class == Some(StorageClass::Static) || constexpr) {
             Linkage::Internal
         } else if spec.storage_class == Some(StorageClass::Extern)
             || (function && spec.storage_class.is_none())
@@ -962,7 +980,15 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         } else {
             ty
         };
+        let errors_before = self.semantic_errors;
         self.bind(name, ty, kind, linkage, duration, None);
+        self.constexpr_binding(
+            name,
+            constexpr && kind == BindingKind::Object,
+            initialized,
+            prior_index,
+            errors_before,
+        );
         if let Some(request) = storage_alignment.filter(|&(requested, _)| requested != 0) {
             _ = self
                 .object_alignments
@@ -1776,11 +1802,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         (record, placement)
     }
 
-    /// Specifier extensions whose meaning this phase does not model:
-    /// constexpr storage, MSVC pointer modifiers and unmodeled layout
-    /// attributes. Other attributes, `__extension__`, thread storage (a
-    /// duration, not a type), x86-64 calling conventions and `__forceinline`
-    /// leave the declared type unchanged.
+    /// Specifier extensions whose meaning this phase does not model: MSVC
+    /// pointer modifiers and unmodeled layout attributes. Other attributes,
+    /// `__extension__`, thread storage (a duration, not a type), `constexpr`
+    /// (see [`Self::constexpr_storage`]), x86-64 calling conventions and
+    /// `__forceinline` leave the declared type unchanged.
     /// C99: §4 paragraph 6, p. 7; PDF p. 19.
     pub(super) fn unmodeled_extension(
         &self,
@@ -1796,7 +1822,6 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         use super::SpecifierExtensionKind as K;
         while let Some(item) = chain {
             match item.kind {
-                | K::Constexpr => return Some(UnmodeledType::Constexpr),
                 // `__forceinline` is `inline` plus `always_inline`, which
                 // the function's entity attributes model.
                 | K::MsModifier(keyword)
@@ -1812,6 +1837,72 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             chain = item.next;
         }
         None
+    }
+
+    /// Records the object just bound as `constexpr`, which requires an
+    /// initializer, or as a redeclaration of a named constant, which keeps
+    /// its value.
+    /// C23 (N3220): §6.7.2 paragraphs 5 and 16, pp. 99-100; PDF
+    /// pp. 112-113.
+    fn constexpr_binding(
+        &mut self,
+        name: Identifier,
+        constexpr: bool,
+        initialized: bool,
+        prior: Option<usize>,
+        errors_before: usize,
+    ) {
+        let index = self.bindings.len() - 1;
+        // C23 §6.7.1p12 leaves an underspecified redeclaration in the same
+        // scope implementation-defined; GCC rejects it.
+        if constexpr
+            && let Some(prior) = prior
+            && self.bindings[prior].scope == self.scope
+            && self.context.configuration.compiler_identity().rules() == RuleSet::Gcc
+        {
+            self.error(
+                SemanticErrorKind::InvalidConstexpr(super::errors::ConstexprFault::Redeclared),
+                name.source_vectors,
+                Some(name.name),
+                Some(self.bindings[prior].name.source_vectors),
+            );
+        }
+        if constexpr {
+            if initialized {
+                _ = self.constexpr_objects.insert(index, errors_before);
+            } else {
+                self.error(
+                    SemanticErrorKind::InvalidConstexpr(
+                        super::errors::ConstexprFault::MissingInitializer,
+                    ),
+                    name.source_vectors,
+                    Some(name.name),
+                    None,
+                );
+            }
+        } else if let Some(prior) = prior
+            && let Some(&initializer) = self.named_objects.get(&prior)
+            && self.bindings[index].linkage != Linkage::None
+            && self
+                .lookup(Namespace::Ordinary, name.name)
+                .is_some_and(|entry| entry.binding == index)
+        {
+            _ = self.named_objects.insert(index, initializer);
+        }
+    }
+
+    /// Whether the specifiers include `constexpr`, which makes the object a
+    /// named constant: implicitly `const`, with internal linkage at file
+    /// scope, its value fixed by its constant initializer.
+    /// C23 (N3220): §6.7.2 paragraphs 16-17, p. 100; PDF p. 113.
+    pub(super) fn constexpr_storage(mut chain: Option<&super::SpecifierExtension<'tu>>) -> bool {
+        while let Some(item) = chain {
+            if item.kind == SpecifierExtensionKind::Constexpr {
+                return true;
+            }
+            chain = item.next;
+        }
+        false
     }
 
     /// Whether the specifiers give thread storage duration: the thread
