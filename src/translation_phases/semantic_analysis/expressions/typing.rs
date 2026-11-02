@@ -2776,6 +2776,14 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             );
             self.bindings.last_mut().expect("implicit binding").origin =
                 super::super::BindingOrigin::ImplicitOrdinary;
+            // GCC's sized atomic routines (`__atomic_load_4` and the like)
+            // are built-ins GCC declares itself, so a call to one is no
+            // implicit declaration.
+            if library.is_some()
+                && crate::builtins::ordinary(self.context.string_cache.at(name.name)).is_none()
+            {
+                return;
+            }
             // GCC warns in C89 only about a library function whose type
             // `int ()` does not match ("incompatible implicit declaration
             // of built-in function"), so `abs` passes silently, unless an
