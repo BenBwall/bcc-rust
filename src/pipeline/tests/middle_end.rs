@@ -292,6 +292,26 @@ fn aggregate_reinitialization_preserves_explicit_bytes() {
     }
 }
 
+/// An address constant may reach a member through `->` from a constant
+/// address, as `&(a + 1)->m`, and an array member taken that way decays to
+/// one, as GCC and Clang compile them (gcc.c-torture/execute/
+/// const-addr-expr-1.c). C99: §6.6 paragraph 9, p. 96; PDF p. 108.
+#[test]
+fn static_initializers_reach_members_through_arrows() {
+    let source = "struct item { int id; char name[4]; struct { short a, b; } in; };\nstruct item \
+                  items[3] = {{1, \"a\"}, {2, \"bb\"}, {3, \"ccc\"}};\nint *p1 = &(items + \
+                  1)->id;\nchar *p2 = (items + 2)->name;\nshort *p3 = &(items + 2)->in.b;\nint \
+                  *p4 = &(&items[1])->id;\nconst char *p5 = &((items + 1)->name[1]);\nint \
+                  main(void) { return (*p1 == 2) + (p2[2] == 'c') * 2 + (p3 - &items[2].in.a == \
+                  1) * 4 + (*p4 == 2) * 8 + (*p5 == 'b') * 16; }\n";
+    for target in [Target::LinuxGnu, Target::WindowsGnu] {
+        for (optimize, profile) in STAGES {
+            let (status, _) = with_module(source, target, optimize, profile, interpret);
+            assert_eq!(status, 31, "{target:?} {optimize} {profile:?}");
+        }
+    }
+}
+
 #[test]
 fn aggregate_reinitialization_matches_native_arms_and_clang() {
     let Some(target) = host() else { return };

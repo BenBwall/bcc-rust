@@ -593,8 +593,10 @@
      text, so the value reads whole. */
   .tape-labels > .tape-bus text { paint-order: stroke; stroke: #1d1d1b; stroke-width: 5px; stroke-linejoin: round; }
   .tape-labels > .tape-bus.is-now text { stroke: #2c2c29; }
-  .tape-labels > .tape-bus[data-access="write"] text, .tape-labels > .tape-bus[data-access="create"] text { stroke: var(--accent); }
   .tape-labels > .tape-bus.is-indeterminate text { stroke: var(--screen); stroke-width: 3px; }
+  /* After the hatch's: a written or created bar is filled with the accent,
+     hatched or not. */
+  .tape-labels > .tape-bus[data-access="write"] text, .tape-labels > .tape-bus[data-access="create"] text { stroke: var(--accent); stroke-width: 5px; }
   .tape-hatch { stroke: #77776f; stroke-width: 1.2; }
   .tape-end { stroke: var(--screen-dim); stroke-width: 1.5; }
   .tape-flow line { stroke: var(--flow); stroke-width: 1.4; }

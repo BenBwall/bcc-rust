@@ -293,6 +293,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     .and_then(Integer::to_u64)
                     .and_then(|mode| u8::try_from(mode).ok())
                     .unwrap_or(0);
+                let mode = self.effective_object_size_mode(args[0], mode);
                 let pure = self.effects_pure(args[0], super::super::EffectContext::Value);
                 let size = if pure {
                     self.infer_object_size(args[0], mode, dynamic)
