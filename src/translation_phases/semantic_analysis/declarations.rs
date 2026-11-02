@@ -1664,10 +1664,12 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             .or_else(|| self.types.alignment(member.ty))
             .unwrap_or(1);
         let packed = tag.packed.get() || member.packed;
-        let mut align = if packed {
-            u64::from(member.explicit_alignment.max(1))
-        } else {
-            natural
+        // Neither packing nor `#pragma pack` moves a zero-width bit-field
+        // off the boundary of its declared type, as at a constant offset.
+        let mut align = match (member.width, layout) {
+            | (Some(0), Some(layout)) => layout.size.max(u64::from(member.explicit_alignment)),
+            | _ if packed => u64::from(member.explicit_alignment.max(1)),
+            | _ => natural,
         };
         let pack = tag.max_member_alignment.get();
         if pack != 0 && member.width != Some(0) {
@@ -1720,9 +1722,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             if let Some(segment) = variable.member_segments.last_mut() {
                 *segment = start;
             }
-            // The member's size is a multiple of its type's alignment, which
-            // packing or `aligned` may make differ from its own.
-            let known = align.min(self.types.alignment(member.ty).unwrap_or(1));
+            // Its end is aligned only as far as both its start and its size
+            // are: an `aligned` member's size is not rounded to its alignment,
+            // so the next member is aligned at run time by its own (GCC's
+            // `place_field` rounds a variable offset up to `desired_align`).
+            let known = align.min(self.types.size_multiple(member.ty));
             _ = variable.push(
                 SegmentBase::After {
                     previous: start,

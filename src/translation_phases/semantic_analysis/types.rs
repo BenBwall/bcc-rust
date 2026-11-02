@@ -311,6 +311,25 @@ impl<'tu, 's> TypeInterner<'tu, 's> {
             .or_else(|| variable_alignment(&self.nodes, &self.tags, ty))
     }
 
+    /// The greatest power of two the size of `ty`, of variable size, is
+    /// known to be a multiple of: an array's is its constant element size's,
+    /// and a record's its own alignment, to which GCC rounds its size. The
+    /// alignment `aligned` or `_Alignas` gives a member or typedef does not
+    /// round the size (GCC's `stor-layout.cc`), so the end of such a member
+    /// is aligned only so far.
+    /// GNU extension: GCC manual, "Variable Length".
+    /// C99: §6.5.3.4p2-3, p. 80; PDF p. 92 (an array's size).
+    pub(crate) fn size_multiple(&self, ty: TypeId) -> u64 {
+        let constant = |size: u64| 1_u64.checked_shl(size.trailing_zeros()).unwrap_or(u64::MAX);
+        match self.nodes[ty.index] {
+            | TypeKind::Array(element, _) => self
+                .layout(element)
+                .map_or_else(|| self.size_multiple(element), |layout| constant(layout.size)),
+            | TypeKind::Tag(id) => self.tags[id].variable.get().map_or(1, |record| record.align),
+            | _ => self.layout(ty).map_or(1, |layout| constant(layout.size)),
+        }
+    }
+
     /// Remove top-level qualification, including qualification carried by
     /// array elements, without changing pointed-to types or atomic identity.
     /// C99: §6.7.3p8, p. 109; PDF p. 121.

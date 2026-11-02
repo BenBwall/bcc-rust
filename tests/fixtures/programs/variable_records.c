@@ -5,8 +5,10 @@
    run-time base has), copies, arrays of such records and pointer
    arithmetic on them, records nested in records, unions, bounds saved at
    the definition, a definition in a loop, packed records, a statement
-   expression's value of variable size, and records passed through `...`
-   by invisible reference. Prints what GCC prints. */
+   expression's value of variable size, records passed through `...`
+   by invisible reference, and members after one whose `aligned` attribute
+   or packing does not round its variable size (the next member is aligned
+   at run time by its own alignment). Prints what GCC prints. */
 #include <stdarg.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -82,10 +84,36 @@ static int value(int n) {
   b = ({ struct W t; t = a; t.v[n - 1] *= 10; t; });
   return b.v[n - 1] + b.v[0];
 }
+static void aligned(int n) {
+  struct A1 { char a[n] __attribute__((aligned(32))); long c; } a1;
+  struct A2 { char a[n] __attribute__((aligned(2))); short c; } a2;
+  struct A3 { struct { char x[n]; } a __attribute__((aligned(16))); long double c; } a3;
+  struct A4 { char a[n] __attribute__((aligned(8))); int b : 3; char c; } a4;
+  struct A5 { char a[n] __attribute__((aligned(16))); struct { int x[n]; char y; } d; char c; } a5;
+  struct A6 { char a[n]; int : 0; char c; } __attribute__((packed)) a6;
+#pragma pack(push, 2)
+  struct A7 { char a[n] __attribute__((aligned(8))); long c; } a7;
+#pragma pack(pop)
+  memset(&a4, 0, sizeof a4);
+  a1.c = 11; a2.c = 12; a3.c = 13; a4.b = -2; a4.c = 14; a5.c = 15; a6.c = 16; a7.c = 17;
+  a5.d.x[n - 1] = 55; a5.d.y = 5;
+  printf("A1 %zu %zu %ld\n", sizeof a1, offsetof(struct A1, c), *(long *)((char *)&a1 + offsetof(struct A1, c)));
+  printf("A2 %zu %zu %d\n", sizeof a2, offsetof(struct A2, c), a2.c);
+  printf("A3 %zu %zu %zu %g\n", sizeof a3, _Alignof(struct A3), offsetof(struct A3, c), (double)a3.c);
+  printf("A4 %zu %zu %d %d %u\n", sizeof a4, offsetof(struct A4, c), a4.b, a4.c,
+         sum((char *)&a4 + n, sizeof a4 - n));
+  printf("A5 %zu %zu %zu %d %d %d\n", sizeof a5, offsetof(struct A5, d), offsetof(struct A5, c),
+         a5.d.x[n - 1], a5.d.y, a5.c);
+  printf("A6 %zu %zu %d\n", sizeof a6, offsetof(struct A6, c), a6.c);
+  printf("A7 %zu %zu %zu %ld\n", sizeof a7, _Alignof(struct A7), offsetof(struct A7, c), a7.c);
+}
 int main(void) {
   printf("value %d %d\n", value(1), value(4));
   printf("%d\n", run(3, 2));
   printf("%d\n", run(1, 5));
   printf("%d\n", run(8, 1));
+  aligned(1);
+  aligned(3);
+  aligned(6);
   return 0;
 }

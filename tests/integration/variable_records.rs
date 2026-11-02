@@ -31,7 +31,7 @@ mod tests {
     const GCC: &str = "--compiler-identity=gcc";
 
     /// One block of output per call of `run`, for 3 and 2, 1 and 5, and 8
-    /// and 1 elements.
+    /// and 1 elements, then one per call of `aligned`.
     const EXPECTED: &str = concat!(
         "value 20 41\n",
         "S 48 4 16 24 40\nidx 12 32\ncopy 1 2 3 14 0.25 932744692\ndiff 2 48\n",
@@ -43,6 +43,14 @@ mod tests {
         "S 56 4 36 40 48\nidx 32 40\ncopy 1 2 3 49 0 2133126390\ndiff 2 56\n",
         "O 192 64 72 184 49 9 77\nU 8 8\nT 32 32\nTD 24 8\nva 5 17 6 99 20 8\nloop 642\n",
         "P 10 5 17 99 4470\n56\n",
+        // `aligned` and packing after members of variable size, for 1, 3
+        // and 6 elements.
+        "A1 32 8 11\nA2 4 2 12\nA3 32 16 16 13\nA4 8 2 -2 14 1430862904\n",
+        "A5 16 4 12 55 5 15\nA6 5 4 16\nA7 10 2 2 17\n",
+        "A1 32 8 11\nA2 6 4 12\nA3 32 16 16 13\nA4 8 4 -2 14 5958200\n",
+        "A5 32 4 20 55 5 15\nA6 5 4 16\nA7 12 2 4 17\n",
+        "A1 32 8 11\nA2 8 6 12\nA3 32 16 16 13\nA4 8 7 -2 14 200\n",
+        "A5 48 8 36 55 5 15\nA6 9 8 16\nA7 14 2 6 17\n",
     );
 
     #[test]
