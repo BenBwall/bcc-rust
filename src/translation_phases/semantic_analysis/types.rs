@@ -322,10 +322,14 @@ impl<'tu, 's> TypeInterner<'tu, 's> {
     pub(crate) fn size_multiple(&self, ty: TypeId) -> u64 {
         let constant = |size: u64| 1_u64.checked_shl(size.trailing_zeros()).unwrap_or(u64::MAX);
         match self.nodes[ty.index] {
-            | TypeKind::Array(element, _) => self
-                .layout(element)
-                .map_or_else(|| self.size_multiple(element), |layout| constant(layout.size)),
-            | TypeKind::Tag(id) => self.tags[id].variable.get().map_or(1, |record| record.align),
+            | TypeKind::Array(element, _) => self.layout(element).map_or_else(
+                || self.size_multiple(element),
+                |layout| constant(layout.size),
+            ),
+            | TypeKind::Tag(id) => self.tags[id]
+                .variable
+                .get()
+                .map_or(1, |record| record.align),
             | _ => self.layout(ty).map_or(1, |layout| constant(layout.size)),
         }
     }

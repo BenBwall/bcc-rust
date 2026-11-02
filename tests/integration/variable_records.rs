@@ -95,7 +95,10 @@ mod tests {
     #[test]
     fn microsoft_layout_refuses_variable_records() {
         for (target, record) in [
-            ("--target=x86_64-w64-windows-gnu", "struct s { int a[n]; char c; }"),
+            (
+                "--target=x86_64-w64-windows-gnu",
+                "struct s { int a[n]; char c; }",
+            ),
             (
                 "--target=x86_64-unknown-linux-gnu",
                 "struct __attribute__((ms_struct)) s { int a[n]; char c; }",
