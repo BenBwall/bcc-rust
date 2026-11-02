@@ -45,6 +45,14 @@ impl CompilerConfiguration {
         self.diagnostic_format
     }
 
+    /// Whether diagnostics take `cl`'s codes and words where bcc models
+    /// them: the `cl` identity writing one of `cl`'s formats. clang-cl
+    /// writes Clang's words in the same formats.
+    pub(crate) fn msvc_wording(self) -> bool {
+        self.identity == super::CompilerIdentity::Msvc
+            && matches!(self.diagnostic_format, DiagnosticFormat::Msvc { .. })
+    }
+
     /// Specific group options override global -Werror regardless of order.
     /// Parent group options update their children at the same argv position.
     pub(crate) fn with_warning_option(

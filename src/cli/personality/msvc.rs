@@ -245,6 +245,9 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
         }
     }
     common.append(&mut state.bcc);
+    if !clang_cl {
+        common.extend(state.coded_warning_options());
+    }
     common.append(&mut clang_options);
     // `cl` compiles every source even after one fails, then skips the link;
     // clang-cl stops at the first failure.
@@ -627,6 +630,13 @@ struct State {
     ignore_include_variable: bool,
     standard:                &'static str,
     diagnostics:             &'static str,
+    /// The warning level `/W0`-`/W4` set; `cl`'s own is 1.
+    warning_level:           u8,
+    /// `/WX`, the last of it and `/WX-`.
+    warnings_error:          bool,
+    /// What `/wd`, `/we`, `/wo` and `/w1`-`/w4` said of each warning, the
+    /// last option for a warning winning.
+    warning_settings:        Vec<(u16, WarningSetting)>,
     errors:                  usize,
 }
 
@@ -658,6 +668,9 @@ impl Default for State {
             ignore_include_variable: false,
             standard:                "c17",
             diagnostics:             "msvc",
+            warning_level:           1,
+            warnings_error:          false,
+            warning_settings:        Vec::new(),
             errors:                  0,
         }
     }
@@ -755,13 +768,24 @@ impl State {
             | "O1" | "Os" => self.bcc.push("-Os".into()),
             | "O2" | "Ox" | "Ot" => self.bcc.push("-O2".into()),
             | "Od" => self.bcc.push("-O0".into()),
-            | "W0" | "w" => self.bcc.push("-w".into()),
+            | "W0" | "w" => {
+                self.warning_level = 0;
+                self.bcc.push("-w".into());
+            },
+            | "W1" | "W2" | "W3" => self.warning_level = option.as_bytes()[1] - b'0',
             | "W4" | "Wall" => {
+                self.warning_level = 4;
                 self.bcc.push("-Wall".into());
                 self.bcc.push("-Wextra".into());
             },
-            | "WX" => self.bcc.push("-Werror".into()),
-            | "WX-" => self.bcc.push("-Wno-error".into()),
+            | "WX" => {
+                self.warnings_error = true;
+                self.bcc.push("-Werror".into());
+            },
+            | "WX-" => {
+                self.warnings_error = false;
+                self.bcc.push("-Wno-error".into());
+            },
             | "std:c11" => self.standard = "c11",
             | "std:c17" => self.standard = "c17",
             | "std:clatest" => self.standard = "c23",
@@ -840,9 +864,6 @@ impl State {
             | "permissive-"
             | "Qpar"
             | "Qpar-"
-            | "W1"
-            | "W2"
-            | "W3"
             | "arch:SSE2"
             | "fp:precise"
             | "fp:fast"
@@ -907,6 +928,9 @@ impl State {
                 } else if let Some(value) = option.strip_prefix("Fa") {
                     self.listing = true;
                     self.listing_name = path(value).filter(|path| !path.as_os_str().is_empty());
+                } else if let Some((code, setting)) = warning_setting(option) {
+                    self.warning_settings.retain(|&(other, _)| other != code);
+                    self.warning_settings.push((code, setting));
                 } else if let Some(file) = option.strip_prefix("Tc") {
                     let file = if file.is_empty() {
                         rest.next().map_or_else(OsString::new, OsString::from)
@@ -956,6 +980,7 @@ impl State {
                     "w2",
                     "w3",
                     "w4",
+                    "Wv",
                     "Zc:",
                     "EH",
                     "Fd",
@@ -1166,6 +1191,83 @@ fn ignored(invocation: &Invocation, option: &str, why: &str) {
             ),
             true,
         );
+    }
+}
+
+/// The warnings bcc reports with `cl`'s code, each with its level and the
+/// groups of bcc's own options that control it. `cl`'s command line shows
+/// level 1 by default. C4047 and C4133 are warnings in `cl`, where the
+/// identity's Clang rules make the groups errors. Microsoft Learn: "/w,
+/// /W0, /W1, /W2, /W3, /W4, /w1, /w2, /w3, /w4, /Wall, /wd, /we, /wo, /Wv,
+/// /WX (Warning level)" and each warning's page.
+const CODED_WARNINGS: [(u16, u8, &str); 5] = [
+    (4013, 3, "implicit-function-declaration"),
+    (4047, 1, "int-conversion"),
+    (4133, 1, "incompatible-pointer-types"),
+    (4311, 1, "pointer-to-int-cast"),
+    (4312, 1, "int-to-pointer-cast"),
+];
+
+/// What `/wd`, `/we`, `/wo` or `/w1`-`/w4` says of one warning.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum WarningSetting {
+    /// `/wd`: never shown.
+    Disabled,
+    /// `/we`: an error.
+    Error,
+    /// `/wo`: shown once; bcc shows it each time.
+    Once,
+    /// `/w1`-`/w4`: shown from this level.
+    Level(u8),
+}
+
+/// The warning number and setting of `/wdNNNN`, `/weNNNN`, `/woNNNN` or
+/// `/wLNNNN`.
+fn warning_setting(option: &str) -> Option<(u16, WarningSetting)> {
+    let (setting, number) = match option.as_bytes() {
+        | [b'w', b'd', ..] => (WarningSetting::Disabled, &option[2..]),
+        | [b'w', b'e', ..] => (WarningSetting::Error, &option[2..]),
+        | [b'w', b'o', ..] => (WarningSetting::Once, &option[2..]),
+        | [b'w', level @ b'1'..=b'4', ..] => (WarningSetting::Level(level - b'0'), &option[2..]),
+        | _ => return None,
+    };
+    Some((number.parse().ok()?, setting))
+}
+
+impl State {
+    /// bcc's options for the warnings it reports with `cl`'s code, from
+    /// the warning level and the options naming them: a warning above the
+    /// level or under `/wd` is off, `/we` makes it an error (at any level),
+    /// and C4047
+    /// and C4133 are warnings unless `/WX` makes every warning an error.
+    fn coded_warning_options(&self) -> Vec<OsString> {
+        let mut options = Vec::new();
+        for (code, level, group) in CODED_WARNINGS {
+            let setting = self
+                .warning_settings
+                .iter()
+                .find(|&&(other, _)| other == code)
+                .map(|&(_, setting)| setting);
+            let level = match setting {
+                | Some(WarningSetting::Level(level)) => level,
+                | _ => level,
+            };
+            if setting == Some(WarningSetting::Error) {
+                options.push(format!("-Werror={group}").into());
+            } else if setting == Some(WarningSetting::Disabled) || level > self.warning_level {
+                options.push(format!("-Wno-{group}").into());
+            } else if !self.warnings_error && matches!(code, 4047 | 4133) {
+                options.push(format!("-Wno-error={group}").into());
+            }
+        }
+        // `cl`'s C4113 for function pointers that differ in their
+        // parameters is a warning too; `-w` alone would leave the error.
+        if self.warning_level == 0 {
+            options.push("-Wno-incompatible-function-pointer-types".into());
+        } else if !self.warnings_error {
+            options.push("-Wno-error=incompatible-function-pointer-types".into());
+        }
+        options
     }
 }
 

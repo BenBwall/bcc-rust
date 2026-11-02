@@ -2484,6 +2484,49 @@ impl SemanticError {
         Some((message, if format == F::Tcc { None } else { group }))
     }
 
+    /// `cl`'s code and words for the diagnostics its users meet most, under
+    /// the `cl` identity in its diagnostic formats; other diagnostics keep
+    /// bcc's words, without a code. The pointer conversions and casts were
+    /// worded by `Analyzer::msvc_conversion_wording` and
+    /// `Analyzer::msvc_cast_wording`, which leave a type `cl` spells its own
+    /// way unworded. Microsoft Learn: "Compiler Error C2065", "Compiler
+    /// Warning (level 3) C4013", "Compiler Warning (level 1) C4047",
+    /// "Compiler Warning (level 1 and level 3) C4133", "Compiler Warning
+    /// (level 1) C4311", "Compiler Warning (level 1) C4312".
+    fn msvc_message<'d>(
+        &self,
+        context: &Context<'_>,
+        arena: &'d Bump,
+    ) -> Option<(&'static str, &'d str)> {
+        use crate::configuration::DiagnosticGroup as G;
+        if !context.configuration.msvc_wording() {
+            return None;
+        }
+        let name = context.string_cache.at(self.name?);
+        Some(match self.kind {
+            | SemanticErrorKind::UndeclaredIdentifier =>
+                ("C2065", format_in!(arena, "'{name}': undeclared identifier")),
+            | SemanticErrorKind::ImplicitFunctionDeclaration
+            | SemanticErrorKind::ImplicitLibraryFunction(_) => (
+                "C4013",
+                format_in!(arena, "'{name}' undefined; assuming extern returning int"),
+            ),
+            | SemanticErrorKind::PointerConstraint(G::IntConversion) =>
+                ("C4047", arena.alloc_str(name)),
+            | SemanticErrorKind::PointerConstraint(G::IncompatiblePointerTypes) =>
+                ("C4133", arena.alloc_str(name)),
+            | SemanticErrorKind::PointerConstraint(
+                G::PointerToIntCast
+                | G::VoidPointerToIntCast
+                | G::PointerToEnumCast
+                | G::VoidPointerToEnumCast,
+            ) => ("C4311", arena.alloc_str(name)),
+            | SemanticErrorKind::PointerConstraint(G::IntToPointerCast | G::IntToVoidPointerCast) =>
+                ("C4312", arena.alloc_str(name)),
+            | _ => return None,
+        })
+    }
+
     /// TCC's own words for the diagnostics its users meet most, in TCC's
     /// diagnostic format (TCC mob, `tccgen.c` and `tccpp.c`); other
     /// diagnostics keep bcc's.
@@ -2603,10 +2646,12 @@ impl ToDiagnostic for SemanticError {
             } else {
                 message
             };
-        let (message, suffixed) = match self.compiler_message(context, arena) {
-            | Some((text, Some(group))) => (format_in!(arena, "{text} [-W{group}]"), true),
-            | Some((text, None)) => (text, false),
-            | None => match self.tcc_message(context, arena) {
+        let msvc = self.msvc_message(context, arena);
+        let (message, suffixed) = match (msvc, self.compiler_message(context, arena)) {
+            | (Some((_, text)), _) => (text, false),
+            | (None, Some((text, Some(group)))) => (format_in!(arena, "{text} [-W{group}]"), true),
+            | (None, Some((text, None))) => (text, false),
+            | (None, None) => match self.tcc_message(context, arena) {
                 | Some(tcc) => (tcc, false),
                 | None => (message, suffixed),
             },
@@ -2617,10 +2662,12 @@ impl ToDiagnostic for SemanticError {
         } else {
             explanation
         };
-        let mut diagnostic = explanation
-            .label(self.kind.label())
-            .note(note)
-            .at(self.severity(), source);
+        let explanation = explanation.label(self.kind.label()).note(note);
+        let explanation = match msvc {
+            | Some((code, _)) => explanation.msvc_code(code),
+            | None => explanation,
+        };
+        let mut diagnostic = explanation.at(self.severity(), source);
         if let Some(previous) = self.previous {
             let label = match self.kind {
                 | SemanticErrorKind::DuplicateLabel | SemanticErrorKind::DuplicateCase =>

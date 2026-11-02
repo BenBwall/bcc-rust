@@ -102,6 +102,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         // Compatibility has already recorded lvalue conversion or decay.
         let (from, _) = self.value_conversion(source);
         if let Some(group) = self.pointer_conversion_violation(target, from) {
+            let group = self.msvc_pointer_group(group, target, from);
             let wording = self.conversion_wording(group, site, target, from, source);
             // GCC points at an initializer, Clang at the declarator.
             let diagnostic_site = if wording.is_some()
@@ -231,7 +232,16 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     .context
                     .in_system_header(self.context.first_source_vector(site)))
         {
-            self.pointer_diagnostic(group, site);
+            let wording = self.msvc_cast_wording(target, from);
+            self.group_diagnostic(
+                group,
+                crate::translation_phases::semantic_analysis::SemanticErrorKind::PointerConstraint(
+                    group,
+                ),
+                site,
+                wording,
+                None,
+            );
         }
     }
 
