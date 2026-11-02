@@ -122,8 +122,20 @@ impl<'tu> Parser<'_, 'tu, '_> {
             return;
         }
         // Plain `_Complex` means `_Complex double`: Clang warns, GCC only
-        // under `-pedantic`; `-pedantic-errors` makes it an error in both.
-        let plain_complex = matches!(error_type, ParserErrorType::IncompleteComplexTypeSpecifier);
+        // under `-pedantic`; `-pedantic-errors` makes it an error in both,
+        // though `-w` and a system header silence it first. TCC refuses
+        // `_Complex` altogether.
+        let plain_complex = matches!(error_type, ParserErrorType::IncompleteComplexTypeSpecifier)
+            && self.context.configuration.compiler_identity()
+                != crate::configuration::CompilerIdentity::Tcc;
+        if plain_complex
+            && (self.context.configuration.suppress_warnings()
+                || self
+                    .context
+                    .withholds(ErrorSeverity::Warning, false, source_vectors))
+        {
+            return;
+        }
         let plain_complex_severity = plain_complex.then(|| {
             let baseline = if self.context.configuration.compiler_identity().rules()
                 == crate::configuration::RuleSet::Clang

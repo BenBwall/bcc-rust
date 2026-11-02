@@ -500,10 +500,37 @@ mod tests {
             let run = Command::new(directory.path("plain")).output().unwrap();
             assert_eq!(run.status.code(), Some(8), "{mode} {options:?}");
         }
+        // `-w` and a system header silence it before `-pedantic-errors`
+        // can make it an error.
+        std::fs::create_dir_all(directory.path("sys")).unwrap();
+        directory.write("sys/plain.h", "_Complex in_header;\n");
+        directory.write("header.c", "#include <plain.h>\n");
+        // A bare declaration: `plain.c`'s imaginary constant is another
+        // pedantic error, which GCC's `-w` does not silence.
+        directory.write("bare.c", "_Complex bare;\n");
         for mode in ["--gcc-mode", "--clang-mode"] {
-            let output = directory.bcc(mode, &["-pedantic-errors", "-fsyntax-only", "plain.c"]);
+            let output = directory.bcc(mode, &["-pedantic-errors", "-fsyntax-only", "bare.c"]);
             assert!(!output.status.success(), "{mode}");
+            let output =
+                directory.bcc(mode, &["-w", "-pedantic-errors", "-fsyntax-only", "bare.c"]);
+            succeeds(&output);
+            assert_eq!(stderr(&output), "", "{mode} -w");
+            let output = directory.bcc(
+                mode,
+                &[
+                    "-pedantic-errors",
+                    "-isystem",
+                    "sys",
+                    "-fsyntax-only",
+                    "header.c",
+                ],
+            );
+            succeeds(&output);
+            assert_eq!(stderr(&output), "", "{mode} system header");
         }
+        // TCC refuses `_Complex` altogether.
+        let output = directory.bcc("--tcc-mode", &["-c", "plain.c", "-o", "plain.o"]);
+        assert!(!output.status.success());
     }
 
     /// TCC names no warning options, so its diagnostics carry no `[-W…]`

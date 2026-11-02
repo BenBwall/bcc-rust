@@ -958,7 +958,12 @@ impl<'tu> SpecifierList<'tu> {
             && !self.type_conflict_seen
             && self.specifiers.type_specifiers == TypeSpecifiers::Complex
         {
-            self.specifiers.type_specifiers = TypeSpecifiers::ComplexDouble;
+            // TCC refuses `_Complex` ("_Complex is not yet supported").
+            if parser.context.configuration.compiler_identity()
+                != crate::configuration::CompilerIdentity::Tcc
+            {
+                self.specifiers.type_specifiers = TypeSpecifiers::ComplexDouble;
+            }
             parser.report(
                 ParserErrorType::IncompleteComplexTypeSpecifier,
                 self.complex_token,
