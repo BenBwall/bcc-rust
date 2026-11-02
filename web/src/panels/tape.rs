@@ -962,11 +962,12 @@ pub fn Deck(
                         let window = (left, left + view);
                         // A compact tape's labels stay left of the head:
                         // past it is only the narrow blank.
-                        let (avoid, labelled) = if compact {
+                        let (mut avoid, labelled) = if compact {
                             (tags(reel, rows, left), (left, window.1.min((px(cursor) + 0.5) * step - 3.0)))
                         } else {
                             (Vec::new(), window)
                         };
+                        avoid.extend(waits(reel, rows, step, compact));
                         let layer = place_labels(reel, rows, source, step, cursor, labelled, &avoid);
                         let values = if compact { pinned_values(reel, rows, step, cursor, window) } else { Vec::new() };
                         view! {
@@ -1028,6 +1029,37 @@ fn tags(reel: &Reel, rows: &[Row], left: f64) -> Vec<(f64, f64, f64, f64)> {
             };
             let top = AXIS + px(place) * LANE;
             (left, top, left + px(chars) * LABEL_CHAR + 26.0, top + TAG)
+        })
+        .collect()
+}
+
+/// Where a call's line writes "waiting for …" along each of its waits (as
+/// `tape_svg` draws it, under the rule on a compact tape and above it
+/// otherwise): a box around each copy of the text, which a slant's label
+/// keeps clear of.
+fn waits(reel: &Reel, rows: &[Row], step: f64, compact: bool) -> Vec<(f64, f64, f64, f64)> {
+    layout(reel, rows)
+        .calls
+        .into_iter()
+        .filter(|&(_, _, rung)| !rung)
+        .flat_map(|(at, y, _)| {
+            let baseline = if compact { y + 11.0 } else { y - 5.0 };
+            reel.groups[at]
+                .calls
+                .iter()
+                .flat_map(|call| call.waiting.iter())
+                .flat_map(move |(from, to, on)| {
+                    // Each copy of the text, as `tape_svg` repeats it.
+                    let text = px(on.chars().count() + "waiting for ".len()) * 6.0 + 12.0;
+                    let end = px(*to) * step;
+                    let mut boxes = Vec::new();
+                    let mut at = px(*from) * step + 6.0;
+                    while at + text <= end {
+                        boxes.push((at - 2.0, baseline - 10.0, at + text - 10.0, baseline + 3.0));
+                        at += (text + 80.0).max(360.0);
+                    }
+                    boxes
+                })
         })
         .collect()
 }
@@ -1102,9 +1134,13 @@ fn place_labels(
         let offsets = (0..8)
             .map(|k| x1 - 4.0 - width - px(k) * 14.0)
             .chain((0..4).map(|k| x1 + 8.0 + px(k) * 14.0));
-        let candidates = gaps
-            .iter()
-            .flat_map(|&middle| offsets.clone().map(move |left| (left, middle)));
+        // Each gap's middle first, then two pixels either way, which keeps
+        // a label off a bus while it clears text along a call's line.
+        let candidates: Vec<(f64, f64)> = [0.0, 2.0, -2.0]
+            .into_iter()
+            .flat_map(|nudge| gaps.iter().map(move |&middle| middle + nudge))
+            .flat_map(|middle| offsets.clone().map(move |left| (left, middle)))
+            .collect();
         let found = candidates.into_iter().find(|&(left, middle)| {
             let label = Placed {
                 text: String::new(),
@@ -2143,6 +2179,50 @@ mod tests {
         assert_eq!(tape_width(50, 14.0, 814.0, ROOM), 814.0);
         assert_eq!(tape_width(50, 14.0, 813.0, ROOM), 830.0);
         assert_eq!(tape_width(5, 14.0, 900.0, ROOM), 900.0);
+    }
+
+    #[test]
+    fn slant_labels_keep_clear_of_the_waiting_text() {
+        let history = run("recursion");
+        let reel = Reel::record(&history);
+        let source = demos::find("recursion").expect("a lesson").source;
+        let mut checked = 0;
+        for cursor in 0..history.len() {
+            let rows = rows(&reel, cursor, &[]);
+            for compact in [false, true] {
+                let waits = waits(&reel, &rows, 18.0, compact);
+                for label in place_labels(&reel, &rows, source, 18.0, cursor, (0.0, 1.0e9), &waits)
+                {
+                    let rect = (
+                        label.left,
+                        label.middle - LABEL_HALF,
+                        label.right,
+                        label.middle + LABEL_HALF,
+                    );
+                    for wait in &waits {
+                        checked += 1;
+                        assert!(
+                            !(rect.0 < wait.2
+                                && wait.0 < rect.2
+                                && rect.1 < wait.3
+                                && wait.1 < rect.3),
+                            "step {cursor}: {} on {wait:?}",
+                            label.text
+                        );
+                    }
+                }
+            }
+        }
+        assert!(checked > 0, "the lesson waits with labels in view");
+        // The flow into the result keeps its label beside the waits.
+        let last = history.len() - 1;
+        let rows = rows(&reel, last, &[]);
+        let waits = waits(&reel, &rows, 18.0, true);
+        let labels = place_labels(&reel, &rows, source, 18.0, last, (0.0, 1.0e9), &waits);
+        assert!(
+            labels.iter().any(|label| label.text.ends_with("→ result")),
+            "{labels:?}"
+        );
     }
 
     #[test]
