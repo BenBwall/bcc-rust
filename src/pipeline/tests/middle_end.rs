@@ -312,6 +312,26 @@ fn static_initializers_reach_members_through_arrows() {
     }
 }
 
+/// `ms_struct` gives a record Microsoft's bit-field layout on a System V
+/// target, as GCC lays it out (gcc.dg/bf-ms-layout-*.c): each field of a new
+/// size starts a unit of its type, and a zero-width field after a
+/// bit-field ends the unit.
+/// GNU extension: GCC manual, "x86 Type Attributes", `ms_struct`.
+#[test]
+fn ms_struct_records_take_microsofts_layout() {
+    let source = "struct __attribute__((ms_struct)) M { char a : 4; int b : 4; char c; };\nstruct \
+                  G { char a : 4; int b : 4; char c; };\nstruct __attribute__((ms_struct)) Z { \
+                  char a : 3; int : 0; char b; };\nstruct __attribute__((ms_struct, packed)) P { \
+                  char a : 4; short b : 4; };\nint main(void) { struct M m = {3, -2, 7}; return \
+                  (sizeof(struct M) == 12) + (sizeof(struct G) == 4) * 2 + (sizeof(struct Z) == \
+                  8) * 4 + (sizeof(struct P) == 3) * 8 + (__builtin_offsetof(struct M, c) == 8) * \
+                  16 + (m.a == 3 && m.b == -2 && m.c == 7) * 32; }\n";
+    for (optimize, profile) in STAGES {
+        let (status, _) = with_module(source, Target::LinuxGnu, optimize, profile, interpret);
+        assert_eq!(status, 63, "{optimize} {profile:?}");
+    }
+}
+
 #[test]
 fn aggregate_reinitialization_matches_native_arms_and_clang() {
     let Some(target) = host() else { return };

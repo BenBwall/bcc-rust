@@ -221,6 +221,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         .packed
                         .set(attributes.packed || self.context.configuration.pack_structures());
                     self.types.tags[tag].alignment.set(attributes.alignment);
+                    self.types.tags[tag]
+                        .microsoft_layout
+                        .set(attributes.microsoft);
                     let before = self
                         .pack_alignments
                         .partition_point(|&(position, _)| position <= s.pack_position);
@@ -1188,7 +1191,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         let tag = self.types.tags[id];
         let mut output = ArenaVec::new_in(self.types.tu);
         let (mut bytes, mut alignment, mut bit_end) = (0_u64, 1_u64, 0_u64);
-        let ms = self.types.target.ms_bitfields;
+        let ms = tag
+            .microsoft_layout
+            .get()
+            .unwrap_or(self.types.target.ms_bitfields);
         let mut ms_unit: Option<(u64, u64, u64)> = None; // size, byte start, used bits
         let mut required = u64::from(tag.alignment.get());
         let named = members.iter().filter(|m| m.initializable()).count();
@@ -1814,6 +1820,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             contains_flexible: Cell::new(false),
             compatible: Cell::new(Scalar::Int),
             packed: Cell::new(false),
+            microsoft_layout: Cell::new(None),
             transparent: Cell::new(false),
             max_member_alignment: Cell::new(0),
             alignment: Cell::new(0),

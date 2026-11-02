@@ -37,6 +37,9 @@ pub(in crate::translation_phases::semantic_analysis) const MAXIMUM_ALIGNMENT: u6
 pub(in crate::translation_phases::semantic_analysis) struct LayoutAttributes {
     pub(in crate::translation_phases::semantic_analysis) packed:    bool,
     pub(in crate::translation_phases::semantic_analysis) alignment: u32,
+    /// `ms_struct` (true) or `gcc_struct` (false), the last given: the
+    /// record's layout, whatever the target's.
+    pub(in crate::translation_phases::semantic_analysis) microsoft: Option<bool>,
 }
 
 impl<'tu> Analyzer<'_, 'tu, '_> {
@@ -247,6 +250,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         for (index, name) in super::known_names(a, self.context) {
             if name == "packed" {
                 result.packed = true;
+            } else if name == "ms_struct" || name == "gcc_struct" {
+                result.microsoft = Some(name == "ms_struct");
             } else if name == "aligned" {
                 let value = self.requested_attribute_alignment(a, index);
                 if let Some(value) =
@@ -288,6 +293,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 let attributes = self.layout_attributes(a);
                 result.packed |= attributes.packed;
                 result.alignment = result.alignment.max(attributes.alignment);
+                result.microsoft = attributes.microsoft.or(result.microsoft);
             }
             chain = item.next;
         }
