@@ -665,7 +665,7 @@ mode gate and policy diagnostics (`Imaginary` reports an unsupported type); a
 | EmptyInitializers | - | - | - | - | - | Y | Y | extension | parser |
 | EnumUnderlyingType | - | - | - | - | - | Y | Y | extension | parser |
 | AutoTypeInference | - | - | - | - | - | Y | Y | extension | parser |
-| Constexpr | - | - | - | - | - | Y | Y | extension | parser |
+| Constexpr | - | - | - | - | - | Y | Y | extension | parser, sema, lowering |
 | Nullptr | - | - | - | - | - | Y | Y | extension | parser |
 | WideEnumerators | - | - | - | - | - | Y | Y | extension | semantic analysis |
 | Countof | - | - | - | - | - | - | Y | extension | parser |
@@ -1680,7 +1680,7 @@ usual promotions. A later object redeclaration supplies its typedef-derived
 alignment, while explicit object alignment requests remain inherited.
 
 Lowering diagnostics for unmodeled types retain the actual construct through
-typedefs, arrays and record members: `_BitInt`, `constexpr`, decimal types,
+typedefs, arrays and record members: `_BitInt`, decimal types,
 types GCC infers from bit-fields, fixed-underlying enums, MSVC pointer
 modifiers or `ext_vector_type`. They no longer list unrelated possible causes.
 
@@ -2607,9 +2607,10 @@ These cases remain different from the compiler each identity claims:
   (`char a[(int){3}] = {0};` in a block, which Clang folds with
   `-Wgnu-folding-constant`), an array designator (`[(int){1}] = 2`) and a
   GNU case range (`case 1 ... (int){3}:`).
-- C23 `constexpr` compound literals (`(constexpr int){3}`), which GCC 15
+- C23 `constexpr` compound literals (`(constexpr int){3}`), which GCC 14
   accepts in integer constant expressions and the bundled Clang does not
-  parse, stay unmodeled with `constexpr` objects: lowering refuses them.
+  parse, are named constants under both identities (see "C23 `constexpr`
+  objects").
 - GCC folds a `?:` before the casts around it, so `static int x = (int)(1
   ? (long)(int){3} : 0L);` is constant for GCC; bcc requires the `?:` to
   have the object's type and rejects it.
@@ -3322,8 +3323,8 @@ arm, wasm32 included, and print what GCC 13.3 and Clang 23 print.
 
 Deviations and limits:
 
-- `constexpr auto` infers its type but stays refused with every `constexpr`
-  object ("constexpr objects").
+- `constexpr auto` infers its type and is a named constant like any
+  `constexpr` object.
 - GCC types a C23 `auto` object inferred from a bit-field with the
   bit-field's own type (`sizeof` 1 for a 2-bit field), which lowering
   refuses ("types inferred from bit-fields"); GCC 13 and 15 agree.
@@ -3347,3 +3348,59 @@ Deviations and limits:
   `auto x [[maybe_unused]] = 1;`) used to be misread as an unknown type name
   followed by a declarator; after a storage-class specifier the identifier
   is now the declarator, as in GCC and Clang.
+
+## C23 `constexpr` objects (2026-11-02)
+
+A `constexpr` object is an ordinary object whose type is implicitly
+`const` (an array's elements are) and which has internal linkage at file
+scope; at block scope it is automatic unless `static` is also given, and
+lowering stores it as any `const` object with its initializer (C23 §6.7.2p16-17).
+`named_constants.rs` checks its initializer against §6.7.2p5-6: every value
+it stores is a constant of the kind its subobject asks for (an integer
+constant expression for an integer, an arithmetic constant expression for
+a floating type, a null pointer for a pointer, a named constant or
+`constexpr` literal for a copied structure or union) and converts to that
+type without changing value, a signaling NaN keeping its type; no member,
+recursively, is atomic, volatile or restrict-qualified, and the type is not
+variably modified. A `constexpr` compound literal is checked the same way.
+
+Its name, a `.` member of it (through copies of whole structures and only
+for a union's initialized member) and a `constexpr` compound literal are
+named constants (§6.6p7, p13-15): they designate a subobject of the named
+constant's initializer, whose plan gives a scalar one its value. An integer
+one is an integer constant expression operand, so `constexpr int n = 4;
+int a[n];` declares an ordinary array, and `static_assert`, case labels,
+bit-field widths, `alignas`, designators and enumerators take them; any is a
+constant in a static initializer, a structure one copied from its
+initializer's bytes. A null pointer named constant is no null pointer
+constant (§6.6 footnote 118). Lowering still evaluates a named constant as
+an object, so its address may be taken.
+
+The constraints are checked against GCC 14.2's `cc1` and Clang 23 with the
+`gcc.dg/c23-constexpr-*.c` tests: under the GCC identity bcc reports an
+error on exactly the lines GCC 14 does in each of them. The identities
+differ where the compilers do:
+
+| Form | GCC | Clang |
+| --- | --- | --- |
+| `(int) d` for a floating named constant `d` | integer constant expression operand (§6.6p8) | folded with `-Wgnu-folding-constant` |
+| integer object initialized by `(int)(double)1.0` | error (not an integer constant expression) | accepted (an integer constant) |
+| a narrow string's elements | read as `char`, so `-funsigned-char` matters | read as `signed char` whatever `char` is |
+| a complex initializer that rounds | error | accepted |
+| more than one declarator, the name in its own initializer, a same-scope redeclaration, a tag declared in the declaration or initializer (C23 §6.7.1p12, implementation-defined) | error | accepted |
+
+Under both identities `constexpr` beside `extern` or `typedef`, a repeated
+`constexpr`, `constexpr` on a function, a parameter or an empty declaration,
+a missing initializer and `auto` with `constexpr` and a type specifier are
+errors; before C23 `constexpr` is no keyword, as in GCC and Clang.
+
+Deviations:
+
+- Clang 23 folds an element of a `constexpr` array read with a constant
+  index (`arr[1]`) with `-Wgnu-folding-constant`; bcc reads no element, as
+  GCC does, and reports a non-constant expression under both identities.
+- Clang 23 reports `static const int v; constexpr const int v = 1;` as a
+  non-static declaration following a static one, although it gives the
+  object internal linkage; bcc accepts it under the Clang identity.
+- bcc's diagnostics have their own wording; GCC's and Clang's messages
+  differ from each other too.
