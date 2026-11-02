@@ -713,7 +713,10 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
 
     /// The elements of string literal `literal` before its null terminator,
     /// decoded once for the unit.
-    fn literal_units(&mut self, literal: StringTokenType) -> &'s [u32] {
+    pub(in crate::translation_phases::semantic_analysis) fn literal_units(
+        &mut self,
+        literal: StringTokenType,
+    ) -> &'s [u32] {
         let key = match literal {
             | StringTokenType::String(id) => (id.0, 0),
             | StringTokenType::WideString(id) => (id.0, 1),

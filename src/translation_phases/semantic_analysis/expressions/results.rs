@@ -77,6 +77,11 @@ pub(crate) enum ConstantFolding {
     /// `Address` fold, but code generation loads the literal, so its
     /// `llvm.is.constant` sees no constant.
     CompoundLiteral,
+    /// A C23 named constant of floating type converted to an integer type,
+    /// which Clang folds as an `Address` fold where GCC takes it as an
+    /// integer constant expression operand.
+    /// C23 (N3220): §6.6 paragraph 8, p. 95; PDF p. 108.
+    NamedCast,
     AtomicCast,
     /// A floating value converted to an integer type out of its range,
     /// folded to the value GCC and Clang store for it (0 for a NaN, else
@@ -118,7 +123,9 @@ impl ExpressionInfo<'_> {
     pub(in crate::translation_phases::semantic_analysis) fn folded_address(self) -> bool {
         matches!(
             self.folding,
-            ConstantFolding::Address | ConstantFolding::CompoundLiteral
+            ConstantFolding::Address
+                | ConstantFolding::CompoundLiteral
+                | ConstantFolding::NamedCast
         )
     }
 

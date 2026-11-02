@@ -69,14 +69,19 @@ use super::{
     },
 };
 use crate::{
+    configuration::RuleSet,
     float_parsing::LongDouble,
     half_precision::HalfFormat,
-    translation_phases::parsing::syntax::{
-        BinaryOperator,
-        Constant,
-        Expression,
-        ExpressionType,
-        UnaryOperator,
+    translation_phases::parsing::{
+        SpecifierExtensionKind,
+        declaration_syntax::DeclarationSpecifiers,
+        syntax::{
+            BinaryOperator,
+            Constant,
+            Expression,
+            ExpressionType,
+            UnaryOperator,
+        },
     },
 };
 
@@ -140,6 +145,19 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                         // it, as §6.6p10 allows.
                         info.integer = binding.value;
                         info.constant = ConstantClass::Arithmetic;
+                    }
+                    self.constexpr_self_reference(index, name);
+                    // C23 §6.6p7: a `constexpr` object's name is a named
+                    // constant.
+                    if let Some(&initializer) = self.named_objects.get(&index) {
+                        self.read_named_constant(
+                            &mut info,
+                            super::ConstantPlace {
+                                initializer,
+                                offset: 0,
+                                bit_field: None,
+                            },
+                        );
                     }
                 } else if !self_reference && !e.recovered && !self.builtin_name(name) {
                     self.error(
@@ -485,6 +503,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     member,
                     matches!(e.kind, E::IndirectMember { .. }),
                 );
+                // C23 §6.6p15: `.` on a structure or union constant forms a
+                // named constant.
+                if matches!(e.kind, E::DirectMember { .. }) && !self.types.unanalyzed(info.ty) {
+                    self.member_constant(&mut info, base_expression, member);
+                }
             },
             | E::Call {
                 function_expression,
@@ -511,34 +534,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             | E::CompoundLiteral {
                 type_name,
                 initializer,
-            } => {
-                let ty = self
-                    .resolved_type_names
-                    .get(&super::type_name_identity(type_name))
-                    .copied()
-                    .unwrap_or_else(|| self.types.unknown());
-                // §6.5.2.5p1 excludes variable length array types; a pointer
-                // to one is a valid compound literal type.
-                if !self.types.unanalyzed(ty)
-                    && ((matches!(self.types.nodes[ty.index], TypeKind::Array(..))
-                        && self.variably_modified(ty))
-                        || (!self.complete_object(ty)
-                            && !matches!(
-                                self.types.nodes[ty.index],
-                                TypeKind::Array(_, ArrayBound::Incomplete)
-                            )))
-                {
-                    info = self.invalid_expression(e, SemanticErrorKind::InvalidCompoundLiteral);
-                } else {
-                    // A compound literal's flexible array member stays empty.
-                    info.ty = self
-                        .check_initializer(ty, initializer, self.scope == 0, false, None)
-                        .0;
-                    self.fold_compound_literal(&mut info, initializer);
-                }
-                info.category = self.object_category(info.ty);
-                info.static_address = self.scope == 0;
-            },
+            } => info = self.type_compound_literal(e, type_name, initializer),
             | E::StatementExpression(statement) => {
                 if let Some((_, tail)) = self.statement_expression_tail(statement) {
                     // GNU extension: GCC "Statement Exprs" returns the value
@@ -633,6 +629,72 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 }
 
 impl<'tu> Analyzer<'_, 'tu, '_> {
+    /// Types the compound literal `e` of the type `type_name` names, as an
+    /// object its `initializer` initializes: a file-scope one has static
+    /// storage duration, and a `constexpr` one is a `const` named constant.
+    /// C99: §6.5.2.5 paragraphs 1-6, pp. 75-76; PDF pp. 87-88. C23 (N3220):
+    /// §6.5.3.6 paragraphs 4-7, p. 79; PDF p. 92.
+    fn type_compound_literal(
+        &mut self,
+        e: &'tu Expression<'tu>,
+        type_name: &'tu crate::translation_phases::parsing::declaration_syntax::TypeName<'tu>,
+        initializer: &'tu crate::translation_phases::parsing::declaration_syntax::Initializer<'tu>,
+    ) -> ExpressionInfo<'tu> {
+        let mut info = Self::expression_result(e, self.types.unknown());
+        let ty = self
+            .resolved_type_names
+            .get(&super::type_name_identity(type_name))
+            .copied()
+            .unwrap_or_else(|| self.types.unknown());
+        let specifiers = type_name.declaration_specifiers;
+        // C23 §6.5.3.6p4: a `constexpr` literal is a `constexpr` object, so
+        // its type is `const`.
+        let mut constexpr = Self::constexpr_storage(specifiers.extensions);
+        if self.context.configuration.compiler_identity().rules() == RuleSet::Clang
+            && !type_name.recovered
+            && literal_storage_class(specifiers)
+        {
+            self.error(
+                SemanticErrorKind::LiteralStorageClass,
+                specifiers.source_vectors,
+                None,
+                None,
+            );
+            constexpr = false;
+        }
+        let ty = if constexpr && !self.types.unanalyzed(ty) {
+            self.types.const_object(ty)
+        } else {
+            ty
+        };
+        let errors_before = self.semantic_errors;
+        // §6.5.2.5p1 excludes variable length array types; a pointer to one
+        // is a valid compound literal type.
+        if !self.types.unanalyzed(ty)
+            && ((matches!(self.types.nodes[ty.index], TypeKind::Array(..))
+                && self.variably_modified(ty))
+                || (!self.complete_object(ty)
+                    && !matches!(
+                        self.types.nodes[ty.index],
+                        TypeKind::Array(_, ArrayBound::Incomplete)
+                    )))
+        {
+            info = self.invalid_expression(e, SemanticErrorKind::InvalidCompoundLiteral);
+        } else {
+            // A compound literal's flexible array member stays empty.
+            info.ty = self
+                .check_initializer(ty, initializer, self.scope == 0, false, None)
+                .0;
+            self.fold_compound_literal(&mut info, initializer);
+            if constexpr {
+                self.constexpr_literal(&mut info, initializer, errors_before);
+            }
+        }
+        info.category = self.object_category(info.ty);
+        info.static_address = self.scope == 0;
+        info
+    }
+
     /// Carries into `info`, the result of `e`, the folding its operands
     /// had.
     /// C99: §6.6 paragraph 10, p. 96; PDF p. 108.
@@ -868,4 +930,21 @@ impl Analyzer<'_, '_, '_> {
             info.constant = ConstantClass::Arithmetic;
         }
     }
+}
+
+/// Whether a compound literal's specifiers include a storage-class
+/// specifier: `constexpr`, `thread_local` or a keyword one.
+/// C23 (N3220): §6.5.3.6 paragraph 4, p. 79; PDF p. 92.
+fn literal_storage_class(specifiers: DeclarationSpecifiers<'_>) -> bool {
+    let mut chain = specifiers.extensions;
+    while let Some(item) = chain {
+        if matches!(
+            item.kind,
+            SpecifierExtensionKind::Constexpr | SpecifierExtensionKind::ThreadLocal(_)
+        ) {
+            return true;
+        }
+        chain = item.next;
+    }
+    specifiers.storage_class.is_some()
 }
