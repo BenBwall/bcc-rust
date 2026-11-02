@@ -725,14 +725,32 @@ mod tests {
             "known.c",
             "#include <stdarg.h>\nstruct S { int a, b; };\nstatic int first(int n, ...) { va_list \
              ap; va_start(ap, n); int r = va_arg(ap, int); va_end(ap); return r; }\nint \
-             main(void) { char *p = __builtin_alloca(4); p[0] = 0; return \
-             __builtin_expect(first(1, 0), 0) + !__builtin_constant_p(3) + \
+             main(void) { return __builtin_expect(first(1, 0), 0) + !__builtin_constant_p(3) + \
              (__builtin_frame_address(0) == 0) + __builtin_popcount(0) + \
-             (int)__builtin_offsetof(struct S, a) + p[0]; }\n",
+             (int)__builtin_offsetof(struct S, a); }\n",
         );
         let output = directory.bcc("--tcc-mode", &["-c", "known.c", "-o", "known.o"]);
         succeeds(&output);
         assert_eq!(stderr(&output), "");
+        // `tccdefs.h` binds the library aliases (`__builtin_alloca` to
+        // `alloca`) only off Windows.
+        directory.write(
+            "alloca.c",
+            "void *alloca(__SIZE_TYPE__);\nint main(void) { char *p = __builtin_alloca(4); p[0] = \
+             0; return p[0]; }\n",
+        );
+        let output = directory.bcc("--tcc-mode", &["-c", "alloca.c", "-o", "alloca.o"]);
+        succeeds(&output);
+        if cfg!(windows) {
+            assert!(
+                stderr(&output)
+                    .contains("warning: implicit declaration of function '__builtin_alloca'"),
+                "{}",
+                stderr(&output)
+            );
+        } else {
+            assert_eq!(stderr(&output), "");
+        }
         // Other identities keep the GCC builtin.
         directory.write("gcc.c", "int main(void){return !__builtin_finite(1.0);}\n");
         let output = directory.bcc("--gcc-mode", &["-c", "gcc.c", "-o", "gcc.o"]);
