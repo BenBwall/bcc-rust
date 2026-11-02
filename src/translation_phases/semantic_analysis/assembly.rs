@@ -67,7 +67,10 @@ use crate::{
         parsing::{
             Asm,
             declaration_syntax::TypeQualifiers,
-            syntax::Statement,
+            syntax::{
+                Expression,
+                Statement,
+            },
         },
         preprocessing::{
             StringTokenType,
@@ -466,6 +469,15 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
             };
             let info = self.expression_info(operand.expression);
             let kind = if constraint.role.is_some_and(AsmRole::writes) {
+                // GCC refuses a string literal, a read-only array, as an
+                // output ("read-only location used as 'asm' output");
+                // Clang takes it as memory.
+                if self.context.configuration.compiler_identity()
+                    == crate::configuration::CompilerIdentity::Gcc
+                    && string_literal(operand.expression)
+                {
+                    return Err(at_expression(AsmFault::OutputLvalue));
+                }
                 self.output_location(info, constraint)
                     .map_err(at_expression)?
             } else if let Some(tie) = constraint.tied {
@@ -928,4 +940,13 @@ impl AsmFault {
             ),
         }
     }
+}
+
+/// Whether `expression`, inside any parentheses, is a string literal.
+fn string_literal(mut expression: &Expression<'_>) -> bool {
+    use crate::translation_phases::parsing::syntax::ExpressionType;
+    while let ExpressionType::Parenthesized { expression: inner } = expression.kind {
+        expression = inner;
+    }
+    matches!(expression.kind, ExpressionType::StringLiteral(_))
 }

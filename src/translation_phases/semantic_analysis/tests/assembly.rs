@@ -118,6 +118,47 @@ fn arrays_are_memory_outputs() {
     }
 }
 
+/// GCC refuses a string literal as an output ("read-only location used as
+/// 'asm' output"); Clang takes it as a memory operand.
+#[test]
+fn string_literal_outputs_follow_each_compiler() {
+    use crate::configuration::CompilerIdentity::{
+        Clang,
+        Gcc,
+    };
+    for body in [
+        "void f(void) { __asm__(\"\" : \"=m\"(\"abc\")); }",
+        "void f(void) { __asm__(\"\" : \"+m\"((\"abc\"))); }",
+    ] {
+        for (identity, expected) in [
+            (
+                Gcc,
+                &[SemanticErrorKind::InvalidAsm(AsmFault::OutputLvalue)][..],
+            ),
+            (Clang, &[]),
+        ] {
+            let mut kinds = Vec::new();
+            with_configuration(
+                body,
+                crate::configuration::CompilerConfiguration::default()
+                    .with_compiler_identity(identity),
+                |context, _| {
+                    kinds.extend(
+                        context
+                            .take_pending_errors()
+                            .iter()
+                            .filter_map(|e| match e {
+                                | TranslationError::Semantic(e) => Some(e.kind),
+                                | _ => None,
+                            }),
+                    );
+                },
+            );
+            assert_eq!(kinds, expected, "{identity:?} {body}");
+        }
+    }
+}
+
 #[test]
 fn generic_constraints_follow_the_operand() {
     facts(
