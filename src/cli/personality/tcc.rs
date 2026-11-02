@@ -188,8 +188,9 @@ fn archive(arguments: &[OsString]) -> Result<Plan, MainError> {
         // TCC opens the library for writing first, so a failure below
         // leaves none; then, object by object, it names each with `v`
         // ("a - NAME"), and refuses one it cannot open or whose ELF class
-        // is not its own (`ELFCLASS64` on x86-64). It writes a fresh library
-        // rather than updating one.
+        // is not its own (`ELFCLASS64` on x86-64); bcc also takes its own
+        // x86-64 COFF objects. It writes a fresh library rather than
+        // updating one.
         if Path::new(library).is_file() && std::fs::remove_file(library).is_err() {
             return fail(format_args!(
                 "can't create file {}",
@@ -206,7 +207,11 @@ fn archive(arguments: &[OsString]) -> Result<Plan, MainError> {
             if verbose {
                 let _ = writeln!(listed, "a - {name}");
             }
-            if bytes.get(4) != Some(&2) {
+            // bcc's own objects for a Windows target are COFF (machine
+            // 0x8664), which it archives as TCC archives its ELF ones.
+            let elf64 = bytes.starts_with(b"\x7fELF") && bytes.get(4) == Some(&2);
+            let coff = bytes.starts_with(&[0x64, 0x86]);
+            if !(elf64 || coff) {
                 super::print(&listed, false);
                 return fail(format_args!("Unsupported Elf Class: {name}"));
             }
