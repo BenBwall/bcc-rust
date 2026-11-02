@@ -41,6 +41,7 @@ use super::{
     Construct,
     FunctionLowerer,
     LoweringError,
+    Task,
     Unit,
     module_items::at,
     ssa::{
@@ -118,6 +119,12 @@ pub(super) struct NestedFunctions<'a> {
     /// The record word that holds each function scope's non-local goto
     /// receiver, if a nested function jumps to one of its labels.
     receivers:            ArenaMap<'a, usize, u32>,
+    /// The record word of each saved runtime bound nested functions use, by
+    /// the function scope that evaluates it and the bound.
+    bound_words:          ArenaMap<'a, (usize, usize), u32>,
+    /// The function scope of each bound a function's parameters write,
+    /// which that function evaluates on entry.
+    parameter_bounds:     ArenaMap<'a, usize, usize>,
     /// Each function scope's captured objects, record trampolines and
     /// non-local goto targets.
     lists:                ArenaMap<'a, usize, Lists>,
@@ -152,6 +159,9 @@ enum Capture {
     /// The address of the function's non-local goto receiver: the index
     /// of the label to resume at, then a `jmp_buf`.
     Receiver,
+    /// The value of a runtime bound the function saved, by bound index:
+    /// an array extent of a variably modified type a nested function uses.
+    Bound(usize),
 }
 
 /// The heads and lengths of one function scope's lists in
@@ -181,11 +191,22 @@ impl<'a> NestedFunctions<'a> {
     pub(super) fn new(arena: &'a Bump, sema: &SemanticTranslationUnit<'_>) -> Self {
         let mut outermost = ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, arena);
         let mut function_scopes = ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, arena);
+        let mut parameter_bounds = ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, arena);
         for record in sema.functions {
             if let Some(binding) = record.binding {
                 _ = outermost.insert(record.scope, binding);
             }
             _ = function_scopes.insert(record.control.id, record.scope);
+            let sites = record
+                .parameter_facts
+                .iter()
+                .filter_map(|facts| facts.site)
+                .chain(record.parameter_sites.iter().copied());
+            for site in sites {
+                for &bound in site.bounds {
+                    _ = parameter_bounds.insert(bound, record.scope);
+                }
+            }
         }
         Self {
             functions: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, arena),
@@ -194,6 +215,8 @@ impl<'a> NestedFunctions<'a> {
             parents: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, arena),
             words: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, arena),
             receivers: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, arena),
+            bound_words: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, arena),
+            parameter_bounds,
             lists: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, arena),
             captures: ArenaVec::new_in(arena),
             trampolines: ArenaVec::new_in(arena),
@@ -219,6 +242,17 @@ impl<'a> NestedFunctions<'a> {
         }
         let word = self.add_word(owner, Capture::Object(binding));
         _ = self.words.insert((owner, binding), word);
+        word
+    }
+
+    /// The record word that holds the saved runtime bound `bound` of the
+    /// function scope `owner`, assigned on first use.
+    fn bound_word(&mut self, owner: usize, bound: usize) -> u32 {
+        if let Some(&word) = self.bound_words.get(&(owner, bound)) {
+            return word;
+        }
+        let word = self.add_word(owner, Capture::Bound(bound));
+        _ = self.bound_words.insert((owner, bound), word);
         word
     }
 
@@ -361,18 +395,6 @@ impl<'tu> Unit<'_, 'tu, '_> {
                 source,
             ));
         }
-        // The bounds of a variably modified type are its definer's, which
-        // GCC evaluates where the definition is.
-        if self
-            .sema
-            .types
-            .variably_modified(self.sema.bindings[binding].ty)
-        {
-            return Err(LoweringError::unsupported(
-                Construct::NestedVariablyModified,
-                source,
-            ));
-        }
         let unchained = self
             .signature(self.sema.bindings[binding].ty)
             .map_err(|kind| at(kind, source))?;
@@ -511,6 +533,16 @@ impl<'tu> Unit<'_, 'tu, '_> {
             .declare_function(name, signature, crate::ir::Linkage::External))
     }
 
+    /// The function scope that evaluates the runtime bound `bound`: the
+    /// function whose parameters write it, or the one around the scope it
+    /// is written in.
+    fn bound_owner(&self, bound: usize) -> Option<usize> {
+        if let Some(&owner) = self.nested.parameter_bounds.get(&bound) {
+            return Some(owner);
+        }
+        self.function_scope(self.sema.runtime_bounds.get(bound)?.scope)
+    }
+
     /// Whether the function scope `scope` builds a chain record: it
     /// defines a nested function.
     fn builds_record(&self, scope: usize) -> bool {
@@ -518,7 +550,7 @@ impl<'tu> Unit<'_, 'tu, '_> {
     }
 }
 
-impl FunctionLowerer<'_, '_, '_, '_, '_> {
+impl<'tu, 's> FunctionLowerer<'_, '_, 'tu, '_, 's> {
     /// Builds the function's chain record on entry, after its parameters:
     /// its own static chain, its trampoline area, made here once per
     /// activation, and the address of each object its nested functions use,
@@ -563,12 +595,20 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
                     });
                     continue;
                 },
+                // Stored when the bound is evaluated.
+                | Capture::Bound(_) => continue,
             };
             let source = self.unit.sema.bindings[binding].name.source_vectors;
             // A parameter is in place already, where it arrived or in a
-            // copy; any other object gets its slot now.
+            // copy; an object of variable size is stored when it is
+            // allocated; any other object gets its slot now.
             let local = match self.locals.get(&binding).copied() {
                 | Some(local) => local,
+                | None if super::types::variable_size(
+                    &self.unit.sema.types,
+                    self.unit.sema.bindings[binding].ty,
+                ) =>
+                    continue,
                 | None => self.local(binding, source)?,
             };
             let address = match local {
@@ -588,32 +628,82 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
         Ok(())
     }
 
-    /// Checks a nested definition where its definer reaches it: the bounds
-    /// of a variably modified type there are the definer's, which GCC
-    /// evaluates at the definition and lowering does not yet.
+    /// The tasks a nested definition runs where its definer reaches it:
+    /// the bounds its own type writes, which are the definer's, as GCC
+    /// evaluates them at the definition (`char (*f(void))[++n]`).
+    /// GNU extension: GCC manual, "Nested Functions".
     pub(super) fn nested_definition(
-        &self,
-        definition: &FunctionDefinition<'_>,
-    ) -> Result<(), LoweringError> {
-        let variably_modified = self
-            .unit
-            .sema
-            .correspondence
-            .declaration(definition.declarator)
-            .and_then(|fact| fact.binding)
-            .is_some_and(|binding| {
-                self.unit
-                    .sema
-                    .types
-                    .variably_modified(self.unit.sema.bindings[binding].ty)
-            });
-        if variably_modified {
-            return Err(LoweringError::unsupported(
-                Construct::NestedVariablyModified,
-                definition.source_vectors,
-            ));
+        &mut self,
+        definition: &FunctionDefinition<'tu>,
+    ) -> Result<ArenaVec<'s, Task<'tu>>, LoweringError> {
+        let mut tasks = ArenaVec::new_in(self.scratch);
+        let bounds = self.unit.sema.definition_bounds(definition);
+        self.prepare_bound_tasks(bounds, &mut tasks, definition.source_vectors)?;
+        Ok(tasks)
+    }
+
+    /// Saves the runtime bound `index`, just evaluated as `value`, in this
+    /// function's record if a nested function reads it there.
+    pub(super) fn capture_bound(&mut self, index: usize, value: Value) {
+        if let (Some(record), Some(&word)) = (
+            self.chain_record,
+            self.unit
+                .nested
+                .bound_words
+                .get(&(self.record.scope, index)),
+        ) {
+            let at = self.offset_address(record, 8 * u64::from(word));
+            _ = self.draft.push(
+                self.memory_op(InstData::Store {
+                    ty:    Type::I64,
+                    flags: InstFlags::empty(),
+                    align: WORD,
+                    tag:   None,
+                    args:  [value, at],
+                }),
+                None,
+            );
         }
-        Ok(())
+    }
+
+    /// Saves the address of `binding`, an object of variable size just
+    /// allocated at `address`, in this function's record if a nested
+    /// function uses it.
+    pub(super) fn capture_allocation(&mut self, binding: usize, address: Value) {
+        if let (Some(record), Some(&word)) = (
+            self.chain_record,
+            self.unit.nested.words.get(&(self.record.scope, binding)),
+        ) {
+            let at = self.offset_address(record, 8 * u64::from(word));
+            self.store_pointer(address, at);
+        }
+    }
+
+    /// The value of the runtime bound `index` of a function around this
+    /// nested one, read from the record of the function that saved it.
+    pub(super) fn captured_bound(
+        &mut self,
+        index: usize,
+        source: SourceVectors,
+    ) -> Result<Value, LoweringError> {
+        let owner = self
+            .unit
+            .bound_owner(index)
+            .filter(|&owner| owner != self.record.scope)
+            .ok_or_else(|| LoweringError::missing("VLA bound was not evaluated", source))?;
+        let word = self.unit.nested.bound_word(owner, index);
+        let record = self.record_of(owner, source)?;
+        let at = self.offset_address(record, 8 * u64::from(word));
+        Ok(self.inst(
+            InstData::Load {
+                ty:    Type::I64,
+                flags: InstFlags::empty(),
+                align: WORD,
+                tag:   None,
+                addr:  at,
+            },
+            Type::I64,
+        ))
     }
 
     /// The address of `binding`, an automatic object of an enclosing
@@ -631,12 +721,6 @@ impl FunctionLowerer<'_, '_, '_, '_, '_> {
             .ok_or_else(|| {
                 LoweringError::missing("an automatic object is used outside its function", source)
             })?;
-        if self.unit.sema.types.variably_modified(data.ty) {
-            return Err(LoweringError::unsupported(
-                Construct::NestedVariablyModified,
-                source,
-            ));
-        }
         let word = self.unit.nested.word(owner, binding);
         _ = self.unit.address_taken.insert(binding);
         let record = self.record_of(owner, source)?;

@@ -122,6 +122,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
     /// C99: §6.7.5.2p5, p. 117; PDF p. 129.
     pub(super) fn variable_bound(&mut self, expression: &'tu Expression<'tu>) -> ArrayBound {
         let bound = self.types.variable_bound(expression);
+        self.bound_scopes.push(self.scope);
         if !self.defining.is_empty()
             && let ArrayBound::Variable(index) = bound
         {

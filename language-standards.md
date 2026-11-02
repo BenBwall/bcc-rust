@@ -3277,9 +3277,10 @@ and pointers to the record, records nested in records, unions, and passing
 one through `...` (`va_arg` of its type) work on every back end; a
 record passed by value travels by invisible reference, as GCC passes it.
 A record whose only variably modified member is a pointer to a VLA has a
-constant layout and may be initialized, as in GCC. Refused by name ("this
-use of a structure or union with a member of variable size"): a function
-result of such a type, a volatile copy, and an `asm` operand of it; under
+constant layout and may be initialized, as in GCC. A result of such a type,
+which only a nested function can have, is returned in memory the caller
+allocates. Refused by name ("this use of a structure or union with a
+member of variable size"): a volatile copy and an `asm` operand of it; under
 Microsoft record layout (the Windows targets) the record stays unmodeled
 and is refused as "structures with variably modified members in Microsoft
 record layout".

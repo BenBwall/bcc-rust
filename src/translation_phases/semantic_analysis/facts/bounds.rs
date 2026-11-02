@@ -199,6 +199,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     .copied()
                     .unwrap_or(BoundEvaluationSite::Unevaluated),
                 dependencies: self.types.tu.alloc_slice_copy(&dependencies),
+                scope: self.bound_scopes.get(index).copied().unwrap_or(0),
             });
         }
     }

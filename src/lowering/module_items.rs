@@ -901,12 +901,16 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
         let mut extensions = ArenaVec::new_in(scratch);
         let mut noundef = ArenaVec::new_in(scratch);
         let result_representation = repr(types, result)?;
-        if types::variable_size(types, result) {
-            return Err(LoweringErrorKind::Unsupported(
-                Construct::VariableSizeRecord,
-            ));
-        }
         let result = match result_representation {
+            // GNU: a result of variable size is returned in memory the
+            // caller allocates at its run-time size and passes first, as
+            // GCC returns it; it has no constant layout to describe.
+            // GNU extension: GCC manual, "Variable Length".
+            | Repr::Aggregate if types::variable_size(types, result) => {
+                noundef.push(0);
+                params.push(Type::Ptr);
+                None
+            },
             | Repr::Void => None,
             | representation
                 if matches!(representation, Repr::Aggregate | Repr::Complex { .. })

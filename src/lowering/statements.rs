@@ -137,8 +137,10 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                         // A nested function is lowered as a function of
                         // its own (`nested.rs`); its definition runs
                         // nothing here.
+                        // The definer evaluates the bounds of its type.
                         | BlockItem::FunctionDefinition(definition) => {
-                            self.nested_definition(definition)?;
+                            let tasks = self.nested_definition(definition)?;
+                            self.push_all(&tasks);
                             continue;
                         },
                     });
@@ -786,9 +788,13 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     .block_params(Draft::entry())
                     .first()
                     .ok_or_else(|| LoweringError::missing("a result has no object", source))?;
-                let layout = types::layout(&self.unit.sema.types, self.result)
-                    .map_err(|kind| at(kind, source))?;
-                let size = self.iconst(Type::I64, i128::from(layout.size));
+                let size = if types::variable_size(&self.unit.sema.types, self.result) {
+                    self.runtime_size(self.result, source)?
+                } else {
+                    let layout = types::layout(&self.unit.sema.types, self.result)
+                        .map_err(|kind| at(kind, source))?;
+                    self.iconst(Type::I64, i128::from(layout.size))
+                };
                 _ = self.draft.push(
                     self.memory_op(InstData::MemoryRange {
                         opcode: Opcode::Copy,
@@ -1056,8 +1062,12 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
         };
         let signature = unit.module.function_signature(func);
         let draft = Draft::new(scratch, signature.params);
-        // A structure or union result comes first, before the C parameters.
-        let first = usize::from(signature.result_param().is_some());
+        // A structure or union result comes first, before the C parameters,
+        // as does GNU's result of variable size, which has no ABI layout.
+        let first = usize::from(
+            signature.result_param().is_some()
+                || types::variable_size(&unit.sema.types, record.result),
+        );
         if record.parameter_facts.len() != parameters.len() {
             return Err(LoweringError::missing(
                 "parameter correspondence is not retained",
