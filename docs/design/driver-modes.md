@@ -1086,17 +1086,16 @@ These driver behaviours still differ from the compilers mimicked:
   program, so `sqrt` links without `-lm`, and `-static` links where both
   TCCs fail against this host's static glibc (`unresolved reference to
   '_Unwind_GetCFA'`; 0.9.27: `Unknown relocation type for got: 23`).
-- `-M` and `-MD` for a link of several sources write one rule per source
-  (`a.d` with `a.o: a.c`, and `b.d`), where TCC writes one rule for the
-  link named after its output (`a.d` with `a.out: a.c b.c inc.h`). TCC's
-  `-M` of standard input lists `-` as a dependency, and its `-M` lists
-  the headers of its own include directory, where bcc's are embedded.
+- TCC's `-M` lists the headers of its own include directory, where bcc's
+  are embedded. (A link's one rule, `-` for standard input and TCC's
+  escaping follow TCC since #251.)
 - TCC's `-c` given an object rewrites that object (`tcc -c a.c b.o`
   writes `a.o` and relinks `b.o` into itself); bcc warns that the
   object is unused, as GCC does.
-- `-ar` runs the bundled `llvm-ar`, whose messages are its own
-  (`llvm-ar: error: lib.o: No such file or directory`, exit status 1, for
-  TCC's `tcc: ar: can't open file lib.o`, exit status 2).
+- `-ar` reads its arguments and reports its errors as TCC's archiver does,
+  then runs the bundled `llvm-ar`, whose archive keeps member names longer
+  than 15 characters in a GNU long-name table; TCC truncates them, and its
+  `-ar t` lists such members of bcc's archive as `/` and `/0`.
 - `-B` is ignored: bcc's headers are embedded, and it has no `libtcc1.a`.
 
 ## Gaps in the compiler these modes expose
