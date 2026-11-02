@@ -1125,8 +1125,6 @@ would use:
   function, so a program calling it links; bcc follows GCC and Clang and
   leaves the call to an external definition, so the link fails (`ld.lld:
   error: undefined symbol: f`). C99 §6.7.4p6 allows either.
-- `cl` compiles a unit without a declaration (`cl /c /Tch.h` of a header
-  holding only macros writes `h.obj`); bcc refuses it, as above.
 - `__vectorcall` and `cl /Gv` are refused, so bcc cannot call or define a
   function with that convention.
 
