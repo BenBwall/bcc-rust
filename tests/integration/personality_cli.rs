@@ -467,6 +467,227 @@ mod tests {
         }
     }
 
+    /// Characters beyond ASCII in identifiers follow each compiler's sets:
+    /// Clang takes C99's Annex D in C99, C11's in C11 and C17 and Unicode's
+    /// in C23; GCC 14 takes any of them in every mode
+    /// (gcc.dg/ucnid-5-utf8.c, ucnid-15-utf8.c).
+    #[test]
+    fn identifier_characters_follow_each_compiler() {
+        let directory = Directory::new();
+        directory.write("emoji.c", "int a\u{1F600} = 2;\nint b\\U0001F600 = 3;\n");
+        directory.write("super.c", "int \u{3C0}\u{B2} = 9;\n");
+        // With a pedantic option, GCC enforces the standard's own set; a
+        // combining mark or middle dot continues a C23 identifier.
+        directory.write("mark.c", "int a\\u0300;\nint b\\u00B7;\n");
+        for (file, standard, options, gcc, clang) in [
+            ("emoji.c", "c99", &["-pedantic"][..], false, false),
+            ("emoji.c", "c11", &["-pedantic"], true, true),
+            ("emoji.c", "c23", &["-pedantic"], false, false),
+            ("mark.c", "c23", &[], true, true),
+            ("mark.c", "c23", &["-pedantic"], true, true),
+        ] {
+            for (mode, accepted) in [("--gcc-mode", gcc), ("--clang-mode", clang)] {
+                let std = format!("-std={standard}");
+                let mut args = vec![std.as_str(), "-fsyntax-only"];
+                args.extend_from_slice(options);
+                args.push(file);
+                let output = directory.bcc(mode, &args);
+                assert_eq!(
+                    output.status.success(),
+                    accepted,
+                    "{mode} {args:?}: {}",
+                    stderr(&output)
+                );
+            }
+        }
+        // GCC reads `\u0024` as `$`; Clang refuses it.
+        directory.write(
+            "dollar.c",
+            "int a$b(void) { return 1; }\nint main(void) { return a\\u0024b() - 1; }\n",
+        );
+        let output = directory.bcc("--gcc-mode", &["-std=c99", "-fsyntax-only", "dollar.c"]);
+        succeeds(&output);
+        let output = directory.bcc("--clang-mode", &["-std=c99", "-fsyntax-only", "dollar.c"]);
+        assert!(!output.status.success());
+        for (file, standard, gcc, clang) in [
+            ("emoji.c", "c99", true, false),
+            ("emoji.c", "c11", true, true),
+            ("emoji.c", "c17", true, true),
+            ("emoji.c", "c23", true, false),
+            ("super.c", "c99", true, false),
+            ("super.c", "c11", true, true),
+            ("super.c", "c23", true, true),
+        ] {
+            for (mode, accepted) in [("--gcc-mode", gcc), ("--clang-mode", clang)] {
+                let std = format!("-std={standard}");
+                let output = directory.bcc(mode, &[std.as_str(), "-fsyntax-only", file]);
+                assert_eq!(
+                    output.status.success(),
+                    accepted,
+                    "{mode} {std} {file}: {}",
+                    stderr(&output)
+                );
+            }
+        }
+    }
+
+    /// U+20D0-U+20FF continue a C23 identifier only where they are
+    /// `XID_Continue`: its nonspacing marks, not its enclosing marks.
+    /// Clang 23 refuses `a` followed by U+20DD in C23, as GCC 14 does
+    /// under `-pedantic`; GCC also takes C11's set, which holds it.
+    #[test]
+    fn enclosing_marks_continue_no_c23_identifier() {
+        let directory = Directory::new();
+        directory.write("enclosing.c", "int a\u{20DD};\n");
+        directory.write("enclosing-ucn.c", "int a\\u20DD;\n");
+        directory.write("nonspacing.c", "int a\u{20D0};\n");
+        directory.write("nonspacing-ucn.c", "int a\\u20D0;\n");
+        for (file, options, gcc, clang) in [
+            ("enclosing.c", &[][..], true, false),
+            ("enclosing.c", &["-pedantic"], false, false),
+            ("enclosing-ucn.c", &[], true, false),
+            ("enclosing-ucn.c", &["-pedantic"], false, false),
+            ("nonspacing.c", &["-pedantic"], true, true),
+            ("nonspacing-ucn.c", &["-pedantic"], true, true),
+        ] {
+            for (mode, accepted) in [("--gcc-mode", gcc), ("--clang-mode", clang)] {
+                let mut args = vec!["-std=c23", "-fsyntax-only"];
+                args.extend_from_slice(options);
+                args.push(file);
+                let output = directory.bcc(mode, &args);
+                assert_eq!(
+                    output.status.success(),
+                    accepted,
+                    "{mode} {args:?}: {}",
+                    stderr(&output)
+                );
+            }
+        }
+    }
+
+    /// No universal character name spells a basic or control character in
+    /// an identifier (C99 and C23 §6.4.3p2): GCC 14 and Clang 23 refuse
+    /// `\u0061`, `a\u0030` and the like in every mode. GCC alone reads
+    /// `\u0024` as `$`.
+    #[test]
+    fn universal_character_names_spell_no_basic_character() {
+        let directory = Directory::new();
+        for (index, source) in [
+            "int \\u0061;\n",
+            "int \\U00000061;\n",
+            "int a\\u0030;\n",
+            "int a\\u005F;\n",
+            "int a\\u0040;\n",
+            "int a\\u0060;\n",
+            "int a\\u0001;\n",
+            "int a\\u009F;\n",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let file = format!("basic{index}.c");
+            directory.write(&file, source);
+            for standard in ["-std=c99", "-std=c17", "-std=c23", "-std=gnu17"] {
+                for mode in ["--gcc-mode", "--clang-mode"] {
+                    let output = directory.bcc(mode, &[standard, "-fsyntax-only", &file]);
+                    assert!(
+                        !output.status.success(),
+                        "{mode} {standard} {source}: {}",
+                        stderr(&output)
+                    );
+                }
+            }
+        }
+        directory.write("dollar.c", "int a\\u0024;\n");
+        for standard in ["-std=c99", "-std=c23"] {
+            let output = directory.bcc("--gcc-mode", &[standard, "-fsyntax-only", "dollar.c"]);
+            succeeds(&output);
+            let output = directory.bcc("--clang-mode", &[standard, "-fsyntax-only", "dollar.c"]);
+            assert!(!output.status.success());
+        }
+    }
+
+    /// GCC 14 warns of an identifier outside Normalization Form C
+    /// (`-Wnormalized`), as `a` followed by U+0300 is; C23 requires the
+    /// form, so there `-pedantic-errors` makes it an error. Clang has no
+    /// such check, nor the option.
+    #[test]
+    fn gcc_reports_identifiers_outside_normalization_form_c() {
+        let directory = Directory::new();
+        directory.write("raw.c", "int a\u{300};\n");
+        directory.write("ucn.c", "int a\\u0300;\n");
+        directory.write("composed.c", "int \u{E0}; int \\u00E0x;\n");
+        // (file, standard, options, accepted, warned) under GCC.
+        for file in ["raw.c", "ucn.c"] {
+            for (standard, options, accepted, warned) in [
+                ("-std=c23", &[][..], true, true),
+                ("-std=gnu23", &["-pedantic"], true, true),
+                ("-std=c23", &["-pedantic-errors"], false, true),
+                ("-std=gnu23", &["-pedantic-errors"], false, true),
+                ("-std=c17", &["-pedantic-errors"], true, true),
+                ("-std=c17", &["-Werror=normalized"], false, true),
+                (
+                    "-std=c23",
+                    &["-pedantic-errors", "-Wno-error=normalized"],
+                    true,
+                    true,
+                ),
+                (
+                    "-std=c23",
+                    &["-pedantic-errors", "-Wno-normalized"],
+                    true,
+                    false,
+                ),
+                (
+                    "-std=c23",
+                    &["-Wnormalized=none", "-pedantic-errors"],
+                    true,
+                    false,
+                ),
+                ("-std=c23", &["-pedantic-errors", "-w"], true, false),
+            ] {
+                let mut args = vec![standard, "-fsyntax-only"];
+                args.extend_from_slice(options);
+                args.push(file);
+                let output = directory.bcc("--gcc-mode", &args);
+                let message = stderr(&output);
+                assert_eq!(output.status.success(), accepted, "{args:?}: {message}");
+                assert_eq!(
+                    message.contains("is not in Normalization Form C"),
+                    warned,
+                    "{args:?}: {message}"
+                );
+            }
+            let output = directory.bcc(
+                "--clang-mode",
+                &["-std=c23", "-pedantic-errors", "-fsyntax-only", file],
+            );
+            succeeds(&output);
+            assert_eq!(stderr(&output), "");
+        }
+        let output = directory.bcc(
+            "--gcc-mode",
+            &[
+                "-std=c23",
+                "-pedantic-errors",
+                "-fsyntax-only",
+                "composed.c",
+            ],
+        );
+        succeeds(&output);
+        assert_eq!(stderr(&output), "");
+        let output = directory.bcc(
+            "--clang-mode",
+            &["-std=c23", "-Wno-normalized", "-fsyntax-only", "composed.c"],
+        );
+        succeeds(&output);
+        assert!(
+            stderr(&output).contains("unknown warning option '-Wno-normalized'"),
+            "{}",
+            stderr(&output)
+        );
+    }
+
     /// `__BASE_FILE__` names the main source file as the command line
     /// wrote it, wherever it is expanded, as in GCC, Clang and TCC.
     #[test]

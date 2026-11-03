@@ -228,6 +228,33 @@ impl<'a> LexedFile<'a> {
                         start.line = start.line.wrapping_add(line_delta);
                         report_skipped_quote(context, source_file_index, start, length, quote);
                     },
+                // A warning group's diagnostic reports once, unless its
+                // group is off or a system header withholds it.
+                | LexDiagnostic::Tokenizer {
+                    error_type,
+                    start,
+                    length,
+                    character,
+                } if let Some(group) = error_type.group() =>
+                    if !context.ignore_tokenizer_errors() && !reported.replace(true) {
+                        let mut start = start;
+                        start.line = start.line.wrapping_add(line_delta);
+                        let vectors =
+                            context.create_source_vectors(start, source_file_index, length);
+                        if context.group_severity(group, vectors).is_some() {
+                            context.preprocessor_tokenizer_error(PreprocessorTokenizerError {
+                                source_vector: SourceVector {
+                                    index: source_offset(start.index),
+                                    column: start.column,
+                                    line: start.line,
+                                    source_file_index,
+                                    length: source_offset(length),
+                                },
+                                error_type,
+                                character,
+                            });
+                        }
+                    },
                 // A warning, unlike an error, is not folded into its
                 // repeats: report it once, as for an extension.
                 | LexDiagnostic::Tokenizer {

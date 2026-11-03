@@ -11,12 +11,14 @@ use super::{
     super::{
         Lexer,
         PreprocessorTokenType,
+        PreprocessorTokenizerErrorType,
     },
     Lexed,
 };
 use crate::{
     configuration::{
         CStandard,
+        CompilerIdentity,
         Feature,
         RuleSet,
     },
@@ -81,7 +83,9 @@ impl Lexer<'_, '_, '_, '_> {
                 .configuration
                 .accepts(Feature::DollarIdentifiers) =>
                 self.lex_extended_identifier(start, start),
-            | b'\\' if super::ucn::decode(&self.text[start..], true).is_some() =>
+            | b'\\'
+                if super::ucn::decode(self.context.configuration, &self.text[start..], true)
+                    .is_some() =>
                 self.lex_identifier(start, start),
             | b'A'..=b'Z' | b'a'..=b'z' | b'_' => self.lex_identifier(start, start + 1),
             | b'.' => match self.peek(start + 1) {
@@ -182,7 +186,12 @@ impl Lexer<'_, '_, '_, '_> {
                 &[(b'=', T::ExclamationMarkEquals)],
             ),
             | b'=' => self.one_of(start, T::Equals, &[(b'=', T::EqualsEquals)]),
-            | 0x80.. if self.char_at(start).is_alphabetic() =>
+            | 0x80..
+                if super::ucn::identifier_character(
+                    self.context.configuration,
+                    self.char_at(start),
+                    true,
+                ) =>
                 self.lex_identifier(start, start + self.char_at(start).len_utf8()),
             | _ => self.lex_other(start),
         }
@@ -228,10 +237,13 @@ impl Lexer<'_, '_, '_, '_> {
     }
 
     /// Extends `identifier` across UCNs and accepted multibyte characters.
+    /// GCC warns of one that is not in Normalization Form C, which C23
+    /// requires (`-Wnormalized`).
     /// C99: §6.4.2.1p1-3, p. 51; PDF p. 63; UCN form §6.4.3p1, p. 53;
-    /// PDF p. 65.
+    /// PDF p. 65. C23: §6.4.2.1p3, p. 54; PDF p. 67.
     #[cold]
     fn lex_extended_identifier(&mut self, start: usize, mut end: usize) -> Lexed {
+        let position = self.tracker.advance_past_deletions(start);
         let mut universal = false;
         loop {
             end += byte_scan::identifier_run(&self.bytes[end..]);
@@ -246,16 +258,41 @@ impl Lexer<'_, '_, '_, '_> {
                     self.record_extension(Feature::DollarIdentifiers, "$", position, 1);
                     end += 1;
                 },
-                | Some(b'\\') if super::ucn::decode(&self.text[end..], end == start).is_some() => {
-                    end += super::ucn::decode(&self.text[end..], end == start)
-                        .unwrap()
-                        .1;
+                | Some(b'\\')
+                    if super::ucn::decode(
+                        self.context.configuration,
+                        &self.text[end..],
+                        end == start,
+                    )
+                    .is_some() =>
+                {
+                    end += super::ucn::decode(
+                        self.context.configuration,
+                        &self.text[end..],
+                        end == start,
+                    )
+                    .unwrap()
+                    .1;
                     universal = true;
                 },
-                | Some(0x80..) if self.char_at(end).is_alphanumeric() =>
+                | Some(0x80..)
+                    if super::ucn::identifier_character(
+                        self.context.configuration,
+                        self.char_at(end),
+                        end == start,
+                    ) =>
                     end += self.char_at(end).len_utf8(),
                 | _ => break,
             }
+        }
+        let configuration = self.context.configuration;
+        if configuration.compiler_identity() == CompilerIdentity::Gcc
+            && super::ucn::composes_in_place(configuration, &self.text[start..end])
+        {
+            let error = PreprocessorTokenizerErrorType::Unnormalized {
+                required: configuration.standard() >= CStandard::C23,
+            };
+            self.diagnose_to(error, position, end);
         }
         let kind = if &self.bytes[start..end] == b"defined" {
             PreprocessorTokenType::Defined
@@ -330,9 +367,18 @@ impl Lexer<'_, '_, '_, '_> {
                         .configuration
                         .accepts(Feature::DollarIdentifiers) =>
                     end += 1,
-                | Some(b'\\') if super::ucn::decode(&self.text[end..], false).is_some() =>
-                    end += super::ucn::decode(&self.text[end..], false).unwrap().1,
-                | Some(0x80..) if self.char_at(end).is_alphanumeric() =>
+                | Some(b'\\')
+                    if super::ucn::decode(self.context.configuration, &self.text[end..], false)
+                        .is_some() =>
+                    end += super::ucn::decode(self.context.configuration, &self.text[end..], false)
+                        .unwrap()
+                        .1,
+                | Some(0x80..)
+                    if super::ucn::identifier_character(
+                        self.context.configuration,
+                        self.char_at(end),
+                        false,
+                    ) =>
                     end += self.char_at(end).len_utf8(),
                 | Some(_) => break,
                 // Reading the end of input leaves the position past any

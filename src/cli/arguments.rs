@@ -364,10 +364,14 @@ impl Cli {
         };
         let mut failed = false;
         for option in &self.language_option {
-            if matches!(
-                LanguageFlag::parse(option),
-                Some(LanguageFlag::UnknownWarning)
-            ) {
+            let unknown = match LanguageFlag::parse(option) {
+                | Some(LanguageFlag::UnknownWarning) => true,
+                | Some(LanguageFlag::WarningGroup(group, _)) =>
+                    group.gcc_only()
+                        && CompilerIdentity::from(self.compiler_identity) != CompilerIdentity::Gcc,
+                | _ => false,
+            };
+            if unknown {
                 let label = if severity == crate::translation_phases::ErrorSeverity::Error {
                     failed = true;
                     "error"
@@ -850,6 +854,17 @@ impl LanguageFlag {
                 (name, WarningOption::Error(false))
             } else if let Some(name) = text.strip_prefix("no-") {
                 (name, WarningOption::Enable(false))
+            } else if let Some(level) = text.strip_prefix("normalized=") {
+                // GCC's level: `none` turns the check off, and the others
+                // all report the one case bcc detects.
+                return Some(if matches!(level, "none" | "id" | "nfc" | "nfkc") {
+                    Self::WarningGroup(
+                        DiagnosticGroup::Normalized,
+                        WarningOption::Enable(level != "none"),
+                    )
+                } else {
+                    Self::UnknownWarning
+                });
             } else {
                 (text, WarningOption::Enable(true))
             };

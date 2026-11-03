@@ -1077,6 +1077,24 @@ it only in a GNU mode (GCC's "extended numbers"), so strict C90 reads
 `0x1p+f` as `0x1p` `+` `f` as GCC's `gcc.dg/c90-hexfloat-2.c` expects, and
 Clang's take it only in a number that starts with `0x` or `0X` and has no `_`.
 
+Characters beyond ASCII in identifiers, raw or as universal character names,
+follow each compiler's sets: Clang takes C99's Annex D in C99, C11's in C11 and
+C17, and `XID_Start`/`XID_Continue` in C23; GCC 14 takes any of them unless a
+pedantic option asks for the standard's own. bcc approximates the Unicode
+classes by Rust's alphabetic and alphanumeric classes plus the nonspacing
+combining marks and middle dots, so it still admits Other_Alphabetic marks such
+as U+0345 at an identifier's start and other numbers such as U+00B2 (which GCC
+refuses under `-pedantic`), and misses U+2118. No universal character name in an
+identifier spells a character below U+00A0, as both compilers require (C99 and
+C23 §6.4.3p2); GCC alone reads `\u0024` as `$`. Under the GCC identity,
+`-Wnormalized` warns of an identifier outside Normalization Form C, which C23
+requires, so there `-pedantic-errors` makes it an error; `-w`, `-Wno-normalized`
+and `-Wnormalized=none` silence it. bcc detects only a combining mark directly
+after a character canonical composition joins it to (`a\u0300`); GCC also
+reports marks out of canonical order, composition across an intervening mark
+(`a\u0327\u0301`), Hangul jamo sequences and singleton decompositions, and
+treats `-Wnormalized=nfkc` and `=id` as stricter levels.
+
 A C23 `'` continues a pp-number only before a digit or an ASCII nondigit, even
 when conversion must reject the resulting constant; a universal character name,
 another character or `$` after it starts a character constant instead. C23
