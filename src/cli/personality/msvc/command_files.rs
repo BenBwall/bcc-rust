@@ -135,13 +135,15 @@ fn is_link(argument: &std::ffi::OsStr) -> bool {
     argument == "/link" || argument == "-link"
 }
 
-/// A command file's text: UTF-16 after its byte order mark, as MSBuild
-/// writes them, otherwise UTF-8 without one.
+/// A command file's text: UTF-16 after its byte order mark, as Visual
+/// Studio's builds write them, otherwise UTF-8 without one.
 fn decode(bytes: &[u8]) -> String {
     let utf16 = |bytes: &[u8], from: fn([u8; 2]) -> u16| {
         let units: Vec<u16> = bytes
-            .chunks_exact(2)
-            .map(|pair| from([pair[0], pair[1]]))
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|&pair| from(pair))
             .collect();
         String::from_utf16_lossy(&units)
     };

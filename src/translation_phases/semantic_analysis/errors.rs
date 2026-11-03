@@ -2651,9 +2651,8 @@ impl ToDiagnostic for SemanticError {
             };
         let msvc = self.msvc_message(context, arena);
         let (message, suffixed) = match (msvc, self.compiler_message(context, arena)) {
-            | (Some((_, text)), _) => (text, false),
+            | (Some((_, text)), _) | (None, Some((text, None))) => (text, false),
             | (None, Some((text, Some(group)))) => (format_in!(arena, "{text} [-W{group}]"), true),
-            | (None, Some((text, None))) => (text, false),
             | (None, None) => match self.tcc_message(context, arena) {
                 | Some(tcc) => (tcc, false),
                 | None => (message, suffixed),

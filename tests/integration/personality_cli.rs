@@ -2653,7 +2653,7 @@ mod tests {
     }
 
     /// `cl` reads its options from command files (`@file`, UTF-8 or UTF-16
-    /// with a byte order mark, as MSBuild writes them) and from the `CL`
+    /// with a byte order mark, as `MSBuild` writes them) and from the `CL`
     /// and `_CL_` environment variables, before and after the command
     /// line. The rest of a command file's line after `/link` is the
     /// linker's; the next line is the compiler's again. A command file that
