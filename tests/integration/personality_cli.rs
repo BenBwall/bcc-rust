@@ -827,6 +827,72 @@ mod tests {
         let (status, _, text) = answer("--clang-mode", &["-std=bogus", "-c", "a.c", "-###"]);
         assert_eq!(status, Some(0));
         assert!(!text.contains("invalid value"), "{text}");
+        // Clang reads the last of `-std=` and `-ansi`; GCC refuses the
+        // unknown value whatever follows it.
+        assert_eq!(
+            answer(
+                "--clang-mode",
+                &["-std=bogus", "-ansi", "-fsyntax-only", "a.c"]
+            ),
+            (Some(0), String::new(), String::new())
+        );
+        let (status, _, text) = answer(
+            "--clang-mode",
+            &["-ansi", "-std=bogus", "-fsyntax-only", "a.c"],
+        );
+        assert_eq!(status, Some(1));
+        assert_eq!(text.matches(invalid).count(), 1, "{text}");
+        assert_eq!(
+            answer(
+                "--gcc-mode",
+                &["-std=bogus", "-ansi", "-fsyntax-only", "a.c"]
+            ),
+            gcc_error("-std=bogus")
+        );
+    }
+
+    /// GCC's `-v` or `-###` without inputs prints the driver's report and
+    /// succeeds even after rejecting an option; without either, GCC adds
+    /// that it has no inputs. Neither compiler shows a step for no inputs.
+    /// As in GCC 13.3 and Clang 23.
+    #[test]
+    fn driver_reports_without_inputs_succeed_as_each_compiler_does() {
+        let directory = Directory::new();
+        directory.write("a.c", "int x;\n");
+        let answer = |mode: &str, args: &[&str]| {
+            let output = directory.bcc(mode, args);
+            (output.status.code(), stderr(&output))
+        };
+        let unrecognized = "gcc: error: unrecognized command-line option '-print-target-triple'\n";
+        for report in ["-v", "-###"] {
+            let (status, text) = answer("--gcc-mode", &["-print-target-triple", report]);
+            assert_eq!(status, Some(0), "{report}: {text}");
+            assert!(text.starts_with(unrecognized), "{report}: {text}");
+            assert!(text.contains("\ngcc version 14.2.0 "), "{report}: {text}");
+            assert!(!text.contains("--compiler-identity"), "{report}: {text}");
+        }
+        assert_eq!(
+            answer("--gcc-mode", &["-print-target-triple"]),
+            (
+                Some(1),
+                format!(
+                    "{unrecognized}gcc: fatal error: no input files\ncompilation terminated.\n"
+                )
+            )
+        );
+        let (status, text) = answer(
+            "--gcc-mode",
+            &["-print-target-triple", "-v", "-fsyntax-only", "a.c"],
+        );
+        assert_eq!((status, text.as_str()), (Some(1), unrecognized));
+        // GCC's compiler checks `-MG`, so it waits for an input.
+        let (status, text) = answer("--gcc-mode", &["-MG", "-v"]);
+        assert_eq!(status, Some(0), "{text}");
+        assert!(!text.contains("-MG"), "{text}");
+        let (status, text) = answer("--clang-mode", &["-###"]);
+        assert_eq!(status, Some(0), "{text}");
+        assert!(text.contains("Thread model: posix\n"), "{text}");
+        assert!(!text.contains("--compiler-identity"), "{text}");
     }
 
     /// GCC keeps every local current across a `__builtin_setjmp`'s second
