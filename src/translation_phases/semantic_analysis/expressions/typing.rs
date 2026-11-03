@@ -399,8 +399,18 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             }
         }
         let op = compound.unwrap_or(op);
-        let lt = self.converted(left);
-        let rt = self.converted(right);
+        // GCC subscripts a register array without taking its address
+        // ("ISO C forbids subscripting 'register' array" under -pedantic);
+        // Clang rejects the conversion as anywhere else.
+        let gcc_subscript = op == B::Subscript
+            && self.context.configuration.compiler_identity().rules()
+                == crate::configuration::RuleSet::Gcc;
+        let subscripted = |operand: ExpressionInfo<'tu>| ExpressionInfo {
+            register: operand.register && !gcc_subscript,
+            ..operand
+        };
+        let lt = self.converted(subscripted(left));
+        let rt = self.converted(subscripted(right));
         let int = self.types.scalar(Scalar::Int);
         if op == B::Comma {
             let mut result = Self::expression_result(e, rt);
@@ -462,11 +472,17 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                     } else {
                         left.ice && left.integer.is_some()
                     };
-                // Array decay retains the designated register object;
-                // reading a register pointer does not transfer its storage.
-                // C99 §6.5.3.2p1, p. 78; PDF p. 90.
+                // Array decay retains the designated register object, which
+                // GCC subscripts; reading a register pointer does not
+                // transfer its storage. Clang reported the decay of a
+                // register array named directly; any other register array
+                // (a structure's member, a parenthesized name) decayed
+                // silently, so its element stays register storage and `&`
+                // of it is refused there. C99 §6.5.3.2p1, p. 78; PDF p. 90.
                 info.register = pointer.register
-                    && matches!(self.types.nodes[pointer.ty.index], TypeKind::Array(..));
+                    && matches!(self.types.nodes[pointer.ty.index], TypeKind::Array(..))
+                    && (gcc_subscript
+                        || !matches!(pointer.expression.kind, ExpressionType::Identifier(_)));
             },
             | B::Multiplication | B::Division | B::Modulo => {
                 if !(self.arithmetic(lt) && self.arithmetic(rt))
@@ -2105,6 +2121,25 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 None,
             );
             return self.types.unknown();
+        }
+        // C99 §6.3.2.1p3, p. 46; PDF p. 58: converting an array of
+        // register storage to a pointer is undefined; GCC and Clang reject
+        // it as taking the register object's address. Clang checks only a
+        // register array named directly, so an array member of a register
+        // structure, or a parenthesized name, decays there; GCC rejects
+        // those too. The pointer still types what uses it.
+        if matches!(kind, Some(ConversionKind::ArrayDecay))
+            && info.register
+            && (self.context.configuration.compiler_identity().rules()
+                == crate::configuration::RuleSet::Gcc
+                || matches!(info.expression.kind, ExpressionType::Identifier(_)))
+        {
+            self.error(
+                SemanticErrorKind::RegisterArrayAddress,
+                info.expression.source_vectors,
+                None,
+                None,
+            );
         }
         if let Some(kind) = kind {
             self.convert(info.expression, ty, kind);

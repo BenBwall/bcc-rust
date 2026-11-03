@@ -486,8 +486,22 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     Construct::VariableLengthArray,
                     source,
                 )),
-            | E::CompoundLiteral { initializer, .. } =>
-                self.compound_literal(info.ty, initializer, source)?,
+            | E::CompoundLiteral {
+                type_name,
+                initializer,
+            } => match literal_global(type_name, true) {
+                | Some(thread_local) => {
+                    let global = self.unit.local_static_literal(
+                        expression,
+                        initializer,
+                        info.ty,
+                        thread_local,
+                    )?;
+                    let address = self.inst(InstData::GlobalAddr { global }, Type::Ptr);
+                    self.push_item(Operand::Place(Place::Memory(address)), info.ty);
+                },
+                | None => self.compound_literal(info.ty, initializer, source)?,
+            },
             | E::Builtin(b) => self.schedule_keyword(expression, b)?,
             | E::OmittedConditional(c) => {
                 let merge_params = self.merge_params(info.ty, source)?;
@@ -2917,23 +2931,21 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
 /// The construct an expression form is, if lowering does not support it.
 fn unsupported(expression: &Expression<'_>) -> Option<Construct> {
     Some(match expression.kind {
-        | ExpressionType::CompoundLiteral { type_name, .. } if literal_storage(type_name, true) =>
-            Construct::CompoundLiteralStorage,
         | ExpressionType::Builtin(b) if !matches!(b.keyword,crate::translation_phases::preprocessing::KeywordTokenType::BuiltinVaArg|crate::translation_phases::preprocessing::KeywordTokenType::BuiltinVaStart|crate::translation_phases::preprocessing::KeywordTokenType::BuiltinVaEnd|crate::translation_phases::preprocessing::KeywordTokenType::BuiltinVaCopy|crate::translation_phases::preprocessing::KeywordTokenType::BuiltinChooseExpr|crate::translation_phases::preprocessing::KeywordTokenType::BuiltinTypesCompatible|crate::translation_phases::preprocessing::KeywordTokenType::BuiltinOffsetof|crate::translation_phases::preprocessing::KeywordTokenType::BuiltinConvertVector|crate::translation_phases::preprocessing::KeywordTokenType::BuiltinBitCast) => Construct::Builtin,
         | ExpressionType::Countof(_) => Construct::Extension,
         | _ => return None,
     })
 }
 
-/// Whether a compound literal's storage-class specifiers give it a storage
-/// duration lowering does not allocate: `thread_local` anywhere, or
-/// `static` in a function, whose object outlives the block. Lowering refuses
-/// these by name rather than allocating them in the frame.
+/// Whether a compound literal is an object of its own outside any frame,
+/// and if so whether it is thread-local: one with `thread_local`, or with
+/// `static` in a function, has static or thread storage duration
+/// (`in_function` false asks about a file-scope one, which always does).
 /// C23 (N3220): §6.5.3.6 paragraph 7, p. 79; PDF p. 92.
-pub(super) fn literal_storage(
+pub(super) fn literal_global(
     type_name: &crate::translation_phases::parsing::declaration_syntax::TypeName<'_>,
     in_function: bool,
-) -> bool {
+) -> Option<bool> {
     let specifiers = type_name.declaration_specifiers;
     let mut extension = specifiers.extensions;
     while let Some(item) = extension {
@@ -2941,13 +2953,14 @@ pub(super) fn literal_storage(
             item.kind,
             crate::translation_phases::parsing::SpecifierExtensionKind::ThreadLocal(_)
         ) {
-            return true;
+            return Some(true);
         }
         extension = item.next;
     }
-    in_function
-        && specifiers.storage_class
-            == Some(crate::translation_phases::parsing::syntax::StorageClass::Static)
+    (!in_function
+        || specifiers.storage_class
+            == Some(crate::translation_phases::parsing::syntax::StorageClass::Static))
+    .then_some(false)
 }
 
 /// The IR comparison of a C relational or equality operator, signed form.

@@ -563,10 +563,15 @@ impl<'tu> SpecifierList<'tu> {
                 token,
             );
         }
+        // C23 (N3220) §6.5.3.6p4 and p7: a compound literal takes
+        // `constexpr`, `register`, `static` and `thread_local` only; GCC and
+        // Clang reject the others as syntax errors.
+        let literal_class = matches!(storage_class, StorageClass::Static | StorageClass::Register);
         if !matches!(
             self.mode,
             SpecifierMode::Declaration | SpecifierMode::CompoundLiteral
-        ) {
+        ) || (self.mode == SpecifierMode::CompoundLiteral && !literal_class)
+        {
             parser.report(
                 ParserErrorType::DeclarationSpecifierNotAllowedHere(token.kind),
                 Some(token),
