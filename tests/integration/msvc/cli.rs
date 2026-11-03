@@ -19,7 +19,7 @@ use super::toolchain::{
 use crate::native::run_native;
 
 /// The files each command line starts with.
-const FILES: [(&str, &str); 14] = [
+const FILES: [(&str, &str); 15] = [
     ("a.c", "int b(void);\nint main(void) { return b() - 2; }\n"),
     ("b.c", "int b(void) { return 2; }\n"),
     (
@@ -44,8 +44,14 @@ const FILES: [(&str, &str); 14] = [
     ),
     (
         "pointers.c",
-        "int main(void) {\n    int *p = 5;\n    float *q = 0;\n    char **r = 0;\n    p = q;\n    \
+        "int main(void) {\n    int *p = 0;\n    float *q = 0;\n    char **r = 0;\n    p = q;\n    \
          p = r;\n    return 0;\n}\n",
+    ),
+    // `cl` reports an initializer's conversion after the statements that
+    // follow it in the function, so its warning has a file of its own.
+    (
+        "initializer.c",
+        "int main(void) {\n    int *p = 5;\n    return p != 0;\n}\n",
     ),
     // A command file whose first line passes the rest to the linker.
     (
@@ -124,6 +130,8 @@ const CASES: &[(&[&str], Expect)] = &[
     (&["/we4013", "/c", "implicit.c"], Expect::Diagnostics),
     (&["/WX", "/c", "implicit.c"], Expect::Diagnostics),
     (&["/c", "pointers.c"], Expect::Diagnostics),
+    (&["/c", "initializer.c"], Expect::Diagnostics),
+    (&["/WX", "/c", "initializer.c"], Expect::Results),
     (&["/wd4047", "/c", "pointers.c"], Expect::Diagnostics),
     (&["/W0", "/c", "pointers.c"], Expect::Diagnostics),
     (&["/WX", "/c", "pointers.c"], Expect::Results),

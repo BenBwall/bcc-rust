@@ -554,7 +554,10 @@ integer or between incompatible pointers, and (C4113) between function
 pointers whose parameters differ, so the personality makes those groups,
 which Clang's rules make errors, warnings unless `/WX` is given. Under
 `/WX` bcc writes `error C4047`, where `cl` writes `error C2220: the
-following warning is treated as an error` and then the warning.
+following warning is treated as an error` and then the warning. bcc
+reports in source order, while `cl` reports an initializer's C4047 after
+the warnings of the statements that follow it in the same function, as the
+Windows comparison with `cl` shows.
 
 The MSVC codes bcc writes for the driver's own messages are those
 Microsoft documents: warnings D9002 (an unknown option), D9024 and D9027
