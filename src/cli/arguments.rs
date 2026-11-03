@@ -959,7 +959,7 @@ pub(super) struct CliInput {
 pub(super) struct SourceDateEpoch(Option<i64>);
 
 /// Exact clang-style explanation, deliberately omitting deprecated aliases.
-const STANDARD_NOTES: &str =
+pub(super) const STANDARD_NOTES: &str =
     "note: use 'c89', 'c90', or 'iso9899:1990' for 'ISO C 1990' standard\nnote: use \
      'iso9899:199409' for 'ISO C 1990 with amendment 1' standard\nnote: use 'gnu89' or 'gnu90' \
      for 'ISO C 1990 with GNU extensions' standard\nnote: use 'c99' or 'iso9899:1999' for 'ISO C \

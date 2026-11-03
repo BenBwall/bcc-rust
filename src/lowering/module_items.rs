@@ -902,6 +902,15 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
         let mut noundef = ArenaVec::new_in(scratch);
         let result_representation = repr(types, result)?;
         let result = match result_representation {
+            // GNU: a result of variable size is returned in memory the
+            // caller allocates at its run-time size and passes first, as
+            // GCC returns it; it has no constant layout to describe.
+            // GNU extension: GCC manual, "Variable Length".
+            | Repr::Aggregate if types::variable_size(types, result) => {
+                noundef.push(0);
+                params.push(Type::Ptr);
+                None
+            },
             | Repr::Void => None,
             | representation
                 if matches!(representation, Repr::Aggregate | Repr::Complex { .. })
@@ -923,6 +932,17 @@ impl<'a, 'tu, 'ir> Unit<'a, 'tu, 'ir> {
         };
         for parameter in parameters {
             match repr(types, parameter)? {
+                // GNU: a record of variable size is passed by invisible
+                // reference, as GCC passes it: a pointer to the caller's
+                // copy, which is the parameter object.
+                // GNU extension: GCC manual, "Variable Length".
+                | Repr::Aggregate if types::variable_size(types, parameter) => {
+                    noundef.push(
+                        u32::try_from(params.len())
+                            .map_err(|_| LoweringErrorKind::MissingFact("too many parameters"))?,
+                    );
+                    params.push(Type::Ptr);
+                },
                 | representation
                     if matches!(representation, Repr::Aggregate | Repr::Complex { .. })
                         || types::limb_argument(types, parameter) =>

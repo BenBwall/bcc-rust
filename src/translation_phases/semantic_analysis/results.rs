@@ -75,6 +75,7 @@ pub(crate) struct SemanticTranslationUnit<'tu> {
     pub(crate) type_names:              &'tu [super::TypeNameFacts<'tu>],
     pub(super) type_name_indices:       ArenaMap<'tu, usize, super::TypeNameId>,
     pub(super) declaration_sites:       ArenaMap<'tu, usize, BoundSiteFacts<'tu>>,
+    pub(super) definition_bounds:       ArenaMap<'tu, usize, &'tu [usize]>,
     pub(super) size_query_sites:        ArenaMap<'tu, usize, super::SizeQueryFacts<'tu>>,
     /// Typed results in child-before-parent order; an expression's ordinal
     /// is its index here.
@@ -227,6 +228,10 @@ impl Duration {
 /// have a record; lowering refuses their unit through the error gate.
 /// C99: §6.9.1 paragraphs 2-10, pp. 141-142; PDF pp. 153-154.
 #[derive(Debug, Clone, Copy)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "Each flag is an independent fact about the body that lowering reads on its own."
+)]
 pub(crate) struct FunctionRecord<'tu> {
     pub(crate) control:           super::FunctionControl,
     pub(crate) parameter_facts:   &'tu [super::ParameterFacts<'tu>],
@@ -257,6 +262,10 @@ pub(crate) struct FunctionRecord<'tu> {
     /// so lowering expands a copy of it at each direct call instead of
     /// lowering it once. GNU extension: GCC manual, "Constructing Calls".
     pub(crate) va_arg_pack:       bool,
+    /// The body calls `__builtin_setjmp`. GCC keeps every local current
+    /// across its second return, so under GCC's identity lowering keeps
+    /// them in memory. GNU extension: GCC manual, "Nonlocal Gotos".
+    pub(crate) builtin_setjmp:    bool,
 }
 
 /// A lexical scope and its enclosing scope.
@@ -319,6 +328,15 @@ pub(crate) struct Definition {
 }
 
 impl<'tu> SemanticTranslationUnit<'tu> {
+    /// The bounds a nested function definition's own type writes, which its
+    /// definer evaluates where the definition is (GNU).
+    pub(crate) fn definition_bounds(&self, definition: &FunctionDefinition<'tu>) -> &'tu [usize] {
+        self.definition_bounds
+            .get(&std::ptr::from_ref(definition).addr())
+            .copied()
+            .unwrap_or_default()
+    }
+
     /// Identity-indexed type-site execution; provenance is not a binding join.
     pub(crate) fn declaration_site(
         &self,

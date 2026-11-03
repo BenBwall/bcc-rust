@@ -44,6 +44,20 @@ mod tests {
         prints_on_every_back_end(&fixture("nested_functions.c"), EXPECTED);
     }
 
+    /// Nested functions use their definers' variably modified objects and
+    /// types: what GCC prints.
+    #[test]
+    fn nested_variably_modified_uses_match_gcc_on_every_back_end() {
+        if !linux_host() {
+            eprintln!("skipping: the fixture runs on an x86-64 GNU/Linux host");
+            return;
+        }
+        prints_on_every_back_end(
+            &fixture("nested_variably_modified.c"),
+            "303022 101020\n18867 41682\n318\n119 127\n50\n",
+        );
+    }
+
     const GOTOS: &str =
         "unwind 42 x y\n42\n37 25\n105 100\n21 22 23\n65 1005\n4\n4008 -1000\n9999\n";
 
@@ -306,9 +320,8 @@ mod tests {
         std::fs::remove_file(apply).unwrap();
     }
 
-    /// A use of a variably modified object of the function around a
-    /// nested function is refused rather than miscompiled, and so is a
-    /// `goto` out of one on the targets whose `longjmp` cannot make it.
+    /// A `goto` out of a nested function is refused on the targets whose
+    /// `longjmp` cannot make it, rather than miscompiled.
     #[test]
     fn unimplemented_forms_are_refused() {
         let jump = "int main(void) { __label__ out; void f(void) { goto out; } f(); return 1; \
@@ -322,29 +335,6 @@ mod tests {
                     .contains("a jump out of a nested function on Windows and WebAssembly targets"),
                 "{target}: {stderr}"
             );
-        }
-        for (source, reason) in [
-            (
-                "int main(void) { int n = 2; int a[n]; int f(void) { return a[1]; } return f(); \
-                 }\n",
-                "a nested function's use of a variably modified object of its definer",
-            ),
-            // The definer refuses the definition too, rather than reaching
-            // the bound it would evaluate there (gcc.dg/nested-vla-2.c).
-            (
-                "char tmp[2]; int main(void) { int n = 1; __typeof__(char (*)[++n]) bar(void) { \
-                 return &tmp; } return sizeof *bar() != 2; }\n",
-                "a nested function's use of a variably modified object of its definer",
-            ),
-        ] {
-            let output = check(
-                &[GCC, "--target=x86_64-unknown-linux-gnu", "--emit=ir"],
-                source,
-            );
-            assert!(!output.status.success(), "{source}");
-            let stderr = text(&output.stderr);
-            assert!(stderr.contains(reason), "{stderr}");
-            assert!(!stderr.contains("internal error"), "{stderr}");
         }
         // MSVC's `__chkstk` clobbers the `%r10` the chain arrives in.
         let output = check(

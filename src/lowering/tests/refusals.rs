@@ -194,11 +194,17 @@ fn unsupported_type_diagnostics_retain_the_actual_construct() {
     assert!(message.ends_with("_Decimal32 types"), "{message}");
 }
 
-/// GCC lays out a record with a variably modified member at run time;
-/// lowering refuses it by name, also as an `asm` operand, whose checked
-/// facts analysis does not retain.
+/// GCC lays out a record with a variably modified member at run time, and
+/// so does lowering; a use it does not implement, such as an `asm` operand,
+/// whose checked facts analysis does not retain, or a volatile copy, is
+/// refused by name.
 #[test]
-fn records_with_variably_modified_members_are_refused_under_gcc() {
+fn records_with_variably_modified_members_lower_under_gcc() {
+    let gcc = || {
+        crate::configuration::CompilerConfiguration::default()
+            .with_gnu_extensions(true)
+            .with_compiler_identity(crate::configuration::CompilerIdentity::Gcc)
+    };
     for source in [
         "int f(int n) { struct s { int a; int b[n]; int c; } s; s.c = 3; return s.c; }",
         "void *vp, *vq; long f(int n) { struct s { int b[n]; } *p = vp, *q = vq; return p - q; }",
@@ -207,18 +213,23 @@ fn records_with_variably_modified_members_are_refused_under_gcc() {
          }",
         "void *vp; int f(int n) { struct s { int b[n]; } *p = vp; return p[1].b[0]; }",
         "void *vp; int f(int n) { struct s { int b[n]; } *p = vp; return (int)sizeof *p; }",
-        "char *p; void f(int n) { __asm__ volatile(\"\" : \"=m\"(*(struct { char x[n]; } *)p)); }",
     ] {
-        let errors = lower_with(
-            source,
-            crate::configuration::CompilerConfiguration::default()
-                .with_gnu_extensions(true)
-                .with_compiler_identity(crate::configuration::CompilerIdentity::Gcc),
-        )
-        .expect_err("a run-time record layout is unsupported");
+        if let Err(errors) = lower_with(source, gcc()) {
+            panic!("{source}: {errors:?}");
+        }
+    }
+    for source in [
+        "char *p; void f(int n) { __asm__ volatile(\"\" : \"=m\"(*(struct { char x[n]; } *)p)); }",
+        "int f(int n) { struct s { int a[n]; } s; volatile struct s *p = &s; struct s t; t = *p; \
+         return t.a[0]; }",
+    ] {
+        let errors = lower_with(source, gcc()).expect_err("the use is unsupported");
         assert_eq!(
             errors,
-            ["not yet supported by lowering: structures with variably modified members"],
+            [
+                "not yet supported by lowering: this use of a structure or union with a member of \
+                 variable size"
+            ],
             "{source}"
         );
     }

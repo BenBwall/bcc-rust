@@ -58,6 +58,7 @@ pub(crate) use context::{
     Context,
     FileSystem,
     IncludeEntry,
+    STDIN_NAME,
     TextPragma,
 };
 pub(crate) use errors::{

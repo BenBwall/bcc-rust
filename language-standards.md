@@ -3377,13 +3377,26 @@ internal error, because analysis retains no `asm` facts for an unanalyzed
 operand; lowering now refuses such an operand by its type, which also fixes
 the same internal error for `_Decimal32` and other unmodeled operand types.
 
-Left to do for full support: a run-time layout (offsets and size as size
-formulas with sums and alignment), member access and copies through byte
-offsets, arrays of and pointers to such records, `offsetof` with run-time
-offsets, and passing by value (`va_arg` of such a type in
-`20020412-1.c`). A record whose only variably modified member is a pointer
-to a VLA (`int (*p)[n]`) has a constant layout and would need only the
-member's bound evaluated where the record is declared.
+**Run-time layout (2026-11-02).** These records are now laid out and
+lowered as GCC lays them out (`middle-end.md`, "GNU records with members
+of variable size"); the paragraphs above describe the state before. The
+record is modeled: its members are typed, so a missing member or the
+record as an arithmetic, scalar or assignment operand is the constraint
+error GCC reports. Its bounds are evaluated where the declaration or type
+name that defines it is reached, once for all its declarators (GCC
+evaluates `struct s { char b[n]; }` before a later `n++`). `sizeof`,
+`offsetof` (with run-time indices too), member access, copies, arrays of
+and pointers to the record, records nested in records, unions, and passing
+one through `...` (`va_arg` of its type) work on every back end; a
+record passed by value travels by invisible reference, as GCC passes it.
+A record whose only variably modified member is a pointer to a VLA has a
+constant layout and may be initialized, as in GCC. A result of such a type,
+which only a nested function can have, is returned in memory the caller
+allocates. Refused by name ("this use of a structure or union with a
+member of variable size"): a volatile copy and an `asm` operand of it; under
+Microsoft record layout (the Windows targets, or `ms_struct`) the record
+stays unmodeled and is refused as "structures with variably modified
+members in Microsoft record layout".
 
 ## Type inference: C23 `auto` and GNU `__auto_type` (2026-10-31)
 

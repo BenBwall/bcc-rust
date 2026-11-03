@@ -38,6 +38,10 @@ use crate::{
     },
 };
 
+/// The name the driver gives standard input read as a source file (`-`),
+/// as Clang and GCC name it in diagnostics and `__FILE__`.
+pub(crate) const STDIN_NAME: &str = "<stdin>";
+
 impl<'tu> Context<'tu> {
     /// Reads and retains an included file without a temporary heap string.
     pub(crate) fn read_source_file(&mut self, index: u32) -> std::io::Result<&'tu str> {
