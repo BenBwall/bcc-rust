@@ -318,7 +318,7 @@
     position: sticky; left: 0; z-index: 1; width: 20%; align-self: stretch;
     font-size: 10.5px; letter-spacing: .06em; text-transform: uppercase;
   }
-  .map-labels li > * { background: var(--screen); box-shadow: -10px 0 0 var(--screen), 6px 0 0 var(--screen); }
+  .map-labels li > * { background: var(--screen); box-shadow: 0 0 0 3px var(--screen), -10px 0 0 3px var(--screen), 6px 0 0 3px var(--screen); }
   .map-labels li { position: absolute; left: 10px; right: 4px; transform: translateY(-58%); top: calc((74 + var(--row) * 34) / 300 * 100%); white-space: nowrap; }
   .map-labels li.is-source { top: calc(19 / 300 * 100%); color: var(--screen-dim); }
   .map-labels li.is-machine { top: calc(40 / 300 * 100%); }
