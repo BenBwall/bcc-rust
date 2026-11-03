@@ -651,6 +651,37 @@ mod tests {
                 &["-pedantic-errors", "-Wno-pedantic", "-Wpedantic"],
                 1,
             ),
+            // `-Wno-pedantic` stops the diagnostic but keeps its error state.
+            (
+                "--gcc-mode",
+                &["-Werror=pedantic", "-Wno-pedantic", "-Wpedantic"],
+                1,
+            ),
+            (
+                "--gcc-mode",
+                &["-Werror=pedantic", "-Wno-pedantic", "-pedantic"],
+                1,
+            ),
+            (
+                "--gcc-mode",
+                &[
+                    "-Werror=pedantic",
+                    "-Wno-error=pedantic",
+                    "-Wno-pedantic",
+                    "-Wpedantic",
+                ],
+                0,
+            ),
+            (
+                "--gcc-mode",
+                &[
+                    "-Werror=pedantic",
+                    "-Wno-pedantic",
+                    "-Wno-error=pedantic",
+                    "-Wpedantic",
+                ],
+                0,
+            ),
             ("--clang-mode", &["-Werror=pedantic"], 0),
             ("--clang-mode", &["-pedantic-errors", "-Wno-pedantic"], 1),
             (

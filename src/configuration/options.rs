@@ -160,9 +160,7 @@ impl CompilerConfiguration {
     /// whether they are errors, as GCC and Clang do after
     /// `-pedantic-errors -Wpedantic`.
     pub(crate) const fn with_pedantic(mut self, enabled: bool) -> Self {
-        if !enabled {
-            self.werror_pedantic = None;
-        }
+        self.pedantic_disabled = !enabled;
         self.extension_policy = if !enabled {
             ExtensionPolicy::Allow
         } else if self.pedantic_as_error {
@@ -195,13 +193,19 @@ impl CompilerConfiguration {
     /// which `-w` still silences, unlike `-pedantic-errors`.
     pub(crate) const fn with_werror_pedantic(mut self) -> Self {
         self.werror_pedantic = Some(true);
+        self.pedantic_disabled = false;
         self
     }
 
     /// What `-Werror=pedantic` asks of a `-Wpedantic` diagnostic: an error
-    /// (`Some(true)`), a warning (`Some(false)`), or nothing.
+    /// (`Some(true)`), a warning (`Some(false)`), or nothing, also while a
+    /// later `-Wno-pedantic` stops the diagnostics.
     pub(crate) const fn werror_pedantic(self) -> Option<bool> {
-        self.werror_pedantic
+        if self.pedantic_disabled {
+            None
+        } else {
+            self.werror_pedantic
+        }
     }
 
     /// Whether `-pedantic-errors` appeared on the command line.
@@ -895,6 +899,7 @@ impl CompilerConfiguration {
             pedantic_errors: false,
             pedantic_as_error: false,
             werror_pedantic: None,
+            pedantic_disabled: false,
             accepted: 0,
             native: 0,
             repeated_specifier_warnings: true,
