@@ -197,12 +197,12 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
     }
     // GCC's `-v` or `-###` without inputs reports the driver and succeeds,
     // even after complaining about an option.
-    let gcc_reports_only = personality == Personality::Gcc
-        && (state.verbose || state.dry_run)
-        && state.inputs.is_empty();
+    let has_inputs = state.has_inputs();
+    let gcc_reports_only =
+        personality == Personality::Gcc && (state.verbose || state.dry_run) && !has_inputs;
     if state.errors != 0 && !gcc_reports_only {
         // GCC still finds no inputs after rejecting an option.
-        if personality == Personality::Gcc && state.inputs.is_empty() {
+        if personality == Personality::Gcc && !has_inputs {
             invocation.fatal(format_args!("no input files"));
         }
         return Err(MainError::Reported(1));
@@ -337,7 +337,7 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
     if state.verbose || state.dry_run {
         let mut text = version::verbose(personality, target);
         // Without inputs, neither compiler has a step to show.
-        if state.dry_run && !state.inputs.is_empty() {
+        if state.dry_run && has_inputs {
             for bcc in &steps {
                 text.push_str(&super::command_line(bcc, style(true)));
             }
@@ -1125,6 +1125,19 @@ impl State<'_> {
             self.invocation
                 .warning(format_args!("{message} [-W{group}]"));
         }
+    }
+
+    /// Whether the command line names an input: a file, or a linker
+    /// option the compiler counts as one. GCC counts `-l`, `-Wl,` and
+    /// `-Xlinker`; Clang counts every linker input, `-z` and `-e` too.
+    fn has_inputs(&self) -> bool {
+        !self.inputs.is_empty()
+            || self.linker_words.iter().any(|(_, word)| {
+                self.compiler == Compiler::Clang
+                    || word.starts_with("-l")
+                    || word.starts_with("-Wl,")
+                    || word.starts_with("-Xlinker ")
+            })
     }
 
     /// Records a linker option Clang reports as an unused linker input

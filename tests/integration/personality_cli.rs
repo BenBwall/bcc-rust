@@ -885,6 +885,29 @@ mod tests {
             &["-print-target-triple", "-v", "-fsyntax-only", "a.c"],
         );
         assert_eq!((status, text.as_str()), (Some(1), unrecognized));
+        // A linker input is an input: GCC counts `-l`, `-Wl,` and
+        // `-Xlinker` but not `-z`, Clang every linker input.
+        let bogus = "gcc: error: unrecognized command-line option '-bogus'\n";
+        for linker in [&["-lm"][..], &["-Wl,-x"], &["-Xlinker", "-x"]] {
+            for report in [&["-v"][..], &["-###"], &[]] {
+                let args = [&["-bogus"][..], report, linker].concat();
+                let (status, text) = answer("--gcc-mode", &args);
+                assert_eq!(status, Some(1), "{args:?}: {text}");
+                assert!(!text.contains("no input files"), "{args:?}: {text}");
+                assert!(text.contains(bogus), "{args:?}: {text}");
+            }
+        }
+        let (status, text) = answer("--gcc-mode", &["-bogus", "-v", "-z", "now"]);
+        assert_eq!(status, Some(0), "{text}");
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            let (status, text) = answer(mode, &["-###", "-lm"]);
+            assert_eq!(status, Some(0), "{mode}: {text}");
+            assert!(text.contains("--compiler-identity"), "{mode}: {text}");
+        }
+        let (_, text) = answer("--gcc-mode", &["-###", "-z", "now"]);
+        assert!(!text.contains("--compiler-identity"), "{text}");
+        let (_, text) = answer("--clang-mode", &["-###", "-z", "now"]);
+        assert!(text.contains("--compiler-identity"), "{text}");
         // GCC's compiler checks `-MG`, so it waits for an input.
         let (status, text) = answer("--gcc-mode", &["-MG", "-v"]);
         assert_eq!(status, Some(0), "{text}");
