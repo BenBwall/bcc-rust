@@ -8,6 +8,7 @@ use super::{
         MAX_CODE,
         MAX_DEPTH,
         Op,
+        Place,
         SourceRange,
         Type,
     },
@@ -15,6 +16,7 @@ use super::{
         CallSite,
         Parser,
         is_identifier,
+        structure_of,
     },
 };
 
@@ -44,6 +46,24 @@ impl Parser<'_> {
             let ty = match (operator, lhs.ty, rhs.ty) {
                 | (_, Type::Int | Type::Char, Type::Int | Type::Char)
                 | ("==" | "!=", Type::Pointer, Type::Pointer) => Type::Int,
+                | ("==" | "!=", Type::StructPointer(a), Type::StructPointer(b)) if a == b =>
+                    Type::Int,
+                | ("==" | "!=", Type::StructPointer(_), Type::Int)
+                    if matches!(rhs.kind, ExprKind::Number(0)) =>
+                    Type::Int,
+                | ("==" | "!=", Type::Int, Type::StructPointer(_))
+                    if matches!(lhs.kind, ExprKind::Number(0)) =>
+                    Type::Int,
+                | (_, Type::Struct(_), _) | (_, _, Type::Struct(_)) =>
+                    return Err(self.error(
+                        "structures are not operands of arithmetic or comparison; compare their \
+                         members",
+                    )),
+                | ("+" | "-", Type::StructPointer(_), _) | ("+", _, Type::StructPointer(_)) =>
+                    return Err(self.error(
+                        "arithmetic on structure pointers needs an array of structures, which is \
+                         outside this subset",
+                    )),
                 | ("+" | "-", Type::Pointer, Type::Int | Type::Char)
                 | ("+", Type::Int | Type::Char, Type::Pointer) => Type::Pointer,
                 | ("==" | "!=", Type::Pointer, Type::Int)
@@ -76,15 +96,21 @@ impl Parser<'_> {
             if expression.call {
                 return Err(self.error("nested calls are outside this subset"));
             }
-            if operator == "&" && matches!(expression.kind, ExprKind::Name(_, Type::Char)) {
+            if operator == "&" && expression.ty == Type::Char {
                 return Err(self.error("pointers to char are outside this subset"));
             }
             let ty = match (operator, expression.ty) {
-                | ("+" | "-" | "!", Type::Int | Type::Char) | ("!" | "*", Type::Pointer) =>
-                    Type::Int,
+                | ("+" | "-" | "!", Type::Int | Type::Char)
+                | ("!" | "*", Type::Pointer)
+                | ("!", Type::StructPointer(_)) => Type::Int,
+                | ("*", Type::StructPointer(id)) => self.complete_type(id)?,
                 | ("&", Type::Int) => {
                     self.check_lvalue(child)?;
                     Type::Pointer
+                },
+                | ("&", Type::Struct(id)) => {
+                    self.check_lvalue(child)?;
+                    Type::StructPointer(id)
                 },
                 | _ =>
                     return Err(
@@ -125,7 +151,7 @@ impl Parser<'_> {
                 .iter()
                 .rev()
                 .find(|symbol| symbol.name == text)
-                .map(|symbol| symbol.ty);
+                .map(|symbol| (symbol.ty, symbol.place));
             if self.take("(") {
                 if binding.is_some() {
                     return Err(self.error("calling a local object is not supported"));
@@ -159,15 +185,20 @@ impl Parser<'_> {
                     caller: self.function_index,
                 });
                 let closing = self.tokens[self.position - 1].range;
+                let returns = self
+                    .signatures
+                    .iter()
+                    .find(|(function, _)| *function == text)
+                    .map_or(Type::Int, |&(_, returns)| returns);
                 self.node(
                     ExprKind::Call(text, arguments),
-                    Type::Int,
+                    returns,
                     true,
                     combined(range, closing),
                     height,
                 )?
             } else {
-                let Some(declared) = binding else {
+                let Some((declared, place)) = binding else {
                     return Err(self.error("use of an undeclared identifier"));
                 };
                 // Arrays decay to pointers. A char's value keeps type char:
@@ -177,7 +208,8 @@ impl Parser<'_> {
                     | Type::Array(_) => Type::Pointer,
                     | other => other,
                 };
-                self.node(ExprKind::Name(text, declared), ty, false, range, 1)?
+                let place = place.map_or_else(|| Place::Local(text.clone()), Place::Static);
+                self.node(ExprKind::Name(text, declared, place), ty, false, range, 1)?
             }
         } else {
             return Err(self.error(
@@ -185,7 +217,14 @@ impl Parser<'_> {
                  syntax are rejected",
             ));
         };
-        while self.take("[") {
+        loop {
+            if self.at(".") || self.at("->") {
+                value = self.member(value)?;
+                continue;
+            }
+            if !self.take("[") {
+                break;
+            }
             let index = self.expression(0)?;
             let closing = self.current().range;
             self.expect("]")?;
@@ -208,6 +247,79 @@ impl Parser<'_> {
             )?;
         }
         Ok(value)
+    }
+
+    /// `base.m` or `base->m`: the member's lvalue (C99 §6.5.2.3p3, p4).
+    /// A member array decays at once, as a named array does.
+    fn member(&mut self, base: usize) -> Result<usize, Diagnostic> {
+        let arrow = self.take("->");
+        if !arrow {
+            self.expect(".")?;
+        }
+        let name = self.current();
+        if !is_identifier(name.text) {
+            return Err(self.error("expected a member name"));
+        }
+        self.position += 1;
+        let operand = &self.expressions[base];
+        if operand.call {
+            return Err(self.error(
+                "a member of a call's result is outside this subset; store the result first",
+            ));
+        }
+        let id = match (arrow, operand.ty) {
+            | (false, Type::Struct(id)) => id,
+            | (true, Type::StructPointer(id)) => {
+                let _complete = self.complete_type(id)?;
+                id
+            },
+            | (false, _) => return Err(self.error("`.` needs a structure on its left")),
+            | (true, _) =>
+                return Err(self.error("`->` needs a pointer to a structure on its left")),
+        };
+        let Some(member) = self.structures[id]
+            .members
+            .iter()
+            .find(|member| member.name == name.text)
+        else {
+            return Err(Diagnostic::new(
+                "unsupported",
+                name.range,
+                &format!(
+                    "struct {} has no member named `{}`",
+                    self.structures[id].name, name.text
+                ),
+            ));
+        };
+        let declared = member.ty;
+        let offset = i32::try_from(member.first).map_err(|_| self.error("object too large"))?;
+        let ty = match declared {
+            | Type::Array(_) => Type::Pointer,
+            | other => other,
+        };
+        let (range, height) = (combined(operand.range, name.range), operand.height + 1);
+        self.node(
+            ExprKind::Member {
+                base,
+                name: String::from(name.text),
+                offset,
+                arrow,
+                declared,
+            },
+            ty,
+            false,
+            range,
+            height,
+        )
+    }
+
+    /// `Struct(id)` when structure `id` is complete.
+    fn complete_type(&self, id: usize) -> Result<Type, Diagnostic> {
+        if self.complete.get(id) == Some(&true) {
+            Ok(Type::Struct(id))
+        } else {
+            Err(self.error("this structure type is incomplete here"))
+        }
     }
 
     fn node(
@@ -254,16 +366,50 @@ impl Parser<'_> {
                 self.emit_node(Op::Push(integer), range, tree)?;
                 tree
             },
-            | ExprKind::Name(name, Type::Array(_)) => {
+            | ExprKind::Name(name, Type::Array(_), place) => {
                 let tree = self.tree(&name, range, Vec::new())?;
-                self.emit_node(Op::Decay(name), range, tree)?;
+                self.emit_node(Op::Decay(place), range, tree)?;
                 tree
             },
-            | ExprKind::Name(name, _) => {
+            | ExprKind::Name(name, declared, place) => {
                 let tree = self.tree(&name, range, Vec::new())?;
-                self.emit_node(Op::Address(name), range, tree)?;
+                self.emit_node(Op::Address(place), range, tree)?;
                 if !address {
-                    self.emit_node(Op::Load, range, tree)?;
+                    self.load(declared, range, tree)?;
+                }
+                tree
+            },
+            | ExprKind::Member {
+                base,
+                name,
+                offset,
+                arrow,
+                declared,
+            } => {
+                let operand = self.emit_expression(base, !arrow)?;
+                let label = if arrow {
+                    format!("->{name}")
+                } else {
+                    format!(".{name}")
+                };
+                let tree = self.tree(&label, range, vec![operand])?;
+                let array = match declared {
+                    | Type::Array(length) => Some(length),
+                    | _ => None,
+                };
+                self.emit_node(
+                    Op::Member {
+                        name,
+                        offset,
+                        arrow,
+                        structure: structure_of(declared),
+                        array,
+                    },
+                    range,
+                    tree,
+                )?;
+                if !address && array.is_none() {
+                    self.load(declared, range, tree)?;
                 }
                 tree
             },
@@ -295,7 +441,7 @@ impl Parser<'_> {
                 let tree = self.tree("*", range, vec![operand])?;
                 self.emit_node(Op::Dereference, range, tree)?;
                 if !address {
-                    self.emit_node(Op::Load, range, tree)?;
+                    self.load(node.ty, range, tree)?;
                 }
                 tree
             },
@@ -348,6 +494,15 @@ impl Parser<'_> {
         Ok(tree)
     }
 
+    /// Read the value of the lvalue just emitted, of type `ty`: one scalar,
+    /// or a copy of a whole structure.
+    fn load(&mut self, ty: Type, range: SourceRange, tree: usize) -> Result<(), Diagnostic> {
+        match ty {
+            | Type::Struct(id) => self.emit_node(Op::LoadStruct(id), range, tree),
+            | _ => self.emit_node(Op::Load, range, tree),
+        }
+    }
+
     /// Promote the char value of `expression`, whose tree node is `tree`, to
     /// int. Only the operands of unary `+` and `-` and of the usual arithmetic
     /// conversions are promoted here: a char that is stored, returned, passed
@@ -365,9 +520,14 @@ impl Parser<'_> {
 
     fn check_lvalue(&self, expression: usize) -> Result<(), Diagnostic> {
         match self.expressions[expression].kind {
-            | ExprKind::Name(_, Type::Int | Type::Char | Type::Pointer)
+            | ExprKind::Name(
+                _,
+                Type::Int | Type::Char | Type::Pointer | Type::Struct(_) | Type::StructPointer(_),
+                _,
+            )
             | ExprKind::Unary("*", _)
             | ExprKind::Index(_, _) => Ok(()),
+            | ExprKind::Member { declared, .. } if !matches!(declared, Type::Array(_)) => Ok(()),
             | _ => Err(Diagnostic::new(
                 "unsupported",
                 self.expressions[expression].range,
@@ -391,7 +551,16 @@ pub(super) struct Expr {
 #[derive(Debug, Clone)]
 pub(super) enum ExprKind {
     Number(i32),
-    Name(String, Type),
+    Name(String, Type, Place),
+    /// `base.name` or `base->name`; `offset` is the member's first leaf and
+    /// `declared` its type.
+    Member {
+        base:     usize,
+        name:     String,
+        offset:   i32,
+        arrow:    bool,
+        declared: Type,
+    },
     Unary(&'static str, usize),
     Binary(&'static str, usize, usize),
     Index(usize, usize),

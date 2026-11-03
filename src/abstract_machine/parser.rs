@@ -10,6 +10,7 @@ use super::{
         ExprKind,
         combined,
     },
+    layout,
     lexer::{
         self,
         Token,
@@ -19,12 +20,20 @@ use super::{
         ExpressionNode,
         Function,
         Instruction,
+        MAX_CELLS,
         MAX_CODE,
         MAX_DEPTH,
+        MAX_MEMBERS,
+        MAX_OBJECTS,
+        MAX_STRUCTURES,
         Op,
+        Place,
         Program,
         SourceRange,
+        Static,
+        Structure,
         Type,
+        Value,
     },
 };
 
@@ -40,30 +49,83 @@ pub(super) fn compile(source: &str) -> Result<Program, Diagnostic> {
         calls:          Vec::new(),
         function_index: 0,
         nodes:          Vec::new(),
+        structures:     Vec::new(),
+        complete:       Vec::new(),
+        statics:        Vec::new(),
+        signatures:     Vec::new(),
+        returns:        Type::Int,
     };
     let mut functions: Vec<Function> = Vec::new();
     let mut total_code = 0;
     while !parser.at("") {
-        parser.function_index = functions.len();
-        parser.expect("int")?;
+        if parser.at("struct") && parser.peek(2) == "{" {
+            parser.structure_definition()?;
+            continue;
+        }
+        let storage = parser.current();
+        let is_static = parser.take("static");
+        let base = parser.base_type()?;
+        let pointer = parser.take("*");
         let name = parser.identifier()?;
+        if !parser.at("(") {
+            parser.file_scope_object(base, pointer, name)?;
+            continue;
+        }
+        if is_static {
+            return Err(Diagnostic::new(
+                "unsupported",
+                storage.range,
+                "static functions are outside this subset; drop the static",
+            ));
+        }
+        let returns = match (base, pointer) {
+            | (Base::Int, false) => Type::Int,
+            | (Base::Struct(id), false) => parser.complete_structure(id, name.range)?,
+            | _ =>
+                return Err(Diagnostic::new(
+                    "unsupported",
+                    name.range,
+                    "functions return int or a structure in this subset",
+                )),
+        };
+        parser.function_index = functions.len();
         if functions.iter().any(|function| function.name == name.text) {
             return Err(parser.error("duplicate function definition"));
         }
+        if parser.symbols.iter().any(|symbol| symbol.name == name.text) {
+            return Err(Diagnostic::new(
+                "unsupported",
+                name.range,
+                "a function and a file-scope object share this name",
+            ));
+        }
+        parser.signatures.push((String::from(name.text), returns));
+        parser.returns = returns;
         parser.expect("(")?;
         let mut parameters = Vec::new();
+        parser.scope = 1;
         if parser.take("void") {
             parser.expect(")")?;
         } else if !parser.take(")") {
             loop {
-                parser.expect("int")?;
-                let ty = if parser.take("*") {
-                    Type::Pointer
-                } else {
-                    Type::Int
-                };
+                let base = parser.base_type()?;
+                let pointer = parser.take("*");
                 let parameter = parser.identifier()?;
-                parser.add_symbol(parameter, ty, 1)?;
+                let ty = match (base, pointer) {
+                    | (Base::Int, false) => Type::Int,
+                    | (Base::Int, true) => Type::Pointer,
+                    | (Base::Struct(id), false) =>
+                        parser.complete_structure(id, parameter.range)?,
+                    | (Base::Struct(id), true) => Type::StructPointer(id),
+                    | (Base::Char, _) =>
+                        return Err(Diagnostic::new(
+                            "unsupported",
+                            parameter.range,
+                            "parameters are int, int *, a structure or a pointer to one in this \
+                             subset",
+                        )),
+                };
+                parser.add_symbol(parameter, ty, 1, None)?;
                 parameters.push((String::from(parameter.text), ty));
                 if parser.take(")") {
                     break;
@@ -71,6 +133,7 @@ pub(super) fn compile(source: &str) -> Result<Program, Diagnostic> {
                 parser.expect(",")?;
             }
         }
+        parser.scope = 0;
         if !parser.at("{") {
             return Err(parser.error("only function definitions are supported at file scope"));
         }
@@ -85,11 +148,12 @@ pub(super) fn compile(source: &str) -> Result<Program, Diagnostic> {
         }
         functions.push(Function {
             name: String::from(name.text),
+            returns,
             parameters,
             code: std::mem::take(&mut parser.code),
             nodes: roots(std::mem::take(&mut parser.nodes)),
         });
-        parser.symbols.clear();
+        parser.symbols.retain(|symbol| symbol.scope == 0);
     }
     let Some(entry) = functions
         .iter()
@@ -97,8 +161,8 @@ pub(super) fn compile(source: &str) -> Result<Program, Diagnostic> {
     else {
         return Err(parser.error("an int main(void) definition is required"));
     };
-    if !functions[entry].parameters.is_empty() {
-        return Err(parser.error("main parameters are outside this subset"));
+    if !functions[entry].parameters.is_empty() || functions[entry].returns != Type::Int {
+        return Err(parser.error("main must be int main(void) in this subset"));
     }
     for CallSite {
         name,
@@ -144,6 +208,8 @@ pub(super) fn compile(source: &str) -> Result<Program, Diagnostic> {
         source: String::from(source),
         functions,
         entry,
+        structures: parser.structures.into(),
+        statics: parser.statics,
     })
 }
 
@@ -159,6 +225,16 @@ pub(super) struct Parser<'a> {
     pub function_index: usize,
     /// The current function's expression-tree nodes.
     pub nodes:          Vec<ExpressionNode>,
+    /// Structure types by index; an incomplete one (declared by `struct T *`
+    /// or still being defined) has no members yet.
+    pub structures:     Vec<Structure>,
+    pub complete:       Vec<bool>,
+    /// Objects with static storage duration, in declaration order.
+    pub statics:        Vec<Static>,
+    /// Each function defined so far, or being defined, and its return type.
+    pub signatures:     Vec<(String, Type)>,
+    /// The return type of the function being compiled.
+    pub returns:        Type,
 }
 
 impl<'a> Parser<'a> {
@@ -171,7 +247,7 @@ impl<'a> Parser<'a> {
             if self.at("") {
                 return Err(self.error("expected closing brace"));
             }
-            if self.at("int") || self.at("char") {
+            if self.at("int") || self.at("char") || self.at("struct") || self.at("static") {
                 self.declaration()?;
             } else {
                 self.statement()?;
@@ -199,7 +275,7 @@ impl<'a> Parser<'a> {
             | "return" => {
                 self.position += 1;
                 let expression = self.expression(0)?;
-                self.require_type(expression, Type::Int)?;
+                self.require_type(expression, self.returns)?;
                 let value = self.emit_expression(expression, false)?;
                 let range = combined(token.range, self.expressions[expression].range);
                 self.expect(";")?;
@@ -240,8 +316,8 @@ impl<'a> Parser<'a> {
                 self.position += 1;
                 Ok(())
             },
-            | "int" | "char" | "else" | "break" | "continue" | "goto" | "do" | "switch" =>
-                Err(self.error("unsupported statement in this subset")),
+            | "int" | "char" | "struct" | "static" | "else" | "break" | "continue" | "goto"
+            | "do" | "switch" => Err(self.error("unsupported statement in this subset")),
             | _ => {
                 self.expression_statement()?;
                 self.expect(";")
@@ -325,134 +401,244 @@ impl<'a> Parser<'a> {
         Ok((range, self.tree(statement, range, vec![value])?))
     }
 
+    /// A block-scope declaration: one declarator, with an optional
+    /// initializer. A `static` one names an object that already exists.
     fn declaration(&mut self) -> Result<(), Diagnostic> {
-        if self.take("char") {
-            let name = self.identifier()?;
-            if self.at("*") || self.at("[") {
-                return Err(self.error("only scalar char objects are supported"));
-            }
-            return self.scalar_declaration(name, Type::Char);
-        }
-        self.expect("int")?;
-        let mut ty = if self.take("*") {
-            Type::Pointer
-        } else {
-            Type::Int
-        };
+        let is_static = self.take("static");
+        let base = self.base_type()?;
+        let pointer = self.take("*");
         let name = self.identifier()?;
-        if self.take("[") {
-            if ty != Type::Int {
-                return Err(self.error("arrays of pointers are outside this subset"));
-            }
-            let count = self.current();
-            let Ok(length) = count.text.parse::<usize>() else {
-                return Err(self.error("array size must be a positive decimal literal"));
-            };
-            if length == 0 || length > super::model::MAX_CELLS {
-                return Err(Diagnostic::limit(
-                    count.range,
-                    "array size must be between 1 and 512",
-                ));
-            }
-            self.position += 1;
-            self.expect("]")?;
-            ty = Type::Array(length);
+        let array = self.array_suffix()?;
+        let ty = self.declared_type(base, pointer, array, name.range)?;
+        if is_static {
+            return self.static_local(name, ty);
         }
-        let Type::Array(length) = ty else {
-            return self.scalar_declaration(name, ty);
-        };
-        self.add_symbol(name, ty, self.scope)?;
+        match ty {
+            | Type::Array(_) | Type::Struct(_) => self.aggregate_declaration(name, ty),
+            | _ => self.scalar_declaration(name, ty),
+        }
+    }
+
+    /// `int x`, `int *p`, `char c` or `struct point *p`, with an optional
+    /// initializer.
+    fn scalar_declaration(&mut self, name: Token<'a>, ty: Type) -> Result<(), Diagnostic> {
+        self.add_symbol(name, ty, self.scope, None)?;
         self.emit(Op::Declare(String::from(name.text), ty), name.range)?;
         if self.take("=") {
-            self.expect("{")?;
-            let mut index = 0;
-            while !self.at("}") {
-                if index >= length {
-                    return Err(self.error("too many array initializer elements"));
+            self.whole_initializer(name, ty)?;
+        }
+        self.expect(";")
+    }
+
+    /// `= expression` for the object `name` just declared: one store that
+    /// ends the full expression. A structure copies a whole structure.
+    fn whole_initializer(&mut self, name: Token<'a>, ty: Type) -> Result<(), Diagnostic> {
+        let target = self.tree(name.text, name.range, Vec::new())?;
+        self.emit_node(
+            Op::Address(Place::Local(String::from(name.text))),
+            name.range,
+            target,
+        )?;
+        let expression = self.expression(0)?;
+        self.require_type(expression, ty)?;
+        let value = self.emit_expression(expression, false)?;
+        let range = combined(name.range, self.expressions[expression].range);
+        let node = self.tree("=", range, vec![target, value])?;
+        let char_value = self.expressions[expression].ty == Type::Char;
+        self.emit_node(
+            Op::Store {
+                initializer: true,
+                full_expression: true,
+                char_value,
+                structure: structure_of(ty),
+            },
+            range,
+            node,
+        )
+    }
+
+    /// An automatic array or structure, with an optional initializer: a
+    /// brace-enclosed list, or for a structure also a whole structure
+    /// (C99 §6.7.8p13).
+    fn aggregate_declaration(&mut self, name: Token<'a>, ty: Type) -> Result<(), Diagnostic> {
+        self.add_symbol(name, ty, self.scope, None)?;
+        self.emit(Op::Declare(String::from(name.text), ty), name.range)?;
+        if self.take("=") {
+            if !self.at("{") {
+                if !matches!(ty, Type::Struct(_)) {
+                    return Err(self.error("an array is initialized by a brace-enclosed list"));
                 }
-                let element = self.array_element(name, index)?;
-                let expression = self.expression(0)?;
-                self.require_type(expression, Type::Int)?;
-                if self.expressions[expression].call {
-                    return Err(self.error("calls in array initializers are outside this subset"));
-                }
-                let value = self.emit_expression(expression, false)?;
-                index += 1;
-                let range = self.expressions[expression].range;
-                self.initialize(element, value, range, index == length)?;
-                if !self.take(",") {
-                    break;
-                }
+                self.whole_initializer(name, ty)?;
+                return self.expect(";");
             }
-            self.expect("}")?;
-            if index == 0 {
-                return Err(self.error("empty initializer lists are outside the C99 subset"));
-            }
-            while index < length {
-                let element = self.array_element(name, index)?;
+            let leaves = ty.leaves(&self.structures);
+            let mut mentioned = vec![false; leaves];
+            let shape = ty.indeterminate(&self.structures);
+            self.initializer_list(name, &shape, ty, 0, &mut mentioned)?;
+            // Every scalar the list did not mention is initialized to zero,
+            // as a static object would be (C99 §6.7.8p19, p21).
+            for (leaf, done) in mentioned.iter().enumerate() {
+                if *done {
+                    continue;
+                }
+                let offset = i32::try_from(leaf).map_err(|_| self.error("object too large"))?;
+                let label = self.label(name.text, &shape, offset, None);
+                let element = self.element(name, &label, offset, None)?;
                 let zero = self.tree("0", name.range, Vec::new())?;
                 self.emit_node(Op::Zero, name.range, zero)?;
-                index += 1;
-                self.initialize(element, zero, name.range, index == length)?;
+                self.initialize(element, zero, name.range, None)?;
+            }
+            // The initializer list is one full expression: its last store
+            // ends it (C99 §6.8p4).
+            if let Some(Op::Store {
+                full_expression, ..
+            }) = self
+                .code
+                .iter_mut()
+                .rev()
+                .find(|instruction| matches!(instruction.op, Op::Store { .. }))
+                .map(|instruction| &mut instruction.op)
+            {
+                *full_expression = true;
             }
         }
         self.expect(";")
     }
 
-    /// `int x`, `int *p` or `char c`, with an optional initializer.
-    fn scalar_declaration(&mut self, name: Token<'a>, ty: Type) -> Result<(), Diagnostic> {
-        self.add_symbol(name, ty, self.scope)?;
-        self.emit(Op::Declare(String::from(name.text), ty), name.range)?;
-        if self.take("=") {
-            let target = self.tree(name.text, name.range, Vec::new())?;
-            self.emit_node(Op::Address(String::from(name.text)), name.range, target)?;
-            let expression = self.expression(0)?;
-            self.require_type(expression, ty)?;
-            let value = self.emit_expression(expression, false)?;
-            let range = combined(name.range, self.expressions[expression].range);
-            let node = self.tree("=", range, vec![target, value])?;
-            let char_value = self.expressions[expression].ty == Type::Char;
-            self.emit_node(
-                Op::Store {
-                    initializer: true,
-                    full_expression: true,
-                    char_value,
-                },
-                range,
-                node,
-            )?;
+    /// A brace-enclosed list initializing the subobject of type `ty` at
+    /// leaf `offset` of `name`, marking each scalar it initializes. Without
+    /// designators it fills elements or members in order; `.m =` moves to
+    /// member `m` (C99 §6.7.8p17). Nested aggregates take braces of their
+    /// own: brace elision is outside this subset.
+    fn initializer_list(
+        &mut self,
+        name: Token<'a>,
+        shape: &Value,
+        ty: Type,
+        offset: usize,
+        mentioned: &mut [bool],
+    ) -> Result<(), Diagnostic> {
+        self.enter_nesting()?;
+        self.expect("{")?;
+        if self.at("}") {
+            return Err(self.error("empty initializer lists are outside the C99 subset"));
         }
-        self.expect(";")
+        let mut index = 0;
+        while !self.at("}") {
+            let (member_type, leaf) = match ty {
+                | Type::Array(length) => {
+                    if self.at("[") {
+                        return Err(self.error("array designators are outside this subset"));
+                    }
+                    if index >= length {
+                        return Err(self.error("too many array initializer elements"));
+                    }
+                    (Type::Int, offset + index)
+                },
+                | Type::Struct(id) => {
+                    if self.take(".") {
+                        let member = self.identifier()?;
+                        index = self.structures[id]
+                            .members
+                            .iter()
+                            .position(|candidate| candidate.name == member.text)
+                            .ok_or_else(|| self.member_error(member, id))?;
+                        self.expect("=")?;
+                    }
+                    let Some(member) = self.structures[id].members.get(index) else {
+                        return Err(self.error("too many initializers for the structure's members"));
+                    };
+                    (member.ty, offset + member.first)
+                },
+                | _ => return Err(self.error("braces initialize only arrays and structures")),
+            };
+            let at = i32::try_from(leaf).map_err(|_| self.error("object too large"))?;
+            match member_type {
+                | Type::Array(_) | Type::Struct(_) if self.at("{") =>
+                    self.initializer_list(name, shape, member_type, leaf, mentioned)?,
+                | Type::Array(_) =>
+                    return Err(self.error(
+                        "brace the initializer of each nested array; brace elision is outside \
+                         this subset",
+                    )),
+                | _ => {
+                    let label = self.label(name.text, shape, at, structure_of(member_type));
+                    let element = self.element(name, &label, at, structure_of(member_type))?;
+                    let expression = self.expression(0)?;
+                    if matches!(member_type, Type::Struct(_))
+                        && !matches!(self.expressions[expression].ty, Type::Struct(_))
+                    {
+                        return Err(self.error(
+                            "brace the initializer of each nested structure; brace elision is \
+                             outside this subset",
+                        ));
+                    }
+                    self.require_type(expression, member_type)?;
+                    if self.expressions[expression].call {
+                        return Err(
+                            self.error("calls in initializer lists are outside this subset")
+                        );
+                    }
+                    let value = self.emit_expression(expression, false)?;
+                    let range = self.expressions[expression].range;
+                    self.initialize(element, value, range, structure_of(member_type))?;
+                    for done in mentioned
+                        .iter_mut()
+                        .skip(leaf)
+                        .take(member_type.leaves(&self.structures))
+                    {
+                        *done = true;
+                    }
+                },
+            }
+            index += 1;
+            if !self.take(",") {
+                break;
+            }
+        }
+        self.expect("}")?;
+        self.nesting -= 1;
+        Ok(())
     }
 
-    /// The lvalue for element `index` of the array being initialized.
-    fn array_element(&mut self, name: Token<'_>, index: usize) -> Result<usize, Diagnostic> {
-        let index =
-            i32::try_from(index).map_err(|_| self.error("array index exceeds int range"))?;
-        let node = self.tree(&format!("{}[{index}]", name.text), name.range, Vec::new())?;
+    /// The lvalue for the subobject `label` at leaf `offset` of the object
+    /// `name` being initialized.
+    fn element(
+        &mut self,
+        name: Token<'_>,
+        label: &str,
+        offset: i32,
+        structure: Option<usize>,
+    ) -> Result<usize, Diagnostic> {
+        let node = self.tree(label, name.range, Vec::new())?;
         self.emit_node(
-            Op::Element(String::from(name.text), index),
+            Op::Element {
+                name: String::from(name.text),
+                offset,
+                structure,
+            },
             name.range,
             node,
         )?;
         Ok(node)
     }
 
-    /// Store an initializer element. The initializer list is one full
-    /// expression, so only its last store ends it (C99 §6.8p4).
+    /// Store an initializer element. Only the list's last store ends the
+    /// full expression; the declaration marks it.
     fn initialize(
         &mut self,
         element: usize,
         value: usize,
         range: SourceRange,
-        last: bool,
+        structure: Option<usize>,
     ) -> Result<(), Diagnostic> {
         let node = self.tree("=", range, vec![element, value])?;
         self.emit_node(
             Op::Store {
-                initializer:     true,
-                full_expression: last,
-                char_value:      false,
+                initializer: true,
+                full_expression: false,
+                char_value: false,
+                structure,
             },
             range,
             node,
@@ -486,6 +672,7 @@ impl<'a> Parser<'a> {
                     initializer: false,
                     full_expression: true,
                     char_value,
+                    structure: structure_of(self.expressions[expression].ty),
                 },
                 range,
                 root,
@@ -504,6 +691,13 @@ impl<'a> Parser<'a> {
         };
         if let Some(delta) = prefix.or(postfix) {
             let operand = &self.expressions[expression];
+            if !matches!(operand.ty, Type::Int | Type::Char | Type::Pointer) {
+                return Err(Diagnostic::new(
+                    "unsupported",
+                    range,
+                    "++ and -- update an int, a char or an int pointer in this subset",
+                ));
+            }
             if prefix.is_none()
                 && matches!(operand.kind, ExprKind::Unary("*", _))
                 && !operand.parenthesized
@@ -659,7 +853,7 @@ impl<'a> Parser<'a> {
     pub fn require_scalar(&self, expression: usize) -> Result<(), Diagnostic> {
         if matches!(
             self.expressions[expression].ty,
-            Type::Int | Type::Char | Type::Pointer
+            Type::Int | Type::Char | Type::Pointer | Type::StructPointer(_)
         ) {
             Ok(())
         } else {
@@ -678,20 +872,437 @@ impl<'a> Parser<'a> {
         Ok(token)
     }
 
-    fn add_symbol(&mut self, token: Token<'a>, ty: Type, scope: usize) -> Result<(), Diagnostic> {
+    /// The text of the token `ahead` places past the current one.
+    fn peek(&self, ahead: usize) -> &'a str {
+        self.tokens
+            .get(self.position + ahead)
+            .map_or("", |token| token.text)
+    }
+
+    fn add_symbol(
+        &mut self,
+        token: Token<'a>,
+        ty: Type,
+        scope: usize,
+        place: Option<usize>,
+    ) -> Result<(), Diagnostic> {
         if self
             .symbols
             .iter()
             .any(|symbol| symbol.name == token.text && symbol.scope == scope)
         {
-            return Err(self.error("duplicate local or parameter declaration"));
+            return Err(Diagnostic::new(
+                "unsupported",
+                token.range,
+                if scope == 0 {
+                    "duplicate file-scope declaration"
+                } else {
+                    "duplicate local or parameter declaration"
+                },
+            ));
         }
         self.symbols.push(Symbol {
             name: token.text,
             ty,
             scope,
+            place,
         });
         Ok(())
+    }
+
+    /// A type specifier: `int`, `char` or `struct tag`. A tag not seen
+    /// before declares an incomplete structure type, which only a pointer
+    /// may use until its definition.
+    fn base_type(&mut self) -> Result<Base, Diagnostic> {
+        if self.take("int") {
+            return Ok(Base::Int);
+        }
+        if self.take("char") {
+            return Ok(Base::Char);
+        }
+        if !self.take("struct") {
+            return Err(self.error(
+                "expected int, char or struct; other types (unsigned, long, float, void, ...) are \
+                 outside this subset",
+            ));
+        }
+        let tag = self.identifier()?;
+        if self.at("{") {
+            return Err(
+                self.error("define structures at file scope, on their own (struct tag { ... };)")
+            );
+        }
+        Ok(Base::Struct(self.tag(tag)?))
+    }
+
+    /// The structure type tagged `tag`, declared incomplete if new.
+    fn tag(&mut self, tag: Token<'_>) -> Result<usize, Diagnostic> {
+        if let Some(id) = self
+            .structures
+            .iter()
+            .position(|structure| structure.name == tag.text)
+        {
+            return Ok(id);
+        }
+        if self.structures.len() >= MAX_STRUCTURES {
+            return Err(Diagnostic::limit(tag.range, "structure type limit reached"));
+        }
+        self.structures.push(layout::structure(tag.text, &[], &[]));
+        self.complete.push(false);
+        Ok(self.structures.len() - 1)
+    }
+
+    /// `Struct(id)`, provided its definition is complete.
+    fn complete_structure(&self, id: usize, range: SourceRange) -> Result<Type, Diagnostic> {
+        if self.complete.get(id) == Some(&true) {
+            Ok(Type::Struct(id))
+        } else {
+            Err(Diagnostic::new(
+                "unsupported",
+                range,
+                "this structure type is incomplete here: define it before declaring an object of \
+                 it (a pointer to it is fine)",
+            ))
+        }
+    }
+
+    /// An optional `[N]` with a positive decimal length.
+    fn array_suffix(&mut self) -> Result<Option<usize>, Diagnostic> {
+        if !self.take("[") {
+            return Ok(None);
+        }
+        let count = self.current();
+        let Ok(length) = count.text.parse::<usize>() else {
+            return Err(self.error("array size must be a positive decimal literal"));
+        };
+        if length == 0 || length > MAX_CELLS {
+            return Err(Diagnostic::limit(
+                count.range,
+                "array size must be between 1 and 512",
+            ));
+        }
+        self.position += 1;
+        self.expect("]")?;
+        Ok(Some(length))
+    }
+
+    /// The type a declarator gives its base type: `int`, `int *`,
+    /// `int[N]`, `char`, `struct T` or `struct T *`.
+    fn declared_type(
+        &self,
+        base: Base,
+        pointer: bool,
+        array: Option<usize>,
+        range: SourceRange,
+    ) -> Result<Type, Diagnostic> {
+        let unsupported = |message| Err(Diagnostic::new("unsupported", range, message));
+        match (base, pointer, array) {
+            | (Base::Int, false, None) => Ok(Type::Int),
+            | (Base::Int, true, None) => Ok(Type::Pointer),
+            | (Base::Int, false, Some(length)) => Ok(Type::Array(length)),
+            | (_, true, Some(_)) => unsupported("arrays of pointers are outside this subset"),
+            | (Base::Char, false, None) => Ok(Type::Char),
+            | (Base::Char, ..) => unsupported("only scalar char objects are supported"),
+            | (Base::Struct(id), false, None) => self.complete_structure(id, range),
+            | (Base::Struct(id), true, None) => Ok(Type::StructPointer(id)),
+            | (Base::Struct(_), false, Some(_)) =>
+                unsupported("arrays of structures are outside this subset"),
+        }
+    }
+
+    /// `struct tag { members };` at file scope. Members are int, char,
+    /// int *, int arrays, complete structures and pointers to structures
+    /// (including this one); several may share a line (`int x, y;`).
+    fn structure_definition(&mut self) -> Result<(), Diagnostic> {
+        self.expect("struct")?;
+        let tag = self.identifier()?;
+        let id = self.tag(tag)?;
+        if self.complete[id] {
+            return Err(Diagnostic::new(
+                "unsupported",
+                tag.range,
+                "this structure is already defined",
+            ));
+        }
+        self.expect("{")?;
+        let mut members: Vec<(String, Type)> = Vec::new();
+        while !self.take("}") {
+            if self.at("") {
+                return Err(self.error("expected closing brace"));
+            }
+            let base = self.base_type()?;
+            loop {
+                let pointer = self.take("*");
+                let name = self.identifier()?;
+                let array = self.array_suffix()?;
+                if base == Base::Struct(id) && !pointer {
+                    return Err(Diagnostic::new(
+                        "unsupported",
+                        name.range,
+                        "a structure cannot contain itself; a pointer to it is fine",
+                    ));
+                }
+                let ty = self.declared_type(base, pointer, array, name.range)?;
+                if members.iter().any(|(existing, _)| existing == name.text) {
+                    return Err(Diagnostic::new(
+                        "unsupported",
+                        name.range,
+                        "duplicate member",
+                    ));
+                }
+                if members.len() >= MAX_MEMBERS {
+                    return Err(Diagnostic::limit(
+                        name.range,
+                        "structure member limit reached",
+                    ));
+                }
+                members.push((String::from(name.text), ty));
+                if !self.take(",") {
+                    break;
+                }
+            }
+            self.expect(";")?;
+        }
+        if members.is_empty() {
+            return Err(Diagnostic::new(
+                "unsupported",
+                tag.range,
+                "a structure needs at least one member",
+            ));
+        }
+        let laid = layout::structure(tag.text, &members, &self.structures);
+        if laid.size > MAX_CELLS * 8 {
+            return Err(Diagnostic::limit(tag.range, "structure size limit reached"));
+        }
+        self.structures[id] = laid;
+        self.complete[id] = true;
+        if !self.at(";") {
+            return Err(self.error(
+                "end the structure definition with `;` and declare its objects separately",
+            ));
+        }
+        self.expect(";")
+    }
+
+    /// The error for a member `name` that structure `id` does not have.
+    fn member_error(&self, name: Token<'_>, id: usize) -> Diagnostic {
+        Diagnostic::new(
+            "unsupported",
+            name.range,
+            &format!(
+                "struct {} has no member named `{}`",
+                self.structures[id].name, name.text
+            ),
+        )
+    }
+
+    /// A file-scope object: static storage duration, initialized before
+    /// `main` by its constant initializer or to zero.
+    fn file_scope_object(
+        &mut self,
+        base: Base,
+        pointer: bool,
+        name: Token<'a>,
+    ) -> Result<(), Diagnostic> {
+        let array = self.array_suffix()?;
+        let ty = self.declared_type(base, pointer, array, name.range)?;
+        if self
+            .signatures
+            .iter()
+            .any(|(function, _)| function == name.text)
+        {
+            return Err(Diagnostic::new(
+                "unsupported",
+                name.range,
+                "a function and a file-scope object share this name",
+            ));
+        }
+        let index = self.static_object(name, ty, None)?;
+        self.add_symbol(name, ty, 0, Some(index))?;
+        self.expect(";")
+    }
+
+    /// `static T name [= constant];` in a block: the object exists before
+    /// `main` and keeps its value between calls; the declaration names it
+    /// and does nothing when execution reaches it.
+    fn static_local(&mut self, name: Token<'a>, ty: Type) -> Result<(), Diagnostic> {
+        let function = self.signatures.last().map(|(function, _)| function.clone());
+        let index = self.static_object(name, ty, function)?;
+        self.add_symbol(name, ty, self.scope, Some(index))?;
+        self.emit(Op::StaticLocal(index), name.range)?;
+        self.expect(";")
+    }
+
+    /// Record an object with static storage duration and its initial value,
+    /// from an optional constant initializer (C99 §6.7.8p4, p10).
+    fn static_object(
+        &mut self,
+        name: Token<'a>,
+        ty: Type,
+        function: Option<String>,
+    ) -> Result<usize, Diagnostic> {
+        if self.statics.len() >= MAX_OBJECTS {
+            return Err(Diagnostic::limit(name.range, "object limit reached"));
+        }
+        let mut leaves = Vec::new();
+        layout::flatten(&ty.zero(&self.structures), &mut leaves);
+        let explicit = self.take("=");
+        let mut range = name.range;
+        if explicit {
+            self.constant_initializer(ty, 0, &mut leaves)?;
+            range = combined(name.range, self.tokens[self.position - 1].range);
+        }
+        self.statics.push(Static {
+            name: String::from(name.text),
+            ty,
+            function,
+            value: ty.shaped(&self.structures, &leaves),
+            explicit,
+            range,
+        });
+        Ok(self.statics.len() - 1)
+    }
+
+    /// A static object's initializer for the subobject of type `ty` at leaf
+    /// `offset`: an integer constant, `0` for a pointer, or a braced list
+    /// of them. Its value is known before the program runs.
+    fn constant_initializer(
+        &mut self,
+        ty: Type,
+        offset: usize,
+        leaves: &mut [Value],
+    ) -> Result<(), Diagnostic> {
+        self.enter_nesting()?;
+        let result = self.constant_initializer_inner(ty, offset, leaves);
+        self.nesting -= 1;
+        result
+    }
+
+    fn constant_initializer_inner(
+        &mut self,
+        ty: Type,
+        offset: usize,
+        leaves: &mut [Value],
+    ) -> Result<(), Diagnostic> {
+        match ty {
+            | Type::Array(_) | Type::Struct(_) => {
+                self.expect("{")?;
+                if self.at("}") {
+                    return Err(self.error("empty initializer lists are outside the C99 subset"));
+                }
+                let mut index = 0;
+                while !self.at("}") {
+                    let (member, leaf) = match ty {
+                        | Type::Array(length) => {
+                            if index >= length {
+                                return Err(self.error("too many array initializer elements"));
+                            }
+                            (Type::Int, offset + index)
+                        },
+                        | Type::Struct(id) => {
+                            if self.take(".") {
+                                let member = self.identifier()?;
+                                index = self.structures[id]
+                                    .members
+                                    .iter()
+                                    .position(|candidate| candidate.name == member.text)
+                                    .ok_or_else(|| self.member_error(member, id))?;
+                                self.expect("=")?;
+                            }
+                            let Some(member) = self.structures[id].members.get(index) else {
+                                return Err(
+                                    self.error("too many initializers for the structure's members")
+                                );
+                            };
+                            (member.ty, offset + member.first)
+                        },
+                        | _ =>
+                            return Err(self.error("braces initialize only arrays and structures")),
+                    };
+                    if matches!(member, Type::Array(_) | Type::Struct(_)) && !self.at("{") {
+                        return Err(self.error(
+                            "brace the initializer of each nested array or structure; brace \
+                             elision is outside this subset",
+                        ));
+                    }
+                    self.constant_initializer(member, leaf, leaves)?;
+                    index += 1;
+                    if !self.take(",") {
+                        break;
+                    }
+                }
+                self.expect("}")
+            },
+            | Type::Int | Type::Char => {
+                let negative = self.take("-");
+                let token = self.current();
+                let digits = token
+                    .text
+                    .as_bytes()
+                    .first()
+                    .is_some_and(u8::is_ascii_digit)
+                    && (token.text.len() == 1 || !token.text.starts_with('0'));
+                let parsed = if negative {
+                    format!("-{}", token.text).parse::<i32>()
+                } else {
+                    token.text.parse::<i32>()
+                };
+                let Ok(mut integer) = parsed
+                    .map_err(|_| ())
+                    .and_then(|value| if digits { Ok(value) } else { Err(()) })
+                else {
+                    return Err(self.error(
+                        "a static object's initializer must be a constant; this subset takes a \
+                         decimal int constant, optionally negated",
+                    ));
+                };
+                self.position += 1;
+                if ty == Type::Char {
+                    #[expect(
+                        clippy::cast_possible_truncation,
+                        reason = "Keeping the low 8 bits is the modeled conversion."
+                    )]
+                    let low = integer as i8;
+                    integer = i32::from(low);
+                }
+                leaves[offset] = Value::Integer(integer);
+                Ok(())
+            },
+            | Type::Pointer | Type::StructPointer(_) => {
+                if !self.take("0") {
+                    return Err(self.error(
+                        "a static pointer's initializer must be a constant; this subset takes \
+                         only 0, the null pointer constant",
+                    ));
+                }
+                leaves[offset] = Value::null();
+                Ok(())
+            },
+        }
+    }
+
+    /// How the source spells the scalar (or the whole structure
+    /// `structure`) at leaf `offset` of the object `name` with value `shape`.
+    fn label(&self, name: &str, shape: &Value, offset: i32, structure: Option<usize>) -> String {
+        let mut label = String::from(name);
+        label.push_str(&layout::path(shape, offset, structure, &self.structures));
+        label
+    }
+}
+
+/// A declaration's type specifier.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Base {
+    Int,
+    Char,
+    Struct(usize),
+}
+
+/// The structure type `ty` is, if it is one.
+pub(super) const fn structure_of(ty: Type) -> Option<usize> {
+    match ty {
+        | Type::Struct(id) => Some(id),
+        | _ => None,
     }
 }
 
@@ -699,6 +1310,9 @@ pub(super) struct Symbol<'a> {
     pub name:  &'a str,
     pub ty:    Type,
     pub scope: usize,
+    /// The static object it names: a file-scope object or a block-scope
+    /// `static` one.
+    pub place: Option<usize>,
 }
 
 pub(super) fn is_identifier(text: &str) -> bool {
@@ -753,7 +1367,9 @@ fn compatible(expected: Type, actual: Type, null: bool) -> bool {
             (expected, actual),
             (Type::Char, Type::Int) | (Type::Int, Type::Char)
         )
-        || (expected == Type::Pointer && actual == Type::Int && null)
+        || (matches!(expected, Type::Pointer | Type::StructPointer(_))
+            && actual == Type::Int
+            && null)
 }
 
 /// Set each node's full-expression root. A parent follows its children, so a

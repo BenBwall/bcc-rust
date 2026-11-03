@@ -59,6 +59,7 @@ fn demo_runs_calls_loop_pointer_and_array() {
                 Value::Pointer {
                     target: Some(1),
                     offset: 1,
+                    ..
                 }
             )
         });
@@ -380,7 +381,16 @@ fn every_step_of_a_topic_carries_its_note() {
 fn unsupported_constructs_are_rejected_even_in_dead_code() {
     for source in [
         "#define X 1\nint main(void) { return X; }",
-        "int global; int main(void) { return 0; }",
+        "int global = global; int main(void) { return 0; }",
+        "struct s { int x; }; int main(void) { struct s a[2]; return 0; }",
+        "struct s { int x; } v; int main(void) { return 0; }",
+        "struct s { struct s inner; }; int main(void) { return 0; }",
+        "struct s { int x; }; int main(void) { struct s a; struct s b; return a == b; }",
+        "struct s { int x; }; int main(void) { struct s a = {1}; return a.y; }",
+        "struct s { int x; }; int main(void) { struct s a = {1, 2}; return a.x; }",
+        "struct s; int main(void) { struct s a; return 0; }",
+        "int main(void) { static int x = 1 + 1; return x; }",
+        "int main(void) { return 1.5; }",
         "int main(void) { if (0) { double x; } return 0; }",
         "int main(void) { int i = 0; return i++ + i; }",
         "int f(void) { return 1; } int main(void) { return f() + f(); }",
@@ -436,10 +446,13 @@ fn snapshots_use_schema_ranges_pointer_ids_and_escaped_source() {
                   a; return *p; }";
     let session = run(source);
     let json = session.state_json();
-    assert!(json.contains("\"schema_version\":2"), "versioned schema");
+    assert!(json.contains("\"schema_version\":3"), "versioned schema");
     assert!(
-        json.contains("\"kind\":\"pointer\",\"target\":1,\"offset\":0"),
-        "object-based pointer"
+        json.contains(
+            "\"kind\":\"pointer\",\"target\":1,\"offset\":0,\"first\":0,\"length\":1,\"structure\"\
+             :null"
+        ),
+        "object-based pointer: {json}"
     );
     assert!(json.contains("\"line\":2"), "one-based line");
     let trace = session.trace_json();
@@ -1248,10 +1261,10 @@ fn storing_zero_into_a_pointer_explains_the_null_pointer() {
 }
 
 #[test]
-fn schema_two_encodes_events_and_evaluations() {
+fn schema_three_encodes_events_and_evaluations() {
     let session = run("int main(void) { int x = 1; return x; }");
     let json = session.state_json();
-    assert!(json.contains("\"schema_version\":2"));
+    assert!(json.contains("\"schema_version\":3"));
     assert!(
         json.contains("\"kind\":\"return\",\"category\":\"call\""),
         "{json}"
@@ -1279,5 +1292,469 @@ fn overflow_names_the_arithmetic_that_did_not_fit() {
         negated.state().diagnostics[0]
             .message
             .starts_with("-(-2147483648) = 2147483648")
+    );
+}
+
+/// The ids of every clause an event cites.
+fn cited(state: &State) -> Vec<&'static str> {
+    state.event.clauses.iter().map(|clause| clause.id).collect()
+}
+
+#[test]
+fn static_objects_are_initialized_before_main_and_live_for_the_whole_run() {
+    let source = "struct point { int x; int y; };\nint counter;\nint limit = -3;\nint table[3] = \
+                  {4};\nstruct point origin;\nint *cursor;\nint main(void) {\n    counter = \
+                  counter + 1;\n    return counter + limit + table[0] + table[2] + origin.y;\n}\n";
+    let states = states(source);
+    assert!(
+        states[0].event.summary.contains("before main"),
+        "{}",
+        states[0].event.summary
+    );
+    assert!(cited(&states[0]).contains(&"5.1.2p1"));
+    let initial: Vec<&State> = states[1..=5].iter().collect();
+    for state in &initial {
+        assert_eq!(
+            state.event.kind,
+            EventKind::StaticStorage,
+            "{}",
+            state.event.title
+        );
+        assert!(state.frames.is_empty(), "no call has begun before main");
+        assert!(cited(state).contains(&"6.2.4p3"), "{:?}", cited(state));
+        assert!(cited(state).contains(&"5.1.2p1"));
+    }
+    let objects = &initial[4].objects;
+    assert!(
+        objects
+            .iter()
+            .all(|object| object.storage_duration == "static" && object.frame_id == 0)
+    );
+    assert_eq!(
+        objects[0].value,
+        Value::Integer(0),
+        "counter starts at zero"
+    );
+    assert_eq!(
+        objects[1].value,
+        Value::Integer(-3),
+        "limit's constant initializer"
+    );
+    assert_eq!(
+        objects[2].value,
+        Value::Array(vec![
+            Value::Integer(4),
+            Value::Integer(0),
+            Value::Integer(0)
+        ])
+    );
+    assert!(matches!(
+        &objects[3].value,
+        Value::Struct { members, .. } if members == &[Value::Integer(0), Value::Integer(0)]
+    ));
+    assert!(matches!(
+        objects[4].value,
+        Value::Pointer { target: None, .. }
+    ));
+    // Zero initialization and constant initializers cite their paragraphs.
+    assert!(cited(initial[0]).contains(&"6.7.8p10"));
+    assert!(cited(initial[1]).contains(&"6.7.8p4"));
+    assert!(
+        initial[0].event.summary.contains("starts as zero"),
+        "{}",
+        initial[0].event.summary
+    );
+    assert!(
+        initial[4].event.summary.contains("null pointer"),
+        "{}",
+        initial[4].event.summary
+    );
+    assert!(initial[0].event.note.contains("Static objects"));
+    // Main begins after them, and the statics outlive its frame.
+    assert_eq!(states[6].frames.len(), 1, "main's first step");
+    let last = states.last().expect("a final state");
+    assert_eq!(last.status, "finished", "{:?}", last.diagnostics);
+    assert_eq!(last.return_value, Some(Value::Integer(1 - 3 + 4)));
+    assert!(
+        last.objects
+            .iter()
+            .filter(|object| object.storage_duration == "static")
+            .all(|object| object.lifetime == "alive")
+    );
+    // A global is read and written like any object.
+    assert!(
+        states
+            .iter()
+            .any(|state| state.event.title == "Store 1 into `counter`")
+    );
+}
+
+#[test]
+fn static_locals_keep_their_value_between_calls() {
+    let source = "int tick(void) {\n    static int calls;\n    calls = calls + 1;\n    return \
+                  calls;\n}\nint main(void) {\n    int first = tick();\n    int second = \
+                  tick();\n    return first * 10 + second;\n}\n";
+    let states = states(source);
+    assert_eq!(states[1].event.kind, EventKind::StaticStorage);
+    assert_eq!(states[1].objects[0].function.as_deref(), Some("tick"));
+    assert!(states[1].event.summary.contains("starts as zero"));
+    let reached: Vec<&State> = states
+        .iter()
+        .filter(|state| state.event.kind == EventKind::StaticLocal)
+        .collect();
+    assert_eq!(reached.len(), 2, "each call reaches the declaration");
+    assert!(
+        reached[1].event.summary.contains("keeps its value, 1"),
+        "{}",
+        reached[1].event.summary
+    );
+    assert!(
+        reached[0]
+            .event
+            .summary
+            .contains("does nothing at run time")
+    );
+    assert_eq!(reached[0].event.objects, [1]);
+    assert!(cited(reached[0]).contains(&"6.2.4p3"));
+    assert_eq!(
+        states.last().and_then(|state| state.return_value.clone()),
+        Some(Value::Integer(12))
+    );
+}
+
+#[test]
+fn structures_are_laid_out_with_padding_on_x86_64() {
+    let program = compile(
+        "struct entry { char tag; int count; char flag; };\nstruct line { struct entry first; int \
+         *p; int a[3]; };\nint main(void) { struct entry e; e.count = 1; return e.count; }\n",
+    )
+    .expect("compiles");
+    let entry = &program.structures()[0];
+    assert_eq!((entry.size, entry.align), (12, 4));
+    let layout: Vec<(&str, usize, usize, usize)> = entry
+        .members
+        .iter()
+        .map(|member| {
+            (
+                member.name.as_str(),
+                member.offset,
+                member.size,
+                member.padding,
+            )
+        })
+        .collect();
+    assert_eq!(
+        layout,
+        [("tag", 0, 1, 3), ("count", 4, 4, 0), ("flag", 8, 1, 3)]
+    );
+    let line = &program.structures()[1];
+    assert_eq!((line.size, line.align), (40, 8));
+    assert_eq!(line.members[1].offset, 16, "the pointer is aligned to 8");
+    assert_eq!(line.members[0].padding, 4);
+    assert_eq!(line.members[2].r#type, "int[3]");
+    assert_eq!(line.members[2].first, 4, "leaves: tag, count, flag, p");
+    let mut session = program.session();
+    let declared = loop {
+        let state = session.step().clone();
+        if state.event.kind == EventKind::Declare {
+            break state;
+        }
+    };
+    assert_eq!(declared.event.title, "Create `e` (struct entry)");
+    assert!(
+        declared
+            .event
+            .explanation
+            .contains("`tag` (char) at byte 0 followed by 3 bytes of padding"),
+        "{}",
+        declared.event.explanation
+    );
+    assert!(cited(&declared).contains(&"6.7.2.1p13"));
+    assert!(
+        declared.event.note.contains("padding"),
+        "{}",
+        declared.event.note
+    );
+}
+
+#[test]
+fn members_are_designated_by_dot_and_arrow() {
+    let source = "struct point { int x; int y; };\nint main(void) {\n    struct point p = {1, \
+                  2};\n    struct point *at = &p;\n    at->y = p.x + 5;\n    return p.y;\n}\n";
+    let states = states(source);
+    let last = states.last().expect("a final state");
+    assert_eq!(
+        last.return_value,
+        Some(Value::Integer(6)),
+        "{:?}",
+        last.diagnostics
+    );
+    let members: Vec<&State> = states
+        .iter()
+        .filter(|state| state.event.kind == EventKind::Member)
+        .collect();
+    let arrow = members
+        .iter()
+        .find(|state| state.event.title.starts_with("`at->y`"))
+        .expect("at->y designates a member");
+    assert_eq!(arrow.event.title, "`at->y` designates `p.y`");
+    assert!(cited(arrow).contains(&"6.5.2.3p4"));
+    assert!(
+        arrow.event.summary.contains("4 bytes into it"),
+        "{}",
+        arrow.event.summary
+    );
+    assert!(matches!(
+        arrow.event.result,
+        Some(Operand::Address {
+            target:    1,
+            offset:    1,
+            structure: None,
+        })
+    ));
+    let dot = members
+        .iter()
+        .find(|state| state.event.title.starts_with("`p.x`"))
+        .expect("p.x designates a member");
+    assert!(cited(dot).contains(&"6.5.2.3p3"));
+    assert_eq!(dot.event.kind.category(), "memory");
+    // `p` before `.x` is located, not read.
+    assert!(
+        states
+            .iter()
+            .any(|state| state.event.title == "`p` holds the member to select")
+    );
+    // The read of the member names it.
+    assert!(
+        states
+            .iter()
+            .any(|state| state.event.title == "Read `p.x` → 1")
+    );
+    // `->` through a null pointer is undefined.
+    let null = run(
+        "struct point { int x; int y; };\nint main(void) { struct point *at = 0; return at->x; }\n",
+    );
+    assert_eq!(null.state().status, "undefined_behavior");
+    assert_eq!(
+        null.state().diagnostics[0].undefined,
+        Some(super::Undefined::NullIndirection)
+    );
+}
+
+#[test]
+fn structures_are_copied_by_assignment_argument_and_return() {
+    let source =
+        "struct point { int x; int y; };\nstruct point moved(struct point p, int dx) {\n    p.x = \
+         p.x + dx;\n    return p;\n}\nint main(void) {\n    struct point a = {1, 2};\n    struct \
+         point b;\n    b = a;\n    b.x = 9;\n    struct point c = moved(a, 3);\n    return a.x * \
+         100 + b.x * 10 + c.x;\n}\n";
+    let states = states(source);
+    let last = states.last().expect("a final state");
+    assert_eq!(last.status, "finished", "{:?}", last.diagnostics);
+    assert_eq!(last.return_value, Some(Value::Integer(100 + 90 + 4)));
+    let copy = states
+        .iter()
+        .find(|state| {
+            state.event.kind == EventKind::Assign && state.event.title.starts_with("Copy")
+        })
+        .expect("b = a copies");
+    assert_eq!(copy.event.title, "Copy {.x = 1, .y = 2} into `b`");
+    assert!(cited(copy).contains(&"6.5.16.1p1"));
+    assert!(
+        copy.event.summary.contains("all 2 members"),
+        "{}",
+        copy.event.summary
+    );
+    let read = states
+        .iter()
+        .find(|state| {
+            state.event.kind == EventKind::LvalueConversion
+                && state.event.title.starts_with("Read `a`")
+        })
+        .expect("a is read whole");
+    assert!(
+        read.event.summary.contains("every member"),
+        "{}",
+        read.event.summary
+    );
+    let call = states
+        .iter()
+        .find(|state| state.event.kind == EventKind::Call)
+        .expect("moved is called");
+    assert!(
+        call.event.explanation.contains("copied whole"),
+        "{}",
+        call.event.explanation
+    );
+    let returned = states
+        .iter()
+        .find(|state| state.event.kind == EventKind::Return && state.frames.len() == 1)
+        .expect("moved returns");
+    assert!(returned.event.explanation.contains("returned by value"));
+    let initialized = states
+        .iter()
+        .find(|state| {
+            state.event.kind == EventKind::Initialize
+                && state.event.title.starts_with("Initialize `c`")
+        })
+        .expect("c is initialized from the call");
+    assert!(cited(initialized).contains(&"6.7.8p13"));
+    assert!(initialized.event.sequence_point);
+}
+
+#[test]
+fn copying_a_partly_initialized_structure_copies_its_indeterminate_members() {
+    let states = states(
+        "struct point { int x; int y; };\nint main(void) { struct point a; a.x = 1; struct point \
+         b = a; return b.x; }\n",
+    );
+    let last = states.last().expect("a final state");
+    assert_eq!(
+        last.return_value,
+        Some(Value::Integer(1)),
+        "{:?}",
+        last.diagnostics
+    );
+    let read = states
+        .iter()
+        .find(|state| state.event.title.starts_with("Read `a`"))
+        .expect("a is read whole");
+    assert!(cited(read).contains(&"6.2.6.1p6"), "{:?}", cited(read));
+    assert!(read.event.explanation.contains("still indeterminate"));
+    // Reading the indeterminate member itself still stops.
+    let stopped = run(
+        "struct point { int x; int y; };\nint main(void) { struct point a; a.x = 1; struct point \
+         b = a; return b.y; }\n",
+    );
+    assert_eq!(stopped.state().status, "error");
+    assert_eq!(stopped.state().diagnostics[0].kind, "indeterminate");
+}
+
+#[test]
+fn brace_and_designated_initializers_fill_members_and_zero_the_rest() {
+    let states = states(
+        "struct inner { int a; int b; };\nstruct outer { int x; struct inner in; int *p; int \
+         n[2]; };\nint main(void) {\n    struct outer o = {.in = {.b = 7}, .x = 2};\n    return \
+         o.x + o.in.a + o.in.b + o.n[1] + (o.p == 0);\n}\n",
+    );
+    let last = states.last().expect("a final state");
+    assert_eq!(
+        last.return_value,
+        Some(Value::Integer(2 + 7 + 1)),
+        "{:?}",
+        last.diagnostics
+    );
+    let selected: Vec<&str> = states
+        .iter()
+        .filter(|state| state.event.title.ends_with("to initialize"))
+        .map(|state| state.event.title.as_str())
+        .collect();
+    assert_eq!(
+        selected,
+        [
+            "Select `o.in.b` to initialize",
+            "Select `o.x` to initialize",
+            "Select `o.in.a` to initialize",
+            "Select `o.p` to initialize",
+            "Select o.n[0] to initialize",
+            "Select o.n[1] to initialize",
+        ]
+    );
+    let first = states
+        .iter()
+        .find(|state| state.event.title == "Select `o.in.b` to initialize")
+        .expect("a designated member");
+    assert!(cited(first).contains(&"6.7.8p7"));
+    let zero = states
+        .iter()
+        .find(|state| state.event.title == "Supply an implicit 0")
+        .expect("an implicit zero");
+    assert!(cited(zero).contains(&"6.7.8p19"));
+    // The zero stored into the pointer member makes it null.
+    assert!(
+        states
+            .iter()
+            .any(|state| state.event.title == "Initialize `o.p` = NULL")
+    );
+    // Only the list's last store ends the full expression.
+    let stores: Vec<bool> = states
+        .iter()
+        .filter(|state| state.event.kind == EventKind::Initialize)
+        .map(|state| state.event.sequence_point)
+        .collect();
+    assert_eq!(stores, [false, false, false, false, false, true]);
+}
+
+#[test]
+fn pointers_to_members_stay_within_their_member() {
+    let source = "struct pair { int a[2]; int b; };\nint main(void) {\n    struct pair s = {{1, \
+                  2}, 3};\n    int *pb = &s.b;\n    *pb = 8;\n    int *q = s.a;\n    q = q + \
+                  1;\n    return s.b + *q;\n}\n";
+    let states = states(source);
+    let last = states.last().expect("a final state");
+    assert_eq!(
+        last.return_value,
+        Some(Value::Integer(10)),
+        "{:?}",
+        last.diagnostics
+    );
+    assert!(
+        states
+            .iter()
+            .any(|state| state.event.title == "Take the address of `s.b`")
+    );
+    let decayed = states
+        .iter()
+        .find(|state| state.event.title == "`s.a` decays to a pointer")
+        .expect("s.a decays");
+    assert!(cited(decayed).contains(&"6.3.2.1p3"));
+    assert!(decayed.event.explanation.contains("a pointer to s.a[0]"));
+    // One past s.a is s.b's address, but dereferencing it is undefined.
+    let past = run(
+        "struct pair { int a[2]; int b; };\nint main(void) { struct pair s = {{1, 2}, 3}; int *q \
+         = s.a + 2; return *q; }\n",
+    );
+    let diagnostic = &past.state().diagnostics[0];
+    assert_eq!(diagnostic.undefined, Some(super::Undefined::OnePastEnd));
+    assert!(
+        diagnostic.message.contains("`s.a` has 2 elements"),
+        "{}",
+        diagnostic.message
+    );
+    let beyond = run(
+        "struct pair { int a[2]; int b; };\nint main(void) { struct pair s = {{1, 2}, 3}; int *q \
+         = &s.b + 1; return *q; }\n",
+    );
+    assert_eq!(
+        beyond.state().diagnostics[0].undefined,
+        Some(super::Undefined::OnePastEnd)
+    );
+}
+
+#[test]
+fn schema_three_encodes_structures_and_static_objects() {
+    let program = compile(
+        "struct point { char c; int y; };\nstruct point origin = {1, 2};\nint main(void) { return \
+         origin.y; }\n",
+    )
+    .expect("compiles");
+    let mut session = program.session();
+    let _ = session.step();
+    let json = session.state_json();
+    assert!(
+        json.contains(
+            "\"kind\":\"struct\",\"structure\":0,\"members\":[{\"kind\":\"integer\",\"value\":1}"
+        ),
+        "{json}"
+    );
+    assert!(json.contains("\"storage_duration\":\"static\""), "{json}");
+    assert!(json.contains("\"kind\":\"static_storage\",\"category\":\"lifetime\""));
+    let trace = session.trace_json();
+    assert!(
+        trace.contains(
+            "\"structures\":[{\"name\":\"point\",\"size\":8,\"align\":4,\"members\":[{\"name\":\"\
+             c\",\"type\":\"char\",\"offset\":0,\"size\":1,\"padding\":3,\"first\":0}"
+        ),
+        "{trace}"
     );
 }
