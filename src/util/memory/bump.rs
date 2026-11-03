@@ -547,14 +547,21 @@ impl<'a> ArenaString<'a> {
     /// Finishes the string, leaving its text in the arena.
     pub(crate) fn into_str(self) -> &'a str {
         let bytes = self.bytes.leak();
-        // SAFETY: mutation only appends whole UTF-8 strings or clears, so the
-        // bytes are always valid UTF-8.
+        // SAFETY: mutation only appends whole UTF-8 strings, removes whole
+        // characters, or clears, so the bytes are always valid UTF-8.
         unsafe { std::str::from_utf8_unchecked(bytes) }
     }
 
     /// Removes the contents, keeping the capacity for reuse.
     pub(crate) fn clear(&mut self) {
         self.bytes.clear();
+    }
+
+    /// Removes the last character and returns it.
+    pub(crate) fn pop(&mut self) -> Option<char> {
+        let last = self.as_str().chars().next_back()?;
+        self.bytes.truncate(self.bytes.len() - last.len_utf8());
+        Some(last)
     }
 
     pub(crate) fn new_in(arena: &'a Bump) -> Self {
@@ -571,8 +578,8 @@ impl<'a> ArenaString<'a> {
     }
 
     pub(crate) fn as_str(&self) -> &str {
-        // SAFETY: mutation only appends whole UTF-8 strings or clears, so the
-        // bytes are always valid UTF-8.
+        // SAFETY: mutation only appends whole UTF-8 strings, removes whole
+        // characters, or clears, so the bytes are always valid UTF-8.
         unsafe { std::str::from_utf8_unchecked(&self.bytes) }
     }
 }
