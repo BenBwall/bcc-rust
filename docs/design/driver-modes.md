@@ -276,9 +276,18 @@ single-dash options such as `-include`, `-isystem`, `-std=`, `-pedantic`.
 Stages: `-E`, `-S`, `-c`, and linking otherwise, into `a.out`. Several inputs
 are compiled separately and linked. GCC rejects an unknown option
 (`gcc: error: unrecognized command-line option '-ffoo'`) except an unknown
-`-Wno-*`, which it ignores. Queries: `--version`, `-v`, `-dumpversion` (the
-major version since GCC 7), `-dumpfullversion`, `-dumpmachine`,
-`-print-prog-name=`, `-print-search-dirs`, `-print-multiarch`, `-###`.
+`-Wno-*`, which it ignores, and reports the unrecognized options only
+after reading the whole command line. Queries: `--version`, `-v`,
+`-dumpversion` (the major version since GCC 7), `-dumpfullversion`,
+`-dumpmachine`, `-print-file-name=`, `-print-libgcc-file-name`,
+`-print-prog-name=`, `-print-search-dirs`, `-print-multiarch`,
+`-print-sysroot`, `-###`. The `-dump` options print at once wherever they
+stand; the others are answered once the command line has been read, so a
+later `--sysroot` applies, and only one: `-print-search-dirs`, then the
+last of `-print-file-name=` and `-print-libgcc-file-name`, the last
+`-print-prog-name=`, `-print-multiarch`, `-print-sysroot`, `--help`, and
+`--version`. A query ignores the inputs, and its status is 0 even after an
+error. An unknown `-std=` is unrecognized wherever it stands.
 `-v` prints the version lines, then each command before running it and
 the header search its compiler uses; `-###` prints the commands without
 running them. `-H` prints each header an `#include` enters, after a dot
@@ -366,7 +375,17 @@ by the Foundation's name, which the disclaimer contains.
 `-Xclang`, `--driver-mode=`, and `-fdiagnostics-format=`. Clang errors on an
 unknown option (`clang: error: unknown argument: '-ffoo'`) but only warns
 about an unknown warning option (`warning: unknown warning option '-Wfoo'
-[-Wunknown-warning-option]`) and goes on.
+[-Wunknown-warning-option]`) and goes on. Its queries are answered once
+the command line has been read, and only one: `-dumpmachine`,
+`-dumpversion`, `--help`, `--version`, `-print-search-dirs`, the last
+`-print-file-name=`, the last `-print-prog-name=`,
+`-print-libgcc-file-name`, then `-print-target-triple` or
+`-print-effective-triple`. A driver error still prints and makes the status
+1; `-print-multiarch` is such an error, and `-print-sysroot` and
+`-dumpfullversion` are not Clang queries. Clang's compiler, not its driver,
+validates `-std=`, and only the last one: an unknown value is `error:
+invalid value 'bogus' in '-std=bogus'` with its list of standards, once for
+each C source, unless a driver error, `-###` or a query stops first.
 
 **Mapping.** As for GCC, with the option names the pinned Clang lists for
 `--autocomplete=-W`, `-f` and `-m` (`options/clang-*.list`). An unknown
@@ -1171,16 +1190,16 @@ would use:
   `-fno-semantic-interposition`, so the option is refused.
 - Decimal floating types, and with them GCC's C23 `<float.h>` `DEC*`
   names; `FLT16_SNAN` and GCC's other `__builtin_*f16` constant builtins.
-- `__BASE_FILE__`, which GCC, Clang and TCC define (TCC lists it in
-  `-dM`), is undefined in every identity.
+- TCC lists `__BASE_FILE__` in `-dM`; bcc defines it in every identity
+  but, as GCC and Clang, does not list it. In a `-include` header Clang
+  expands it to `"<built-in>"`; bcc names the main file there, as GCC and
+  TCC do.
 - TCC's warning for a function that may return no value (`function might
   return no value: 'f'`) has no bcc counterpart.
 - A C99 `inline` definition with no external one: TCC emits it as a local
   function, so a program calling it links; bcc follows GCC and Clang and
   leaves the call to an external definition, so the link fails (`ld.lld:
   error: undefined symbol: f`). C99 §6.7.4p6 allows either.
-- `cl` compiles a unit without a declaration (`cl /c /Tch.h` of a header
-  holding only macros writes `h.obj`); bcc refuses it, as above.
 - `__vectorcall` and `cl /Gv` are refused, so bcc cannot call or define a
   function with that convention.
 
