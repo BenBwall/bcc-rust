@@ -467,6 +467,108 @@ mod tests {
         }
     }
 
+    /// `__BASE_FILE__` names the main source file as the command line
+    /// wrote it, wherever it is expanded, as in GCC, Clang and TCC.
+    #[test]
+    fn base_file_names_the_main_source() {
+        let directory = Directory::new();
+        std::fs::create_dir_all(directory.path("sub")).unwrap();
+        directory.write("sub/h.h", "const char *h = __BASE_FILE__;\n");
+        directory.write("forced.h", "const char *f = __BASE_FILE__;\n");
+        directory.write(
+            "m.c",
+            "#include \"sub/h.h\"\nconst char *m = __BASE_FILE__;\n#ifdef __BASE_FILE__\nint \
+             defined_ok;\n#endif\n",
+        );
+        for mode in ["--gcc-mode", "--clang-mode", "--tcc-mode"] {
+            let output = directory.bcc(mode, &["-E", "-P", "m.c"]);
+            succeeds(&output);
+            let text = stdout(&output);
+            for line in [
+                "const char *h = \"m.c\";",
+                "const char *m = \"m.c\";",
+                "int defined_ok;",
+            ] {
+                assert!(text.contains(line), "{mode}: {line} in {text}");
+            }
+        }
+        // In a forced include GCC and TCC name the main file too (Clang
+        // says `<built-in>` there, which bcc does not mimic).
+        for mode in ["--gcc-mode", "--tcc-mode"] {
+            let output = directory.bcc(mode, &["-E", "-P", "-include", "forced.h", "m.c"]);
+            succeeds(&output);
+            assert!(
+                stdout(&output).contains("const char *f = \"m.c\";"),
+                "{mode}: {}",
+                stdout(&output)
+            );
+        }
+    }
+
+    /// Clang's `__BASE_FILE__` is the main file's presumed name where the
+    /// outermost `#include` (or the expansion itself) sits, so a `#line`
+    /// there renames it; GCC and TCC keep the command line's name. Standard
+    /// input is `<stdin>` in Clang, an empty name in GCC and `-` in TCC.
+    #[test]
+    fn base_file_follows_each_identity_for_line_and_stdin() {
+        use std::io::Write as _;
+        let directory = Directory::new();
+        directory.write("h.h", "const char *h = __BASE_FILE__;\n");
+        directory.write(
+            "m.c",
+            "#include \"h.h\"\n#line 9 \"z.c\"\nconst char *m = __BASE_FILE__;\n#include \"h.h\"\n",
+        );
+        for (mode, renamed) in [
+            ("--clang-mode", true),
+            ("--gcc-mode", false),
+            ("--tcc-mode", false),
+        ] {
+            let output = directory.bcc(mode, &["-E", "-P", "m.c"]);
+            succeeds(&output);
+            let lines: Vec<_> = stdout(&output)
+                .lines()
+                .filter(|line| !line.trim().is_empty())
+                .map(str::to_owned)
+                .collect();
+            let late = if renamed { "z.c" } else { "m.c" };
+            assert_eq!(
+                lines,
+                [
+                    "const char *h = \"m.c\";".to_owned(),
+                    format!("const char *m = \"{late}\";"),
+                    format!("const char *h = \"{late}\";"),
+                ],
+                "{mode}"
+            );
+        }
+        for (mode, name) in [
+            ("--clang-mode", "<stdin>"),
+            ("--gcc-mode", ""),
+            ("--tcc-mode", "-"),
+        ] {
+            let mut child = Command::new(env!("CARGO_BIN_EXE_bcc-rust"))
+                .args([mode, "-E", "-P", "-x", "c", "-"])
+                .current_dir(&directory.0)
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .spawn()
+                .unwrap();
+            child
+                .stdin
+                .take()
+                .unwrap()
+                .write_all(b"__BASE_FILE__\n")
+                .unwrap();
+            let output = child.wait_with_output().unwrap();
+            assert!(output.status.success(), "{mode}");
+            assert_eq!(
+                String::from_utf8_lossy(&output.stdout).trim(),
+                format!("\"{name}\""),
+                "{mode}"
+            );
+        }
+    }
+
     /// `-print-file-name=` and `-print-prog-name=` answer as GCC and Clang
     /// do, with a path to the file the link would use or the name itself.
     #[test]

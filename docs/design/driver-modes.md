@@ -1131,16 +1131,16 @@ would use:
   `-fno-semantic-interposition`, so the option is refused.
 - Decimal floating types, and with them GCC's C23 `<float.h>` `DEC*`
   names; `FLT16_SNAN` and GCC's other `__builtin_*f16` constant builtins.
-- `__BASE_FILE__`, which GCC, Clang and TCC define (TCC lists it in
-  `-dM`), is undefined in every identity.
+- TCC lists `__BASE_FILE__` in `-dM`; bcc defines it in every identity
+  but, as GCC and Clang, does not list it. In a `-include` header Clang
+  expands it to `"<built-in>"`; bcc names the main file there, as GCC and
+  TCC do.
 - TCC's warning for a function that may return no value (`function might
   return no value: 'f'`) has no bcc counterpart.
 - A C99 `inline` definition with no external one: TCC emits it as a local
   function, so a program calling it links; bcc follows GCC and Clang and
   leaves the call to an external definition, so the link fails (`ld.lld:
   error: undefined symbol: f`). C99 §6.7.4p6 allows either.
-- `cl` compiles a unit without a declaration (`cl /c /Tch.h` of a header
-  holding only macros writes `h.obj`); bcc refuses it, as above.
 - `__vectorcall` and `cl /Gv` are refused, so bcc cannot call or define a
   function with that convention.
 

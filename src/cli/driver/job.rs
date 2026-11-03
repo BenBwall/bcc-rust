@@ -73,7 +73,7 @@ pub(super) fn compile(
         | Source::Text(text) => Ok((tu.alloc_str(text), false, Path::new("<input>"))),
         | Source::File(path) | Source::Preprocessed(path) if path == Path::new("-") => tu
             .read_from_lossy(io::stdin().lock())
-            .map(|(text, raw)| (text, raw, Path::new("<stdin>")))
+            .map(|(text, raw)| (text, raw, Path::new(crate::translation_phases::STDIN_NAME)))
             .map_err(|source| (path, source)),
         | Source::File(path) | Source::Preprocessed(path) => tu
             .read_to_str_lossy(path)

@@ -23,8 +23,10 @@ use super::super::{
     PreprocessorErrorType,
 };
 use crate::{
+    configuration::CompilerIdentity,
     translation_phases::{
         Context,
+        STDIN_NAME,
         TranslationPhase,
         preprocessor_tokenizer::{
             PreprocessorToken,
@@ -57,9 +59,29 @@ impl Expander<'_, '_, '_, '_> {
         match self.context.string_cache.at(token.contents) {
             // C99 §6.10.8p1: each built-in expands to an ordinary
             // token spelled as C source, located at the invocation.
-            | "__FILE__" => {
+            // `__BASE_FILE__` names the main source file, as written on the
+            // command line, wherever it is expanded; GCC, Clang and TCC
+            // define it. Standard input is `<stdin>` in Clang, an empty
+            // name in GCC and `-` in TCC. GNU extension: GCC manual,
+            // "Common Predefined Macros".
+            | name @ ("__FILE__" | "__BASE_FILE__") => {
                 let invocation = self.current_line_location(token);
-                let file = self.context.get_source_file(invocation.source_file_index);
+                let base = name == "__BASE_FILE__";
+                let index = if base {
+                    self.base_source_file_index()
+                } else {
+                    invocation.source_file_index
+                };
+                let mut file = self.context.get_source_file(index);
+                if base && index == 0 && file == Path::new(STDIN_NAME) {
+                    match self.context.configuration.compiler_identity() {
+                        | CompilerIdentity::Gcc => file = Path::new(""),
+                        | CompilerIdentity::Tcc => file = Path::new("-"),
+                        | CompilerIdentity::Clang
+                        | CompilerIdentity::ClangCl
+                        | CompilerIdentity::Msvc => (),
+                    }
+                }
                 // A name that is not UTF-8 keeps its bytes, as GCC's and
                 // Clang's do.
                 let contents = if let Some(text) = raw_bytes::path_text(self.scratch, file) {
