@@ -657,6 +657,7 @@
   .cell-run { display: flex; gap: 1px; }
   .cell { display: flex; flex-direction: column; justify-content: space-between; min-width: 68px; height: 62px; padding: 4px 7px; background: var(--cell); color: var(--ink-3); font-size: 10px; }
   .cell-value { color: var(--ink); font-size: 20px; line-height: 1; font-weight: 700; white-space: nowrap; }
+  .cell.is-long .cell-value { font-size: 13px; line-height: 20px; }
   .cell-name { white-space: nowrap; }
   .cell-pointers { color: var(--flow-ink); margin-left: 5px; font-weight: 700; }
   .cell[data-access="write"], .cell[data-access="create"] { background: var(--accent); color: #3a1406; }
