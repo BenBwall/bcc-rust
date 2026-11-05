@@ -43,6 +43,8 @@ use std::{
 
 mod command_files;
 
+use command_files::CommandFileError;
+
 use super::{
     Invocation,
     MainError,
@@ -87,13 +89,21 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
     // `CL`, the command line with its command files, then `_CL_`.
     let expanded = match command_files::expand(&invocation.arguments, clang_cl) {
         | Ok(arguments) => arguments,
-        | Err(file) => {
+        | Err(CommandFileError::Unreadable(file)) => {
             state.command_line_error(
                 invocation,
                 Some("D8022"),
                 format_args!("cannot open '{}'", file.to_string_lossy()),
             );
             return Err(MainError::Reported(ERROR_STATUS));
+        },
+        | Err(CommandFileError::Recursive(file)) => {
+            // LLVM's own words, before the driver exists to name itself.
+            super::print(
+                &format!("recursive expansion of: '{}'\n", file.display()),
+                true,
+            );
+            return Err(MainError::Reported(1));
         },
     };
     let mut arguments = expanded.iter().map(OsString::as_os_str);
@@ -649,6 +659,9 @@ struct State {
     diagnostics:             &'static str,
     /// The warning level `/W0`-`/W4` set; `cl`'s own is 1.
     warning_level:           u8,
+    /// Where in [`State::bcc`] the options of the last level stand, and how
+    /// many there are.
+    warning_level_options:   (usize, usize),
     /// `/WX`, the last of it and `/WX-`.
     warnings_error:          bool,
     /// What `/wd`, `/we`, `/wo` and `/w1`-`/w4` said of each warning, the
@@ -686,6 +699,7 @@ impl Default for State {
             standard:                "c17",
             diagnostics:             "msvc",
             warning_level:           1,
+            warning_level_options:   (0, 0),
             warnings_error:          false,
             warning_settings:        Vec::new(),
             errors:                  0,
@@ -785,16 +799,9 @@ impl State {
             | "O1" | "Os" => self.bcc.push("-Os".into()),
             | "O2" | "Ox" | "Ot" => self.bcc.push("-O2".into()),
             | "Od" => self.bcc.push("-O0".into()),
-            | "W0" | "w" => {
-                self.warning_level = 0;
-                self.bcc.push("-w".into());
-            },
-            | "W1" | "W2" | "W3" => self.warning_level = option.as_bytes()[1] - b'0',
-            | "W4" | "Wall" => {
-                self.warning_level = 4;
-                self.bcc.push("-Wall".into());
-                self.bcc.push("-Wextra".into());
-            },
+            | "W0" | "w" => self.set_warning_level(0, &["-w"]),
+            | "W1" | "W2" | "W3" => self.set_warning_level(option.as_bytes()[1] - b'0', &[]),
+            | "W4" | "Wall" => self.set_warning_level(4, &["-Wall", "-Wextra"]),
             | "WX" => {
                 self.warnings_error = true;
                 self.bcc.push("-Werror".into());
@@ -1211,16 +1218,20 @@ fn ignored(invocation: &Invocation, option: &str, why: &str) {
     }
 }
 
-/// The warnings bcc reports with `cl`'s code, each with its level and the
-/// groups of bcc's own options that control it. `cl`'s command line shows
-/// level 1 by default. C4047 and C4133 are warnings in `cl`, where the
+/// The warnings the command line names by `cl`'s code, each with its level
+/// and the group of bcc's own options that controls it. `cl`'s command line
+/// shows level 1 by default. C4047 and C4133 are warnings in `cl`, where the
 /// identity's Clang rules make the groups errors. Microsoft Learn: "/w,
 /// /W0, /W1, /W2, /W3, /W4, /w1, /w2, /w3, /w4, /Wall, /wd, /we, /wo, /Wv,
-/// /WX (Warning level)" and each warning's page.
-const CODED_WARNINGS: [(u16, u8, &str); 5] = [
+/// /WX (Warning level)" and each warning's page, as for C4090 and C4113.
+const CODED_WARNINGS: [(u16, u8, &str); 7] = [
     (4013, 3, "implicit-function-declaration"),
     (4047, 1, "int-conversion"),
     (4133, 1, "incompatible-pointer-types"),
+    // After C4133, whose group holds theirs. bcc keeps its own words for
+    // these two, but `/wd`, `/we` and the levels name them.
+    (4090, 1, "incompatible-pointer-types-discards-qualifiers"),
+    (4113, 1, "incompatible-function-pointer-types"),
     (4311, 1, "pointer-to-int-cast"),
     (4312, 1, "int-to-pointer-cast"),
 ];
@@ -1252,6 +1263,17 @@ fn warning_setting(option: &str) -> Option<(u16, WarningSetting)> {
 }
 
 impl State {
+    /// Sets the warning level, with the bcc `options` that mean it in place
+    /// of an earlier level's: `cl`'s rightmost level wins, so `/W0 /W3`
+    /// keeps no `-w`. Microsoft Learn: "Order of CL Options".
+    fn set_warning_level(&mut self, level: u8, options: &[&str]) {
+        let (at, count) = self.warning_level_options;
+        drop(self.bcc.drain(at..at + count));
+        self.warning_level = level;
+        self.warning_level_options = (self.bcc.len(), options.len());
+        self.bcc.extend(options.iter().map(OsString::from));
+    }
+
     /// bcc's options for the warnings it reports with `cl`'s code, from
     /// the warning level and the options naming them: a warning above the
     /// level or under `/wd` is off, `/we` makes it an error (at any level),
@@ -1273,16 +1295,16 @@ impl State {
                 options.push(format!("-Werror={group}").into());
             } else if setting == Some(WarningSetting::Disabled) || level > self.warning_level {
                 options.push(format!("-Wno-{group}").into());
-            } else if !self.warnings_error && matches!(code, 4047 | 4133) {
-                options.push(format!("-Wno-error={group}").into());
+            } else {
+                // C4133's group holds these in bcc's options, so a setting
+                // of C4133 above must not reach them.
+                if matches!(code, 4090 | 4113) {
+                    options.push(format!("-W{group}").into());
+                }
+                if !self.warnings_error && matches!(code, 4047 | 4090 | 4113 | 4133) {
+                    options.push(format!("-Wno-error={group}").into());
+                }
             }
-        }
-        // `cl`'s C4113 for function pointers that differ in their
-        // parameters is a warning too; `-w` alone would leave the error.
-        if self.warning_level == 0 {
-            options.push("-Wno-incompatible-function-pointer-types".into());
-        } else if !self.warnings_error {
-            options.push("-Wno-error=incompatible-function-pointer-types".into());
         }
         options
     }

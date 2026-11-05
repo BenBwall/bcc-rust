@@ -3528,6 +3528,14 @@ mod tests {
                 ],
             ),
             (&["/W0", "pointers.c"], 0, &[]),
+            // The rightmost level wins.
+            (
+                &["/W0", "/W3", "implicit.c"],
+                0,
+                &["implicit.c(1): warning C4013: 'g' undefined; assuming extern returning int"],
+            ),
+            (&["/W3", "/W0", "implicit.c"], 0, &[]),
+            (&["/W4", "/W1", "implicit.c"], 0, &[]),
             (
                 &["casts.c"],
                 0,
@@ -3549,6 +3557,38 @@ mod tests {
             let printed: Vec<String> = stderr(&output).lines().map(str::to_owned).collect();
             assert_eq!(printed, lines, "{args:?}");
         }
+        assert_eq!(
+            cl(&["/W0", "/W3", "/WX", "implicit.c"]).status.code(),
+            Some(2)
+        );
+        // `cl` reports function pointers (C4113) and lost qualifiers (C4090)
+        // apart from C4133, in bcc's words here: C4133's settings leave
+        // them, and their own control them.
+        directory.write(
+            "apart.c",
+            "int f(int x) { return x; }\nint (*p)(double) = f;\nconst char *c;\nchar *d(void) { \
+             return c; }\n",
+        );
+        let warnings = |args: &[&str]| {
+            let mut all = args.to_vec();
+            all.push("apart.c");
+            let output = cl(&all);
+            (
+                output.status.code(),
+                stderr(&output).matches("): warning:").count(),
+            )
+        };
+        assert_eq!(warnings(&[]), (Some(0), 2));
+        assert_eq!(warnings(&["/wd4133"]), (Some(0), 2));
+        assert_eq!(warnings(&["/w34133"]), (Some(0), 2));
+        assert_eq!(warnings(&["/we4133"]), (Some(0), 2));
+        assert_eq!(warnings(&["/wd4113"]), (Some(0), 1));
+        assert_eq!(warnings(&["/wd4090"]), (Some(0), 1));
+        assert_eq!(warnings(&["/wd4113", "/wd4090"]), (Some(0), 0));
+        assert_eq!(warnings(&["/W0"]), (Some(0), 0));
+        assert_eq!(warnings(&["/we4113"]).0, Some(2));
+        assert_eq!(warnings(&["/wd4133", "/WX"]).0, Some(2));
+        assert_eq!(warnings(&["/wd4113", "/wd4090", "/WX"]).0, Some(0));
         // clang-cl writes Clang's errors in bcc's words.
         let clang_cl = directory.bcc("--clang-cl-mode", &["/c", "pointers.c"]);
         assert_eq!(clang_cl.status.code(), Some(1));
@@ -3621,6 +3661,30 @@ mod tests {
         directory.write("inner.rsp", "/c x.c /DX=6\n");
         directory.write("clang.rsp", "@inner.rsp /Foclang.obj\n");
         succeeds(&directory.bcc("--clang-cl-mode", &["@clang.rsp"]));
+        // clang-cl refuses a file that names itself, directly or through
+        // others, however it branches, in LLVM's words; naming one file
+        // twice is no cycle.
+        directory.write("self.rsp", "@self.rsp\n");
+        directory.write("fork.rsp", "@fork.rsp @fork.rsp\n");
+        directory.write("one.rsp", "@two.rsp\n");
+        directory.write("two.rsp", "@one.rsp\n");
+        for (file, named) in [
+            ("@self.rsp", "self.rsp"),
+            ("@fork.rsp", "fork.rsp"),
+            ("@one.rsp", "one.rsp"),
+        ] {
+            let cycle = directory.bcc("--clang-cl-mode", &["/c", file]);
+            assert_eq!(cycle.status.code(), Some(1), "{file}");
+            let text = stderr(&cycle);
+            assert!(text.starts_with("recursive expansion of: '"), "{text}");
+            assert!(text.trim_end().ends_with(&format!("{named}'")), "{text}");
+        }
+        directory.write("empty.rsp", "\n");
+        directory.write(
+            "twice.rsp",
+            "@empty.rsp @empty.rsp /c x.c /DX=6 /Fotwice.obj\n",
+        );
+        succeeds(&directory.bcc("--clang-cl-mode", &["@twice.rsp"]));
         assert!(directory.path("clang.obj").is_file());
     }
 

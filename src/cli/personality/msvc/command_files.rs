@@ -15,22 +15,33 @@
 //! (Specify a Compiler Response File)", "Parsing C command-line
 //! arguments".
 
-use std::ffi::OsString;
+use std::{
+    ffi::OsString,
+    path::PathBuf,
+};
 
-/// How deeply clang-cl's command files may name each other before bcc
-/// gives up, as LLVM gives up on a cycle.
-const MAX_NESTING: usize = 32;
+/// Why the arguments could not be read.
+pub(super) enum CommandFileError {
+    /// `cl` cannot read this command file.
+    Unreadable(OsString),
+    /// A command file of clang-cl's names itself, directly or through
+    /// others, as LLVM refuses it; the file by its full path.
+    Recursive(PathBuf),
+}
 
 /// `arguments` with `CL` before them, `_CL_` after them and every
 /// `@file` replaced by its contents; linker options that a command file
 /// line or an environment variable gave after `/link` come last, after a
-/// `/link` of their own unless the arguments already hold one. A command
-/// file that cannot be read is `Err` with its name.
-pub(super) fn expand(arguments: &[OsString], clang_cl: bool) -> Result<Vec<OsString>, OsString> {
+/// `/link` of their own unless the arguments already hold one.
+pub(super) fn expand(
+    arguments: &[OsString],
+    clang_cl: bool,
+) -> Result<Vec<OsString>, CommandFileError> {
     let mut expansion = Expansion {
         clang_cl,
         arguments: Vec::new(),
         link: Vec::new(),
+        open: Vec::new(),
     };
     let variable = |name: &str| std::env::var_os(name).filter(|value| !value.is_empty());
     if let Some(prepended) = variable("CL") {
@@ -69,12 +80,15 @@ struct Expansion {
     /// What lines of command files and the environment variables gave
     /// after their `/link`.
     link:      Vec<OsString>,
+    /// The command files being read, outermost first, each by its full
+    /// path: naming one again would never end.
+    open:      Vec<PathBuf>,
 }
 
 impl Expansion {
     /// Reads one argument at nesting `depth`: a command file's contents,
     /// or the argument itself.
-    fn argument(&mut self, argument: OsString, depth: usize) -> Result<(), OsString> {
+    fn argument(&mut self, argument: OsString, depth: usize) -> Result<(), CommandFileError> {
         let Some(file) = argument
             .to_str()
             .and_then(|text| text.strip_prefix('@'))
@@ -84,19 +98,25 @@ impl Expansion {
             return Ok(());
         };
         let text = match std::fs::read(file) {
-            | Ok(bytes) if depth < MAX_NESTING => decode(&bytes),
+            | Ok(bytes) => decode(&bytes),
             // clang-cl leaves a command file it cannot read on the
             // command line, as an input it then reports missing.
-            | _ if self.clang_cl => {
+            | Err(_) if self.clang_cl => {
                 self.arguments.push(argument);
                 return Ok(());
             },
-            | _ => return Err(file.into()),
+            | Err(_) => return Err(CommandFileError::Unreadable(file.into())),
         };
         if self.clang_cl {
+            let path = std::fs::canonicalize(file).unwrap_or_else(|_| file.into());
+            if self.open.contains(&path) {
+                return Err(CommandFileError::Recursive(path));
+            }
+            self.open.push(path);
             for word in split(&text) {
                 self.argument(word.into(), depth + 1)?;
             }
+            drop(self.open.pop());
         } else {
             for line in text.lines() {
                 self.line(&split(line), depth + 1)?;
@@ -108,7 +128,7 @@ impl Expansion {
     /// Reads the words of one line of a command file or environment
     /// variable, whose words after `/link` are the linker's; clang-cl
     /// reads a `/link` there as on the command line.
-    fn line(&mut self, words: &[String], depth: usize) -> Result<(), OsString> {
+    fn line(&mut self, words: &[String], depth: usize) -> Result<(), CommandFileError> {
         let mut words = words.iter();
         while let Some(word) = words.next() {
             if !self.clang_cl && is_link(word.as_ref()) {

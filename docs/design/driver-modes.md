@@ -552,7 +552,10 @@ by default (`/W1`), so C4013 appears from `/W3`; `/wd`, `/we` and
 any level. `cl` only warns about a conversion between a pointer and an
 integer or between incompatible pointers, and (C4113) between function
 pointers whose parameters differ, so the personality makes those groups,
-which Clang's rules make errors, warnings unless `/WX` is given. Under
+which Clang's rules make errors, warnings unless `/WX` is given. C4113 and
+C4090 (lost qualifiers) keep bcc's words, but `/wd`, `/we` and the levels
+name them apart from C4133, as `cl` does. The rightmost of `/W0`-`/W4`,
+`/Wall` and `/w` wins. Under
 `/WX` bcc writes `error C4047`, where `cl` writes `error C2220: the
 following warning is treated as an error` and then the warning. bcc
 reports in source order, while `cl` reports an initializer's C4047 after
