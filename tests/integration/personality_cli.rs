@@ -6177,9 +6177,9 @@ mod tests {
     /// With `BCC_TCC` naming a real `tcc`, compares it with the TCC
     /// personality on the command lines where they are meant to agree:
     /// exit status, stdout, stderr, the files written, and what the
-    /// programs built print. CI has no TCC, so the test passes without
-    /// one; `docs/design/driver-modes.md` lists the differences that
-    /// remain.
+    /// programs built print. The Linux CI job names Ubuntu's `tcc`; the test
+    /// passes without one. `docs/design/driver-modes.md` lists the
+    /// differences that remain.
     #[test]
     fn tcc_parity_with_a_real_tcc() {
         let Some(tcc) = std::env::var_os("BCC_TCC") else {
