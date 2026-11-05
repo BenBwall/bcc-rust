@@ -879,7 +879,11 @@ impl<'x> MacroCallCursor<'x> {
                 while let Some(token) = expanded.next_item(preprocessor.context) {
                     self.pending.push(token);
                 }
-                self.pad_replacement(white && !token.spacing.is_right_operand(), prescan.end);
+                if token.spacing.is_right_operand() {
+                    self.pending_end = prescan.end;
+                } else {
+                    self.pad_replacement(white, prescan.end);
+                }
                 continue;
             }
             if stringified && self.text {
@@ -1050,7 +1054,7 @@ impl CallToken<'_> {
         match self {
             | Self::Read(token) => token.identifier_id(context),
             | Self::Shared(token) => PreprocessorToken {
-                spacing: TokenSpacing::NONE,
+                spacing:        TokenSpacing::NONE,
                 kind:           token.kind(),
                 contents:       token.contents(),
                 source_vectors: SourceVectors::default(),

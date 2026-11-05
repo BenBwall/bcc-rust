@@ -140,10 +140,10 @@ pub(crate) enum TraceEvent<'pp> {
     /// A token that a replacement produced left phase 4.
     /// C99: §6.10.3.4 paragraph 1, p. 155; PDF p. 167.
     Produced {
-        expansion:    SourceVector,
-        spelling:     StringCacheId,
+        expansion: SourceVector,
+        spelling:  StringCacheId,
         /// How the token is separated from the one before it.
-        spacing:      OutputSpacing,
+        spacing:   OutputSpacing,
     },
     /// A conditional directive decided whether its group is processed.
     /// C99: §6.10.1 paragraph 6, p. 149; PDF p. 161.

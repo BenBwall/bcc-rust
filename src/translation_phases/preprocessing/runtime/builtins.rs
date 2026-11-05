@@ -30,9 +30,9 @@ use crate::{
         TranslationPhase,
         preprocessor_tokenizer::{
             PreprocessorToken,
-            TokenSpacing,
             PreprocessorTokenType,
             TokenSource,
+            TokenSpacing,
         },
     },
     util::{
@@ -130,7 +130,7 @@ impl Expander<'_, '_, '_, '_> {
                     "1\0"
                 };
                 Some(PreprocessorToken {
-                    spacing: TokenSpacing::NONE,
+                    spacing:        TokenSpacing::NONE,
                     kind:           PreprocessorTokenType::Number,
                     contents:       self.context.string_cache.intern(spelling),
                     source_vectors: token.source_vectors,

@@ -174,8 +174,8 @@ mod tests {
     /// the PR that added it for where Clang's own printer differs.
     #[test]
     fn expansion_matrix_is_spaced_as_gcc_spaces_it() {
-        let source = include_str!("../fixtures/preprocessing/expansion_spacing.c")
-            .replace("\r\n", "\n");
+        let source =
+            include_str!("../fixtures/preprocessing/expansion_spacing.c").replace("\r\n", "\n");
         let expected = include_str!("../fixtures/preprocessing/expansion_spacing.expected")
             .replace("\r\n", "\n");
         expect_spacing(&source, &expected);

@@ -879,7 +879,9 @@ impl<'c, 'tu> Trace<'c, 'tu> {
         let first = spelling.as_bytes().first().copied().unwrap_or(0);
         let ResultEnd { last, .. } = &mut self.keys[index].1;
         let result = &mut self.output.expansions[index].result;
-        if !result.is_empty() && (spacing.space || (spacing.avoid_paste && avoid_paste(*last, class, first))) {
+        if !result.is_empty()
+            && (spacing.space || (spacing.avoid_paste && avoid_paste(*last, class, first)))
+        {
             result.push(' ');
         }
         result.push_str(spelling);

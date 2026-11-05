@@ -78,6 +78,10 @@ pub(crate) use replay::{
     SharedRun,
     SharedToken,
 };
+pub(crate) use spacing::{
+    OutputSpacing,
+    TokenSpacing,
+};
 pub(crate) use splicing::{
     LogicalCharacter,
     RemapKind,
@@ -88,10 +92,6 @@ use storage::{
     Entry,
     LexDiagnostic,
     LexedFile,
-};
-pub(crate) use spacing::{
-    OutputSpacing,
-    TokenSpacing,
 };
 pub(crate) use token::{
     PreprocessorToken,

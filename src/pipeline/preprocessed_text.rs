@@ -23,13 +23,13 @@ use std::fmt::Write as _;
 use crate::{
     translation_phases::{
         Context,
-        preprocessor_tokenizer::OutputSpacing,
         preprocessing::{
             ReadAt,
             StringTokenType,
             Token,
             TokenType,
         },
+        preprocessor_tokenizer::OutputSpacing,
     },
     util::bump::{
         ArenaString,
@@ -113,8 +113,8 @@ pub(crate) enum PasteClass {
     Character,
     /// An unprefixed string literal.
     String,
-    /// A prefixed character constant or string literal, which pastes with
-    /// nothing, as a GCC `CPP_WSTRING` does not.
+    /// A prefixed character constant or string literal, of which GCC's
+    /// `cpp_avoid_paste` takes no account (`CPP_WSTRING`, `CPP_WCHAR`).
     Prefixed,
     /// The other tokens: a punctuator, as it is written, with its digraph
     /// `%:` written `#`; the three-character ones paste with nothing.
@@ -132,11 +132,10 @@ impl PasteClass {
             | [b'\\'] => Self::Backslash,
             | [b'"', ..] => Self::String,
             | [b'\'', ..] => Self::Character,
-            | [b'0'..=b'9', ..] | [b'.', b'0'..=b'9', ..] => Self::Number(
-                bytes
-                    .iter()
-                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'$' | 0x80..)),
-            ),
+            | [b'0'..=b'9', ..] | [b'.', b'0'..=b'9', ..] =>
+                Self::Number(bytes.iter().all(|byte| {
+                    byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'$' | 0x80..)
+                })),
             | [first, .., b'"' | b'\''] if first.is_ascii_alphabetic() => Self::Prefixed,
             | [first, ..]
                 if first.is_ascii_alphabetic() || matches!(first, b'_' | b'$' | b'\\' | 0x80..) =>
@@ -168,8 +167,6 @@ pub(crate) fn avoid_paste(last: PasteClass, next: PasteClass, first: u8) -> bool
     let operator = next.operator(first);
     let c = |set: &[u8]| operator.is_some_and(|c| set.contains(&c));
     match last {
-        | PasteClass::None | PasteClass::Character | PasteClass::String | PasteClass::Prefixed =>
-            false,
         | PasteClass::Name => matches!(
             next,
             PasteClass::Name
@@ -178,22 +175,25 @@ pub(crate) fn avoid_paste(last: PasteClass, next: PasteClass, first: u8) -> bool
                 | PasteClass::String
         ),
         | PasteClass::Number(_) =>
-            matches!(next, PasteClass::Number(_) | PasteClass::Name | PasteClass::Character)
-                || c(b".+-"),
+            matches!(
+                next,
+                PasteClass::Number(_) | PasteClass::Name | PasteClass::Character
+            ) || c(b".+-"),
         | PasteClass::Backslash => next == PasteClass::Name,
         | PasteClass::Punctuator(a, 0) =>
-            (matches!(a, b'=' | b'!' | b'>' | b'<' | b'+' | b'-' | b'*' | b'/' | b'%' | b'&' | b'|' | b'^')
-                && operator == Some(b'='))
+            (matches!(
+                a,
+                b'=' | b'!' | b'>' | b'<' | b'+' | b'-' | b'*' | b'/' | b'%' | b'&' | b'|' | b'^'
+            ) && operator == Some(b'='))
                 || match a {
                     | b'>' => c(b">"),
                     | b'<' => c(b"<%:"),
                     | b'+' => c(b"+"),
                     | b'-' => c(b"->"),
                     | b'/' => c(b"/*"),
-                    | b'%' => c(b":>"),
+                    | b'%' | b':' => c(b":>"),
                     | b'&' => c(b"&"),
                     | b'|' => c(b"|"),
-                    | b':' => c(b":>"),
                     | b'.' => c(b".%") || matches!(next, PasteClass::Number(_)),
                     | b'#' => c(b"#%"),
                     | _ => false,
@@ -202,6 +202,10 @@ pub(crate) fn avoid_paste(last: PasteClass, next: PasteClass, first: u8) -> bool
             operator == Some(b'='),
         | PasteClass::Punctuator(b'-', b'>') => c(b"*"),
         | PasteClass::Punctuator(b'<', b'=') => c(b">"),
+        | PasteClass::None
+        | PasteClass::Character
+        | PasteClass::String
+        | PasteClass::Prefixed
         | PasteClass::Punctuator(..) => false,
     }
 }

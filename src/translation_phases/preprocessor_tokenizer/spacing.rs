@@ -27,9 +27,9 @@ pub(crate) struct TokenSpacing(u8);
 #[repr(u8)]
 enum Source {
     /// There is no source: the token speaks for itself.
-    None     = 0,
+    None = 0,
     /// The source had white space before it.
-    Spaced   = 1,
+    Spaced = 1,
     /// The source had none.
     Unspaced = 2,
 }
@@ -49,10 +49,10 @@ const FROM_NONE: u8 = 2;
 const FROM_UNSPACED: u8 = 4;
 
 impl TokenSpacing {
-    /// No padding, as for a token read from a source file.
-    pub(crate) const NONE: Self = Self::new(false, Source::None, Source::Unspaced);
     /// The padding with no source, after an expansion or an argument.
     pub(crate) const END: Self = Self::new(true, Source::None, Source::None);
+    /// No padding, as for a token read from a source file.
+    pub(crate) const NONE: Self = Self::new(false, Source::None, Source::Unspaced);
 
     /// The padding whose source is a token with white space before it or
     /// without, before an expansion (the macro's name) or an argument (the

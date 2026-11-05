@@ -38,9 +38,9 @@ use crate::{
         TranslationPhase,
         preprocessor_tokenizer::{
             PreprocessorToken,
-            TokenSpacing,
             PreprocessorTokenType as T,
             TokenSource,
+            TokenSpacing,
         },
     },
     util::bump::{
@@ -156,7 +156,7 @@ impl<'pp: 'x, 'x> Expander<'_, '_, 'pp, 'x> {
                 let name = self.context.string_cache.at(token.contents);
                 if name == "__pragma" {
                     let newline = PreprocessorToken {
-                        spacing: TokenSpacing::NONE,
+                        spacing:        TokenSpacing::NONE,
                         kind:           T::Newline,
                         contents:       self.context.string_cache.intern("\n"),
                         source_vectors: token.source_vectors,
@@ -343,7 +343,7 @@ impl<'pp: 'x, 'x> Expander<'_, '_, 'pp, 'x> {
             for (index, byte) in bytes.iter().enumerate() {
                 if index != 0 {
                     output.push(PreprocessorToken {
-                        spacing: TokenSpacing::NONE,
+                        spacing:        TokenSpacing::NONE,
                         kind:           T::Comma,
                         contents:       self.context.string_cache.intern(","),
                         source_vectors: directive.source_vectors,
@@ -354,7 +354,7 @@ impl<'pp: 'x, 'x> Expander<'_, '_, 'pp, 'x> {
             output.extend_from_slice(params.suffix);
         }
         output.push(PreprocessorToken {
-            spacing: TokenSpacing::NONE,
+            spacing:        TokenSpacing::NONE,
             kind:           T::Newline,
             contents:       self.context.string_cache.intern("\n"),
             source_vectors: directive.source_vectors,
@@ -884,7 +884,7 @@ impl<'tu, 'pp: 'x, 'x> Expander<'_, 'tu, 'pp, 'x> {
         source: SourceVectors,
     ) -> Option<u64> {
         let end = PreprocessorToken {
-            spacing: TokenSpacing::NONE,
+            spacing:        TokenSpacing::NONE,
             kind:           T::Newline,
             contents:       self.context.string_cache.intern("\n"),
             source_vectors: source,

@@ -354,3 +354,43 @@ o15 = W( W(a) );
 o16 = TWO(ID(1),ID(2));
 o17 = TWO2(ID(1),ID(2));
 o18 = TWO3(ID(1),ID(2));
+#define G(x) [x]
+#define Q1(x) G(x-y)
+#define Q2(x) G(y-x)
+#define Q3(x) G(x)-y
+#define Q4(x) G(#x)
+#define Q5(x) G(a#x)
+#define Q6(x) G(x##1)
+#define Q7(x) G(-x##1-)
+#define Q8(x) G(x x)
+#define Q9(x) G(x+x)
+#define Q10(...) VA1(1,##__VA_ARGS__)
+#define Q12(x) ID(ID(x))
+#define Q13(x) ID(ID(x)x)
+#define Q14 ID(-
+#define Q15(x) x G
+#define Q16(x) x ID
+p1 = Q1(1);
+p2 = Q1(ID(1));
+p3 = Q2(1);
+p4 = Q2(-);
+p5 = Q3(1);
+p6 = Q4(a);
+p7 = Q5(a);
+p8 = Q6(a);
+p9 = Q7(a);
+p10 = Q8(1);
+p11 = Q9(1);
+p12 = Q9(+);
+p13 = Q10(2);
+p14 = Q10( 2);
+p15 = Q10();
+p17 = Q12(+)+;
+p18 = Q13(+);
+p19 = Q14 -);
+p20 = Q14-);
+p21 = Q15(1)(2);
+p22 = Q15(1) (2);
+p23 = Q16(+)(+);
+p24 = Q16(+)+;
+p25 = ID(Q16(+))(+);

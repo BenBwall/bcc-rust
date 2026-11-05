@@ -67,9 +67,9 @@ use crate::{
         interface::StrExt,
         preprocessor_tokenizer::{
             PreprocessorToken,
-            TokenSpacing,
             PreprocessorTokenType,
             PreprocessorTokenizerError,
+            TokenSpacing,
         },
     },
     util::{

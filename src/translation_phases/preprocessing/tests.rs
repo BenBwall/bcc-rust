@@ -48,8 +48,8 @@ use crate::{
         TranslationError,
         preprocessor_tokenizer::{
             PreprocessorToken,
-            TokenSpacing,
             PreprocessorTokenType,
+            TokenSpacing,
         },
     },
     util::shared::SharedVec,

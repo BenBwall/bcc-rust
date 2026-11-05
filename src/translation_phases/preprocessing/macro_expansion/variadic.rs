@@ -159,9 +159,9 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                         Self::stringify(self.context, self.scratch, &selected[start..end], token);
                     // The string stands where the operator was: GCC pads it
                     // unless it begins the list, and adds nothing after it.
-                    let white = output.last().is_some_and(|t: &PreprocessorToken| {
-                        t.kind == T::Whitespace
-                    });
+                    let white = output
+                        .last()
+                        .is_some_and(|t: &PreprocessorToken| t.kind == T::Whitespace);
                     output.push(PreprocessorToken {
                         spacing: if output.is_empty() {
                             TokenSpacing::NONE
@@ -174,7 +174,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                     });
                 } else if selected.is_empty() {
                     output.push(PreprocessorToken {
-                        spacing: TokenSpacing::NONE,
+                        spacing:        TokenSpacing::NONE,
                         kind:           T::Placeholder,
                         contents:       self.context.string_cache.intern(""),
                         source_vectors: token.source_vectors,
@@ -206,7 +206,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                         expanded,
                     });
                     output.push(PreprocessorToken {
-                        spacing: TokenSpacing::NONE,
+                        spacing:        TokenSpacing::NONE,
                         kind:           T::Identifier,
                         contents:       name,
                         source_vectors: token.source_vectors,
@@ -405,7 +405,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         let retain_placeholders = replace(&mut self.state.retain_placeholders, true);
         let spacing = replace(&mut self.spacing, SpacingState::new());
         let newline = PreprocessorToken {
-            spacing: TokenSpacing::NONE,
+            spacing:        TokenSpacing::NONE,
             kind:           PreprocessorTokenType::Newline,
             contents:       self.context.string_cache.intern("\n"),
             source_vectors: invocation.source_vectors,

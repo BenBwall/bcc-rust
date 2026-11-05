@@ -389,7 +389,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
     /// C99: §6.10.3.3 paragraph 2 and footnote 151, p. 154; PDF p. 166.
     pub(super) fn placeholder(context: &mut Context<'_>) -> PreprocessorToken {
         PreprocessorToken {
-            spacing: TokenSpacing::NONE,
+            spacing:        TokenSpacing::NONE,
             kind:           PreprocessorTokenType::Placeholder,
             contents:       context.string_cache.intern(""),
             source_vectors: SourceVectors::default(),
@@ -455,7 +455,7 @@ pub(crate) struct FunctionLikeMacroArgument<'x> {
         Option<MacroArguments<'x>>,
     pub(in crate::translation_phases::preprocessing) disabled_macros:     &'x [StringCacheId],
     /// Shared once-only argument prescan; raw #/## operands bypass it.
-    pub(in crate::translation_phases::preprocessing) expanded: &'x OnceCell<Prescan<'x>>,
+    pub(in crate::translation_phases::preprocessing) expanded:            &'x OnceCell<Prescan<'x>>,
 }
 
 /// An argument completely macro-replaced, kept for each use of its parameter.

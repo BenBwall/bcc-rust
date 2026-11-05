@@ -140,7 +140,7 @@ impl LexedCursor<'_> {
         let length = self.file.eof().index - start.index;
         let vector = context.push_lexed_source_vector(start, self.source_file_index, length);
         PreprocessorToken {
-            spacing: TokenSpacing::NONE,
+            spacing:        TokenSpacing::NONE,
             kind:           super::PreprocessorTokenType::Newline,
             source_vectors: SourceVectors::new(vector, vector + 1),
             contents:       context.string_cache.intern("\n"),

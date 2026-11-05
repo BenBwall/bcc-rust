@@ -21,11 +21,11 @@ use super::{
     TokenizerFrameType,
     frames::FileFrame,
 };
-use crate::translation_phases::preprocessing::macro_expansion::SpacingState;
 use crate::{
     translation_phases::{
         Context,
         TranslationError,
+        preprocessing::macro_expansion::SpacingState,
         preprocessor_tokenizer::TokenSource,
     },
     util::bump::{

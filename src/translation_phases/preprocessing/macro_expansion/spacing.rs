@@ -35,21 +35,25 @@ use crate::translation_phases::preprocessor_tokenizer::{
 
 /// What the reader knows about spacing since the last token it gave out.
 #[derive(Clone, Copy, Debug)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "Independent facts about the last token read, none implying another."
+)]
 pub(in crate::translation_phases::preprocessing) struct SpacingState {
     /// The padding since the last token given out, including what the tokens
     /// read since then carried.
-    pending:       TokenSpacing,
+    pending: TokenSpacing,
     /// White space was read since the last token read.
-    white:         bool,
+    white: bool,
     /// The last token read had white space before it, GCC's `PREV_WHITE`.
-    token_white:   bool,
+    token_white: bool,
     /// A replacement list was just entered, so the next token begins it.
-    list_start:    bool,
+    list_start: bool,
     /// The last token read began its replacement list.
-    token_first:   bool,
+    token_first: bool,
     /// The next token given out is a whole replacement of its own, which
     /// padding follows.
-    end_after:     bool,
+    end_after: bool,
     /// The padding left when the last argument was read to its end.
     pub(in crate::translation_phases::preprocessing) argument_end: TokenSpacing,
     /// The spacing of the last token that left phase 4.
@@ -167,12 +171,12 @@ impl SpacingState {
     }
 
     /// The padding gathered so far, to go with the argument just read.
-    pub(in crate::translation_phases::preprocessing) const fn pending(&self) -> TokenSpacing {
+    pub(in crate::translation_phases::preprocessing) const fn pending(self) -> TokenSpacing {
         self.pending
     }
 
     /// The last token read had white space before it.
-    pub(in crate::translation_phases::preprocessing) const fn token_white(&self) -> bool {
+    pub(in crate::translation_phases::preprocessing) const fn token_white(self) -> bool {
         self.token_white
     }
 }
@@ -221,7 +225,10 @@ impl<'x> Expander<'_, '_, '_, 'x> {
         &mut self,
         argument: &FunctionLikeMacroArgument<'x>,
     ) -> TokenSpacing {
-        let prescan = argument.expanded.get().expect("the argument was prescanned");
+        let prescan = argument
+            .expanded
+            .get()
+            .expect("the argument was prescanned");
         if let Some(spacing) = self.text_spacing() {
             spacing.pad_before_parameter();
         }
