@@ -195,7 +195,16 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
             }
         }
     }
-    if state.errors != 0 {
+    // GCC's `-v` or `-###` without inputs reports the driver and succeeds,
+    // even after complaining about an option.
+    let has_inputs = state.has_inputs();
+    let gcc_reports_only =
+        personality == Personality::Gcc && (state.verbose || state.dry_run) && !has_inputs;
+    if state.errors != 0 && !gcc_reports_only {
+        // GCC still finds no inputs after rejecting an option.
+        if personality == Personality::Gcc && !has_inputs {
+            invocation.fatal(format_args!("no input files"));
+        }
         return Err(MainError::Reported(1));
     }
     let mut common = vec![invocation.program.clone()];
@@ -327,7 +336,8 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
     // Clang's subprocesses do; `-###` prints the steps alone.
     if state.verbose || state.dry_run {
         let mut text = version::verbose(personality, target);
-        if state.dry_run {
+        // Without inputs, neither compiler has a step to show.
+        if state.dry_run && has_inputs {
             for bcc in &steps {
                 text.push_str(&super::command_line(bcc, style(true)));
             }
@@ -737,7 +747,12 @@ impl State<'_> {
                 self.syntax_only = true;
                 self.positions.push((self.position, Unused::SyntaxOnly));
             },
-            | "-ansi" => self.out.push("-std=c89".into()),
+            // Either compiler reads the last of `-std=` and `-ansi`, so a
+            // later `-ansi` replaces a value Clang would refuse.
+            | "-ansi" => {
+                self.bad_standard = None;
+                self.out.push("-std=c89".into());
+            },
             | "-nostdinc" => self.out.push("--nostdinc".into()),
             | "-s" => {
                 self.link_only(text.into());
@@ -808,7 +823,9 @@ impl State<'_> {
         let clang = self.compiler == Compiler::Clang;
         // `-MG` lists missing headers only in the rules `-M` and `-MM`
         // write instead of the output.
+        // GCC's compiler checks `-MG` for each input it compiles.
         if self.out.iter().any(|option| option == "-MG")
+            && (clang || !self.inputs.is_empty())
             && !self
                 .stages
                 .iter()
@@ -1108,6 +1125,19 @@ impl State<'_> {
             self.invocation
                 .warning(format_args!("{message} [-W{group}]"));
         }
+    }
+
+    /// Whether the command line names an input: a file, or a linker
+    /// option the compiler counts as one. GCC counts `-l`, `-Wl,` and
+    /// `-Xlinker`; Clang counts every linker input, `-z` and `-e` too.
+    fn has_inputs(&self) -> bool {
+        !self.inputs.is_empty()
+            || self.linker_words.iter().any(|(_, word)| {
+                self.compiler == Compiler::Clang
+                    || word.starts_with("-l")
+                    || word.starts_with("-Wl,")
+                    || word.starts_with("-Xlinker ")
+            })
     }
 
     /// Records a linker option Clang reports as an unused linker input
