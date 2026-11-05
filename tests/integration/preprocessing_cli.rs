@@ -139,6 +139,17 @@ mod tests {
         );
     }
 
+    /// A name or number stays apart from a prefixed literal after it, as in
+    /// Clang. GCC 13.3 writes `returnL"x"`, which is other tokens; a wrong
+    /// spacing is at worst cosmetic, and that is a compile error.
+    #[test]
+    fn a_prefixed_literal_does_not_paste_to_what_comes_before_it() {
+        expect_spacing(
+            "#define ID(x) x\nID(1)L\"x\" ID(return)u8\"y\" ID(x)L'a'\n",
+            "1 L\"x\" return u8\"y\" x L'a'\n",
+        );
+    }
+
     /// GCC's gcc.dg/cpp/avoidpaste1.c and avoidpaste2.c: tokens that are
     /// already together stay together, and macros and arguments do not
     /// paste what surrounds them. `__COUNTER__` stands in for

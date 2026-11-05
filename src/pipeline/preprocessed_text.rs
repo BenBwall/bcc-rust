@@ -113,8 +113,9 @@ pub(crate) enum PasteClass {
     Character,
     /// An unprefixed string literal.
     String,
-    /// A prefixed character constant or string literal, of which GCC's
-    /// `cpp_avoid_paste` takes no account (`CPP_WSTRING`, `CPP_WCHAR`).
+    /// A prefixed character constant or string literal. GCC's
+    /// `cpp_avoid_paste` takes no account of them (`CPP_WSTRING`,
+    /// `CPP_WCHAR`), and so changes `ID(return)L"x"`'s tokens; bcc does.
     Prefixed,
     /// The other tokens: a punctuator, as it is written, with its digraph
     /// `%:` written `#`; the three-character ones paste with nothing.
@@ -160,7 +161,9 @@ impl PasteClass {
 /// one of class `last`, could read as other tokens, as GCC's `cpp_avoid_paste`
 /// (libcpp `lex.cc`) decides. It is conservative on purpose: a number followed
 /// by `+`, `-` or `.` is kept apart even without an exponent, and `.` from a
-/// number, since `.2` could be read with it.
+/// number, since `.2` could be read with it. Unlike GCC it also keeps a name or
+/// number from a prefixed literal after it, since `return L"x"` would otherwise
+/// read as the name `returnL` and a string, as Clang's printer knows.
 /// C99: preprocessing tokens are the longest sequence that can form one,
 /// §6.4 paragraph 4, p. 49; PDF p. 61; pp-numbers §6.4.8, p. 65; PDF p. 77.
 pub(crate) fn avoid_paste(last: PasteClass, next: PasteClass, first: u8) -> bool {
@@ -173,13 +176,17 @@ pub(crate) fn avoid_paste(last: PasteClass, next: PasteClass, first: u8) -> bool
                 | PasteClass::Number(true)
                 | PasteClass::Character
                 | PasteClass::String
+                | PasteClass::Prefixed
         ),
         | PasteClass::Number(_) =>
             matches!(
                 next,
-                PasteClass::Number(_) | PasteClass::Name | PasteClass::Character
+                PasteClass::Number(_)
+                    | PasteClass::Name
+                    | PasteClass::Character
+                    | PasteClass::Prefixed
             ) || c(b".+-"),
-        | PasteClass::Backslash => next == PasteClass::Name,
+        | PasteClass::Backslash => matches!(next, PasteClass::Name | PasteClass::Prefixed),
         | PasteClass::Punctuator(a, 0) =>
             (matches!(
                 a,
