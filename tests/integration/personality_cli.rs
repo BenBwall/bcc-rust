@@ -1232,6 +1232,240 @@ mod tests {
         }
     }
 
+    /// Plain `_Complex` means `_Complex double` to GCC and Clang: Clang
+    /// warns, GCC only under `-pedantic`, and `-pedantic-errors` refuses it
+    /// in both (gcc.c-torture/execute/20070614-1.c).
+    #[test]
+    fn plain_complex_means_complex_double() {
+        if !cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+            return;
+        }
+        let directory = Directory::new();
+        directory.write(
+            "plain.c",
+            "_Complex v = 3.0 + 1.0i;\n_Static_assert(sizeof v == 2 * sizeof(double), \
+             \"\");\n_Complex twice(_Complex z) { return z + z; }\nint main(void) { return \
+             (int)__real__ twice(v) + (int)__imag__ twice(v); }\n",
+        );
+        for (mode, options, warns) in [
+            ("--gcc-mode", &[][..], false),
+            ("--gcc-mode", &["-pedantic"], true),
+            ("--clang-mode", &[], true),
+        ] {
+            let mut args = options.to_vec();
+            args.extend(["plain.c", "-o", "plain"]);
+            let output = directory.bcc(mode, &args);
+            succeeds(&output);
+            assert_eq!(
+                stderr(&output).contains("_Complex"),
+                warns,
+                "{mode} {options:?}: {}",
+                stderr(&output)
+            );
+            let run = Command::new(directory.path("plain")).output().unwrap();
+            assert_eq!(run.status.code(), Some(8), "{mode} {options:?}");
+        }
+        // `-w` and a system header silence it before `-pedantic-errors`
+        // can make it an error.
+        std::fs::create_dir_all(directory.path("sys")).unwrap();
+        directory.write("sys/plain.h", "_Complex in_header;\n");
+        directory.write("header.c", "#include <plain.h>\n");
+        // A bare declaration: `plain.c`'s imaginary constant is another
+        // pedantic error, which GCC's `-w` does not silence.
+        directory.write("bare.c", "_Complex bare;\n");
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            let output = directory.bcc(mode, &["-pedantic-errors", "-fsyntax-only", "bare.c"]);
+            assert!(!output.status.success(), "{mode}");
+            let output =
+                directory.bcc(mode, &["-w", "-pedantic-errors", "-fsyntax-only", "bare.c"]);
+            succeeds(&output);
+            assert_eq!(stderr(&output), "", "{mode} -w");
+            let output = directory.bcc(
+                mode,
+                &[
+                    "-pedantic-errors",
+                    "-isystem",
+                    "sys",
+                    "-fsyntax-only",
+                    "header.c",
+                ],
+            );
+            succeeds(&output);
+            assert_eq!(stderr(&output), "", "{mode} system header");
+        }
+        // GCC's `-Wno-error=pedantic` keeps its warning one, and a later
+        // `-Wno-pedantic` silences it; `-Werror=pedantic` makes it an
+        // error. Clang's error outlasts both, and is no `-Wpedantic`
+        // diagnostic for `-Werror=pedantic` to promote.
+        for (mode, options, status) in [
+            (
+                "--gcc-mode",
+                &["-pedantic-errors", "-Wno-error=pedantic"][..],
+                0,
+            ),
+            (
+                "--gcc-mode",
+                &["-Wno-error=pedantic", "-pedantic-errors"],
+                1,
+            ),
+            ("--gcc-mode", &["-pedantic-errors", "-Wno-pedantic"], 0),
+            ("--gcc-mode", &["-Werror=pedantic"], 1),
+            ("--gcc-mode", &["-Werror=pedantic", "-w"], 0),
+            (
+                "--gcc-mode",
+                &["-Werror=pedantic", "-Wno-error=pedantic"],
+                0,
+            ),
+            ("--gcc-mode", &["-Werror=pedantic", "-Wno-pedantic"], 0),
+            ("--gcc-mode", &["-Wno-pedantic", "-Werror=pedantic"], 1),
+            (
+                "--gcc-mode",
+                &["-pedantic-errors", "-Wno-pedantic", "-Wpedantic"],
+                1,
+            ),
+            // `-Wno-pedantic` stops the diagnostic but keeps its error state.
+            (
+                "--gcc-mode",
+                &["-Werror=pedantic", "-Wno-pedantic", "-Wpedantic"],
+                1,
+            ),
+            (
+                "--gcc-mode",
+                &["-Werror=pedantic", "-Wno-pedantic", "-pedantic"],
+                1,
+            ),
+            (
+                "--gcc-mode",
+                &[
+                    "-Werror=pedantic",
+                    "-Wno-error=pedantic",
+                    "-Wno-pedantic",
+                    "-Wpedantic",
+                ],
+                0,
+            ),
+            (
+                "--gcc-mode",
+                &[
+                    "-Werror=pedantic",
+                    "-Wno-pedantic",
+                    "-Wno-error=pedantic",
+                    "-Wpedantic",
+                ],
+                0,
+            ),
+            ("--clang-mode", &["-Werror=pedantic"], 0),
+            ("--clang-mode", &["-pedantic-errors", "-Wno-pedantic"], 1),
+            (
+                "--clang-mode",
+                &["-pedantic-errors", "-Wno-error=pedantic"],
+                1,
+            ),
+        ] {
+            let mut args = options.to_vec();
+            args.extend(["-fsyntax-only", "bare.c"]);
+            let output = directory.bcc(mode, &args);
+            assert_eq!(output.status.code(), Some(status), "{mode} {options:?}");
+        }
+        // TCC refuses `_Complex` altogether.
+        let output = directory.bcc("--tcc-mode", &["-c", "plain.c", "-o", "plain.o"]);
+        assert!(!output.status.success());
+    }
+
+    /// GCC reads its pedantic options in order. Clang reads `-pedantic` and
+    /// `-pedantic-errors` before every `-W` option, so `-Wno-error=pedantic`
+    /// and `-Wno-pedantic` outrank them wherever they appear. In both,
+    /// `-Wpedantic` keeps pedantic errors errors. `-Werror=pedantic` makes
+    /// only GCC's plain `_Complex` diagnostic an error so far: it leaves the
+    /// other extensions as they were, and `-w` still silences it.
+    #[test]
+    fn pedantic_options_combine_as_each_compiler_reads_them() {
+        let directory = Directory::new();
+        directory.write("empty.c", "int a[1] = {};\n");
+        for (mode, options, status) in [
+            (
+                "--gcc-mode",
+                &["-Wno-error=pedantic", "-pedantic-errors"][..],
+                1,
+            ),
+            (
+                "--gcc-mode",
+                &["-pedantic-errors", "-Wno-error=pedantic"],
+                0,
+            ),
+            ("--gcc-mode", &["-Werror=pedantic", "-Wno-pedantic"], 0),
+            (
+                "--gcc-mode",
+                &["-Werror=pedantic", "-Wno-error=pedantic"],
+                0,
+            ),
+            ("--gcc-mode", &["-pedantic-errors", "-Wpedantic"], 1),
+            (
+                "--clang-mode",
+                &["-Wno-error=pedantic", "-pedantic-errors"],
+                0,
+            ),
+            (
+                "--clang-mode",
+                &["-pedantic-errors", "-Wno-error=pedantic"],
+                0,
+            ),
+            ("--clang-mode", &["-Wno-pedantic", "-pedantic-errors"], 0),
+            ("--clang-mode", &["-pedantic-errors", "-Wpedantic"], 1),
+        ] {
+            let mut args = vec!["-std=c17"];
+            args.extend(options);
+            args.extend(["-fsyntax-only", "empty.c"]);
+            let output = directory.bcc(mode, &args);
+            assert_eq!(
+                output.status.code(),
+                Some(status),
+                "{mode} {options:?}: {}",
+                stderr(&output)
+            );
+        }
+        let output = directory.bcc(
+            "--clang-mode",
+            &[
+                "-std=c17",
+                "-Wno-pedantic",
+                "-pedantic-errors",
+                "-fsyntax-only",
+                "empty.c",
+            ],
+        );
+        assert_eq!(stderr(&output), "");
+        // `-Werror=pedantic` neither outlasts `-w` nor reaches a diagnostic
+        // GCC files under another option (`-Wlong-long`).
+        directory.write("zero.c", "int a[0];\n");
+        directory.write("ll.c", "long long x;\n");
+        for (mode, args) in [
+            (
+                "--gcc-mode",
+                &["-std=c17", "-Werror=pedantic", "-w", "zero.c"][..],
+            ),
+            (
+                "--clang-mode",
+                &["-std=c17", "-Werror=pedantic", "-w", "zero.c"],
+            ),
+            (
+                "--gcc-mode",
+                &["-std=c17", "-w", "-Werror=pedantic", "zero.c"],
+            ),
+            ("--gcc-mode", &["-std=c89", "-Werror=pedantic", "ll.c"]),
+        ] {
+            let mut args = args.to_vec();
+            args.push("-fsyntax-only");
+            let output = directory.bcc(mode, &args);
+            assert_eq!(
+                output.status.code(),
+                Some(0),
+                "{mode} {args:?}: {}",
+                stderr(&output)
+            );
+        }
+    }
+
     /// TCC names no warning options, so its diagnostics carry no `[-W…]`
     /// suffix, as GCC's and Clang's do.
     #[test]
