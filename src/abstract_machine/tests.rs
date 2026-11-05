@@ -1758,3 +1758,30 @@ fn schema_three_encodes_structures_and_static_objects() {
         "{trace}"
     );
 }
+
+#[test]
+fn a_member_of_a_first_member_names_the_structure_it_is_in() {
+    let states = states(
+        "struct inner { int a; int b; };\nstruct outer { struct inner in; int z; };\nint \
+         main(void) {\n    struct outer o = {{1, 2}, 3};\n    return o.in.b;\n}\n",
+    );
+    let last = states.last().expect("a final state");
+    assert_eq!(
+        last.return_value,
+        Some(Value::Integer(2)),
+        "{:?}",
+        last.diagnostics
+    );
+    let selected = states
+        .iter()
+        .find(|state| state.event.title.starts_with("`o.in.b`"))
+        .expect("o.in.b designates a member");
+    assert!(
+        selected
+            .event
+            .summary
+            .contains("inside `o.in`, 4 bytes into it"),
+        "{}",
+        selected.event.summary
+    );
+}

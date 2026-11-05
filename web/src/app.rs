@@ -2106,8 +2106,8 @@ fn About() -> impl IntoView {
                          structures (members of those types, nested structures and pointers to structures, brace and \
                          .member initializers, copies by =, by argument and by return), file-scope and static objects, \
                          functions returning int or a structure, if, while and for. Still outside it: the preprocessor \
-                         (its lesson opens in the compiler pipeline instead), arrays of structures, unions, other \
-                         integer types, void functions, char pointers and strings, switch, break and goto, library calls \
+                         (its lesson opens in the compiler pipeline instead), arrays of anything but int, unions, other \
+                         integer types, void functions, char parameters, char pointers and strings, switch, break and goto, library calls \
                          and floating point. Operands are evaluated left to right, and nested side effects are rejected \
                          rather than sequenced."
                     </p>

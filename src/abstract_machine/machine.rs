@@ -216,7 +216,7 @@ impl Machine {
                 structure,
                 array,
             } => {
-                let (target, base, pointer) = if *arrow {
+                let (target, base, whole, pointer) = if *arrow {
                     let pointer = self.pop_value()?;
                     if matches!(pointer, Value::Pointer { target: None, .. }) {
                         return Err(Diagnostic::ub(
@@ -228,11 +228,18 @@ impl Machine {
                             Undefined::NullIndirection,
                         ));
                     }
-                    let (target, base, _) = self.dereference(&pointer)?;
-                    (target, base, Some(pointer))
+                    let (target, base, whole) = self.dereference(&pointer)?;
+                    (target, base, whole, Some(pointer))
                 } else {
-                    let (target, base) = self.pop_address()?;
-                    (target, base, None)
+                    let Operand::Address {
+                        target,
+                        offset: base,
+                        structure: whole,
+                    } = self.pop()?
+                    else {
+                        return Err(self.error("expected a structure lvalue"));
+                    };
+                    (target, base, whole, None)
                 };
                 let at = base + offset;
                 let result = if let Some(length) = array {
@@ -246,7 +253,7 @@ impl Machine {
                     }
                 };
                 self.push(result.clone())?;
-                self.member(range, source, target, base, pointer, result)
+                self.member(range, source, target, base, whole, pointer, result)
             },
             | Op::Promote => {
                 let value = self.pop_value()?;

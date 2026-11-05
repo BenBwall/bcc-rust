@@ -170,10 +170,10 @@ impl Topic {
                  and by returning it. A large structure is often passed by pointer instead, to \
                  avoid the copy and to let the callee change the caller's object.",
             | Self::Padding =>
-                "x86-64 compilers align each member on a multiple of its size (up to 8 bytes), so \
-                 a char followed by an int leaves 3 unused bytes between them. Ordering members \
-                 from largest to smallest alignment often removes the padding. Padding holds \
-                 unspecified bytes, which is why comparing structures with memcmp is unsafe.",
+                "On x86-64 an int starts on a multiple of 4 bytes and a pointer on a multiple of \
+                 8, so a char followed by an int leaves 3 unused bytes between them. Ordering \
+                 members from largest to smallest alignment often removes the padding. Padding \
+                 holds unspecified bytes, which is why comparing structures with memcmp is unsafe.",
             | Self::ExitStatus =>
                 "The exit status is how a program reports to whoever ran it: 0 means success. A \
                  shell shows it as `$?`, and on Linux only its low 8 bits get there.",
@@ -727,14 +727,19 @@ impl Machine {
         result(event, Operand::Value(value))
     }
 
-    /// `.m` or `->m` designated a member. `pointer` is the pointer `->`
-    /// followed.
+    /// `.m` or `->m` designated a member of the structure `whole` at leaf
+    /// `base`. `pointer` is the pointer `->` followed.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "One member access's complete observation."
+    )]
     pub(super) fn member(
         &self,
         range: SourceRange,
         source: &str,
         target: usize,
         base: i32,
+        whole: Option<usize>,
         pointer: Option<Value>,
         selected: Operand,
     ) -> Event {
@@ -747,14 +752,7 @@ impl Machine {
                 (self.array_name(target, *first), *first, Some(value)),
             | Operand::Value(_) => (String::from("the member"), base, None),
         };
-        let whole = self.location_of(
-            target,
-            base,
-            match self.object_type(target) {
-                | Some(Type::Struct(id)) if base == 0 => Some(id),
-                | _ => self.structure_at(target, base),
-            },
-        );
+        let whole = self.location_of(target, base, whole);
         let byte = self.byte_offset(target, base, offset);
         let at = byte.map_or_else(String::new, |byte| format!(", {byte} bytes into it"));
         let (summary, mut text, mut cited) = if let Some(pointer) = &pointer {
@@ -915,24 +913,6 @@ impl Machine {
         let mut leaves = Vec::new();
         layout::flatten(value, &mut leaves);
         leaves.contains(&Value::Indeterminate)
-    }
-
-    /// The structure type of the subobject that starts at leaf `offset` of
-    /// `target` and is the left operand of a member operator, if any: the
-    /// innermost structure starting there.
-    fn structure_at(&self, target: usize, offset: i32) -> Option<usize> {
-        let mut ty = self.object_type(target)?;
-        let mut within = usize::try_from(offset).ok()?;
-        let mut found = None;
-        while let Type::Struct(id) = ty {
-            if within == 0 {
-                found = Some(id);
-            }
-            let (member, rest) = layout::member_at(self.structures.get(id)?, within)?;
-            ty = member.ty;
-            within = rest;
-        }
-        found
     }
 
     /// The byte offset of leaf `offset` from the structure at leaf `base` of
