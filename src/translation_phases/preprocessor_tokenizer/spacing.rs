@@ -201,41 +201,39 @@ mod tests {
     /// were kept, tells the printer what the run itself would.
     #[test]
     fn composed_paddings_print_as_the_run_of_them() {
-        let mut runs: Vec<Vec<Padding>> = vec![Vec::new()];
-        for _ in 0..5 {
-            let longer: Vec<Vec<Padding>> = runs
-                .iter()
-                .flat_map(|run| {
-                    Padding::ALL.map(|padding| {
-                        let mut run = run.clone();
-                        run.push(padding);
-                        run
-                    })
-                })
-                .collect();
-            runs.extend(longer);
-        }
-        for run in &runs {
-            for split in 0..=run.len() {
-                let fold = |paddings: &[Padding]| {
-                    paddings
-                        .iter()
-                        .fold(TokenSpacing::NONE, |spacing, padding| {
-                            spacing.then(padding.spacing())
-                        })
-                };
-                let composed = fold(&run[..split]).then(fold(&run[split..]));
-                let (avoid_paste, source) = printed(run);
-                for white in [false, true] {
-                    let output = composed.with_white(white).output();
-                    assert_eq!(output.avoid_paste, avoid_paste);
-                    let space = match source {
-                        | Source::Spaced => true,
-                        | Source::Unspaced => false,
-                        | Source::None => white,
-                    };
-                    assert_eq!(output.space, space);
+        for length in 0..=5u32 {
+            for mut code in 0..3usize.pow(length) {
+                let mut run = [Padding::End; 5];
+                for padding in &mut run[..length as usize] {
+                    *padding = Padding::ALL[code % 3];
+                    code /= 3;
                 }
+                check_run(&run[..length as usize]);
+            }
+        }
+    }
+
+    /// Checks `run` of paddings against the printer, split at every point.
+    fn check_run(run: &[Padding]) {
+        let fold = |paddings: &[Padding]| {
+            paddings
+                .iter()
+                .fold(TokenSpacing::NONE, |spacing, padding| {
+                    spacing.then(padding.spacing())
+                })
+        };
+        let (avoid_paste, source) = printed(run);
+        for split in 0..=run.len() {
+            let composed = fold(&run[..split]).then(fold(&run[split..]));
+            for white in [false, true] {
+                let output = composed.with_white(white).output();
+                assert_eq!(output.avoid_paste, avoid_paste);
+                let space = match source {
+                    | Source::Spaced => true,
+                    | Source::Unspaced => false,
+                    | Source::None => white,
+                };
+                assert_eq!(output.space, space);
             }
         }
     }
