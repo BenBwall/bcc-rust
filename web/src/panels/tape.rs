@@ -872,7 +872,7 @@ pub fn Deck(
     view! {
         <figure class="deck" class:is-compact=move || compact.get() aria-labelledby="deck-caption">
             <figcaption class="deck-caption" id="deck-caption">
-                <b>"Figure 1"</b>" — Every object of the run, recorded on tape. Drag the tape, or use "<kbd>"←"</kbd>" "<kbd>"→"</kbd>"."
+                <b>"Figure 1"</b>" — Every object of the run, recorded on tape. Drag the tape, or use "<span class="keys"><kbd>"←"</kbd>" "<kbd>"→"</kbd>"."</span>
             </figcaption>
             <Spool side="left" fill=Signal::derive(played) turn=Signal::derive(move || px(at()) * 37.0) />
             // The labels and the tape scroll together where a run has more
