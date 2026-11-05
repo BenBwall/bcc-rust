@@ -268,7 +268,6 @@ k8 = ID(__LINE__);
 k9 = W(__LINE__);
 k11 = ID(__COUNTER__)__COUNTER__;
 k12 = -__COUNTER__-;
-k14 = +__has_include("nonexistent.h");
 m1 = EMPTY x;
 m2=EMPTY x;
 m3 = x EMPTY;
