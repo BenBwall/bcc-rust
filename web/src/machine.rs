@@ -783,7 +783,7 @@ mod tests {
         // Before main: static storage, no frame.
         let first = &states[1];
         assert_eq!(first.event.kind, "static_storage");
-        assert!(first.stack.is_empty());
+        assert_eq!(first.stack, []);
         assert_eq!(first.objects[0].storage, "static");
         assert_eq!(first.objects[0].frame_id, 0);
         assert_eq!(first.event.access[0].kind, "create");

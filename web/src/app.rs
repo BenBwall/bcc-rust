@@ -2136,7 +2136,7 @@ fn tape_summary(state: &Snapshot) -> Option<String> {
                 .objects
                 .iter()
                 .find(|object| object.id == access.object)?;
-            let value = crate::panels::value_text(&object.value, &state.objects)
+            let value = crate::panels::value_text(&object.value)
                 .unwrap_or_else(|| "indeterminate".to_owned());
             Some(match access.kind.as_str() {
                 | "create" => format!("track {} begins, {value}", object.name),

@@ -260,7 +260,7 @@ impl Reel {
                 }
                 let last = lane.segments.last_mut();
                 if object.alive {
-                    let value = value_text(&object.value, &snapshot.objects);
+                    let value = value_text(&object.value);
                     match last {
                         | Some(segment)
                             if segment.to == step
@@ -480,7 +480,7 @@ fn arguments(
 
 /// An object's value as the tape and the cells write it, or `None` while it
 /// is indeterminate.
-pub fn value_text(value: &Value, objects: &[Object]) -> Option<String> {
+pub fn value_text(value: &Value) -> Option<String> {
     match value {
         | Value::Indeterminate => None,
         | Value::Integer { text } => Some(text.clone()),
@@ -488,7 +488,7 @@ pub fn value_text(value: &Value, objects: &[Object]) -> Option<String> {
             "{{{}}}",
             elements
                 .iter()
-                .map(|element| value_text(element, objects).unwrap_or_else(|| "?".to_owned()))
+                .map(|element| value_text(element).unwrap_or_else(|| "?".to_owned()))
                 .collect::<Vec<_>>()
                 .join(",")
         )),
@@ -499,7 +499,7 @@ pub fn value_text(value: &Value, objects: &[Object]) -> Option<String> {
                 .map(|member| format!(
                     "{}={}",
                     member.name,
-                    value_text(&member.value, objects).unwrap_or_else(|| "?".to_owned())
+                    value_text(&member.value).unwrap_or_else(|| "?".to_owned())
                 ))
                 .collect::<Vec<_>>()
                 .join(",")
@@ -2419,20 +2419,9 @@ mod tests {
 
     #[test]
     fn pointers_name_what_they_point_at() {
-        let objects = vec![Object {
-            id:        7,
-            name:      "values".to_owned(),
-            ty:        "int[3]".to_owned(),
-            storage:   "automatic".to_owned(),
-            alive:     true,
-            frame_id:  1,
-            function:  "main".to_owned(),
-            scope:     None,
-            parameter: false,
-            value:     Value::Array {
-                elements: vec![Value::Indeterminate; 3],
-            },
-        }];
+        let array = Value::Array {
+            elements: vec![Value::Indeterminate; 3],
+        };
         let pointer = |offset, one_past| Value::Pointer {
             target: Some(7),
             offset,
@@ -2445,15 +2434,15 @@ mod tests {
             },
         };
         assert_eq!(
-            value_text(&pointer(1, false), &objects).as_deref(),
+            value_text(&pointer(1, false)).as_deref(),
             Some("→values[1]")
         );
         assert_eq!(
-            value_text(&pointer(3, true), &objects).as_deref(),
+            value_text(&pointer(3, true)).as_deref(),
             Some("→values+3")
         );
         assert_eq!(
-            value_text(&objects[0].value, &objects).as_deref(),
+            value_text(&array).as_deref(),
             Some("{?,?,?}")
         );
     }

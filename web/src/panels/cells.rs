@@ -174,7 +174,7 @@ fn strip(snapshot: &Snapshot) -> impl IntoView {
                 parts(object).into_iter().map(move |part| match part {
                     | Part::Cell { value, name, ty, leaf } => {
                         let kind = access(object.id, leaf);
-                        let text = value_text(&value, &snapshot.objects);
+                        let text = value_text(&value);
                         let indeterminate = text.is_none();
                         // A pointer's name is set smaller than a number, so
                         // its cell stays narrow enough for a phone's strip.

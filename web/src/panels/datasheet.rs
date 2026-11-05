@@ -63,7 +63,7 @@ pub fn Datasheet(
                         // The objects of returned calls fold into one row,
                         // unless the step used one; those it used are
                         // listed, not counted.
-                        let shown = |object: &crate::snapshot::Object| {
+                        let shown = |object: &Object| {
                             object.alive || snapshot.event.access.iter().any(|access| access.object == object.id)
                         };
                         let ended: Vec<&str> = snapshot.objects.iter().filter(|object| !shown(object)).map(|object| object.name.as_str()).collect();
@@ -78,7 +78,7 @@ pub fn Datasheet(
                                         // Its members' rows hold the values.
                                         format!("{size} bytes")
                                     } else if object.alive {
-                                        value_text(&object.value, &snapshot.objects).unwrap_or_else(|| "indeterminate".to_owned())
+                                        value_text(&object.value).unwrap_or_else(|| "indeterminate".to_owned())
                                     } else {
                                         "lifetime over".to_owned()
                                     };
@@ -94,7 +94,7 @@ pub fn Datasheet(
                                             <td class="sheet-value">{value}</td>
                                         </tr>
                                     };
-                                    let members = (object.alive).then(|| members(object)).unwrap_or_default();
+                                    let members = if object.alive { members(object) } else { Vec::new() };
                                     view! { {row}{members} }
                                 })
                                 .map(IntoAny::into_any)
@@ -156,7 +156,7 @@ fn collect(
         let shown = if matches!(member.value, Value::Struct { .. }) {
             String::new()
         } else {
-            value_text(&member.value, &[]).unwrap_or_else(|| "?".to_owned())
+            value_text(&member.value).unwrap_or_else(|| "?".to_owned())
         };
         let bytes = if member.size == 1 {
             format!("byte {offset}")
