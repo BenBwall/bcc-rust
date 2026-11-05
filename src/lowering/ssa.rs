@@ -15,8 +15,10 @@
 //! Blocks are sealed when all their predecessors are known: a loop header
 //! after its back edge, a label block at the end of the function. A read in
 //! an unsealed block adds an incomplete parameter that sealing completes.
-//! A variable read where no definition reaches is `poison`, C's
-//! indeterminate value (C99 §6.2.4 paragraph 5, p. 32; PDF p. 44).
+//! A variable read where no definition reaches is [`Def::Uninit`], C's
+//! indeterminate value (C99 §6.2.4 paragraph 5, p. 32; PDF p. 44), which
+//! emission writes as a `freeze` of `poison`, or as `poison` on an edge
+//! (`optimizer/promote.rs` says why).
 //!
 //! Draft values and blocks reuse the IR's entity types but number the draft,
 //! not the emitted function; emission renumbers them in reverse post-order.
@@ -57,6 +59,8 @@ pub(super) struct Draft<'s> {
     definitions:       ArenaMap<'s, (Block, Var), Value>,
     /// One `poison` per type, materialized in the entry block on emission.
     poison:            [Option<Value>; Type::ALL.len()],
+    /// One uninitialized value per type, likewise.
+    uninit:            [Option<Value>; Type::ALL.len()],
     current:           Block,
     lookups:           ArenaVec<'s, Lookup>,
     results:           ArenaVec<'s, Value>,
@@ -112,6 +116,8 @@ pub(super) enum Def {
     FloatConstant(u32),
     Param(Block),
     Poison,
+    /// What a variable holds where no definition reaches it.
+    Uninit,
 }
 
 /// A non-terminator operation. Operands are draft values.
@@ -248,7 +254,7 @@ impl Draft<'_> {
         let value = found.unwrap_or_else(|| {
             let data = &self.blocks[block.index()];
             if data.sealed && data.preds.is_empty() {
-                let value = self.poison(ty);
+                let value = self.uninit(ty);
                 self.results.push(value);
                 return value;
             }
@@ -447,6 +453,21 @@ impl<'s> Draft<'s> {
         value
     }
 
+    /// The value a variable of type `ty` holds where no definition reaches.
+    pub(super) fn uninit(&mut self, ty: Type) -> Value {
+        if let Some(value) = self.uninit[ty as usize] {
+            return value;
+        }
+        let value = Value::new(self.values.len());
+        self.values.push(DraftValue {
+            ty,
+            def: Def::Uninit,
+            alias: None,
+        });
+        self.uninit[ty as usize] = Some(value);
+        value
+    }
+
     /// Appends an operation to the current block; its result, if any, has
     /// type `result`.
     pub(super) fn push(&mut self, op: Op<'s>, result: Option<Type>) -> Option<Value> {
@@ -574,6 +595,7 @@ impl<'s> Draft<'s> {
             variables: ArenaVec::new_in(scratch),
             definitions: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, scratch),
             poison: [None; Type::ALL.len()],
+            uninit: [None; Type::ALL.len()],
             current: Block::new(0),
             lookups: ArenaVec::new_in(scratch),
             results: ArenaVec::new_in(scratch),
