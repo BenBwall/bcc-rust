@@ -525,6 +525,12 @@ pub(crate) enum PreprocessorErrorType<'tu> {
     /// implementation-defined pragma, C99 §6.10.6 paragraph 1, p. 159; PDF
     /// p. 171.
     SystemHeaderPragmaInMainFile,
+    /// `#` spelled an argument ending in an odd `\`, which would escape
+    /// the closing quote; the final `\` is dropped, as GCC and Clang drop
+    /// it with this warning. C99: the result is not a valid character
+    /// string literal, so the behavior is undefined, §6.10.3.2 paragraph 2,
+    /// p. 153; PDF p. 165.
+    StringizedTrailingBackslash,
     /// GCC's `#pragma scalar_storage_order` without `big-endian`,
     /// `little-endian` or `default` (`missing` when no identifier follows),
     /// which GCC ignores with a `-Wpragmas` warning. C99: implementation-
@@ -1353,6 +1359,9 @@ impl PreprocessorErrorType<'_> {
             .note("C99 §6.10.6p2: each standard pragma takes an on-off switch"),
             | Self::PragmaOnceInNonHeader =>
                 new("`#pragma once` in main file").label("only affects files that are included"),
+            | Self::StringizedTrailingBackslash =>
+                new("invalid string literal, ignoring final '\\'")
+                    .label("this `\\` would escape the closing quote"),
             | Self::SystemHeaderPragmaInMainFile =>
                 new("`#pragma GCC system_header` ignored in main file")
                     .label("only a header can be a system header"),
@@ -1745,6 +1754,7 @@ impl GetSeverity for PreprocessorError<'_> {
             | PreprocessorErrorType::PragmaMessage { error: false, .. }
             | PreprocessorErrorType::PragmaOnceInNonHeader
             | PreprocessorErrorType::SystemHeaderPragmaInMainFile
+            | PreprocessorErrorType::StringizedTrailingBackslash
             | PreprocessorErrorType::StorageOrderPragmaOperand { .. }
             | PreprocessorErrorType::IncludeNextInPrimarySource(..)
             | PreprocessorErrorType::IncludeNextWithoutSearchEntry(..) => ErrorSeverity::Warning,
