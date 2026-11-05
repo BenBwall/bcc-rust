@@ -694,7 +694,7 @@ impl Machine {
              is a copy of all its members."
         );
         let mut cited = vec![clauses::LVALUE_CONVERSION];
-        if self.indeterminate_member(&value) {
+        if indeterminate_member(&value) {
             text.push_str(
                 " Some members are still indeterminate. That is not an error here: a structure's \
                  value is never a trap representation, so copying it copies those members as they \
@@ -879,7 +879,7 @@ impl Machine {
                 self.value_text(previous)
             )
         };
-        if self.indeterminate_member(&stored) {
+        if indeterminate_member(&stored) {
             text.push_str(
                 " Indeterminate members are copied as they are: a structure's value is never a \
                  trap representation.",
@@ -906,13 +906,6 @@ impl Machine {
         ]);
         event.objects.push(target);
         result(event, Operand::Value(stored))
-    }
-
-    /// Whether a structure value has an indeterminate member.
-    fn indeterminate_member(&self, value: &Value) -> bool {
-        let mut leaves = Vec::new();
-        layout::flatten(value, &mut leaves);
-        leaves.contains(&Value::Indeterminate)
     }
 
     /// The byte offset of leaf `offset` from the structure at leaf `base` of
@@ -1447,7 +1440,7 @@ impl Machine {
                 } else {
                     &[clauses::POINTER_ARITHMETIC, clauses::EVALUATION_ORDER]
                 };
-                if self.one_past(&output) {
+                if one_past(&output) {
                     text.push_str(
                         " That is the one-past-the-end position: a pointer there may be formed \
                          and compared, but never dereferenced.",
@@ -1464,7 +1457,7 @@ impl Machine {
                         "`{written}` computes an address from the pointer and the index; the \
                          element is never read."
                     )
-                } else if self.one_past(&output) {
+                } else if one_past(&output) {
                     format!(
                         "Pointer arithmetic counts elements: {sign} {} gives {}, which may be \
                          formed and compared but not read through.",
@@ -2159,7 +2152,7 @@ impl Machine {
                 structure,
                 ..
             } =>
-                if self.one_past(value) {
+                if one_past(value) {
                     format!(
                         "a pointer one past the end of {}",
                         self.array_name(target, first)
@@ -2218,19 +2211,6 @@ impl Machine {
             ),
             | Value::Array(_) | Value::Struct { .. } => self.value_text(value),
         }
-    }
-
-    fn one_past(&self, value: &Value) -> bool {
-        matches!(
-            *value,
-            Value::Pointer {
-                target: Some(_),
-                offset,
-                first,
-                length,
-                ..
-            } if offset == first + length
-        )
     }
 
     /// Structure `id`'s layout in words: its size and each member's offset,
@@ -2385,6 +2365,27 @@ pub(super) fn jump(range: SourceRange, backward: bool) -> Event {
             &[clauses::IF_STATEMENT],
         )
     }
+}
+
+/// Whether a structure value has an indeterminate member.
+fn indeterminate_member(value: &Value) -> bool {
+    let mut leaves = Vec::new();
+    layout::flatten(value, &mut leaves);
+    leaves.contains(&Value::Indeterminate)
+}
+
+/// Whether a pointer points one past the end of its array.
+const fn one_past(value: &Value) -> bool {
+    matches!(
+        *value,
+        Value::Pointer {
+            target: Some(_),
+            offset,
+            first,
+            length,
+            ..
+        } if offset == first + length
+    )
 }
 
 /// How a shell on Linux sees main's return `value` when it is outside 0 to

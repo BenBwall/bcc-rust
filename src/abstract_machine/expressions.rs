@@ -48,12 +48,6 @@ impl Parser<'_> {
                 | ("==" | "!=", Type::Pointer, Type::Pointer) => Type::Int,
                 | ("==" | "!=", Type::StructPointer(a), Type::StructPointer(b)) if a == b =>
                     Type::Int,
-                | ("==" | "!=", Type::StructPointer(_), Type::Int)
-                    if matches!(rhs.kind, ExprKind::Number(0)) =>
-                    Type::Int,
-                | ("==" | "!=", Type::Int, Type::StructPointer(_))
-                    if matches!(lhs.kind, ExprKind::Number(0)) =>
-                    Type::Int,
                 | (_, Type::Struct(_), _) | (_, _, Type::Struct(_)) =>
                     return Err(self.error(
                         "structures are not operands of arithmetic or comparison; compare their \
@@ -66,10 +60,10 @@ impl Parser<'_> {
                     )),
                 | ("+" | "-", Type::Pointer, Type::Int | Type::Char)
                 | ("+", Type::Int | Type::Char, Type::Pointer) => Type::Pointer,
-                | ("==" | "!=", Type::Pointer, Type::Int)
+                | ("==" | "!=", Type::Pointer | Type::StructPointer(_), Type::Int)
                     if matches!(rhs.kind, ExprKind::Number(0)) =>
                     Type::Int,
-                | ("==" | "!=", Type::Int, Type::Pointer)
+                | ("==" | "!=", Type::Int, Type::Pointer | Type::StructPointer(_))
                     if matches!(lhs.kind, ExprKind::Number(0)) =>
                     Type::Int,
                 | _ => return Err(self.error("unsupported operand types for this operator")),

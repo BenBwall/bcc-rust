@@ -36,6 +36,10 @@ pub struct Structure {
 
 /// One member of a [`Structure`].
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[expect(
+    clippy::partial_pub_fields,
+    reason = "The page reads the layout; the type is the engine's own."
+)]
 pub struct Member {
     /// The member's identifier.
     pub name:      String,
