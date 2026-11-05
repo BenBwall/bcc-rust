@@ -466,6 +466,21 @@ option... ] filename... [ /link linkoption... ]`, and succeeds; with options
 but no file it stops with `cl : Command line error D8003 : missing source
 filename` and status 2. `/?`, `/help` and `/HELP` print bcc's help.
 
+`cl` reads more options from the `CL` environment variable, before the
+command line, and from `_CL_`, after it, and replaces each `@file` (a
+command file) with its contents: UTF-8, or UTF-16 after a byte order mark,
+as MSBuild writes them. These are split into arguments as the Microsoft C
+runtime splits a command line. The rest of a command file's line, or of a
+variable, after `/link` goes to the linker, and the next line holds compiler
+options again. A command file that cannot be opened is `cl : Command line
+error D8022 : cannot open 'x.rsp'` (status 2), and a command file cannot
+name another: `@inner.rsp` inside one is an input like any other. clang-cl
+reads `CL`, `_CL_` and command files too, as one stream of arguments in
+which a command file may name another, as LLVM's `ExpandResponseFiles`
+does, and leaves one it cannot read on the command line as an input it then
+reports missing. (Microsoft Learn: "CL environment variables", "CL Command
+Files", "@ (Specify a Compiler Response File)".)
+
 **Mapping.**
 
 | `cl` | bcc |
@@ -475,7 +490,8 @@ filename` and status 2. `/?`, `/help` and `/HELP` print bcc's help.
 | `/FA`, `/Fa` | `-S -o NAME.asm` beside the object |
 | `/I`, `/D`, `/U`, `/FI`, `/X` | `-I`, `-D`, `-U`, `-include`; `/X` skips `%INCLUDE%` |
 | `/O1`, `/Os` / `/O2`, `/Ox`, `/Ot` / `/Od` | `-Os` / `-O2` / `-O0` |
-| `/W0`, `/w` / `/W1`-`/W3` / `/W4`, `/Wall` / `/WX` | `-w` / default / `-Wall -Wextra` / `-Werror` |
+| `/W0`, `/w` / `/W1`-`/W3` / `/W4`, `/Wall` / `/WX` | `-w` / default / `-Wall -Wextra` / `-Werror`; each also sets the level of the warnings bcc reports with `cl`'s code (see Diagnostics) |
+| `/wdNNNN`, `/weNNNN`, `/w1NNNN`-`/w4NNNN` | for a warning bcc reports with `cl`'s code, `-Wno-GROUP`, `-Werror=GROUP` or its level; other numbers have no effect, and `/wo` none |
 | `/std:c11`, `/std:c17`, `/std:clatest` | `-std=c11`, `-std=c17`, `-std=c23` |
 | `/TC`, `/Tc FILE` | the inputs (or FILE) are C |
 | `/MD`, `/MDd`, `/MT`, `/MTd`, `/LD`, `/LDd` | the last runtime option wins: `_DLL` for `/MD*`, `_DEBUG` for `/M*d` and `/LDd`, and the link takes `msvcrt`, `msvcrtd` or `libcmtd` instead of `libcmt`; `/LD` links a DLL with `/MT`'s runtime unless `/MD` names another |
@@ -487,7 +503,7 @@ filename` and status 2. `/?`, `/help` and `/HELP` print bcc's help.
 | `/external:I DIR`, `/external:env:VAR` | `-isystem` |
 | `/showIncludes` | `--show-includes`: `Note: including file: PATH` to stderr |
 | `/diagnostics:classic`, `column`, `caret` | `file(line):`, `file(line,col):`, and with the snippet |
-| `/nologo`, `/Zi`, `/Z7`, `/Zc:inline` and the other `/Zc:` switches for C++, `/utf-8`, `/EH*`, `/wd####`, `/MP`, `/FS`, `/Fd`, `/Gy`, `/GL`, `/Oi`, `/Oy`, `/arch:SSE2`, `/fp:precise`, `/fp:fast`, `/volatile:iso` ... | accepted, no effect |
+| `/nologo`, `/Zi`, `/Z7`, `/Zc:inline` and the other `/Zc:` switches for C++, `/utf-8`, `/EH*`, `/Wv`, `/MP`, `/FS`, `/Fd`, `/Gy`, `/GL`, `/Oi`, `/Oy`, `/arch:SSE2`, `/fp:precise`, `/fp:fast`, `/volatile:iso` ... | accepted, no effect |
 | `/GS`, `/sdl`, `/RTC*`, `/guard:cf`, `/guard:ehcont`, `/Qspectre*`, `/d1*`, `/d2*` | accepted with a warning |
 | `/TP`, `/Tp`, `/std:c++*`, `.cpp` inputs, `/Gv`, `/arch:` other than SSE2, `/fp:strict`, `/fp:except`, `/volatile:ms`, `/Zc:preprocessor-`, non-UTF-8 charsets | refused with `cl : Command line error : ...` |
 
@@ -511,21 +527,59 @@ bcc compiles C17 by default, as clang-cl does, and defines
 **Diagnostics.** `file(line): error: message`, the form `cl` writes
 without `/diagnostics:` (its `/diagnostics:classic`); `/diagnostics:column`
 gives `file(line,col):`, the form clang-cl writes by default and MSBuild
-asks `cl` for. `cl`'s own messages carry
-a code such as `C2065`; bcc's messages are its own, and no mapping from them
-to MSVC's codes is documented, so bcc writes no code rather than an invented
-one. The MSVC codes bcc writes are those Microsoft documents for the
-driver's own messages: warnings D9002 (an unknown option), D9024 and D9027
-(inputs), errors D8003 (no source file) and D8036 (`/Fo` for several
-sources), and fatal error C1083 for a source that cannot be opened, which
-gives the C runtime's reason (`No such file or directory`) on Windows too,
-as `cl` does, rather than the system's. bcc's own driver messages take `cl`'s
-command-line form without a code (`cl : Command line error : cannot build
-...`). `/showIncludes` indents each header by one space more per level of
+asks `cl` for. The diagnostics `cl`'s users meet most take `cl`'s code and
+words, and drop bcc's notes:
+
+| Code | `cl`'s words | Level | bcc's group |
+| --- | --- | --- | --- |
+| error C2065 | `'y': undeclared identifier` | | |
+| error C2143 | `syntax error: missing ';' before 'return'` (a type keyword is `'type'`, a literal `'constant'` or `'string'`) | | |
+| error C2146 | `syntax error: missing ';' before identifier 'y'` | | |
+| warning C4013 | `'g' undefined; assuming extern returning int` | 3 | `implicit-function-declaration` |
+| warning C4047 | `'=': 'int *' differs in levels of indirection from 'int'` (also between pointers: `'int *'` from `'char **'`) | 1 | `int-conversion` |
+| warning C4133 | `'=': incompatible types - from 'float *' to 'int *'` | 1 | `incompatible-pointer-types` |
+| warning C4311 | `'type cast': pointer truncation from 'int *' to 'int'` | 1 | `pointer-to-int-cast` |
+| warning C4312 | `'type cast': conversion from 'int' to 'int *' of greater size` | 1 | `int-to-pointer-cast` |
+
+The operation that leads C4047 and C4133 is `initializing`, `=`,
+`function` (an argument) or `return`, as in `cl`. A type `cl` spells its
+own way (`__int64`, a function pointer with `__cdecl`) keeps bcc's words,
+without a code, and so does every other diagnostic: no mapping from bcc's
+other messages to MSVC's codes is documented, so bcc writes no code rather
+than an invented one. As in `cl`, the command line shows level 1 warnings
+by default (`/W1`), so C4013 appears from `/W3`; `/wd`, `/we` and
+`/w1`-`/w4` with these numbers control them, `/we` making one an error at
+any level. `cl` only warns about a conversion between a pointer and an
+integer or between incompatible pointers, and (C4113) between function
+pointers whose parameters differ, so the personality makes those groups,
+which Clang's rules make errors, warnings unless `/WX` is given. C4113 and
+C4090 (lost qualifiers) keep bcc's words, but `/wd`, `/we` and the levels
+name them apart from C4133, as `cl` does. The rightmost of `/W0`-`/W4`,
+`/Wall` and `/w` wins. Under
+`/WX` bcc writes `error C4047`, where `cl` writes `error C2220: the
+following warning is treated as an error` and then the warning. bcc
+reports in source order, while `cl` reports an initializer's C4047 after
+the warnings of the statements that follow it in the same function, as the
+Windows comparison with `cl` shows.
+
+The MSVC codes bcc writes for the driver's own messages are those
+Microsoft documents: warnings D9002 (an unknown option), D9024 and D9027
+(inputs), errors D8003 (no source file), D8022 (a command file that cannot
+be opened) and D8036 (`/Fo` for several sources), and fatal error C1083
+for a source that cannot be opened, which gives the C runtime's reason
+(`No such file or directory`) on Windows too, as `cl` does, rather than
+the system's. bcc's own driver messages take `cl`'s command-line form
+without a code (`cl : Command line error : cannot build ...`).
+`/showIncludes` indents each header by one space more per level of
 nesting, as `cl` does, and leaves out a re-inclusion whose include guard
-is already defined. `cl` writes compiler diagnostics,
-C1083 among them, to stdout; bcc writes them to stderr, as in its other
-modes, and writes only the source names to stdout, as `cl` does.
+is already defined. `cl` writes compiler diagnostics, C1083 among them, to
+stdout; bcc writes them to stderr, as in its other modes, and writes only
+the source names to stdout, as `cl` does. (Microsoft Learn: "Compiler Error
+C2065", "Compiler Error C2143", "Compiler Error C2146", "Compiler Warning
+(level 3) C4013", "Compiler Warning (level 1) C4047", "Compiler Warning
+(level 1 and level 3) C4133", "Compiler Warning (level 1) C4311",
+"Compiler Warning (level 1) C4312", "/w, /W0, /W1, /W2, /W3, /W4, /w1, /w2,
+/w3, /w4, /Wall, /wd, /we, /wo, /Wv, /WX (Warning level)".)
 
 **Banner.** `bcc 0.1.0, compatible with Microsoft (R) C/C++ Optimizing
 Compiler Version 19.33.0 for x64; not a Microsoft product`, to stderr. Tools
@@ -684,7 +738,8 @@ which prints `tcc version 0.9.27`. bcc claims the 0.9.27 release
 where they only extend 0.9.27's command line: `-dumpmachine`, `-M`, `-MM`,
 `-MMD`, `-MP`, `-std=gnu11`, `-run --` and `-rstdin`. The opt-in test
 `tcc_parity_with_a_real_tcc` in `tests/integration/personality_cli.rs`
-repeats the comparison when `BCC_TCC` names a `tcc` binary.
+repeats the comparison when `BCC_TCC` names a `tcc` binary, which the Linux
+CI job does with Ubuntu's.
 
 **Command line.** TCC reads its arguments with `tcc_parse_args`
 (`libtcc.c`), and so does the personality: an option is the first entry
@@ -949,7 +1004,11 @@ runtime and the ABI, not these rules.
   --compiler-identity=clang`, to keep Clang's paths.
 - **Name bcc.** Every banner names bcc and says it is not the compiler it
   mimics; `__bcc__` stays defined in every identity.
-- **No invented MSVC codes.** See Diagnostics under MSVC.
+- **`cl`'s codes only where its words are modeled.** Under the `cl`
+  identity a diagnostic carries an MSVC code only where bcc writes `cl`'s
+  own message for it, for the diagnostics `cl`'s users meet most; the
+  others keep bcc's words and no code rather than an invented one. See
+  Diagnostics under MSVC.
 - **The host's C library for the host only.** Compiling for the host on an
   x86-64 Linux host, bcc's own driver searches the host's
   `/usr/local/include`, multiarch directory and `/usr/include` after its
@@ -1027,12 +1086,19 @@ Besides those above:
   (`inc.c(1): fatal error C1083: Cannot open include file: 'deep.h': No
   such file or directory`); bcc reports `cannot find header` with the
   directories it searched, and goes on.
-- Compiler messages are bcc's own, without `cl`'s codes, and go to stderr:
-  `cl`'s `bad.c(2): error C2065: 'missing': undeclared identifier` is
-  bcc's `bad.c(2): error: identifier has no visible declaration:
-  `missing`` and a C99 note. bcc has no unreferenced-local warning
-  (`cl /W4`'s C4101), so `cl /W4 /WX` fails (error C2220) on a unit bcc
-  compiles.
+- Compiler messages go to stderr, and only those in the table under
+  Diagnostics take `cl`'s code and words; the others are bcc's own, with
+  their C99 notes. bcc has no warning levels of its own, so `/W2` and `/W3`
+  change only the coded warnings, and `/W4` and `/Wall` turn on bcc's
+  `-Wall -Wextra`. bcc has no unreferenced-local warning (`cl /W4`'s
+  C4101), so `cl /W4 /WX` fails (error C2220) on a unit bcc compiles.
+  `/wo` (report a warning once) has no effect.
+- bcc implements no `deprecated` attribute, `__declspec(deprecated)`
+  included, so it never writes `cl`'s C4996, which the CRT headers raise
+  through it for `strcpy` and its relatives at `/W3`.
+- A missing `;` at the end of a file, `cl`'s fatal error C1004, keeps
+  bcc's words, and so does one before a keyword other than a statement or
+  basic type keyword.
 - `-v` and `-###` print the commands bcc runs, not GCC's or Clang's: each
   step is a bcc command line that bcc runs in process, named by the path
   of the running bcc, then, under `-v`, the bundled clang's assembly and

@@ -945,6 +945,67 @@ fn alternatives<'a>(items: &'a [&'a str]) -> impl Display {
 }
 
 /// Describes a found token, or the end of the file when there is none.
+/// `cl`'s syntax error for a missing `;` before `token`: C2146 names an
+/// identifier, C2143 any other token, a type keyword as `type` and a
+/// constant or string literal by its kind. `None` for the end of the file
+/// (`cl`'s fatal error C1004) and for a keyword whose naming in `cl`'s
+/// message bcc does not know. Microsoft Learn: "Compiler Error C2143",
+/// "Compiler Error C2146".
+/// C99: §6.7p1, p. 97; PDF p. 109 (a declaration ends with `;`); §6.8.3p1,
+/// p. 132; PDF p. 144 (so does an expression statement).
+fn msvc_missing_semicolon<'d>(
+    token: Option<TokenType>,
+    spelling: Option<&str>,
+    arena: &'d Bump,
+) -> Option<(&'static str, &'d str)> {
+    use KeywordTokenType as K;
+    let before = match token? {
+        | TokenType::Identifier =>
+            return Some((
+                "C2146",
+                format_in!(
+                    arena,
+                    "syntax error: missing ';' before identifier '{}'",
+                    spelling?
+                ),
+            )),
+        | TokenType::Integer(_) | TokenType::Float(_) | TokenType::Character(_) => "constant",
+        | TokenType::String(_) => "string",
+        | TokenType::Keyword(
+            K::Void
+            | K::Char
+            | K::Short
+            | K::Int
+            | K::Long
+            | K::Float
+            | K::Double
+            | K::Signed
+            | K::Unsigned
+            | K::Bool,
+        ) => "type",
+        | TokenType::Keyword(
+            K::Return
+            | K::If
+            | K::Else
+            | K::While
+            | K::Do
+            | K::For
+            | K::Switch
+            | K::Case
+            | K::Default
+            | K::Break
+            | K::Continue
+            | K::Goto,
+        )
+        | TokenType::Operator(_) => spelling?,
+        | TokenType::Keyword(_) => return None,
+    };
+    Some((
+        "C2143",
+        format_in!(arena, "syntax error: missing ';' before '{before}'"),
+    ))
+}
+
 fn found_token(token: Option<TokenType>, spelling: Option<&str>) -> impl Display {
     fmt::from_fn(move |f| match token {
         | Some(token) => write!(f, "{}", token.found(spelling)),
@@ -1687,6 +1748,13 @@ impl ToDiagnostic for ParserError<'_> {
                     "expected `;`, found {}",
                     found_token(self.found, self.found_spelling)
                 );
+                if context.configuration.msvc_wording()
+                    && let Some((code, message)) =
+                        msvc_missing_semicolon(self.found, self.found_spelling, arena)
+                {
+                    explanation.message = message;
+                    explanation = explanation.msvc_code(code);
+                }
             }
             explanation.help.clear();
         }
