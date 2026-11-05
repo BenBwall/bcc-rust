@@ -7,7 +7,10 @@
 //! element a pointer points at names that pointer. The objects of returned
 //! calls fold into one cell.
 
-use leptos::prelude::*;
+use leptos::{
+    html,
+    prelude::*,
+};
 
 use super::tape::value_text;
 use crate::{
@@ -21,8 +24,32 @@ use crate::{
 
 #[component]
 pub fn Cells(snapshot: Memo<Option<Snapshot>>) -> impl IntoView {
+    // The strip is drawn anew at each step, at its start. Where it is wider
+    // than the window, bring the cell the step used into the middle.
+    let section = NodeRef::<html::Section>::new();
+    Effect::new(move || {
+        snapshot.track();
+        let Some(section) = section.get() else {
+            return;
+        };
+        let Ok(Some(strip)) = section.query_selector(".cells") else {
+            return;
+        };
+        if strip.scroll_width() <= strip.client_width() {
+            return;
+        }
+        if let Ok(Some(cell)) = strip.query_selector("[data-access]") {
+            let cell = cell.get_bounding_client_rect();
+            let offset = cell.left() - strip.get_bounding_client_rect().left();
+            let left = f64::from(strip.scroll_left()) + offset
+                - (f64::from(strip.client_width()) - cell.width()) / 2.0;
+            let options = web_sys::ScrollToOptions::new();
+            options.set_left(left.max(0.0));
+            strip.scroll_to_with_scroll_to_options(&options);
+        }
+    });
     view! {
-        <section class="head-cells" aria-labelledby="cells-title">
+        <section class="head-cells" aria-labelledby="cells-title" node_ref=section>
             <h2 class="module-caption" id="cells-title">
                 <b>"Under the head"</b>" the objects at the playhead, by call"
             </h2>

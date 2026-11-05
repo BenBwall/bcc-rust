@@ -44,6 +44,7 @@ pub fn Datasheet(
                 <b>"Table 1"</b>
                 {move || snapshot.with(|snapshot| snapshot.as_ref().map_or_else(|| " — Objects".to_owned(), |snapshot| format!(" — Objects at step {}", snapshot.step)))}
             </figcaption>
+            <div class="sheet-scroll">
             <table>
                 <thead>
                     <tr>
@@ -73,22 +74,21 @@ pub fn Datasheet(
                                 .filter(|object| shown(object) || ended.len() <= 3)
                                 .map(|object| {
                                     let used = snapshot.event.access.iter().any(|access| access.object == object.id);
-                                    let value = if object.alive {
+                                    let value = if let (true, Value::Struct { size, .. }) = (object.alive, &object.value) {
+                                        // Its members' rows hold the values.
+                                        format!("{size} bytes")
+                                    } else if object.alive {
                                         value_text(&object.value, &snapshot.objects).unwrap_or_else(|| "indeterminate".to_owned())
                                     } else {
                                         "lifetime over".to_owned()
                                     };
                                     let place = place(object);
-                                    let ty = match &object.value {
-                                        | Value::Struct { size, .. } => format!("{} ({size} B)", object.ty),
-                                        | _ => object.ty.clone(),
-                                    };
                                     let row = view! {
                                         <tr class:is-used=used class:is-ended=!object.alive>
                                             <th scope="row" class=palette::class(&object.name)>
                                                 <span class="sheet-swatch" aria-hidden="true"></span>{reel.with(|reel| reel.label_of(object.id)).unwrap_or_else(|| object.name.clone())}
                                             </th>
-                                            <td>{ty}</td>
+                                            <td>{object.ty.clone()}</td>
                                             <td>{place}</td>
                                             <td>{born.get(&object.id).map(ToString::to_string).unwrap_or_default()}</td>
                                             <td class="sheet-value">{value}</td>
@@ -109,6 +109,7 @@ pub fn Datasheet(
                     })}
                 </tbody>
             </table>
+            </div>
         </figure>
     }
 }
@@ -118,7 +119,7 @@ fn place(object: &Object) -> String {
     if object.storage == "static" {
         return object.scope.as_ref().map_or_else(
             || "static storage".to_owned(),
-            |function| format!("static, in {function}()"),
+            |function| format!("static, {function}()"),
         );
     }
     if object.function.is_empty() {
@@ -151,8 +152,17 @@ fn collect(
     for member in members {
         let name = format!("{path}.{}", member.name);
         let offset = base + member.offset;
-        let shown =
-            value_text(&member.value, &[]).unwrap_or_else(|| "indeterminate".to_owned());
+        // A nested structure's own members follow it, with the values.
+        let shown = if matches!(member.value, Value::Struct { .. }) {
+            String::new()
+        } else {
+            value_text(&member.value, &[]).unwrap_or_else(|| "?".to_owned())
+        };
+        let bytes = if member.size == 1 {
+            format!("byte {offset}")
+        } else {
+            format!("bytes {}–{}", offset, offset + member.size - 1)
+        };
         rows.push(
             view! {
                 <tr class="is-member" style:--depth=depth.to_string()>
@@ -160,7 +170,7 @@ fn collect(
                         <span class="sheet-member">{format!(".{}", member.name)}</span>
                     </th>
                     <td>{member.ty.clone()}</td>
-                    <td class="sheet-offset">{format!("bytes {}–{}", offset, offset + member.size - 1)}</td>
+                    <td class="sheet-offset">{bytes}</td>
                     <td></td>
                     <td class="sheet-value">{shown}</td>
                 </tr>
@@ -178,7 +188,7 @@ fn collect(
                         <td>{format!("{} byte{plural}", member.padding)}</td>
                         <td class="sheet-offset">{if member.padding == 1 { format!("byte {start}") } else { format!("bytes {}–{}", start, start + member.padding - 1) }}</td>
                         <td></td>
-                        <td class="sheet-value">"unnamed, no value"</td>
+                        <td class="sheet-value">"no value"</td>
                     </tr>
                 }
                 .into_any(),
