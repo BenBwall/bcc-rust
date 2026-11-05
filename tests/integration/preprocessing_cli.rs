@@ -182,8 +182,8 @@ mod tests {
     /// A wider matrix of expansions, arguments, `#`, `##`, `__VA_OPT__`,
     /// built-in macros and token pairs. The expected text is `gcc -E -P
     /// -std=gnu2x` from GCC 13.3, whose model both personalities follow, but
-    /// for `c27`, where GCC's `nL"s"` is other tokens and bcc keeps Clang's; see
-    /// the PR that added it for where Clang's own printer differs.
+    /// for `c27`, where GCC's `nL"s"` is other tokens and bcc keeps Clang's;
+    /// see the PR that added it for where Clang's own printer differs.
     #[test]
     fn expansion_matrix_is_spaced_as_gcc_spaces_it() {
         let source =
