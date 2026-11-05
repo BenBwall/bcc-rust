@@ -2108,7 +2108,10 @@ fn About() -> impl IntoView {
                          functions returning int or a structure, if, while and for. Still outside it: the preprocessor \
                          (its lesson opens in the compiler pipeline instead), arrays of anything but int, unions, other \
                          integer types, void functions, char parameters, char pointers and strings, switch, break and goto, library calls \
-                         and floating point. Operands are evaluated left to right, and nested side effects are rejected \
+                         and floating point. Initializers take no brace elision or array designators, and a static object's \
+                         takes only a decimal int constant, or 0 for a pointer, so no address constants or arithmetic. \
+                         Pointers to structures take no arithmetic, and a call's result has no members to select. \
+                         Operands are evaluated left to right, and nested side effects are rejected \
                          rather than sequenced."
                     </p>
                     <p>

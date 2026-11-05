@@ -1686,6 +1686,47 @@ fn brace_and_designated_initializers_fill_members_and_zero_the_rest() {
 }
 
 #[test]
+fn a_repeated_initializer_replaces_its_whole_subobject() {
+    for (declarations, object) in [
+        ("", "struct O x = {.p = {1, 2}, .p = {3}};\n    "),
+        ("struct O x = {.p = {1, 2}, .p = {3}};\n", ""),
+        ("", "struct A x = {.a = {1, 2}, .a = {3}};\n    "),
+        ("struct A x = {.a = {1, 2}, .a = {3}};\n", ""),
+    ] {
+        let source = format!(
+            "struct P {{ int a; int b; }};\nstruct O {{ struct P p; }};\nstruct A {{ int a[2]; \
+             }};\n{declarations}int main(void) {{\n    {object}return {};\n}}\n",
+            if declarations.contains("struct O") || object.contains("struct O") {
+                "x.p.a * 10 + x.p.b"
+            } else {
+                "x.a[0] * 10 + x.a[1]"
+            },
+        );
+        let states = states(&source);
+        let last = states.last().expect("a final state");
+        assert_eq!(
+            last.return_value,
+            Some(Value::Integer(30)),
+            "{source}: {:?}",
+            last.diagnostics
+        );
+    }
+}
+
+#[test]
+fn a_static_initializer_with_arithmetic_says_what_the_subset_takes() {
+    let states = states("int n = 1 + 2;\nint main(void) {\n    return n;\n}\n");
+    let last = states.last().expect("a final state");
+    assert!(
+        last.diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("no arithmetic")),
+        "{:?}",
+        last.diagnostics
+    );
+}
+
+#[test]
 fn pointers_to_members_stay_within_their_member() {
     let source = "struct pair { int a[2]; int b; };\nint main(void) {\n    struct pair s = {{1, \
                   2}, 3};\n    int *pb = &s.b;\n    *pb = 8;\n    int *q = s.a;\n    q = q + \

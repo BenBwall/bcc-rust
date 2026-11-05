@@ -554,8 +554,14 @@ impl<'a> Parser<'a> {
             };
             let at = i32::try_from(leaf).map_err(|_| self.error("object too large"))?;
             match member_type {
-                | Type::Array(_) | Type::Struct(_) if self.at("{") =>
-                    self.initializer_list(name, shape, member_type, leaf, mentioned)?,
+                | Type::Array(_) | Type::Struct(_) if self.at("{") => {
+                    // A later initializer of the same subobject replaces it
+                    // whole, so a scalar the new list leaves out is zero
+                    // again, not what an earlier list stored (C99 §6.7.8p19,
+                    // p21).
+                    mentioned[leaf..leaf + member_type.leaves(&self.structures)].fill(false);
+                    self.initializer_list(name, shape, member_type, leaf, mentioned)?;
+                },
                 | Type::Array(_) =>
                     return Err(self.error(
                         "brace the initializer of each nested array; brace elision is outside \
@@ -1225,6 +1231,11 @@ impl<'a> Parser<'a> {
                              elision is outside this subset",
                         ));
                     }
+                    // A later initializer of the same subobject replaces it
+                    // whole (C99 §6.7.8p19, p21).
+                    let mut zeros = Vec::new();
+                    layout::flatten(&member.zero(&self.structures), &mut zeros);
+                    leaves[leaf..leaf + zeros.len()].clone_from_slice(&zeros);
                     self.constant_initializer(member, leaf, leaves)?;
                     index += 1;
                     if !self.take(",") {
@@ -1257,6 +1268,12 @@ impl<'a> Parser<'a> {
                     ));
                 };
                 self.position += 1;
+                if !(self.at(",") || self.at(";") || self.at("}")) {
+                    return Err(self.error(
+                        "a static object's initializer must be a constant; this subset takes a \
+                         decimal int constant, optionally negated, and no arithmetic on it",
+                    ));
+                }
                 if ty == Type::Char {
                     #[expect(
                         clippy::cast_possible_truncation,
