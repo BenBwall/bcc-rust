@@ -310,10 +310,10 @@
   .map-stop { fill: var(--screen); stroke: var(--screen-ink); stroke-width: 1.5; }
   .map-form { fill: var(--screen-dim); font: 11px var(--font-mono); }
   .map-source { fill: var(--screen-ink); font: 700 11px var(--font-mono); }
-  /* The stations' names, over the graph's left margin: each a link. */
-  /* The station names are frozen at the left edge: where the graph scrolls
-     sideways (on a phone), it slides under them, so each line keeps its
-     name, which rides on it like the tape's name tags. */
+  /* The stations' names, over the graph's left margin: each a link. They
+     are frozen at the left edge: where the graph scrolls sideways (on a
+     phone), it slides under them, so each line keeps its name, which rides
+     on it like the tape's name tags. */
   .map-labels {
     position: sticky; left: 0; z-index: 1; width: 20%; align-self: stretch;
     font-size: 10.5px; letter-spacing: .06em; text-transform: uppercase;
