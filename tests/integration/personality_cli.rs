@@ -607,6 +607,56 @@ mod tests {
         }
     }
 
+    /// What GCC 14 finds outside Normalization Form C, raw and as universal
+    /// character names.
+    #[test]
+    fn gcc_finds_every_kind_of_identifier_outside_normalization_form_c() {
+        use std::fmt::Write as _;
+        let directory = Directory::new();
+        // Composition, also across a lower mark; marks out of canonical
+        // order; characters the form never holds, wherever they stand; and
+        // Hangul. Otherwise nothing composes or moves.
+        for (raw, warned) in [
+            ("a\u{301}", true),
+            ("a\u{327}\u{301}", true),
+            ("a\u{301}\u{301}", true),
+            ("e\u{301}\u{302}", true),
+            ("b\u{301}\u{327}", true),
+            ("\u{212B}", true),
+            ("\u{212B}x", true),
+            ("x\u{212B}", true),
+            ("\u{958}", true),
+            ("\u{1100}\u{1161}", true),
+            ("\u{AC00}\u{11A8}", true),
+            ("b\u{327}\u{301}", false),
+            ("x\u{301}", false),
+            ("q\u{300}", false),
+            ("\u{AC01}\u{11A8}", false),
+            ("\u{C5}\u{327}", false),
+            ("\u{E0}", false),
+        ] {
+            let mut universal = String::new();
+            for character in raw.chars() {
+                if character.is_ascii() {
+                    universal.push(character);
+                } else {
+                    _ = write!(universal, "\\u{:04X}", u32::from(character));
+                }
+            }
+            for spelling in [raw, &universal] {
+                directory.write("id.c", &format!("int {spelling};\n"));
+                let output = directory.bcc("--gcc-mode", &["-std=c23", "-fsyntax-only", "id.c"]);
+                let message = stderr(&output);
+                assert!(output.status.success(), "{spelling}: {message}");
+                assert_eq!(
+                    message.contains("is not in Normalization Form C"),
+                    warned,
+                    "{spelling}: {message}"
+                );
+            }
+        }
+    }
+
     /// GCC 14 warns of an identifier outside Normalization Form C
     /// (`-Wnormalized`), as `a` followed by U+0300 is; C23 requires the
     /// form, so there `-pedantic-errors` makes it an error. Clang has no

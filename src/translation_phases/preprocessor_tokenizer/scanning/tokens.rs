@@ -192,7 +192,7 @@ impl Lexer<'_, '_, '_, '_> {
                     self.char_at(start),
                     true,
                 ) =>
-                self.lex_identifier(start, start + self.char_at(start).len_utf8()),
+                self.lex_extended_identifier(start, start + self.char_at(start).len_utf8()),
             | _ => self.lex_other(start),
         }
     }
@@ -287,7 +287,7 @@ impl Lexer<'_, '_, '_, '_> {
         }
         let configuration = self.context.configuration;
         if configuration.compiler_identity() == CompilerIdentity::Gcc
-            && super::ucn::composes_in_place(configuration, &self.text[start..end])
+            && super::ucn::not_in_nfc(configuration, &self.text[start..end])
         {
             let error = PreprocessorTokenizerErrorType::Unnormalized {
                 required: configuration.standard() >= CStandard::C23,

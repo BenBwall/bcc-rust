@@ -190,29 +190,69 @@ pub(crate) fn identifier_character(
 }
 
 /// Whether GCC finds the identifier spelled `text` outside Normalization
-/// Form C, which C23 requires of it, by the one case bcc detects: a
-/// character followed directly by a combining mark that canonical
-/// composition joins to it, as `a\u0300` stands for `à`. GCC also finds
-/// marks out of canonical order and composition across an intervening mark
-/// (`a\u0327\u0301`); bcc does not.
-/// C23: §6.4.2.1p3, p. 54; PDF p. 67.
-pub(super) fn composes_in_place(configuration: CompilerConfiguration, text: &str) -> bool {
-    let mut previous = None;
+/// Form C, which C23 requires of it. The identifier is not in the form when
+/// a character in it never is (a singleton decomposition or an excluded
+/// composite), when combining marks stand out of canonical order, or when
+/// canonical composition would join a character to the last starter before
+/// it, as `a\u0300` stands for `à` and `a\u0327\u0301` for `á\u0327`.
+/// Without decomposing, bcc misses a mark that would reorder into a
+/// precomposed character (`Å\u0338\u0328\u0309`), and it does not report
+/// `-Wnormalized=nfkc`'s compatibility characters.
+///
+/// C23: §6.4.2.1p3, p. 54; PDF p. 67. Unicode Standard Annex #15, sections
+/// 1.3 (canonical ordering and composition) and 9 (detecting normalization
+/// forms).
+pub(super) fn not_in_nfc(configuration: CompilerConfiguration, text: &str) -> bool {
+    let mut starter = None;
+    // The highest combining class since the last starter, which blocks a
+    // mark of no higher class from composing with it, and whether
+    // anything stands between them, which blocks another starter.
+    let mut between = None;
+    let mut previous_class = 0;
     let mut index = 0;
     while let Some(rest) = text.get(index..)
         && let Some(next) = rest.chars().next()
     {
         let (character, length) =
             decode(configuration, rest, index == 0).unwrap_or((next, next.len_utf8()));
-        if let Some(base) = previous
-            && composition::composes(base, character)
-        {
+        index += length;
+        if composition::never_in_nfc(character) {
             return true;
         }
-        previous = Some(character);
-        index += length;
+        let class = composition::combining_class(character);
+        if class != 0 && previous_class > class {
+            return true;
+        }
+        if let Some(base) = starter {
+            let unblocked = match between {
+                | None => true,
+                | Some(highest) => class != 0 && highest < class,
+            };
+            if unblocked
+                && (composition::composes(base, character) || hangul_composes(base, character))
+            {
+                return true;
+            }
+        }
+        if class == 0 {
+            starter = Some(character);
+            between = None;
+        } else {
+            between = Some(between.map_or(class, |highest: u8| highest.max(class)));
+        }
+        previous_class = class;
     }
     false
+}
+
+/// Whether Hangul composition joins `next` to `base`: a leading consonant
+/// and a vowel, or such a syllable and a trailing consonant. The Unicode
+/// Standard, chapter 3.12, "Conjoining Jamo Behavior".
+fn hangul_composes(base: char, next: char) -> bool {
+    let (base, next) = (u32::from(base), u32::from(next));
+    let syllable = base.wrapping_sub(0xAC00);
+    matches!((base, next), (0x1100..=0x1112, 0x1161..=0x1175))
+        || (syllable < 11172 && syllable % 28 == 0 && matches!(next, 0x11A8..=0x11C2))
 }
 
 /// C11's ranges of characters allowed in identifiers (D.1), less those

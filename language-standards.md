@@ -1089,11 +1089,14 @@ identifier spells a character below U+00A0, as both compilers require (C99 and
 C23 §6.4.3p2); GCC alone reads `\u0024` as `$`. Under the GCC identity,
 `-Wnormalized` warns of an identifier outside Normalization Form C, which C23
 requires, so there `-pedantic-errors` makes it an error; `-w`, `-Wno-normalized`
-and `-Wnormalized=none` silence it. bcc detects only a combining mark directly
-after a character canonical composition joins it to (`a\u0300`); GCC also
-reports marks out of canonical order, composition across an intervening mark
-(`a\u0327\u0301`), Hangul jamo sequences and singleton decompositions, and
-treats `-Wnormalized=nfkc` and `=id` as stricter levels.
+and `-Wnormalized=none` silence it. bcc finds a character the form never
+holds, combining marks out of canonical order, and composition with the last
+starter, including Hangul and across a lower mark; the tables come from
+`scripts/generate_normalization_tables.py`. Without decomposing it misses a
+mark that would reorder into a precomposed character, and GCC also warns of a
+few identifiers already in the form. It does not report `-Wnormalized=nfkc`'s
+compatibility characters, where GCC treats `-Wnormalized=nfkc` and `=id` as
+stricter levels.
 
 A C23 `'` continues a pp-number only before a digit or an ASCII nondigit, even
 when conversion must reject the resulting constant; a universal character name,
