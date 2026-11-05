@@ -738,7 +738,8 @@ which prints `tcc version 0.9.27`. bcc claims the 0.9.27 release
 where they only extend 0.9.27's command line: `-dumpmachine`, `-M`, `-MM`,
 `-MMD`, `-MP`, `-std=gnu11`, `-run --` and `-rstdin`. The opt-in test
 `tcc_parity_with_a_real_tcc` in `tests/integration/personality_cli.rs`
-repeats the comparison when `BCC_TCC` names a `tcc` binary.
+repeats the comparison when `BCC_TCC` names a `tcc` binary, which the Linux
+CI job does with Ubuntu's.
 
 **Command line.** TCC reads its arguments with `tcc_parse_args`
 (`libtcc.c`), and so does the personality: an option is the first entry

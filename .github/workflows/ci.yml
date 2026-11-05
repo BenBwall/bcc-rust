@@ -153,6 +153,10 @@ jobs:
           llvm-key: ${{ needs.llvm.outputs.key }}
       - run: cargo test --all-targets --no-fail-fast
       - run: cargo test --features benchmarking-internals --test allocation_count
+      - name: Compare the TCC personality with a real TCC
+        run: |
+          sudo apt-get update && sudo apt-get install -y tcc
+          BCC_TCC="$(command -v tcc)" cargo test --test integration tcc_parity_with_a_real_tcc
       # The site (web/) compiles every stage live in the browser except LLVM
       # IR, which it carries precomputed by the native compiler for each
       # lesson. Regenerate it with this commit's compiler and fail if it
