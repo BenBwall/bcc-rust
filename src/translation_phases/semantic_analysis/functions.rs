@@ -303,6 +303,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             parameter_aliases: &[],
             assembly: false,
             va_arg_pack: false,
+            builtin_setjmp: false,
         });
         self.functions.current = Some(FunctionContext {
             id,
@@ -1008,11 +1009,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         for i in 0..self.functions.inline_objects.len() {
             let object = self.functions.inline_objects[i];
             if self.is_inline_definition(object.function) {
-                let b = self.bindings[object.binding];
+                let name = object.binding.map(|b| self.bindings[b].name.name);
                 self.error(
                     SemanticErrorKind::InlineStaticObject,
-                    b.name.source_vectors,
-                    Some(b.name.name),
+                    object.source,
+                    name,
                     None,
                 );
             }
@@ -1242,6 +1243,32 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 None,
                 None,
             );
+        }
+    }
+
+    /// Records a modifiable static or thread-local compound literal `e` of
+    /// type `ty` in an inline function with external linkage, which C99
+    /// §6.7.4p3 forbids in an inline definition (checked once the unit
+    /// shows whether the definition is one).
+    /// C99: §6.7.4 paragraph 3, p. 112; PDF p. 124; C23 (N3220): §6.5.3.6
+    /// paragraph 4, p. 79; PDF p. 92.
+    pub(super) fn inline_static_literal(&mut self, e: &'tu Expression<'tu>, ty: TypeId) {
+        if !self.types.unanalyzed(ty)
+            && self.inline_object_modifiable(ty)
+            && let Some(function) = self.functions.current
+            && function
+                .syntax
+                .declaration_specifiers
+                .function_specifiers
+                .is_inline
+            && let Some(function) = function.binding
+            && self.bindings[function].linkage == Linkage::External
+        {
+            self.functions.inline_objects.push(InlineObject {
+                function,
+                binding: None,
+                source: e.source_vectors,
+            });
         }
     }
 
@@ -1604,7 +1631,8 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         {
             self.functions.inline_objects.push(InlineObject {
                 function,
-                binding: index,
+                binding: Some(index),
+                source: binding.name.source_vectors,
             });
         }
         let previous = (binding.linkage != Linkage::None)
@@ -2871,7 +2899,9 @@ enum ReferenceOwner {
 #[derive(Clone, Copy)]
 struct InlineObject {
     function: usize,
-    binding:  usize,
+    /// The object's binding; none for a compound literal.
+    binding:  Option<usize>,
+    source:   SourceVectors,
 }
 
 #[expect(

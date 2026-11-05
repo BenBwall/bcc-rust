@@ -467,6 +467,717 @@ mod tests {
         }
     }
 
+    /// Characters beyond ASCII in identifiers follow each compiler's sets:
+    /// Clang takes C99's Annex D in C99, C11's in C11 and C17 and Unicode's
+    /// in C23; GCC 14 takes any of them in every mode
+    /// (gcc.dg/ucnid-5-utf8.c, ucnid-15-utf8.c).
+    #[test]
+    fn identifier_characters_follow_each_compiler() {
+        let directory = Directory::new();
+        directory.write("emoji.c", "int a\u{1F600} = 2;\nint b\\U0001F600 = 3;\n");
+        directory.write("super.c", "int \u{3C0}\u{B2} = 9;\n");
+        // With a pedantic option, GCC enforces the standard's own set; a
+        // combining mark or middle dot continues a C23 identifier.
+        directory.write("mark.c", "int a\\u0300;\nint b\\u00B7;\n");
+        for (file, standard, options, gcc, clang) in [
+            ("emoji.c", "c99", &["-pedantic"][..], false, false),
+            ("emoji.c", "c11", &["-pedantic"], true, true),
+            ("emoji.c", "c23", &["-pedantic"], false, false),
+            ("mark.c", "c23", &[], true, true),
+            ("mark.c", "c23", &["-pedantic"], true, true),
+        ] {
+            for (mode, accepted) in [("--gcc-mode", gcc), ("--clang-mode", clang)] {
+                let std = format!("-std={standard}");
+                let mut args = vec![std.as_str(), "-fsyntax-only"];
+                args.extend_from_slice(options);
+                args.push(file);
+                let output = directory.bcc(mode, &args);
+                assert_eq!(
+                    output.status.success(),
+                    accepted,
+                    "{mode} {args:?}: {}",
+                    stderr(&output)
+                );
+            }
+        }
+        // GCC reads `\u0024` as `$`; Clang refuses it.
+        directory.write(
+            "dollar.c",
+            "int a$b(void) { return 1; }\nint main(void) { return a\\u0024b() - 1; }\n",
+        );
+        let output = directory.bcc("--gcc-mode", &["-std=c99", "-fsyntax-only", "dollar.c"]);
+        succeeds(&output);
+        let output = directory.bcc("--clang-mode", &["-std=c99", "-fsyntax-only", "dollar.c"]);
+        assert!(!output.status.success());
+        for (file, standard, gcc, clang) in [
+            ("emoji.c", "c99", true, false),
+            ("emoji.c", "c11", true, true),
+            ("emoji.c", "c17", true, true),
+            ("emoji.c", "c23", true, false),
+            ("super.c", "c99", true, false),
+            ("super.c", "c11", true, true),
+            ("super.c", "c23", true, true),
+        ] {
+            for (mode, accepted) in [("--gcc-mode", gcc), ("--clang-mode", clang)] {
+                let std = format!("-std={standard}");
+                let output = directory.bcc(mode, &[std.as_str(), "-fsyntax-only", file]);
+                assert_eq!(
+                    output.status.success(),
+                    accepted,
+                    "{mode} {std} {file}: {}",
+                    stderr(&output)
+                );
+            }
+        }
+    }
+
+    /// U+20D0-U+20FF continue a C23 identifier only where they are
+    /// `XID_Continue`: its nonspacing marks, not its enclosing marks.
+    /// Clang 23 refuses `a` followed by U+20DD in C23, as GCC 14 does
+    /// under `-pedantic`; GCC also takes C11's set, which holds it.
+    #[test]
+    fn enclosing_marks_continue_no_c23_identifier() {
+        let directory = Directory::new();
+        directory.write("enclosing.c", "int a\u{20DD};\n");
+        directory.write("enclosing-ucn.c", "int a\\u20DD;\n");
+        directory.write("nonspacing.c", "int a\u{20D0};\n");
+        directory.write("nonspacing-ucn.c", "int a\\u20D0;\n");
+        for (file, options, gcc, clang) in [
+            ("enclosing.c", &[][..], true, false),
+            ("enclosing.c", &["-pedantic"], false, false),
+            ("enclosing-ucn.c", &[], true, false),
+            ("enclosing-ucn.c", &["-pedantic"], false, false),
+            ("nonspacing.c", &["-pedantic"], true, true),
+            ("nonspacing-ucn.c", &["-pedantic"], true, true),
+        ] {
+            for (mode, accepted) in [("--gcc-mode", gcc), ("--clang-mode", clang)] {
+                let mut args = vec!["-std=c23", "-fsyntax-only"];
+                args.extend_from_slice(options);
+                args.push(file);
+                let output = directory.bcc(mode, &args);
+                assert_eq!(
+                    output.status.success(),
+                    accepted,
+                    "{mode} {args:?}: {}",
+                    stderr(&output)
+                );
+            }
+        }
+    }
+
+    /// No universal character name spells a basic or control character in
+    /// an identifier (C99 and C23 §6.4.3p2): GCC 14 and Clang 23 refuse
+    /// `\u0061`, `a\u0030` and the like in every mode. GCC alone reads
+    /// `\u0024` as `$`.
+    #[test]
+    fn universal_character_names_spell_no_basic_character() {
+        let directory = Directory::new();
+        for (index, source) in [
+            "int \\u0061;\n",
+            "int \\U00000061;\n",
+            "int a\\u0030;\n",
+            "int a\\u005F;\n",
+            "int a\\u0040;\n",
+            "int a\\u0060;\n",
+            "int a\\u0001;\n",
+            "int a\\u009F;\n",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let file = format!("basic{index}.c");
+            directory.write(&file, source);
+            for standard in ["-std=c99", "-std=c17", "-std=c23", "-std=gnu17"] {
+                for mode in ["--gcc-mode", "--clang-mode"] {
+                    let output = directory.bcc(mode, &[standard, "-fsyntax-only", &file]);
+                    assert!(
+                        !output.status.success(),
+                        "{mode} {standard} {source}: {}",
+                        stderr(&output)
+                    );
+                }
+            }
+        }
+        directory.write("dollar.c", "int a\\u0024;\n");
+        for standard in ["-std=c99", "-std=c23"] {
+            let output = directory.bcc("--gcc-mode", &[standard, "-fsyntax-only", "dollar.c"]);
+            succeeds(&output);
+            let output = directory.bcc("--clang-mode", &[standard, "-fsyntax-only", "dollar.c"]);
+            assert!(!output.status.success());
+        }
+    }
+
+    /// GCC 14 warns of an identifier outside Normalization Form C
+    /// (`-Wnormalized`), as `a` followed by U+0300 is; C23 requires the
+    /// form, so there `-pedantic-errors` makes it an error. Clang has no
+    /// such check, nor the option.
+    #[test]
+    fn gcc_reports_identifiers_outside_normalization_form_c() {
+        let directory = Directory::new();
+        directory.write("raw.c", "int a\u{300};\n");
+        directory.write("ucn.c", "int a\\u0300;\n");
+        directory.write("composed.c", "int \u{E0}; int \\u00E0x;\n");
+        // (file, standard, options, accepted, warned) under GCC.
+        for file in ["raw.c", "ucn.c"] {
+            for (standard, options, accepted, warned) in [
+                ("-std=c23", &[][..], true, true),
+                ("-std=gnu23", &["-pedantic"], true, true),
+                ("-std=c23", &["-pedantic-errors"], false, true),
+                ("-std=gnu23", &["-pedantic-errors"], false, true),
+                ("-std=c17", &["-pedantic-errors"], true, true),
+                ("-std=c17", &["-Werror=normalized"], false, true),
+                (
+                    "-std=c23",
+                    &["-pedantic-errors", "-Wno-error=normalized"],
+                    true,
+                    true,
+                ),
+                (
+                    "-std=c23",
+                    &["-pedantic-errors", "-Wno-normalized"],
+                    true,
+                    false,
+                ),
+                (
+                    "-std=c23",
+                    &["-Wnormalized=none", "-pedantic-errors"],
+                    true,
+                    false,
+                ),
+                ("-std=c23", &["-pedantic-errors", "-w"], true, false),
+            ] {
+                let mut args = vec![standard, "-fsyntax-only"];
+                args.extend_from_slice(options);
+                args.push(file);
+                let output = directory.bcc("--gcc-mode", &args);
+                let message = stderr(&output);
+                assert_eq!(output.status.success(), accepted, "{args:?}: {message}");
+                assert_eq!(
+                    message.contains("is not in Normalization Form C"),
+                    warned,
+                    "{args:?}: {message}"
+                );
+            }
+            let output = directory.bcc(
+                "--clang-mode",
+                &["-std=c23", "-pedantic-errors", "-fsyntax-only", file],
+            );
+            succeeds(&output);
+            assert_eq!(stderr(&output), "");
+        }
+        let output = directory.bcc(
+            "--gcc-mode",
+            &[
+                "-std=c23",
+                "-pedantic-errors",
+                "-fsyntax-only",
+                "composed.c",
+            ],
+        );
+        succeeds(&output);
+        assert_eq!(stderr(&output), "");
+        let output = directory.bcc(
+            "--clang-mode",
+            &["-std=c23", "-Wno-normalized", "-fsyntax-only", "composed.c"],
+        );
+        succeeds(&output);
+        assert!(
+            stderr(&output).contains("unknown warning option '-Wno-normalized'"),
+            "{}",
+            stderr(&output)
+        );
+    }
+
+    /// `__BASE_FILE__` names the main source file as the command line
+    /// wrote it, wherever it is expanded, as in GCC, Clang and TCC.
+    #[test]
+    fn base_file_names_the_main_source() {
+        let directory = Directory::new();
+        std::fs::create_dir_all(directory.path("sub")).unwrap();
+        directory.write("sub/h.h", "const char *h = __BASE_FILE__;\n");
+        directory.write("forced.h", "const char *f = __BASE_FILE__;\n");
+        directory.write(
+            "m.c",
+            "#include \"sub/h.h\"\nconst char *m = __BASE_FILE__;\n#ifdef __BASE_FILE__\nint \
+             defined_ok;\n#endif\n",
+        );
+        for mode in ["--gcc-mode", "--clang-mode", "--tcc-mode"] {
+            let output = directory.bcc(mode, &["-E", "-P", "m.c"]);
+            succeeds(&output);
+            let text = stdout(&output);
+            for line in [
+                "const char *h = \"m.c\";",
+                "const char *m = \"m.c\";",
+                "int defined_ok;",
+            ] {
+                assert!(text.contains(line), "{mode}: {line} in {text}");
+            }
+        }
+        // In a forced include GCC and TCC name the main file too (Clang
+        // says `<built-in>` there, which bcc does not mimic).
+        for mode in ["--gcc-mode", "--tcc-mode"] {
+            let output = directory.bcc(mode, &["-E", "-P", "-include", "forced.h", "m.c"]);
+            succeeds(&output);
+            assert!(
+                stdout(&output).contains("const char *f = \"m.c\";"),
+                "{mode}: {}",
+                stdout(&output)
+            );
+        }
+    }
+
+    /// Clang's `__BASE_FILE__` is the main file's presumed name where the
+    /// outermost `#include` (or the expansion itself) sits, so a `#line`
+    /// there renames it; GCC and TCC keep the command line's name. Standard
+    /// input is `<stdin>` in Clang, an empty name in GCC and `-` in TCC.
+    #[test]
+    fn base_file_follows_each_identity_for_line_and_stdin() {
+        use std::io::Write as _;
+        let directory = Directory::new();
+        directory.write("h.h", "const char *h = __BASE_FILE__;\n");
+        directory.write(
+            "m.c",
+            "#include \"h.h\"\n#line 9 \"z.c\"\nconst char *m = __BASE_FILE__;\n#include \"h.h\"\n",
+        );
+        for (mode, renamed) in [
+            ("--clang-mode", true),
+            ("--gcc-mode", false),
+            ("--tcc-mode", false),
+        ] {
+            let output = directory.bcc(mode, &["-E", "-P", "m.c"]);
+            succeeds(&output);
+            let lines: Vec<_> = stdout(&output)
+                .lines()
+                .filter(|line| !line.trim().is_empty())
+                .map(str::to_owned)
+                .collect();
+            let late = if renamed { "z.c" } else { "m.c" };
+            assert_eq!(
+                lines,
+                [
+                    "const char *h = \"m.c\";".to_owned(),
+                    format!("const char *m = \"{late}\";"),
+                    format!("const char *h = \"{late}\";"),
+                ],
+                "{mode}"
+            );
+        }
+        for (mode, name) in [
+            ("--clang-mode", "<stdin>"),
+            ("--gcc-mode", ""),
+            ("--tcc-mode", "-"),
+        ] {
+            let mut child = Command::new(env!("CARGO_BIN_EXE_bcc-rust"))
+                .args([mode, "-E", "-P", "-x", "c", "-"])
+                .current_dir(&directory.0)
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .spawn()
+                .unwrap();
+            child
+                .stdin
+                .take()
+                .unwrap()
+                .write_all(b"__BASE_FILE__\n")
+                .unwrap();
+            let output = child.wait_with_output().unwrap();
+            assert!(output.status.success(), "{mode}");
+            assert_eq!(
+                String::from_utf8_lossy(&output.stdout).trim(),
+                format!("\"{name}\""),
+                "{mode}"
+            );
+        }
+    }
+
+    /// `-print-file-name=` and `-print-prog-name=` answer as GCC and Clang
+    /// do, with a path to the file the link would use or the name itself.
+    #[test]
+    fn gnu_print_queries_name_files_and_programs() {
+        let directory = Directory::new();
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            let output = directory.bcc(mode, &["-print-file-name=no-such-file.a"]);
+            succeeds(&output);
+            assert_eq!(stdout(&output), "no-such-file.a\n", "{mode}");
+            if cfg!(all(target_os = "linux", target_env = "gnu")) {
+                let output = directory.bcc(mode, &["-print-file-name=libc.so"]);
+                succeeds(&output);
+                let path = stdout(&output);
+                let path = Path::new(path.trim_end());
+                assert!(
+                    path.is_absolute() && path.exists(),
+                    "{mode}: {}",
+                    path.display()
+                );
+            }
+            let output = directory.bcc(mode, &["-print-prog-name=ld"]);
+            succeeds(&output);
+            assert!(
+                stdout(&output).trim_end().ends_with("ld.lld") || cfg!(windows),
+                "{mode}"
+            );
+        }
+    }
+
+    /// Both compilers read the whole command line before they answer a
+    /// query, so the last `-print-file-name=` or `-print-prog-name=`
+    /// counts, a later `--sysroot` applies, the query that ranks first in
+    /// each compiler's own order answers, and the inputs go unread, as in
+    /// GCC 13.3 and Clang 23. GCC answers a `-dump` option where it stands,
+    /// before it reports an unrecognized option; Clang's driver errors make
+    /// its status 1, GCC's do not.
+    #[test]
+    fn gnu_queries_answer_once_the_command_line_is_read() {
+        let directory = Directory::new();
+        let answer = |mode: &str, args: &[&str]| {
+            let output = directory.bcc(mode, args);
+            (output.status.code(), stdout(&output), stderr(&output))
+        };
+        let help = |mode: &str| answer(mode, &["--help"]).1;
+        let file = |name: &str| (Some(0), format!("{name}\n"), String::new());
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            for args in [
+                &["-print-file-name=first", "-print-file-name=second"][..],
+                &["-print-prog-name=first", "-print-file-name=second"],
+                &["-print-file-name=second", "-print-prog-name=first"],
+                &["-print-libgcc-file-name", "-print-file-name=second"],
+                &["-print-file-name=second", "missing.c", "-c", "-o", "x.o"],
+            ] {
+                assert_eq!(answer(mode, args), file("second"), "{mode} {args:?}");
+            }
+            assert_eq!(
+                answer(mode, &["-print-prog-name=first", "-print-prog-name=second"]),
+                file("second"),
+                "{mode}"
+            );
+            assert!(!directory.path("x.o").exists(), "{mode}");
+            let (status, text, _) = answer(mode, &["-print-file-name=x", "-print-search-dirs"]);
+            assert_eq!(status, Some(0), "{mode}");
+            assert!(text.starts_with("install: "), "{mode}: {text}");
+            assert_eq!(
+                answer(mode, &["--version", "--help"]).1,
+                help(mode),
+                "{mode}"
+            );
+            assert_eq!(
+                answer(mode, &["--help", "--version"]).1,
+                help(mode),
+                "{mode}"
+            );
+            // A sysroot given after the query still applies.
+            if cfg!(all(target_os = "linux", target_env = "gnu")) {
+                std::fs::create_dir_all(directory.path("root/usr/lib")).unwrap();
+                directory.write("root/usr/lib/libfoo.a", "");
+                let expected = directory
+                    .path("root/usr/lib/libfoo.a")
+                    .canonicalize()
+                    .unwrap();
+                for args in [
+                    ["-print-file-name=libfoo.a", "--sysroot=root"],
+                    ["--sysroot=root", "-print-file-name=libfoo.a"],
+                ] {
+                    let (status, text, _) = answer(mode, &args);
+                    assert_eq!(status, Some(0), "{mode} {args:?}");
+                    let found = directory.path(text.trim_end()).canonicalize();
+                    assert_eq!(
+                        found.ok().as_ref(),
+                        Some(&expected),
+                        "{mode} {args:?}: {text}"
+                    );
+                }
+            }
+        }
+        // GCC's `-print-libgcc-file-name` is its `-print-file-name=libgcc.a`,
+        // so the later of the two answers; Clang's ranks below.
+        assert_eq!(
+            answer(
+                "--gcc-mode",
+                &["-print-file-name=x", "-print-libgcc-file-name"]
+            ),
+            file("libgcc.a")
+        );
+        assert_eq!(
+            answer(
+                "--clang-mode",
+                &["-print-file-name=x", "-print-libgcc-file-name"]
+            ),
+            file("x")
+        );
+        // GCC's `-dump` options answer at once; it reports the options it
+        // does not recognize only after reading them all, and with a query
+        // keeps status 0.
+        let version = answer("--gcc-mode", &["-dumpversion"]).1;
+        for args in [
+            &["-print-file-name=x", "-dumpversion"][..],
+            &["-fbogus", "-dumpversion", "-fbogus2"],
+        ] {
+            assert_eq!(
+                answer("--gcc-mode", args),
+                (Some(0), version.clone(), String::new())
+            );
+        }
+        assert_eq!(
+            answer("--gcc-mode", &["-fbogus", "-print-file-name=x"]),
+            (
+                Some(0),
+                "x\n".into(),
+                "gcc: error: unrecognized command-line option '-fbogus'\n".into()
+            )
+        );
+        assert_eq!(
+            answer("--gcc-mode", &["-print-sysroot"]),
+            (Some(0), String::new(), String::new())
+        );
+        assert_eq!(
+            answer("--gcc-mode", &["-print-sysroot", "--sysroot=root"]),
+            file("root")
+        );
+        // Clang answers `-dumpmachine` before `-dumpversion` wherever each
+        // stands; its driver errors still print, with status 1, and it
+        // knows neither `-print-sysroot` nor `-dumpfullversion` as queries.
+        let machine = answer("--clang-mode", &["-dumpmachine"]).1;
+        assert_eq!(
+            answer("--clang-mode", &["-dumpversion", "-dumpmachine"]),
+            (Some(0), machine, String::new())
+        );
+        assert_eq!(
+            answer("--clang-mode", &["-fbogus", "-print-file-name=x"]),
+            (
+                Some(1),
+                "x\n".into(),
+                "clang: error: unknown argument: '-fbogus'\n".into()
+            )
+        );
+        assert_eq!(
+            answer("--clang-mode", &["-print-multiarch", "-print-file-name=x"]),
+            (
+                Some(1),
+                "x\n".into(),
+                "clang: error: unsupported option '-print-multiarch'\n".into()
+            )
+        );
+        assert_eq!(
+            answer("--clang-mode", &["-std=bogus", "-print-file-name=x"]),
+            file("x")
+        );
+        let (status, _, text) = answer("--clang-mode", &["-print-sysroot"]);
+        assert_eq!(status, Some(1));
+        assert!(
+            text.contains("unknown argument: '-print-sysroot'"),
+            "{text}"
+        );
+        directory.write("a.c", "int x;\n");
+        assert_eq!(
+            answer(
+                "--clang-mode",
+                &["-dumpfullversion", "-fsyntax-only", "a.c"]
+            ),
+            (
+                Some(0),
+                String::new(),
+                "clang: warning: argument unused during compilation: '-dumpfullversion' \
+                 [-Wunused-command-line-argument]\n"
+                    .into()
+            )
+        );
+    }
+
+    /// An unknown `-std=` is GCC's unrecognized option wherever it stands,
+    /// while Clang's compiler refuses only the last `-std=`, once for each C
+    /// source it compiles, and not when its driver stops first, as in GCC
+    /// 13.3 and Clang 23.
+    #[test]
+    fn gnu_unknown_standards_are_refused_as_each_compiler_does() {
+        let directory = Directory::new();
+        directory.write("a.c", "int x;\n");
+        directory.write("b.c", "int y;\n");
+        let answer = |mode: &str, args: &[&str]| {
+            let output = directory.bcc(mode, args);
+            (output.status.code(), stdout(&output), stderr(&output))
+        };
+        let gcc_error = |option: &str| {
+            (
+                Some(1),
+                String::new(),
+                format!("gcc: error: unrecognized command-line option '{option}'\n"),
+            )
+        };
+        for args in [
+            &["-std=bogus", "-std=c17", "-fsyntax-only", "a.c"][..],
+            &["-std=c17", "-std=bogus", "-fsyntax-only", "a.c"],
+            &["-std=bogus", "-c", "a.c"],
+            &["-std=bogus", "missing.c"],
+        ] {
+            assert_eq!(
+                answer("--gcc-mode", args),
+                gcc_error("-std=bogus"),
+                "{args:?}"
+            );
+        }
+        assert_eq!(
+            answer(
+                "--clang-mode",
+                &["-std=bogus", "-std=c17", "-fsyntax-only", "a.c"]
+            ),
+            (Some(0), String::new(), String::new())
+        );
+        let invalid = "error: invalid value 'bogus' in '-std=bogus'\n";
+        for (args, count) in [
+            (&["-std=c17", "-std=bogus", "-fsyntax-only", "a.c"][..], 1),
+            (&["-std=bogus", "-c", "a.c"], 1),
+            (&["-std=bogus", "-fsyntax-only", "a.c", "b.c"], 2),
+        ] {
+            let (status, _, text) = answer("--clang-mode", args);
+            assert_eq!(status, Some(1), "{args:?}");
+            assert_eq!(text.matches(invalid).count(), count, "{args:?}: {text}");
+            assert!(
+                text.contains("note: use 'c99' or 'iso9899:1999'"),
+                "{args:?}: {text}"
+            );
+        }
+        assert_eq!(
+            answer("--clang-mode", &["-std=bogus", "missing.c"]),
+            (
+                Some(1),
+                String::new(),
+                "clang: error: no such file or directory: 'missing.c'\nclang: error: no input \
+                 files\n"
+                    .into()
+            )
+        );
+        let (status, _, text) = answer("--clang-mode", &["-std=bogus", "-c", "a.c", "-###"]);
+        assert_eq!(status, Some(0));
+        assert!(!text.contains("invalid value"), "{text}");
+        // Clang reads the last of `-std=` and `-ansi`; GCC refuses the
+        // unknown value whatever follows it.
+        assert_eq!(
+            answer(
+                "--clang-mode",
+                &["-std=bogus", "-ansi", "-fsyntax-only", "a.c"]
+            ),
+            (Some(0), String::new(), String::new())
+        );
+        let (status, _, text) = answer(
+            "--clang-mode",
+            &["-ansi", "-std=bogus", "-fsyntax-only", "a.c"],
+        );
+        assert_eq!(status, Some(1));
+        assert_eq!(text.matches(invalid).count(), 1, "{text}");
+        assert_eq!(
+            answer(
+                "--gcc-mode",
+                &["-std=bogus", "-ansi", "-fsyntax-only", "a.c"]
+            ),
+            gcc_error("-std=bogus")
+        );
+    }
+
+    /// GCC's `-v` or `-###` without inputs prints the driver's report and
+    /// succeeds even after rejecting an option; without either, GCC adds
+    /// that it has no inputs. Neither compiler shows a step for no inputs.
+    /// As in GCC 13.3 and Clang 23.
+    #[test]
+    fn driver_reports_without_inputs_succeed_as_each_compiler_does() {
+        let directory = Directory::new();
+        directory.write("a.c", "int x;\n");
+        let answer = |mode: &str, args: &[&str]| {
+            let output = directory.bcc(mode, args);
+            (output.status.code(), stderr(&output))
+        };
+        let unrecognized = "gcc: error: unrecognized command-line option '-print-target-triple'\n";
+        for report in ["-v", "-###"] {
+            let (status, text) = answer("--gcc-mode", &["-print-target-triple", report]);
+            assert_eq!(status, Some(0), "{report}: {text}");
+            assert!(text.starts_with(unrecognized), "{report}: {text}");
+            assert!(text.contains("\ngcc version 14.2.0 "), "{report}: {text}");
+            assert!(!text.contains("--compiler-identity"), "{report}: {text}");
+        }
+        assert_eq!(
+            answer("--gcc-mode", &["-print-target-triple"]),
+            (
+                Some(1),
+                format!(
+                    "{unrecognized}gcc: fatal error: no input files\ncompilation terminated.\n"
+                )
+            )
+        );
+        let (status, text) = answer(
+            "--gcc-mode",
+            &["-print-target-triple", "-v", "-fsyntax-only", "a.c"],
+        );
+        assert_eq!((status, text.as_str()), (Some(1), unrecognized));
+        // A linker input is an input: GCC counts `-l`, `-Wl,` and
+        // `-Xlinker` but not `-z`, Clang every linker input.
+        let bogus = "gcc: error: unrecognized command-line option '-bogus'\n";
+        for linker in [&["-lm"][..], &["-Wl,-x"], &["-Xlinker", "-x"]] {
+            for report in [&["-v"][..], &["-###"], &[]] {
+                let args = [&["-bogus"][..], report, linker].concat();
+                let (status, text) = answer("--gcc-mode", &args);
+                assert_eq!(status, Some(1), "{args:?}: {text}");
+                assert!(!text.contains("no input files"), "{args:?}: {text}");
+                assert!(text.contains(bogus), "{args:?}: {text}");
+            }
+        }
+        let (status, text) = answer("--gcc-mode", &["-bogus", "-v", "-z", "now"]);
+        assert_eq!(status, Some(0), "{text}");
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            let (status, text) = answer(mode, &["-###", "-lm"]);
+            assert_eq!(status, Some(0), "{mode}: {text}");
+            assert!(text.contains("--compiler-identity"), "{mode}: {text}");
+        }
+        let (_, text) = answer("--gcc-mode", &["-###", "-z", "now"]);
+        assert!(!text.contains("--compiler-identity"), "{text}");
+        let (_, text) = answer("--clang-mode", &["-###", "-z", "now"]);
+        assert!(text.contains("--compiler-identity"), "{text}");
+        // GCC's compiler checks `-MG`, so it waits for an input.
+        let (status, text) = answer("--gcc-mode", &["-MG", "-v"]);
+        assert_eq!(status, Some(0), "{text}");
+        assert!(!text.contains("-MG"), "{text}");
+        let (status, text) = answer("--clang-mode", &["-###"]);
+        assert_eq!(status, Some(0), "{text}");
+        assert!(text.contains("Thread model: posix\n"), "{text}");
+        assert!(!text.contains("--compiler-identity"), "{text}");
+    }
+
+    /// GCC keeps every local current across a `__builtin_setjmp`'s second
+    /// return, which `__builtin_longjmp` resumes: a local stored after the
+    /// first return holds its new value there (gcc.dg/setjmp-3.c and
+    /// setjmp-4.c, gcc.c-torture/execute/pr60003.c), on every back end.
+    /// So do a variable length array and a structure parameter, which live
+    /// at an address rather than in a stack slot.
+    #[test]
+    fn builtin_setjmp_keeps_locals_current_as_gcc_does() {
+        if !cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+            return;
+        }
+        let directory = Directory::new();
+        directory.write(
+            "resume.c",
+            "void *buf[5];\nvoid raise0(void) { __builtin_longjmp(buf, 1); }\nint after(int cmd) \
+             {\n  int last = 0;\n  if (__builtin_setjmp(buf) == 0)\n    while (1) { last = 1; \
+             raise0(); }\n  return last == 0 ? 0 : cmd;\n}\nint before(int cmd) {\n  int last = \
+             0;\n  __builtin_setjmp(buf);\n  if (last == 0)\n    while (1) { last = 1; raise0(); \
+             }\n  return last == 0 ? 0 : cmd;\n}\nint vla(int n) {\n  int a[n];\n  a[0] = 0;\n  \
+             if (!__builtin_setjmp(buf)) { a[0] = 7; raise0(); }\n  return a[0] - 7;\n}\nstruct S \
+             { int x, y[4]; };\nint param(struct S s) {\n  if (!__builtin_setjmp(buf)) { s.x = 9; \
+             raise0(); }\n  return s.x - 9;\n}\nint main(void) {\n  struct S s = {0};\n  return \
+             after(3) + before(4) + vla(3) + param(s);\n}\n",
+        );
+        for options in [
+            &["-O0"][..],
+            &["-O"],
+            &["-O2"],
+            &["-Xbcc", "--backend=native", "-O0"],
+            &["-Xbcc", "--backend=native", "-O2"],
+        ] {
+            let mut args = options.to_vec();
+            args.extend(["resume.c", "-o", "resume"]);
+            succeeds(&directory.bcc("--gcc-mode", &args));
+            let run = Command::new(directory.path("resume")).output().unwrap();
+            assert_eq!(run.status.code(), Some(7), "{options:?}");
+        }
+    }
+
     /// GCC names the x87 extended format `__float80`, the same type as
     /// `long double` on x86-64 Linux; Clang knows no such name.
     #[test]
@@ -518,6 +1229,240 @@ mod tests {
                 let output = directory.bcc(mode, &["-std=c17", "-fsyntax-only", "redeclared.c"]);
                 assert_eq!(output.status.success(), accepted, "{mode} {source}");
             }
+        }
+    }
+
+    /// Plain `_Complex` means `_Complex double` to GCC and Clang: Clang
+    /// warns, GCC only under `-pedantic`, and `-pedantic-errors` refuses it
+    /// in both (gcc.c-torture/execute/20070614-1.c).
+    #[test]
+    fn plain_complex_means_complex_double() {
+        if !cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+            return;
+        }
+        let directory = Directory::new();
+        directory.write(
+            "plain.c",
+            "_Complex v = 3.0 + 1.0i;\n_Static_assert(sizeof v == 2 * sizeof(double), \
+             \"\");\n_Complex twice(_Complex z) { return z + z; }\nint main(void) { return \
+             (int)__real__ twice(v) + (int)__imag__ twice(v); }\n",
+        );
+        for (mode, options, warns) in [
+            ("--gcc-mode", &[][..], false),
+            ("--gcc-mode", &["-pedantic"], true),
+            ("--clang-mode", &[], true),
+        ] {
+            let mut args = options.to_vec();
+            args.extend(["plain.c", "-o", "plain"]);
+            let output = directory.bcc(mode, &args);
+            succeeds(&output);
+            assert_eq!(
+                stderr(&output).contains("_Complex"),
+                warns,
+                "{mode} {options:?}: {}",
+                stderr(&output)
+            );
+            let run = Command::new(directory.path("plain")).output().unwrap();
+            assert_eq!(run.status.code(), Some(8), "{mode} {options:?}");
+        }
+        // `-w` and a system header silence it before `-pedantic-errors`
+        // can make it an error.
+        std::fs::create_dir_all(directory.path("sys")).unwrap();
+        directory.write("sys/plain.h", "_Complex in_header;\n");
+        directory.write("header.c", "#include <plain.h>\n");
+        // A bare declaration: `plain.c`'s imaginary constant is another
+        // pedantic error, which GCC's `-w` does not silence.
+        directory.write("bare.c", "_Complex bare;\n");
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            let output = directory.bcc(mode, &["-pedantic-errors", "-fsyntax-only", "bare.c"]);
+            assert!(!output.status.success(), "{mode}");
+            let output =
+                directory.bcc(mode, &["-w", "-pedantic-errors", "-fsyntax-only", "bare.c"]);
+            succeeds(&output);
+            assert_eq!(stderr(&output), "", "{mode} -w");
+            let output = directory.bcc(
+                mode,
+                &[
+                    "-pedantic-errors",
+                    "-isystem",
+                    "sys",
+                    "-fsyntax-only",
+                    "header.c",
+                ],
+            );
+            succeeds(&output);
+            assert_eq!(stderr(&output), "", "{mode} system header");
+        }
+        // GCC's `-Wno-error=pedantic` keeps its warning one, and a later
+        // `-Wno-pedantic` silences it; `-Werror=pedantic` makes it an
+        // error. Clang's error outlasts both, and is no `-Wpedantic`
+        // diagnostic for `-Werror=pedantic` to promote.
+        for (mode, options, status) in [
+            (
+                "--gcc-mode",
+                &["-pedantic-errors", "-Wno-error=pedantic"][..],
+                0,
+            ),
+            (
+                "--gcc-mode",
+                &["-Wno-error=pedantic", "-pedantic-errors"],
+                1,
+            ),
+            ("--gcc-mode", &["-pedantic-errors", "-Wno-pedantic"], 0),
+            ("--gcc-mode", &["-Werror=pedantic"], 1),
+            ("--gcc-mode", &["-Werror=pedantic", "-w"], 0),
+            (
+                "--gcc-mode",
+                &["-Werror=pedantic", "-Wno-error=pedantic"],
+                0,
+            ),
+            ("--gcc-mode", &["-Werror=pedantic", "-Wno-pedantic"], 0),
+            ("--gcc-mode", &["-Wno-pedantic", "-Werror=pedantic"], 1),
+            (
+                "--gcc-mode",
+                &["-pedantic-errors", "-Wno-pedantic", "-Wpedantic"],
+                1,
+            ),
+            // `-Wno-pedantic` stops the diagnostic but keeps its error state.
+            (
+                "--gcc-mode",
+                &["-Werror=pedantic", "-Wno-pedantic", "-Wpedantic"],
+                1,
+            ),
+            (
+                "--gcc-mode",
+                &["-Werror=pedantic", "-Wno-pedantic", "-pedantic"],
+                1,
+            ),
+            (
+                "--gcc-mode",
+                &[
+                    "-Werror=pedantic",
+                    "-Wno-error=pedantic",
+                    "-Wno-pedantic",
+                    "-Wpedantic",
+                ],
+                0,
+            ),
+            (
+                "--gcc-mode",
+                &[
+                    "-Werror=pedantic",
+                    "-Wno-pedantic",
+                    "-Wno-error=pedantic",
+                    "-Wpedantic",
+                ],
+                0,
+            ),
+            ("--clang-mode", &["-Werror=pedantic"], 0),
+            ("--clang-mode", &["-pedantic-errors", "-Wno-pedantic"], 1),
+            (
+                "--clang-mode",
+                &["-pedantic-errors", "-Wno-error=pedantic"],
+                1,
+            ),
+        ] {
+            let mut args = options.to_vec();
+            args.extend(["-fsyntax-only", "bare.c"]);
+            let output = directory.bcc(mode, &args);
+            assert_eq!(output.status.code(), Some(status), "{mode} {options:?}");
+        }
+        // TCC refuses `_Complex` altogether.
+        let output = directory.bcc("--tcc-mode", &["-c", "plain.c", "-o", "plain.o"]);
+        assert!(!output.status.success());
+    }
+
+    /// GCC reads its pedantic options in order. Clang reads `-pedantic` and
+    /// `-pedantic-errors` before every `-W` option, so `-Wno-error=pedantic`
+    /// and `-Wno-pedantic` outrank them wherever they appear. In both,
+    /// `-Wpedantic` keeps pedantic errors errors. `-Werror=pedantic` makes
+    /// only GCC's plain `_Complex` diagnostic an error so far: it leaves the
+    /// other extensions as they were, and `-w` still silences it.
+    #[test]
+    fn pedantic_options_combine_as_each_compiler_reads_them() {
+        let directory = Directory::new();
+        directory.write("empty.c", "int a[1] = {};\n");
+        for (mode, options, status) in [
+            (
+                "--gcc-mode",
+                &["-Wno-error=pedantic", "-pedantic-errors"][..],
+                1,
+            ),
+            (
+                "--gcc-mode",
+                &["-pedantic-errors", "-Wno-error=pedantic"],
+                0,
+            ),
+            ("--gcc-mode", &["-Werror=pedantic", "-Wno-pedantic"], 0),
+            (
+                "--gcc-mode",
+                &["-Werror=pedantic", "-Wno-error=pedantic"],
+                0,
+            ),
+            ("--gcc-mode", &["-pedantic-errors", "-Wpedantic"], 1),
+            (
+                "--clang-mode",
+                &["-Wno-error=pedantic", "-pedantic-errors"],
+                0,
+            ),
+            (
+                "--clang-mode",
+                &["-pedantic-errors", "-Wno-error=pedantic"],
+                0,
+            ),
+            ("--clang-mode", &["-Wno-pedantic", "-pedantic-errors"], 0),
+            ("--clang-mode", &["-pedantic-errors", "-Wpedantic"], 1),
+        ] {
+            let mut args = vec!["-std=c17"];
+            args.extend(options);
+            args.extend(["-fsyntax-only", "empty.c"]);
+            let output = directory.bcc(mode, &args);
+            assert_eq!(
+                output.status.code(),
+                Some(status),
+                "{mode} {options:?}: {}",
+                stderr(&output)
+            );
+        }
+        let output = directory.bcc(
+            "--clang-mode",
+            &[
+                "-std=c17",
+                "-Wno-pedantic",
+                "-pedantic-errors",
+                "-fsyntax-only",
+                "empty.c",
+            ],
+        );
+        assert_eq!(stderr(&output), "");
+        // `-Werror=pedantic` neither outlasts `-w` nor reaches a diagnostic
+        // GCC files under another option (`-Wlong-long`).
+        directory.write("zero.c", "int a[0];\n");
+        directory.write("ll.c", "long long x;\n");
+        for (mode, args) in [
+            (
+                "--gcc-mode",
+                &["-std=c17", "-Werror=pedantic", "-w", "zero.c"][..],
+            ),
+            (
+                "--clang-mode",
+                &["-std=c17", "-Werror=pedantic", "-w", "zero.c"],
+            ),
+            (
+                "--gcc-mode",
+                &["-std=c17", "-w", "-Werror=pedantic", "zero.c"],
+            ),
+            ("--gcc-mode", &["-std=c89", "-Werror=pedantic", "ll.c"]),
+        ] {
+            let mut args = args.to_vec();
+            args.push("-fsyntax-only");
+            let output = directory.bcc(mode, &args);
+            assert_eq!(
+                output.status.code(),
+                Some(0),
+                "{mode} {args:?}: {}",
+                stderr(&output)
+            );
         }
     }
 

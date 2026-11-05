@@ -883,7 +883,7 @@ functions.
 | C89/C90/C95 | Native implicit int; C99-origin mixed blocks, for declarations, designated initializers, compound literals, flexible array members, long long, trailing enum comma, `__func__`, and unambiguous qualified/static/`[*]` array syntax follow Allow/Warn/Deny | Variable bounds need constant evaluation to distinguish VLAs from constant arrays; flexible-member position and object layout |
 | C99 | Full C99 grammar; implicit int is retained under `-Wimplicit-int` ([C type-safety permerrors](#c-type-safety-permerrors-2026-11-02)) | Type/name/control-flow constraints listed in the C99 checklist |
 | C11/C17 | `_Alignas` expression/type operands, `_Alignof` types (expression operands as a GNU extension), `_Atomic` type/qualifier, `_Generic` associations, `_Noreturn`, `_Static_assert`, `_Thread_local`, anonymous untagged aggregates; `_Alignas` in a plain type name is a constraint error | Alignment validity, storage-class combinations and aggregate layout; atomic eligibility and generic selection are analyzed |
-| C23 | All `[[...]]` attribute positions with standard/vendor names and balanced arguments; `bool`/`true`/`false`, `nullptr`, `constexpr`, `typeof`/`typeof_unqual`, message-optional `static_assert`, `alignas`/`alignof`/`thread_local` aliases; labels before declarations and at block end; `{}`; `_BitInt` with signedness; fixed enum underlying specifier-qualifier lists; `auto` type inference, alone or beside another storage class except `typedef`; unnamed definition parameters; ellipsis-only prototypes; empty parameter lists as prototypes; rejected identifier-list declarators; decimal type keywords; compound-literal storage classes | Attribute applicability/meaning, width values, enum type legality, decimal literal support and literal object lifetime; inferred types are analyzed (see "Type inference") |
+| C23 | All `[[...]]` attribute positions with standard/vendor names and balanced arguments; `bool`/`true`/`false`, `nullptr`, `constexpr`, `typeof`/`typeof_unqual`, message-optional `static_assert`, `alignas`/`alignof`/`thread_local` aliases; labels before declarations and at block end; `{}`; `_BitInt` with signedness; fixed enum underlying specifier-qualifier lists; `auto` type inference, alone or beside another storage class except `typedef`; unnamed definition parameters; ellipsis-only prototypes; empty parameter lists as prototypes; rejected identifier-list declarators; decimal type keywords; compound-literal storage classes | Attribute applicability/meaning, width values, enum type legality and decimal literal support; inferred types and compound-literal storage are analyzed (see "Type inference" and "Compound-literal storage classes") |
 | C2y subset | `_Countof` unary expression or parenthesized type; type-controlling `_Generic`; `if`/`switch` declaration headers with an optional following expression; case ranges; `break`/`continue` label | Array/type/count evaluation, selection conversion, range overlap, and named control-target resolution |
 
 The keyword classifier reports reserved keywords, so parser consumers do not
@@ -1076,6 +1076,24 @@ the identity decides: GCC's rules (`--gcc-mode`, TCC and MSVC identities) take
 it only in a GNU mode (GCC's "extended numbers"), so strict C90 reads
 `0x1p+f` as `0x1p` `+` `f` as GCC's `gcc.dg/c90-hexfloat-2.c` expects, and
 Clang's take it only in a number that starts with `0x` or `0X` and has no `_`.
+
+Characters beyond ASCII in identifiers, raw or as universal character names,
+follow each compiler's sets: Clang takes C99's Annex D in C99, C11's in C11 and
+C17, and `XID_Start`/`XID_Continue` in C23; GCC 14 takes any of them unless a
+pedantic option asks for the standard's own. bcc approximates the Unicode
+classes by Rust's alphabetic and alphanumeric classes plus the nonspacing
+combining marks and middle dots, so it still admits Other_Alphabetic marks such
+as U+0345 at an identifier's start and other numbers such as U+00B2 (which GCC
+refuses under `-pedantic`), and misses U+2118. No universal character name in an
+identifier spells a character below U+00A0, as both compilers require (C99 and
+C23 §6.4.3p2); GCC alone reads `\u0024` as `$`. Under the GCC identity,
+`-Wnormalized` warns of an identifier outside Normalization Form C, which C23
+requires, so there `-pedantic-errors` makes it an error; `-w`, `-Wno-normalized`
+and `-Wnormalized=none` silence it. bcc detects only a combining mark directly
+after a character canonical composition joins it to (`a\u0300`); GCC also
+reports marks out of canonical order, composition across an intervening mark
+(`a\u0327\u0301`), Hangul jamo sequences and singleton decompositions, and
+treats `-Wnormalized=nfkc` and `=id` as stricter levels.
 
 A C23 `'` continues a pp-number only before a digit or an ASCII nondigit, even
 when conversion must reject the resulting constant; a universal character name,
@@ -3516,3 +3534,38 @@ Deviations:
   object internal linkage; bcc accepts it under the Clang identity.
 - bcc's diagnostics have their own wording; GCC's and Clang's messages
   differ from each other too.
+
+## Compound-literal storage classes (2026-11-02)
+
+A C23 compound literal's storage-class specifiers declare its object as
+`SC typeof(T) ID = { IL };` would in the literal's scope (C23 §6.5.3.6p4-7):
+
+| Specifiers | File scope | Block scope |
+| --- | --- | --- |
+| none, `constexpr` | static | automatic |
+| `static` (with `constexpr` too) | static | static: one object, initialized once before the program starts, keeping its value between evaluations |
+| `thread_local` with `static` | thread | thread |
+| `thread_local` alone | thread | error, as for a declaration (§6.7.2p3) |
+| `register` | error (§6.9p2) | automatic; neither `&` nor an array's conversion to a pointer takes its address |
+| `typedef`, `auto`, `extern` | error | error |
+
+A static literal's initializer must be constant, as a static object's is,
+and its address is an address constant; a thread-local literal's address is
+not (C11 §6.6p9). A modifiable static or thread-local literal in an inline
+definition of a function with external linkage breaks C99 §6.7.4p3 as a
+static object there does; a `const` one does not. Lowering gives a
+block-scope static literal an internal global, and a thread-local one a
+thread-local global, like a file-scope literal's; GCC 14 accepts and runs
+`gcc.dg/c23-complit-*.c` the same way, and bcc reports an error on every
+line GCC 14 does there except one. GCC still subscripts a `register`
+array, literal or object, which Clang rejects with the conversion; bcc
+follows each identity. Under the Clang identity a storage-class specifier
+in a compound literal is an error, as the bundled Clang parses none.
+
+Deviations:
+
+- GCC rejects a repeated `thread_local` in a literal (`(static
+  thread_local thread_local int){0}`) as in a declaration; bcc warns, as
+  Clang does for a declaration.
+- GCC reports a `register` array's conversion at the start of the
+  function that contains it; bcc reports it at the operand.

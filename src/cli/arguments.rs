@@ -37,6 +37,7 @@ use crate::{
         LanguageMode,
         MsvcFeature,
         RelaxedFloatingPoint,
+        RuleSet,
         WarningOption,
     },
     target::{
@@ -338,9 +339,17 @@ impl Cli {
         let configuration = configuration
             .with_target(self.target)
             .with_compiler_identity(self.compiler_identity.into());
-        self.language_option
-            .iter()
-            .filter_map(|option| LanguageFlag::parse(option))
+        // Clang reads `-pedantic` and `-pedantic-errors` before every `-W`
+        // option, so `-Wno-pedantic` and `-Wno-error=pedantic` outrank them
+        // wherever they appear; GCC reads all of them in order.
+        let clang = configuration.compiler_identity().rules() == RuleSet::Clang;
+        let first = |option: &str| clang && matches!(option, "-pedantic" | "-pedantic-errors");
+        let options = self.language_option.iter().map(std::ops::Deref::deref);
+        options
+            .clone()
+            .filter(|option| first(option))
+            .chain(options.filter(|option| !first(option)))
+            .filter_map(LanguageFlag::parse)
             .fold(configuration, |configuration, flag| {
                 flag.apply(configuration)
             })
@@ -364,10 +373,14 @@ impl Cli {
         };
         let mut failed = false;
         for option in &self.language_option {
-            if matches!(
-                LanguageFlag::parse(option),
-                Some(LanguageFlag::UnknownWarning)
-            ) {
+            let unknown = match LanguageFlag::parse(option) {
+                | Some(LanguageFlag::UnknownWarning) => true,
+                | Some(LanguageFlag::WarningGroup(group, _)) =>
+                    group.gcc_only()
+                        && CompilerIdentity::from(self.compiler_identity) != CompilerIdentity::Gcc,
+                | _ => false,
+            };
+            if unknown {
                 let label = if severity == crate::translation_phases::ErrorSeverity::Error {
                     failed = true;
                     "error"
@@ -600,8 +613,12 @@ enum LanguageFlag {
     AllWarnings(bool),
     ExtraWarnings,
     UnknownWarning,
-    /// `-pedantic` or `-Wpedantic` (warn), or `-pedantic-errors` (deny).
-    Pedantic(ExtensionPolicy),
+    /// `-pedantic` or `-Wpedantic` (true), or `-Wno-pedantic` (false).
+    Pedantic(bool),
+    /// `-pedantic-errors`.
+    PedanticErrors,
+    /// `-Werror=pedantic` (true) or `-Wno-error=pedantic` (false).
+    PedanticAsError(bool),
     /// `-fms-extensions` or `-fno-ms-extensions`.
     MsvcExtensions(bool),
     /// `-fms-<feature>` or `-fno-ms-<feature>`.
@@ -709,14 +726,16 @@ impl FloatingPointGroup {
 impl LanguageFlag {
     fn parse(text: &str) -> Option<Self> {
         match text {
-            | "-pedantic" | "-Wpedantic" => return Some(Self::Pedantic(ExtensionPolicy::Warn)),
-            | "-pedantic-errors" => return Some(Self::Pedantic(ExtensionPolicy::Deny)),
+            | "-pedantic" | "-Wpedantic" => return Some(Self::Pedantic(true)),
+            | "-pedantic-errors" => return Some(Self::PedanticErrors),
+            | "-Werror=pedantic" => return Some(Self::PedanticAsError(true)),
+            | "-Wno-error=pedantic" => return Some(Self::PedanticAsError(false)),
             | "-Werror" => return Some(Self::WarningsAsErrors(true)),
             | "-Wno-error" => return Some(Self::WarningsAsErrors(false)),
             | "-Wall" => return Some(Self::AllWarnings(true)),
             | "-Wno-all" => return Some(Self::AllWarnings(false)),
             | "-Wextra" | "-Wno-extra" => return Some(Self::ExtraWarnings),
-            | "-Wno-pedantic" => return Some(Self::Pedantic(ExtensionPolicy::Allow)),
+            | "-Wno-pedantic" => return Some(Self::Pedantic(false)),
             | "-fhosted" => return Some(Self::Hosted(true)),
             | "-ffreestanding" => return Some(Self::Hosted(false)),
             | "-fgnu89-inline" => return Some(Self::Gnu89Inline(true)),
@@ -850,6 +869,17 @@ impl LanguageFlag {
                 (name, WarningOption::Error(false))
             } else if let Some(name) = text.strip_prefix("no-") {
                 (name, WarningOption::Enable(false))
+            } else if let Some(level) = text.strip_prefix("normalized=") {
+                // GCC's level: `none` turns the check off, and the others
+                // all report the one case bcc detects.
+                return Some(if matches!(level, "none" | "id" | "nfc" | "nfkc") {
+                    Self::WarningGroup(
+                        DiagnosticGroup::Normalized,
+                        WarningOption::Enable(level != "none"),
+                    )
+                } else {
+                    Self::UnknownWarning
+                });
             } else {
                 (text, WarningOption::Enable(true))
             };
@@ -887,7 +917,10 @@ impl LanguageFlag {
                 .with_all_warnings(enabled),
             | Self::WarningsAsErrors(enabled) => configuration.with_warnings_as_errors(enabled),
             | Self::WarningGroup(group, option) => configuration.with_warning_option(group, option),
-            | Self::Pedantic(policy) => configuration.with_extension_policy(policy),
+            | Self::Pedantic(enabled) => configuration.with_pedantic(enabled),
+            | Self::PedanticErrors => configuration.with_pedantic_errors(),
+            | Self::PedanticAsError(true) => configuration.with_werror_pedantic(),
+            | Self::PedanticAsError(false) => configuration.with_pedantic_as_error(false),
             | Self::MsvcExtensions(enabled) => configuration.with_msvc_extensions(enabled),
             | Self::MsvcFeature(feature, enabled) =>
                 configuration.with_msvc_feature(feature, enabled),
@@ -944,7 +977,7 @@ pub(super) struct CliInput {
 pub(super) struct SourceDateEpoch(Option<i64>);
 
 /// Exact clang-style explanation, deliberately omitting deprecated aliases.
-const STANDARD_NOTES: &str =
+pub(super) const STANDARD_NOTES: &str =
     "note: use 'c89', 'c90', or 'iso9899:1990' for 'ISO C 1990' standard\nnote: use \
      'iso9899:199409' for 'ISO C 1990 with amendment 1' standard\nnote: use 'gnu89' or 'gnu90' \
      for 'ISO C 1990 with GNU extensions' standard\nnote: use 'c99' or 'iso9899:1999' for 'ISO C \

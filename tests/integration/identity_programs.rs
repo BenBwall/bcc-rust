@@ -102,6 +102,14 @@ mod tests {
         matches_the_claimed_compiler_in("constexpr_objects.c", "-std=gnu2x", true);
     }
 
+    /// C23 `static`, `thread_local`, `register` and `constexpr` compound
+    /// literals in functions; GCC's identity only, as the bundled Clang
+    /// parses none; on wasm32 too.
+    #[test]
+    fn compound_literal_storage_matches_the_claimed_compiler() {
+        matches_the_claimed_compiler_in("compound_literal_storage.c", "-std=gnu2x", true);
+    }
+
     /// Signed left shifts that wrap, and `__LINE__` as a macro argument in
     /// a replacement list.
     #[test]

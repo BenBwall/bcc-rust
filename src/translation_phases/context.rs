@@ -45,7 +45,10 @@ use std::path::Path;
 
 use expansion_sites::ExpansionSites;
 use rustc_hash::FxBuildHasher;
-pub(crate) use source_files::FileSystem;
+pub(crate) use source_files::{
+    FileSystem,
+    STDIN_NAME,
+};
 use source_text::SourceText;
 
 #[cfg(test)]

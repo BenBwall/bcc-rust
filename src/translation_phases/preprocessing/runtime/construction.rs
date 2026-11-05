@@ -252,9 +252,10 @@ impl<'tu, 'pp> Preprocessor<'tu, 'pp> {
 /// defined names of §6.10.8 paragraph 2, p. 161; PDF p. 173, is defined.
 /// `_Pragma` is an operator (§6.10.9, p. 161; PDF p. 173), not a macro; it
 /// is registered here so that rescanning recognizes it.
-const PREDEFINED_MACRO_NAMES: [&str; 10] = [
+const PREDEFINED_MACRO_NAMES: [&str; 11] = [
     "__LINE__",
     "__FILE__",
+    "__BASE_FILE__",
     "__DATE__",
     "__TIME__",
     "_Pragma",

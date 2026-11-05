@@ -24,6 +24,7 @@ mod bits;
 mod builtin_names;
 mod checked_builtins;
 mod compound_literal_statics;
+mod compound_literal_storage;
 mod constexpr_objects;
 mod control_facts;
 mod correspondence;
