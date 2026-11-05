@@ -15,6 +15,7 @@ use std::fmt::{
 };
 
 use crate::{
+    configuration::DiagnosticGroup,
     diagnostics::{
         Diagnostic,
         Explanation,
@@ -77,9 +78,23 @@ pub(crate) enum PreprocessorTokenizerErrorType {
     /// C99: a `'` or `"` that begins no token is undefined, §6.4p3, p. 49;
     /// PDF p. 61.
     MissingTerminatingQuote(u8),
+    /// GCC's warning that an identifier is not in Normalization Form C
+    /// (`-Wnormalized`): a constraint violation where the standard
+    /// `required` the form, so `-pedantic-errors` makes it an error there.
+    /// C23: §6.4.2.1p3, p. 54; PDF p. 67.
+    Unnormalized { required: bool },
 }
 
 impl PreprocessorTokenizerErrorType {
+    /// The warning group that controls this diagnostic, if any.
+    pub(crate) const fn group(self) -> Option<DiagnosticGroup> {
+        match self {
+            | Self::Unnormalized { required: true } => Some(DiagnosticGroup::PedanticNormalized),
+            | Self::Unnormalized { required: false } => Some(DiagnosticGroup::Normalized),
+            | _ => None,
+        }
+    }
+
     /// The diagnostic of a `'` or `"` that closes on no line where phase 7
     /// never reads it: GCC's and Clang's warning, or, under
     /// `-pedantic-errors`, which makes it an error in both, the error a
@@ -99,7 +114,8 @@ impl PreprocessorTokenizerErrorType {
             | Self::UnterminatedCharacter | Self::NewlineInCharacter => Some(b'\''),
             | Self::UnterminatedString | Self::NewlineInString => Some(b'"'),
             | Self::MissingTerminatingQuote(quote) => Some(quote),
-            | Self::UnknownToken | Self::UnterminatedBlockComment => None,
+            | Self::UnknownToken | Self::UnterminatedBlockComment | Self::Unnormalized { .. } =>
+                None,
         }
     }
 
@@ -153,11 +169,24 @@ impl PreprocessorTokenizerErrorType {
             })
             .label("the rest of the line is kept as written")
             .note("C99 §6.4p3: a `'` or `\"` that begins no token is undefined"),
+            | Self::Unnormalized { .. } => new(format_in!(
+                arena,
+                "identifier `{}` is not in Normalization Form C",
+                spelling.unwrap_or_default()
+            ))
+            .label("a combining mark in this identifier composes with the character before it")
+            .note("C23 §6.4.2.1p3: an identifier shall conform to Normalization Form C")
+            .help("write the precomposed character instead"),
         }
     }
 }
 
 impl PreprocessorTokenizerError {
+    /// The warning group that controls this diagnostic, if any.
+    pub(crate) const fn group(&self) -> Option<DiagnosticGroup> {
+        self.error_type.group()
+    }
+
     pub(crate) fn is_unclosed_header_string_at(&self, source: &SourceVector) -> bool {
         matches!(
             self.error_type,
@@ -221,7 +250,8 @@ impl GetSeverity for PreprocessorTokenizerError {
             | PreprocessorTokenizerErrorType::UnterminatedString
             | PreprocessorTokenizerErrorType::NewlineInCharacter
             | PreprocessorTokenizerErrorType::NewlineInString => ErrorSeverity::Error,
-            | PreprocessorTokenizerErrorType::MissingTerminatingQuote(_) => ErrorSeverity::Warning,
+            | PreprocessorTokenizerErrorType::MissingTerminatingQuote(_)
+            | PreprocessorTokenizerErrorType::Unnormalized { .. } => ErrorSeverity::Warning,
         }
     }
 }

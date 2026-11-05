@@ -222,7 +222,9 @@ at SourcePosition { index: 64, line: 2, column: 1 }
 end
 at SourcePosition { index: 64, line: 2, column: 1 }
 === "é𝑥 = ünïcode; € \u{a0}x\n" []
-Identifier "é𝑥" [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 6 }]
+Identifier "é" [SourceVector { index: 0, column: 1, line: 1, source_file_index: 0, length: 2 }]
+at SourcePosition { index: 2, line: 1, column: 2 }
+Other "𝑥" [SourceVector { index: 2, column: 2, line: 1, source_file_index: 0, length: 4 }]
 at SourcePosition { index: 6, line: 1, column: 3 }
 Whitespace " " [SourceVector { index: 6, column: 3, line: 1, source_file_index: 0, length: 1 }]
 at SourcePosition { index: 7, line: 1, column: 4 }

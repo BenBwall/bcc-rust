@@ -141,9 +141,76 @@ impl CompilerConfiguration {
         self.derive_features()
     }
 
+    /// Sets the extension policy outright; the command line goes through
+    /// [`Self::with_pedantic`] and its siblings instead.
+    #[cfg(test)]
     pub(crate) const fn with_extension_policy(mut self, policy: ExtensionPolicy) -> Self {
         self.extension_policy = policy;
         self
+    }
+
+    /// Records `-pedantic-errors`, which also denies extensions.
+    pub(crate) const fn with_pedantic_errors(mut self) -> Self {
+        self.pedantic_errors = true;
+        self.with_pedantic_as_error(true)
+    }
+
+    /// `-pedantic` or `-Wpedantic` (true), or `-Wno-pedantic` (false):
+    /// whether pedantic diagnostics are reported. Enabling them keeps
+    /// whether they are errors, as GCC and Clang do after
+    /// `-pedantic-errors -Wpedantic`.
+    pub(crate) const fn with_pedantic(mut self, enabled: bool) -> Self {
+        self.pedantic_disabled = !enabled;
+        self.extension_policy = if !enabled {
+            ExtensionPolicy::Allow
+        } else if self.pedantic_as_error {
+            ExtensionPolicy::Deny
+        } else {
+            ExtensionPolicy::Warn
+        };
+        self
+    }
+
+    /// `-pedantic-errors` (true), or `-Wno-error=pedantic` (false), which
+    /// keeps pedantic diagnostics warnings, including a `-Werror=pedantic`
+    /// one.
+    pub(crate) const fn with_pedantic_as_error(mut self, error: bool) -> Self {
+        self.pedantic_as_error = error;
+        if error {
+            self.extension_policy = ExtensionPolicy::Deny;
+        } else {
+            if matches!(self.extension_policy, ExtensionPolicy::Deny) {
+                self.extension_policy = ExtensionPolicy::Warn;
+            }
+            if matches!(self.werror_pedantic, Some(true)) {
+                self.werror_pedantic = Some(false);
+            }
+        }
+        self
+    }
+
+    /// `-Werror=pedantic`: enables GCC's `-Wpedantic` diagnostics as errors,
+    /// which `-w` still silences, unlike `-pedantic-errors`.
+    pub(crate) const fn with_werror_pedantic(mut self) -> Self {
+        self.werror_pedantic = Some(true);
+        self.pedantic_disabled = false;
+        self
+    }
+
+    /// What `-Werror=pedantic` asks of a `-Wpedantic` diagnostic: an error
+    /// (`Some(true)`), a warning (`Some(false)`), or nothing, also while a
+    /// later `-Wno-pedantic` stops the diagnostics.
+    pub(crate) const fn werror_pedantic(self) -> Option<bool> {
+        if self.pedantic_disabled {
+            None
+        } else {
+            self.werror_pedantic
+        }
+    }
+
+    /// Whether `-pedantic-errors` appeared on the command line.
+    pub(crate) const fn pedantic_errors(self) -> bool {
+        self.pedantic_errors
     }
 
     pub(crate) const fn with_optimization(mut self, optimization: (bool, bool)) -> Self {
@@ -829,6 +896,10 @@ impl CompilerConfiguration {
             gnu: false,
             msvc: 0,
             extension_policy,
+            pedantic_errors: false,
+            pedantic_as_error: false,
+            werror_pedantic: None,
+            pedantic_disabled: false,
             accepted: 0,
             native: 0,
             repeated_specifier_warnings: true,

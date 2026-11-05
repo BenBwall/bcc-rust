@@ -125,7 +125,7 @@ impl Expander<'_, '_, '_, '_> {
             let tokens = self.replace_operand_argument(argument);
             return PreprocessorToken {
                 kind:           PreprocessorTokenType::String,
-                contents:       Self::stringify(self.context, self.scratch, &tokens),
+                contents:       Self::stringify(self.context, self.scratch, &tokens, token),
                 source_vectors: token.source_vectors,
             };
         }
@@ -136,6 +136,7 @@ impl Expander<'_, '_, '_, '_> {
         synthetic_contents.push('"');
         let mut pending_space = false;
         let mut paren_depth = 1;
+        let mut last = None;
         'base: loop {
             let Some(token) = Self::next_treat_newlines_as_whitespace(
                 &mut token_tokenizer,
@@ -169,7 +170,9 @@ impl Expander<'_, '_, '_, '_> {
                 synthetic_contents.push(' ');
             }
             Self::append_stringified_token(self.context, &mut synthetic_contents, token);
+            last = Some(token);
         }
+        Self::drop_trailing_backslash(self.context, &mut synthetic_contents, last, token);
         synthetic_contents.push('"');
         PreprocessorToken {
             kind:           PreprocessorTokenType::String,
@@ -184,10 +187,12 @@ impl Expander<'_, '_, '_, '_> {
         context: &mut Context<'_>,
         scratch: &Bump,
         tokens: &[PreprocessorToken],
+        hash: PreprocessorToken,
     ) -> StringCacheId {
         let mut spelling = ArenaString::new_in(scratch);
         spelling.push('"');
         let mut space = false;
+        let mut last = None;
         for token in tokens {
             match token.kind {
                 | PreprocessorTokenType::Whitespace | PreprocessorTokenType::Newline => {
@@ -201,9 +206,37 @@ impl Expander<'_, '_, '_, '_> {
                     },
             }
             Self::append_stringified_token(context, &mut spelling, *token);
+            last = Some(*token);
         }
+        Self::drop_trailing_backslash(context, &mut spelling, last, hash);
         spelling.push('"');
         context.string_cache.intern(&*spelling)
+    }
+
+    /// Drops the final `\` of a spelling that ends in an odd run of them,
+    /// which would escape the closing quote, and warns at the argument's
+    /// last token, as GCC and Clang do: `str(\)` gives `""`.
+    ///
+    /// C99: §6.10.3.2 paragraph 2, p. 153; PDF p. 165.
+    fn drop_trailing_backslash(
+        context: &mut Context<'_>,
+        spelling: &mut ArenaString<'_>,
+        last: Option<PreprocessorToken>,
+        hash: PreprocessorToken,
+    ) {
+        let run = spelling[1..]
+            .bytes()
+            .rev()
+            .take_while(|&byte| byte == b'\\')
+            .count();
+        if run % 2 == 0 {
+            return;
+        }
+        _ = spelling.pop();
+        context.preprocessor_error(PreprocessorError {
+            error_type:     PreprocessorErrorType::StringizedTrailingBackslash,
+            source_vectors: last.unwrap_or(hash).source_vectors,
+        });
     }
 
     /// C99 6.10.3.2p2: escape quotes/backslashes only inside literal tokens.

@@ -84,6 +84,7 @@ impl CompilerConfiguration {
             | DiagnosticGroup::ReturnMismatch => &[DiagnosticGroup::VoidReturnMismatch],
             | DiagnosticGroup::IncompatiblePointerTypes =>
                 &[DiagnosticGroup::GccConditionalPointerMismatch],
+            | DiagnosticGroup::Normalized => &[DiagnosticGroup::PedanticNormalized],
             | _ => &[],
         };
         for &child in children {
@@ -198,14 +199,16 @@ impl CompilerConfiguration {
             }
         };
         // GCC makes a pedantic warning an error before `-w` can silence
-        // it; Clang's `-w` silences it first.
+        // it, though not one of its preprocessor's (`-Wnormalized`);
+        // Clang's `-w` silences it first.
         let gcc = self.identity == super::CompilerIdentity::Gcc;
         let pedantic = self.pedantic_error(group);
+        let preprocessor = group == DiagnosticGroup::PedanticNormalized;
         // Clang 23's `-w` also silences its default-error
         // `-Wargument-outside-range`, though not `-Wint-conversion` or
         // `-Wincompatible-function-pointer-types`.
         if self.suppress_warnings
-            && !(gcc && pedantic)
+            && !(gcc && pedantic && !preprocessor)
             && (default == ErrorSeverity::Warning || group == DiagnosticGroup::ArgumentOutsideRange)
         {
             return None;
@@ -490,6 +493,12 @@ diagnostic_groups! {
     /// `-pedantic-errors`, and controlled by `-Woverflow`'s options, which
     /// disable it or set its severity but never enable it alone.
     PedanticOverflow => Some("overflow"), Extension, true;
+    /// GCC: an identifier not in Normalization Form C, before C23, which
+    /// does not require the form: a warning no pedantic option changes.
+    Normalized => Some("normalized"), Warning, false;
+    /// GCC: the same in C23, which requires the form, so `-pedantic-errors`
+    /// makes it an error; `-Wnormalized`'s options set it with its parent.
+    PedanticNormalized => Some("normalized"), Warning, true;
     /// Clang: a floating literal whose implicit conversion to an integer
     /// type is out of range or changes its value; `-Wconversion` holds it.
     LiteralConversion => Some("literal-conversion"), Warning, false;
@@ -523,6 +532,12 @@ impl DiagnosticGroup {
                 | Self::ConstantConversion
                 | Self::LiteralConversion
         )
+    }
+
+    /// Whether only GCC has the group, so that Clang reports its option as
+    /// unknown.
+    pub(crate) const fn gcc_only(self) -> bool {
+        matches!(self, Self::Normalized | Self::PedanticNormalized)
     }
 
     pub(crate) fn parse(name: &str) -> Option<Self> {

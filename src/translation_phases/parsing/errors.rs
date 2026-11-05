@@ -121,6 +121,51 @@ impl<'tu> Parser<'_, 'tu, '_> {
         {
             return;
         }
+        // Plain `_Complex` means `_Complex double`: Clang warns, GCC only
+        // under `-pedantic`; `-pedantic-errors` makes it an error in both,
+        // though `-w` and a system header silence it first. TCC refuses
+        // `_Complex` altogether.
+        let plain_complex = matches!(error_type, ParserErrorType::IncompleteComplexTypeSpecifier)
+            && self.context.configuration.compiler_identity()
+                != crate::configuration::CompilerIdentity::Tcc;
+        if plain_complex
+            && (self.context.configuration.suppress_warnings()
+                || self
+                    .context
+                    .withholds(ErrorSeverity::Warning, false, source_vectors))
+        {
+            return;
+        }
+        // Clang's warning is an error wherever `-pedantic-errors` appeared;
+        // GCC's is a `-Wpedantic` diagnostic, which its pedantic options
+        // enable and make errors.
+        let plain_complex_severity = plain_complex.then(|| {
+            let configuration = self.context.configuration;
+            if configuration.compiler_identity().rules() == crate::configuration::RuleSet::Clang {
+                Some(if configuration.pedantic_errors() {
+                    ErrorSeverity::Error
+                } else {
+                    ErrorSeverity::Warning
+                })
+            } else {
+                // `-Werror=pedantic` enables it as an error, or as a warning
+                // after `-Wno-error=pedantic`; `-w` silenced it above.
+                let policy = crate::translation_phases::policy_severity(
+                    configuration.extension_policy(),
+                    crate::translation_phases::DiagnosticPolicy::Extension,
+                );
+                match (policy, configuration.werror_pedantic()) {
+                    | (Some(ErrorSeverity::Error), _) | (_, Some(true)) =>
+                        Some(ErrorSeverity::Error),
+                    | (Some(severity), _) => Some(severity),
+                    | (None, Some(false)) => Some(ErrorSeverity::Warning),
+                    | (None, None) => None,
+                }
+            }
+        });
+        if plain_complex_severity == Some(None) {
+            return;
+        }
         let insertion_point = if error_type.expects_terminating_semicolon() {
             self.semicolon_insertion_point(token)
         } else {
@@ -134,6 +179,8 @@ impl<'tu> Parser<'_, 'tu, '_> {
                     crate::translation_phases::DiagnosticPolicy::Warning,
                 )
                 .unwrap_or(ErrorSeverity::Warning)
+            } else if let Some(Some(severity)) = plain_complex_severity {
+                severity
             } else if matches!(error_type, ParserErrorType::EmptyTranslationUnit) {
                 crate::translation_phases::policy_severity(
                     self.context.configuration.extension_policy(),
@@ -1614,8 +1661,8 @@ impl ParserErrorType<'_> {
             .label("not a type name in scope")
             .note("C99 §6.7.7: an identifier names a type only after a `typedef` declares it"),
             | Self::IncompleteComplexTypeSpecifier =>
-                new("`_Complex` requires `float`, `double`, or `long double`")
-                    .label("incomplete complex type")
+                new("plain `_Complex` requires a type specifier; assuming `_Complex double`")
+                    .label("no `float`, `double` or `long double` here")
                     .note(SPECIFIER_COMBINATIONS_NOTE),
             | Self::BothStaticAndPointerInArrayDirectDeclarator =>
                 new("`static` and `*` in one array declarator")

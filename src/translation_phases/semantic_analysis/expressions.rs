@@ -630,8 +630,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
 
 impl<'tu> Analyzer<'_, 'tu, '_> {
     /// Types the compound literal `e` of the type `type_name` names, as an
-    /// object its `initializer` initializes: a file-scope one has static
-    /// storage duration, and a `constexpr` one is a `const` named constant.
+    /// object its `initializer` initializes: its storage-class specifiers
+    /// give its storage duration, as [`Self::literal_storage`] tells, and a
+    /// `constexpr` one is a `const` named constant. Clang's identity
+    /// rejects the specifiers, as Clang parses none.
     /// C99: §6.5.2.5 paragraphs 1-6, pp. 75-76; PDF pp. 87-88. C23 (N3220):
     /// §6.5.3.6 paragraphs 4-7, p. 79; PDF p. 92.
     fn type_compound_literal(
@@ -650,10 +652,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         // C23 §6.5.3.6p4: a `constexpr` literal is a `constexpr` object, so
         // its type is `const`.
         let mut constexpr = Self::constexpr_storage(specifiers.extensions);
-        if self.context.configuration.compiler_identity().rules() == RuleSet::Clang
+        let clang_storage = self.context.configuration.compiler_identity().rules()
+            == RuleSet::Clang
             && !type_name.recovered
-            && literal_storage_class(specifiers)
-        {
+            && literal_storage_class(specifiers);
+        if clang_storage {
             self.error(
                 SemanticErrorKind::LiteralStorageClass,
                 specifiers.source_vectors,
@@ -668,6 +671,17 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             ty
         };
         let errors_before = self.semantic_errors;
+        // Clang's error leaves a literal without storage-class specifiers.
+        let (duration, register) = if clang_storage {
+            let duration = if self.scope == 0 {
+                Duration::Static
+            } else {
+                Duration::Automatic
+            };
+            (duration, false)
+        } else {
+            self.literal_storage(e, type_name)
+        };
         // §6.5.2.5p1 excludes variable length array types; a pointer to one
         // is a valid compound literal type.
         if !self.types.unanalyzed(ty)
@@ -682,16 +696,23 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             info = self.invalid_expression(e, SemanticErrorKind::InvalidCompoundLiteral);
         } else {
             // A compound literal's flexible array member stays empty.
+            let static_storage = duration.is_static_or_thread();
             info.ty = self
-                .check_initializer(ty, initializer, self.scope == 0, false, None)
+                .check_initializer(ty, initializer, static_storage, false, None)
                 .0;
+            if static_storage && self.scope != 0 {
+                self.inline_static_literal(e, info.ty);
+            }
             self.fold_compound_literal(&mut info, initializer);
             if constexpr {
                 self.constexpr_literal(&mut info, initializer, errors_before);
             }
         }
         info.category = self.object_category(info.ty);
-        info.static_address = self.scope == 0;
+        // A thread-local literal's address is the evaluating thread's, no
+        // address constant (C11 §6.6p9).
+        info.static_address = duration == Duration::Static;
+        info.register = register;
         info
     }
 
