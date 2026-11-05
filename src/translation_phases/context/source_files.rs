@@ -13,6 +13,7 @@ use std::{
     ffi::OsStr,
     io::Read,
     path::Path,
+    time::SystemTime,
 };
 
 use rustc_hash::FxBuildHasher;
@@ -126,6 +127,14 @@ impl<'tu> Context<'tu> {
         match self.file_system {
             | FileSystem::Host => std::fs::metadata(path).ok().map(|metadata| metadata.len()),
             | FileSystem::InMemory(_) => self.in_memory_file(path).map(|text| text.len() as u64),
+        }
+    }
+
+    /// When the file at `path` was last modified, if it has such a time.
+    pub(crate) fn source_modification_time(&self, path: &Path) -> Option<SystemTime> {
+        match self.file_system {
+            | FileSystem::Host => std::fs::metadata(path).and_then(|file| file.modified()).ok(),
+            | FileSystem::InMemory(_) => None,
         }
     }
 

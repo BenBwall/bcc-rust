@@ -1433,7 +1433,10 @@ fn clang_feature(configuration: CompilerConfiguration, name: &str, extension: bo
 /// <https://gcc.gnu.org/onlinedocs/cpp/Common-Predefined-Macros.html>
 /// C99: §6.10.8 paragraph 4, p. 161; PDF p. 173.
 pub(super) fn overridable_gnu_builtin(name: &str) -> bool {
-    LANGUAGE_BUILTINS.iter().any(|(spelling, feature)| {
+    matches!(
+        name,
+        "__BASE_FILE__" | "__FILE_NAME__" | "__INCLUDE_LEVEL__" | "__TIMESTAMP__"
+    ) || LANGUAGE_BUILTINS.iter().any(|(spelling, feature)| {
         *spelling == name && matches!(feature.origin(), FeatureOrigin::Gnu)
     })
 }

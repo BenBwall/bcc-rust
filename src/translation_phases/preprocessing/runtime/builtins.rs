@@ -13,14 +13,20 @@ use std::{
     ops::ControlFlow,
     path::Path,
 };
+#[cfg(feature = "native")]
+use std::time::SystemTime;
 
+use chrono::NaiveDateTime;
 #[cfg(feature = "native")]
 use chrono::Local;
 
-use super::super::{
-    Expander,
-    PreprocessorError,
-    PreprocessorErrorType,
+use super::{
+    super::{
+        Expander,
+        PreprocessorError,
+        PreprocessorErrorType,
+    },
+    TokenizerFrameType,
 };
 use crate::{
     configuration::CompilerIdentity,
@@ -64,7 +70,10 @@ impl Expander<'_, '_, '_, '_> {
             // define it. Standard input is `<stdin>` in Clang, an empty
             // name in GCC and `-` in TCC. GNU extension: GCC manual,
             // "Common Predefined Macros".
-            | name @ ("__FILE__" | "__BASE_FILE__") => {
+            //
+            // `__FILE_NAME__` is the last component of `__FILE__`, in GCC and
+            // Clang. GNU extension: GCC manual, "Common Predefined Macros".
+            | name @ ("__FILE__" | "__BASE_FILE__" | "__FILE_NAME__") => {
                 let invocation = self.current_line_location(token);
                 let base = name == "__BASE_FILE__";
                 let index = if base {
@@ -81,6 +90,12 @@ impl Expander<'_, '_, '_, '_> {
                         | CompilerIdentity::ClangCl
                         | CompilerIdentity::Msvc => (),
                     }
+                }
+                if name == "__FILE_NAME__" {
+                    file = file
+                        .components()
+                        .next_back()
+                        .map_or(file, |last| Path::new(last.as_os_str()));
                 }
                 // A name that is not UTF-8 keeps its bytes, as GCC's and
                 // Clang's do.
@@ -103,6 +118,32 @@ impl Expander<'_, '_, '_, '_> {
                     kind: PreprocessorTokenType::Number,
                     contents,
                     source_vectors: self.context.push_source_vectors(&[invocation]),
+                })
+            },
+            // The nesting of `#include`s at the expansion, counting from 0 in
+            // the main file; a forced `-include` header is at 1, though the
+            // command line's pseudo-file reads it. Macros and `#line` do not
+            // matter. GNU extension: GCC manual, "Common Predefined Macros".
+            | "__INCLUDE_LEVEL__" => {
+                let opened = self
+                    .tokenizer_stack
+                    .iter()
+                    .filter(|frame| {
+                        matches!(
+                            frame.frame_type,
+                            TokenizerFrameType::SourceFile {
+                                physical_source_file_index,
+                                ..
+                            } if Some(physical_source_file_index) != self.state.command_line_file
+                        )
+                    })
+                    .count();
+                let level = u32::try_from(opened.saturating_sub(1)).unwrap_or(u32::MAX);
+                let contents = intern_line_number(self.context, self.scratch, level);
+                Some(PreprocessorToken {
+                    kind: PreprocessorTokenType::Number,
+                    contents,
+                    source_vectors: token.source_vectors,
                 })
             },
             | name @ ("__STDC__"
@@ -153,6 +194,17 @@ impl Expander<'_, '_, '_, '_> {
                     source_vectors: token.source_vectors,
                 })
             },
+            // GNU and MSVC extension: GCC manual, "Common Predefined Macros";
+            // Microsoft Learn, "Predefined macros". Neither names a time zone
+            // for it, and `SOURCE_DATE_EPOCH` does not pin it.
+            | "__TIMESTAMP__" => {
+                let contents = self.source_file_timestamp();
+                Some(PreprocessorToken {
+                    kind: PreprocessorTokenType::String,
+                    contents,
+                    source_vectors: token.source_vectors,
+                })
+            },
             // In an argument's prescan the operator stays, to be carried
             // out where the replaced argument is rescanned among the
             // tokens around it, as GCC and Clang do: a pragma takes
@@ -175,6 +227,24 @@ impl Expander<'_, '_, '_, '_> {
             | s =>
                 unreachable!("Compiler bug: Predefined macro {s:#?} not in PREDEFINED_MACRO_NAMES"),
         }
+    }
+
+    /// The literal `__TIMESTAMP__` expands to: when the source file being read
+    /// was last modified, in local time and spelled as `asctime` spells it, or
+    /// GCC's and Clang's question marks when that cannot be known. `#line`
+    /// does not rename the file this asks about.
+    fn source_file_timestamp(&mut self) -> StringCacheId {
+        let modified = self
+            .reading_position()
+            .and_then(|(file, _)| file_modification_time(self.context, file));
+        let mut spelling = ArenaString::new_in(self.scratch);
+        if let Some(modified) = modified {
+            write!(spelling, "{}", modified.format("%a %b %e %H:%M:%S %Y"))
+                .expect("arena formatting cannot fail");
+        } else {
+            spelling.push_str("??? ??? ?? ??:??:?? ????");
+        }
+        intern_string_literal(self.context, self.scratch, &spelling)
     }
 
     /// Executes the C99 string-form pragma operator.
@@ -258,6 +328,31 @@ impl Expander<'_, '_, '_, '_> {
 pub(super) struct TranslationTimestamp<'pp> {
     date: ArenaString<'pp>,
     time: ArenaString<'pp>,
+}
+
+/// When source file `file` was last modified, in local time. Standard input
+/// has no file to ask: GCC reads the time of the pipe, which is about now, and
+/// Clang's buffer has the Unix epoch.
+#[cfg(feature = "native")]
+fn file_modification_time(context: &Context<'_>, file: u32) -> Option<NaiveDateTime> {
+    let path = context.get_source_file(file);
+    let time = if path == Path::new(STDIN_NAME) {
+        match context.configuration.compiler_identity() {
+            | CompilerIdentity::Clang | CompilerIdentity::ClangCl => SystemTime::UNIX_EPOCH,
+            | CompilerIdentity::Gcc | CompilerIdentity::Msvc | CompilerIdentity::Tcc =>
+                SystemTime::now(),
+        }
+    } else {
+        context.source_modification_time(path)?
+    };
+    Some(chrono::DateTime::<Local>::from(time).naive_local())
+}
+
+/// Builds without the native host (the explorer's WebAssembly build) have
+/// neither files with times nor a clock.
+#[cfg(not(feature = "native"))]
+fn file_modification_time(_: &Context<'_>, _: u32) -> Option<NaiveDateTime> {
+    None
 }
 
 /// Spells `value` as a narrow C string literal whose evaluated contents are
