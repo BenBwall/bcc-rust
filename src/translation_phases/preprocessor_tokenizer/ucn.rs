@@ -2,8 +2,15 @@
 //!
 //! C99: §6.4.2.1p3, p. 51; PDF p. 63; §6.4.3p1-4, p. 53; PDF p. 65; the
 //! permitted ranges are Annex D, pp. 440-441; PDF pp. 452-453.
+mod composition;
+
 use super::PreprocessorTokenType;
 use crate::{
+    configuration::{
+        CStandard,
+        CompilerConfiguration,
+        RuleSet,
+    },
     translation_phases::Context,
     util::{
         bump::{
@@ -28,7 +35,7 @@ pub(crate) fn identifier(
     let mut canonical = ArenaString::with_capacity_in(text.len(), scratch);
     let mut index = 0;
     while index < text.len() {
-        if let Some((c, length)) = decode(&text[index..], index == 0) {
+        if let Some((c, length)) = decode(context.configuration, &text[index..], index == 0) {
             canonical.push(c);
             index += length;
         } else {
@@ -68,15 +75,14 @@ pub(crate) fn identifier_name(
             index += run;
             continue;
         }
-        let (c, length) = match decode(rest, first) {
+        let (c, length) = match decode(context.configuration, rest, first) {
             | Some(decoded) => decoded,
             | None => {
                 let c = rest.chars().next()?;
                 let valid = match c {
                     | '$' => dollar,
                     | c if c.is_ascii() => false,
-                    | c if first => c.is_alphabetic(),
-                    | c => c.is_alphanumeric(),
+                    | c => identifier_character(context.configuration, c, first),
                 };
                 if !valid {
                     return None;
@@ -93,7 +99,37 @@ pub(crate) fn identifier_name(
 /// Decodes a `universal-character-name` valid in an identifier.
 /// C99: §6.4.3p1-2, p. 53; PDF p. 65; identifier ranges §6.4.2.1p3, p. 51;
 /// PDF p. 63; Annex D, pp. 440-441; PDF pp. 452-453.
-pub(super) fn decode(text: &str, first: bool) -> Option<(char, usize)> {
+pub(super) fn decode(
+    configuration: CompilerConfiguration,
+    text: &str,
+    first: bool,
+) -> Option<(char, usize)> {
+    let (code, length) = universal_character(text)?;
+    // GCC reads `\u0024` as the `$` it accepts in identifiers; Clang
+    // refuses a universal character name for `$`.
+    // C99: §6.4.3p2, p. 53; PDF p. 65 (`$` may be one).
+    if code == 0x24
+        && configuration.compiler_identity().rules() == RuleSet::Gcc
+        && configuration.accepts(crate::configuration::Feature::DollarIdentifiers)
+    {
+        return Some(('$', length));
+    }
+    // No universal character name spells a character of the basic set or a
+    // control character: C99 and C11 keep only `$`, `@` and `` ` `` below
+    // U+00A0, none of them an identifier character, and C23, whose basic
+    // set holds all three, keeps none. GCC and Clang refuse every one.
+    // C99: §6.4.3p2, p. 53; PDF p. 65. C23: §6.4.3p2, p. 56; PDF p. 69.
+    if code < 0xA0 {
+        return None;
+    }
+    let character = char::from_u32(code)?;
+    identifier_character(configuration, character, first).then_some((character, length))
+}
+
+/// The code point a `\uXXXX` or `\UXXXXXXXX` at the start of `text` names,
+/// and the escape's length.
+/// C99: §6.4.3p1-2, p. 53; PDF p. 65.
+fn universal_character(text: &str) -> Option<(u32, usize)> {
     let digits = match text.as_bytes() {
         | [b'\\', b'u', ..] => 4,
         | [b'\\', b'U', ..] => 8,
@@ -103,7 +139,129 @@ pub(super) fn decode(text: &str, first: bool) -> Option<(char, usize)> {
     if !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return None;
     }
-    let code = u32::from_str_radix(hex, 16).ok()?;
+    Some((u32::from_str_radix(hex, 16).ok()?, 2 + digits))
+}
+
+/// Whether an identifier may hold `character`, beyond ASCII, written as
+/// itself or as a universal character name, at its start (`first`) or
+/// after it. Clang takes C99's Annex D ranges in C99, C11's in C11 and
+/// C17, and Unicode's identifier characters in C23 (bcc approximates
+/// `XID_Start` and `XID_Continue` by Rust's alphabetic and alphanumeric
+/// classes); GCC 14 takes any of them in every mode.
+/// C99: Annex D, pp. 440-441; PDF pp. 452-453. C11: Annex D, pp. 664-665;
+/// PDF pp. 682-683. C23: §6.4.2.1p3, p. 54; PDF p. 67.
+pub(crate) fn identifier_character(
+    configuration: CompilerConfiguration,
+    character: char,
+    first: bool,
+) -> bool {
+    let code = u32::from(character);
+    // `XID_Continue` also holds the nonspacing combining marks and the
+    // middle dots (`Other_ID_Continue`), which Rust's alphanumeric class
+    // lacks; the enclosing marks among U+20D0-U+20FF (U+20DD-U+20E0,
+    // U+20E2-U+20E4) and its unassigned tail are not identifier characters.
+    let unicode = if first {
+        character.is_alphabetic()
+    } else {
+        character.is_alphanumeric()
+            || matches!(code,
+                | 0x00B7
+                | 0x0387
+                | 0x0300..=0x036F
+                | 0x1DC0..=0x1DFF
+                | 0x20D0..=0x20DC
+                | 0x20E1
+                | 0x20E5..=0x20F0
+                | 0xFE20..=0xFE2F
+            )
+    };
+    // GCC takes any of the sets unless a pedantic option asks for the
+    // standard's own, which it then enforces with an error.
+    if configuration.compiler_identity().rules() == RuleSet::Gcc
+        && configuration.extension_policy() == crate::configuration::ExtensionPolicy::Allow
+    {
+        return c99_character(code, first) || c11_character(code, first) || unicode;
+    }
+    match configuration.standard() {
+        | standard if standard < CStandard::C11 => c99_character(code, first),
+        | standard if standard < CStandard::C23 => c11_character(code, first),
+        | _ => unicode,
+    }
+}
+
+/// Whether GCC finds the identifier spelled `text` outside Normalization
+/// Form C, which C23 requires of it, by the one case bcc detects: a
+/// character followed directly by a combining mark that canonical
+/// composition joins to it, as `a\u0300` stands for `à`. GCC also finds
+/// marks out of canonical order and composition across an intervening mark
+/// (`a\u0327\u0301`); bcc does not.
+/// C23: §6.4.2.1p3, p. 54; PDF p. 67.
+pub(super) fn composes_in_place(configuration: CompilerConfiguration, text: &str) -> bool {
+    let mut previous = None;
+    let mut index = 0;
+    while let Some(rest) = text.get(index..)
+        && let Some(next) = rest.chars().next()
+    {
+        let (character, length) =
+            decode(configuration, rest, index == 0).unwrap_or((next, next.len_utf8()));
+        if let Some(base) = previous
+            && composition::composes(base, character)
+        {
+            return true;
+        }
+        previous = Some(character);
+        index += length;
+    }
+    false
+}
+
+/// C11's ranges of characters allowed in identifiers (D.1), less those
+/// not allowed first (D.2) at an identifier's start.
+/// C11: Annex D, pp. 664-665; PDF pp. 682-683.
+fn c11_character(code: u32, first: bool) -> bool {
+    let combining = matches!(code,
+        | 0x0300..=0x036F | 0x1DC0..=0x1DFF | 0x20D0..=0x20FF | 0xFE20..=0xFE2F
+    );
+    let allowed = matches!(code,
+        | 0x00A8
+        | 0x00AA
+        | 0x00AD
+        | 0x00AF
+        | 0x00B2..=0x00B5
+        | 0x00B7..=0x00BA
+        | 0x00BC..=0x00BE
+        | 0x00C0..=0x00D6
+        | 0x00D8..=0x00F6
+        | 0x00F8..=0x00FF
+        | 0x0100..=0x167F
+        | 0x1681..=0x180D
+        | 0x180F..=0x1FFF
+        | 0x200B..=0x200D
+        | 0x202A..=0x202E
+        | 0x203F..=0x2040
+        | 0x2054
+        | 0x2060..=0x206F
+        | 0x2070..=0x218F
+        | 0x2460..=0x24FF
+        | 0x2776..=0x2793
+        | 0x2C00..=0x2DFF
+        | 0x2E80..=0x2FFF
+        | 0x3004..=0x3007
+        | 0x3021..=0x302F
+        | 0x3031..=0x303F
+        | 0x3040..=0xD7FF
+        | 0xF900..=0xFD3D
+        | 0xFD40..=0xFDCF
+        | 0xFDF0..=0xFE44
+        | 0xFE47..=0xFFFD
+    ) || ((0x10000..=0xEFFFD).contains(&code) && (code & 0xFFFF) <= 0xFFFD);
+    allowed && !(first && combining)
+}
+
+/// C99's ranges of characters allowed in identifiers, less the digits at
+/// an identifier's start.
+/// C99: Annex D, pp. 440-441; PDF pp. 452-453.
+fn c99_character(code: u32, first: bool) -> bool {
     let digit = matches!(code,
         | 0x0660..=0x0669
         | 0x06F0..=0x06F9
@@ -357,8 +515,5 @@ pub(super) fn decode(text: &str, first: bool) -> Option<(char, usize)> {
         | 0x3005..=0x3007
         | 0x3021..=0x3029
     );
-    if (first && digit) || !(allowed || digit) {
-        return None;
-    }
-    Some((char::from_u32(code)?, 2 + digits))
+    !((first && digit) || !(allowed || digit))
 }

@@ -563,10 +563,15 @@ impl<'tu> SpecifierList<'tu> {
                 token,
             );
         }
+        // C23 (N3220) §6.5.3.6p4 and p7: a compound literal takes
+        // `constexpr`, `register`, `static` and `thread_local` only; GCC and
+        // Clang reject the others as syntax errors.
+        let literal_class = matches!(storage_class, StorageClass::Static | StorageClass::Register);
         if !matches!(
             self.mode,
             SpecifierMode::Declaration | SpecifierMode::CompoundLiteral
-        ) {
+        ) || (self.mode == SpecifierMode::CompoundLiteral && !literal_class)
+        {
             parser.report(
                 ParserErrorType::DeclarationSpecifierNotAllowedHere(token.kind),
                 Some(token),
@@ -972,7 +977,8 @@ impl<'tu> SpecifierList<'tu> {
     }
 
     /// Diagnoses a finished list whose `_Complex` never received `float`,
-    /// `double`, or `long double`.
+    /// `double`, or `long double`, and takes it as `_Complex double`, as
+    /// GCC and Clang do: Clang warns, GCC only under `-pedantic`.
     ///
     /// C99: §6.7.2 paragraph 2, pp. 99-100; PDF pp. 111-112 lists only
     /// `float _Complex`, `double _Complex`, and `long double _Complex`.
@@ -989,6 +995,12 @@ impl<'tu> SpecifierList<'tu> {
             && !self.type_conflict_seen
             && self.specifiers.type_specifiers == TypeSpecifiers::Complex
         {
+            // TCC refuses `_Complex` ("_Complex is not yet supported").
+            if parser.context.configuration.compiler_identity()
+                != crate::configuration::CompilerIdentity::Tcc
+            {
+                self.specifiers.type_specifiers = TypeSpecifiers::ComplexDouble;
+            }
             parser.report(
                 ParserErrorType::IncompleteComplexTypeSpecifier,
                 self.complex_token,

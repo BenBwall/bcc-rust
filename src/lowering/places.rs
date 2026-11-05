@@ -33,7 +33,11 @@ use super::{
 };
 use crate::{
     ir::{
+        AsmClobbers,
+        AsmConstraint,
+        AsmOperand,
         FloatCC,
+        InlineAsm,
         InstData,
         InstFlags,
         IntCC,
@@ -104,6 +108,17 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
         })
     }
 
+    /// Whether this function's locals live in memory because GCC keeps
+    /// them current across a `__builtin_setjmp`'s second return, where a
+    /// `__builtin_longjmp` resumes it; Clang, and ISO `setjmp`, leave the
+    /// unsaved ones indeterminate. GNU extension: GCC manual, "Nonlocal
+    /// Gotos"; C99: §7.13.2.1p3, p. 244; PDF p. 256.
+    pub(super) fn locals_survive_setjmp(&self) -> bool {
+        self.record.builtin_setjmp
+            && self.unit.context.configuration.compiler_identity().rules()
+                == crate::configuration::RuleSet::Gcc
+    }
+
     /// The storage of an automatic object, allocated on first use.
     pub(super) fn local(
         &mut self,
@@ -122,7 +137,8 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
             | Some(value_type)
                 if !types::is_volatile(ty)
                     && !matches!(self.unit.sema.types.kind(ty), TypeKind::Atomic(_))
-                    && !self.unit.address_taken.contains(&binding) =>
+                    && !self.unit.address_taken.contains(&binding)
+                    && !self.locals_survive_setjmp() =>
                 Local::Variable(self.draft.declare_var(value_type)),
             | _ if types::variable_size(&self.unit.sema.types, ty) => {
                 let size = self.runtime_size(ty, source)?;
@@ -158,8 +174,54 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                 )
             },
         };
+        if self.locals_survive_setjmp() {
+            let address = match local {
+                | Local::Slot(slot) => Some(self.inst(InstData::StackAddr { slot }, Type::Ptr)),
+                | Local::Address(address) => Some(address),
+                | Local::Variable(_) => None,
+            };
+            if let Some(address) = address {
+                self.escape_for_setjmp(address, ty);
+            }
+        }
         _ = self.locals.insert(binding, local);
         Ok(local)
+    }
+
+    /// Passes the `address` of a local of type `ty` to an empty volatile
+    /// `asm` that may read and write memory, as `asm volatile("" :: "m"(x)
+    /// : "memory")` does: the optimizer may then neither keep the local in
+    /// a register nor carry a value across a call, so a resumed
+    /// `__builtin_setjmp` reads what was last stored, as GCC guarantees.
+    /// A variable length array's operand names its first byte; the memory
+    /// clobber covers the rest once its address has escaped. The wasm
+    /// target, which refuses `__builtin_setjmp`, takes no asm.
+    pub(super) fn escape_for_setjmp(&mut self, address: Value, ty: TypeId) {
+        if self.unit.target.is_wasm() {
+            return;
+        }
+        let bytes = types::layout(&self.unit.sema.types, ty)
+            .ok()
+            .and_then(|layout| u32::try_from(layout.size).ok())
+            .unwrap_or(1)
+            .max(1);
+        let asm = self.scratch.alloc(InlineAsm {
+            template:     "",
+            operands:     self.scratch.alloc_slice_copy(&[AsmOperand {
+                output: false,
+                early_clobber: false,
+                constraint: AsmConstraint::Memory,
+                ty: Type::I8,
+                bytes,
+            }]),
+            clobbers:     AsmClobbers {
+                memory: true,
+                ..AsmClobbers::default()
+            },
+            side_effects: true,
+        });
+        let args = self.scratch.alloc_slice_copy(&[address]);
+        _ = self.draft.push(Op::InlineAsm(asm, args), None);
     }
 
     /// The value of the object at `place`, whose lvalue type is `ty`,

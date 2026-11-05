@@ -35,6 +35,34 @@ mod tests {
         );
     }
 
+    /// `#` drops a final `\\` that would escape the closing quote and warns
+    /// in GCC's and Clang's words, in every revision, through `__VA_OPT__`
+    /// too (gcc.dg/cpp/strify2.c). C99 §6.10.3.2p2.
+    #[test]
+    fn stringizing_drops_a_final_backslash_with_a_warning() {
+        let source = "#define S(x) #x\n#define V(...) #__VA_OPT__(\\)\n_Static_assert(sizeof \
+                      S(\\) == 1, \"\");\n_Static_assert(sizeof S(a\\) == 2, \
+                      \"\");\n_Static_assert(sizeof S(\\\\) == 2, \"\");\n_Static_assert(sizeof \
+                      V(1) == 1, \"\");\n";
+        let output = bcc(&["--std", "c23", "--input", source]);
+        let warnings = text(&output);
+        assert!(output.status.success(), "{warnings}");
+        assert_eq!(
+            warnings
+                .matches("warning: invalid string literal, ignoring final '\\'")
+                .count(),
+            3,
+            "{warnings}"
+        );
+        let output = bcc(&[
+            "--std",
+            "c99",
+            "--input",
+            "#define S(x) #x\nchar s[sizeof S(\\)];\n",
+        ]);
+        assert!(output.status.success(), "{}", text(&output));
+    }
+
     #[test]
     fn definitions_keep_values_and_follow_command_line_order() {
         for standard in ["c17", "gnu17", "c23"] {

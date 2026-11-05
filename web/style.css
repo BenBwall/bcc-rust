@@ -327,6 +327,21 @@
   .map-labels a:hover, .map-labels a:focus-visible { color: var(--accent); border-color: var(--accent); }
   .map-legend { color: var(--ink-2); font-size: 12px; line-height: 1.7; }
   .map-key { font-weight: 700; text-transform: uppercase; letter-spacing: .06em; font-size: 11px; }
+  /* Narrower than the graph's 520px plus the figure's padding, the graph
+     scrolls sideways: the caption says so, and its right edge fades until
+     the reader reaches the end (where scroll-driven animation exists). */
+  @media (max-width: 555px) {
+    .map-caption::after { content: " · scroll sideways →"; color: var(--accent); white-space: nowrap; }
+  }
+  @supports (animation-timeline: scroll()) {
+    @media (max-width: 555px) {
+      .map-screen { animation: map-more linear both; animation-timeline: scroll(self inline); }
+    }
+    @keyframes map-more {
+      from, 96% { mask-image: linear-gradient(to right, #000 78%, transparent); }
+      to { mask-image: none; }
+    }
+  }
   .map-key.is-run { color: var(--accent-ink); }
 
   /* Section headings: a caption over a rule, numbered like a datasheet's. */

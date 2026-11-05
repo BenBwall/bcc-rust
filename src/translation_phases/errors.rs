@@ -115,6 +115,7 @@ impl TranslationError<'_> {
                     Some(G::ArgumentOutsideRange),
                 | _ => None,
             },
+            | Self::PreprocessorTokenizining(error) => error.group(),
             | _ => None,
         }
     }

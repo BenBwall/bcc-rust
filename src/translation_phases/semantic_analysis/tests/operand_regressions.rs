@@ -184,9 +184,10 @@ fn register_pointer_does_not_transfer_storage_to_pointee() {
         "void f(void) { register int *p; &p; }",
         SemanticErrorKind::InvalidAddressOperand,
     );
+    // Clang reports the register array's conversion to a pointer.
     rejects(
         "void f(void) { register int a[2]; &a[1]; }",
-        SemanticErrorKind::InvalidAddressOperand,
+        SemanticErrorKind::RegisterArrayAddress,
     );
 }
 

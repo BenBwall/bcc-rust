@@ -1208,6 +1208,9 @@ impl<'u, 'a, 'tu, 'ir, 's> FunctionLowerer<'u, 'a, 'tu, 'ir, 's> {
                 } else {
                     value
                 };
+                if lowerer.locals_survive_setjmp() {
+                    lowerer.escape_for_setjmp(home, declared);
+                }
                 _ = lowerer.locals.insert(parameter, Local::Address(home));
                 continue;
             }
