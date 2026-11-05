@@ -67,6 +67,7 @@ use crate::{
         interface::StrExt,
         preprocessor_tokenizer::{
             PreprocessorToken,
+            TokenSpacing,
             PreprocessorTokenType,
             PreprocessorTokenizerError,
         },
@@ -583,6 +584,7 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
             let errors_from = self.context.pending_queue_length();
             let real_token = self.parse_plain_number(
                 PreprocessorToken {
+                    spacing: TokenSpacing::NONE,
                     contents: real_contents,
                     ..token
                 },

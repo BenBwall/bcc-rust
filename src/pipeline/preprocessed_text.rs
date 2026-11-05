@@ -3,8 +3,11 @@
 //! its source file, with GCC's line markers unless `-P` drops them. The
 //! command line streams it (`cli/preprocessed.rs`); the explorer keeps it.
 //!
-//! A token that does not touch the previous one in its source gets a space
-//! before it, so no two tokens paste together. Adjacent string literals are
+//! A token gets a space before it where white space came before it where it
+//! was written, or, around a macro's expansion and its arguments, where the
+//! preprocessor's padding says so or the two tokens could paste together, as
+//! GCC prints them (`c-ppoutput.cc`, `scan_translation_unit`; see
+//! `preprocessor_tokenizer/spacing.rs`). Adjacent string literals are
 //! written apart, as phase 4 leaves them; both callers keep phase 6 from
 //! joining them. A token goes on the line where the reader was in its
 //! source file, so the text a macro expands to stays on its invocation's
@@ -20,6 +23,7 @@ use std::fmt::Write as _;
 use crate::{
     translation_phases::{
         Context,
+        preprocessor_tokenizer::OutputSpacing,
         preprocessing::{
             ReadAt,
             StringTokenType,
@@ -84,12 +88,8 @@ pub(crate) struct TextWriter<'a> {
     options:         TextOptions,
     /// The source file and line the output is on, once a token was written.
     line:            Option<(u32, u32)>,
-    /// Where the last token ended in its own source: its file and byte
-    /// offset, and its line.
-    end:             Option<(u32, usize)>,
-    end_line:        u32,
-    /// The first and last bytes of the last token's spelling.
-    last:            (Option<u8>, Option<u8>),
+    /// The class of the last token on the line.
+    last:            PasteClass,
     /// The main source file, whose line marker starts the text.
     main_file:       u32,
     /// The current line holds a pragma: a token for it or an earlier line
@@ -97,55 +97,112 @@ pub(crate) struct TextWriter<'a> {
     after_pragma:    bool,
 }
 
-/// What separated two tokens in the source.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum Gap {
-    /// Nothing: the second began where the first ended.
-    Touching,
-    /// Whitespace or a comment on the same line.
-    Space,
-    /// They come from different places, such as a macro's definition and
-    /// its argument.
-    Unknown,
+/// A token's spelling as far as it decides what it could paste with: GCC's
+/// `cpp_avoid_paste` looks at the token's type and, of an operator, at its
+/// first character.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub(crate) enum PasteClass {
+    /// Nothing comes before the token on its line.
+    #[default]
+    None,
+    /// An identifier.
+    Name,
+    /// A pp-number, and whether all of it could continue an identifier.
+    Number(bool),
+    /// An unprefixed character constant.
+    Character,
+    /// An unprefixed string literal.
+    String,
+    /// A prefixed character constant or string literal, which pastes with
+    /// nothing, as a GCC `CPP_WSTRING` does not.
+    Prefixed,
+    /// The other tokens: a punctuator, as it is written, with its digraph
+    /// `%:` written `#`; the three-character ones paste with nothing.
+    Punctuator(u8, u8),
+    /// A lone `\`, which would begin a universal character name.
+    Backslash,
 }
 
-/// Whether writing `next` right after a token whose spelling began and ended
-/// with `last` could read as other tokens, as GCC's `cpp_avoid_paste`
-/// decides: two identifier or number characters, a number and what would
-/// continue it, a prefix and a quote, and the punctuator pairs that form a
-/// longer punctuator or a comment.
+impl PasteClass {
+    /// The class of the token spelled `spelling`.
+    pub(crate) fn of(spelling: &str) -> Self {
+        let bytes = spelling.as_bytes();
+        match bytes {
+            | [] => Self::None,
+            | [b'\\'] => Self::Backslash,
+            | [b'"', ..] => Self::String,
+            | [b'\'', ..] => Self::Character,
+            | [b'0'..=b'9', ..] | [b'.', b'0'..=b'9', ..] => Self::Number(
+                bytes
+                    .iter()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'$' | 0x80..)),
+            ),
+            | [first, .., b'"' | b'\''] if first.is_ascii_alphabetic() => Self::Prefixed,
+            | [first, ..]
+                if first.is_ascii_alphabetic() || matches!(first, b'_' | b'$' | b'\\' | 0x80..) =>
+                Self::Name,
+            | [b'%', b':'] => Self::Punctuator(b'#', 0),
+            | [first] => Self::Punctuator(*first, 0),
+            | [first, second] => Self::Punctuator(*first, *second),
+            | [first, ..] => Self::Punctuator(*first, 1),
+        }
+    }
+
+    /// The first character of the operator this is, by GCC's `c`.
+    const fn operator(self, spelling: u8) -> Option<u8> {
+        match self {
+            | Self::Punctuator(..) => Some(spelling),
+            | _ => None,
+        }
+    }
+}
+
+/// Whether a token of class `next`, spelled from `first`, written right after
+/// one of class `last`, could read as other tokens, as GCC's `cpp_avoid_paste`
+/// (libcpp `lex.cc`) decides. It is conservative on purpose: a number followed
+/// by `+`, `-` or `.` is kept apart even without an exponent, and `.` from a
+/// number, since `.2` could be read with it.
 /// C99: preprocessing tokens are the longest sequence that can form one,
 /// §6.4 paragraph 4, p. 49; PDF p. 61; pp-numbers §6.4.8, p. 65; PDF p. 77.
-pub(crate) fn would_paste(last: (Option<u8>, Option<u8>), next: Option<u8>) -> bool {
-    let (Some(first), Some(end), Some(start)) = (last.0, last.1, next) else {
-        return false;
-    };
-    let word = |byte: u8| byte.is_ascii_alphanumeric() || byte == b'_' || byte >= 0x80;
-    let number = first.is_ascii_digit() || (first == b'.' && end != b'.' && end.is_ascii_digit());
-    if word(end) && (word(start) || start == b'"' || start == b'\'') {
-        return true;
-    }
-    if number
-        && (start == b'.'
-            || word(start)
-            || (matches!(start, b'+' | b'-') && matches!(end, b'e' | b'E' | b'p' | b'P')))
-    {
-        return true;
-    }
-    match (end, start) {
-        | (b'.', b'.' | b'0'..=b'9')
-        | (b'+', b'+' | b'=')
-        | (b'-', b'-' | b'=' | b'>')
-        | (b'<', b'<' | b'=' | b':' | b'%')
-        | (b'>', b'>' | b'=')
-        | (b'&', b'&' | b'=')
-        | (b'|', b'|' | b'=')
-        | (b'=' | b'!' | b'*' | b'^', b'=')
-        | (b'/', b'=' | b'*' | b'/')
-        | (b'%', b'=' | b'>' | b':')
-        | (b'#', b'#' | b'%')
-        | (b':', b'>') => true,
-        | _ => false,
+pub(crate) fn avoid_paste(last: PasteClass, next: PasteClass, first: u8) -> bool {
+    let operator = next.operator(first);
+    let c = |set: &[u8]| operator.is_some_and(|c| set.contains(&c));
+    match last {
+        | PasteClass::None | PasteClass::Character | PasteClass::String | PasteClass::Prefixed =>
+            false,
+        | PasteClass::Name => matches!(
+            next,
+            PasteClass::Name
+                | PasteClass::Number(true)
+                | PasteClass::Character
+                | PasteClass::String
+        ),
+        | PasteClass::Number(_) =>
+            matches!(next, PasteClass::Number(_) | PasteClass::Name | PasteClass::Character)
+                || c(b".+-"),
+        | PasteClass::Backslash => next == PasteClass::Name,
+        | PasteClass::Punctuator(a, 0) =>
+            (matches!(a, b'=' | b'!' | b'>' | b'<' | b'+' | b'-' | b'*' | b'/' | b'%' | b'&' | b'|' | b'^')
+                && operator == Some(b'='))
+                || match a {
+                    | b'>' => c(b">"),
+                    | b'<' => c(b"<%:"),
+                    | b'+' => c(b"+"),
+                    | b'-' => c(b"->"),
+                    | b'/' => c(b"/*"),
+                    | b'%' => c(b":>"),
+                    | b'&' => c(b"&"),
+                    | b'|' => c(b"|"),
+                    | b':' => c(b":>"),
+                    | b'.' => c(b".%") || matches!(next, PasteClass::Number(_)),
+                    | b'#' => c(b"#%"),
+                    | _ => false,
+                },
+        | PasteClass::Punctuator(b'>', b'>') | PasteClass::Punctuator(b'<', b'<') =>
+            operator == Some(b'='),
+        | PasteClass::Punctuator(b'-', b'>') => c(b"*"),
+        | PasteClass::Punctuator(b'<', b'=') => c(b">"),
+        | PasteClass::Punctuator(..) => false,
     }
 }
 
@@ -156,9 +213,7 @@ impl<'a> TextWriter<'a> {
             scratch: Bump::new(),
             options,
             line: None,
-            end: None,
-            end_line: 0,
-            last: (None, None),
+            last: PasteClass::None,
             main_file,
             after_pragma: false,
         }
@@ -175,6 +230,14 @@ impl<'a> TextWriter<'a> {
         at: Option<ReadAt>,
     ) -> Option<(u32, usize)> {
         let spelled = context.get_source_vectors(token.source_vectors).first();
+        // A token without a place to read it from is one a macro made.
+        let spacing = at.as_ref().map_or(
+            OutputSpacing {
+                space:       false,
+                avoid_paste: true,
+            },
+            |at| at.spacing,
+        );
         // Where the token belongs: where the outermost invocation is for a
         // token a macro produced, even when the macro is defined in the same
         // file, otherwise its own place if the reader's file spells it, and
@@ -216,29 +279,9 @@ impl<'a> TextWriter<'a> {
             ),
             | (None, None) => (0, 0, 0, None),
         };
-        let gap = match (self.end, spelled) {
-            // Tokens from one place in the source keep its spacing.
-            | (Some((end_file, end)), Some(vector)) if end_file == vector.source_file_index => {
-                let start = vector.index as usize;
-                if start == end {
-                    Gap::Touching
-                } else if start > end && vector.line == self.end_line {
-                    Gap::Space
-                } else {
-                    Gap::Unknown
-                }
-            },
-            | _ => Gap::Unknown,
-        };
-        // Like GCC's PREV_WHITE: whitespace before the token where it is
-        // spelled, such as in a macro's replacement list.
-        let white_before = spelled.is_some_and(|vector| {
-            context
-                .source_text(vector.source_file_index)
-                .and_then(|text| text.as_bytes().get((vector.index as usize).checked_sub(1)?))
-                .is_some_and(u8::is_ascii_whitespace)
-        });
-        let next = first_byte(context, token);
+        let classified = paste_spelling(context, token, self.options.as_written);
+        let class = PasteClass::of(classified);
+        let first = classified.as_bytes().first().copied().unwrap_or(0);
         let later = matches!(self.line, Some((current_file, current_line))
             if current_file == file && line > current_line);
         if std::mem::take(&mut self.after_pragma)
@@ -256,14 +299,21 @@ impl<'a> TextWriter<'a> {
             .is_some_and(|(current_file, _)| current_file == file)
             && !later
         {
-            if gap == Gap::Space
-                || (gap == Gap::Unknown && (white_before || would_paste(self.last, next)))
-            {
+            if spacing.space || (spacing.avoid_paste && avoid_paste(self.last, class, first)) {
                 self.text.push(' ');
             }
         } else {
             self.advance(context, file, line);
             self.indent(column);
+            // A token a macro made starts the line away from its name's column
+            // if white space stands before it, and a `#` so that it does not
+            // read as beginning a directive.
+            if column <= 1
+                && (spacing.space
+                    || (spacing.avoid_paste && class == PasteClass::Punctuator(b'#', 0)))
+            {
+                self.text.push(' ');
+            }
         }
         self.scratch.reset();
         let spelling = if self.options.as_written {
@@ -275,12 +325,7 @@ impl<'a> TextWriter<'a> {
             spelling(context, &self.scratch, token)
         };
         self.text.push_str(spelling);
-        self.last = (
-            spelling.as_bytes().first().copied(),
-            spelling.as_bytes().last().copied(),
-        );
-        self.end = spelled.map(|vector| (vector.source_file_index, vector.end()));
-        self.end_line = spelled.map_or(0, |vector| vector.line);
+        self.last = class;
         offset.map(|offset| (file, offset))
     }
 
@@ -302,8 +347,7 @@ impl<'a> TextWriter<'a> {
         }
         self.text.push_str(text);
         self.after_pragma = true;
-        self.last = (None, None);
-        self.end = None;
+        self.last = PasteClass::None;
     }
 
     /// Starts output line `line` of `file`, which is later in the same file
@@ -367,15 +411,21 @@ impl<'a> TextWriter<'a> {
     }
 }
 
-/// The first byte of the token's spelling.
-fn first_byte(context: &Context<'_>, token: Token) -> Option<u8> {
+/// The token's spelling as far as [`PasteClass::of`] looks at it, so a string
+/// literal needs no spelling out.
+fn paste_spelling<'s>(context: &'s Context<'_>, token: Token, as_written: bool) -> &'s str {
     match token.kind {
-        | TokenType::Operator(operator) => operator.spelling().bytes().next(),
-        | TokenType::String(StringTokenType::EncodedString(_, encoding)) =>
-            encoding.prefix().bytes().next().or(Some(b'"')),
-        | TokenType::String(StringTokenType::WideString(_)) => Some(b'L'),
-        | TokenType::String(StringTokenType::String(_)) => Some(b'"'),
-        | _ => context.string_cache.at(token.contents).bytes().next(),
+        | _ if as_written => context
+            .string_cache
+            .at(token.contents)
+            .trim_end_matches('\0'),
+        | TokenType::Operator(operator) => operator.spelling(),
+        | TokenType::String(StringTokenType::String(_)) => "\"\"",
+        | TokenType::String(_) => "L\"\"",
+        | _ => context
+            .string_cache
+            .at(token.contents)
+            .trim_end_matches('\0'),
     }
 }
 

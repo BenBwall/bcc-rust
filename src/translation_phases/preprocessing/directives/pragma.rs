@@ -624,7 +624,10 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
         );
         let generate_placeholders = self.generate_placeholders;
         self.push_tokenizer_frame(super::super::runtime::TokenizerFrame {
-            frame_type: super::super::runtime::TokenizerFrameType::Rescan { argument: false },
+            frame_type: super::super::runtime::TokenizerFrameType::Rescan {
+                argument: false,
+                end:      crate::translation_phases::preprocessor_tokenizer::TokenSpacing::NONE,
+            },
             tokenizer,
         });
         let depth = self.tokenizer_stack.len();

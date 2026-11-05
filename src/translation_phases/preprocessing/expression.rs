@@ -1164,10 +1164,10 @@ impl<'tu> Expander<'_, 'tu, '_, '_> {
                 // A raw argument is read here only as a `##` operand, so the
                 // `defined` it forms belongs to the replacement list below.
                 // Deferred query arguments replay collected tokens unchanged.
-                | TokenizerFrameType::Rescan { argument: false }
+                | TokenizerFrameType::Rescan { argument: false, .. }
                 | TokenizerFrameType::DeferredQuery
                 | TokenizerFrameType::FunctionLikeMacroArgument { .. } => continue,
-                | TokenizerFrameType::Rescan { argument: true } => {
+                | TokenizerFrameType::Rescan { argument: true, .. } => {
                     _ = function_like.get_or_insert(false);
                     continue;
                 },

@@ -26,6 +26,7 @@ use crate::{
         },
         preprocessor_tokenizer::{
             PreprocessorToken,
+            TokenSpacing,
             PreprocessorTokenType,
         },
     },
@@ -58,6 +59,10 @@ impl Expander<'_, '_, '_, '_> {
                     })
                 ) {
                     let result = self.parse_hash_operator(token);
+                    if let Some(spacing) = self.text_spacing() {
+                        spacing.pad_before_parameter();
+                        spacing.pad_after_next();
+                    }
                     if self.tracing() {
                         self.trace_stringified(result);
                     }
@@ -90,6 +95,7 @@ impl Expander<'_, '_, '_, '_> {
         ) else {
             self.set_position(position);
             return PreprocessorToken {
+                spacing: TokenSpacing::NONE,
                 kind:           PreprocessorTokenType::String,
                 contents:       self.context.string_cache.intern("\"\""),
                 source_vectors: token.source_vectors,
@@ -112,6 +118,7 @@ impl Expander<'_, '_, '_, '_> {
                         source_vectors: argument_name.source_vectors,
                     });
                     return PreprocessorToken {
+                        spacing: TokenSpacing::NONE,
                         kind:           PreprocessorTokenType::String,
                         contents:       self.context.string_cache.intern("\"\""),
                         source_vectors: token.source_vectors,
@@ -124,6 +131,7 @@ impl Expander<'_, '_, '_, '_> {
         if argument.enclosing_arguments.is_some() {
             let tokens = self.replace_operand_argument(argument);
             return PreprocessorToken {
+                spacing: TokenSpacing::NONE,
                 kind:           PreprocessorTokenType::String,
                 contents:       Self::stringify(self.context, self.scratch, &tokens, token),
                 source_vectors: token.source_vectors,
@@ -175,6 +183,7 @@ impl Expander<'_, '_, '_, '_> {
         Self::drop_trailing_backslash(self.context, &mut synthetic_contents, last, token);
         synthetic_contents.push('"');
         PreprocessorToken {
+            spacing: TokenSpacing::NONE,
             kind:           PreprocessorTokenType::String,
             contents:       self.context.string_cache.intern(&*synthetic_contents),
             source_vectors: token.source_vectors,

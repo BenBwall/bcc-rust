@@ -48,6 +48,7 @@ use crate::{
         TranslationError,
         preprocessor_tokenizer::{
             PreprocessorToken,
+            TokenSpacing,
             PreprocessorTokenType,
         },
     },
@@ -444,6 +445,7 @@ fn phase_07_mapping_diagnoses_every_internal_only_token_kind() {
         PreprocessorTokenType::Whitespace,
     ] {
         let token = PreprocessorToken {
+            spacing: TokenSpacing::NONE,
             kind,
             source_vectors: source,
             contents,

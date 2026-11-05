@@ -21,6 +21,7 @@ use super::{
     TokenizerFrameType,
     frames::FileFrame,
 };
+use crate::translation_phases::preprocessing::macro_expansion::SpacingState;
 use crate::{
     translation_phases::{
         Context,
@@ -52,6 +53,7 @@ impl<'c, 'tu, 'pp, 'x> Expander<'c, 'tu, 'pp, 'x> {
             pending_parser_token,
             pending_parser_errors,
             source_segment_limit,
+            spacing,
         } = resting;
         let mut tokenizer_stack = ArenaVec::with_capacity_in(state.file_frames.len(), scratch);
         tokenizer_stack.extend(state.file_frames.drain(..).map(|frame| TokenizerFrame {
@@ -81,6 +83,7 @@ impl<'c, 'tu, 'pp, 'x> Expander<'c, 'tu, 'pp, 'x> {
             pending_parser_token,
             pending_parser_errors,
             source_segment_limit,
+            spacing,
             pushed_frames: 0,
             paren_ends: ArenaMap::with_hasher_in(rustc_hash::FxBuildHasher, scratch),
         }
@@ -105,6 +108,7 @@ impl<'c, 'tu, 'pp, 'x> Expander<'c, 'tu, 'pp, 'x> {
             pending_parser_token,
             pending_parser_errors,
             source_segment_limit,
+            spacing,
             ..
         } = self;
         for frame in tokenizer_stack.drain(..) {
@@ -135,6 +139,7 @@ impl<'c, 'tu, 'pp, 'x> Expander<'c, 'tu, 'pp, 'x> {
             pending_parser_token,
             pending_parser_errors,
             source_segment_limit,
+            spacing,
         }
     }
 
@@ -165,6 +170,7 @@ pub(in crate::translation_phases::preprocessing) struct Resting<'tu, 'pp> {
     pub(super) pending_parser_token: Option<Token>,
     pub(super) pending_parser_errors: ArenaVec<'pp, TranslationError<'tu>>,
     pub(in crate::translation_phases::preprocessing) source_segment_limit: usize,
+    pub(super) spacing: SpacingState,
 }
 
 impl Debug for PreprocessorState<'_> {

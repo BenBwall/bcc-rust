@@ -70,7 +70,10 @@ pub(crate) use errors::{
 };
 use expression::PreprocessorExpressionParser;
 pub(crate) use macro_expansion::HashHash;
-use macro_expansion::MacroDefinition;
+use macro_expansion::{
+    MacroDefinition,
+    SpacingState,
+};
 use runtime::{
     OutputPurpose,
     PreprocessorState,
@@ -296,7 +299,7 @@ impl Expander<'_, '_, '_, '_> {
         &mut self,
     ) -> Option<PreprocessorToken> {
         self.last_was_newline = self.current_is_newline;
-        let ret = 'base: loop {
+        let mut ret = 'base: loop {
             self.generate_placeholders = true;
             let Some((mut token, mut is_pasted)) =
                 self.handle_hash_hash_operator::<SHOULD_IGNORE_WHITESPACE>()
@@ -360,12 +363,18 @@ impl Expander<'_, '_, '_, '_> {
                     if let Some(new) = new {
                         token = new;
                         is_pasted = true;
+                        if let Some(spacing) = self.text_spacing() {
+                            spacing.pad_after_next();
+                        }
                     } else {
                         break 'merge;
                     }
                 }
             }
             if token.kind == PreprocessorTokenType::Placeholder && !self.state.retain_placeholders {
+                if let Some(spacing) = self.text_spacing() {
+                    spacing.empty_replacement();
+                }
                 continue 'base;
             }
             if !token.kind.is_identifier()
@@ -438,6 +447,11 @@ impl Expander<'_, '_, '_, '_> {
         };
         self.generate_placeholders = false;
         self.current_is_newline = ret.is_none_or(|t| t.kind == PreprocessorTokenType::Newline);
+        if self.state.as_text
+            && let Some(token) = &mut ret
+        {
+            self.spacing.give(token);
+        }
         ret
     }
 }
@@ -494,6 +508,8 @@ struct Expander<'c, 'tu, 'pp: 'x, 'x> {
     expression_parser:     PreprocessorExpressionParser<'pp>,
     pending_parser_token:  Option<Token>,
     pending_parser_errors: ArenaVec<'pp, TranslationError<'tu>>,
+    /// Where macro replacement separated the tokens, for a text of phase 4.
+    spacing:               SpacingState,
     /// Parser-supplied provenance budget, checked within string concatenation
     /// as well as between completed output tokens.
     source_segment_limit:  usize,
