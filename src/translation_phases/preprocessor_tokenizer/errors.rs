@@ -174,9 +174,9 @@ impl PreprocessorTokenizerErrorType {
                 "identifier `{}` is not in Normalization Form C",
                 spelling.unwrap_or_default()
             ))
-            .label("a combining mark in this identifier composes with the character before it")
+            .label("normalization would compose, reorder or replace a character in this identifier")
             .note("C23 §6.4.2.1p3: an identifier shall conform to Normalization Form C")
-            .help("write the precomposed character instead"),
+            .help("write the identifier in Normalization Form C"),
         }
     }
 }
