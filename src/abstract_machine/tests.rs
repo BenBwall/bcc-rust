@@ -1715,14 +1715,12 @@ fn a_repeated_initializer_replaces_its_whole_subobject() {
 
 #[test]
 fn a_static_initializer_with_arithmetic_says_what_the_subset_takes() {
-    let states = states("int n = 1 + 2;\nint main(void) {\n    return n;\n}\n");
-    let last = states.last().expect("a final state");
+    let Err(diagnostic) = compile("int n = 1 + 2;\nint main(void) {\n    return n;\n}\n") else {
+        panic!("arithmetic in a static initializer must be refused");
+    };
     assert!(
-        last.diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.message.contains("no arithmetic")),
-        "{:?}",
-        last.diagnostics
+        diagnostic.message.contains("no arithmetic"),
+        "{diagnostic:?}"
     );
 }
 
