@@ -775,8 +775,12 @@ impl<'x> MacroCallCursor<'x> {
                     })
                 {
                     let raw = preprocessor.read_argument(argument, false);
-                    token.contents =
-                        Expander::stringify(preprocessor.context, preprocessor.scratch, &raw);
+                    token.contents = Expander::stringify(
+                        preprocessor.context,
+                        preprocessor.scratch,
+                        &raw,
+                        token,
+                    );
                     token.kind = PreprocessorTokenType::String;
                     token.source_vectors = preprocessor
                         .context

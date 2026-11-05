@@ -153,7 +153,7 @@ impl<'x> Expander<'_, '_, '_, 'x> {
                         .position(|token| !boundary(token))
                         .unwrap_or(end);
                     let contents =
-                        Self::stringify(self.context, self.scratch, &selected[start..end]);
+                        Self::stringify(self.context, self.scratch, &selected[start..end], token);
                     output.push(PreprocessorToken {
                         kind: T::String,
                         contents,

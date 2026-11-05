@@ -41,6 +41,43 @@ fn stringification_discards_trailing_argument_whitespace() {
 }
 
 #[test]
+fn stringification_drops_a_final_backslash_that_would_escape_the_quote() {
+    // C99 6.10.3.2p2: `"\"` is no valid character string literal; GCC and
+    // Clang drop the final `\` with a warning (gcc.dg/cpp/strify2.c).
+    let check = |source: &str, expected: &str, warned: bool| {
+        expansion_of(source, |expansion, errors| {
+            assert_eq!(expansion, expected, "{source}");
+            let warnings: Vec<_> = errors
+                .iter()
+                .map(|error| match error {
+                    | TranslationError::Preprocessing(PreprocessorError { error_type, .. }) =>
+                        format!("{error_type:?}"),
+                    | _ => panic!("{source:?}: {errors:#?}"),
+                })
+                .collect();
+            let expected: &[&str] = if warned {
+                &["StringizedTrailingBackslash"]
+            } else {
+                &[]
+            };
+            assert_eq!(warnings, expected, "{source}");
+        });
+    };
+    for (argument, expected, warned) in [
+        (r"\", r#""""#, true),
+        (r"a\", r#""a""#, true),
+        (r"\\", r#""\\""#, false),
+        (r"\\\", r#""\\""#, true),
+    ] {
+        check(
+            &format!("#define S(x) #x\nS({argument})\n"),
+            expected,
+            warned,
+        );
+    }
+}
+
+#[test]
 fn a_pasted_name_of_the_macro_being_replaced_stays_unreplaced() {
     // C99 6.10.3.4p2: `##` makes `glue` inside glue's own replacement, so
     // it is painted for good and the `(12)` after the invocation does not
