@@ -52,6 +52,12 @@ mod tests {
 
         /// Runs bcc in this directory with `mode` first, unless it is empty.
         fn bcc(&self, mode: &str, args: &[&str]) -> Output {
+            self.bcc_with(mode, args, &[])
+        }
+
+        /// Runs bcc as [`Self::bcc`] does, with the environment variables
+        /// `variables` set.
+        fn bcc_with(&self, mode: &str, args: &[&str], variables: &[(&str, &str)]) -> Output {
             Command::new(env!("CARGO_BIN_EXE_bcc-rust"))
                 .args((!mode.is_empty()).then_some(mode))
                 .args(args)
@@ -61,6 +67,9 @@ mod tests {
                 .env_remove("CPATH")
                 .env_remove("C_INCLUDE_PATH")
                 .env_remove("INCLUDE")
+                .env_remove("CL")
+                .env_remove("_CL_")
+                .envs(variables.iter().copied())
                 .output()
                 .unwrap()
         }
@@ -604,6 +613,56 @@ mod tests {
             succeeds(&output);
             let output = directory.bcc("--clang-mode", &[standard, "-fsyntax-only", "dollar.c"]);
             assert!(!output.status.success());
+        }
+    }
+
+    /// What GCC 14 finds outside Normalization Form C, raw and as universal
+    /// character names.
+    #[test]
+    fn gcc_finds_every_kind_of_identifier_outside_normalization_form_c() {
+        use std::fmt::Write as _;
+        let directory = Directory::new();
+        // Composition, also across a lower mark; marks out of canonical
+        // order; characters the form never holds, wherever they stand; and
+        // Hangul. Otherwise nothing composes or moves.
+        for (raw, warned) in [
+            ("a\u{301}", true),
+            ("a\u{327}\u{301}", true),
+            ("a\u{301}\u{301}", true),
+            ("e\u{301}\u{302}", true),
+            ("b\u{301}\u{327}", true),
+            ("\u{212B}", true),
+            ("\u{212B}x", true),
+            ("x\u{212B}", true),
+            ("\u{958}", true),
+            ("\u{1100}\u{1161}", true),
+            ("\u{AC00}\u{11A8}", true),
+            ("b\u{327}\u{301}", false),
+            ("x\u{301}", false),
+            ("q\u{300}", false),
+            ("\u{AC01}\u{11A8}", false),
+            ("\u{C5}\u{327}", false),
+            ("\u{E0}", false),
+        ] {
+            let mut universal = String::new();
+            for character in raw.chars() {
+                if character.is_ascii() {
+                    universal.push(character);
+                } else {
+                    _ = write!(universal, "\\u{:04X}", u32::from(character));
+                }
+            }
+            for spelling in [raw, &universal] {
+                directory.write("id.c", &format!("int {spelling};\n"));
+                let output = directory.bcc("--gcc-mode", &["-std=c23", "-fsyntax-only", "id.c"]);
+                let message = stderr(&output);
+                assert!(output.status.success(), "{spelling}: {message}");
+                assert_eq!(
+                    message.contains("is not in Normalization Form C"),
+                    warned,
+                    "{spelling}: {message}"
+                );
+            }
         }
     }
 
@@ -3427,6 +3486,256 @@ mod tests {
         );
         let cpp = directory.bcc("--msvc-mode", &["/nologo", "/c", "/TP", "one.c"]);
         assert_eq!(cpp.status.code(), Some(2));
+    }
+
+    /// Under the `cl` identity the diagnostics `cl`'s users meet most take
+    /// its code and words, without bcc's notes, and its warning levels:
+    /// C4013 is a level 3 warning, which `cl`'s default `/W1` hides, and
+    /// `/wd`, `/we` and `/wN` name a warning by its number. `cl` only warns
+    /// about a conversion between a pointer and an integer or between
+    /// incompatible pointers, so it succeeds unless `/WX` is given.
+    /// clang-cl keeps Clang's rules and bcc's words.
+    #[test]
+    fn cl_diagnostics_take_cls_codes_words_and_levels() {
+        let directory = Directory::new();
+        directory.write("bad.c", "int f(void) {\n    return missing;\n}\n");
+        directory.write(
+            "syntax.c",
+            "int f(void) {\n    int x = 1\n    int y = 2;\n    x = 3\n    y = x;\n    return \
+             x\n}\n",
+        );
+        directory.write("implicit.c", "int main(void) { return g(1); }\n");
+        directory.write(
+            "pointers.c",
+            "int main(void) {\n    int *p = 5;\n    float *q = 0;\n    char **r = 0;\n    p = \
+             q;\n    p = r;\n    return 0;\n}\n",
+        );
+        directory.write(
+            "casts.c",
+            "int f(int *p) { return (int)p; }\nint *g(int i) { return (int *)i; }\n",
+        );
+        let cl = |args: &[&str]| {
+            let mut all = vec!["/nologo", "/c"];
+            all.extend(args);
+            directory.bcc("--msvc-mode", &all)
+        };
+        for (args, status, lines) in [
+            (
+                &["bad.c"][..],
+                2,
+                &["bad.c(2): error C2065: 'missing': undeclared identifier"][..],
+            ),
+            (
+                &["/diagnostics:column", "bad.c"],
+                2,
+                &["bad.c(2,12): error C2065: 'missing': undeclared identifier"],
+            ),
+            (
+                &["syntax.c"],
+                2,
+                &[
+                    "syntax.c(3): error C2143: syntax error: missing ';' before 'type'",
+                    "syntax.c(5): error C2146: syntax error: missing ';' before identifier 'y'",
+                    "syntax.c(7): error C2143: syntax error: missing ';' before '}'",
+                ],
+            ),
+            (&["implicit.c"], 0, &[]),
+            (&["/WX", "implicit.c"], 0, &[]),
+            (
+                &["/W3", "implicit.c"],
+                0,
+                &["implicit.c(1): warning C4013: 'g' undefined; assuming extern returning int"],
+            ),
+            (
+                &["/w14013", "implicit.c"],
+                0,
+                &["implicit.c(1): warning C4013: 'g' undefined; assuming extern returning int"],
+            ),
+            (&["/W4", "/wd4013", "implicit.c"], 0, &[]),
+            (
+                &["/we4013", "implicit.c"],
+                2,
+                &["implicit.c(1): error C4013: 'g' undefined; assuming extern returning int"],
+            ),
+            (
+                &["pointers.c"],
+                0,
+                &[
+                    "pointers.c(2): warning C4047: 'initializing': 'int *' differs in levels of \
+                     indirection from 'int'",
+                    "pointers.c(5): warning C4133: '=': incompatible types - from 'float *' to \
+                     'int *'",
+                    "pointers.c(6): warning C4047: '=': 'int *' differs in levels of indirection \
+                     from 'char **'",
+                ],
+            ),
+            (
+                &["/wd4047", "/WX", "pointers.c"],
+                2,
+                &[
+                    "pointers.c(5): error C4133: '=': incompatible types - from 'float *' to 'int \
+                     *'",
+                ],
+            ),
+            (&["/W0", "pointers.c"], 0, &[]),
+            // The rightmost level wins.
+            (
+                &["/W0", "/W3", "implicit.c"],
+                0,
+                &["implicit.c(1): warning C4013: 'g' undefined; assuming extern returning int"],
+            ),
+            (&["/W3", "/W0", "implicit.c"], 0, &[]),
+            (&["/W4", "/W1", "implicit.c"], 0, &[]),
+            (
+                &["casts.c"],
+                0,
+                &[
+                    "casts.c(1): warning C4311: 'type cast': pointer truncation from 'int *' to \
+                     'int'",
+                    "casts.c(2): warning C4312: 'type cast': conversion from 'int' to 'int *' of \
+                     greater size",
+                ],
+            ),
+        ] {
+            let output = cl(args);
+            assert_eq!(
+                output.status.code(),
+                Some(status),
+                "{args:?}: {}",
+                stderr(&output)
+            );
+            let printed: Vec<String> = stderr(&output).lines().map(str::to_owned).collect();
+            assert_eq!(printed, lines, "{args:?}");
+        }
+        assert_eq!(
+            cl(&["/W0", "/W3", "/WX", "implicit.c"]).status.code(),
+            Some(2)
+        );
+        // `cl` reports function pointers (C4113) and lost qualifiers (C4090)
+        // apart from C4133, in bcc's words here: C4133's settings leave
+        // them, and their own control them.
+        directory.write(
+            "apart.c",
+            "int f(int x) { return x; }\nint (*p)(double) = f;\nconst char *c;\nchar *d(void) { \
+             return c; }\n",
+        );
+        let warnings = |args: &[&str]| {
+            let mut all = args.to_vec();
+            all.push("apart.c");
+            let output = cl(&all);
+            (
+                output.status.code(),
+                stderr(&output).matches("): warning:").count(),
+            )
+        };
+        assert_eq!(warnings(&[]), (Some(0), 2));
+        assert_eq!(warnings(&["/wd4133"]), (Some(0), 2));
+        assert_eq!(warnings(&["/w34133"]), (Some(0), 2));
+        assert_eq!(warnings(&["/we4133"]), (Some(0), 2));
+        assert_eq!(warnings(&["/wd4113"]), (Some(0), 1));
+        assert_eq!(warnings(&["/wd4090"]), (Some(0), 1));
+        assert_eq!(warnings(&["/wd4113", "/wd4090"]), (Some(0), 0));
+        assert_eq!(warnings(&["/W0"]), (Some(0), 0));
+        assert_eq!(warnings(&["/we4113"]).0, Some(2));
+        assert_eq!(warnings(&["/wd4133", "/WX"]).0, Some(2));
+        assert_eq!(warnings(&["/wd4113", "/wd4090", "/WX"]).0, Some(0));
+        // clang-cl writes Clang's errors in bcc's words.
+        let clang_cl = directory.bcc("--clang-cl-mode", &["/c", "pointers.c"]);
+        assert_eq!(clang_cl.status.code(), Some(1));
+        let text = stderr(&clang_cl);
+        assert!(!text.contains(" C40"), "{text}");
+        assert!(text.contains("pointers.c(2,"), "{text}");
+        assert!(text.contains("): error: "), "{text}");
+    }
+
+    /// `cl` reads its options from command files (`@file`, UTF-8 or UTF-16
+    /// with a byte order mark, as `MSBuild` writes them) and from the `CL`
+    /// and `_CL_` environment variables, before and after the command
+    /// line. The rest of a command file's line after `/link` is the
+    /// linker's; the next line is the compiler's again. A command file that
+    /// cannot be opened is error D8022, and one cannot name another, which
+    /// clang-cl allows.
+    #[test]
+    fn cl_reads_command_files_and_environment_variables() {
+        let directory = Directory::new();
+        directory.write("x.c", "int x = X;\n");
+        directory.write(
+            "options.rsp",
+            "/nologo /c\n\"x.c\" /link /SUBSYSTEM:CONSOLE\n/DX#2 /Fofile.obj\n",
+        );
+        let output = directory.bcc("--msvc-mode", &["@options.rsp"]);
+        succeeds(&output);
+        assert_eq!(stderr(&output), "");
+        assert!(directory.path("file.obj").is_file());
+        let mut utf16 = vec![0xFF, 0xFE];
+        for unit in "/nologo /c /DX=3 x.c /Fowide.obj\r\n".encode_utf16() {
+            utf16.extend(unit.to_le_bytes());
+        }
+        std::fs::write(directory.path("wide.rsp"), utf16).unwrap();
+        succeeds(&directory.bcc("--msvc-mode", &["@wide.rsp"]));
+        assert!(directory.path("wide.obj").is_file());
+        let missing = directory.bcc("--msvc-mode", &["/nologo", "/c", "@missing.rsp", "x.c"]);
+        assert_eq!(missing.status.code(), Some(2));
+        assert_eq!(
+            stderr(&missing),
+            "cl : Command line error D8022 : cannot open 'missing.rsp'\n"
+        );
+        // `CL` comes before the command line and `_CL_` after it, so the
+        // latter's `/Fo` wins.
+        let environment = directory.bcc_with(
+            "--msvc-mode",
+            &["/Fofirst.obj", "x.c"],
+            &[("CL", "/nologo /c /DX#4"), ("_CL_", "/Foenvironment.obj")],
+        );
+        succeeds(&environment);
+        assert!(directory.path("environment.obj").is_file());
+        assert!(!directory.path("first.obj").exists());
+        directory.write("nested.rsp", "@options.rsp\n");
+        let nested = directory.bcc(
+            "--msvc-mode",
+            &[
+                "/nologo",
+                "/c",
+                "/DX=5",
+                "@nested.rsp",
+                "x.c",
+                "/Fonested.obj",
+            ],
+        );
+        succeeds(&nested);
+        assert!(
+            stderr(&nested).contains("unrecognized source file type '@options.rsp'"),
+            "{}",
+            stderr(&nested)
+        );
+        directory.write("inner.rsp", "/c x.c /DX=6\n");
+        directory.write("clang.rsp", "@inner.rsp /Foclang.obj\n");
+        succeeds(&directory.bcc("--clang-cl-mode", &["@clang.rsp"]));
+        // clang-cl refuses a file that names itself, directly or through
+        // others, however it branches, in LLVM's words; naming one file
+        // twice is no cycle.
+        directory.write("self.rsp", "@self.rsp\n");
+        directory.write("fork.rsp", "@fork.rsp @fork.rsp\n");
+        directory.write("one.rsp", "@two.rsp\n");
+        directory.write("two.rsp", "@one.rsp\n");
+        for (file, named) in [
+            ("@self.rsp", "self.rsp"),
+            ("@fork.rsp", "fork.rsp"),
+            ("@one.rsp", "one.rsp"),
+        ] {
+            let cycle = directory.bcc("--clang-cl-mode", &["/c", file]);
+            assert_eq!(cycle.status.code(), Some(1), "{file}");
+            let text = stderr(&cycle);
+            assert!(text.starts_with("recursive expansion of: '"), "{text}");
+            assert!(text.trim_end().ends_with(&format!("{named}'")), "{text}");
+        }
+        directory.write("empty.rsp", "\n");
+        directory.write(
+            "twice.rsp",
+            "@empty.rsp @empty.rsp /c x.c /DX=6 /Fotwice.obj\n",
+        );
+        succeeds(&directory.bcc("--clang-cl-mode", &["@twice.rsp"]));
+        assert!(directory.path("clang.obj").is_file());
     }
 
     #[test]

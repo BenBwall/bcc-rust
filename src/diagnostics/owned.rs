@@ -45,6 +45,7 @@ pub(crate) struct OwnedDiagnostic {
     pub(crate) severity:      ErrorSeverity,
     pub(crate) message:       String,
     pub(crate) option_suffix: bool,
+    pub(crate) code:          Option<&'static str>,
     labels:                   Vec<(OwnedLabelSource, Option<String>, bool)>,
     notes:                    Vec<String>,
     help:                     Vec<String>,
@@ -72,6 +73,7 @@ impl Diagnostic<'_> {
             severity:      self.severity,
             message:       self.message.to_owned(),
             option_suffix: self.option_suffix,
+            code:          self.code,
             labels:        self
                 .labels
                 .iter()
@@ -115,6 +117,7 @@ impl OwnedDiagnostic {
             severity: self.severity,
             message: &self.message,
             option_suffix: self.option_suffix,
+            code: self.code,
             labels,
             notes,
             help,

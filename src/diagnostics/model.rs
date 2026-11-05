@@ -28,6 +28,9 @@ pub(crate) struct Diagnostic<'d> {
     /// The message ends with the ` [-WNAME]` of the warning option that
     /// controls it, which bcc appended (see [`Explanation::option_suffix`]).
     pub(crate) option_suffix: bool,
+    /// `cl`'s code for the diagnostic (`C2065`), which the MSVC formats
+    /// write after the severity under the `cl` identity.
+    pub(crate) code:          Option<&'static str>,
     pub(super) labels:        ArenaVec<'d, Label<'d>>,
     pub(super) notes:         ArenaVec<'d, &'d str>,
     pub(super) help:          ArenaVec<'d, &'d str>,
@@ -105,6 +108,7 @@ pub(crate) struct Explanation<'d> {
     pub(crate) notes:   ArenaVec<'d, &'d str>,
     pub(crate) help:    ArenaVec<'d, &'d str>,
     option_suffix:      bool,
+    code:               Option<&'static str>,
 }
 
 impl<'d> Explanation<'d> {
@@ -119,6 +123,15 @@ impl<'d> Explanation<'d> {
 
     pub(crate) fn label(mut self, label: &'d str) -> Self {
         self.label = Some(label);
+        self
+    }
+
+    /// Gives the diagnostic `cl`'s code and drops bcc's notes and help:
+    /// the message is then `cl`'s own, which stands alone.
+    pub(crate) fn msvc_code(mut self, code: &'static str) -> Self {
+        self.code = Some(code);
+        self.notes.clear();
+        self.help.clear();
         self
     }
 
@@ -138,6 +151,7 @@ impl<'d> Explanation<'d> {
             severity,
             message: self.message,
             option_suffix: self.option_suffix,
+            code: self.code,
             labels: ArenaVec::new_in(self.arena),
             notes: self.notes,
             help: self.help,
@@ -153,6 +167,7 @@ impl<'d> Explanation<'d> {
             notes: ArenaVec::new_in(arena),
             help: ArenaVec::new_in(arena),
             option_suffix: false,
+            code: None,
         }
     }
 
