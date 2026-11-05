@@ -7,18 +7,18 @@
 //! Pragma payloads are passed to directive handling; dialect builtins are
 //! delegated.
 
+#[cfg(feature = "native")]
+use std::time::SystemTime;
 use std::{
     fmt::Write,
     mem::take,
     ops::ControlFlow,
     path::Path,
 };
-#[cfg(feature = "native")]
-use std::time::SystemTime;
 
-use chrono::NaiveDateTime;
 #[cfg(feature = "native")]
 use chrono::Local;
+use chrono::NaiveDateTime;
 
 use super::{
     super::{
@@ -234,9 +234,18 @@ impl Expander<'_, '_, '_, '_> {
     /// GCC's and Clang's question marks when that cannot be known. `#line`
     /// does not rename the file this asks about.
     fn source_file_timestamp(&mut self) -> StringCacheId {
-        let modified = self
-            .reading_position()
-            .and_then(|(file, _)| file_modification_time(self.context, file));
+        let file = self
+            .tokenizer_stack
+            .iter()
+            .rev()
+            .find_map(|frame| match frame.frame_type {
+                | TokenizerFrameType::SourceFile {
+                    physical_source_file_index,
+                    ..
+                } => Some(physical_source_file_index),
+                | _ => None,
+            });
+        let modified = file.and_then(|file| file_modification_time(self.context, file));
         let mut spelling = ArenaString::new_in(self.scratch);
         if let Some(modified) = modified {
             write!(spelling, "{}", modified.format("%a %b %e %H:%M:%S %Y"))

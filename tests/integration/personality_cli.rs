@@ -787,12 +787,16 @@ mod tests {
 
     /// `__FILE_NAME__` is the last component of the presumed file name and
     /// `__INCLUDE_LEVEL__` counts `#include`s from the main file, forced ones
-    /// included, in GCC and Clang. Microsoft's and TCC's compilers have neither.
+    /// included, in GCC and Clang. Microsoft's and TCC's compilers have
+    /// neither.
     #[test]
     fn file_name_and_include_level_follow_gcc_and_clang() {
         let directory = Directory::new();
         std::fs::create_dir_all(directory.path("sub")).unwrap();
-        directory.write("sub/h.h", "h = __INCLUDE_LEVEL__ __FILE_NAME__\n#include \"i.h\"\n");
+        directory.write(
+            "sub/h.h",
+            "h = __INCLUDE_LEVEL__ __FILE_NAME__\n#include \"i.h\"\n",
+        );
         directory.write("sub/i.h", "i = __INCLUDE_LEVEL__ __FILE_NAME__ EARLY\n");
         directory.write("forced.h", "f = __INCLUDE_LEVEL__ __FILE_NAME__\n");
         directory.write(
@@ -829,7 +833,10 @@ mod tests {
     fn timestamp_is_the_modification_time_of_the_current_file() {
         let directory = Directory::new();
         directory.write("h.h", "__TIMESTAMP__\n");
-        directory.write("m.c", "#include \"h.h\"\n#line 3 \"elsewhere.c\"\n__TIMESTAMP__\n");
+        directory.write(
+            "m.c",
+            "#include \"h.h\"\n#line 3 \"elsewhere.c\"\n__TIMESTAMP__\n",
+        );
         for mode in ["--gcc-mode", "--clang-mode"] {
             let output = Command::new(env!("CARGO_BIN_EXE_bcc-rust"))
                 .current_dir(&directory.0)
@@ -854,7 +861,11 @@ mod tests {
         directory.write("q.c", "__TIMESTAMP__\n");
         let output = directory.bcc("--tcc-mode", &["-E", "-P", "q.c"]);
         succeeds(&output);
-        assert!(stdout(&output).contains("__TIMESTAMP__"), "{}", stdout(&output));
+        assert!(
+            stdout(&output).contains("__TIMESTAMP__"),
+            "{}",
+            stdout(&output)
+        );
     }
 
     /// Unlike the names C99 §6.10.8 predefines, these extensions can be
@@ -864,14 +875,19 @@ mod tests {
         let directory = Directory::new();
         directory.write(
             "m.c",
-            "#define __BASE_FILE__ 1\n#define __FILE_NAME__ 2\n#define __INCLUDE_LEVEL__ 3\n#define \
-             __TIMESTAMP__ 4\n__BASE_FILE__ __FILE_NAME__ __INCLUDE_LEVEL__ __TIMESTAMP__\n",
+            "#define __BASE_FILE__ 1\n#define __FILE_NAME__ 2\n#define __INCLUDE_LEVEL__ \
+             3\n#define __TIMESTAMP__ 4\n__BASE_FILE__ __FILE_NAME__ __INCLUDE_LEVEL__ \
+             __TIMESTAMP__\n",
         );
         for mode in ["--gcc-mode", "--clang-mode"] {
             let output = directory.bcc(mode, &["-E", "-P", "m.c"]);
             succeeds(&output);
             assert_eq!(stdout(&output), "1 2 3 4\n", "{mode}");
-            assert!(stderr(&output).contains("warning"), "{mode}: {}", stderr(&output));
+            assert!(
+                stderr(&output).contains("warning"),
+                "{mode}: {}",
+                stderr(&output)
+            );
         }
     }
 

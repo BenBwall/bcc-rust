@@ -28,10 +28,10 @@ use super::{
     Resting,
     frames::FileFrame,
 };
-use crate::configuration::CompilerIdentity;
 #[cfg(test)]
 use crate::util::shared::SharedVec;
 use crate::{
+    configuration::CompilerIdentity,
     headers::HeaderSearch,
     translation_phases::{
         Context,

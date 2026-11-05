@@ -8,12 +8,13 @@
 //! Diagnostic locations: §5.1.1.3 paragraph 1, p. 11; PDF p. 23.
 //! Directive interpretation remains in preprocessing.
 
+#[cfg(feature = "native")]
+use std::time::SystemTime;
 use std::{
     cell::OnceCell,
     ffi::OsStr,
     io::Read,
     path::Path,
-    time::SystemTime,
 };
 
 use rustc_hash::FxBuildHasher;
@@ -131,9 +132,12 @@ impl<'tu> Context<'tu> {
     }
 
     /// When the file at `path` was last modified, if it has such a time.
+    #[cfg(feature = "native")]
     pub(crate) fn source_modification_time(&self, path: &Path) -> Option<SystemTime> {
         match self.file_system {
-            | FileSystem::Host => std::fs::metadata(path).and_then(|file| file.modified()).ok(),
+            | FileSystem::Host => std::fs::metadata(path)
+                .and_then(|file| file.modified())
+                .ok(),
             | FileSystem::InMemory(_) => None,
         }
     }
