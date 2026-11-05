@@ -301,14 +301,31 @@ pub(super) struct BitFieldBits {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) struct BitField {
     /// The number of bytes the field touches.
-    pub(super) span:   u32,
+    pub(super) span:          u32,
     /// The field's lowest bit within the first byte.
-    pub(super) shift:  u32,
-    pub(super) width:  u32,
+    pub(super) shift:         u32,
+    pub(super) width:         u32,
     /// Whether the field is read with sign extension.
-    pub(super) signed: bool,
+    pub(super) signed:        bool,
     /// The alignment of the place's address.
-    pub(super) align:  Align,
+    pub(super) align:         Align,
+    /// The access unit of a `volatile` field under
+    /// `-fstrict-volatile-bitfields`, when GCC's rule gives it one.
+    pub(super) volatile_unit: Option<VolatileUnit>,
+}
+
+/// The storage unit that one access reads or writes for a `volatile`
+/// bit-field under `-fstrict-volatile-bitfields`: an aligned object of the
+/// declared type's size that holds the whole field.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) struct VolatileUnit {
+    /// How many bytes before the place's address the unit begins.
+    pub(super) before: u32,
+    /// The declared type's size in bytes, at most a machine word.
+    pub(super) size:   u32,
+    /// Whether a write may use the unit too, which stays within the memory
+    /// location of the field.
+    pub(super) writes: bool,
 }
 
 /// An automatic object an initializer fills: a declared one, or the

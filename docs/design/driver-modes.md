@@ -226,6 +226,19 @@ type needs more than 32-byte alignment, since that linker aligns a
 communal symbol by its size, which is rounded up to the alignment there;
 bcc's objects then link with GCC's `-fcommon` objects, an initialized
 definition winning),
+`-fstrict-volatile-bitfields` (GCC only and off by default, as on x86-64 in
+GCC; the last of it and `-fno-strict-volatile-bitfields` decides, Clang
+refuses both as unknown and TCC ignores both: every back end reads a
+`volatile` bit-field with one aligned access of its declared type's width,
+and writes it with one when the access stays in the field's memory location,
+which is GCC's smallest integer holding the run of adjacent bit-fields; a
+type wider than a word, a field straddling the access, a base aligned less
+than the type and a record of variable size take bcc's ordinary access to
+the field's own bytes, where GCC's own ordinary access may be one wider
+load or store, and GCC also reads a whole byte it then overwrites; an access
+reaching beyond the record, which GCC performs for an over-aligned packed
+object, is ordinary too, since it would leave the object in the IR; see
+`lowering/bit_fields.rs`),
 `-fpack-struct=N` and `cl /ZpN` (the packing before any `#pragma pack`),
 `-fpack-struct` alone (every structure packed, the pragmas ignored with
 GCC's warning), the options that give up part of IEC 60559 semantics

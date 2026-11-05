@@ -721,6 +721,8 @@ impl<'tu> FunctionLowerer<'_, '_, 'tu, '_, '_> {
                     {
                         bit_field.align = align;
                     }
+                    bit_field.volatile_unit =
+                        self.volatile_unit(access_ty, member.tag, field, base);
                     Place::BitField(address, bit_field)
                 } else {
                     Place::Memory(address)

@@ -15,6 +15,9 @@
 //! forces position-independent code on x86-64 Windows, so the options do
 //! not change code for the Windows targets.
 //!
+//! [`CodeOptions::strict_volatile_bit_fields`] sets the width of the memory
+//! accesses to a `volatile` bit-field, for memory-mapped registers.
+//!
 //! These options are not part of C, which only gives a thread-local object
 //! one instance per thread. [`CodeAssumptions`] beside them defines what C
 //! leaves undefined about pointers (`-fno-delete-null-pointer-checks`,
@@ -24,14 +27,21 @@
 
 use super::Target;
 
-/// The code generation options that depend on how the output is linked.
+/// The code generation options that depend on how the output is linked or
+/// on the machine it runs on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) struct CodeOptions {
     /// The relocation model the last `-fpic`-family flag selected, or
     /// `None` for the target's default.
-    pub(crate) relocation: Option<Relocation>,
+    pub(crate) relocation:                 Option<Relocation>,
     /// The `-ftls-model`, general-dynamic by default as in Clang.
-    pub(crate) tls_model:  TlsModel,
+    pub(crate) tls_model:                  TlsModel,
+    /// A `volatile` bit-field is accessed at the width of its declared
+    /// type: GCC's `-fstrict-volatile-bitfields`, which is off by default
+    /// on x86-64. Clang has no such option. `lowering/bit_fields.rs` holds
+    /// the rule. Extension: C99 §6.7.3 paragraph 6, p. 109; PDF p. 121 leaves
+    /// what makes up an access to a volatile object implementation-defined.
+    pub(crate) strict_volatile_bit_fields: bool,
 }
 
 /// What code generation may assume where C leaves the behaviour

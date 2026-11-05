@@ -1282,8 +1282,14 @@ impl State<'_> {
         } else if LINK_ONLY_OPTIONS.contains(&text) {
             self.link_only(text.into());
         }
-        // Clang knows `-ftrapv` but not its negation.
-        if self.compiler == Compiler::Clang && text == "-fno-trapv" {
+        // Clang knows `-ftrapv` but not its negation, and has no
+        // `-fstrict-volatile-bitfields`.
+        if self.compiler == Compiler::Clang
+            && matches!(
+                text,
+                "-fno-trapv" | "-fstrict-volatile-bitfields" | "-fno-strict-volatile-bitfields"
+            )
+        {
             self.error(format_args!("unknown argument: '{text}'"));
             return;
         }

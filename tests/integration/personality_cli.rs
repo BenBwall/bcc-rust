@@ -6944,6 +6944,168 @@ mod tests {
         }
     }
 
+    /// `-fstrict-volatile-bitfields` makes each back end read and write a
+    /// `volatile` bit-field with one access of its declared type: GCC's
+    /// option, off by default and the last of the pair winning, which Clang
+    /// does not know and TCC ignores. The widths are what GCC 14 emits.
+    #[test]
+    fn strict_volatile_bitfields_set_the_access_width() {
+        if !cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+            return;
+        }
+        let directory = Directory::new();
+        directory.write(
+            "w.c",
+            "struct S { volatile unsigned a : 8, b : 8, c : 16; };\nint r(struct S *p) { return \
+             p->b; }\nvoid w(struct S *p) { p->b = 3; }\n",
+        );
+        let assembly = |mode: &str, options: &[&str]| {
+            let mut args = vec!["-O2", "-S", "-o", "-", "w.c"];
+            args.extend(options);
+            let output = directory.bcc(mode, &args);
+            succeeds(&output);
+            stdout(&output)
+        };
+        let strict = "-fstrict-volatile-bitfields";
+        let plain = "-fno-strict-volatile-bitfields";
+        for backend in [&[][..], &["-Xbcc", "--backend=native"]] {
+            let gcc = |options: &[&str]| assembly("--gcc-mode", &[options, backend].concat());
+            let wide = gcc(&[strict]);
+            // Two loads, one of which may fold into the mask, and a store.
+            let accesses: Vec<&str> = wide.lines().filter(|l| l.contains("(%rdi)")).collect();
+            assert_eq!(accesses.len(), 3, "{wide}");
+            assert!(
+                accesses.iter().all(|line| {
+                    let line = line.trim_start();
+                    line.contains("\t(%rdi)") || line.ends_with(", (%rdi)")
+                }),
+                "{wide}"
+            );
+            assert!(
+                accesses.iter().all(|line| line
+                    .trim_start()
+                    .split('\t')
+                    .next()
+                    .unwrap()
+                    .ends_with('l')
+                    && !line.contains("movz")),
+                "{wide}"
+            );
+            for narrow in [gcc(&[]), gcc(&[strict, plain])] {
+                assert!(narrow.contains("1(%rdi)"), "{narrow}");
+                assert!(!narrow.contains("movl\t(%rdi)"), "{narrow}");
+            }
+            assert_eq!(gcc(&[plain, strict]), wide);
+        }
+        let clang = directory.bcc("--clang-mode", &["-c", strict, "w.c"]);
+        assert!(!clang.status.success());
+        assert!(
+            stderr(&clang).contains(&format!("unknown argument: '{strict}'")),
+            "{}",
+            stderr(&clang)
+        );
+        // TCC ignores it, and so does clang-cl, with its usual warning.
+        let ignored = directory.bcc("--tcc-mode", &["-c", strict, "w.c", "-o", "t.o"]);
+        succeeds(&ignored);
+        assert_eq!(stderr(&ignored), "");
+        succeeds(&directory.bcc("--tcc-mode", &["-c", "w.c", "-o", "plain.o"]));
+        assert_eq!(
+            std::fs::read(directory.path("t.o")).unwrap(),
+            std::fs::read(directory.path("plain.o")).unwrap()
+        );
+        let clang_cl = directory.bcc("--clang-cl-mode", &["-c", strict, "w.c"]);
+        succeeds(&clang_cl);
+        assert!(
+            stderr(&clang_cl).contains("unknown argument ignored in clang-cl"),
+            "{}",
+            stderr(&clang_cl)
+        );
+    }
+
+    /// A wider access keeps the neighbors' bits and the field's value on
+    /// every back end, optimized or not, where GCC's runs agree. Memory that
+    /// was never written beside a written field stays out of the result,
+    /// though the load covers it.
+    #[test]
+    fn strict_volatile_bitfields_keep_every_value() {
+        if !cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+            return;
+        }
+        let directory = Directory::new();
+        directory.write(
+            "v.c",
+            "struct T { volatile unsigned a : 8, b : 8, c : 16; };\nstruct N { char c; volatile \
+             int a : 8; volatile int b : 3; char d; };\nstruct P { char x; volatile unsigned y : \
+             31; } __attribute__((packed));\nunion U { struct T t; unsigned char bytes[4]; \
+             };\nstruct T global = {1, 2, 3};\nvolatile struct N neighbors = {1, -2, -3, \
+             4};\nstruct P packed;\nint check(void) {\n  /* Each field beside its neighbors. */\n  \
+             global.b = 0xab;\n  if (global.a != 1 || global.b != 0xab || global.c != 3) return \
+             1;\n  if ((global.c = 0x12345) != 0x2345 || global.a != 1) return 2;\n  \
+             global.a++;\n  if (global.a != 2 || global.b != 0xab) return 3;\n  /* The unit \
+             starts before the field; signed values extend. */\n  if (neighbors.a != -2 || \
+             neighbors.b != -3) return 4;\n  neighbors.a = 5;\n  if (neighbors.c != 1 || \
+             neighbors.a != 5 || neighbors.b != -3 || neighbors.d != 4) return 5;\n  if \
+             ((neighbors.b = 7) != -1) return 6;\n  /* A packed field keeps its ordinary access. \
+             */\n  packed.y = 0x7fffffff;\n  if (packed.y != 0x7fffffff || packed.x != 0) return \
+             7;\n  /* An automatic object with bytes nobody wrote. */\n  struct { volatile \
+             unsigned a : 8; char c; } local;\n  local.a = 0x5a;\n  if (local.a != 0x5a) return \
+             8;\n  union U u;\n  u.bytes[0] = 7;\n  u.t.b = 9;\n  if (u.bytes[0] != 7 || \
+             u.bytes[1] != 9 || u.t.b != 9) return 9;\n  return 0;\n}\nint main(void) { return \
+             check(); }\n",
+        );
+        let strict = "-fstrict-volatile-bitfields";
+        if Command::new("gcc").arg("--version").output().is_ok() {
+            let built = Command::new("gcc")
+                .args(["-O2", strict, "v.c", "-o", "reference"])
+                .current_dir(&directory.0)
+                .output()
+                .unwrap();
+            succeeds(&built);
+            let run = Command::new(directory.path("reference")).output().unwrap();
+            assert_eq!(run.status.code(), Some(0), "gcc");
+        }
+        for options in [
+            &["-O0"][..],
+            &["-O2"],
+            &["--opt=bcc"],
+            &["--backend=native", "-O0"],
+            &["--backend=native", "-O2"],
+        ] {
+            let mut args = vec![strict, "v.c", "-o", "program"];
+            args.extend(options);
+            succeeds(&directory.bcc("", &args));
+            let run = Command::new(directory.path("program")).output().unwrap();
+            assert_eq!(run.status.code(), Some(0), "{options:?}");
+        }
+        for options in [&["-O0"][..], &["-O2"]] {
+            let mut args = vec![strict, "--interpret", "v.c"];
+            args.extend(options);
+            let run = directory.bcc("", &args);
+            assert_eq!(run.status.code(), Some(0), "interpreter {options:?}");
+        }
+        if !Command::new("node")
+            .arg("--version")
+            .output()
+            .is_ok_and(|output| output.status.success())
+        {
+            eprintln!("skipping wasm32: node is not on the path");
+            return;
+        }
+        let runner = Path::new(env!("CARGO_MANIFEST_DIR")).join("scripts/wasm/run.mjs");
+        for options in [&["-O0"][..], &["-O2"]] {
+            let mut args = vec![strict, "--target=wasm32-wasip1", "v.c", "-o", "v.wasm"];
+            args.extend(options);
+            succeeds(&directory.bcc("", &args));
+            let run = Command::new("node")
+                .arg("--no-warnings")
+                .arg(&runner)
+                .arg(directory.path("v.wasm"))
+                .output()
+                .unwrap();
+            assert_eq!(run.status.code(), Some(0), "wasm32 {options:?}");
+        }
+    }
+
     /// `-fcommon` makes an external tentative definition a common symbol on
     /// the LLVM and native back ends, so two units' `int x;` link, and one
     /// links with GCC's `-fcommon` objects, an initialized definition

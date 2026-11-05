@@ -171,9 +171,14 @@ shl that overflows, an `exact` division that is inexact, and an `inbounds`
 pointer offset that leaves its object all produce *poison*. Poison propagates
 through arithmetic; branching on poison, dividing by it, or using it as an
 address is undefined behaviour. `freeze` turns poison into an arbitrary but
-fixed value. Reading an uninitialized local yields `poison`. The interpreter
-implements this exactly and is the specification the optimizer is tested
-against.
+fixed value. Reading an uninitialized local yields `poison`. A `volatile` load
+never produces poison: it reads the bytes as they are in memory, where a byte
+never written or written with poison is arbitrary and the others keep their
+values, since what a volatile load returns is beyond the program's control and
+no pass may reason about it. LLVM's rule for a load is stricter on paper, but
+nothing in LLVM looks through a volatile load, and the machine has no poison.
+The interpreter implements this exactly and is the specification the optimizer
+is tested against.
 
 C lowering sets `nsw` on signed `+ - *`, because C99 §6.5p5 makes signed
 overflow undefined; unsigned arithmetic wraps and gets no flags. A signed left
@@ -528,7 +533,10 @@ bytes that hold the field with shifts and masks, from sema's byte offset, bit
 offset and width. A read loads exactly the field's bytes, a write loads (and
 `freeze`s) only the bytes it covers in part, and a `volatile` field is accessed
 with volatile loads and stores. The accesses stay inside the field's own bytes
-because a load of bytes never written is poison as a whole.
+because a load of bytes never written is poison as a whole. Only under
+`-fstrict-volatile-bitfields` does a `volatile` field get a wider access, one
+load or store of its declared type's width, which a volatile load's freedom from
+poison makes sound.
 
 ### Module
 
