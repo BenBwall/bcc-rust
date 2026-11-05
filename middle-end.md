@@ -176,8 +176,10 @@ to SSA refines a read on a path without a store to one `freeze` of `poison`, so
 masking it clears bits and testing them decides nothing about the rest of the
 function, which is how GCC and Clang read such a program; an edge that carries
 no store still passes `poison`, which a merge folds away, as LLVM folds a `phi`
-with an `undef` operand. The interpreter implements this exactly and is the
-specification the optimizer is tested against.
+with an `undef` operand. `--interpret` therefore no longer reports a plain read
+of an uninitialized scalar: it runs on the frozen value. The interpreter
+implements this exactly and is the specification the optimizer is tested
+against.
 
 C lowering sets `nsw` on signed `+ - *`, because C99 §6.5p5 makes signed
 overflow undefined; unsigned arithmetic wraps and gets no flags. A signed left
