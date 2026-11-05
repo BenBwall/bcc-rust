@@ -28,6 +28,7 @@ use crate::{
         Clause,
         Diagnostic,
         Frame,
+        MemberValue,
         Object,
         Position,
         Range,
@@ -175,7 +176,13 @@ fn snapshot(state: &State, program: &Program, source: &str) -> Snapshot {
             summary:        event.summary.clone(),
             explanation:    event.explanation.clone(),
             note:           event.note.clone(),
-            flow:           flow::flow(event, operator, state.status == "finished", &objects),
+            flow:           flow::flow(
+                event,
+                operator,
+                state.status == "finished",
+                &objects,
+                program,
+            ),
             access:         flow::access(event),
             clauses:        event
                 .clauses
@@ -218,8 +225,9 @@ fn snapshot(state: &State, program: &Program, source: &str) -> Snapshot {
                     .get(&object.frame_id)
                     .map(|name| (*name).to_owned())
                     .unwrap_or_default(),
+                scope:     object.function.clone(),
                 parameter: object.parameter,
-                value:     value(&object.value, &objects),
+                value:     value(&object.value, &objects, program),
             })
             .collect(),
         effects:      state.pending_effects.clone(),
@@ -227,7 +235,7 @@ fn snapshot(state: &State, program: &Program, source: &str) -> Snapshot {
         return_value: state
             .return_value
             .as_ref()
-            .map(|returned| value(returned, &objects)),
+            .map(|returned| value(returned, &objects, program)),
     }
 }
 
@@ -266,7 +274,7 @@ fn tree(
                 TreeNode {
                     label:    node.label.clone(),
                     children: node.children.iter().map(|child| child - first).collect(),
-                    value:    operand.map(|operand| operand_text(operand, objects)),
+                    value:    operand.map(|operand| operand_text(operand, objects, program)),
                     lvalue:   matches!(operand, Some(Operand::Address { .. })),
                     active:   evaluation.last == Some(index),
                     object:   is_name
@@ -280,16 +288,25 @@ fn tree(
 
 /// How the page shows an operand: `5`, `&values[1]`, or the designated
 /// object `values[1]` for an lvalue.
-fn operand_text(operand: &Operand, objects: &HashMap<usize, &abstract_machine::Object>) -> String {
+fn operand_text(
+    operand: &Operand,
+    objects: &HashMap<usize, &abstract_machine::Object>,
+    program: &Program,
+) -> String {
     match operand {
-        | Operand::Value(value) => value_text(value, objects),
-        | &Operand::Address { target, offset } => location(target, offset, objects),
+        | Operand::Value(value) => value_text(value, objects, program),
+        | &Operand::Address {
+            target,
+            offset,
+            structure,
+        } => location(target, offset, structure, objects, program),
     }
 }
 
 fn value_text(
     value: &abstract_machine::Value,
     objects: &HashMap<usize, &abstract_machine::Object>,
+    program: &Program,
 ) -> String {
     match value {
         | abstract_machine::Value::Indeterminate => "?".to_owned(),
@@ -298,23 +315,33 @@ fn value_text(
         | &abstract_machine::Value::Pointer {
             target: Some(target),
             offset,
-        } => format!("&{}", location(target, offset, objects)),
+            structure,
+            ..
+        } => format!("&{}", location(target, offset, structure, objects, program)),
         | abstract_machine::Value::Array(_) => "{…}".to_owned(),
+        | abstract_machine::Value::Struct { members, .. } => format!(
+            "{{{}}}",
+            members
+                .iter()
+                .map(|member| value_text(member, objects, program))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
     }
 }
 
+/// How the source names the place at scalar `offset` of `target` (or the
+/// whole structure `structure` there).
 fn location(
     target: usize,
     offset: i32,
+    structure: Option<usize>,
     objects: &HashMap<usize, &abstract_machine::Object>,
+    program: &Program,
 ) -> String {
     objects.get(&target).map_or_else(
         || format!("#{target}"),
-        |object| match object.value {
-            | abstract_machine::Value::Array(_) => format!("{}[{offset}]", object.name),
-            | _ if offset == 0 => object.name.clone(),
-            | _ => format!("{}+{offset}", object.name),
-        },
+        |object| program.path(object, offset, structure),
     )
 }
 
@@ -356,6 +383,7 @@ fn diagnostic(fault: &abstract_machine::Diagnostic) -> Diagnostic {
 fn value(
     value: &abstract_machine::Value,
     objects: &HashMap<usize, &abstract_machine::Object>,
+    program: &Program,
 ) -> Value {
     match value {
         | abstract_machine::Value::Indeterminate => Value::Indeterminate,
@@ -365,20 +393,57 @@ fn value(
         | abstract_machine::Value::Array(elements) => Value::Array {
             elements: elements
                 .iter()
-                .map(|element| self::value(element, objects))
+                .map(|element| self::value(element, objects, program))
                 .collect(),
         },
-        | &abstract_machine::Value::Pointer { target, offset } => {
+        | abstract_machine::Value::Struct { structure, members } => {
+            let layout = program.structures().get(*structure);
+            Value::Struct {
+                name:    layout.map_or_else(String::new, |layout| format!("struct {}", layout.name)),
+                size:    layout.map_or(0, |layout| layout.size),
+                members: members
+                    .iter()
+                    .enumerate()
+                    .map(|(index, member)| {
+                        let declared = layout.and_then(|layout| layout.members.get(index));
+                        MemberValue {
+                            name:    declared.map(|member| member.name.clone()).unwrap_or_default(),
+                            ty:      declared
+                                .map(|member| member.r#type.clone())
+                                .unwrap_or_default(),
+                            offset:  declared.map_or(0, |member| member.offset),
+                            size:    declared.map_or(0, |member| member.size),
+                            padding: declared.map_or(0, |member| member.padding),
+                            value:   self::value(member, objects, program),
+                        }
+                    })
+                    .collect(),
+            }
+        },
+        | &abstract_machine::Value::Pointer {
+            target,
+            offset,
+            first,
+            length,
+            structure,
+        } => {
             let object = target.and_then(|target| objects.get(&target));
-            let length = object.map(|object| match &object.value {
-                | abstract_machine::Value::Array(elements) => elements.len(),
-                | _ => 1,
+            let one_past = target.is_some() && offset == first + length;
+            let to = object.map_or_else(String::new, |object| {
+                if one_past {
+                    let array = program.path(object, first, None);
+                    let array = array.strip_suffix("[0]").unwrap_or(&array);
+                    format!("{array}+{length}")
+                } else {
+                    program.path(object, offset, structure)
+                }
             });
             Value::Pointer {
                 target,
                 offset,
-                one_past: length.is_some_and(|length| usize::try_from(offset) == Ok(length)),
+                one_past,
                 ended: object.is_some_and(|object| object.lifetime == "ended"),
+                to,
             }
         },
     }
@@ -567,6 +632,7 @@ mod tests {
             ("path", "finished", Some("16")),
             ("pointers", "finished", Some("17")),
             ("recursion", "finished", Some("24")),
+            ("structs", "finished", Some("31")),
             ("promotion", "finished", Some("255")),
             ("overflow", "undefined_behavior", None),
             ("bounds", "undefined_behavior", None),
@@ -706,6 +772,75 @@ mod tests {
         );
         let oversized = machine.load(" ".repeat(32 * 1024 + 1));
         assert_eq!(oversized.status, "error");
+    }
+
+    #[test]
+    fn structures_and_static_objects_reach_the_page() {
+        let mut machine = Machine::default();
+        let states = execute(&mut machine, demos::find("structs").unwrap().source);
+        // Before main: static storage, no frame.
+        let first = &states[1];
+        assert_eq!(first.event.kind, "static_storage");
+        assert!(first.stack.is_empty());
+        assert_eq!(first.objects[0].storage, "static");
+        assert_eq!(first.objects[0].frame_id, 0);
+        assert_eq!(first.event.access[0].kind, "create");
+        let total = states
+            .iter()
+            .flat_map(|state| &state.objects)
+            .find(|object| object.name == "total")
+            .expect("the static local");
+        assert_eq!(total.scope.as_deref(), Some("moved"));
+        // A structure lists its members with their layout.
+        let last = states.last().unwrap();
+        let entry = last
+            .objects
+            .iter()
+            .find(|object| object.name == "e")
+            .expect("e");
+        let Value::Struct { name, size, members } = &entry.value else {
+            panic!("e is a structure: {:?}", entry.value);
+        };
+        assert_eq!((name.as_str(), *size), ("struct entry", 8));
+        let layout: Vec<(&str, &str, usize, usize, usize)> = members
+            .iter()
+            .map(|member| {
+                (
+                    member.name.as_str(),
+                    member.ty.as_str(),
+                    member.offset,
+                    member.size,
+                    member.padding,
+                )
+            })
+            .collect();
+        assert_eq!(
+            layout,
+            [("tag", "char", 0, 1, 3), ("count", "int", 4, 4, 0)]
+        );
+        assert_eq!(entry.value.cells(), 2);
+        // Member steps name the member, in the flow and the expression tree.
+        let arrow = states
+            .iter()
+            .find(|state| state.event.kind == "member" && state.event.title.starts_with("`at->y`"))
+            .expect("at->y");
+        let flow: Vec<String> = arrow
+            .event
+            .flow
+            .iter()
+            .map(|part| format!("{}:{}", part.role, part.text))
+            .collect();
+        assert_eq!(flow, ["value:&b", "arrow:->", "object:b.y"]);
+        assert_eq!(arrow.event.access[0].cell, Some(1));
+        let px = last
+            .objects
+            .iter()
+            .find(|object| object.name == "px")
+            .map(|object| &object.value);
+        assert!(
+            matches!(px, Some(Value::Pointer { to, .. }) if to == "b.x"),
+            "{px:?}"
+        );
     }
 
     #[test]

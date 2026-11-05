@@ -25,7 +25,12 @@ them. Visitors pick a lesson (a small C program) and see it three ways:
   the step shown, the cells under it hold the objects at that step by call,
   the step's numbered note hangs off it, the current full expression is
   wired up as a schematic whose wires fill with values (Figure 2), and a
-  datasheet lists the objects (Table 1).
+  datasheet lists the objects (Table 1). Objects with static storage
+  duration (file-scope and `static` ones) are created one step each before
+  `main` and kept in a group of their own, outside every call. A structure
+  is drawn as its members: one cell per member under the head, with a
+  hatched cell for each run of padding bcc's x86-64 layout leaves, and a row
+  per member in the datasheet with its byte offsets.
 - **Compiler pipeline.** What bcc itself produces for the same program, from
   the first translation phases to machine code: the logical lines after
   line splicing (phases 1-2), the preprocessing tokens (phase 3), the
@@ -82,7 +87,8 @@ times that, and a longer run scrolls, the tape moving under a playhead that
 stays in the middle of the screen. Calls are grouped by function and depth
 on the call stack, so a loop's repeated calls share one set of lanes; a group
 with no call at the playhead folds to one row of call bars, and its label
-opens it.
+opens it. The static objects' group comes first and never folds: its rule
+runs from the first of them to the end of the run.
 
 The page has light and dark themes (the device in daylight and under low
 light; its screens stay black in both) and works down to phone width. At

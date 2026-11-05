@@ -642,6 +642,10 @@
   .cell[data-access="designate"], .cell[data-access="address"] { outline: 2px dashed var(--ink); outline-offset: -5px; }
   .cell.is-indeterminate .cell-value { color: transparent; height: 18px; width: 100%; background: repeating-linear-gradient(45deg, var(--ink-3) 0 1px, transparent 1px 5px); }
   .cell.is-ended { background: var(--device-2); opacity: .8; }
+  /* Padding: bytes of a structure that no member owns. */
+  .cell.is-padding { min-width: 40px; background: repeating-linear-gradient(-45deg, var(--cell) 0 4px, var(--device-2) 4px 5px); color: var(--ink-3); }
+  .cell.is-padding .cell-value { color: var(--ink-3); font-size: 13px; font-weight: 400; }
+  .cell-frame.is-static .cell-frame-name { background: var(--ink-2); }
   .cell.is-ended .cell-value { text-decoration: line-through; color: var(--ink-3); }
 
   /* The note hangs off the playhead. */
@@ -791,6 +795,13 @@
   .datasheet table { border-collapse: collapse; width: 100%; font-size: 12px; font-variant-numeric: tabular-nums; }
   .datasheet thead th { font-size: 10px; font-weight: 400; letter-spacing: .1em; text-transform: uppercase; text-align: left; color: var(--ink-3); border-bottom: 1px solid var(--ink); padding: 3px 8px 3px 0; }
   .datasheet td, .datasheet tbody th { border-bottom: 1px solid var(--seam); padding: 5px 8px 5px 0; text-align: left; white-space: nowrap; font-weight: 400; }
+  /* A structure's members, under it: offsets in bytes, padding hatched. */
+  .datasheet tr.is-member th, .datasheet tr.is-member td { border-bottom-style: dotted; color: var(--ink-2); font-size: 11px; }
+  .datasheet tr.is-member th { padding-left: calc(var(--depth, 1) * 12px); font-weight: 400; }
+  .datasheet .sheet-member { font-weight: 700; color: var(--ink); }
+  .datasheet tr.is-padding th, .datasheet tr.is-padding td { color: var(--ink-3); background: repeating-linear-gradient(-45deg, transparent 0 4px, var(--seam) 4px 5px); }
+  .datasheet tr.is-padding .sheet-member { color: var(--ink-3); font-weight: 400; font-style: italic; }
+  .datasheet .sheet-offset { white-space: nowrap; }
   .datasheet tbody th { font-weight: 700; }
   .sheet-swatch { display: inline-block; width: 7px; height: 7px; margin-right: 7px; background: var(--obj); }
   .datasheet tr.is-used td, .datasheet tr.is-used th { color: var(--accent-ink); }

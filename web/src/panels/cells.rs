@@ -1,6 +1,8 @@
 //! Under the head: the objects at the playhead as a strip of cells, one run
-//! per active call, innermost first, the way a tape passes under a read/write
-//! head. An array is a run of element cells. The cell the step wrote is lit,
+//! per active call, innermost first, then the objects with static storage
+//! duration, the way a tape passes under a read/write head. An array is a
+//! run of element cells, a structure a run of its members' cells with a
+//! padding cell wherever the layout leaves unused bytes. The cell the step wrote is lit,
 //! the one it read underlined, the one it only designated outlined; an
 //! element a pointer points at names that pointer. The objects of returned
 //! calls fold into one cell.
@@ -33,6 +35,71 @@ pub fn Cells(snapshot: Memo<Option<Snapshot>>) -> impl IntoView {
     }
 }
 
+/// One cell of the strip: a scalar, or the padding after a member.
+enum Part {
+    Cell {
+        value: Value,
+        /// How the source names it: `total`, `values[1]`, `p.x`.
+        name:  String,
+        ty:    String,
+        /// Its scalar index in the object, for an array or a structure.
+        leaf:  Option<usize>,
+    },
+    Padding {
+        bytes: usize,
+        /// The member it follows.
+        after: String,
+    },
+}
+
+/// The cells of `object`: one per scalar, in memory order, with a padding
+/// cell after each structure member that has padding.
+fn parts(object: &Object) -> Vec<Part> {
+    let mut parts = Vec::new();
+    let ty = object.ty.split('[').next().unwrap_or_default().trim().to_owned();
+    match &object.value {
+        | Value::Array { .. } | Value::Struct { .. } =>
+            collect(&object.value, &object.name, &ty, &mut 0, &mut parts),
+        | value => parts.push(Part::Cell {
+            value: value.clone(),
+            name: object.name.clone(),
+            ty,
+            leaf: None,
+        }),
+    }
+    parts
+}
+
+fn collect(value: &Value, name: &str, ty: &str, leaf: &mut usize, parts: &mut Vec<Part>) {
+    match value {
+        | Value::Array { elements } =>
+            for (index, element) in elements.iter().enumerate() {
+                collect(element, &format!("{name}[{index}]"), ty, leaf, parts);
+            },
+        | Value::Struct { members, .. } =>
+            for member in members {
+                let path = format!("{name}.{}", member.name);
+                let ty = member.ty.split('[').next().unwrap_or_default().trim();
+                collect(&member.value, &path, ty, leaf, parts);
+                if member.padding > 0 {
+                    parts.push(Part::Padding {
+                        bytes: member.padding,
+                        after: path,
+                    });
+                }
+            },
+        | scalar => {
+            parts.push(Part::Cell {
+                value: scalar.clone(),
+                name:  name.to_owned(),
+                ty:    ty.to_owned(),
+                leaf:  Some(*leaf),
+            });
+            *leaf += 1;
+        },
+    }
+}
+
 #[expect(clippy::too_many_lines, reason = "One block per kind of cell.")]
 fn strip(snapshot: &Snapshot) -> impl IntoView {
     let access = |object: usize, cell: Option<usize>| {
@@ -48,7 +115,7 @@ fn strip(snapshot: &Snapshot) -> impl IntoView {
             })
             .map(|access| access.kind.clone())
     };
-    // Which pointer points at which element, to name it under the element.
+    // Which pointer points at which cell, to name it under the cell.
     let pointers: Vec<(usize, i32, String)> = snapshot
         .objects
         .iter()
@@ -73,33 +140,16 @@ fn strip(snapshot: &Snapshot) -> impl IntoView {
             .collect::<Vec<_>>()
             .join(" ")
     };
-    let frames = snapshot
-        .stack
-        .iter()
-        .map(|frame| {
-            let objects: Vec<&Object> = snapshot
-                .objects
-                .iter()
-                .filter(|object| object.frame_id == frame.id && object.alive)
-                .collect();
-            let cells = objects
-                .into_iter()
-                .flat_map(|object| {
-                    let element = matches!(object.value, Value::Array { .. });
-                    let parts: Vec<(Value, String, Option<usize>)> = match &object.value {
-                        | Value::Array { elements } => elements
-                            .iter()
-                            .enumerate()
-                            .map(|(index, element)| (element.clone(), format!("{}[{index}]", object.name), Some(index)))
-                            .collect(),
-                        | value => vec![(value.clone(), object.name.clone(), None)],
-                    };
-                    let ty = object.ty.split('[').next().unwrap_or_default().trim().to_owned();
-                    parts.into_iter().map(move |(value, name, index)| {
-                        let kind = access(object.id, if element { index } else { None });
+    let cells = |objects: Vec<&Object>| {
+        objects
+            .into_iter()
+            .flat_map(|object| {
+                parts(object).into_iter().map(move |part| match part {
+                    | Part::Cell { value, name, ty, leaf } => {
+                        let kind = access(object.id, leaf);
                         let text = value_text(&value, &snapshot.objects);
                         let indeterminate = text.is_none();
-                        let marks = pointed(object.id, index.unwrap_or(0));
+                        let marks = pointed(object.id, leaf.unwrap_or(0));
                         let description = format!(
                             "{name}, {ty}: {}{}",
                             text.as_deref().unwrap_or("indeterminate"),
@@ -112,18 +162,59 @@ fn strip(snapshot: &Snapshot) -> impl IntoView {
                                 data-access=kind
                                 aria-label=description
                             >
-                                <span class="cell-type" aria-hidden="true">{ty.clone()}</span>
+                                <span class="cell-type" aria-hidden="true">{ty}</span>
                                 <b class="cell-value" aria-hidden="true">{text.unwrap_or_else(|| "?".to_owned())}</b>
                                 <span class="cell-name" aria-hidden="true">{name}<span class="cell-pointers">{marks}</span></span>
                             </li>
                         }
-                    }).collect::<Vec<_>>()
+                        .into_any()
+                    },
+                    | Part::Padding { bytes, after } => {
+                        let plural = if bytes == 1 { "" } else { "s" };
+                        view! {
+                            <li
+                                class="cell is-padding"
+                                aria-label=format!("{bytes} byte{plural} of padding after {after}, holding no value")
+                                title=format!("{bytes} byte{plural} of unnamed padding after {after}: no member lives here, and its bytes hold unspecified values")
+                            >
+                                <span class="cell-type" aria-hidden="true">"pad"</span>
+                                <b class="cell-value" aria-hidden="true">{format!("{bytes}B")}</b>
+                                <span class="cell-name" aria-hidden="true">"padding"</span>
+                            </li>
+                        }
+                        .into_any()
+                    },
                 })
-                .collect_view();
+                .collect::<Vec<_>>()
+            })
+            .collect_view()
+    };
+    let statics: Vec<&Object> = snapshot
+        .objects
+        .iter()
+        .filter(|object| object.frame_id == 0 && object.alive)
+        .collect();
+    let statics = (!statics.is_empty()).then(|| {
+        view! {
+            <li class="cell-frame is-static">
+                <span class="cell-frame-name">"static"</span>
+                <ol class="cell-run" aria-label="Static storage: objects that exist for the whole run">{cells(statics)}</ol>
+            </li>
+        }
+    });
+    let frames = snapshot
+        .stack
+        .iter()
+        .map(|frame| {
+            let objects: Vec<&Object> = snapshot
+                .objects
+                .iter()
+                .filter(|object| object.frame_id == frame.id && object.alive)
+                .collect();
             view! {
                 <li class="cell-frame">
                     <span class="cell-frame-name">{format!("{}()", frame.name)}</span>
-                    <ol class="cell-run" aria-label=format!("{}() frame", frame.name)>{cells}</ol>
+                    <ol class="cell-run" aria-label=format!("{}() frame", frame.name)>{cells(objects)}</ol>
                 </li>
             }
         })
@@ -136,6 +227,7 @@ fn strip(snapshot: &Snapshot) -> impl IntoView {
     view! {
         <ol class="cells">
             {frames}
+            {statics}
             {(!ended.is_empty()).then(|| {
                 let names = tally(ended.iter().map(|object| object.name.as_str()));
                 let label = format!("Lifetimes over: {names}");

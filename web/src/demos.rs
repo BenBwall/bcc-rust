@@ -24,7 +24,7 @@ pub struct Demo {
     pub source:  &'static str,
 }
 
-pub static DEMOS: [Demo; 9] = [
+pub static DEMOS: [Demo; 10] = [
     Demo {
         key:     "tour",
         title:   "Objects, loops and calls",
@@ -72,6 +72,18 @@ pub static DEMOS: [Demo; 9] = [
         path:    &[],
         name:    "recursion.c",
         source:  include_str!("../demos/recursion.c"),
+    },
+    Demo {
+        key:     "structs",
+        title:   "Structs and static storage",
+        summary: "Objects outside functions exist for the whole run and start at zero; a \
+                  structure's members sit at fixed offsets, with padding, and = copies them all.",
+        topics:  &["static storage", "structures", "padding"],
+        faults:  false,
+        stage:   None,
+        path:    &[],
+        name:    "structs.c",
+        source:  include_str!("../demos/structs.c"),
     },
     Demo {
         key:     "promotion",
