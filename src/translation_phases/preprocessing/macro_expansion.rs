@@ -24,6 +24,8 @@
 //!   `macro_expansion/arguments.rs`, `macro_expansion/variadic.rs`.
 //! - Replacement operators: `macro_expansion/stringification.rs`,
 //!   `macro_expansion/paste.rs`.
+//! - For a text of phase 4: `macro_expansion/spacing.rs` records where
+//!   replacement separates tokens.
 //!
 //! C99: macro replacement, §6.10.3, pp. 151-153; PDF pp. 163-165.
 //!

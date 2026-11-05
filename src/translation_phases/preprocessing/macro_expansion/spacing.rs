@@ -74,7 +74,14 @@ impl SpacingState {
     pub(in crate::translation_phases::preprocessing) fn read(&mut self, token: &PreprocessorToken) {
         match token.kind {
             | PreprocessorTokenType::Whitespace => self.white = true,
-            | PreprocessorTokenType::Newline => self.white = false,
+            // A new line ends what the printer's `source` remembers, though
+            // not that padding was seen (`cb_line_change`).
+            | PreprocessorTokenType::Newline => {
+                self.white = false;
+                if self.pending != TokenSpacing::NONE {
+                    self.pending = TokenSpacing::END;
+                }
+            },
             | _ => {
                 self.token_white = std::mem::take(&mut self.white) || token.spacing.white();
                 self.token_first =

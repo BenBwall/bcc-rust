@@ -294,6 +294,7 @@ impl<'a> TextWriter<'a> {
             }
             self.line = Some((file, line));
             self.indent(column);
+            self.begin_line(column, spacing, class);
         } else if self
             .line
             .is_some_and(|(current_file, _)| current_file == file)
@@ -305,15 +306,7 @@ impl<'a> TextWriter<'a> {
         } else {
             self.advance(context, file, line);
             self.indent(column);
-            // A token a macro made starts the line away from its name's column
-            // if white space stands before it, and a `#` so that it does not
-            // read as beginning a directive.
-            if column <= 1
-                && (spacing.space
-                    || (spacing.avoid_paste && class == PasteClass::Punctuator(b'#', 0)))
-            {
-                self.text.push(' ');
-            }
+            self.begin_line(column, spacing, class);
         }
         self.scratch.reset();
         let spelling = if self.options.as_written {
@@ -394,6 +387,18 @@ impl<'a> TextWriter<'a> {
             self.text.push_str(" 3");
         }
         self.text.push('\n');
+    }
+
+    /// Separates the first token of a line, at `column`, from the start of
+    /// the line when a macro made it: white space may stand before it where
+    /// its column does not show that, and a `#` must not read as beginning a
+    /// directive.
+    fn begin_line(&mut self, column: u32, spacing: OutputSpacing, class: PasteClass) {
+        if column <= 1
+            && (spacing.space || (spacing.avoid_paste && class == PasteClass::Punctuator(b'#', 0)))
+        {
+            self.text.push(' ');
+        }
     }
 
     /// Indents the first token of a line to its source column, as GCC does.

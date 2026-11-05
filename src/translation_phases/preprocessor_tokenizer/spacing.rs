@@ -152,3 +152,99 @@ impl Default for TokenSpacing {
         Self::NONE
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The printer of `c-ppoutput.cc`, one padding at a time, from a printer
+    /// that holds no source: its `avoid_paste` and `source`.
+    fn printed(paddings: &[Padding]) -> (bool, Source) {
+        let mut source = Source::None;
+        for padding in paddings {
+            let incoming = padding.source();
+            if source == Source::None || (source != Source::Spaced && incoming == Source::None) {
+                source = incoming;
+            }
+        }
+        (!paddings.is_empty(), source)
+    }
+
+    #[derive(Clone, Copy)]
+    enum Padding {
+        Spaced,
+        Unspaced,
+        End,
+    }
+
+    impl Padding {
+        const ALL: [Self; 3] = [Self::Spaced, Self::Unspaced, Self::End];
+
+        fn source(self) -> Source {
+            match self {
+                | Self::Spaced => Source::Spaced,
+                | Self::Unspaced => Source::Unspaced,
+                | Self::End => Source::None,
+            }
+        }
+
+        fn spacing(self) -> TokenSpacing {
+            match self {
+                | Self::Spaced => TokenSpacing::before(true),
+                | Self::Unspaced => TokenSpacing::before(false),
+                | Self::End => TokenSpacing::END,
+            }
+        }
+    }
+
+    /// Every run of paddings, however it is split where a replay's tokens
+    /// were kept, tells the printer what the run itself would.
+    #[test]
+    fn composed_paddings_print_as_the_run_of_them() {
+        let mut runs: Vec<Vec<Padding>> = vec![Vec::new()];
+        for _ in 0..5 {
+            let longer: Vec<Vec<Padding>> = runs
+                .iter()
+                .flat_map(|run| {
+                    Padding::ALL.map(|padding| {
+                        let mut run = run.clone();
+                        run.push(padding);
+                        run
+                    })
+                })
+                .collect();
+            runs.extend(longer);
+        }
+        for run in &runs {
+            for split in 0..=run.len() {
+                let fold = |paddings: &[Padding]| {
+                    paddings
+                        .iter()
+                        .fold(TokenSpacing::NONE, |spacing, padding| {
+                            spacing.then(padding.spacing())
+                        })
+                };
+                let composed = fold(&run[..split]).then(fold(&run[split..]));
+                let (avoid_paste, source) = printed(run);
+                for white in [false, true] {
+                    let output = composed.with_white(white).output();
+                    assert_eq!(output.avoid_paste, avoid_paste);
+                    let space = match source {
+                        | Source::Spaced => true,
+                        | Source::Unspaced => false,
+                        | Source::None => white,
+                    };
+                    assert_eq!(output.space, space);
+                }
+            }
+        }
+    }
+
+    /// The spacing rides in the padding of the tokens it is on.
+    #[test]
+    fn spacing_does_not_grow_tokens() {
+        use super::super::PreprocessorToken;
+        assert_eq!(size_of::<TokenSpacing>(), 1);
+        assert_eq!(size_of::<PreprocessorToken>(), 16);
+    }
+}

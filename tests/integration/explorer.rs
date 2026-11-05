@@ -567,7 +567,7 @@ mod tests {
             panic!("{:#?}", trace.expansions);
         };
         assert_eq!(expansion.invocation, "A(B(2))");
-        assert_eq!(expansion.result, "2+2+2+2");
+        assert_eq!(expansion.result, "2 +2 +2 +2");
         let steps: Vec<(&str, u32, bool, String)> = expansion
             .steps
             .iter()
@@ -773,7 +773,7 @@ mod tests {
                 ("replace A", 2, Some(1)),
             ])
         );
-        assert_eq!(trace.expansions[0].result, "6+6+6+6");
+        assert_eq!(trace.expansions[0].result, "6 +6 +6 +6");
         // The `##` is CAT_'s, not CAT's.
         assert_eq!(
             tree(1),
