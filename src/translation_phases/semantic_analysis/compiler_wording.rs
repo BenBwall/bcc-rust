@@ -67,6 +67,9 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         source: ExpressionInfo<'tu>,
     ) -> Option<StringCacheId> {
         let format = self.context.configuration.diagnostic_format();
+        if self.context.configuration.msvc_wording() {
+            return self.msvc_conversion_wording(group, site, target, from);
+        }
         if site == ConversionSite::Other
             || !matches!(format, DiagnosticFormat::Gcc | DiagnosticFormat::Clang)
             || !matches!(
@@ -175,6 +178,135 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             }
         }
         Some(self.context.string_cache.intern(text.as_str()))
+    }
+
+    /// `cl`'s words for an implicit conversion between a pointer and an
+    /// integer or between pointers to incompatible types, both warnings
+    /// there: C4047 when the two differ in their levels of indirection
+    /// (`'=': 'int *' differs in levels of indirection from 'int'`; the
+    /// group is then `int-conversion`, see [`Self::msvc_pointer_group`]),
+    /// C4133 otherwise (`'=': incompatible types - from 'float *' to 'int
+    /// *'`), each led by the operation, which `cl` names `initializing`, `=`,
+    /// `function` (an argument) or `return`. A function pointer, which
+    /// `cl` spells with its calling convention, keeps bcc's words.
+    /// Microsoft Learn: "Compiler Warning (level 1) C4047", "Compiler
+    /// Warning (level 1 and level 3) C4133".
+    /// C99: §6.5.16.1p1, p. 92; PDF p. 104.
+    fn msvc_conversion_wording(
+        &mut self,
+        group: DiagnosticGroup,
+        site: ConversionSite,
+        target: TypeId,
+        from: TypeId,
+    ) -> Option<StringCacheId> {
+        if !matches!(
+            group,
+            DiagnosticGroup::IntConversion | DiagnosticGroup::IncompatiblePointerTypes
+        ) {
+            return None;
+        }
+        let operation = match site {
+            | ConversionSite::Initialization => "initializing",
+            | ConversionSite::Assignment => "=",
+            | ConversionSite::Argument { .. } => "function",
+            | ConversionSite::Return => "return",
+            | ConversionSite::Other => return None,
+        };
+        let to = self.msvc_type_spelling(target)?;
+        let from_spelling = self.msvc_type_spelling(from)?;
+        let text = if group == DiagnosticGroup::IntConversion {
+            crate::diagnostics::format_in!(
+                self.scratch,
+                "'{operation}': '{to}' differs in levels of indirection from '{from_spelling}'"
+            )
+        } else {
+            crate::diagnostics::format_in!(
+                self.scratch,
+                "'{operation}': incompatible types - from '{from_spelling}' to '{to}'"
+            )
+        };
+        Some(self.context.string_cache.intern(text))
+    }
+
+    /// `cl`'s words for a cast between a pointer and an integer of another
+    /// width: C4311 for a pointer truncated to an integer, C4312 for an
+    /// integer widened to a pointer. Microsoft Learn: "Compiler Warning
+    /// (level 1) C4311", "Compiler Warning (level 1) C4312".
+    /// C99: §6.3.2.3 paragraphs 5-6, p. 47; PDF p. 59.
+    pub(super) fn msvc_cast_wording(
+        &mut self,
+        target: TypeId,
+        from: TypeId,
+    ) -> Option<StringCacheId> {
+        if !self.context.configuration.msvc_wording() {
+            return None;
+        }
+        let to = self.msvc_type_spelling(target)?;
+        let from_spelling = self.msvc_type_spelling(from)?;
+        let text = if self.pointer_target(target).is_some() {
+            crate::diagnostics::format_in!(
+                self.scratch,
+                "'type cast': conversion from '{from_spelling}' to '{to}' of greater size"
+            )
+        } else {
+            crate::diagnostics::format_in!(
+                self.scratch,
+                "'type cast': pointer truncation from '{from_spelling}' to '{to}'"
+            )
+        };
+        Some(self.context.string_cache.intern(text))
+    }
+
+    /// `ty` as `cl` spells it, for the types whose spelling is known to
+    /// agree with Clang's (`int *`, `const char *`, `struct S *`); `None`
+    /// for the others, which `cl` spells its own way (`__int64`, a
+    /// function pointer's `__cdecl`).
+    fn msvc_type_spelling(&self, ty: TypeId) -> Option<&'tu str> {
+        let spelling = self.type_spelling(ty, false)?;
+        (!spelling.contains(['(', '['])
+            && ![
+                "long long",
+                "_Bool",
+                "_Complex",
+                "_BitInt",
+                "_Atomic",
+                "__int128",
+            ]
+            .iter()
+            .any(|word| spelling.contains(word)))
+        .then_some(spelling)
+    }
+
+    /// The group of a pointer conversion violation under `cl`'s wording:
+    /// `cl` reports pointers that differ in their levels of indirection
+    /// (`int *` from `char **`) as it reports a pointer from an integer,
+    /// with C4047, so they take the `int-conversion` group, which `/wd4047`
+    /// turns off with the rest of C4047.
+    pub(super) fn msvc_pointer_group(
+        &self,
+        group: DiagnosticGroup,
+        target: TypeId,
+        from: TypeId,
+    ) -> DiagnosticGroup {
+        if self.context.configuration.msvc_wording()
+            && group == DiagnosticGroup::IncompatiblePointerTypes
+            && self.indirection_levels(target) != self.indirection_levels(from)
+        {
+            DiagnosticGroup::IntConversion
+        } else {
+            group
+        }
+    }
+
+    /// How many pointers `ty` goes through before its first non-pointer
+    /// type.
+    fn indirection_levels(&self, mut ty: TypeId) -> usize {
+        let mut levels = 0;
+        while let TypeKind::Pointer(next) = self.types.nodes[self.types.non_atomic(ty).index] {
+            levels += 1;
+            ty = next;
+        }
+        levels
     }
 
     /// Clang's fix-it in words: dereferencing the value, or taking the
