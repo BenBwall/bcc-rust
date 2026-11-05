@@ -286,14 +286,16 @@ fn tree(
     }
 }
 
-/// How the page shows an operand: `5`, `&values[1]`, or the designated
-/// object `values[1]` for an lvalue.
+/// How the schematic labels an operand on a wire: `5`, `&values[1]`, the
+/// designated object `values[1]` for an lvalue, or `{…}` for a structure,
+/// whose members would not fit there.
 fn operand_text(
     operand: &Operand,
     objects: &HashMap<usize, &abstract_machine::Object>,
     program: &Program,
 ) -> String {
     match operand {
+        | Operand::Value(abstract_machine::Value::Struct { .. }) => "{…}".to_owned(),
         | Operand::Value(value) => value_text(value, objects, program),
         | &Operand::Address {
             target,
@@ -832,6 +834,14 @@ mod tests {
             .collect();
         assert_eq!(flow, ["value:&b", "arrow:->", "object:b.y"]);
         assert_eq!(arrow.event.access[0].cell, Some(1));
+        // A copy shows its members in the flow, `{…}` on the schematic's wires.
+        let copy = states
+            .iter()
+            .find(|state| state.event.title.starts_with("Copy"))
+            .expect("b = moved(b, 4) copies");
+        assert_eq!(copy.event.flow[0].text, "{12, 12}");
+        let tree = copy.tree.as_ref().expect("the assignment's tree");
+        assert_eq!(tree.nodes.last().and_then(|node| node.value.as_deref()), Some("{…}"));
         let px = last
             .objects
             .iter()
