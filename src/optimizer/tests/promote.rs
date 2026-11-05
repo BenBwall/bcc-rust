@@ -188,7 +188,7 @@ block3:
 }
 
 #[test]
-fn a_load_before_any_store_reads_poison() {
+fn a_load_without_a_store_reads_a_frozen_value_and_an_edge_passes_poison() {
     let input = "\
 function @f(i1) -> i32 external {
     slot0 = stack_slot 4, align 4
@@ -230,7 +230,8 @@ block0:
 function @f() -> i8 external {
 block0:
     v0 = poison.i8
-    return v0
+    v1 = freeze.i8 v0
+    return v1
 }
 ";
     assert_promote(straight, expected);
@@ -322,14 +323,15 @@ block2:
 function @f() -> i32 external {
 block0:
     v0 = poison.i32
-    v1 = iconst.i32 5
+    v1 = freeze.i32 v0
+    v2 = iconst.i32 5
     jump block2
 block1:
-    v2 = iconst.i32 1
-    v3 = iadd.i32 v0, v2
+    v3 = iconst.i32 1
+    v4 = iadd.i32 v1, v3
     jump block2
 block2:
-    return v1
+    return v2
 }
 ";
     assert_promote(input, expected);
@@ -362,18 +364,19 @@ block4:
 function @f(i1) -> i32 external {
 block0(v0: i1):
     v1 = poison.i32
+    v2 = freeze.i32 v1
     brif v0, block1, block2
 block1:
-    v2 = iconst.i32 1
-    jump block4(v2)
-block2:
-    v3 = iconst.i32 2
+    v3 = iconst.i32 1
     jump block4(v3)
-block3:
-    v4 = iadd.i32 v1, v1
+block2:
+    v4 = iconst.i32 2
     jump block4(v4)
-block4(v5: i32):
-    return v5
+block3:
+    v5 = iadd.i32 v2, v2
+    jump block4(v5)
+block4(v6: i32):
+    return v6
 }
 ";
     assert_promote(join, expected);

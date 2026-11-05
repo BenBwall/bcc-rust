@@ -171,9 +171,13 @@ shl that overflows, an `exact` division that is inexact, and an `inbounds`
 pointer offset that leaves its object all produce *poison*. Poison propagates
 through arithmetic; branching on poison, dividing by it, or using it as an
 address is undefined behaviour. `freeze` turns poison into an arbitrary but
-fixed value. Reading an uninitialized local yields `poison`. The interpreter
-implements this exactly and is the specification the optimizer is tested
-against.
+fixed value. An uninitialized local read in memory yields `poison`. Promotion
+to SSA refines a read on a path without a store to one `freeze` of `poison`, so
+masking it clears bits and testing them decides nothing about the rest of the
+function, which is how GCC and Clang read such a program; an edge that carries
+no store still passes `poison`, which a merge folds away, as LLVM folds a `phi`
+with an `undef` operand. The interpreter implements this exactly and is the
+specification the optimizer is tested against.
 
 C lowering sets `nsw` on signed `+ - *`, because C99 §6.5p5 makes signed
 overflow undefined; unsigned arithmetic wraps and gets no flags. A signed left

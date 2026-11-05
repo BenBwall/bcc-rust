@@ -154,6 +154,83 @@ mod tests {
         }
     }
 
+    /// A read of an uninitialized local is a fixed value, so masking it clears
+    /// bits and testing them decides nothing else, as GCC and Clang read such
+    /// a program (gcc.c-torture/execute/pr43629.c), on every back end and with
+    /// the local kept as a value, as a field, across a loop and in a `switch`.
+    #[test]
+    fn an_uninitialized_read_stays_a_value() {
+        const COMMON: &str = "int flag;\nvoid abort(void);\nstruct s { int a; char b; };\n";
+        for (name, body) in [
+            (
+                "scalar",
+                "int x; if (flag) x = -1; else x &= 0xff; if (x & ~0xff) abort();",
+            ),
+            (
+                "field",
+                "struct s v; if (flag) v.a = -1; else v.a &= 0xff; if (v.a & ~0xff) abort();",
+            ),
+            (
+                "loop",
+                "int x; for (int i = 0; i < 3; i++) { if (flag) x = -1; else x &= 15; if (x & \
+                 ~15) abort(); x = 0; }",
+            ),
+            (
+                "switch",
+                "unsigned x; switch (flag) { case 1: x = ~0u; break; default: x >>= 28; } if \
+                 (!flag && x > 15) abort();",
+            ),
+            (
+                "types",
+                "long l; l &= 1; __int128 w; w &= 1; double d; d = d * 1.0; int *p; p = p ? p : \
+                 0; if (flag && (l || w || d > 0 || p)) abort();",
+            ),
+        ] {
+            let source = format!("{COMMON}int main(void) {{ {body} return 0; }}\n");
+            for level in ["-O0", "-O1", "-O2"] {
+                let interpreted = Command::new(env!("CARGO_BIN_EXE_bcc-rust"))
+                    .args([level, "-w", "--interpret", "--input", &source])
+                    .output()
+                    .unwrap();
+                // Unoptimized, a field stays in memory and a merge keeps its
+                // `poison`, which the interpreter reports reading.
+                if level != "-O0" {
+                    assert_eq!(
+                        interpreted.status.code(),
+                        Some(0),
+                        "{name} {level} {interpreted:?}"
+                    );
+                }
+                if !cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+                    continue;
+                }
+                for backend in ["llvm", "native"] {
+                    let path = std::env::temp_dir().join(format!(
+                        "uninit-{}-{name}-{level}-{backend}",
+                        std::process::id()
+                    ));
+                    let output = Command::new(env!("CARGO_BIN_EXE_bcc-rust"))
+                        .args([level, "-w", "--backend", backend, "-o"])
+                        .arg(&path)
+                        .args(["--input", &source])
+                        .output()
+                        .unwrap();
+                    assert!(
+                        output.status.success(),
+                        "{name} {level} {backend}: {output:?}"
+                    );
+                    let run = Command::new(&path).output().unwrap();
+                    assert_eq!(
+                        run.status.code(),
+                        Some(0),
+                        "{name} {level} {backend}: {run:?}"
+                    );
+                    std::fs::remove_file(path).unwrap();
+                }
+            }
+        }
+    }
+
     #[test]
     fn optimization_flags_select_working_codegen_pipelines() {
         for level in ["-O0", "-O1", "-O2", "-O3", "-Os", "-Oz", "-Og"] {
