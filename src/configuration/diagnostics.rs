@@ -85,6 +85,7 @@ impl CompilerConfiguration {
             | DiagnosticGroup::IncompatiblePointerTypes =>
                 &[DiagnosticGroup::GccConditionalPointerMismatch],
             | DiagnosticGroup::Normalized => &[DiagnosticGroup::PedanticNormalized],
+            | DiagnosticGroup::Main => &[DiagnosticGroup::MainExtension],
             | _ => &[],
         };
         for &child in children {
@@ -103,10 +104,10 @@ impl CompilerConfiguration {
     }
 
     /// `-Wall` (true) or `-Wno-all` at its argv position, for the groups
-    /// whose meaning under it bcc models: `-Wimplicit`'s and
-    /// `-Wreturn-mismatch`'s. Each group records the setting apart from its
-    /// own options, which take precedence in GCC whatever their order and
-    /// only when they come later in Clang
+    /// whose meaning under it bcc models: `-Wimplicit`'s,
+    /// `-Wreturn-mismatch`'s and GCC's `-Wmain`. Each group records the setting
+    /// apart from its own options, which take precedence in GCC whatever their
+    /// order and only when they come later in Clang
     /// ([`WarningSettings::enabled_with_all`]).
     pub(crate) fn with_all_warnings(mut self, enabled: bool) -> Self {
         for group in [
@@ -117,6 +118,10 @@ impl CompilerConfiguration {
             DiagnosticGroup::VoidReturnMismatch,
         ] {
             self.warning_options[group as usize].apply_all(enabled);
+        }
+        // Clang's `-Wmain` is on already, and its `-Wall` does not hold it.
+        if self.identity.rules() != super::RuleSet::Clang {
+            self.warning_options[DiagnosticGroup::Main as usize].apply_all(enabled);
         }
         self
     }
@@ -180,6 +185,9 @@ impl CompilerConfiguration {
             (group.default() == GroupDefault::Permerror).then(|| self.permerror_default(group));
         let enabled = match permerror {
             | Some(default) => default.is_some(),
+            | None if group.default() == GroupDefault::OnInClang =>
+                self.identity != super::CompilerIdentity::Gcc
+                    || self.extension_policy != ExtensionPolicy::Allow,
             | None =>
                 group.enabled_by_default()
                     || (group.default() == GroupDefault::Extension
@@ -257,12 +265,14 @@ impl CompilerConfiguration {
     /// Whether `-pedantic-errors` makes `group` an error: Clang's
     /// `ExtWarn` diagnostics, except that GCC's `-fpermissive` keeps its
     /// permerrors warnings whatever `-pedantic-errors` says.
-    /// GCC's C89 implicit int and Clang's implicitly declared library
-    /// function are pedantic warnings as well, in their compilers only.
-    fn pedantic_error(self, group: DiagnosticGroup) -> bool {
+    /// GCC's C89 implicit int and `-Wmain`, and Clang's implicitly declared
+    /// library function, are pedantic warnings as well, in their compilers
+    /// only.
+    pub(crate) fn pedantic_error(self, group: DiagnosticGroup) -> bool {
         let promoted = group.pedantic_promoted()
             || match group {
-                | DiagnosticGroup::ImplicitInt => self.identity == super::CompilerIdentity::Gcc,
+                | DiagnosticGroup::ImplicitInt | DiagnosticGroup::Main =>
+                    self.identity == super::CompilerIdentity::Gcc,
                 | DiagnosticGroup::ImplicitLibraryFunction =>
                     self.identity.rules() == super::RuleSet::Clang,
                 | _ => false,
@@ -507,6 +517,19 @@ diagnostic_groups! {
     /// (`DiagnosticGroup::converts`), which take its `-W`, `-Wno-` and
     /// `-Werror=` options unless they have their own.
     Conversion => Some("conversion"), Ignored, false;
+    /// The forms of `main` that Clang warns about and GCC's `-Wmain`, which
+    /// is off until `-Wall` or `-Wpedantic` enables it and which every form
+    /// `-pedantic-errors` makes an error of.
+    Main => Some("main"), OnInClang, false;
+    /// Clang's extension warnings about `main`, which `-pedantic-errors`
+    /// makes errors; `-Wmain`'s options set them with the group.
+    MainExtension => Some("main"), Warning, true;
+    /// Clang: `main` returning anything but `int` in a GNU mode. GCC has no
+    /// such option, its `-Wmain` holding this form.
+    MainReturnType => Some("main-return-type"), Warning, true;
+    /// GCC's warning about `inline` or `_Noreturn` on `main`, which no
+    /// option controls and `-pedantic-errors` makes an error.
+    MainSpecifier => None, Warning, true;
 }
 
 /// A group's severity when no option names it.
@@ -519,6 +542,8 @@ enum GroupDefault {
     Warning,
     Ignored,
     Extension,
+    /// Clang's warning by default; GCC's only under `-Wpedantic`.
+    OnInClang,
 }
 
 impl DiagnosticGroup {
@@ -550,8 +575,10 @@ impl DiagnosticGroup {
     pub(crate) const fn default_severity(self) -> ErrorSeverity {
         match self.default() {
             | GroupDefault::Error | GroupDefault::Permerror => ErrorSeverity::Error,
-            | GroupDefault::Warning | GroupDefault::Ignored | GroupDefault::Extension =>
-                ErrorSeverity::Warning,
+            | GroupDefault::Warning
+            | GroupDefault::Ignored
+            | GroupDefault::Extension
+            | GroupDefault::OnInClang => ErrorSeverity::Warning,
         }
     }
 
@@ -559,7 +586,10 @@ impl DiagnosticGroup {
     pub(crate) fn enabled_by_default(self) -> bool {
         matches!(
             self.default(),
-            GroupDefault::Error | GroupDefault::Permerror | GroupDefault::Warning
+            GroupDefault::Error
+                | GroupDefault::Permerror
+                | GroupDefault::Warning
+                | GroupDefault::OnInClang
         )
     }
 }
@@ -643,6 +673,7 @@ impl WarningSettings {
                 | DiagnosticGroup::ImplicitFunctionDeclaration
                 | DiagnosticGroup::ImplicitLibraryFunction
                 | DiagnosticGroup::ImplicitInt => all,
+                | DiagnosticGroup::Main => all,
                 | DiagnosticGroup::ReturnMismatch if all.is_some() => Some(true),
                 | _ => None,
             }

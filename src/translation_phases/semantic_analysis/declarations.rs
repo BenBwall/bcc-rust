@@ -820,7 +820,10 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         if spec.function_specifiers.is_inline
             && ((!function && !self.types.unanalyzed(ty))
                 || typedef
-                || self.context.string_cache.at(name.name) == "main")
+                || (self.context.configuration.hosted()
+                    && self.context.configuration.compiler_identity()
+                        == crate::configuration::CompilerIdentity::Msvc
+                    && self.context.string_cache.at(name.name) == "main"))
         {
             self.error(
                 SemanticErrorKind::InvalidInline,
@@ -859,6 +862,7 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
         } else {
             Linkage::None
         };
+        self.check_main_declaration(name, spec, ty, kind, linkage);
         let thread = self.thread_storage(spec.extensions);
         if thread && function && !typedef {
             self.error(

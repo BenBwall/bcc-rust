@@ -1,0 +1,7 @@
+sema-main-gcc-variadic.c:1:5: warning: 'main' declared as variadic function [-Wmain]
+  |
+1 | int main(int argc, char **argv, ...) { return 0; }
+  |     ^^^^ nonportable declaration of main
+  |
+  = note: C99 §5.1.2.2.1p1: hosted main returns int and accepts no parameters or int and char **, or an implementation-defined form
+

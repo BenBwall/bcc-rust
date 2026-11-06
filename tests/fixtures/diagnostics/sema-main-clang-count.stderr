@@ -1,0 +1,8 @@
+sema-main-clang-count.c:1:5: error: too many parameters (4) for 'main': must be 0, 2, or 3
+  |
+1 | int main(int argc, char **argv, char **envp, char **apple) { return 0; }
+  |     ^^^^ nonportable declaration of main
+  |
+  = note: C99 §5.1.2.2.1p1: hosted main returns int and accepts no parameters or int and char **, or an implementation-defined form
+
+1 error generated.
