@@ -96,6 +96,21 @@ pub(super) fn plan(invocation: &Invocation) -> Result<Plan, MainError> {
             invocation.error(format_args!("too many @-files encountered"));
             return Err(MainError::Reported(1));
         },
+        | Err(ResponseFileError::GccDirectory) => {
+            invocation.error(format_args!("@-file refers to a directory"));
+            return Err(MainError::Reported(1));
+        },
+        | Err(ResponseFileError::ClangDirectory(file)) => {
+            // LLVM's own words, misprint included.
+            super::print(
+                &format!(
+                    "cannot not open file '{}': Is a directory\n",
+                    file.display()
+                ),
+                true,
+            );
+            return Err(MainError::Reported(1));
+        },
         | Err(ResponseFileError::Recursive(file)) => {
             // LLVM's own words, before the driver exists to name itself.
             super::print(
@@ -616,9 +631,9 @@ impl Query {
                 | Self::ProgramName(_) => 2,
                 | Self::MultiLib => 3,
                 | Self::MultiDirectory => 4,
-                | Self::Sysroot => 5,
-                | Self::MultiOsDirectory => 6,
-                | Self::Multiarch => 7,
+                | Self::Multiarch => 5,
+                | Self::Sysroot => 6,
+                | Self::MultiOsDirectory => 7,
                 | Self::Help => 8,
                 | Self::Version => 9,
                 | _ => 10,
@@ -628,15 +643,15 @@ impl Query {
                 | Self::DumpVersion => 1,
                 | Self::Help => 2,
                 | Self::Version => 3,
-                | Self::SearchDirectories => 4,
-                | Self::ResourceDirectory => 5,
-                | Self::FileName(_) => 6,
-                | Self::ProgramName(_) => 7,
-                | Self::LibgccFileName => 8,
-                | Self::MultiLib => 9,
-                | Self::MultiDirectory => 10,
-                | Self::Triple => 11,
-                | Self::RuntimeDirectory => 12,
+                | Self::ResourceDirectory => 4,
+                | Self::SearchDirectories => 5,
+                | Self::RuntimeDirectory => 6,
+                | Self::FileName(_) => 7,
+                | Self::ProgramName(_) => 8,
+                | Self::LibgccFileName => 9,
+                | Self::MultiLib => 10,
+                | Self::MultiDirectory => 11,
+                | Self::Triple => 12,
                 | _ => 13,
             },
         }
@@ -767,17 +782,22 @@ impl State<'_> {
             return self.argument(OsStr::new("-Wextra"), rest);
         }
         let clang = self.compiler == Compiler::Clang;
+        // Both compilers take `--print-` for `-print-`.
+        let queried = text
+            .strip_prefix('-')
+            .filter(|rest| rest.starts_with("-print-"))
+            .unwrap_or(text);
         // `-print-file-name=NAME`: the library or start file the link would
         // use. `-print-prog-name=NAME`: the bundled tool bcc would run.
-        if let Some(name) = text.strip_prefix("-print-file-name=") {
+        if let Some(name) = queried.strip_prefix("-print-file-name=") {
             self.queries.push(Query::FileName(name.into()));
             return None;
         }
-        if let Some(name) = text.strip_prefix("-print-prog-name=") {
+        if let Some(name) = queried.strip_prefix("-print-prog-name=") {
             self.queries.push(Query::ProgramName(name.into()));
             return None;
         }
-        let query = match text {
+        let query = match queried {
             | "-dumpmachine" => Some(Query::DumpMachine),
             | "-dumpversion" => Some(Query::DumpVersion),
             | "-dumpfullversion" if !clang => Some(Query::DumpFullVersion),
@@ -808,7 +828,7 @@ impl State<'_> {
             self.queries.push(query);
             return None;
         }
-        match text {
+        match queried {
             // Clang knows GCC's query and refuses it; it does not know
             // `-print-sysroot` at all.
             | "-print-multiarch" | "-print-multi-os-directory" =>

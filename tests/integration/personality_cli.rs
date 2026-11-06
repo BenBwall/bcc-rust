@@ -1301,19 +1301,32 @@ mod tests {
             assert!(stderr(&output).contains("@missing.rsp"), "{mode}");
         }
 
-        std::fs::create_dir(directory.path("sub")).unwrap();
-        directory.write("sub/a2.c", "int a2(void) { return 3; }\n");
-        directory.write("sub/nested.rsp", "-c sub/a2.c\n");
-        directory.write("sub/start.rsp", "@nested.rsp\n");
-        directory.write("start.rsp", "@sub/start.rsp\n");
-        // Clang finds a nested name beside the file that names it; GCC looks
-        // in the working directory, so this one stays an input.
-        succeeds(&directory.bcc("--clang-mode", &["@start.rsp"]));
+        // Either compiler resolves a nested name against the working directory,
+        // not against the file naming it.
+        std::fs::create_dir(directory.path("child")).unwrap();
+        directory.write("nested.c", "int value = VALUE;\n");
+        directory.write("child/outer.rsp", "@inner.rsp\n");
+        directory.write("inner.rsp", "-E -P -DVALUE=11 nested.c\n");
+        directory.write("child/inner.rsp", "-E -P -DVALUE=22 nested.c\n");
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            let output = directory.bcc(mode, &["@child/outer.rsp"]);
+            succeeds(&output);
+            assert_eq!(stdout(&output).trim_end(), "int value = 11;", "{mode}");
+        }
+
+        // A directory is an error in each compiler's words.
+        let output = directory.bcc("--gcc-mode", &["@child", "-c", "a.c"]);
+        assert_eq!(output.status.code(), Some(1));
+        assert_eq!(
+            stderr(&output),
+            "gcc: error: @-file refers to a directory\n"
+        );
+        let output = directory.bcc("--clang-mode", &["@child", "-c", "a.c"]);
+        assert_eq!(output.status.code(), Some(1));
         assert!(
-            !directory
-                .bcc("--gcc-mode", &["@start.rsp"])
-                .status
-                .success()
+            stderr(&output).starts_with("cannot not open file '"),
+            "{}",
+            stderr(&output)
         );
 
         directory.write("self.rsp", "@self.rsp\n");
@@ -1326,6 +1339,76 @@ mod tests {
             stderr(&output),
             "gcc: error: too many @-files encountered\n"
         );
+    }
+
+    /// A response file's bytes are never replaced: a file name that is not
+    /// UTF-8 is found, and a `-D` value bcc cannot take is refused rather than
+    /// changed.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn gnu_response_files_keep_bytes_that_are_not_text() {
+        use std::os::unix::ffi::OsStrExt as _;
+        let directory = Directory::new();
+        std::fs::write(
+            directory.0.join(std::ffi::OsStr::from_bytes(b"\xff.c")),
+            "int raw;\n",
+        )
+        .unwrap();
+        std::fs::write(directory.path("name.rsp"), b"-E -P \xff.c".as_slice()).unwrap();
+        directory.write("macro.c", "const char *s = MSG;\n");
+        std::fs::write(
+            directory.path("define.rsp"),
+            b"-E -P -DMSG='\"\xff\"' macro.c".as_slice(),
+        )
+        .unwrap();
+        for mode in ["--gcc-mode", "--clang-mode"] {
+            let output = directory.bcc(mode, &["@name.rsp"]);
+            succeeds(&output);
+            assert_eq!(stdout(&output).trim_end(), "int raw;", "{mode}");
+            let output = directory.bcc(mode, &["@define.rsp"]);
+            assert!(!output.status.success(), "{mode}: {}", stdout(&output));
+        }
+    }
+
+    /// When several queries are given, the one each compiler answers, and
+    /// `--print-` spelled for `-print-`.
+    #[test]
+    fn gnu_query_precedence_follows_each_compiler() {
+        let directory = Directory::new();
+        let answer = |mode: &str, args: &[&str]| {
+            let output = directory.bcc(mode, args);
+            succeeds(&output);
+            stdout(&output)
+        };
+        for (mode, winner, loser) in [
+            ("--clang-mode", "-print-resource-dir", "-print-search-dirs"),
+            ("--clang-mode", "-print-runtime-dir", "-print-file-name=x"),
+            ("--clang-mode", "-print-runtime-dir", "-print-multi-lib"),
+            ("--clang-mode", "-print-multi-lib", "-print-target-triple"),
+            (
+                "--gcc-mode",
+                "-print-multiarch",
+                "-print-multi-os-directory",
+            ),
+            ("--gcc-mode", "-print-multiarch", "-print-sysroot"),
+            ("--gcc-mode", "-print-sysroot", "-print-multi-os-directory"),
+        ] {
+            let expected = answer(mode, &[winner]);
+            assert_eq!(answer(mode, &[winner, loser]), expected, "{mode} {winner}");
+            assert_eq!(answer(mode, &[loser, winner]), expected, "{mode} {winner}");
+        }
+        for (mode, query) in [
+            ("--gcc-mode", "print-multi-lib"),
+            ("--gcc-mode", "print-file-name=x"),
+            ("--clang-mode", "print-multi-directory"),
+            ("--clang-mode", "print-libgcc-file-name"),
+        ] {
+            assert_eq!(
+                answer(mode, &[&format!("--{query}")]),
+                answer(mode, &[&format!("-{query}")]),
+                "{mode} {query}"
+            );
+        }
     }
 
     /// The probes libtool and other build systems ask about library layout.
