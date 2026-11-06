@@ -1007,26 +1007,11 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
             .push(Work::FunctionWork(FunctionWork::StatementExpressionEnd(
                 self.functions.dead,
             )));
-        if self.functions.dead {
-            return;
-        }
-        let StatementType::Compound { items } = block.kind else {
+        let Some(last) = value_statement_of(block) else {
             return;
         };
-        let Some(&BlockItem::Statement(mut last)) = items.last() else {
-            return;
-        };
-        loop {
-            match last.kind {
-                | StatementType::Label(_, child) => last = child,
-                | StatementType::Attributed(attributed) => last = attributed.statement,
-                | _ => break,
-            }
-        }
-        if matches!(
-            last.kind,
-            StatementType::Expression(ExpressionSlot::Parsed(_))
-        ) {
+        self.note_statement_expression_value(last);
+        if !self.functions.dead {
             _ = self
                 .functions
                 .emission
@@ -1034,6 +1019,30 @@ impl<'tu> Analyzer<'_, 'tu, '_> {
                 .insert(std::ptr::from_ref(last).addr(), ());
         }
     }
+}
+
+/// The expression statement that gives statement expression `block` its
+/// value: the last item, after its labels.
+/// GNU extension: GCC manual, "Statement Exprs".
+fn value_statement_of<'tu>(block: &'tu Statement<'tu>) -> Option<&'tu Statement<'tu>> {
+    let StatementType::Compound { items } = block.kind else {
+        return None;
+    };
+    let Some(&BlockItem::Statement(mut last)) = items.last() else {
+        return None;
+    };
+    loop {
+        match last.kind {
+            | StatementType::Label(_, child) => last = child,
+            | StatementType::Attributed(attributed) => last = attributed.statement,
+            | _ => break,
+        }
+    }
+    matches!(
+        last.kind,
+        StatementType::Expression(ExpressionSlot::Parsed(_))
+    )
+    .then_some(last)
 }
 
 fn unparenthesized<'tu>(mut expression: &'tu Expression<'tu>) -> &'tu Expression<'tu> {

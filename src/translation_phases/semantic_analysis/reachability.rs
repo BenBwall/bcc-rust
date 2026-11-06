@@ -270,7 +270,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
     }
 
     /// Records which association a generic selection selects.
-    /// C11: §6.5.1.1 paragraphs 2-3, p. 78; PDF p. 96.
+    /// C11: §6.5.1.1 paragraphs 2-3, p. 79; PDF p. 97.
     pub(super) fn note_selected_association(
         &mut self,
         generic: &'tu GenericSelection<'tu>,
@@ -583,7 +583,7 @@ impl<'tu, 's> Analyzer<'_, 'tu, 's> {
     }
 
     /// Whether a condition's `value` is in a case's range, the bounds being
-    /// converted to its type. C99: §6.8.4.2 paragraph 5, p. 135; PDF p. 147.
+    /// converted to its type. C99: §6.8.4.2 paragraph 5, p. 134; PDF p. 146.
     fn in_case_range(value: super::Integer, low: super::Integer, high: super::Integer) -> bool {
         let converted = |bound: super::Integer| bound.cast(value.bits, value.signed).to_i128();
         match (value.to_i128(), converted(low), converted(high)) {

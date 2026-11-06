@@ -4,8 +4,8 @@
 //! or discards, and recognizes conditions the tautology warnings are about: a
 //! comparison that a mask or a Boolean operand decides, and two comparisons of
 //! one operand that a logical operator makes contradictory.
-//! C99: §6.5.8-§6.5.14, pp. 85-89; PDF pp. 97-101; §6.6, pp. 95-97;
-//! PDF pp. 107-109.
+//! C99: §6.5.8-§6.5.14, pp. 85-89; PDF pp. 97-101; §6.6, pp. 95-96;
+//! PDF pp. 107-108.
 
 use super::{
     super::{

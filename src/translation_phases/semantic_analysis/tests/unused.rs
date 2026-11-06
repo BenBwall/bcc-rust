@@ -815,3 +815,25 @@ fn a_discarded_conditional_asks_about_its_last_arm() {
         assert_eq!(found, warns, "{source}");
     }
 }
+
+/// A statement expression's last statement gives it its value, and discards
+/// nothing, wherever the statement expression is.
+#[test]
+fn a_statement_expression_value_is_not_discarded_in_unreachable_code() {
+    for source in [
+        "void f(int n) { return; int z = ({ n; }); (void)z; }",
+        "void f(int n) { return; int z = ({ (void)0; n; }); (void)z; }",
+        "void f(int n) { return; (void)({ (void)0; n; }); }",
+        "void f(int n) { return; int z[({ n; })]; (void)z; }",
+        "void f(int n) { return; int (*z)[({ n; })]; (void)z; }",
+    ] {
+        let unused_value = |rules: &[U]| {
+            rules
+                .iter()
+                .filter(|rule| rule.group() == DiagnosticGroup::UnusedValue)
+                .count()
+        };
+        assert_eq!(unused_value(&rules(source, gcc())), 0, "{source}");
+        assert_eq!(unused_value(&rules(source, clang())), 0, "{source}");
+    }
+}
