@@ -832,6 +832,14 @@ int main(void) { char *p = malloc(16); return __builtin_object_size(p, 0) & 0xff
                     : 1;
             }
         "#;
+        for options in ["--opt=none", "--opt=bcc"] {
+            let output = bcc(source, &["-w", "--interpret", options]);
+            assert_eq!(output.status.code(), Some(42), "{options}");
+        }
+        // The default target's start files exist only on Linux here.
+        if !cfg!(target_os = "linux") {
+            return;
+        }
         let executable = temporary("internal-tentative.exe");
         for options in [
             &["--opt=none"][..],
